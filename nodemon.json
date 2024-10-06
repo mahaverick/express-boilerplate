@@ -1,0 +1,9 @@
+{
+  "env": {
+    "__DEV__": "true"
+  },
+  "watch": ["src", "drizzle.config.ts"],
+  "ext": "ts, js, html, json",
+  "ignore": ["src/**/*.spec.ts", ".git", "node_modules", "dist"],
+  "exec": "npx ts-node --files -r tsconfig-paths/register src/index.ts"
+}
