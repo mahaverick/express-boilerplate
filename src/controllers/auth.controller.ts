@@ -6,7 +6,6 @@ import asyncHandler from 'express-async-handler';
 
 import { REFRESH_TOKEN, SESSION_TOKEN } from '@/configs/constants/constants';
 import { BaseController } from '@/controllers/base.controller';
-import { LoginSchemaType, RegisterSchemaType } from '@/controllers/validators/auth.validator';
 import { TokenType } from '@/database/models/token.model';
 import { TokenRepository } from '@/repositories/token.repository';
 import { UserRepository } from '@/repositories/user.repository';
@@ -19,6 +18,7 @@ import {
   verifyToken,
 } from '@/utils/auth.utils';
 import { logger } from '@/utils/logger.utils';
+import { LoginSchemaType, RegisterSchemaType } from '@/validators/auth.validator';
 
 export class AuthController extends BaseController {
   /**

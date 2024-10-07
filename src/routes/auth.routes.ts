@@ -1,6 +1,8 @@
 import { Router } from 'express';
 
 import { AuthController } from '@/controllers/auth.controller';
+import { requireAuthentication } from '@/middlewares/auth.middleware';
+import { zodValidate } from '@/middlewares/validation.middleware';
 import {
   forgetPasswordSchema,
   loginSchema,
@@ -9,9 +11,7 @@ import {
   resetPasswordSchema,
   verifyEmailSchema,
   verifyResetTokenSchema,
-} from '@/controllers/validators/auth.validator';
-import { requireAuthentication } from '@/middlewares/auth.middleware';
-import { zodValidate } from '@/middlewares/validation.middleware';
+} from '@/validators/auth.validator';
 
 const router = Router();
 const authController = new AuthController();
