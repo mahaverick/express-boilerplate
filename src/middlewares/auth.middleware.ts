@@ -1,3 +1,5 @@
+// src/middleware/auth.middleware.ts
+
 import { NextFunction, Request, Response } from 'express';
 
 import { AppError } from '@/middlewares/error.middleware';
@@ -27,7 +29,7 @@ export const requireAuthentication = async (req: Request, res: Response, next: N
     const decoded = verifyToken(accessToken);
 
     // Attach authenticated user and Access Token to request object
-    req.userId = decoded.id;
+    req.userId = decoded.userId;
     req.sessionId = decoded.sessionId;
     req.token = accessToken;
     next();

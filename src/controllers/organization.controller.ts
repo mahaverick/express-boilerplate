@@ -1,4 +1,5 @@
 // src/controllers/organization.controller.ts
+
 import { Request, Response } from 'express';
 import expressAsyncHandler from 'express-async-handler';
 

@@ -73,7 +73,7 @@ export const generateAccessToken = (userId: number, email: string, sessionId: st
     // Create signed access token
     const accessToken = sign(
       {
-        id: userId,
+        userId: userId,
         email: email,
         sessionId: sessionId,
       },
@@ -111,7 +111,7 @@ export const generateRefreshToken = async (
   }
 
   try {
-    const refreshToken = sign({ id: userId, sessionId }, PRIVATE_KEY, {
+    const refreshToken = sign({ userId, sessionId }, PRIVATE_KEY, {
       expiresIn: REFRESH_TOKEN.expiry,
       algorithm: 'RS256', // RSA SHA-256
     });

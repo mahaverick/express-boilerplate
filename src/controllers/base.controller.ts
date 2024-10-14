@@ -1,4 +1,5 @@
 // src/controllers/base.controller.ts
+
 import { Response } from 'express';
 
 import { AppError } from '@/middlewares/error.middleware';

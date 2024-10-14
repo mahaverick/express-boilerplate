@@ -1,4 +1,5 @@
 // src/controllers/user.controller.ts
+
 import crypto from 'crypto';
 
 import { Request, Response } from 'express';
@@ -175,7 +176,7 @@ export class AuthController extends BaseController {
       //sanitize user object
       const sanitizedUser = this.userRepo.sanitize(token.user);
 
-      const accessToken = generateAccessToken(token.user.id, token.user.email, sessionId);
+      const accessToken = generateAccessToken(token.userId, token.user.email, sessionId);
 
       return this.sendResponse(
         res,

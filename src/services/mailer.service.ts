@@ -123,7 +123,7 @@ class Mailer {
     const resetLink = `${CLIENT_URL}/password/reset?token=${resetToken}&email=${to}`;
     const emailOptions: EmailOptions = {
       to,
-      subject: 'Reset your password for Boilerplate',
+      subject: 'Reset your password for Edyt',
       text: `Please reset your password by clicking this link: ${resetLink}`,
       html: `
       <html>
