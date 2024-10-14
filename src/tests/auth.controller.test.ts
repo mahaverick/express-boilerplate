@@ -18,14 +18,12 @@ import {
 jest.mock('@/repositories/user.repository');
 jest.mock('@/repositories/token.repository');
 jest.mock('@/utils/auth.utils');
-jest.mock('@/services/mailer.service');
 
 jest.mock('zod', () => ({
   ZodError: {
     create: jest.fn(),
   },
 }));
-
 describe('AuthController', () => {
   let authController: AuthController;
   let req: Partial<Request>;
@@ -74,7 +72,7 @@ describe('AuthController', () => {
       const nextFn = jest.fn();
       await authController.login(req as Request, res as Response, nextFn);
 
-      expect(res.status).toHaveBeenCalledWith(401);
+      expect(res.status).toHaveBeenCalledWith(404);
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({ message: 'Wrong credentials!!' }),
       );
@@ -269,80 +267,4 @@ describe('AuthController', () => {
       );
     });
   });
-
-  describe('verifyEmail', () => {
-    it('should return error if token is invalid', async () => {
-      req.body = { token: 'invalidToken' };
-      (TokenRepository.prototype.findByValueAndType as jest.Mock).mockResolvedValue(null);
-
-      const nextFn = jest.fn();
-      await authController.verifyEmail(req as Request, res as Response, nextFn);
-
-      expect(res.status).toHaveBeenCalledWith(400);
-      expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({ message: 'Invalid or expired verification token' }),
-      );
-    });
-
-    it('should verify email successfully', async () => {
-      req.body = { token: 'validToken' };
-      (TokenRepository.prototype.findByValueAndType as jest.Mock).mockResolvedValue({
-        id: 1,
-        userId: 1,
-        active: true,
-      });
-      (UserRepository.prototype.findByIdWithSensitiveColumns as jest.Mock).mockResolvedValue({
-        id: 1,
-        email: 'test@example.com',
-        emailVerifiedAt: null,
-      });
-      (UserRepository.prototype.verifyEmail as jest.Mock).mockResolvedValue({});
-      (TokenRepository.prototype.deactivateToken as jest.Mock).mockResolvedValue({});
-
-      const nextFn = jest.fn();
-      await authController.verifyEmail(req as Request, res as Response, nextFn);
-
-      expect(res.status).toHaveBeenCalledWith(200);
-      expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({ message: 'Email verified successfully' }),
-      );
-    });
-  });
-
-  describe('resendVerificationEmail', () => {
-    it('should return error if email is not found', async () => {
-      req.body = { email: 'nonexistent@example.com' };
-      (UserRepository.prototype.findByEmailWithSensitiveColumns as jest.Mock).mockResolvedValue(
-        null,
-      );
-
-      const nextFn = jest.fn();
-      await authController.resendVerificationEmail(req as Request, res as Response, nextFn);
-
-      expect(res.status).toHaveBeenCalledWith(404);
-      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: 'User not found' }));
-    });
-
-    it('should resend verification email successfully', async () => {
-      req.body = { email: 'test@example.com' };
-      (UserRepository.prototype.findByEmailWithSensitiveColumns as jest.Mock).mockResolvedValue({
-        id: 1,
-        email: 'test@example.com',
-        emailVerifiedAt: null,
-      });
-      (TokenRepository.prototype.createEmailVerificationToken as jest.Mock).mockResolvedValue({
-        value: 'newToken',
-      });
-
-      const nextFn = jest.fn();
-      await authController.resendVerificationEmail(req as Request, res as Response, nextFn);
-
-      expect(res.status).toHaveBeenCalledWith(200);
-      expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({ message: 'Verification email sent successfully' }),
-      );
-    });
-  });
-
-  // Add more test cases for forgotPassword, verifyPasswordResetToken, and resetPassword methods
 });

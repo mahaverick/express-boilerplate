@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, isNotNull } from 'drizzle-orm';
 
 import { InsertUser, userModel } from '@/database/models/user.model';
 import { providerModel } from '@/database/schema';
@@ -37,19 +37,12 @@ export class UserRepository extends BaseRepository {
    *
    * @memberof UserRepository
    */
-  sanitize(user: { emailVerified?: boolean; phoneVerified?: boolean } & InsertUser) {
+  sanitize(user: InsertUser) {
     if (user) {
       delete user.id;
       delete user.password;
 
-      if (user.emailVerifiedAt) {
-        user.emailVerified = true;
-      }
       delete user.emailVerifiedAt;
-
-      if (user.phoneVerifiedAt) {
-        user.phoneVerified = true;
-      }
       delete user.phoneVerifiedAt;
       delete user.lastLoggedInAt;
 
@@ -78,6 +71,10 @@ export class UserRepository extends BaseRepository {
           columns: this.omitSensitiveColumns(...DEFAULT_SENSITIVE_COLUMNS),
         },
       },
+      extras: {
+        emailVerified: isNotNull(userModel.emailVerifiedAt).as('email_verified'),
+        phoneVerified: isNotNull(userModel.phoneVerifiedAt).as('phone_verified'),
+      },
     });
   }
 
@@ -90,8 +87,8 @@ export class UserRepository extends BaseRepository {
    * @param {string} firstName - User's first name
    * @param {string} middleName - User's middle name (default: '')
    * @param {string} lastName - User's last name (default: '')
-   * @param {string} active - User's active status (default: true)
-   * @param {Date} emailVerifiedAt - User's active status (default: true)
+   * @param {string} active - User's active status (default: false)
+   * @param {Date} emailVerifiedAt - User's active status (default: null)
    *
    * @returns {Promise<{user: User, tokenValue: string}>}
    * @memberof UserRepository
@@ -148,6 +145,10 @@ export class UserRepository extends BaseRepository {
           columns: this.omitSensitiveColumns(...DEFAULT_SENSITIVE_COLUMNS),
         },
       },
+      extras: {
+        emailVerified: isNotNull(userModel.emailVerifiedAt).as('email_verified'),
+        phoneVerified: isNotNull(userModel.phoneVerifiedAt).as('phone_verified'),
+      },
     });
     return user;
   }
@@ -165,6 +166,10 @@ export class UserRepository extends BaseRepository {
       with: {
         providers: true,
         organizations: true,
+      },
+      extras: {
+        emailVerified: isNotNull(userModel.emailVerifiedAt).as('email_verified'),
+        phoneVerified: isNotNull(userModel.phoneVerifiedAt).as('phone_verified'),
       },
     });
     return user;
@@ -189,6 +194,10 @@ export class UserRepository extends BaseRepository {
           columns: this.omitSensitiveColumns(...DEFAULT_SENSITIVE_COLUMNS),
         },
       },
+      extras: {
+        emailVerified: isNotNull(userModel.emailVerifiedAt).as('email_verified'),
+        phoneVerified: isNotNull(userModel.phoneVerifiedAt).as('phone_verified'),
+      },
     });
     return user;
   }
@@ -206,6 +215,10 @@ export class UserRepository extends BaseRepository {
       with: {
         providers: true,
         organizations: true,
+      },
+      extras: {
+        emailVerified: isNotNull(userModel.emailVerifiedAt).as('email_verified'),
+        phoneVerified: isNotNull(userModel.phoneVerifiedAt).as('phone_verified'),
       },
     });
     return user;
@@ -227,6 +240,10 @@ export class UserRepository extends BaseRepository {
         organizations: {
           columns: this.omitSensitiveColumns(...DEFAULT_SENSITIVE_COLUMNS),
         },
+      },
+      extras: {
+        emailVerified: isNotNull(userModel.emailVerifiedAt).as('email_verified'),
+        phoneVerified: isNotNull(userModel.phoneVerifiedAt).as('phone_verified'),
       },
     });
     return user;
@@ -278,6 +295,10 @@ export class UserRepository extends BaseRepository {
         organizations: {
           columns: this.omitSensitiveColumns(...DEFAULT_SENSITIVE_COLUMNS),
         },
+      },
+      extras: {
+        emailVerified: isNotNull(userModel.emailVerifiedAt).as('email_verified'),
+        phoneVerified: isNotNull(userModel.phoneVerifiedAt).as('phone_verified'),
       },
     });
     return user?.organizations || [];

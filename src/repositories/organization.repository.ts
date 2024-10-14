@@ -1,6 +1,6 @@
 import { and, eq } from 'drizzle-orm';
 
-import { organizationModel } from '@/database/models/organization.model';
+import { InsertOrganization, organizationModel } from '@/database/models/organization.model';
 import { userModel } from '@/database/schema';
 import { BaseRepository } from '@/repositories/base.repository';
 import db from '@/services/db.service';
@@ -80,6 +80,34 @@ export class OrganizationRepository extends BaseRepository {
   }
 
   /**
+   * Create a new organization
+   *
+   * @param {InsertOrganization} organizationData - Organization data to insert
+   * @returns {Promise<Organization>}
+   * @memberof OrganizationRepository
+   */
+  async create(organizationData: InsertOrganization) {
+    const identifier = await this.generateUniqueIdentifier(organizationData.name);
+
+    // Handle establishedAt separately
+    if (organizationData.establishedAt) {
+      try {
+        organizationData.establishedAt = new Date(organizationData.establishedAt);
+      } catch (error) {
+        // eslint-disable-next-line no-console
+        console.error('Error parsing establishedAt:', error);
+        delete organizationData.establishedAt;
+      }
+    }
+
+    const [newOrganization] = await db
+      .insert(organizationModel)
+      .values({ ...organizationData, identifier })
+      .returning();
+    return newOrganization;
+  }
+
+  /**
    * delete organization by identifier
    *
    * @param {string} identifier - identifier
@@ -88,5 +116,32 @@ export class OrganizationRepository extends BaseRepository {
    */
   async deleteByIdentifier(identifier: string) {
     await db.delete(organizationModel).where(eq(organizationModel.identifier, identifier));
+  }
+
+  /**
+   * Generate a unique identifier for the organization
+   *
+   * @param {string} name - Organization name
+   * @returns {Promise<string>}
+   * @memberof OrganizationRepository
+   */
+  private async generateUniqueIdentifier(name: string): Promise<string> {
+    const baseIdentifier = name
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, '-')
+      .slice(0, 20);
+    let identifier = `${baseIdentifier}-${crypto.randomUUID().slice(0, 6)}`;
+    let isUnique = false;
+
+    while (!isUnique) {
+      const existingOrg = await this.findByIdentifier(identifier);
+      if (!existingOrg) {
+        isUnique = true;
+      } else {
+        identifier = `${baseIdentifier}-${crypto.randomUUID().slice(0, 6)}`;
+      }
+    }
+
+    return identifier;
   }
 }

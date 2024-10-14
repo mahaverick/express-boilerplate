@@ -59,4 +59,32 @@ export class OrganizationController extends BaseController {
       return this.sendError(res, error.message, 500);
     }
   });
+
+  /**
+   * Create a new organization
+   *
+   * @param {Request} req - Request object
+   * @param {Response} res - Response object
+   * @returns {Promise<any>}
+   * @memberof OrganizationController
+   */
+  createOrganization = expressAsyncHandler(async (req: Request, res: Response) => {
+    try {
+      const organizationData = req.body;
+
+      // Use the authenticated user's ID
+      const userId = req.userId;
+
+      const newOrganization = await this.organizationRepo.create({ ...organizationData, userId });
+      return this.sendResponse(
+        res,
+        { organization: newOrganization },
+        201,
+        'Organization created successfully',
+      );
+    } catch (e) {
+      const error = e as Error;
+      return this.sendError(res, error.message, 500);
+    }
+  });
 }

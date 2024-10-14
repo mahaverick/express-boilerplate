@@ -90,7 +90,7 @@ export const PUBLIC_KEY = process.env.TOKEN_PUBLIC_KEY as string;
  * @constant {object} SMTP_CREDENTIALS
  */
 export const SMTP_CREDENTIALS = {
-  host: process.env.SMTP_HOST as string as string,
+  host: process.env.SMTP_HOST as string,
   port: Number(process.env.SMTP_PORT),
   secure: Boolean(process.env.SMTP_SECURE) || false,
   username: process.env.SMTP_USERNAME as string,
