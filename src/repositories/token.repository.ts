@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 
-import { and, eq } from 'drizzle-orm';
+import { and, eq, gt } from 'drizzle-orm';
 import { PgTransaction } from 'drizzle-orm/pg-core';
 
 import { InsertToken, Token, tokenModel, TokenType } from '@/database/models/token.model';
@@ -21,14 +21,35 @@ export class TokenRepository extends BaseRepository {
     data: Omit<InsertToken, 'value'>,
     tx?: PgTransaction<any, any, any>,
   ): Promise<Token> {
+    const now = new Date();
+    const dbOperation = tx || db;
+
+    // Attempt to update an existing active token that hasn't expired yet
+    const [updatedToken] = await dbOperation
+      .update(tokenModel)
+      .set({ expiresAt: new Date(now.getTime() + 24 * 60 * 60 * 1000), updatedAt: now })
+      .where(
+        and(
+          eq(tokenModel.userId, data.userId),
+          eq(tokenModel.type, data.type),
+          eq(tokenModel.active, true),
+          gt(tokenModel.expiresAt, now),
+        ),
+      )
+      .returning();
+
+    if (updatedToken) {
+      return updatedToken;
+    }
+
     const tokenValue = crypto.randomBytes(32).toString('hex');
-    const [token] = await (tx || db)
+    const [token] = await dbOperation
       .insert(tokenModel)
       .values({
         value: tokenValue,
         active: true,
         provider: 'boilerplate',
-        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+        expiresAt: new Date(now.getTime() + 24 * 60 * 60 * 1000),
         ...data,
       })
       .returning();

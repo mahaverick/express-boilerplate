@@ -18,7 +18,7 @@
     "check-format": "prettier --check \"src/**/*.ts\"",
     "db:generate": "drizzle-kit generate",
     "db:migrate:dev": "npx ts-node -r tsconfig-paths/register src/database/migrate.ts",
-    "db:migrate": "npx ts-node src/database/migrate.ts",
+    "db:migrate": "npx ts-node -r tsconfig-paths/register src/database/migrate.ts",
     "db:studio": "drizzle-kit studio",
     "test": "jest",
     "test:watch": "jest --watch",
