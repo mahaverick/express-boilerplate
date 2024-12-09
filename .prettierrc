@@ -1,11 +1,12 @@
 {
-  "semi": true,
-  "tabWidth": 2,
   "endOfLine": "lf",
-  "printWidth": 100,
+  "trailingComma": "es5",
+  "tabWidth": 2,
+  "semi": false,
   "singleQuote": true,
-  "trailingComma": "all",
+  "printWidth": 100,
   "bracketSpacing": true,
+  "bracketSameLine": false,
   "arrowParens": "always",
   "importOrder": [
     "^(crypto/(.*)$)|^(crypto$)",
@@ -28,9 +29,5 @@
     "^@/(.*)$",
     "^[./]"
   ],
-  "importOrderSeparation": true,
-  "importOrderSortSpecifiers": true,
-  "plugins": ["@ianvs/prettier-plugin-sort-imports"],
-  "importOrderParserPlugins": ["typescript", "jsx", "decorators-legacy"],
-  "importOrderTypeScriptVersion": "5.0.0"
+  "plugins": ["@ianvs/prettier-plugin-sort-imports"]
 }

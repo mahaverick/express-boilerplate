@@ -1,24 +1,24 @@
 // src/controllers/organization.controller.ts
 
-import { Request, Response } from 'express';
-import expressAsyncHandler from 'express-async-handler';
+import { Request, Response } from 'express'
+import expressAsyncHandler from 'express-async-handler'
 
-import { BaseController } from '@/controllers/base.controller';
-import { OrganizationRepository } from '@/repositories/organization.repository';
+import { BaseController } from '@/controllers/base.controller'
+import { OrganizationRepository } from '@/repositories/organization.repository'
 
 export class OrganizationController extends BaseController {
   /**
    * OrganizationRepository
    * @type {OrganizationRepository}
    */
-  private organizationRepo: OrganizationRepository;
+  private organizationRepo: OrganizationRepository
 
   /**
    * Constructor  - Initialize OrganizationController
    */
   constructor() {
-    super();
-    this.organizationRepo = new OrganizationRepository();
+    super()
+    this.organizationRepo = new OrganizationRepository()
   }
 
   /**
@@ -29,13 +29,13 @@ export class OrganizationController extends BaseController {
    */
   getAllOrganizations = expressAsyncHandler(async (req: Request, res: Response) => {
     try {
-      const organizations = await this.organizationRepo.getAll();
-      return this.sendResponse(res, { organizations }, 200, 'All organizations');
+      const organizations = await this.organizationRepo.getAll()
+      return this.sendResponse(res, { organizations }, 200, 'All organizations')
     } catch (e) {
-      const error = e as Error;
-      return this.sendError(res, error.message, 500);
+      const error = e as Error
+      return this.sendError(res, error.message, 500)
     }
-  });
+  })
 
   /**
    * Get organization by identifier
@@ -48,18 +48,18 @@ export class OrganizationController extends BaseController {
    */
   getOrganization = expressAsyncHandler(async (req: Request, res: Response) => {
     try {
-      const { identifier } = req.params;
-      const organization = await this.organizationRepo.findByIdentifier(identifier);
+      const { identifier } = req.params
+      const organization = await this.organizationRepo.findByIdentifier(identifier)
 
       if (!organization) {
-        return this.sendError(res, 'Organization not found', 404);
+        return this.sendError(res, 'Organization not found', 404)
       }
-      return this.sendResponse(res, { organization }, 200, 'Organization');
+      return this.sendResponse(res, { organization }, 200, 'Organization')
     } catch (e) {
-      const error = e as Error;
-      return this.sendError(res, error.message, 500);
+      const error = e as Error
+      return this.sendError(res, error.message, 500)
     }
-  });
+  })
 
   /**
    * Create a new organization
@@ -71,21 +71,21 @@ export class OrganizationController extends BaseController {
    */
   createOrganization = expressAsyncHandler(async (req: Request, res: Response) => {
     try {
-      const organizationData = req.body;
+      const organizationData = req.body
 
       // Use the authenticated user's ID
-      const userId = req.userId;
+      const userId = req.userId
 
-      const newOrganization = await this.organizationRepo.create({ ...organizationData, userId });
+      const newOrganization = await this.organizationRepo.create({ ...organizationData, userId })
       return this.sendResponse(
         res,
         { organization: newOrganization },
         201,
-        'Organization created successfully',
-      );
+        'Organization created successfully'
+      )
     } catch (e) {
-      const error = e as Error;
-      return this.sendError(res, error.message, 500);
+      const error = e as Error
+      return this.sendError(res, error.message, 500)
     }
-  });
+  })
 }

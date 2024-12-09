@@ -1,11 +1,11 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm'
 
-import { InsertOrganization, organizationModel } from '@/database/models/organization.model';
-import { userModel } from '@/database/schema';
-import { BaseRepository } from '@/repositories/base.repository';
-import db from '@/services/db.service';
+import { InsertOrganization, organizationModel } from '@/database/models/organization.model'
+import { userModel } from '@/database/schema'
+import { BaseRepository } from '@/repositories/base.repository'
+import db from '@/services/db.service'
 
-const DEFAULT_SENSITIVE_COLUMNS = ['id', 'userId', 'deletedAt'];
+const DEFAULT_SENSITIVE_COLUMNS = ['id', 'userId', 'deletedAt']
 
 export class OrganizationRepository extends BaseRepository {
   /**
@@ -23,7 +23,7 @@ export class OrganizationRepository extends BaseRepository {
           columns: this.omitUserSensitiveColumns(),
         },
       },
-    });
+    })
   }
   /**
    * Get organization by identifier
@@ -36,8 +36,8 @@ export class OrganizationRepository extends BaseRepository {
     const organization = await db.query.organizationModel.findFirst({
       columns: this.omitSensitiveColumns(...DEFAULT_SENSITIVE_COLUMNS),
       where: eq(organizationModel.identifier, identifier),
-    });
-    return organization;
+    })
+    return organization
   }
 
   /**
@@ -51,8 +51,8 @@ export class OrganizationRepository extends BaseRepository {
     const organizations = await db.query.organizationModel.findMany({
       columns: this.omitSensitiveColumns(...DEFAULT_SENSITIVE_COLUMNS),
       where: and(eq(organizationModel.userId, Number(userId)), eq(organizationModel.active, true)),
-    });
-    return organizations;
+    })
+    return organizations
   }
 
   /**
@@ -64,18 +64,18 @@ export class OrganizationRepository extends BaseRepository {
    */
   async findByUsername(username: string) {
     try {
-      const user = await db.query.userModel.findFirst({ where: eq(userModel.username, username) });
+      const user = await db.query.userModel.findFirst({ where: eq(userModel.username, username) })
       if (!user) {
-        throw new Error('User not found');
+        throw new Error('User not found')
       }
       const organizations = await db.query.organizationModel.findMany({
         columns: this.omitSensitiveColumns(...DEFAULT_SENSITIVE_COLUMNS),
         where: and(eq(organizationModel.userId, user.id), eq(organizationModel.active, true)),
-      });
-      return organizations;
+      })
+      return organizations
     } catch (e) {
-      const error = e as Error;
-      throw new Error(error.message);
+      const error = e as Error
+      throw new Error(error.message)
     }
   }
 
@@ -87,24 +87,24 @@ export class OrganizationRepository extends BaseRepository {
    * @memberof OrganizationRepository
    */
   async create(organizationData: InsertOrganization) {
-    const identifier = await this.generateUniqueIdentifier(organizationData.name);
+    const identifier = await this.generateUniqueIdentifier(organizationData.name)
 
     // Handle establishedAt separately
     if (organizationData.establishedAt) {
       try {
-        organizationData.establishedAt = new Date(organizationData.establishedAt);
+        organizationData.establishedAt = new Date(organizationData.establishedAt)
       } catch (error) {
         // eslint-disable-next-line no-console
-        console.error('Error parsing establishedAt:', error);
-        delete organizationData.establishedAt;
+        console.error('Error parsing establishedAt:', error)
+        delete organizationData.establishedAt
       }
     }
 
     const [newOrganization] = await db
       .insert(organizationModel)
       .values({ ...organizationData, identifier })
-      .returning();
-    return newOrganization;
+      .returning()
+    return newOrganization
   }
 
   /**
@@ -115,7 +115,7 @@ export class OrganizationRepository extends BaseRepository {
    * @memberof OrganizationRepository
    */
   async deleteByIdentifier(identifier: string) {
-    await db.delete(organizationModel).where(eq(organizationModel.identifier, identifier));
+    await db.delete(organizationModel).where(eq(organizationModel.identifier, identifier))
   }
 
   /**
@@ -129,19 +129,19 @@ export class OrganizationRepository extends BaseRepository {
     const baseIdentifier = name
       .toLowerCase()
       .replace(/[^a-z0-9]/g, '-')
-      .slice(0, 20);
-    let identifier = `${baseIdentifier}-${crypto.randomUUID().slice(0, 6)}`;
-    let isUnique = false;
+      .slice(0, 20)
+    let identifier = `${baseIdentifier}-${crypto.randomUUID().slice(0, 6)}`
+    let isUnique = false
 
     while (!isUnique) {
-      const existingOrg = await this.findByIdentifier(identifier);
+      const existingOrg = await this.findByIdentifier(identifier)
       if (!existingOrg) {
-        isUnique = true;
+        isUnique = true
       } else {
-        identifier = `${baseIdentifier}-${crypto.randomUUID().slice(0, 6)}`;
+        identifier = `${baseIdentifier}-${crypto.randomUUID().slice(0, 6)}`
       }
     }
 
-    return identifier;
+    return identifier
   }
 }

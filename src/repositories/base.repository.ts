@@ -1,4 +1,4 @@
-import { AnyColumn, isNull } from 'drizzle-orm';
+import { AnyColumn, isNull } from 'drizzle-orm'
 
 export abstract class BaseRepository {
   /**
@@ -8,7 +8,7 @@ export abstract class BaseRepository {
    * @returns {boolean}
    */
   protected withSoftDelete(deletedAtColumn: AnyColumn) {
-    return isNull(deletedAtColumn);
+    return isNull(deletedAtColumn)
   }
 
   /**
@@ -18,12 +18,12 @@ export abstract class BaseRepository {
    * @returns {{ [key: string]: boolean }} - Omitted columns
    */
   protected omitSensitiveColumns(...columns: string[]): { [key: string]: boolean } {
-    const omittedColumnMap: { [key: string]: boolean } = {};
+    const omittedColumnMap: { [key: string]: boolean } = {}
 
     columns.forEach((column: string) => {
-      omittedColumnMap[column] = false;
-    });
-    return omittedColumnMap;
+      omittedColumnMap[column] = false
+    })
+    return omittedColumnMap
   }
 
   /**
@@ -42,8 +42,8 @@ export abstract class BaseRepository {
       'phoneVerifiedAt',
       'deletedAt',
       'active',
-      ...columns,
-    );
+      ...columns
+    )
   }
 
   /**
@@ -52,6 +52,6 @@ export abstract class BaseRepository {
    * @returns {Date}
    */
   protected getCurrentTimestamp() {
-    return new Date();
+    return new Date()
   }
 }

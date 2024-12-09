@@ -1,14 +1,14 @@
 // src/controllers/base.controller.ts
 
-import { Response } from 'express';
+import { Response } from 'express'
 
-import { AppError } from '@/middlewares/error.middleware';
-import { logger } from '@/utils/logger.utils';
+import { AppError } from '@/middlewares/error.middleware'
+import { logger } from '@/utils/logger.utils'
 
 export type ValidationErrors = {
-  _errors?: string[] | undefined;
-  [key: string]: ValidationErrors | string[] | undefined;
-};
+  _errors?: string[] | undefined
+  [key: string]: ValidationErrors | string[] | undefined
+}
 
 export abstract class BaseController {
   /**
@@ -24,7 +24,7 @@ export abstract class BaseController {
     data: unknown,
     statusCode = 200,
     message = 'Success',
-    meta = { timestamp: new Date().toISOString() },
+    meta = { timestamp: new Date().toISOString() }
   ) {
     res.status(statusCode).json({
       success: true,
@@ -32,7 +32,7 @@ export abstract class BaseController {
       message,
       data,
       meta,
-    });
+    })
   }
 
   /**
@@ -50,13 +50,13 @@ export abstract class BaseController {
     statusCode = 500,
     code = 'INTERNAL_SERVER_ERROR',
     errors?: ValidationErrors,
-    meta = { timestamp: new Date().toISOString(), location: 'base' },
+    meta = { timestamp: new Date().toISOString(), location: 'base' }
   ) {
-    const error: AppError = new Error(message);
-    error.statusCode = statusCode;
-    error.code = code;
+    const error: AppError = new Error(message)
+    error.statusCode = statusCode
+    error.code = code
 
-    logger.error(`Error: ${error.message} [${error.code}]`);
+    logger.error(`Error: ${error.message} [${error.code}]`)
 
     res.status(error.statusCode).json({
       success: false,
@@ -65,6 +65,6 @@ export abstract class BaseController {
       statusCode: error.statusCode,
       errors,
       meta,
-    });
+    })
   }
 }

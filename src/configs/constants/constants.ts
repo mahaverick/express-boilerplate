@@ -1,8 +1,8 @@
-import { config } from 'dotenv';
-import { CookieOptions } from 'express';
-import ms from 'ms';
+import { config } from 'dotenv'
+import { CookieOptions } from 'express'
+import ms from 'ms'
 
-config();
+config()
 
 /**
  * Environment
@@ -10,7 +10,7 @@ config();
  * @export
  * @constant {string} ENV
  */
-export const ENV = process.env.NODE_ENV || 'development';
+export const ENV = process.env.NODE_ENV || 'development'
 
 /**
  * Database URL
@@ -18,7 +18,7 @@ export const ENV = process.env.NODE_ENV || 'development';
  * @export
  * @constant {string} DATABASE_URL
  */
-export const DATABASE_URL = process.env.DATABASE_URL as string;
+export const DATABASE_URL = process.env.DATABASE_URL as string
 
 /**
  * Access token
@@ -28,7 +28,7 @@ export const DATABASE_URL = process.env.DATABASE_URL as string;
  */
 export const ACCESS_TOKEN = {
   expiry: process.env.ACCESS_TOKEN_EXPIRY as string,
-};
+}
 
 /**
  * Refresh token
@@ -47,7 +47,7 @@ export const REFRESH_TOKEN = {
       maxAge: ms(process.env.REFRESH_TOKEN_EXPIRY as string),
     } as CookieOptions,
   },
-};
+}
 
 /**
  * Session token
@@ -65,7 +65,7 @@ export const SESSION_TOKEN = {
       maxAge: ms(process.env.REFRESH_TOKEN_EXPIRY as string),
     } as CookieOptions,
   },
-};
+}
 
 /**
  * Private key
@@ -73,7 +73,7 @@ export const SESSION_TOKEN = {
  * @export
  * @constant {string} PRIVATE_KEY
  */
-export const PRIVATE_KEY = process.env.TOKEN_PRIVATE_KEY as string;
+export const PRIVATE_KEY = process.env.TOKEN_PRIVATE_KEY as string
 
 /**
  * Public key
@@ -81,7 +81,7 @@ export const PRIVATE_KEY = process.env.TOKEN_PRIVATE_KEY as string;
  * @export
  * @constant {string} PUBLIC_KEY
  */
-export const PUBLIC_KEY = process.env.TOKEN_PUBLIC_KEY as string;
+export const PUBLIC_KEY = process.env.TOKEN_PUBLIC_KEY as string
 
 /**
  * SMTP credentials
@@ -95,7 +95,7 @@ export const SMTP_CREDENTIALS = {
   secure: Boolean(process.env.SMTP_SECURE) || false,
   username: process.env.SMTP_USERNAME as string,
   password: process.env.SMTP_PASSWORD as string,
-};
+}
 
 /**
  * Client URL
@@ -103,7 +103,7 @@ export const SMTP_CREDENTIALS = {
  * @export
  * @constant {string} CLIENT_URL
  */
-export const CLIENT_URL = process.env.CLIENT_URL as string;
+export const CLIENT_URL = process.env.CLIENT_URL as string
 
 /**
  * AWS region
@@ -115,7 +115,7 @@ export const AWS = {
   region: process.env.AWS_REGION as string,
   accessKeyId: process.env.AWS_ACCESS_KEY_ID as string,
   secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY as string,
-};
+}
 
 /**
  * From email
@@ -123,4 +123,4 @@ export const AWS = {
  * @export
  * @constant {string} FROM_EMAIL
  */
-export const FROM_EMAIL = process.env.FROM_EMAIL as string;
+export const FROM_EMAIL = process.env.FROM_EMAIL as string

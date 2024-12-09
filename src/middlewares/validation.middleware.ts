@@ -1,7 +1,7 @@
 // src/middleware/validation.middleware.ts
 
-import { NextFunction, Request, Response } from 'express';
-import { AnyZodObject, ZodError } from 'zod';
+import { NextFunction, Request, Response } from 'express'
+import { AnyZodObject, ZodError } from 'zod'
 
 /**
  * Middleware to validate request body using Zod
@@ -12,8 +12,8 @@ import { AnyZodObject, ZodError } from 'zod';
 export const zodValidate =
   (schema: AnyZodObject) => async (req: Request, res: Response, next: NextFunction) => {
     try {
-      await schema.parseAsync(req.body);
-      return next();
+      await schema.parseAsync(req.body)
+      return next()
     } catch (error) {
       if (error instanceof ZodError) {
         return res.status(422).json({
@@ -23,7 +23,7 @@ export const zodValidate =
           statusCode: 422,
           errors: error.format(),
           meta: { timestamp: new Date().toISOString() },
-        });
+        })
       }
 
       return res.status(500).json({
@@ -33,6 +33,6 @@ export const zodValidate =
         statusCode: 500,
         errors: null,
         meta: { timestamp: new Date().toISOString(), location: 'validation' },
-      });
+      })
     }
-  };
+  }

@@ -1,13 +1,13 @@
-import { and, eq, isNotNull } from 'drizzle-orm';
+import { and, eq, isNotNull } from 'drizzle-orm'
 
-import { InsertUser, userModel } from '@/database/models/user.model';
-import { providerModel } from '@/database/schema';
-import { BaseRepository } from '@/repositories/base.repository';
-import { TokenRepository } from '@/repositories/token.repository';
-import db from '@/services/db.service';
-import { hashPassword } from '@/utils/auth.utils';
+import { InsertUser, userModel } from '@/database/models/user.model'
+import { providerModel } from '@/database/schema'
+import { BaseRepository } from '@/repositories/base.repository'
+import { TokenRepository } from '@/repositories/token.repository'
+import db from '@/services/db.service'
+import { hashPassword } from '@/utils/auth.utils'
 
-const DEFAULT_SENSITIVE_COLUMNS = ['id', 'userId', 'deletedAt'];
+const DEFAULT_SENSITIVE_COLUMNS = ['id', 'userId', 'deletedAt']
 
 export class UserRepository extends BaseRepository {
   /**
@@ -17,7 +17,7 @@ export class UserRepository extends BaseRepository {
    * @type {TokenRepository}
    * @memberof UserRepository
    */
-  private tokenRepo: TokenRepository;
+  private tokenRepo: TokenRepository
 
   /**
    * Constructor
@@ -25,8 +25,8 @@ export class UserRepository extends BaseRepository {
    * @memberof UserRepository
    */
   constructor() {
-    super();
-    this.tokenRepo = new TokenRepository();
+    super()
+    this.tokenRepo = new TokenRepository()
   }
 
   /**
@@ -39,18 +39,18 @@ export class UserRepository extends BaseRepository {
    */
   sanitize(user: InsertUser) {
     if (user) {
-      delete user.id;
-      delete user.password;
+      delete user.id
+      delete user.password
 
-      delete user.emailVerifiedAt;
-      delete user.phoneVerifiedAt;
-      delete user.lastLoggedInAt;
+      delete user.emailVerifiedAt
+      delete user.phoneVerifiedAt
+      delete user.lastLoggedInAt
 
-      delete user.createdAt;
-      delete user.updatedAt;
-      delete user.deletedAt;
+      delete user.createdAt
+      delete user.updatedAt
+      delete user.deletedAt
     }
-    return user;
+    return user
   }
 
   /**
@@ -75,7 +75,7 @@ export class UserRepository extends BaseRepository {
         emailVerified: isNotNull(userModel.emailVerifiedAt).as('email_verified'),
         phoneVerified: isNotNull(userModel.phoneVerifiedAt).as('phone_verified'),
       },
-    });
+    })
   }
 
   /**
@@ -102,27 +102,27 @@ export class UserRepository extends BaseRepository {
             ...userData,
             password: await hashPassword(userData.password ? userData.password : ''),
           })
-          .returning();
+          .returning()
 
         await tx.insert(providerModel).values({
           userId: user.id,
           type: 'email',
           active: true,
-        });
+        })
 
         // if email verified is provided then we don't need to create verification token
-        let tokenValue = null;
+        let tokenValue = null
         if (!user.emailVerifiedAt) {
-          const token = await this.tokenRepo.createEmailVerificationToken(user.id, tx);
-          tokenValue = token.value;
+          const token = await this.tokenRepo.createEmailVerificationToken(user.id, tx)
+          tokenValue = token.value
         }
-        return { user, tokenValue };
-      });
+        return { user, tokenValue }
+      })
 
-      return userAndToken;
+      return userAndToken
     } catch (e) {
-      const error = e as Error;
-      throw error;
+      const error = e as Error
+      throw error
     }
   }
 
@@ -149,8 +149,8 @@ export class UserRepository extends BaseRepository {
         emailVerified: isNotNull(userModel.emailVerifiedAt).as('email_verified'),
         phoneVerified: isNotNull(userModel.phoneVerifiedAt).as('phone_verified'),
       },
-    });
-    return user;
+    })
+    return user
   }
 
   /**
@@ -171,8 +171,8 @@ export class UserRepository extends BaseRepository {
         emailVerified: isNotNull(userModel.emailVerifiedAt).as('email_verified'),
         phoneVerified: isNotNull(userModel.phoneVerifiedAt).as('phone_verified'),
       },
-    });
-    return user;
+    })
+    return user
   }
 
   /**
@@ -198,8 +198,8 @@ export class UserRepository extends BaseRepository {
         emailVerified: isNotNull(userModel.emailVerifiedAt).as('email_verified'),
         phoneVerified: isNotNull(userModel.phoneVerifiedAt).as('phone_verified'),
       },
-    });
-    return user;
+    })
+    return user
   }
 
   /**
@@ -220,8 +220,8 @@ export class UserRepository extends BaseRepository {
         emailVerified: isNotNull(userModel.emailVerifiedAt).as('email_verified'),
         phoneVerified: isNotNull(userModel.phoneVerifiedAt).as('phone_verified'),
       },
-    });
-    return user;
+    })
+    return user
   }
 
   /**
@@ -245,8 +245,8 @@ export class UserRepository extends BaseRepository {
         emailVerified: isNotNull(userModel.emailVerifiedAt).as('email_verified'),
         phoneVerified: isNotNull(userModel.phoneVerifiedAt).as('phone_verified'),
       },
-    });
-    return user;
+    })
+    return user
   }
 
   /**
@@ -261,8 +261,8 @@ export class UserRepository extends BaseRepository {
       .update(userModel)
       .set({ deletedAt: this.getCurrentTimestamp() })
       .where(eq(userModel.id, userId))
-      .returning();
-    return user;
+      .returning()
+    return user
   }
 
   /**
@@ -277,8 +277,8 @@ export class UserRepository extends BaseRepository {
       .update(userModel)
       .set({ deletedAt: null })
       .where(eq(userModel.id, userId))
-      .returning();
-    return user;
+      .returning()
+    return user
   }
 
   /**
@@ -300,8 +300,8 @@ export class UserRepository extends BaseRepository {
         emailVerified: isNotNull(userModel.emailVerifiedAt).as('email_verified'),
         phoneVerified: isNotNull(userModel.phoneVerifiedAt).as('phone_verified'),
       },
-    });
-    return user?.organizations || [];
+    })
+    return user?.organizations || []
   }
 
   /**
@@ -316,8 +316,8 @@ export class UserRepository extends BaseRepository {
       .update(userModel)
       .set({ emailVerifiedAt: this.getCurrentTimestamp() })
       .where(eq(userModel.id, userId))
-      .returning();
-    return user;
+      .returning()
+    return user
   }
 
   /**
@@ -329,13 +329,13 @@ export class UserRepository extends BaseRepository {
    * @memberof UserRepository
    */
   async updatePassword(userId: number, newPassword: string) {
-    const hashedPassword = await hashPassword(newPassword);
+    const hashedPassword = await hashPassword(newPassword)
     const [user] = await db
       .update(userModel)
       .set({ password: hashedPassword })
       .where(eq(userModel.id, userId))
-      .returning();
-    return user;
+      .returning()
+    return user
   }
 
   // Add more methods as needed...

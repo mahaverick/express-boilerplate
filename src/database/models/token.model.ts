@@ -1,4 +1,4 @@
-import { InferInsertModel, InferSelectModel, relations } from 'drizzle-orm';
+import { InferInsertModel, InferSelectModel, relations } from 'drizzle-orm'
 import {
   boolean,
   integer,
@@ -8,9 +8,9 @@ import {
   text,
   timestamp,
   varchar,
-} from 'drizzle-orm/pg-core';
+} from 'drizzle-orm/pg-core'
 
-import { userModel } from './user.model';
+import { userModel } from './user.model'
 
 export enum TokenType {
   ACCESS_TOKEN = 'ACCESS_TOKEN',
@@ -26,7 +26,7 @@ export const TokenTypeEnum = pgEnum('token_type', [
   'PASSWORD_RESET',
   'EMAIL_VERIFICATION',
   'PHONE_VERIFICATION',
-]);
+])
 
 /**
  * Tokens table
@@ -61,14 +61,14 @@ export const tokenModel = pgTable('tokens', {
   })
     .defaultNow()
     .notNull(),
-});
+})
 
 export const tokenRelations = relations(tokenModel, ({ one }) => ({
   user: one(userModel, {
     fields: [tokenModel.userId],
     references: [userModel.id],
   }),
-}));
+}))
 
-export type Token = InferSelectModel<typeof tokenModel>;
-export type InsertToken = InferInsertModel<typeof tokenModel>;
+export type Token = InferSelectModel<typeof tokenModel>
+export type InsertToken = InferInsertModel<typeof tokenModel>

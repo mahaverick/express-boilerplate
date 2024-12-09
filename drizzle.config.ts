@@ -1,9 +1,9 @@
-import path from 'path';
+import path from 'path'
 
-import dotenv from 'dotenv';
-import { defineConfig, type Config } from 'drizzle-kit';
+import dotenv from 'dotenv'
+import { defineConfig, type Config } from 'drizzle-kit'
 
-dotenv.config();
+dotenv.config()
 
 export default defineConfig({
   schema: path.join(__dirname, 'src/database/schema.ts'),
@@ -14,4 +14,4 @@ export default defineConfig({
   },
   verbose: true,
   strict: true,
-}) satisfies Config;
+}) satisfies Config

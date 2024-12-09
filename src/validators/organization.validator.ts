@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod'
 
 export const createOrganizationSchema = z.object({
   name: z.string().min(1).max(255),
@@ -24,6 +24,6 @@ export const createOrganizationSchema = z.object({
     .union([z.string().datetime({ message: 'Invalid date format for establishedAt' }), z.date()])
     .optional()
     .transform((val) => (val ? new Date(val).toISOString() : undefined)),
-});
+})
 
-export type CreateOrganizationInput = z.infer<typeof createOrganizationSchema>;
+export type CreateOrganizationInput = z.infer<typeof createOrganizationSchema>

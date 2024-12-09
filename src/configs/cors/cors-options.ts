@@ -1,22 +1,22 @@
-import { CorsOptions } from 'cors';
-import { config } from 'dotenv';
+import { CorsOptions } from 'cors'
+import { config } from 'dotenv'
 
-import { CLIENT_URL } from '@/configs/constants/constants';
+import { CLIENT_URL } from '@/configs/constants/constants'
 
-config();
+config()
 
 const allowedOrigins: string[] = [
   'https://dev.boilerplate.com',
   'https://stage.boilerplate.com',
   'https://boilerplate.com',
-];
+]
 
 const corsOptions: CorsOptions = {
   origin: (origin, callback) => {
     if (!origin || allowedOrigins.includes(origin) || origin === CLIENT_URL) {
-      callback(null, true);
+      callback(null, true)
     } else {
-      callback(new Error('Not allowed by CORS'));
+      callback(new Error('Not allowed by CORS'))
     }
   },
   credentials: true,
@@ -24,6 +24,6 @@ const corsOptions: CorsOptions = {
   allowedHeaders: ['Content-Type', 'Authorization'],
   optionsSuccessStatus: 204,
   exposedHeaders: ['WWW-Authenticate'],
-};
+}
 
-export default corsOptions;
+export default corsOptions

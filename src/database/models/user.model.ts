@@ -1,4 +1,4 @@
-import { InferInsertModel, InferSelectModel, relations } from 'drizzle-orm';
+import { InferInsertModel, InferSelectModel, relations } from 'drizzle-orm'
 import {
   boolean,
   date,
@@ -8,12 +8,12 @@ import {
   timestamp,
   uniqueIndex,
   varchar,
-} from 'drizzle-orm/pg-core';
+} from 'drizzle-orm/pg-core'
 
-import { organizationModel } from '@/database/models/organization.model';
-import { providerModel } from '@/database/models/provider.model';
+import { organizationModel } from '@/database/models/organization.model'
+import { providerModel } from '@/database/models/provider.model'
 
-export const userRole = pgEnum('user_role', ['superAdmin', 'admin', 'teacher', 'user', 'guest']);
+export const userRole = pgEnum('user_role', ['superAdmin', 'admin', 'teacher', 'user', 'guest'])
 
 export const userModel = pgTable(
   'users',
@@ -72,14 +72,14 @@ export const userModel = pgTable(
     return {
       emailIndex: uniqueIndex('email_index').on(table.email),
       usernameIndex: uniqueIndex('username_index').on(table.username),
-    };
-  },
-);
+    }
+  }
+)
 
 export const userRelations = relations(userModel, ({ many }) => ({
   providers: many(providerModel),
   organizations: many(organizationModel),
-}));
+}))
 
-export type User = InferSelectModel<typeof userModel>;
-export type InsertUser = InferInsertModel<typeof userModel>;
+export type User = InferSelectModel<typeof userModel>
+export type InsertUser = InferInsertModel<typeof userModel>

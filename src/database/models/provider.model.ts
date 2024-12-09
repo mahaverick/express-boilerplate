@@ -1,7 +1,7 @@
-import { InferInsertModel, InferSelectModel, relations } from 'drizzle-orm';
-import { boolean, integer, pgTable, serial, text, timestamp, varchar } from 'drizzle-orm/pg-core';
+import { InferInsertModel, InferSelectModel, relations } from 'drizzle-orm'
+import { boolean, integer, pgTable, serial, text, timestamp, varchar } from 'drizzle-orm/pg-core'
 
-import { userModel } from './user.model';
+import { userModel } from './user.model'
 
 /**
  * Providers table
@@ -33,14 +33,14 @@ export const providerModel = pgTable('providers', {
   })
     .defaultNow()
     .notNull(),
-});
+})
 
 export const providerRelations = relations(providerModel, ({ one }) => ({
   user: one(userModel, {
     fields: [providerModel.userId],
     references: [userModel.id],
   }),
-}));
+}))
 
-export type Provider = InferSelectModel<typeof providerModel>;
-export type InsertProvider = InferInsertModel<typeof providerModel>;
+export type Provider = InferSelectModel<typeof providerModel>
+export type InsertProvider = InferInsertModel<typeof providerModel>

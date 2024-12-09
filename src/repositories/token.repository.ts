@@ -1,11 +1,11 @@
-import crypto from 'crypto';
+import crypto from 'crypto'
 
-import { and, eq, gt } from 'drizzle-orm';
-import { PgTransaction } from 'drizzle-orm/pg-core';
+import { and, eq, gt } from 'drizzle-orm'
+import { PgTransaction } from 'drizzle-orm/pg-core'
 
-import { InsertToken, Token, tokenModel, TokenType } from '@/database/models/token.model';
-import { BaseRepository } from '@/repositories/base.repository';
-import db from '@/services/db.service';
+import { InsertToken, Token, tokenModel, TokenType } from '@/database/models/token.model'
+import { BaseRepository } from '@/repositories/base.repository'
+import db from '@/services/db.service'
 
 export class TokenRepository extends BaseRepository {
   /**
@@ -19,10 +19,10 @@ export class TokenRepository extends BaseRepository {
    */
   async create(
     data: Omit<InsertToken, 'value'>,
-    tx?: PgTransaction<any, any, any>,
+    tx?: PgTransaction<any, any, any>
   ): Promise<Token> {
-    const now = new Date();
-    const dbOperation = tx || db;
+    const now = new Date()
+    const dbOperation = tx || db
 
     // Attempt to update an existing active token that hasn't expired yet
     const [updatedToken] = await dbOperation
@@ -33,16 +33,16 @@ export class TokenRepository extends BaseRepository {
           eq(tokenModel.userId, data.userId),
           eq(tokenModel.type, data.type),
           eq(tokenModel.active, true),
-          gt(tokenModel.expiresAt, now),
-        ),
+          gt(tokenModel.expiresAt, now)
+        )
       )
-      .returning();
+      .returning()
 
     if (updatedToken) {
-      return updatedToken;
+      return updatedToken
     }
 
-    const tokenValue = crypto.randomBytes(32).toString('hex');
+    const tokenValue = crypto.randomBytes(32).toString('hex')
     const [token] = await dbOperation
       .insert(tokenModel)
       .values({
@@ -52,9 +52,9 @@ export class TokenRepository extends BaseRepository {
         expiresAt: new Date(now.getTime() + 24 * 60 * 60 * 1000),
         ...data,
       })
-      .returning();
+      .returning()
 
-    return token;
+    return token
   }
 
   /**
@@ -66,7 +66,7 @@ export class TokenRepository extends BaseRepository {
    * @memberof TokenRepository
    */
   async createEmailVerificationToken(userId: number, tx?: PgTransaction<any, any, any>) {
-    return this.create({ userId, type: TokenType.EMAIL_VERIFICATION }, tx);
+    return this.create({ userId, type: TokenType.EMAIL_VERIFICATION }, tx)
   }
 
   /**
@@ -78,7 +78,7 @@ export class TokenRepository extends BaseRepository {
    * @memberof TokenRepository
    */
   async createPasswordResetToken(userId: number, tx?: PgTransaction<any, any, any>) {
-    return this.create({ userId, type: TokenType.PASSWORD_RESET }, tx);
+    return this.create({ userId, type: TokenType.PASSWORD_RESET }, tx)
   }
 
   /**
@@ -91,8 +91,8 @@ export class TokenRepository extends BaseRepository {
   async findByUserId(userId: number | string) {
     const tokens = await db.query.tokenModel.findMany({
       where: and(eq(tokenModel.userId, Number(userId)), eq(tokenModel.active, true)),
-    });
-    return tokens;
+    })
+    return tokens
   }
 
   /**
@@ -108,10 +108,10 @@ export class TokenRepository extends BaseRepository {
       where: and(
         eq(tokenModel.userId, userId),
         eq(tokenModel.type, type),
-        eq(tokenModel.active, true),
+        eq(tokenModel.active, true)
       ),
-    });
-    return token;
+    })
+    return token
   }
 
   /**
@@ -124,8 +124,8 @@ export class TokenRepository extends BaseRepository {
   async findByValue(value: string) {
     const token = await db.query.tokenModel.findFirst({
       where: and(eq(tokenModel.value, value)),
-    });
-    return token;
+    })
+    return token
   }
 
   /**
@@ -140,8 +140,8 @@ export class TokenRepository extends BaseRepository {
     const token = await db.query.tokenModel.findFirst({
       where: and(eq(tokenModel.value, value), eq(tokenModel.type, type)),
       with: { user: true },
-    });
-    return token;
+    })
+    return token
   }
 
   /**
@@ -152,7 +152,7 @@ export class TokenRepository extends BaseRepository {
    * @memberof TokenRepository
    */
   async delete(id: number) {
-    await db.delete(tokenModel).where(eq(tokenModel.id, id));
+    await db.delete(tokenModel).where(eq(tokenModel.id, id))
   }
 
   /**
@@ -163,7 +163,7 @@ export class TokenRepository extends BaseRepository {
    * @memberof TokenRepository
    */
   async deleteBySessionId(sessionId: string) {
-    await db.delete(tokenModel).where(eq(tokenModel.sessionId, sessionId));
+    await db.delete(tokenModel).where(eq(tokenModel.sessionId, sessionId))
   }
 
   /**
@@ -174,7 +174,7 @@ export class TokenRepository extends BaseRepository {
    * @memberof TokenRepository
    */
   async deleteByValue(value: string) {
-    await db.delete(tokenModel).where(eq(tokenModel.value, value));
+    await db.delete(tokenModel).where(eq(tokenModel.value, value))
   }
 
   /**
@@ -189,7 +189,7 @@ export class TokenRepository extends BaseRepository {
       .update(tokenModel)
       .set({ active: false })
       .where(eq(tokenModel.id, tokenId))
-      .returning();
-    return token;
+      .returning()
+    return token
   }
 }

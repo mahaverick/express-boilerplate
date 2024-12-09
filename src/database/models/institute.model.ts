@@ -1,4 +1,4 @@
-import { InferInsertModel, InferSelectModel, relations } from 'drizzle-orm';
+import { InferInsertModel, InferSelectModel, relations } from 'drizzle-orm'
 import {
   boolean,
   integer,
@@ -8,9 +8,9 @@ import {
   timestamp,
   uniqueIndex,
   varchar,
-} from 'drizzle-orm/pg-core';
+} from 'drizzle-orm/pg-core'
 
-import { organizationModel } from './organization.model';
+import { organizationModel } from './organization.model'
 
 export const instituteModel = pgTable(
   'institutes',
@@ -70,16 +70,16 @@ export const instituteModel = pgTable(
   (table) => {
     return {
       instituteIdentifierIndex: uniqueIndex('institute_identifier_index').on(table.identifier),
-    };
-  },
-);
+    }
+  }
+)
 
 export const instituteRelations = relations(instituteModel, ({ one }) => ({
   organization: one(organizationModel, {
     fields: [instituteModel.organizationId],
     references: [organizationModel.id],
   }),
-}));
+}))
 
-export type Institute = InferSelectModel<typeof instituteModel>;
-export type InsertInstitute = InferInsertModel<typeof instituteModel>;
+export type Institute = InferSelectModel<typeof instituteModel>
+export type InsertInstitute = InferInsertModel<typeof instituteModel>

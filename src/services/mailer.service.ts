@@ -1,17 +1,17 @@
-import 'dotenv/config';
+import 'dotenv/config'
 
-import { SESClient } from '@aws-sdk/client-ses';
-import { fromEnv } from '@aws-sdk/credential-providers';
-import { createTransport, Transporter } from 'nodemailer';
+import { SESClient } from '@aws-sdk/client-ses'
+import { fromEnv } from '@aws-sdk/credential-providers'
+import { createTransport, Transporter } from 'nodemailer'
 
-import { AWS, CLIENT_URL, ENV, FROM_EMAIL, SMTP_CREDENTIALS } from '@/configs/constants/constants';
-import { logger } from '@/utils/logger.utils';
+import { AWS, CLIENT_URL, ENV, FROM_EMAIL, SMTP_CREDENTIALS } from '@/configs/constants/constants'
+import { logger } from '@/utils/logger.utils'
 
 export interface EmailOptions {
-  to: string;
-  subject: string;
-  text: string;
-  html?: string;
+  to: string
+  subject: string
+  text: string
+  html?: string
 }
 
 /**
@@ -20,8 +20,8 @@ export interface EmailOptions {
  * @class Mailer
  */
 class Mailer {
-  private static instance: Mailer;
-  private transporter: Transporter;
+  private static instance: Mailer
+  private transporter: Transporter
 
   /**
    * Constructor
@@ -34,10 +34,10 @@ class Mailer {
       const ses = new SESClient({
         region: AWS.region,
         credentials: fromEnv(),
-      });
+      })
       this.transporter = createTransport({
         SES: { ses, aws: { SESClient } },
-      });
+      })
     } else {
       this.transporter = createTransport({
         host: SMTP_CREDENTIALS.host,
@@ -46,7 +46,7 @@ class Mailer {
           user: SMTP_CREDENTIALS.username,
           pass: SMTP_CREDENTIALS.password,
         },
-      });
+      })
     }
   }
 
@@ -59,9 +59,9 @@ class Mailer {
    */
   public static getInstance(): Mailer {
     if (!Mailer.instance) {
-      Mailer.instance = new Mailer();
+      Mailer.instance = new Mailer()
     }
-    return Mailer.instance;
+    return Mailer.instance
   }
 
   /**
@@ -76,11 +76,11 @@ class Mailer {
       await this.transporter.sendMail({
         from: FROM_EMAIL,
         ...options,
-      });
-      logger.info(`Email sent successfully to ${options.to}`);
+      })
+      logger.info(`Email sent successfully to ${options.to}`)
     } catch (error) {
-      logger.error('Error sending email:', error);
-      throw new Error('Failed to send email');
+      logger.error('Error sending email:', error)
+      throw new Error('Failed to send email')
     }
   }
 
@@ -93,7 +93,7 @@ class Mailer {
    * @memberof Mailer
    */
   async sendVerificationEmail(to: string, verificationToken: string): Promise<void> {
-    const verificationLink = `${CLIENT_URL}/email/verify?token=${verificationToken}&email=${to}`;
+    const verificationLink = `${CLIENT_URL}/email/verify?token=${verificationToken}&email=${to}`
     const emailOptions: EmailOptions = {
       to,
       subject: 'Verify your email for Boilerplate',
@@ -107,8 +107,8 @@ class Mailer {
           </body>
         </html>
       `,
-    };
-    await this.sendEmail(emailOptions);
+    }
+    await this.sendEmail(emailOptions)
   }
 
   /**
@@ -120,7 +120,7 @@ class Mailer {
    * @memberof Mailer
    */
   async sendPasswordResetEmail(to: string, resetToken: string): Promise<void> {
-    const resetLink = `${CLIENT_URL}/password/reset?token=${resetToken}&email=${to}`;
+    const resetLink = `${CLIENT_URL}/password/reset?token=${resetToken}&email=${to}`
     const emailOptions: EmailOptions = {
       to,
       subject: 'Reset your password for Edyt',
@@ -134,9 +134,9 @@ class Mailer {
         </body>
       </html>
     `,
-    };
-    await this.sendEmail(emailOptions);
+    }
+    await this.sendEmail(emailOptions)
   }
 }
 
-export const mailer = Mailer.getInstance();
+export const mailer = Mailer.getInstance()

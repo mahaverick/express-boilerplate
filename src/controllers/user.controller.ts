@@ -1,33 +1,33 @@
 // src/controllers/user.controller.ts
 
-import { Request, Response } from 'express';
-import asyncHandler from 'express-async-handler';
+import { Request, Response } from 'express'
+import asyncHandler from 'express-async-handler'
 
-import { BaseController } from '@/controllers/base.controller';
-import { OrganizationRepository } from '@/repositories/organization.repository';
-import { UserRepository } from '@/repositories/user.repository';
-import { hashPassword } from '@/utils/auth.utils';
+import { BaseController } from '@/controllers/base.controller'
+import { OrganizationRepository } from '@/repositories/organization.repository'
+import { UserRepository } from '@/repositories/user.repository'
+import { hashPassword } from '@/utils/auth.utils'
 
 export class UserController extends BaseController {
   /**
    * UserRepository
    * @type {UserRepository}
    */
-  private userRepo: UserRepository;
+  private userRepo: UserRepository
 
   /**
    * OrganizationRepository
    * @type {OrganizationRepository}
    */
-  private organizationRepo: OrganizationRepository;
+  private organizationRepo: OrganizationRepository
 
   /**
    * Constructor  - Initialize UserController
    */
   constructor() {
-    super();
-    this.userRepo = new UserRepository();
-    this.organizationRepo = new OrganizationRepository();
+    super()
+    this.userRepo = new UserRepository()
+    this.organizationRepo = new OrganizationRepository()
   }
 
   /**
@@ -38,13 +38,13 @@ export class UserController extends BaseController {
    */
   getAllUsers = asyncHandler(async (req: Request, res: Response) => {
     try {
-      const users = await this.userRepo.getAll();
-      return this.sendResponse(res, { users }, 200, 'All users');
+      const users = await this.userRepo.getAll()
+      return this.sendResponse(res, { users }, 200, 'All users')
     } catch (e) {
-      const error = e as Error;
-      return this.sendError(res, error.message, 500);
+      const error = e as Error
+      return this.sendError(res, error.message, 500)
     }
-  });
+  })
 
   /**
    * Create a new user
@@ -54,21 +54,21 @@ export class UserController extends BaseController {
    */
   createUser = asyncHandler(async (req: Request, res: Response) => {
     try {
-      const { email, firstName, username, password } = req.body;
-      const passwordHash = await hashPassword(password);
+      const { email, firstName, username, password } = req.body
+      const passwordHash = await hashPassword(password)
 
       const user = await this.userRepo.create({
         firstName,
         username,
         email,
         password: passwordHash,
-      });
-      return this.sendResponse(res, { user }, 201, 'User created');
+      })
+      return this.sendResponse(res, { user }, 201, 'User created')
     } catch (e) {
-      const error = e as Error;
-      return this.sendError(res, error.message, 500);
+      const error = e as Error
+      return this.sendError(res, error.message, 500)
     }
-  });
+  })
 
   /**
    * Get logged in user
@@ -77,21 +77,21 @@ export class UserController extends BaseController {
    * @param {Response} res - Response object
    */
   getLoggedInUser = asyncHandler(async (req: Request, res: Response) => {
-    const userId = req.userId;
+    const userId = req.userId
 
     try {
-      const user = await this.userRepo.findById(userId);
+      const user = await this.userRepo.findById(userId)
 
       if (!user) {
-        return this.sendError(res, 'User not found', 404);
+        return this.sendError(res, 'User not found', 404)
       }
 
-      return this.sendResponse(res, { user }, 200, 'Logged in user');
+      return this.sendResponse(res, { user }, 200, 'Logged in user')
     } catch (e) {
-      const error = e as Error;
-      return this.sendError(res, error.message, 500);
+      const error = e as Error
+      return this.sendError(res, error.message, 500)
     }
-  });
+  })
 
   /**
    * Get single user by id
@@ -100,21 +100,21 @@ export class UserController extends BaseController {
    * @param {Response} res - Response object
    */
   getUserById = asyncHandler(async (req: Request, res: Response) => {
-    const { userId } = req.params;
+    const { userId } = req.params
 
     try {
-      const user = await this.userRepo.findById(userId);
+      const user = await this.userRepo.findById(userId)
 
       if (!user) {
-        return this.sendError(res, 'User not found', 404);
+        return this.sendError(res, 'User not found', 404)
       }
 
-      return this.sendResponse(res, { user }, 200, 'User by id');
+      return this.sendResponse(res, { user }, 200, 'User by id')
     } catch (e) {
-      const error = e as Error;
-      return this.sendError(res, error.message, 500);
+      const error = e as Error
+      return this.sendError(res, error.message, 500)
     }
-  });
+  })
 
   /**
    * Get single user by email
@@ -123,21 +123,21 @@ export class UserController extends BaseController {
    * @param {Response} res - Response object
    */
   getUserByEmail = asyncHandler(async (req: Request, res: Response) => {
-    const { email } = req.params;
+    const { email } = req.params
 
     try {
-      const user = await this.userRepo.findByEmail(email);
+      const user = await this.userRepo.findByEmail(email)
 
       if (!user) {
-        return this.sendError(res, 'User not found', 404);
+        return this.sendError(res, 'User not found', 404)
       }
 
-      return this.sendResponse(res, { user }, 200, 'User by email');
+      return this.sendResponse(res, { user }, 200, 'User by email')
     } catch (e) {
-      const error = e as Error;
-      return this.sendError(res, error.message, 500);
+      const error = e as Error
+      return this.sendError(res, error.message, 500)
     }
-  });
+  })
 
   /**
    * Get single user by username
@@ -146,21 +146,21 @@ export class UserController extends BaseController {
    * @param {Response} res - Response object
    */
   getUserByUsername = asyncHandler(async (req: Request, res: Response) => {
-    const { username } = req.params;
+    const { username } = req.params
 
     try {
-      const user = await this.userRepo.findByUsername(username);
+      const user = await this.userRepo.findByUsername(username)
 
       if (!user) {
-        return this.sendError(res, 'User not found', 404);
+        return this.sendError(res, 'User not found', 404)
       }
 
-      return this.sendResponse(res, { user }, 200, 'User by username');
+      return this.sendResponse(res, { user }, 200, 'User by username')
     } catch (e) {
-      const error = e as Error;
-      return this.sendError(res, error.message, 500);
+      const error = e as Error
+      return this.sendError(res, error.message, 500)
     }
-  });
+  })
 
   /**
    * Delete a user
@@ -169,34 +169,34 @@ export class UserController extends BaseController {
    * @param {Response} res - Response object
    */
   deleteUser = asyncHandler(async (req: Request, res: Response) => {
-    const { id } = req.params;
+    const { id } = req.params
 
     try {
-      const user = await this.userRepo.softDelete(Number(id));
+      const user = await this.userRepo.softDelete(Number(id))
 
       if (!user) {
-        return this.sendError(res, 'User not found', 404);
+        return this.sendError(res, 'User not found', 404)
       }
 
-      return this.sendResponse(res, { user }, 200, 'User deleted');
+      return this.sendResponse(res, { user }, 200, 'User deleted')
     } catch (e) {
-      const error = e as Error;
-      return this.sendError(res, error.message, 500);
+      const error = e as Error
+      return this.sendError(res, error.message, 500)
     }
-  });
+  })
 
   /**
    * Get Users Organizations
    */
   getUsersOrganizations = asyncHandler(async (req: Request, res: Response) => {
-    const { username } = req.params;
+    const { username } = req.params
 
     try {
-      const organizations = await this.organizationRepo.findByUsername(username);
-      return this.sendResponse(res, { organizations }, 200, 'Users organizations');
+      const organizations = await this.organizationRepo.findByUsername(username)
+      return this.sendResponse(res, { organizations }, 200, 'Users organizations')
     } catch (e) {
-      const error = e as Error;
-      return this.sendError(res, error.message, 500);
+      const error = e as Error
+      return this.sendError(res, error.message, 500)
     }
-  });
+  })
 }
