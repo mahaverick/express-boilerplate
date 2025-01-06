@@ -14,8 +14,8 @@ export const providerModel = pgTable('providers', {
     .references(() => userModel.id, { onDelete: 'cascade' })
     .notNull(),
   type: varchar('type', { length: 255 }).notNull(),
-  accessToken: text('accessToken'),
-  refreshToken: text('refreshToken'),
+  accessToken: text('access_token'),
+  refreshToken: text('refresh_token'),
 
   // Provider status fields
   active: boolean('active').default(false).notNull(),
