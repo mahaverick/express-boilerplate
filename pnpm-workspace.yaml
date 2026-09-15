@@ -1,4 +1,10 @@
 allowBuilds:
+  # bcrypt's "install" script runs node-gyp-build: fetches a prebuilt native
+  # binding for the host platform, or compiles one from source via node-gyp
+  # if no prebuild matches. Required for bcrypt to work at all — it is a
+  # native addon, not a pure-JS package — and it is the password-hashing
+  # library this plan's Task 2 adds. See MIGRATIONS.md.
+  bcrypt: true
   esbuild: true
   # unrs-resolver: native binary that eslint-plugin-import-x depends on
   # directly for module/TS-path resolution. Its postinstall only fetches a

@@ -1,6 +1,12 @@
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vitest/config'
+// Extension included deliberately, unlike src/'s @/-aliased imports: this
+// file is loaded by Vite's own config loader, not the bundled resolution
+// pipeline used for src/tests — Vite warned "configLoader: 'native' ...
+// import without a file extension ... planned to become the default in a
+// future major version" when this was extensionless.
+import { WORKER_COUNT } from './tests/helpers/worker-database.ts'
 
 const dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -36,7 +42,17 @@ export default defineConfig({
     // `poolOptions` now warns "removed ... All previous poolOptions are now
     // top-level options", and `maxWorkers?: number | string` is what the
     // installed package's own config types declare in its place).
-    maxWorkers: 8,
+    //
+    // Sourced from tests/helpers/worker-database.ts's WORKER_COUNT, not a
+    // second literal `8` kept in sync by comment: that file provisions
+    // exactly WORKER_COUNT per-worker test databases in global setup, keyed
+    // off vitest's own VITEST_POOL_ID ("value is between 1-maxWorkers"). If
+    // this number and that one ever disagreed, a worker could be assigned a
+    // pool id with no matching database — a connection error with nothing
+    // in it to suggest a configuration mismatch caused it. One constant,
+    // imported here, makes that impossible rather than merely commented
+    // against.
+    maxWorkers: WORKER_COUNT,
     testTimeout: 20_000,
     hookTimeout: 20_000,
     coverage: {
