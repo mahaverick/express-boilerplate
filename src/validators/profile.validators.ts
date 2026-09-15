@@ -7,18 +7,17 @@
 // whole request to fail. Two things drove that choice over the stricter
 // alternative:
 //
-// 1. `parseBody` (auth.validators.ts, reused as-is here) only forwards a
-//    zod error's per-FIELD messages (`fieldErrors`) into the client-facing
-//    `errors` envelope. A `.strict()` violation is a root-level
-//    "unrecognized keys" error (`formErrors`), which `parseBody` has no
-//    way to surface — a client sending `active: true` here would get back
-//    an opaque `400 { message: 'Validation failed' }` with no `errors` at
-//    all. `.strict()`'s entire selling point ("tell the client exactly what
-//    it did wrong") is unreachable through this codebase's shared
-//    validation plumbing, so it buys nothing here over stripping while
-//    costing the friendlier behaviour below. (Fixing `parseBody` to also
-//    surface `formErrors` is a reasonable follow-up — it's shared
-//    infrastructure outside this task's file list, so it isn't done here.)
+// 1. At the time this schema was written, `parseBody` (auth.validators.ts,
+//    reused as-is here) only forwarded a zod error's per-FIELD messages
+//    (`fieldErrors`) into the client-facing `errors` envelope. A `.strict()`
+//    violation is a root-level "unrecognized keys" error (`formErrors`),
+//    which `parseBody` had no way to surface — a client sending
+//    `active: true` here would have gotten back an opaque
+//    `400 { message: 'Validation failed', errors: {} }`. `parseBody` now
+//    surfaces `formErrors` too (see its own header comment), so that
+//    specific gap is closed — but reason 2 below still stands on its own
+//    and is why this schema stays a plain allow-list rather than adopting
+//    `.strict()` now that the option actually works.
 // 2. Stripping is the friendlier contract for the realistic client: one
 //    that fetches its own profile with `GET`, edits a name field, and PATCHes
 //    the same object back wholesale (`id`, `email`, `createdAt` and all). A
