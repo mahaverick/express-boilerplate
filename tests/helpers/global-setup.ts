@@ -21,9 +21,75 @@
 // have these from a previous run, so a duplicate-database error (42P04) is
 // caught and ignored rather than treated as failure.
 import postgres from 'postgres'
+import { createClient } from 'redis'
 import { runMigrations } from '@/database/migrate'
 import { loadTestEnv } from './env'
 import { testDatabaseUrlForWorker, WORKER_COUNT } from './worker-database'
+
+// Every key SharedRateLimitStore writes starts with this (see each
+// `new SharedRateLimitStore('rl:<endpoint>:')` in rate-limit.middleware.ts).
+const RATE_LIMIT_KEY_PATTERN = 'rl:*'
+
+/**
+ * Delete every rate-limit counter left in Redis before the run starts.
+ *
+ * Unlike Postgres, Redis is NOT per-worker: all eight workers share the one
+ * compose instance, and a counter outlives the run that created it for the
+ * length of its window (an hour, for registration). Every integration test
+ * also reaches the API from the same client address, so an IP-keyed limiter
+ * accumulates across runs — `pnpm test` twice in a row would spend one
+ * budget twice and the second run would start seeing 429s that have nothing
+ * to do with the code under test. The login limiter never hit this only
+ * because its key includes a per-run unique email; the registration and
+ * logout limiters are keyed on IP alone and cannot dodge it that way.
+ *
+ * SCAN, not KEYS: KEYS blocks the server for the whole keyspace, and this
+ * may be a developer's own Redis with other data in it. Deletion is scoped
+ * to the `rl:` prefix for the same reason — never FLUSHDB.
+ *
+ * Non-fatal: if Redis is unreachable, `SharedRateLimitStore` falls back to
+ * a per-process in-memory store that cannot accumulate across runs anyway,
+ * so there is nothing to clear and nothing to fail for.
+ *
+ * Note this runs once per `vitest run`, so a long `vitest watch` session
+ * re-running the same file many times can still accumulate against the
+ * production limits; restart the watcher if that ever surfaces.
+ */
+async function clearRateLimitCounters(): Promise<void> {
+  const url = process.env.REDIS_URL
+  if (url === undefined) return
+
+  const client = createClient({
+    url,
+    // Bounded for the same reason redis.service.ts bounds its own: node-
+    // redis's default strategy retries forever and never rejects
+    // `connect()`, which would hang global setup — and therefore the whole
+    // suite — instead of falling through to the warning below.
+    socket: {
+      connectTimeout: 2000,
+      reconnectStrategy: (retries) => (retries > 1 ? new Error('Redis unreachable') : 100),
+    },
+  })
+  // Without a listener, node-redis's emitted 'error' becomes an unhandled
+  // error event and takes the process down — the failure this function is
+  // explicitly allowed to tolerate.
+  client.on('error', () => {})
+
+  try {
+    await client.connect()
+    const batches = client.scanIterator({ MATCH: RATE_LIMIT_KEY_PATTERN, COUNT: 500 })
+    for await (const keys of batches) {
+      if (keys.length > 0) await client.del(keys)
+    }
+  } catch (error) {
+    console.warn(
+      'global-setup: could not clear rate-limit counters in Redis; continuing.',
+      (error as Error).message
+    )
+  } finally {
+    if (client.isOpen) client.destroy()
+  }
+}
 
 /**
  * Create and migrate every worker's dedicated test database once, before
@@ -61,4 +127,5 @@ export default async function setup(): Promise<void> {
   }
 
   await Promise.all(workerUrls.map((workerUrl) => runMigrations(workerUrl)))
+  await clearRateLimitCounters()
 }

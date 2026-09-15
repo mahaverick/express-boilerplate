@@ -134,7 +134,16 @@ distinct validation error first would leak that distinction to an
 unauthenticated caller before the controller ever gets a chance to make the
 two paths agree.
 
-### User enumeration: identical responses, identical timing
+### User enumeration: closed on `/login`, bounded on `/register`
+
+**Scope this claim to the endpoint.** What follows is a property of
+`POST /api/v1/auth/login` and of nothing else. It is not a property of this
+API: `POST /api/v1/auth/register` is, by construction, an enumeration
+oracle, and reading the next two paragraphs as "this boilerplate does not
+leak which addresses are registered" would be exactly the false conclusion
+this file's own preamble warns about.
+
+#### `/login`: identical responses, identical timing
 
 `POST /api/v1/auth/login` (`src/controllers/auth.controller.ts`) answers an
 unknown email and a wrong password for a real account with the same status
@@ -151,16 +160,71 @@ account (`active: false`) is rejected the same way, after the same
 comparison, through the same error — "these credentials are correct but the
 account is disabled" is not something this endpoint lets a caller learn.
 
-### Rate limiting: login (IP + email) and refresh (IP, volume only)
+#### `/register`: an oracle, bounded by a rate limit, not closed
 
-`src/middlewares/rate-limit.middleware.ts` ships two limiters, each backed
-by `SharedRateLimitStore`: it starts on an in-memory store and latches,
+`POST /api/v1/auth/register` answers **409** for an address that already
+exists and **201** for one that does not (`UserRepository.create` translates
+the `lower(email)` unique-index violation; see "Mass assignment" below for
+the surrounding design). One request per address therefore reads out the
+user base, with no password and no account of the attacker's own. That is
+the plain, unavoidable consequence of telling a real person "that address is
+already registered" at signup time, and it means the careful work `/login`
+does above is worth exactly as much as registration's rate limit — not
+more.
+
+What actually constrains it today is the registration limiter below: 100
+attempts per hour from one IP. That is a bound on the oracle, **not a
+closure of it** — an attacker with many source addresses still enumerates,
+just far more slowly and visibly than the unlimited endpoint that shipped
+before this.
+
+Closing it properly means never telling an unauthenticated caller anything:
+answer every registration with the same 202-style "check your email", and
+send the address either a "finish signing up" or a "you already have an
+account, here is a reset link" message, so the only party who learns
+anything is whoever controls the mailbox. That requires email delivery,
+which this boilerplate does not have — it is owned by plan B3 (see
+ARCHITECTURE.md's "B3 seam"). A downstream project that cannot wait for
+that should lower `REGISTER_RATE_LIMIT_MAX_ATTEMPTS`
+(`src/middlewares/rate-limit.middleware.ts`), accepting that a tighter
+limit is also felt by every legitimate user behind a shared egress address.
+
+### Rate limiting: one limiter per auth route, one store prefix each
+
+`src/middlewares/rate-limit.middleware.ts` ships four limiters — one for
+every route on the auth router, which is a standing rule for that router
+rather than four separate decisions. Each is backed by its **own**
+`SharedRateLimitStore`, with its own key prefix (`rl:register:`,
+`rl:login:`, `rl:refresh:`, `rl:logout:`), so no endpoint can spend
+another's budget and a 429 is only ever a statement about the endpoint that
+returned it. A new auth route — B3's `/forgot-password` and
+`/resend-verification` are next — takes its own prefix on the same pattern;
+`tests/unit/middlewares/rate-limit.middleware.test.ts` fails if two ever
+collide. The store starts on an in-memory store and latches,
 once, to a Redis-backed one the first time Redis is confirmed reachable —
 never back — so the limit ends up shared across replicas rather than
 per-process as soon as Redis is up. Until that first successful latch (or
 whenever Redis stays unreachable), the store stays in-memory and the limit
 is per-process only.
 
+- **Register** (`POST /api/v1/auth/register`): 100 attempts per hour, keyed
+  on the client's **IP alone** — deliberately not the composite login uses.
+  Both threats here come from one caller varying the email, so any key
+  containing the email would hand an attacker a fresh counter per request
+  and bound nothing: enumeration (see above) changes the address by
+  construction, and bcrypt CPU exhaustion does not care what the address is.
+  That second threat is the reason this endpoint cannot stay unlimited at
+  all — `register` hashes at cost 12 (~250ms) before anything else, and
+  node-bcrypt runs on libuv's threadpool (4 threads by default, shared with
+  fs and DNS), so a few dozen concurrent registrations starve the whole
+  process, not just this route. Keying on IP means everyone behind one NAT'd
+  egress address shares a counter, so the **limit**, not the key, is what
+  keeps an office of real people from locking each other out: 100/hour sits
+  far above any human signup rate and far below either attack. Two things
+  make that trade acceptable here where it would not be for login — a 429 on
+  registration delays a **new** signup and can never lock anyone out of an
+  **existing** account, and it clears itself within the window with nobody
+  intervening.
 - **Login** (`POST /api/v1/auth/login`): 5 attempts per 15-minute window,
   keyed on the **composite** of the client's IP and the submitted email —
   deliberately neither alone. Email alone would let anyone who merely knows
@@ -186,8 +250,20 @@ is per-process only.
   is generous precisely because tightening it would only cost real users
   retrying a flaky connection, for a property reuse detection already
   provides.
+- **Logout** (`POST /api/v1/auth/logout`): 300 requests per 5-minute window,
+  keyed on IP alone — volume protection on the same reasoning as refresh.
+  Logout is unauthenticated by design (a user whose access token has just
+  expired must still be able to end their session), so an anonymous caller
+  can drive one indexed lookup by token hash plus at most one bounded
+  `UPDATE` per request; that load is what this bounds. It closes no oracle,
+  because there is none — every logout answers 200 whether the presented
+  token was live, already revoked, forged, or absent. Its limit is generous
+  for a reason specific to this route: a 429 answers **before** the handler
+  runs, so it would leave the refresh cookie uncleared. This limiter must
+  never plausibly be the reason a real user cannot log out.
 
-There is no general-purpose rate limiter beyond these two routes.
+There is no general-purpose rate limiter beyond the auth router's four
+routes.
 
 ### Cookies: httpOnly, environment-derived `secure`, `sameSite: 'strict'`
 
@@ -245,7 +321,7 @@ Everything below genuinely ships nothing today, in either direction:
 | Email delivery and verification | **Not implemented** | `users.email_verified_at` exists as a column; nothing issues, sends, or verifies a token yet. Owned by plan B3 — see ARCHITECTURE.md's "B3 seam" section. |
 | OAuth / social login            | **Not implemented** | No provider integration. Owned by a later plan (B4).                                                                                                      |
 | Tenancy / RBAC                  | **Not implemented** | Every authenticated user has the same access to their own resources; there is no role or organization model.                                              |
-| General-purpose rate limiting   | **Partial**         | Login and refresh are covered (above). No limiter exists on registration, profile, or any future route.                                                   |
+| General-purpose rate limiting   | **Partial**         | All four auth routes are covered (above). No limiter exists on the profile routes or any future non-auth route.                                           |
 
 `JWT_ACCESS_SECRET` is required by the environment schema and **is** read —
 by `signAccessToken`/`verifyAccessToken`. `APP_URL`, `WEB_URL` and

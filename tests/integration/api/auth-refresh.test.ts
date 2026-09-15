@@ -195,6 +195,50 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
     })
   })
 
+  // The production limiters on /register and /logout are proven WIRED here,
+  // not proven to 429 here: exhausting either would take 100 registrations
+  // (or 300 logouts) from this suite's single client address, spending a
+  // budget every other integration file running in parallel shares — the
+  // exact cross-test coupling tests/helpers/global-setup.ts's Redis flush
+  // exists to keep out of this suite. The 429 behaviour itself is proven
+  // against the same factories, with small `limit` overrides, in
+  // tests/unit/middlewares/rate-limit.middleware.test.ts.
+  //
+  // `RateLimit-*` headers are set by express-rate-limit on EVERY response it
+  // lets through, not only on a 429 (standardHeaders: true, verified
+  // empirically), so their presence on an ordinary response is exactly the
+  // evidence that a limiter ran. Red proof: delete `createRegisterRateLimiter()`
+  // from auth.routes.ts and this goes from green to red.
+  describe('every auth route is behind a limiter (wiring, not thresholds)', () => {
+    it('runs a limiter on /register — proven by the RateLimit-* headers on an ordinary response', async () => {
+      // A body that fails validation: this reaches the limiter (which runs
+      // first) but never reaches bcrypt or the database, so the wiring
+      // proof costs nothing and creates no row to clean up.
+      const response = await request(app).post('/api/v1/auth/register').send({ email: 'nope' })
+
+      expect(response.status).toBe(400)
+      expect(response.headers).toHaveProperty('ratelimit-limit')
+      expect(response.headers).not.toHaveProperty('x-ratelimit-limit')
+    })
+
+    it('runs a limiter on /logout', async () => {
+      const response = await request(app).post('/api/v1/auth/logout')
+
+      expect(response.status).toBe(200)
+      expect(response.headers).toHaveProperty('ratelimit-limit')
+    })
+
+    it('runs a limiter on /login and /refresh', async () => {
+      const loginResponse = await request(app)
+        .post('/api/v1/auth/login')
+        .send({ email: uniqueEmail(), password: VALID_PASSWORD })
+      const refreshResponse = await request(app).post('/api/v1/auth/refresh')
+
+      expect(loginResponse.headers).toHaveProperty('ratelimit-limit')
+      expect(refreshResponse.headers).toHaveProperty('ratelimit-limit')
+    })
+  })
+
   describe('login rate limiting (end to end, against the real production limiter and real Redis)', () => {
     it('returns 429 after the configured number of attempts, with RateLimit-* headers', async () => {
       const email = uniqueEmail()
