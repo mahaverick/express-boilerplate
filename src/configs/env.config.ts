@@ -189,6 +189,50 @@ const EnvSchema = z.object({
     .optional()
     .describe('Absent means tracing is disabled; the SDK is never started.'),
   LOG_LEVEL: z.enum(['error', 'warn', 'info', 'debug']).default('info'),
+
+  // SMTP configuration for mailer.service.ts (src/services/mailer.service.ts)
+  // / mailer.config.ts. Defaulted to docker-compose.yml's Mailpit service
+  // (SMTP on 1025) so a fresh clone can send mail with zero configuration —
+  // the same reasoning TRUST_PROXY/ACCESS_TOKEN_TTL use for their own
+  // defaults, and unlike DATABASE_URL/REDIS_URL, where a wrong default would
+  // point at a real dependency silently. Mailpit does not require or check
+  // SMTP_USER/SMTP_PASS at all, which is exactly why they stay optional with
+  // no default rather than joining APP_URL/WEB_URL's required-placeholder
+  // pattern: a real provider (SES, SendGrid, ...) needs both, and a
+  // downstream project sets them then, not before.
+  SMTP_HOST: z
+    .string()
+    .min(1)
+    .default('localhost')
+    .describe(
+      'SMTP server host. Defaults to localhost, where the compose Mailpit service listens.'
+    ),
+  SMTP_PORT: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(1025)
+    .describe("SMTP server port. Defaults to 1025 — Mailpit's SMTP port."),
+  SMTP_USER: z
+    .string()
+    .optional()
+    .describe(
+      'SMTP username. Absent means no authentication is attempted, which is correct for Mailpit and wrong for most real providers — set this alongside SMTP_PASS.'
+    ),
+  SMTP_PASS: z.string().optional().describe('SMTP password. See SMTP_USER.'),
+  // Not cross-validated against SMTP_USER/SMTP_PASS with a schema-level
+  // .refine(): EnvSchema.pick({ DATABASE_URL: true }) (getDatabaseUrl, below)
+  // throws "cannot be used on object schemas containing refinements" the
+  // moment ANY .refine() sits on the object itself — verified empirically —
+  // which would break drizzle-kit's one entry point into this file.
+  // mailer.config.ts's own comment covers what happens when only one of the
+  // two is set (auth is not attempted, same as neither being set).
+  MAIL_FROM: z
+    .email()
+    .default('no-reply@example.com')
+    .describe(
+      'The From address on every outbound email. Mailpit accepts any value; a real provider may require this to be a verified sender.'
+    ),
 })
 
 /**

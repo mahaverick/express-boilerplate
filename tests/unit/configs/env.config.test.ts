@@ -158,6 +158,38 @@ describe('getDatabaseUrl', () => {
   })
 })
 
+describe('SMTP configuration', () => {
+  it('defaults SMTP_HOST/SMTP_PORT to Mailpit’s local address when absent', () => {
+    const parsed = parseEnv(valid)
+    expect(parsed.SMTP_HOST).toBe('localhost')
+    expect(parsed.SMTP_PORT).toBe(1025)
+  })
+
+  it('coerces SMTP_PORT from a string to a number', () => {
+    expect(parseEnv({ ...valid, SMTP_PORT: '2525' }).SMTP_PORT).toBe(2525)
+  })
+
+  it('leaves SMTP_USER/SMTP_PASS undefined when absent — Mailpit needs no credentials', () => {
+    const parsed = parseEnv(valid)
+    expect(parsed.SMTP_USER).toBeUndefined()
+    expect(parsed.SMTP_PASS).toBeUndefined()
+  })
+
+  it('accepts SMTP_USER/SMTP_PASS when a real provider needs them', () => {
+    const parsed = parseEnv({ ...valid, SMTP_USER: 'apikey', SMTP_PASS: 'secret' })
+    expect(parsed.SMTP_USER).toBe('apikey')
+    expect(parsed.SMTP_PASS).toBe('secret')
+  })
+
+  it('defaults MAIL_FROM to a working local address', () => {
+    expect(parseEnv(valid).MAIL_FROM).toBe('no-reply@example.com')
+  })
+
+  it('rejects a malformed MAIL_FROM', () => {
+    expect(() => parseEnv({ ...valid, MAIL_FROM: 'not-an-address' })).toThrow(/MAIL_FROM/)
+  })
+})
+
 describe('TRUST_PROXY', () => {
   it('defaults to "false" — trusting no proxy until an operator says otherwise', () => {
     // The default has to fail towards OVER-limiting (every client sharing

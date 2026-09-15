@@ -39,6 +39,9 @@ const baseEnv: Env = {
   SESSION_ABSOLUTE_TTL: '30d',
   TRUST_PROXY: 'false',
   LOG_LEVEL: 'info',
+  SMTP_HOST: 'localhost',
+  SMTP_PORT: 1025,
+  MAIL_FROM: 'no-reply@example.com',
 }
 
 describe('isSecureCookieEnvironment', () => {
