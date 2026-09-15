@@ -7,13 +7,24 @@ than one. Each plan leaves the repo green — `pnpm lint`, `pnpm test` and
 
 ## Backend (this repo)
 
-| #   | Plan                               | Delivers                                                                                                                                         | Depends on |
-| --- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ---------- |
-| B1  | `2026-09-14-backend-foundation.md` | Express 5 + ESM + pnpm app that boots, validates its env, serves `/health` and `/health/ready`, with the full toolchain, CI and hygiene in place | —          |
-| B2  | `backend-auth.md`                  | Registration, login, refresh rotation, email verify, forgot/reset, Google OAuth, MFA (TOTP + recovery codes)                                     | B1         |
-| B3  | `backend-tenancy.md`               | Tenants, memberships, RBAC, invitations, `audit_log`, cursor pagination                                                                          | B2         |
-| B4  | `backend-billing.md`               | Stripe catalog, subscriptions, webhooks, entitlements, onboarding state machine, consent + retention                                             | B3         |
-| B5  | `backend-platform.md`              | BullMQ jobs, email transports, storage adapters, OpenAPI + `/docs`, seeders, `pnpm bootstrap`                                                    | B4         |
+| #   | Plan                                    | Delivers                                                                                                                                                 | Depends on |
+| --- | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| B1  | `2026-09-14-backend-foundation.md`      | Express 5 + ESM + pnpm app that boots, validates its env, serves `/health` and `/health/ready`, with the full toolchain, CI and hygiene in place         | —          |
+| B2  | `2026-09-15-users-and-password-auth.md` | User model, migrations, bcrypt, register/login/logout, JWT access + refresh rotation with reuse detection, auth middleware, login rate limiting, profile | B1         |
+| B3  | `email-and-recovery.md`                 | nodemailer + Mailpit, templates, email-verification delivery, forgot/reset password                                                                      | B2         |
+| B4  | `federated-identity-and-mfa.md`         | Google OAuth via Passport, MFA (TOTP + single-use recovery codes), step-up checks                                                                        | B2         |
+| B5  | `tenancy.md`                            | Tenants, memberships, RBAC, invitations, `audit_log`, cursor pagination                                                                                  | B4         |
+| B6  | `billing.md`                            | Stripe catalog, subscriptions, webhooks, entitlements, onboarding state machine, consent + retention                                                     | B5         |
+| B7  | `platform.md`                           | BullMQ jobs, storage adapters, OpenAPI + `/docs`, seeders, `pnpm bootstrap`                                                                              | B6         |
+
+**Why B2 was split.** The original index made B2 a single plan covering password
+auth, email delivery, OAuth and MFA. That is three independent subsystems, and
+the writing-plans scope check rejects it: each plan must produce working,
+testable software on its own. Password authentication does — you can register,
+log in, rotate a refresh token and call an authenticated route with nothing else
+built. Email delivery and federated identity are separable and now have their
+own plans. B1 ran to ten tasks and surfaced six gates that reported success
+while enforcing nothing; a fifteen-task plan would have hidden more of them.
 
 ## Frontend (`../../../react-boilerplate`)
 
