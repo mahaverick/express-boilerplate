@@ -75,48 +75,59 @@ a defect that tests can easily pass over.
    use `new Date()`.
 7. **Raw tokens are 32 random bytes, hex** (`token.utilities.ts:42,116`) — opaque,
    never JWTs.
-8. **`revokeAllForUser` ignores purpose.** `user-token.repository.ts:138` matches
+8. **`getDummyHash` is module-private to `auth.controller.ts`** (line 62), not a
+   utility. Any second caller needs it moved, not copied — a second dummy hash
+   would be a second bcrypt cost to keep in step.
+9. **`revokeAllForUser` ignores purpose.** `user-token.repository.ts:138` matches
    `userId` alone, so it takes refresh tokens with it. Anything purpose-scoped
    needs a new method.
-9. **Registration's 409 comes from the repository, not the controller.**
+10. **Registration's 409 comes from the repository, not the controller.**
    `UserRepository.create` translates the unique violation
    (`auth.controller.ts:194`). Closing the oracle means catching that, not
    adding a pre-check — a pre-check would be a second, driftable copy of the
    decision and racy besides.
 
-## Squatting: the case this design bounds but does not close
+## Squatting, and why verification needs the password
 
 An attacker registers `victim@example.com` with a password they chose. The row
 now exists, unverified. The real owner later registers the same address, is told
-nothing (the response is identical by design), and receives the
-"someone tried to register with your address" mail. They cannot log in — Ruling S
-refuses an unverified account — and, until Task 6 ships, they have no route to
-the account at all.
+nothing (the response is identical by design), and receives the "someone tried to
+register with your address" mail.
 
-**The obvious fix is wrong.** Overwriting `passwordHash` and the names on a
-taken-but-unverified address, so the newest registrant wins, looks like it hands
-the account to the mailbox owner. Run it the other way round: the victim
-registers first and has not yet clicked their link; the attacker then registers
-the same address, overwriting the password with their own and mailing a fresh
-link to the victim's inbox. The victim clicks the link they were expecting and
-verifies an account whose password belongs to the attacker, who can now log in.
-That converts a denial of service into a silent account takeover, using the
-victim's own click as the final step. A lockout is the better failure.
+The harmful step, in every variant of this, is the same one: **`emailVerifiedAt`
+being written at click time on a row whose password the clicker did not set.**
+Who registered first does not matter.
 
-**Decision: the taken branch writes nothing.** `resend-verification` carries the
-same hazard for the same reason and likewise never writes.
+- *Newest registrant wins* (overwrite the password on a taken-but-unverified
+  address) fails when the victim registered first and has not yet clicked: the
+  attacker overwrites the password and a fresh link goes to the victim's inbox,
+  so the victim's own click verifies the attacker's credentials.
+- *Taken writes nothing* fails too, and through the only door left open to the
+  victim. A squatted address is "known and unverified", so
+  `resend-verification` mails it a link; the victim clicks, the column is
+  written, and the attacker logs in with the password they chose.
 
-Consequences that must be recorded in `SECURITY.md` rather than discovered later:
+Both turn a denial of service into a silent account takeover using the victim's
+own click as the final step.
 
+**Decision: `POST /auth/verify-email` takes `{ token, password }`.** The attacker
+knows the password but can never produce the click; the mailbox owner can produce
+the click but not the attacker's password. Neither can verify, so the outcome is
+a lockout that password reset recovers — never a takeover. The taken branch still
+writes nothing, which also denies an attacker a way to keep resetting an
+unverified victim's password.
+
+Consequences to record in `SECURITY.md`:
+
+- **A wrong password burns the token**, because the row is claimed before the
+  comparison runs (see the endpoint contract). This is intended, not a defect:
+  one link is one attempt, so a leaked or intercepted link gives an attacker
+  exactly one guess. A legitimate typo costs the user a resend.
 - A squatted address is unrecoverable until password reset exists.
 - **Task 6 must set `emailVerifiedAt` on a successful password reset.** Clicking a
-  reset link proves mailbox control, which is the same proof verification asks
-  for, and it is what makes reset the escape route from a squatted address. Task 6
-  as currently written does not mention the column.
-- Verification proves control of the mailbox. It does **not** prove that the
-  stored password belongs to the mailbox owner. Binding a token to the password
-  hash it was issued against would close that, at the cost of another
-  `user_tokens` column; it is deliberately out of scope here and recorded as open.
+  reset link proves mailbox control, which is the proof verification asks for, and
+  it is what makes reset the escape route from a squatted address. Task 6 as
+  written does not mention the column.
 
 ## Endpoint contracts
 
@@ -159,6 +170,20 @@ branch the value must be the **stored** user's `firstName`, never the submitted
 one: the submitted value is attacker-chosen text being delivered into the
 victim's inbox.
 
+**A taken address may have no *visible* row.** The unique index is on
+`lower(email)` with no `deleted_at` predicate (`user.model.ts:46`), so
+registering a soft-deleted user's address still raises the 409 — but
+`findByEmail` excludes soft-deleted rows (`user.repository.ts:45`) and returns
+`undefined`. Reading `existing.firstName` there is a null dereference on a path
+no happy-path test covers. Pin: taken **and** no visible row → send the
+registration-attempt mail with the `'there'` fallback, exactly as for a visible
+one. The response is unchanged, as it must be.
+
+**Residual timing, accepted.** Both branches already pay bcrypt — `hashPassword`
+runs before `create` (`auth.controller.ts:208-210`) — so the two differ by one
+token INSERT on the free branch. That is dominated by ordinary network jitter and
+is recorded as accepted rather than closed, which is what the plan asked for.
+
 Both sends respond-first and use `.catch()`, never `void` — Ruling T, at
 `2026-09-15-email-and-recovery.md`'s findings section: under Node 24 an unhandled
 rejection kills the process, and it would do so *only* on one branch, which is
@@ -166,7 +191,8 @@ the enumeration oracle again, escalated into a denial of service.
 
 ### `POST /api/v1/auth/verify-email`
 
-Request body: `{ token: string }`. **Body, not query string** — a token in a query
+Request body: `{ token: string, password: string }` — see "Squatting" above for
+why the password is required. **Body, not query string** — a token in a query
 string reaches access logs and `Referer` headers. The emailed link points at the
 frontend (`WEB_URL/verify-email?token=…`); the frontend POSTs it here. That is
 what `WEB_URL` is for (`env.config.ts:76` — currently a reserved placeholder
@@ -174,9 +200,15 @@ nothing reads).
 
 - Success: `200`, `'Email verified.'`, `data: null`. Sets `emailVerifiedAt` on the
   token's `userId`.
-- Every failure — unknown token, wrong purpose, already consumed, expired —
-  returns byte-identical: `400`, `'Invalid or expired verification token.'`,
-  `data: null`. Four distinguishable failures would be a token-state oracle.
+- Every failure — unknown token, wrong purpose, already consumed, expired, **wrong
+  password**, or no such user — returns byte-identical: `400`, `'Invalid or
+  expired verification token.'`, `data: null`. Distinguishable failures would be a
+  token-state oracle, and a distinguishable wrong-password failure would tell an
+  attacker holding a link that the address is squatted.
+- **Order: claim first, compare second.** `claimToken` consumes the row, then
+  `isPasswordValid(password, user?.passwordHash ?? await getDummyHash())` — the
+  dummy hash runs even when the claim failed, so every failure costs the same
+  bcrypt time, exactly as `login` already does it (`auth.controller.ts:245`).
 - Idempotence: a user already verified presenting a fresh valid token succeeds
   and leaves the original `emailVerifiedAt` unchanged. Mechanism, since fact 6
   rules out a `coalesce` through the typed `update()`: a new
@@ -184,6 +216,9 @@ nothing reads).
   `and email_verified_at is null`. A read-then-write in the controller would also
   work and its race is harmless, but the repository method keeps the decision in
   one place and needs no comment explaining a benign race.
+  **`markEmailVerified` returning `undefined` is success, not failure** — it means
+  the row was already verified, which is the idempotent case. Only a missing user
+  is an error, and that is already covered by the identical 400.
 - **Prior verification tokens are revoked** — after a successful verify, and on
   every fresh issue from `resend-verification` — so several live links never
   coexist. Leaving earlier links valid means a token from an older mail still
@@ -296,6 +331,13 @@ New:
 
 - `src/controllers/verification.controller.ts` — `verifyEmail`, `resendVerification`.
 - `src/validators/verification.validators.ts` — `verifyEmailSchema`, `resendVerificationSchema`.
+- **`getDummyHash` must move before it can be reused.** It is a module-private
+  IIFE in `auth.controller.ts:62`, and `verification.controller.ts` needs the same
+  constant-time behaviour. Move it to `src/utilities/password.utilities.ts`
+  (alongside `hashPassword` and `isPasswordValid`, which it already calls) and
+  export it, leaving `login` importing it rather than owning it. Its memoisation
+  closure and the comment explaining why the cache is not a top-level variable
+  move with it unchanged.
 - `claimToken(raw, purpose)` exported from `src/utilities/token.utilities.ts` —
   hashes with the module-private `hashToken`, calls `claimOnce`, **and rejects an
   expired row** (fact 1). Keeping hashing private is why this is a utility export
@@ -360,7 +402,12 @@ Tests to write (red first):
 - A `password_reset` token is rejected by the verify endpoint.
 - An **expired** token fails — the test that pins fact 1. Without it, the missing
   expiry check passes every other test in this list.
-- All four verify failures return identical status and body.
+- All verify failures return identical status and body — including a **wrong
+  password**, which must be indistinguishable from an unknown token.
+- A wrong-password attempt **consumes** the token: the same link with the correct
+  password afterwards still fails.
+- Registering a soft-deleted user's address returns the identical response and
+  sends the registration-attempt mail rather than crashing.
 - Login is refused for an unverified account, with a response equal to the
   wrong-password response.
 - Login writes `lastLoggedInAt`; a **failed** login does not.
@@ -392,6 +439,8 @@ the plan's execution-status section.
 (`src/endpoints/auth.endpoints.ts:14,22`) and its register page consumes the
 returned user. The register contract change and the verification gate both break
 that flow: the frontend needs a "check your email" state, a `/verify-email` route
-that POSTs the token, and a resend action. That work belongs to the frontend
+that POSTs the token **together with a password field** ("confirm your password
+to finish"), and a resend action. That password field is not optional polish —
+the endpoint rejects without it. That work belongs to the frontend
 repo and is not part of this design, but it must not be discovered at
 integration time.
