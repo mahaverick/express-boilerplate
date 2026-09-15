@@ -7,7 +7,7 @@
 // cases again. Same reasoning `trustProxySetting` (env.config.ts) is
 // unit-tested as a pure function rather than through `getEnv()`.
 import { describe, expect, it } from 'vitest'
-import { getMailTransporter, mailTransportOptions } from '@/configs/mailer.config'
+import { getMailTransporter, mailTransportOptions, requiresTls } from '@/configs/mailer.config'
 
 const baseEnv = {
   SMTP_HOST: 'localhost',
@@ -54,17 +54,33 @@ describe('mailTransportOptions', () => {
   })
 })
 
+describe('requiresTls', () => {
+  // Keyed on NODE_ENV, not SMTP_HOST — see this function's own comment
+  // (mailer.config.ts) for why a host-name check is the wrong footgun here.
+  // Mirrors isSecureCookieEnvironment's identical NODE_ENV-keyed decision
+  // (auth.controller.ts). Unit-tested directly, with a hand-built env slice,
+  // for the same reason mailTransportOptions is: getMailTransporter reads
+  // the memoised getEnv() exactly once per worker, so this decision cannot
+  // otherwise be exercised for both branches in one test run.
+  it('is false outside production', () => {
+    expect(requiresTls({ NODE_ENV: 'development' })).toBe(false)
+    expect(requiresTls({ NODE_ENV: 'test' })).toBe(false)
+  })
+
+  it('is true in production', () => {
+    expect(requiresTls({ NODE_ENV: 'production' })).toBe(true)
+  })
+})
+
 describe('getMailTransporter', () => {
   it('memoises: repeated calls return the same transporter instance', () => {
     expect(getMailTransporter()).toBe(getMailTransporter())
   })
 
-  // requireTLS is wired at the createTransport call site, not inside
-  // mailTransportOptions — see getMailTransporter's own comment for why.
-  // .env.test does not set SMTP_HOST, so it resolves to the schema's
-  // 'localhost' default here, and requireTLS must be false to match —
-  // Mailpit does not speak TLS.
-  it('does not require TLS against the default (local Mailpit) host', () => {
+  // .env.test sets NODE_ENV=test, so the real, memoised transporter this
+  // process builds must not require TLS — confirms requiresTls is actually
+  // wired into the createTransport call, not just correct in isolation.
+  it('does not require TLS in this (test) process', () => {
     const options = getMailTransporter().options as { requireTLS?: boolean }
     expect(options.requireTLS).toBe(false)
   })

@@ -74,10 +74,38 @@ export interface MailMessage {
  * @param error - Whatever the transport call rejected with.
  * @returns The extracted code, or `UNKNOWN_ERROR_CODE`.
  */
-function extractErrorCode(error: unknown): string {
+export function extractErrorCode(error: unknown): string {
   if (typeof error !== 'object' || error === null) return UNKNOWN_ERROR_CODE
   const code = (error as { code?: unknown }).code
   return typeof code === 'string' ? code : UNKNOWN_ERROR_CODE
+}
+
+/**
+ * The `at ...` call frames of an object-shaped error's stack, with its
+ * message line removed — mirrors `stackFramesOf` in error.middleware.ts
+ * exactly, for the identical reason: `error.stack` embeds the message
+ * verbatim on its first line, and the message is precisely what
+ * `redactedMailErrorForLog` below must not log. The frames themselves are
+ * still worth keeping — for a genuine bug in THIS module (a TypeError, not
+ * an SMTP rejection), `name`/`code`/`command`/`responseCode` alone would be
+ * `{ name: 'TypeError' }` and nothing else, which is not enough to find
+ * where a real defect actually threw.
+ *
+ * Takes `object`, not `unknown` — its one caller has already narrowed to
+ * that (checking it again here would be a branch no real call site can ever
+ * take the other side of, which is exactly the kind of untested,
+ * unreachable condition this project treats as a defect in itself).
+ * @param error - The thrown or rejected value, already known to be object-shaped.
+ * @returns The call frames, or undefined when there is no usable stack.
+ */
+function callFramesOf(error: object): string | undefined {
+  const { stack } = error as { stack?: unknown }
+  if (typeof stack !== 'string') return undefined
+  const frames = stack
+    .split('\n')
+    .filter((line) => line.trimStart().startsWith('at '))
+    .join('\n')
+  return frames === '' ? undefined : frames
 }
 
 /**
@@ -89,11 +117,18 @@ function extractErrorCode(error: unknown): string {
  * operator's log stream has no such structural backstop, so this function is
  * what keeps the identical property true there. Deliberately excludes
  * `.message` and `.response` for the same reason `extractErrorCode` does —
- * see its own comment.
+ * see its own comment — while `stack` (via `callFramesOf`, message line
+ * stripped) is kept, so a genuine bug in this module's own code is still
+ * diagnosable and not merely indistinguishable from a real SMTP rejection.
+ *
+ * Exported for direct unit testing — see tests/unit/services/mailer.service.test.ts
+ * — for the same reason `mailTransportOptions` (mailer.config.ts) is: this
+ * codebase does not tolerate a branch that only a real SMTP round trip
+ * could reach.
  * @param error - Whatever the transport call rejected with.
  * @returns A redacted record when `error` is object-shaped; `error` itself otherwise (nothing to redact from a primitive).
  */
-function redactedMailErrorForLog(error: unknown): unknown {
+export function redactedMailErrorForLog(error: unknown): unknown {
   if (typeof error !== 'object' || error === null) return error
   const candidate = error as {
     name?: unknown
@@ -106,6 +141,7 @@ function redactedMailErrorForLog(error: unknown): unknown {
     code: candidate.code,
     command: candidate.command,
     responseCode: candidate.responseCode,
+    stack: callFramesOf(error),
   }
 }
 
@@ -133,11 +169,13 @@ async function recordDelivery(entry: NewEmailLog): Promise<void> {
 export async function sendMail(message: MailMessage): Promise<void> {
   let entry: NewEmailLog
   try {
-    // Cast, not inference: nodemailer's own generic `Transporter<T, D>`
-    // chain resolves `sendMail(...)`'s return type to `any` in this
-    // installed @types/nodemailer version — verified empirically (assigning
-    // the un-cast result to a `string`-typed variable produced no type
-    // error, which only happens for `any`). `SMTPTransport.SentMessageInfo`
+    // Cast, not inference: `sendMail(...)`'s return type resolves to `any`
+    // somewhere in this installed @types/nodemailer version's generic
+    // `Transporter<T, D>` chain — the SYMPTOM is verified empirically
+    // (assigning the un-cast result to a `string`-typed local produced no
+    // type error, which only happens for `any`); the exact place inside
+    // nodemailer's own type definitions this collapses was not tracked down
+    // further. `SMTPTransport.SentMessageInfo`
     // is the concrete, documented shape a real SMTP transport resolves
     // with (`messageId`, `envelope`, `accepted`, `rejected`, `pending`,
     // `response`); this cast states that real shape explicitly rather than
