@@ -1,0 +1,66 @@
+# docker-compose.yml — the local infrastructure the app requires to boot.
+#
+# Postgres is pinned to 18 because the migrations use uuidv7() as a column
+# default, which is built in from 18. On 17 or older the migration aborts
+# with "function uuidv7() does not exist" unless an extension is installed.
+#
+# Host ports are non-default (5433, 6380) on purpose: the two most commonly
+# installed local dev services are a native Postgres and a native Redis,
+# both of which default to 5432/6379. On a machine running either, a native
+# bind on 127.0.0.1 wins over Docker's wildcard bind for connections to
+# "localhost" — Postgres then fails loudly ("role does not exist"), but
+# Redis fails silently, since any Redis answers PING and the test suite
+# would pass against a developer's personal instance without ever touching
+# this stack. Container-internal ports stay 5432/6379 — a URL like
+# postgres://…@postgres:5432/… (container-to-container) is unaffected.
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: boilerplate
+      POSTGRES_PASSWORD: boilerplate
+      POSTGRES_DB: boilerplate
+    ports: ['5433:5432']
+    volumes:
+      # postgres:18+ images store data under a major-version-specific
+      # subdirectory of /var/lib/postgresql (pg_ctlcluster-compatible
+      # layout) rather than directly under /var/lib/postgresql/data as
+      # earlier images did — mounting at .../data here fails to start
+      # ("unused mount/volume", verified against this exact image/tag).
+      # Mount the parent directory instead, per the image's own guidance.
+      - pgdata:/var/lib/postgresql
+      # Runs once against an empty volume: provisions the test/test/
+      # boilerplate_test role+database that .env.test already points at,
+      # separate from the boilerplate dev database above.
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U boilerplate']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7.2-alpine
+    ports: ['6380:6379']
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    command: ['--config=/etc/otel/config.yaml']
+    volumes: ['./otel-collector.yaml:/etc/otel/config.yaml:ro']
+    # 13133 is the health_check extension's endpoint (see otel-collector.yaml)
+    # — exposed for manual/host-side verification. No Docker HEALTHCHECK
+    # here: the image has no shell/wget/curl to run one from inside the
+    # container (verified; see otel-collector.yaml's comment).
+    ports: ['4318:4318', '13133:13133']
+
+  mailpit:
+    image: axllent/mailpit:latest
+    ports: ['1025:1025', '8025:8025']
+
+volumes:
+  pgdata:

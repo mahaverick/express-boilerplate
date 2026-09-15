@@ -1,0 +1,9 @@
+allowBuilds:
+  esbuild: true
+  # unrs-resolver: native binary that eslint-plugin-import-x depends on
+  # directly for module/TS-path resolution. Its postinstall only fetches a
+  # prebuilt binary for the host platform; no arbitrary script.
+  unrs-resolver: true
+minimumReleaseAgeExclude:
+  - zod@4.6.5
+  - eslint-plugin-jsdoc@64.4.0

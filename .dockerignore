@@ -1,0 +1,25 @@
+# Load-bearing, not hygiene: the build stage's `COPY . .` runs AFTER the
+# deps stage's `pnpm install`. Without excluding node_modules here, that
+# COPY would overwrite the Linux-built node_modules with whatever is on the
+# host (macOS) checkout, breaking any native dependency.
+node_modules
+
+.git
+.worktrees
+.superpowers
+docs
+
+coverage
+dist
+*.tsbuildinfo
+
+.env
+.env.*
+!.env.example
+
+.vscode
+.devcontainer
+.github
+
+*.log
+.DS_Store
