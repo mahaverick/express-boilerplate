@@ -188,6 +188,62 @@ until you check.
   vulnerability sits on disk in a worktree other sessions and tools can
   read, stage, and commit.
 
+## Verifying a claim, and two ways this project has been wrong
+
+Ten tests have been found here that passed while enforcing nothing — one of them
+_inside a fix written to close exactly that class_. Two techniques found almost
+all of them, and both are cheap:
+
+- **Measure the value against what it is supposed to exclude.** `email_logs`
+  shipped an `error_code varchar(64)` justified as "structurally unable to hold a
+  token". A raw token is `randomBytes(32)` hex-encoded — **exactly 64
+  characters**. The width chosen as the gate fit the secret precisely. The column
+  is now `varchar(32)` _plus_ a CHECK constraint on `^[A-Z][A-Z0-9_]*$`, because
+  tokens are lowercase hex and nodemailer codes are uppercase: a shape constraint
+  makes the secret unrepresentable, where a width only makes it awkward. Before
+  trusting any width, regex, or prefix check, compute the thing it must reject
+  and compare.
+- **Run it; do not read it.** A `CHECK` constraint built with drizzle's normal
+  `sql` template and interpolated values _compiles, type-checks, and passes
+  review_ — and fails when the migration executes, because Postgres rejects bound
+  parameters inside a DDL `CHECK`. Only running the migration surfaced it. The
+  same applies to `@ts-expect-error`: an unused one is itself a `tsc` error, so a
+  green tree proves every directive is consumed — but removing one and watching
+  the specific error appear proves it guards what it claims to.
+
+Assertions that silently cannot fail, seen here more than once:
+
+- `JSON.stringify(err)` on an `Error` is `"{}"` — `message`, `stack` and
+  `response` are non-enumerable. A leak assertion built on it passes whether or
+  not anything is redacted. Use `util.inspect(err, { depth: null })`. (A
+  `DrizzleQueryError` _is_ partly enumerable — `query` and `params` survive — so
+  the same line can be load-bearing in one file and vacuous in the next. Check,
+  do not assume.)
+- A guard of the form `a && b` where no test supplies a case that is `a`-true and
+  `b`-false: the `b` clause can be deleted with the suite still green.
+- Asserting a constant against itself (`expect(render(v).templateKey).toBe(KEY)`),
+  or `toStrictEqual` between two calls that both throw.
+- A helper whose JSDoc claims it polls a budget while its body does one
+  unwaited fetch.
+
+## Writing a plan for this repo
+
+B1's plan was ~1800 lines and needed almost no correction. B3's was 183 and
+produced **seven** briefs whose stated facts were wrong — a column width that fit
+the secret, a logging library that does not exist here (there is no pino; the
+convention is `console.error` plus `error.middleware.ts`'s `redactedForLog`), a
+normalisation that had never been implemented, and an instruction to install
+`@types/nodemailer`, which nodemailer 10 makes dead because it ships its own
+types. Each cost a full fix round.
+
+The compression always falls on exactly the thing that must not be omitted: the
+exact values. If a task's text says "implement" without naming columns, types and
+signatures, it is not a task yet.
+
+Related: implementers on B3 were right against the brief **seven times**, every
+time because the dispatch asked them to argue rather than comply. Keep that
+instruction in any dispatch written here.
+
 ## Auth and tokens
 
 - **`isPasswordValid`, not `verifyPassword`.**

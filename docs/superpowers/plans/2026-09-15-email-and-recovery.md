@@ -181,3 +181,138 @@ Checked against the spec on 2026-09-15.
 **Type consistency.** `TokenPurpose`, `claimOnce` and `issueToken` (Task 1) are the names Tasks 5 and 6 consume. `sendMail` (Task 2) is what Tasks 5 and 6 call. `emailLogRepository` (Task 4) is what Task 2's transport writes through.
 
 **The riskiest task is 1.** It changes a table and a function that B2's 235 tests depend on, including the security-critical rotation path. It is first precisely so everything after it is built on the settled shape — and its Step 5 exists to catch a regression disguised as a refactor.
+
+---
+
+# Execution status — B3 stopped after Task 3 (2026-09-15)
+
+Tasks 0, 1, 4, 2 and 3 are **built, reviewed and merged**. Tasks 5, 6, 7 and 8
+are **not built**. Execution ran in the order 0, 1, 4, 2, 3 (Task 4 was moved
+ahead of Task 2 because Task 2's transport writes through the delivery log Task 4
+builds).
+
+What shipped: the token store generalised to three purposes with a single-use
+atomic claim; an append-only `email_logs` delivery log; the nodemailer transport;
+and three rendered templates. 352 tests, up from B2's 235.
+
+## SECURITY FINDINGS THAT MUST BE READ BEFORE BUILDING TASK 5
+
+These were found during B3 and are recorded here because they are the reason
+Task 5 is harder than its plan text suggests. **None of them affects the merged
+code** — they are all latent in what Task 5 would do next.
+
+### 1. Closing the register response opens an enumeration oracle through `login`
+
+Task 5's whole purpose is making `POST /auth/register` return an identical
+response for a new and an existing address. But on the new-address branch,
+register **creates the account, with the password the caller supplied**. So:
+
+1. Register `victim@example.com` with password `hunter2` — identical response
+   either way, oracle apparently closed.
+2. Log in as `victim@example.com` / `hunter2`.
+   - `200` — the address was FREE (register just created it)
+   - `401` — the address was TAKEN (the real account has a different password)
+
+That reads out the entire user base with no timing analysis and no mailbox
+access, using only the two endpoints Task 5 exists to protect. The attacker also
+ends up owning an unverified account on every free address probed, which is
+account squatting on top of enumeration.
+
+**The fix (verified against the current controller):** `login` must refuse an
+account whose `emailVerifiedAt` is null, and that refusal must be
+indistinguishable from a wrong password — same status, same body, and bcrypt
+still executed. `auth.controller.ts`'s `login` already computes
+`isPasswordCorrect` BEFORE its guard (B2's constant-time handling of a
+non-existent user), so adding `|| !user.emailVerifiedAt` to that same condition
+inherits both properties. A separate early return would itself be a timing
+oracle: a fast 401 for unverified against a slow 401 for a wrong password.
+
+Accepted cost, which belongs in SECURITY.md when this lands: a legitimate
+unverified user sees "Invalid email or password", which is misleading.
+
+Plan for this: **every B2 auth test registers then logs in**, so a verification
+gate breaks all of them at once. The fix belongs in the test helpers (mark the
+user verified), never in weakening the gate.
+
+### 2. The same guarantee has now been defeated through four different channels
+
+`sendMail` must never let a send failure change the response, or an SMTP outage
+becomes an oracle (registered address errors, unregistered address does not).
+Four channels have defeated that, each found by a different party:
+
+| Channel                                                                                   | Status                                |
+| ----------------------------------------------------------------------------------------- | ------------------------------------- |
+| Status code — a propagated error returns 500 on the send branch only                      | Closed: `sendMail` never rejects      |
+| Latency — nodemailer's default timeouts (2 min / 30 s / 10 min) hang only the send branch | **Bounded, not closed** — see below   |
+| Rendering exceptions — thrown before the send's try/catch                                 | Closed: `sendMail` renders internally |
+| `register` -> `login`                                                                     | **Open** — finding 1 above            |
+
+**The latency channel is bounded, not closed.** `SMTP_*_TIMEOUT` now caps a hung
+host at ~10s, but a hung host still yields ~10s for a registered address against
+milliseconds for an unregistered one. The real fix is architectural and belongs
+to the endpoints: **respond first, then send**, so response time cannot depend on
+whether a send happened. Prove it with a timing assertion, not by inspection.
+
+**If you respond first, use `.catch()`, never `void`.** `sendMail`'s catches are
+not absolutely total (a throwing getter, or a broken `console.error`, escapes),
+and under Node 24 an unhandled rejection kills the process — on the send branch
+only. That turns a rare bug into a denial of service that fires exclusively for
+registered addresses: the same oracle, escalated.
+
+When enumeration-resistance is asserted anywhere, assert it by **direct equality
+of status and body**, never "both are 2xx".
+
+## Data retention — a gap this plan created and did not close
+
+`user_tokens` had no retention job before B3 and still has none; B3 added
+`email_verification` and `password_reset` rows to it. B3 also created
+`email_logs`, which is deliberately append-only and stores `recipient` — a real
+email address, i.e. PII — with no expiry, forever, by design.
+
+No plan owns adding retention. A derived project must add it (cron, `pg_cron`, or
+a queue). This was to be documented in Task 8, which was not built; it is
+recorded here instead so it is not lost.
+
+## Also unbuilt
+
+`POST /auth/resend-verification` (Task 5), forgot/reset password (Task 6), rate
+limiting for all of those (Task 7), and the documentation pass (Task 8). The
+`users.email_verified_at` column exists and is still written by nothing — the
+"B3 seam" described in ARCHITECTURE.md remains a seam.
+
+## Known open findings in the MERGED code (Task 3 review, fix round not completed)
+
+Task 3's review raised ten findings. Findings 1 and 2 are the forward-looking
+security items above. Finding 5's false comment has been corrected in
+`mailer.service.ts`. The rest were dispatched as a fix round that was stopped
+when B3 was halted, so they remain open. None is a vulnerability; all are the
+"a test that cannot fail" class this repo takes seriously.
+
+- **`appName` still reaches a Subject header.** `variables.appName` is typed
+  plain `string` and is interpolated into `registration-attempt.template.ts`'s
+  subject. The fix is to source `appName` from config rather than accept it
+  per-message, which removes it from the caller-supplied `variables` union and
+  makes "no token in a subject line" total. The comment in `mailer.service.ts`
+  now states this gap accurately instead of claiming it closed.
+- **`appName`'s escaping is pinned by no test.** It is escaped at every
+  interpolation site, but `toContain('Acme')` passes whether or not escaping
+  runs.
+- **`requireEmailVariables` is under-tested.** `firstName` is index 0 of every
+  `REQUIRED_VARIABLE_NAMES` and of every test, so an implementation checking only
+  `requiredNames[0]` would pass the whole suite. `resetUrl`, `verificationUrl`
+  and `appName` are unproven. It also accepts `''`, which renders an unusable
+  blank link into a recovery email — an empty required variable is a missing one.
+- **`assertNoMailpitMessage` does not do what its JSDoc says.** It claims to poll
+  a full budget; the body is a single fetch with zero wait. Both "sends nothing"
+  proofs therefore rest on an assertion that would not detect a send arriving a
+  moment later.
+- **Three assertions cannot fail**: the rendering-failure `toStrictEqual`
+  (both calls throw, so it compares an object to itself) and
+  `expect(render(v).templateKey).toBe(SAME_CONSTANT)` in three places.
+- **Normalisation covers 4 of the 6 varchar columns `record()` writes.** `id`
+  (settable and 22001-capable) and `status` are neither normalised nor explained.
+- **Rendering errors lose their diagnostic.** They now flow through
+  `redactedMailErrorForLog`, which strips the message — but a rendering error is
+  app-authored ("missing required variable resetUrl") and carries no SMTP echo,
+  so the message was its only useful content. Redact what the transport rejected
+  with; preserve what our own rendering threw.

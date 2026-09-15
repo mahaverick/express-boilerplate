@@ -7,15 +7,15 @@ than one. Each plan leaves the repo green — `pnpm lint`, `pnpm test` and
 
 ## Backend (this repo)
 
-| #   | Plan                                    | Delivers                                                                                                                                                                                                                         | Depends on |
-| --- | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
-| B1  | `2026-09-14-backend-foundation.md`      | Express 5 + ESM + pnpm app that boots, validates its env, serves `/health` and `/health/ready`, with the full toolchain, CI and hygiene in place                                                                                 | —          |
-| B2  | `2026-09-15-users-and-password-auth.md` | User model, migrations, bcrypt, register/login/logout, JWT access + refresh rotation with reuse detection, auth middleware, login rate limiting, profile                                                                         | B1         |
-| B3  | `email-and-recovery.md`                 | Email-verification token **issuing and verification** (B2 reserved the `email_verified_at` column but built no token flow — see the correction below), plus nodemailer + Mailpit, templates, delivery, and forgot/reset password | B2         |
-| B4  | `federated-identity-and-mfa.md`         | Google OAuth via Passport, MFA (TOTP + single-use recovery codes), step-up checks                                                                                                                                                | B2         |
-| B5  | `tenancy.md`                            | Tenants, memberships, RBAC, invitations, `audit_log`, cursor pagination                                                                                                                                                          | B4         |
-| B6  | `billing.md`                            | Stripe catalog, subscriptions, webhooks, entitlements, onboarding state machine, consent + retention                                                                                                                             | B5         |
-| B7  | `platform.md`                           | BullMQ jobs, storage adapters, OpenAPI + `/docs`, seeders, `pnpm bootstrap`                                                                                                                                                      | B6         |
+| #   | Plan                                                                                                                 | Delivers                                                                                                                                                                                                                         | Depends on |
+| --- | -------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| B1  | `2026-09-14-backend-foundation.md`                                                                                   | Express 5 + ESM + pnpm app that boots, validates its env, serves `/health` and `/health/ready`, with the full toolchain, CI and hygiene in place                                                                                 | —          |
+| B2  | `2026-09-15-users-and-password-auth.md`                                                                              | User model, migrations, bcrypt, register/login/logout, JWT access + refresh rotation with reuse detection, auth middleware, login rate limiting, profile                                                                         | B1         |
+| B3  | `email-and-recovery.md` **(PARTIAL — tasks 0/1/4/2/3 done; 5-8 unbuilt, see the plan's "Execution status" section)** | Email-verification token **issuing and verification** (B2 reserved the `email_verified_at` column but built no token flow — see the correction below), plus nodemailer + Mailpit, templates, delivery, and forgot/reset password | B2         |
+| B4  | `federated-identity-and-mfa.md`                                                                                      | Google OAuth via Passport, MFA (TOTP + single-use recovery codes), step-up checks                                                                                                                                                | B2         |
+| B5  | `tenancy.md`                                                                                                         | Tenants, memberships, RBAC, invitations, `audit_log`, cursor pagination                                                                                                                                                          | B4         |
+| B6  | `billing.md`                                                                                                         | Stripe catalog, subscriptions, webhooks, entitlements, onboarding state machine, consent + retention                                                                                                                             | B5         |
+| B7  | `platform.md`                                                                                                        | BullMQ jobs, storage adapters, OpenAPI + `/docs`, seeders, `pnpm bootstrap`                                                                                                                                                      | B6         |
 
 **Why B2 was split.** The original index made B2 a single plan covering password
 auth, email delivery, OAuth and MFA. That is three independent subsystems, and
@@ -46,3 +46,22 @@ only the reserved `email_verified_at` column exists. The spec-coverage check tha
 made the claim did not verify it. B3 therefore owns the whole flow — issuing,
 verifying and delivering — not delivery alone. The documentation shipped in B2
 describes the real state rather than the planned one.
+
+## B3 stopped after Task 3 (2026-09-15)
+
+B3 shipped its token store, delivery log, mail transport and templates. It did
+**not** ship email verification, forgot/reset password, their rate limiting, or
+the documentation pass — tasks 5 through 8.
+
+Anyone resuming must read the **"Execution status"** section at the end of
+`2026-09-15-email-and-recovery.md` before starting Task 5. It records an
+enumeration oracle that Task 5 _opens_ rather than closes — closing the register
+response lets an attacker read the whole user base through `login`, because
+register creates the account with the attacker's own password — and the exact fix,
+verified against the current controller. It also records the four distinct
+channels through which the "a send failure must not change the response"
+guarantee has already been defeated, one of which is still open, and the data
+retention gap B3 widened and nobody owns.
+
+`users.email_verified_at` remains a column nothing writes to. The "B3 seam" in
+ARCHITECTURE.md is still a seam.
