@@ -87,6 +87,12 @@ curl -X POST http://localhost:4040/api/v1/auth/login \
 }
 ```
 
+The `Content-Type: application/json` header above is required, not
+decorative: every route under `/api/v1/auth` refuses a form-encoded body
+with 415, which is what stops an attacker's page from auto-submitting a
+cross-site form that logs a victim into the attacker's account — see
+[SECURITY.md](SECURITY.md).
+
 Login also sets an httpOnly `refreshToken` cookie, scoped to
 `/api/v1/auth`. `data.accessToken` above is a JWT — send it as
 `Authorization: Bearer <accessToken>` to reach an authenticated route, e.g.
