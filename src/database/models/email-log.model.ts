@@ -39,16 +39,30 @@
 //     shape-unrepresentable the way `errorCode` is. A 32-character
 //     FRAGMENT of a token would still fit and would not be caught by
 //     anything — this column's protection is "nothing plausible reaches
-//     it", not "nothing possible could".
-//   - `providerMessageId` (255) carries NO structural protection at all.
-//     It is provider-derived, genuinely variable-length (a Message-ID can
-//     legitimately be long), and trusted by convention exactly the way
-//     `errorCode` used to be — flagged to the plan/Task 2, not addressed
-//     here; see task-4-report.md's round-2 notes.
-//   - `recipient` (MAX_EMAIL_LENGTH) carries no structural protection
-//     either, by design: it is the send's actual destination address, not
-//     derived from an error or the rendered body, so this table's load-
-//     bearing property was never about this column.
+//     it", not "nothing possible could". As of Task 3 (task-3-brief.md's
+//     Controller addendum, item 2), `EmailLogRepository.record` also
+//     NORMALIZES an over-width value here to a fixed placeholder before
+//     the insert, the same "handle the class, not one column" policy
+//     applied to `recipient`/`providerMessageId` below — see that file's
+//     own comment for why, and for the correction this makes to the
+//     addendum's own inaccurate claim that this column already had that
+//     protection.
+//   - `providerMessageId` (255) carries no SHAPE protection — it is
+//     provider-derived, genuinely variable-length (a Message-ID can
+//     legitimately be long), so nothing here can exclude a token-shaped
+//     value the way `errorCode`'s shape CHECK does (flagged to the
+//     plan/Task 2, not addressed here; see task-4-report.md's round-2
+//     notes). As of Task 3, it DOES get the same WIDTH normalization as
+//     `templateKey` above: an over-255 value is replaced with a
+//     placeholder rather than left to throw a 22001 that silently drops
+//     the audit row — see EmailLogRepository's own comment for the
+//     truncate-vs-sentinel argument this makes.
+//   - `recipient` (MAX_EMAIL_LENGTH) carries no shape protection either,
+//     by design: it is the send's actual destination address, not derived
+//     from an error or the rendered body, so this table's load-bearing
+//     property was never about excluding a token from this column. As of
+//     Task 3, it too gets width normalization — same reasoning as
+//     `providerMessageId` above.
 //
 // APPEND-ONLY, DELIBERATELY: no `updatedAt`, no `deletedAt`. An audit
 // record you can hide (soft-delete) or silently rewrite (update) after the
@@ -148,6 +162,29 @@ export const ERROR_CODE_PATTERN = new RegExp(ERROR_CODE_PATTERN_SOURCE)
 export const UNKNOWN_ERROR_CODE = 'UNKNOWN'
 
 /**
+ * The widest a `template_key` value is allowed to be. Exported for the same
+ * reason `ERROR_CODE_MAX_LENGTH` is: so `EmailLogRepository.record` can
+ * check an incoming value against this EXACT width — as of Task 3, to
+ * normalize an over-width value to a placeholder rather than let the insert
+ * throw 22001 — rather than duplicating the number. 32 is narrower than a
+ * 64-character hex-encoded raw token (this file's header comment), chosen
+ * for the identical reason `ERROR_CODE_MAX_LENGTH` was narrowed from an
+ * original 64: "the value that reaches this column today is trusted" is not
+ * a width justification.
+ */
+export const TEMPLATE_KEY_MAX_LENGTH = 32
+
+/**
+ * The widest a `provider_message_id` value is allowed to be. Exported for
+ * the same reason `ERROR_CODE_MAX_LENGTH` is — see `TEMPLATE_KEY_MAX_LENGTH`
+ * above. Unlike that column, 255 is not chosen to stay clear of a
+ * hex-encoded raw token's 64 characters — a Message-ID can legitimately be
+ * long (this file's header comment) — so this width bounds the audit-row
+ * insert failure Task 3 closes, not a token-shape leak.
+ */
+export const PROVIDER_MESSAGE_ID_MAX_LENGTH = 255
+
+/**
  * The `email_logs` table: one row per outbound email attempt, whether it
  * sent or failed. This is an audit trail for "did the email send?", not a
  * mailbox — see this file's header comment for the property every column
@@ -176,14 +213,14 @@ export const emailLogModel = pgTable(
     // not a width justification). No shape CHECK here, unlike
     // `errorCode` — see this file's header comment for why width alone is
     // an adequate (if weaker) gate for this specific column.
-    templateKey: varchar('template_key', { length: 32 }).notNull(),
+    templateKey: varchar('template_key', { length: TEMPLATE_KEY_MAX_LENGTH }).notNull(),
     // 'sent' | 'failed'. varchar + $type<>(), NOT pgEnum — matching
     // `purpose` on user_tokens (user-token.model.ts), plus the CHECK
     // constraint below: `$type<>()` alone is compile-time-only narrowing,
     // and a raw SQL insert is not bound by it.
     status: varchar('status', { length: 16 }).$type<EmailLogStatus>().notNull(),
     // The sending provider's message id. Set on success; null on failure.
-    providerMessageId: varchar('provider_message_id', { length: 255 }),
+    providerMessageId: varchar('provider_message_id', { length: PROVIDER_MESSAGE_ID_MAX_LENGTH }),
     // nodemailer's short `code` (or `UNKNOWN_ERROR_CODE` when the rejected
     // value has no `code`, or doesn't match the shape below). Null on
     // success. NOT a message or response column — see this file's header
