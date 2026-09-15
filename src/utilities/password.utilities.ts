@@ -1,7 +1,7 @@
 // src/utilities/password.utilities.ts
 //
 // The one module that imports bcrypt. Callers hash and verify through
-// hashPassword()/verifyPassword() rather than reaching for bcrypt directly,
+// hashPassword()/isPasswordValid() rather than reaching for bcrypt directly,
 // so the work factor and the 72-byte truncation guard (auth.constants.ts)
 // live in exactly one place instead of being re-decided at every call site.
 import * as bcrypt from 'bcrypt'
@@ -32,7 +32,7 @@ export async function hashPassword(plain: string): Promise<string> {
 }
 
 /**
- * Check a plaintext password against a stored bcrypt hash.
+ * Whether a plaintext password matches a stored bcrypt hash.
  *
  * Never throws. A hash that is missing, empty, or otherwise not a valid
  * bcrypt hash — a corrupt row, a column that was never populated — is
@@ -54,7 +54,7 @@ export async function hashPassword(plain: string): Promise<string> {
  * @param hash - The stored bcrypt hash to compare against.
  * @returns Whether `plain` matches `hash`.
  */
-export async function verifyPassword(plain: string, hash: string): Promise<boolean> {
+export async function isPasswordValid(plain: string, hash: string): Promise<boolean> {
   if (Buffer.byteLength(plain, 'utf8') > MAX_PASSWORD_BYTES) {
     return false
   }
@@ -71,7 +71,7 @@ export async function verifyPassword(plain: string, hash: string): Promise<boole
     // keeps this function's "never throws" contract true even if that
     // binding detail changes.
     console.error(
-      '[password.utilities] verifyPassword: comparison threw, treating as no match',
+      '[password.utilities] isPasswordValid: comparison threw, treating as no match',
       error
     )
     return false

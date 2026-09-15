@@ -109,23 +109,19 @@ export default tseslint.config(
       // enforced everywhere, including as identifiers — the plan's own code
       // samples deliberately spell those out (request, response, error), and
       // this repo should not drift from that.
-      'unicorn/name-replacements': ['error', { replacements: { env: false, db: false } }],
-
-      // `verifyPassword` (src/utilities/password.utilities.ts) is a
-      // spec-mandated interface name — the B2 plan names it exactly this,
-      // and src/controllers/auth.controller.ts (a later task) imports it by
-      // that name. unicorn/consistent-boolean-name otherwise wants a
-      // boolean-returning function to start with is/has/can/etc.
       //
-      // The fix is `ignore`, not `prefixes: { verify: true }`: adding
-      // "verify" as an allowed boolean prefix would also mark ANY
-      // "verify*" name as required-boolean, and the same plan later adds
-      // `verifyAccessToken`, which returns a decoded payload, not a
-      // boolean — that function would then fail this same rule for the
-      // opposite reason. `ignore` targets this one exported name only, the
-      // same narrow, justified-in-comment carve-out already used above for
-      // "env"/"db".
-      'unicorn/consistent-boolean-name': ['error', { ignore: ['^verifyPassword$'] }],
+      // `repository` is carved out the same way: check-file's own
+      // filename-naming-convention (below) requires every file under
+      // src/repositories/ to end in ".repository.ts", and the B2 plan names
+      // the exported classes `BaseRepository`/`UserRepository` exactly —
+      // both directly contradict this rule's default preference for "repo".
+      // Abbreviating only the identifiers and not the filenames (or vice
+      // versa) would leave the class name and its file disagreeing with
+      // each other.
+      'unicorn/name-replacements': [
+        'error',
+        { replacements: { env: false, db: false, repository: false } },
+      ],
 
       // Express detects error handlers by arity — exactly four parameters —
       // so the unused fourth is load-bearing. The underscore prefix is the
