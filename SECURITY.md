@@ -81,6 +81,39 @@ the whole chain is assumed compromised. An expired-but-not-yet-rotated
 token is simply revoked, not treated as reuse — nothing else in that
 session is implicated by an expiry.
 
+### Session lifetime: a sliding window AND an absolute ceiling
+
+Two clocks bound a session, and they answer different questions.
+
+`REFRESH_TOKEN_TTL` (default 30d) is a **sliding** window: every rotation
+issues a token with a fresh expiry, so this bounds how long a client may go
+**idle**. On its own it bounds nothing else — with a 15-minute access
+token, a normal client refreshes roughly four times an hour and never lets
+one expire, so the session lives forever. So does an exfiltrated refresh
+cookie: it stays valid until somebody happens to log out.
+
+`SESSION_ABSOLUTE_TTL` (default 30d) is the **ceiling**: measured from the
+login itself, never reset. `user_tokens.session_started_at` is written once
+when a session begins and copied forward unchanged by every rotation
+(`rotateRefreshToken`, `src/utilities/token.utilities.ts`), so it measures
+the age of the **login**, not of the token presented. Past it, rotation
+fails with 401 and the whole session family is revoked — the user signs in
+again, and a stolen cookie has a definite end date whether or not anyone
+noticed the theft.
+
+The two default to the same 30 days so they agree out of the box, but they
+are independent knobs: raising how long a client may be idle does not raise
+how long one login may live. A deployment wanting the common "idle 30 days,
+absolute 90" shape sets `REFRESH_TOKEN_TTL=30d` and
+`SESSION_ABSOLUTE_TTL=90d`.
+
+The ceiling is enforced on the rotation path only — the check runs when a
+refresh token is presented, not by a background sweep. An access token
+already issued stays valid for the remainder of its own (15-minute) life
+after the ceiling passes. Note also that `user_tokens` accumulates a row per
+rotation and nothing prunes it; see
+[DATABASE.md](DATABASE.md#user_tokens-grows-without-bound-and-nothing-prunes-it).
+
 ### Password hashing: bcrypt at cost 12
 
 Implemented: `src/utilities/password.utilities.ts` exports `hashPassword`/

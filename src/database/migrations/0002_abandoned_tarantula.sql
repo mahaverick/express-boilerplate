@@ -1,0 +1,1 @@
+ALTER TABLE "user_tokens" ADD COLUMN "session_started_at" timestamp with time zone DEFAULT now() NOT NULL;

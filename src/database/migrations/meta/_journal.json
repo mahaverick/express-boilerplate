@@ -15,6 +15,13 @@
       "when": 1789441416815,
       "tag": "0001_great_dragon_man",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1789456802080,
+      "tag": "0002_abandoned_tarantula",
+      "breakpoints": true
     }
   ]
 }

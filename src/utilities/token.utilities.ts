@@ -175,6 +175,15 @@ export async function issueRefreshToken(
   await userTokenRepository.create({
     userId,
     sessionId,
+    // This is where a session's absolute clock starts. `rotateRefreshToken`
+    // copies the value forward rather than calling this function, so the
+    // anchor survives every rotation — see that function and the column's
+    // own comment (user-token.model.ts). Calling THIS function a second
+    // time for a sessionId that already exists would restart that clock;
+    // nothing in the application does (login always mints a fresh
+    // sessionId), and a caller that wants a second live token in one
+    // session should be aware it is also extending that session's ceiling.
+    sessionStartedAt: new Date(),
     tokenHash: hashToken(raw),
     expiresAt,
   })
@@ -190,9 +199,18 @@ export async function issueRefreshToken(
  * every token in its session, not just this one. A legitimate client only
  * ever presents a token once; a second presentation of an already-used
  * token means someone else has it.
+ *
+ * Two clocks stop a rotation, and they are not the same clock. The token's
+ * own `expiresAt` is a SLIDING window reset by every rotation — it bounds
+ * how long a client may go idle. The session's `sessionStartedAt` is an
+ * ABSOLUTE ceiling (`SESSION_ABSOLUTE_TTL`) copied forward unchanged — it
+ * bounds how long one login may live at all, however diligently it
+ * refreshes. Without the second, a client refreshing every 15 minutes (as
+ * `ACCESS_TOKEN_TTL` implies) holds a session forever, and so does anyone
+ * who exfiltrated its cookie.
  * @param raw - The raw refresh token presented by the client.
  * @returns The new raw token to hand to the client, and its metadata.
- * @throws {HttpError} 401, when the token is unknown, already used, or expired.
+ * @throws {HttpError} 401, when the token is unknown, already used, expired, or belongs to a session past its absolute lifetime.
  */
 export async function rotateRefreshToken(raw: string): Promise<IssuedRefreshToken> {
   const tokenHash = hashToken(raw)
@@ -217,12 +235,37 @@ export async function rotateRefreshToken(raw: string): Promise<IssuedRefreshToke
   }
 
   const env = getEnv()
+  const sessionAgeMs = Date.now() - claimed.sessionStartedAt.getTime()
+  if (sessionAgeMs >= requireDurationMs(env.SESSION_ABSOLUTE_TTL)) {
+    // The absolute ceiling, which `expiresAt` above cannot enforce: that is
+    // a sliding window every rotation resets, so a client that refreshes
+    // before each expiry keeps a session alive indefinitely — and so does
+    // anyone who stole its cookie. `sessionStartedAt` is copied forward
+    // unchanged by rotation (below), so this measures the age of the LOGIN,
+    // not of the token just presented.
+    //
+    // The whole family is revoked, unlike the expiry case above: every
+    // other token in this session shares the same `sessionStartedAt` and is
+    // therefore equally past the ceiling. Leaving them nominally live would
+    // make the table disagree with the rule this function enforces, for no
+    // gain — they could not be rotated either.
+    await userTokenRepository.revokeAllForSession(claimed.sessionId)
+    // Deliberately the SAME message the expiry branch uses. A third
+    // distinguishable rejection would tell a caller holding a valid refresh
+    // token which of the two clocks ran out, and "expired" is a true
+    // description of both.
+    throw new HttpError('Refresh token expired', 401)
+  }
+
   const newRaw = generateRawToken()
   const expiresAt = new Date(Date.now() + requireDurationMs(env.REFRESH_TOKEN_TTL))
 
   const created = await userTokenRepository.create({
     userId: claimed.userId,
     sessionId: claimed.sessionId,
+    // Copied, never recomputed: this is what makes the ceiling above an
+    // ABSOLUTE limit rather than another sliding one.
+    sessionStartedAt: claimed.sessionStartedAt,
     tokenHash: hashToken(newRaw),
     expiresAt,
   })

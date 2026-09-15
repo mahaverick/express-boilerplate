@@ -125,6 +125,30 @@ const EnvSchema = z.object({
       'Refresh token lifetime, as an ms()-parseable duration string (e.g. "30d"). Defaults to 30d.'
     ),
 
+  // The ABSOLUTE cap on one login session, measured from when it started
+  // and never reset. REFRESH_TOKEN_TTL above is a SLIDING window: every
+  // rotation issues a token with a fresh expiry, so a client refreshing
+  // normally (every 15 minutes, as ACCESS_TOKEN_TTL implies) never lets one
+  // expire and the session lives forever — and so does an exfiltrated
+  // refresh cookie, until someone happens to log out.
+  //
+  // Defaulted to the same 30d as REFRESH_TOKEN_TTL so the two agree out of
+  // the box: a session lasts at most as long as a single un-rotated refresh
+  // token would have. They are independent knobs, though — raising
+  // REFRESH_TOKEN_TTL (how long a client may be idle) does not raise this
+  // (how long a session may live at all), which is the point of having
+  // both.
+  SESSION_ABSOLUTE_TTL: z
+    .string()
+    .default('30d')
+    .refine((value) => parseDurationMs(value) !== undefined, {
+      message:
+        'SESSION_ABSOLUTE_TTL must be a duration string ms() can parse, e.g. "30d" or "2592000000".',
+    })
+    .describe(
+      'Hard ceiling on one login session, measured from the login itself and never reset by rotation, as an ms()-parseable duration string (e.g. "30d"). Past it, refreshing fails and the user signs in again. Defaults to 30d.'
+    ),
+
   // How much of `X-Forwarded-For` Express is allowed to believe. There is
   // no safe default in either direction, which is why this is a required
   // decision expressed as configuration rather than a literal in app.ts:
