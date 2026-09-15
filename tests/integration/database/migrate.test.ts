@@ -92,6 +92,51 @@ describe('migrations', () => {
     expect(remaining).toHaveLength(0)
   })
 
+  it('creates the email_logs table', async () => {
+    const rows = await sql`
+      select column_name from information_schema.columns
+      where table_name = 'email_logs'
+    `
+    const columns = rows.map((r) => r.column_name as string)
+    expect(columns).toEqual(
+      expect.arrayContaining([
+        'id',
+        'recipient',
+        'template_key',
+        'status',
+        'provider_message_id',
+        'error_code',
+        'created_at',
+      ])
+    )
+    // No updatedAt, no deletedAt — see email-log.model.ts's header comment
+    // (append-only, Ruling D in task-4-brief.md). Asserted as an absence,
+    // not just an omission from the arrayContaining list above, so a later
+    // change that adds either column back fails loudly here instead of
+    // silently passing this file.
+    expect(columns).not.toContain('updated_at')
+    expect(columns).not.toContain('deleted_at')
+  })
+
+  // Migration 0006 adds `email_logs_status_check`. `$type<EmailLogStatus>()`
+  // (email-log.model.ts) is compile-time only — this proves the database
+  // itself, not just the application, refuses a status outside 'sent' /
+  // 'failed', via a raw SQL insert that bypasses Drizzle's typing entirely.
+  // Same shape as `user_tokens_purpose_check`'s own test above.
+  it('rejects an invalid status value at the database level via its CHECK constraint', async () => {
+    await expect(
+      sql`
+        insert into email_logs (recipient, template_key, status)
+        values (${'bogus-status@example.test'}, 'password_reset', 'bogus')
+      `
+    ).rejects.toThrow()
+
+    const remaining = await sql`
+      select 1 from email_logs where recipient = ${'bogus-status@example.test'}
+    `
+    expect(remaining).toHaveLength(0)
+  })
+
   it('enforces case-insensitive email uniqueness at the database level', async () => {
     const email = `dup-${Date.now()}@example.test`
     await sql`insert into users (email) values (${email})`
