@@ -174,9 +174,9 @@ it, change the things that still say "express-boilerplate":
       the placeholders with your own never-commit vocabulary, or delete the
       file and the gate's CI step in `.github/workflows/ci.yml` if you have
       none.
-- [ ] **`LICENSE`** — there is no `LICENSE` file in this repository, even
-      though `package.json` and the footer below both declare MIT. Add one
-      (with your own copyright holder) before publishing.
+- [ ] **`LICENSE`** — this repository ships a proprietary licence naming
+      Mahaverick as the copyright holder. Replace it with your own terms and
+      holder, and set `license` in `package.json` to match.
 
 Nothing above is enforced by a gate; it is a five-minute pass that stops a
 new project quietly carrying someone else's identity in its metadata.
@@ -229,5 +229,11 @@ from the pnpm virtual store — verified: no `typescript` under
 
 ## License
 
-MIT — declared in `package.json`. Note that no `LICENSE` file is committed
-yet; see the "Make this yours" checklist above.
+Proprietary — all rights reserved. See [`LICENSE`](LICENSE).
+
+`package.json` declares `UNLICENSED`, which is npm's spelling for "not open
+source". It is not the same thing as the public-domain "Unlicense", and this
+repository being publicly visible grants no right to use, copy, modify or
+distribute it. If you are starting a project from this template, replace
+`LICENSE` and the `license` field with your own terms — see the "Make this
+yours" checklist above.
