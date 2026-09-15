@@ -5,8 +5,18 @@
 // deleted in afterEach.
 import { randomBytes, randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
-import { UNKNOWN_ERROR_CODE } from '@/database/models/email-log.model'
-import { EmailLogRepository } from '@/repositories/email-log.repository'
+import { MAX_EMAIL_LENGTH } from '@/constants/auth.constants'
+import {
+  PROVIDER_MESSAGE_ID_MAX_LENGTH,
+  TEMPLATE_KEY_MAX_LENGTH,
+  UNKNOWN_ERROR_CODE,
+} from '@/database/models/email-log.model'
+import {
+  EmailLogRepository,
+  OVERLENGTH_PROVIDER_MESSAGE_ID_PLACEHOLDER,
+  OVERLENGTH_RECIPIENT_PLACEHOLDER,
+  OVERLENGTH_TEMPLATE_KEY_PLACEHOLDER,
+} from '@/repositories/email-log.repository'
 import { sql } from '@/services/database.service'
 
 const emailLogRepository = new EmailLogRepository()
@@ -17,6 +27,19 @@ const emailLogRepository = new EmailLogRepository()
  */
 function uniqueRecipient(): string {
   return `email-log-repo-${randomUUID()}@example.test`
+}
+
+/**
+ * A syntactically email-shaped string of an exact total length, for
+ * boundary-testing `recipient` normalization against MAX_EMAIL_LENGTH
+ * itself — not an assumed number. Appends `randomUUID()` before the domain
+ * so two calls in the same test never collide even at the same length.
+ * @param length - The exact total character length to produce.
+ * @returns A string of exactly `length` characters, shaped like `<padding>-<uuid>@example.test`.
+ */
+function recipientOfLength(length: number): string {
+  const suffix = `-${randomUUID()}@example.test`
+  return suffix.padStart(length, 'a')
 }
 
 describe('EmailLogRepository', () => {
@@ -160,17 +183,35 @@ describe('EmailLogRepository', () => {
   // the token through record()'s actual input, field by field, and checks
   // the table itself.
   //
-  // Deliberately scoped to the two fields this schema actually guards —
-  // `errorCode` (normalization) and `templateKey` (width, post round-2
-  // finding 2) — not "every string field": `recipient` (MAX_EMAIL_LENGTH)
-  // and `providerMessageId` (255) carry no structural protection at all,
-  // confirmed empirically (a raw token passed as either lands verbatim in
-  // the table — see task-4-report.md's round-2 notes) and by design —
-  // this table's load-bearing property was never a claim about those two
-  // columns (see email-log.model.ts's header comment, round-2 finding 3).
-  // Writing this test against a claim the schema does not make would just
-  // be a second version of finding 4's original defect: an assertion that
-  // cannot mean what it appears to mean.
+  // Deliberately scoped to the two fields this schema actually guards
+  // against a raw token specifically — `errorCode` (shape+width
+  // normalization) and `templateKey` (width alone, since a 64-character
+  // token cannot fit under TEMPLATE_KEY_MAX_LENGTH, 32) — not "every string
+  // field": `recipient` (MAX_EMAIL_LENGTH, 320) and `providerMessageId`
+  // (PROVIDER_MESSAGE_ID_MAX_LENGTH, 255) carry no protection AGAINST A
+  // TOKEN, confirmed empirically (a raw token passed as either lands
+  // verbatim in the table — see task-4-report.md's round-2 notes) and by
+  // design — this table's load-bearing property was never a claim about
+  // those two columns excluding a token (see email-log.model.ts's header
+  // comment, round-2 finding 3). Task 3 (task-3-brief.md's Controller
+  // addendum, item 2) gave both of them WIDTH normalization too — see the
+  // boundary tests below — but that guards against an over-width value
+  // vanishing the audit row, not against a token, since 320 and 255 are
+  // both well past 64. Writing this test against a claim the schema does
+  // not make would just be a second version of finding 4's original
+  // defect: an assertion that cannot mean what it appears to mean.
+  //
+  // The `templateKey` branch below changed shape in Task 3: it used to
+  // assert the insert REJECTS (width alone, no normalization, matching
+  // `errorCode`'s pre-Task-3 state). `EmailLogRepository.record` now
+  // normalizes an over-width `templateKey` the same way it already
+  // normalized `errorCode` — the addendum's own "unlike template_key and
+  // error_code" framing for this gap turned out to be inaccurate (this
+  // exact test, before this edit, proved the insert REJECTED for
+  // `templateKey`, and task-4-review.md's finding 2 flagged the same gap
+  // independently) — so the row is now written, with `templateKey`
+  // replaced, never the token itself, exactly like the `errorCode` branch
+  // above it.
   it('never contains the raw token, driven through every field this schema actually guards', async () => {
     const rawToken = randomBytes(32).toString('hex') // 64 lowercase-hex characters
 
@@ -190,21 +231,114 @@ describe('EmailLogRepository', () => {
     const [errorCodeRow] = await sql`select * from email_logs where id = ${viaErrorCode.id}`
     expect(JSON.stringify(errorCodeRow)).not.toContain(rawToken)
 
-    // templateKey: guarded by width alone (32, narrower than a 64-char
-    // token) — the insert itself must reject; no row can land with the
-    // token as its templateKey, full stop.
+    // templateKey: guarded by width (32, narrower than a 64-char token) —
+    // as of Task 3, normalized rather than left to reject. The row is
+    // written, with templateKey replaced by the placeholder; the token
+    // itself lands nowhere in it, in any form.
     const templateKeyRecipient = uniqueRecipient()
-    await expect(
-      emailLogRepository.record({
-        recipient: templateKeyRecipient,
-        templateKey: rawToken,
+    const viaTemplateKey = await emailLogRepository.record({
+      recipient: templateKeyRecipient,
+      templateKey: rawToken,
+      status: 'sent',
+    })
+    createdIds.push(viaTemplateKey.id)
+
+    const [templateKeyRow] = await sql`select * from email_logs where id = ${viaTemplateKey.id}`
+    expect(templateKeyRow?.template_key).toBe(OVERLENGTH_TEMPLATE_KEY_PLACEHOLDER)
+    expect(JSON.stringify(templateKeyRow)).not.toContain(rawToken)
+  })
+
+  // Task 3 (task-3-brief.md's Controller addendum, item 2): width
+  // normalization for recipient/templateKey/providerMessageId. Boundaries
+  // measured against the REAL column widths (MAX_EMAIL_LENGTH,
+  // TEMPLATE_KEY_MAX_LENGTH, PROVIDER_MESSAGE_ID_MAX_LENGTH), not assumed —
+  // the exact lesson task-3-brief.md itself names: a previous task's own
+  // width was once the precise length of the secret it was meant to
+  // exclude. "Exactly N passes through unchanged; N+1 normalizes" is the
+  // only way to prove the boundary is where the code claims it is.
+  describe('width normalization at the exact boundary', () => {
+    it('a recipient of exactly MAX_EMAIL_LENGTH characters is stored unchanged', async () => {
+      const recipient = recipientOfLength(MAX_EMAIL_LENGTH)
+      expect(recipient).toHaveLength(MAX_EMAIL_LENGTH)
+
+      const recorded = await emailLogRepository.record({
+        recipient,
+        templateKey: 'password_reset',
+        status: 'sent',
+        providerMessageId: 'boundary-test',
+      })
+      createdIds.push(recorded.id)
+
+      expect(recorded.recipient).toBe(recipient)
+    })
+
+    it('a recipient one character over MAX_EMAIL_LENGTH is normalized to the placeholder', async () => {
+      const recipient = recipientOfLength(MAX_EMAIL_LENGTH + 1)
+      expect(recipient).toHaveLength(MAX_EMAIL_LENGTH + 1)
+
+      const recorded = await emailLogRepository.record({
+        recipient,
+        templateKey: 'password_reset',
+        status: 'sent',
+        providerMessageId: 'boundary-test',
+      })
+      createdIds.push(recorded.id)
+
+      expect(recorded.recipient).toBe(OVERLENGTH_RECIPIENT_PLACEHOLDER)
+    })
+
+    it('a templateKey of exactly TEMPLATE_KEY_MAX_LENGTH characters is stored unchanged', async () => {
+      const templateKey = 'a'.repeat(TEMPLATE_KEY_MAX_LENGTH)
+
+      const recorded = await emailLogRepository.record({
+        recipient: uniqueRecipient(),
+        templateKey,
         status: 'sent',
       })
-    ).rejects.toThrow()
+      createdIds.push(recorded.id)
 
-    const rowsForRejectedAttempt = await sql`
-      select 1 from email_logs where recipient = ${templateKeyRecipient}
-    `
-    expect(rowsForRejectedAttempt).toHaveLength(0)
+      expect(recorded.templateKey).toBe(templateKey)
+    })
+
+    it('a templateKey one character over TEMPLATE_KEY_MAX_LENGTH is normalized to the placeholder', async () => {
+      const templateKey = 'a'.repeat(TEMPLATE_KEY_MAX_LENGTH + 1)
+
+      const recorded = await emailLogRepository.record({
+        recipient: uniqueRecipient(),
+        templateKey,
+        status: 'sent',
+      })
+      createdIds.push(recorded.id)
+
+      expect(recorded.templateKey).toBe(OVERLENGTH_TEMPLATE_KEY_PLACEHOLDER)
+    })
+
+    it('a providerMessageId of exactly PROVIDER_MESSAGE_ID_MAX_LENGTH characters is stored unchanged', async () => {
+      const providerMessageId = 'a'.repeat(PROVIDER_MESSAGE_ID_MAX_LENGTH)
+
+      const recorded = await emailLogRepository.record({
+        recipient: uniqueRecipient(),
+        templateKey: 'password_reset',
+        status: 'sent',
+        providerMessageId,
+      })
+      createdIds.push(recorded.id)
+
+      expect(recorded.providerMessageId).toBe(providerMessageId)
+    })
+
+    it('a providerMessageId one character over PROVIDER_MESSAGE_ID_MAX_LENGTH is normalized to the placeholder', async () => {
+      const providerMessageId = 'a'.repeat(PROVIDER_MESSAGE_ID_MAX_LENGTH + 1)
+
+      const recorded = await emailLogRepository.record({
+        recipient: uniqueRecipient(),
+        templateKey: 'password_reset',
+        status: 'sent',
+        providerMessageId,
+      })
+      createdIds.push(recorded.id)
+
+      expect(recorded.providerMessageId).toBe(OVERLENGTH_PROVIDER_MESSAGE_ID_PLACEHOLDER)
+    })
   })
 })
