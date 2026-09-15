@@ -48,11 +48,14 @@
 // composite login uses. Both threats it bounds come from one caller varying
 // the email:
 //
-//   - Enumeration. A duplicate address answers 409 and a fresh one 201, so
-//     one request per address reads out the user base. An attacker probing
-//     addresses changes the email on every request BY CONSTRUCTION, so any
-//     key containing the email hands them a fresh counter each time and
-//     bounds nothing at all.
+//   - Outbound mail amplification. `register` (auth.controller.ts) now
+//     sends exactly one mail per request regardless of which branch fires
+//     — a verification link to a free address, a "someone tried to
+//     register" notice to a taken one. An attacker probing addresses
+//     changes the email on every request BY CONSTRUCTION, so any key
+//     containing the email hands them a fresh counter each time and bounds
+//     nothing at all; only a key that ignores the email (IP) actually caps
+//     how much mail one caller can trigger.
 //   - bcrypt CPU exhaustion. `register` (auth.controller.ts) hashes at
 //     BCRYPT_COST — roughly 250ms — before anything else, and node-bcrypt
 //     runs on libuv's threadpool: 4 threads by default, shared with fs and
@@ -69,13 +72,16 @@
 // EXISTING account, and it clears itself within the window with nobody
 // having to intervene.
 //
-// What this limiter does NOT do is CLOSE the registration enumeration
-// oracle — it BOUNDS it. Closing it means never telling an unauthenticated
-// caller whether an address is taken: answer every registration identically
-// and mail the address either "finish signing up" or "you already have an
-// account". That needs email delivery, which is plan B3's. Until then this
-// rate is the whole control, and it is the one number a downstream project
-// with a real enumeration concern should tighten.
+// The registration-enumeration oracle this comment used to describe as
+// merely bounded is now CLOSED, not bounded: `register` (auth.controller.ts)
+// answers an identical 202 with `data: null` for both a free and a taken
+// address, sent BEFORE either branch's mail goes out, so the two cases
+// cannot be told apart by status, body, or response latency — see that
+// function's own header comment. What this limiter guards now that there
+// is no oracle left to bound is the two things the bullets above name:
+// bcrypt threadpool time and outbound mail volume per IP. It is volume
+// protection, on the same footing as REFRESH and LOGOUT below, not a
+// defence against enumeration.
 //
 // LOGOUT is keyed on IP alone and is volume protection only, on the same
 // reasoning as REFRESH below: it is unauthenticated (deliberately — see
@@ -145,8 +151,10 @@ import { HttpError } from '@/middlewares/error.middleware'
 // why registration is keyed on IP alone and why the limit is therefore what
 // protects a NAT'd office. 100 per hour is far above any realistic human
 // signup rate through one egress address, and far below what either threat
-// needs: it bounds one IP to 100 probed addresses per hour (against
-// unbounded today) and to ~25 seconds of bcrypt threadpool time per hour.
+// needs: it bounds one IP to 100 outbound mails per hour (one per request,
+// on either branch — a verification link to a free address or a
+// registration-attempt notice to a taken one) and to ~25 seconds of bcrypt
+// threadpool time per hour.
 // It is also comfortably above what this repo's own integration suite
 // spends from one IP per run (~20 registrations); a suite re-run does not
 // accumulate against it, because tests/helpers/global-setup.ts clears the
@@ -226,8 +234,10 @@ function sendRateLimitedResponse(_request: Request, _response: Response, next: N
  *
  * Keyed on IP rather than on IP-and-email the way login is, and generous
  * rather than tight — see this file's header comment for both, and for what
- * this bounds rather than closes. A factory, not a module-scope constant —
- * see this file's header comment.
+ * this limiter bounds (bcrypt cost, outbound mail volume) now that the
+ * response itself, not this limiter, is what closes the registration
+ * enumeration oracle. A factory, not a module-scope constant — see this
+ * file's header comment.
  * @param overrides - Options to override, e.g. a small `limit`/`windowMs` for a test.
  * @returns Express middleware enforcing the limit.
  */

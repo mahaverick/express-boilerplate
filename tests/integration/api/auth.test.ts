@@ -340,6 +340,34 @@ describe('POST /api/v1/auth/register and /login', () => {
       expect(envelopeOf<unknown>(second.response).data).toBeNull()
     })
 
+    it('mails the STORED firstName on the taken branch, never the submitted one', async () => {
+      // The response body carries no name either way (the test above), but
+      // that leaves the outbound MAIL itself unpinned — `sendRegistrationAttemptMail`
+      // (auth.controller.ts) reads `existing?.firstName` off the row already
+      // in the database, not `input.firstName` off this request's body. A
+      // refactor that swapped one for the other would pass every test above
+      // while delivering attacker-chosen text into the victim's inbox. This
+      // reads the rendered mail body directly to pin that.
+      const email = uniqueEmail()
+      await registerUser({ email, firstName: 'Real' })
+      await drainMailpit(email)
+
+      await registerUser({ email, firstName: 'Attacker' })
+
+      const messages = await findMailpitMessages(email)
+      expect(messages).toHaveLength(1)
+      const detail = await getMailpitMessage(messages[0]?.ID ?? '')
+      // `Hi ${firstName},` (registration-attempt.template.ts) — the comma
+      // makes this tight enough that a stray substring match elsewhere in
+      // the mail (e.g. inside "Real" as a prefix of some other word)
+      // couldn't produce a false pass.
+      expect(detail.Text).toContain('Hi Real,')
+      expect(detail.HTML).toContain('Real')
+      expect(detail.Text).not.toContain('Attacker')
+      expect(detail.HTML).not.toContain('Attacker')
+      await deleteMailpitMessage(messages[0]?.ID ?? '')
+    })
+
     it('answers identically for a soft-deleted address', async () => {
       // The unique index is on lower(email) with no deleted_at predicate
       // (user.model.ts:46), so create() still raises its 409 — but

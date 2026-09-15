@@ -7,13 +7,12 @@ import { boolean, pgTable, timestamp, uniqueIndex, varchar } from 'drizzle-orm/p
 import { MAX_EMAIL_LENGTH, MAX_NAME_LENGTH } from '@/constants/auth.constants'
 
 /**
- * The `users` table. Most columns are read and written by this plan's
- * auth/profile code; two are deliberately reserved for a later plan and
- * nothing sets them yet: `emailVerifiedAt` (email verification — B3, see
- * ARCHITECTURE.md's "B3 seam") and `lastLoggedInAt` (no code path updates
- * it on login today). Both stay on the table now rather than being added
- * later, since adding a column to an existing table is a migration a
- * reserved-but-unused column avoids.
+ * The `users` table. `emailVerifiedAt` and `lastLoggedInAt` are both live
+ * columns, not reserved ones: `UserRepository.markEmailVerified`
+ * (`user.repository.ts`) sets `emailVerifiedAt` when a verification token
+ * is redeemed, and `login` (`auth.controller.ts`) sets `lastLoggedInAt` on
+ * every successful login — see ARCHITECTURE.md's "B3 seam" for the full
+ * picture of what B3 wired up.
  */
 export const userModel = pgTable(
   'users',
