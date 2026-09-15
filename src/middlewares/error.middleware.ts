@@ -177,10 +177,19 @@ function stackFramesOf(error: QueryErrorShape): string | undefined {
  * some of them (`invalid input syntax for type uuid: "..."`), and its
  * `detail` field does so routinely (`Key (lower(email))=(...) already
  * exists.`). The code says the same thing without the value.
+ *
+ * Exported (not module-private) so `mailer.service.ts`'s `recordDelivery`
+ * can reuse it verbatim for a failed `EmailLogRepository.record()` write —
+ * that failure is the identical shape (a `DrizzleQueryError` wrapping a
+ * `postgres.PostgresError` in `.cause`, same as here), and its bound
+ * parameters include a recipient email address, which is PII. Building a
+ * second, parallel redaction for that one call site would be exactly the
+ * duplicated-logic-block this codebase treats as a defect; this is the one
+ * definition both places use.
  * @param error - The thrown or forwarded error.
  * @returns The error itself when it is not a query error; a redacted, parameter-free record when it is.
  */
-function redactedForLog(error: unknown): unknown {
+export function redactedForLog(error: unknown): unknown {
   if (!isQueryError(error)) return error
   return {
     name: (error as { name?: unknown }).name ?? 'QueryError',

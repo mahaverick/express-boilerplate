@@ -40,6 +40,7 @@
 import type SMTPTransport from 'nodemailer/lib/smtp-transport'
 import { getMailTransporter } from '@/configs/mailer.config'
 import { UNKNOWN_ERROR_CODE, type NewEmailLog } from '@/database/models/email-log.model'
+import { redactedForLog } from '@/middlewares/error.middleware'
 import { EmailLogRepository } from '@/repositories/email-log.repository'
 
 const emailLogRepository = new EmailLogRepository()
@@ -149,13 +150,24 @@ export function redactedMailErrorForLog(error: unknown): unknown {
  * Record one delivery attempt, never letting a failure to record escape —
  * see this file's header comment (Ruling E) for why this is its own,
  * independent try/catch rather than sharing one with the send itself.
+ *
+ * A failed `record()` is a Drizzle query error — the same shape
+ * `error.middleware.ts` already redacts for every other failed write in
+ * this codebase — so this reuses `redactedForLog` from there rather than
+ * logging the raw error. That matters here specifically: the insert's bound
+ * parameters include `entry.recipient`, an email address, and an
+ * unredacted `console.error` would put it straight into the log stream —
+ * PII, not a secret (no token reaches this path; `withErrorCodeNormalized`,
+ * email-log.repository.ts, already guarantees that), but exactly the class
+ * of leak B2's `fix: never log bound query parameters` built this
+ * redaction to close everywhere else.
  * @param entry - The row to insert.
  */
 async function recordDelivery(entry: NewEmailLog): Promise<void> {
   try {
     await emailLogRepository.record(entry)
   } catch (error) {
-    console.error('Failed to record email delivery log', error)
+    console.error('Failed to record email delivery log', redactedForLog(error))
   }
 }
 
