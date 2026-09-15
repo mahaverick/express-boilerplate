@@ -48,6 +48,7 @@ import { getMailTransporter } from '@/configs/mailer.config'
 import { UNKNOWN_ERROR_CODE, type NewEmailLog } from '@/database/models/email-log.model'
 import { redactedForLog } from '@/middlewares/error.middleware'
 import { EmailLogRepository } from '@/repositories/email-log.repository'
+import type { EmailTemplateKey } from '@/utilities/email-template.utilities'
 
 const emailLogRepository = new EmailLogRepository()
 
@@ -61,7 +62,12 @@ export interface MailMessage {
   subject: string
   text: string
   html?: string
-  templateKey: string
+  // Closed to EmailTemplateKey (email-template.utilities.ts), not left as
+  // an unconstrained `string` — the deferred item from Task 2's own
+  // comment above. A typo (`'password-reset'` instead of
+  // `'password_reset'`) is now a compile error rather than an email that
+  // silently records under a key no template ever renders.
+  templateKey: EmailTemplateKey
 }
 
 /**
