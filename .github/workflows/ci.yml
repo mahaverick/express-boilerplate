@@ -25,6 +25,16 @@ jobs:
         ports: ['6379:6379']
         options: >-
           --health-cmd="redis-cli ping" --health-interval=10s --health-timeout=5s --health-retries=5
+      # mailer.service.test.ts sends real mail through this and reads it back
+      # via Mailpit's own HTTP API on 8025 — not a mock. No --health-cmd:
+      # the image has no shell/wget/curl to run one from inside the container
+      # (same constraint as docker-compose.yml's otel-collector). Default,
+      # unremapped ports — unlike postgres/redis above, there is no common
+      # native service on 1025/8025 for a GitHub-hosted runner to collide
+      # with, so this needs none of docker-compose.yml's 5433/6380 dodge.
+      mailpit:
+        image: axllent/mailpit:latest
+        ports: ['1025:1025', '8025:8025']
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
