@@ -34,12 +34,12 @@ import { parseDurationMs } from '@/utilities/duration.utilities'
 // once, here, rather than fighting that type a second time.
 const MS_PER_SECOND = 1000
 
-// A raw refresh token's length in bytes before hex-encoding. 32 bytes
-// (256 bits) hex-encodes to the 64 characters user-token.model.ts's
+// A raw token's length in bytes before hex-encoding, for every purpose. 32
+// bytes (256 bits) hex-encodes to the 64 characters user-token.model.ts's
 // `tokenHash` column width assumes for a SHA-256 digest — deliberately the
 // same length as the hash, though the two are unrelated facts: the digest
 // is fixed by SHA-256, and the raw token's length is this constant.
-const REFRESH_TOKEN_BYTES = 32
+const RAW_TOKEN_BYTES = 32
 
 const userTokenRepository = new UserTokenRepository()
 
@@ -111,7 +111,7 @@ function hashToken(raw: string): string {
  * @returns A hex-encoded, cryptographically random token.
  */
 function generateRawToken(): string {
-  return randomBytes(REFRESH_TOKEN_BYTES).toString('hex')
+  return randomBytes(RAW_TOKEN_BYTES).toString('hex')
 }
 
 /**
