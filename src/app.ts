@@ -7,6 +7,7 @@
 import express, { type Express } from 'express'
 import { errorHandler, HttpError } from '@/middlewares/error.middleware'
 import { requestId } from '@/middlewares/request-id.middleware'
+import { createApiRouter } from '@/routes/index.routes'
 import { isDatabaseReachable } from '@/services/database.service'
 import { isRedisReachable } from '@/services/redis.service'
 
@@ -38,6 +39,8 @@ export function createApp(): Express {
       checks: { database, redis },
     })
   })
+
+  app.use('/api/v1', createApiRouter())
 
   app.use((_request, _response, next) => {
     next(new HttpError('Not found', 404))

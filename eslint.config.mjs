@@ -185,6 +185,7 @@ export default tseslint.config(
           'src/repositories/**/*.ts': '*.repository',
           'src/services/**/*.ts': '*.service',
           'src/validators/**/*.ts': '*.validators',
+          'src/routes/**/*.ts': '*.routes',
           'src/middlewares/**/*.ts': '*.middleware',
           'src/database/models/**/*.ts': '*.model',
           'src/utilities/**/*.ts': '*.utilities',
