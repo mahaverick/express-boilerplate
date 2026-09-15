@@ -13,9 +13,11 @@
 //    which addresses are registered, just through response TIMING instead
 //    of response content — a wrong password pays for a real bcrypt compare
 //    and an unknown email would otherwise return almost immediately.
-//    `getDummyHash` below exists so both paths always run one real
-//    comparison, at the same configured cost (BCRYPT_COST), regardless of
-//    whether a matching row exists.
+//    `getDummyHash` (@/utilities/password.utilities) exists so both paths
+//    always run one real comparison, at the same configured cost
+//    (BCRYPT_COST), regardless of whether a matching row exists. See its
+//    own header comment there for how it stays in step with BCRYPT_COST and
+//    why it's memoised.
 import { randomUUID } from 'node:crypto'
 import { type NextFunction, type Request, type Response } from 'express'
 import { getEnv } from '@/configs/env.config'
@@ -24,7 +26,7 @@ import type { User } from '@/database/models/user.model'
 import { toAuthenticatedUser, type AuthenticatedUser } from '@/middlewares/auth.middleware'
 import { HttpError } from '@/middlewares/error.middleware'
 import { UserRepository } from '@/repositories/user.repository'
-import { hashPassword, isPasswordValid } from '@/utilities/password.utilities'
+import { getDummyHash, hashPassword, isPasswordValid } from '@/utilities/password.utilities'
 import { successResponse } from '@/utilities/response.utilities'
 import {
   issueRefreshToken,
@@ -35,37 +37,6 @@ import {
 import { loginSchema, parseBody, registerSchema } from '@/validators/auth.validators'
 
 const userRepository = new UserRepository()
-
-// A fixed, non-secret plaintext — never a real password, never compared
-// against a real account. Hashed lazily (only once actually needed) and
-// memoised for the life of the process, using the SAME `hashPassword` every
-// real password goes through — so it always costs the current BCRYPT_COST,
-// never a stale cost captured in a hard-coded hash string that would
-// silently stop matching the moment that constant changes and quietly
-// reopen the timing gap this exists to close.
-//
-// That closes the STALE DUMMY half of the problem, and only that half. The
-// dummy tracks BCRYPT_COST; a stored hash does not — bcrypt encodes the
-// cost it was written with, so an existing row keeps verifying at that
-// cost forever. Raise BCRYPT_COST and the two stop agreeing, inverted:
-// existing users verify more cheaply than the dummy, and an unknown email
-// becomes measurably SLOWER than a wrong password rather than identical.
-// Nothing this function can do fixes that — there is no single cost that
-// matches every row. The remedy (rehash-on-successful-login) and the
-// decision it belongs to are documented on BCRYPT_COST itself
-// (auth.constants.ts), which is where someone about to raise the cost is
-// actually looking.
-//
-// The memoisation cache lives inside this IIFE's closure rather than as a
-// top-level module variable, mirroring env.config.ts's `getEnv` — satisfying
-// unicorn/no-top-level-assignment-in-function without disabling it.
-const getDummyHash: () => Promise<string> = (() => {
-  let cached: Promise<string> | undefined
-  return (): Promise<string> => {
-    cached ??= hashPassword('not-a-real-password-used-only-to-pay-bcrypts-cost')
-    return cached
-  }
-})()
 
 /**
  * The fields of a user row it is safe to return to a client. An explicit
