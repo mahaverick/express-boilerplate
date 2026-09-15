@@ -14,6 +14,7 @@
 // `app.use(...)` in app.ts.
 import { Router } from 'express'
 import { createAuthRouter } from '@/routes/auth.routes'
+import { createProfileRouter } from '@/routes/profile.routes'
 
 /**
  * Build the versioned API router.
@@ -23,5 +24,6 @@ import { createAuthRouter } from '@/routes/auth.routes'
 export function createApiRouter(): Router {
   const router = Router()
   router.use('/auth', createAuthRouter())
+  router.use('/profile', createProfileRouter())
   return router
 }
