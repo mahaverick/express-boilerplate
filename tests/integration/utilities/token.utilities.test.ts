@@ -161,9 +161,16 @@ describe('refresh token issuance, rotation, and revocation', () => {
       select token_hash from user_tokens where user_id = ${userId} and session_id = ${sessionId}
         and revoked_at is not null and replaced_by_id is null
     `
+    // The row must be FOUND before its revokedAt means anything. Asserted
+    // first, and separately: `expect(row?.revokedAt).not.toBeNull()` passes
+    // against `undefined` too, so if reuse detection broke and the query
+    // matched nothing, that assertion alone would still be green while
+    // reading as though it had checked something.
+    expect(rotatedTokenRows).toHaveLength(1)
     const rotatedRow = await userTokenRepository.findByHash(
       rotatedTokenRows[0]?.token_hash as string
     )
+    expect(rotatedRow).toBeDefined()
     expect(rotatedRow?.revokedAt).not.toBeNull()
 
     // Confirmed from the client's perspective too: the token that was still

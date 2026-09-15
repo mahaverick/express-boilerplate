@@ -216,7 +216,7 @@ export default tseslint.config(
     files: ['**/*.test.ts', 'tests/**/*.ts'],
     rules: {
       'jsdoc/require-jsdoc': 'off',
-      // Test filenames carry a middle extension (sanity.utilities.test.ts).
+      // Test filenames carry a middle extension (token.utilities.test.ts).
       // A file colocated with its source under a governed directory ends in
       // ".test", not the pattern's required suffix (e.g. ".utilities"), so
       // it can never satisfy that directory's naming pattern. core disables
@@ -224,8 +224,8 @@ export default tseslint.config(
       'check-file/filename-naming-convention': 'off',
       // Fixture credentials in tests are not real secrets — they exist so
       // the test can assert against a known value, never to guard anything.
-      // hardcoded-secret-signatures is the same false-positive class as
-      // no-hardcoded-passwords above, tripped by token.utilities.test.ts
+      // Both rules below are the same false-positive class:
+      // hardcoded-secret-signatures is tripped by token.utilities.test.ts
       // signing a JWT with a deliberately-wrong secret to prove rejection.
       'sonarjs/no-hardcoded-passwords': 'off',
       'sonarjs/hardcoded-secret-signatures': 'off',

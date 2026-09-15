@@ -24,12 +24,23 @@
 // `sessionId` is the session "family" identifier: every refresh token
 // issued at login, and every token rotation produces from it, shares the
 // same sessionId for the life of that session — it does not change on
-// rotation. That single shared value is what makes both revocation methods
-// possible: revoking by sessionId kills one session/device's whole chain in
-// one write, and `replacedById` (below) traces which row replaced which
-// within that chain, which is what lets reuse detection identify "this
-// exact chain was just compromised" rather than only "some token,
-// somewhere, was reused".
+// rotation. That single shared value is what makes revocation possible at
+// all: revoking by sessionId kills one session/device's whole chain in one
+// write, which is how both an explicit logout and reuse detection contain a
+// session (`revokeAllForSession`, user-token.repository.ts).
+//
+// `replacedById` is NOT part of that mechanism. Correcting an earlier
+// version of this comment, which claimed it "lets reuse detection identify
+// this exact chain was compromised": it does not, and nothing in src/ reads
+// the column at all — `rotateRefreshToken` writes it and no query ever
+// selects it. Reuse detection needs exactly two facts, both of which live
+// elsewhere: `revokedAt` on the presented row (a token already revoked, and
+// presented again, is a replay) and `sessionId` (which rows to revoke in
+// response). What `replacedById` actually is, is FORENSIC METADATA: after
+// the fact, it lets a human walk one session's rotation chain in order and
+// see which row replaced which. Useful in an incident review, load-bearing
+// for nothing at runtime. A plan that wants to build on it should build on
+// that description, not on the mechanism claim it used to carry.
 import { sql, type InferInsertModel, type InferSelectModel } from 'drizzle-orm'
 import {
   index,
@@ -43,10 +54,14 @@ import { userModel } from '@/database/models/user.model'
 
 /**
  * The `user_tokens` table: one row per issued or rotated-to refresh token.
- * `replacedById` links a rotated-away row to the row that replaced it,
- * tracing a session's full rotation chain — this is what lets
- * `rotateRefreshToken` (token.utilities.ts) tell "this token was already
- * rotated" (reuse) apart from "this token was never issued".
+ *
+ * What tells `rotateRefreshToken` (token.utilities.ts) that a token was
+ * "already rotated" (reuse) rather than "never issued" is `revokedAt` — the
+ * row exists and is already revoked — and what it revokes in response is
+ * every row sharing the presented row's `sessionId`. `replacedById` links a
+ * rotated-away row to its replacement, but is read by nothing: it is
+ * forensic metadata for tracing a chain after the fact. See this file's
+ * header comment.
  */
 export const userTokenModel = pgTable(
   'user_tokens',
@@ -87,10 +102,13 @@ export const userTokenModel = pgTable(
     // Set once, either by an explicit revoke (logout, password change) or
     // by rotation claiming this row. Null means "still a live token".
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
-    // Self-referencing: the row this one was rotated into. The `():
-    // AnyPgColumn` return annotation is required, not decorative — without
-    // it TypeScript cannot resolve `userTokenModel`'s own type while this
-    // object literal is still being constructed (the standard Drizzle
+    // Self-referencing: the row this one was rotated into. Written by
+    // `rotateRefreshToken` and read by nothing — forensic metadata, not a
+    // mechanism; see this file's header comment before building on it.
+    //
+    // The `(): AnyPgColumn` return annotation is required, not decorative —
+    // without it TypeScript cannot resolve `userTokenModel`'s own type while
+    // this object literal is still being constructed (the standard Drizzle
     // pattern for a self-referencing column).
     replacedById: varchar('replaced_by_id', { length: 36 }).references(
       (): AnyPgColumn => userTokenModel.id

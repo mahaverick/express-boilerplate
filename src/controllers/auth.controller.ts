@@ -21,6 +21,7 @@ import { type NextFunction, type Request, type Response } from 'express'
 import { getEnv } from '@/configs/env.config'
 import { REFRESH_TOKEN_COOKIE_NAME, REFRESH_TOKEN_COOKIE_PATH } from '@/constants/auth.constants'
 import type { User } from '@/database/models/user.model'
+import { toAuthenticatedUser, type AuthenticatedUser } from '@/middlewares/auth.middleware'
 import { HttpError } from '@/middlewares/error.middleware'
 import { UserRepository } from '@/repositories/user.repository'
 import { hashPassword, isPasswordValid } from '@/utilities/password.utilities'
@@ -43,6 +44,18 @@ const userRepository = new UserRepository()
 // silently stop matching the moment that constant changes and quietly
 // reopen the timing gap this exists to close.
 //
+// That closes the STALE DUMMY half of the problem, and only that half. The
+// dummy tracks BCRYPT_COST; a stored hash does not — bcrypt encodes the
+// cost it was written with, so an existing row keeps verifying at that
+// cost forever. Raise BCRYPT_COST and the two stop agreeing, inverted:
+// existing users verify more cheaply than the dummy, and an unknown email
+// becomes measurably SLOWER than a wrong password rather than identical.
+// Nothing this function can do fixes that — there is no single cost that
+// matches every row. The remedy (rehash-on-successful-login) and the
+// decision it belongs to are documented on BCRYPT_COST itself
+// (auth.constants.ts), which is where someone about to raise the cost is
+// actually looking.
+//
 // The memoisation cache lives inside this IIFE's closure rather than as a
 // top-level module variable, mirroring env.config.ts's `getEnv` — satisfying
 // unicorn/no-top-level-assignment-in-function without disabling it.
@@ -58,33 +71,33 @@ const getDummyHash: () => Promise<string> = (() => {
  * The fields of a user row it is safe to return to a client. An explicit
  * allow-list — see this file's header comment for why.
  *
- * Exported so profile.controller.ts (Task 8) can reuse this exact shape for
- * `GET`/`PATCH /api/v1/profile` instead of defining a second "what a user
- * looks like to a client" — two independent definitions of that shape are
- * how one of them drifts and quietly leaks a field the other forgot to
- * exclude.
+ * DERIVED, not declared: this is `AuthenticatedUser` (auth.middleware.ts,
+ * the projection attached to `request.user`) plus `createdAt`, which is the
+ * only field the two ever differed by. They used to be two independent
+ * hand-maintained lists, which is precisely the drift this file's header
+ * comment warns about one paragraph earlier — a field added to one and not
+ * the other, or excluded from one and not the other, with nothing to catch
+ * it. Extending rather than repeating makes that impossible: a change to
+ * the narrower shape reaches this one automatically.
+ *
+ * Exported so profile.controller.ts can reuse this exact shape for
+ * `GET`/`PATCH /api/v1/profile` instead of defining a third "what a user
+ * looks like to a client".
  */
-export interface PublicUser {
-  id: string
-  email: string
-  firstName: string | null
-  lastName: string | null
+export interface PublicUser extends AuthenticatedUser {
   createdAt: Date
 }
 
 /**
  * Narrow a full user row to the fields `PublicUser` exposes.
+ *
+ * Built from `toAuthenticatedUser` for the same reason `PublicUser` extends
+ * `AuthenticatedUser`: one field list, not two that agree today.
  * @param user - The full row read from or written to the database.
  * @returns The public projection of that row.
  */
 export function toPublicUser(user: User): PublicUser {
-  return {
-    id: user.id,
-    email: user.email,
-    firstName: user.firstName,
-    lastName: user.lastName,
-    createdAt: user.createdAt,
-  }
+  return { ...toAuthenticatedUser(user), createdAt: user.createdAt }
 }
 
 /**

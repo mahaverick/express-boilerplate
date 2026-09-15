@@ -293,7 +293,11 @@ describe('POST /api/v1/auth/register and /login', () => {
         },
         accessToken: ANY_STRING,
       })
-      expect(JSON.stringify(response.body)).not.toMatch(/passwordhash/i)
+      // /password/i, not /passwordhash/i: the stricter pattern, used
+      // identically in the registration test above. A leaked `password`
+      // key — or any other field whose name merely contains it — slips past
+      // a check that only looks for the exact column name.
+      expect(JSON.stringify(response.body)).not.toMatch(/password/i)
 
       const refreshCookie = findRefreshTokenCookie(response)
       expect(refreshCookie).toBeDefined()
@@ -377,6 +381,29 @@ describe('POST /api/v1/auth/register and /login', () => {
       const { response } = await login(email, 'any-password-at-all-123')
 
       expect(response.status).toBe(401)
+      expect(findRefreshTokenCookie(response)).toBeUndefined()
+    })
+
+    it('refuses a cross-site form POST outright, so it can never set a session cookie', async () => {
+      // The CSRF direction SECURITY.md's own section did not consider: not
+      // an attacker using the victim's credentials, but an attacker's page
+      // auto-submitting a form that logs the VICTIM into the ATTACKER's
+      // account. `sameSite: 'strict'` does not help — it governs when a
+      // cookie is SENT, not whether a cross-site response may SET one.
+      //
+      // Real, registered credentials are used here deliberately: the point
+      // is that the request is refused on its ENCODING, before the
+      // controller ever looks at the body, so credentials that would
+      // otherwise succeed still set no cookie.
+      const email = uniqueEmail()
+      await registerUser({ email })
+
+      const response = await request(app)
+        .post('/api/v1/auth/login')
+        .type('form')
+        .send({ email, password: VALID_PASSWORD })
+
+      expect(response.status).toBe(415)
       expect(findRefreshTokenCookie(response)).toBeUndefined()
     })
 
