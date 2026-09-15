@@ -13,21 +13,52 @@
 //
 // vitest's `globalSetup` runs exactly once, in the main process, before any
 // worker is spawned — the right hook for a once-per-run side effect.
+//
+// This now provisions WORKER_COUNT separate databases, not one — see
+// ./worker-database for why each worker needs its own. Postgres has no
+// `CREATE DATABASE IF NOT EXISTS`; the compose stack's Postgres volume (and
+// CI's ephemeral one, freshly created every run) may or may not already
+// have these from a previous run, so a duplicate-database error (42P04) is
+// caught and ignored rather than treated as failure.
+import postgres from 'postgres'
+import { runMigrations } from '@/database/migrate'
 import { loadTestEnv } from './env'
+import { testDatabaseUrlForWorker, WORKER_COUNT } from './worker-database'
 
 /**
- * Migrate the test database once, before any worker (and therefore any test
- * file) starts.
+ * Create and migrate every worker's dedicated test database once, before
+ * any worker (and therefore any test file) starts.
  */
 export default async function setup(): Promise<void> {
-  // Populate process.env from .env.test(.local) before importing anything
-  // that reads it. This has to be a dynamic import, not a static one: a
-  // static `import { runMigrations } from '@/database/migrate'` at the top
-  // of this file would be hoisted and evaluated before this function body
-  // — and therefore before loadTestEnv() runs — so
-  // src/services/database.service.ts would call getEnv() against an empty
-  // process.env and throw before DATABASE_URL ever gets set.
+  // Populate process.env from .env.test(.local) before reading DATABASE_URL.
   loadTestEnv()
-  const { runMigrations } = await import('@/database/migrate')
-  await runMigrations()
+  const baseUrl = process.env.DATABASE_URL
+  if (baseUrl === undefined) {
+    throw new Error('DATABASE_URL is not set — check .env.test')
+  }
+
+  const workerUrls = Array.from({ length: WORKER_COUNT }, (_unused, index) =>
+    testDatabaseUrlForWorker(baseUrl, index + 1)
+  )
+
+  const admin = postgres(baseUrl, { max: 1 })
+  try {
+    for (const workerUrl of workerUrls) {
+      const name = new URL(workerUrl).pathname.slice(1)
+      try {
+        // CREATE DATABASE takes no placeholder parameter; `name` is one of
+        // WORKER_COUNT fixed, code-generated identifiers, never user input.
+        await admin.unsafe(`CREATE DATABASE "${name}"`)
+      } catch (error) {
+        const code = (error as { code?: string }).code
+        // 42P04 = duplicate_database: already created by a previous run
+        // against this same (persistent) Postgres volume.
+        if (code !== '42P04') throw error
+      }
+    }
+  } finally {
+    await admin.end({ timeout: 5 })
+  }
+
+  await Promise.all(workerUrls.map((workerUrl) => runMigrations(workerUrl)))
 }

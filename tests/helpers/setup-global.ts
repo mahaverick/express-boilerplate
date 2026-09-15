@@ -10,6 +10,13 @@
 // The loading logic itself lives in ./env — shared with
 // tests/helpers/global-setup.ts, which needs the identical precedence
 // applied before it can run migrations.
+//
+// useWorkerDatabase() then points DATABASE_URL at THIS worker's own
+// dedicated test database (see ./worker-database for why) — before
+// anything in this test file's own module graph (database.service.ts, via
+// getEnv()) ever reads it.
 import { loadTestEnv } from './env'
+import { useWorkerDatabase } from './worker-database'
 
 loadTestEnv()
+useWorkerDatabase()

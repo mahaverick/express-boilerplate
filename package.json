@@ -15,7 +15,7 @@
   "packageManager": "pnpm@12.4.1",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "rm -rf dist && tsc && tsc-alias --resolve-full-paths",
+    "build": "rm -rf dist && tsc && tsc-alias --resolve-full-paths && cp -r src/database/migrations dist/database/",
     "start": "node dist/index.js",
     "lint": "eslint . && tsc -p tsconfig.typecheck.json --noEmit",
     "lint:fix": "eslint . --fix",
