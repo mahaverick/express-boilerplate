@@ -16,6 +16,8 @@
 
 - **Argue, do not comply.** If a step below states something the source contradicts, stop and say so. Seven briefs in the previous run of this project stated facts that were wrong, and every one was caught by an implementer who checked rather than obeyed. That is the single most valuable thing you can do here.
 - **Never hand-edit `src/` to prove a test fails.** Use `tests/helpers/mutate.ts`. `CLAUDE.md` documents why: a hand-edited mutation once left a live mass-assignment hole in a tracked file.
+- **Mutation proofs are COMMITTED, gated, and reproducible — not run once and thrown away.** `CLAUDE.md`'s "Proving a security behaviour is real" section is binding: commit the demonstration behind `it.runIf(process.env.MUTATION_PROOF === '1')(...)`, reproducing the real test's own assertions against the mutated dependency, so running the file twice — once with the variable set, once without — yields a red transcript and a green one with nothing changed on disk. `tests/integration/utilities/token-reuse-mutation.test.ts` is the worked pattern; follow it. Wherever a task below says "prove it is load-bearing", this is the form that proof takes.
+- **Pick the right mutate helper.** `withMutatedMethod` is the default — it swaps a method on a shared object (`SomeClass.prototype`) and reaches module-private singletons already constructed elsewhere. `withMutatedModule` is only for an export with no shared mutable object to reach, such as a plain function captured by value at another module's load time; it calls `vi.resetModules()`, which re-evaluates `database.service.ts` and opens a fresh Postgres pool nobody closes, so never call it in a loop.
 - **Enumeration-resistance is asserted by direct equality of status and body**, never "both are 2xx".
 - **`claimOnce` does NOT check expiry.** `user-token.repository.ts:100`'s own doc comment says so in capitals. Expiry is the caller's job, on the row it returns.
 - **`revokeAllForUser` ignores purpose** (`user-token.repository.ts:138`) — it would take refresh tokens with it. Never call it for verification cleanup.
@@ -45,6 +47,7 @@
 | `src/validators/verification.validators.ts`    | **New.** Bodies for verify and resend                                                                    | 7, 10   |
 | `src/controllers/verification.controller.ts`   | **New.** `verifyEmail` (7), `resendVerification` (10)                                                    | 7, 10   |
 | `src/middlewares/rate-limit.middleware.ts`     | Three new limiter factories                                                                              | 7, 10   |
+| `src/utilities/verification-mail.utilities.ts` | **New.** Issues a verification token and mails the link; called by register (8) and resend (10)          | 8       |
 | `src/routes/auth.routes.ts`                    | Two new routes                                                                                           | 7, 10   |
 | `SECURITY.md`                                  | The squatting trade, the burnt-token rule, the backfill requirement                                      | 11      |
 
@@ -1227,6 +1230,7 @@ Because the response no longer carries the user, **both test helpers break silen
 
 **Files:**
 
+- Create: `src/utilities/verification-mail.utilities.ts`
 - Modify: `src/controllers/auth.controller.ts` — `register` at `:200-218`
 - Modify: `tests/integration/api/auth.test.ts` (helper at `:146-155`, assertions at `:162`, `:246`, `:256`), `tests/integration/api/auth-refresh.test.ts` (helper at `:76-85`)
 
