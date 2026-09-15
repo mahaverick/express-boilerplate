@@ -265,6 +265,45 @@ is per-process only.
 There is no general-purpose rate limiter beyond the auth router's four
 routes.
 
+### Deploying behind a proxy: `TRUST_PROXY` is a required decision
+
+**If you deploy this behind an ingress, a load balancer, a CDN, or any
+reverse proxy, you must set `TRUST_PROXY`. Leaving it unset is a real
+misconfiguration, not a safe default.**
+
+Every limiter above keys on `request.ip`. Express derives that from the
+socket's peer address unless `trust proxy` is set — so behind a proxy, the
+peer is the **proxy**, and `request.ip` is the same value for every request
+that ever arrives. All four limiters then collapse into one bucket for the
+entire deployment: refresh's "300 per 5 minutes" becomes 300 requests per 5
+minutes shared by all users, and a single noisy client denies refresh to
+everyone else.
+
+The opposite error is worse, and is why this is configuration rather than
+something turned on by default. `X-Forwarded-For` is an ordinary request
+header; anything that can reach the app can write whatever it likes into it.
+Trust it too eagerly and a caller picks its own "client IP" on every
+request, gets a fresh rate-limit bucket each time, and the login limiter
+stops applying at all. **`TRUST_PROXY=true` is refused at boot** for exactly
+this reason (`src/configs/env.config.ts`) — it is the value that gets typed
+by accident, and every legitimate use of it can be written as a hop count or
+an address list instead.
+
+What to set:
+
+| Deployment                                   | Value                                       |
+| -------------------------------------------- | ------------------------------------------- |
+| Clients reach the app directly               | `false` (the default)                       |
+| Exactly one proxy in front (typical ingress) | `1`                                         |
+| A known chain (e.g. CDN → load balancer)     | `2` — the number of hops you control        |
+| Proxies on a known network                   | `10.0.0.0/8` (comma-separated list is fine) |
+| Docker/compose networking only               | `uniquelocal`                               |
+
+Count only the proxies **you** control. Each extra hop of trust is one more
+position from which `X-Forwarded-For` can be forged. `createApp()` applies
+the value at boot and a malformed one throws there, so a typo stops the
+process rather than quietly disabling the limiters.
+
 ### Cookies: httpOnly, environment-derived `secure`, `sameSite: 'strict'`
 
 The refresh token travels only in a cookie (`REFRESH_TOKEN_COOKIE_NAME`,

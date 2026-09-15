@@ -122,20 +122,21 @@ An optional key with no default (currently only
 `.env.example`, so a reader can tell "no value needed" from "fill this in."
 Required keys are emitted blank.
 
-| Variable                      | Required                   | Notes                                                                                      |
-| ----------------------------- | -------------------------- | ------------------------------------------------------------------------------------------ |
-| `NODE_ENV`                    | no (default `development`) | `development` \| `test` \| `production`                                                    |
-| `APP_PORT`                    | no (default `4040`)        |                                                                                            |
-| `APP_URL`                     | **yes** (placeholder)      | Public origin of this API. `http://localhost:4040` locally. **Nothing reads it yet.**      |
-| `WEB_URL`                     | **yes** (placeholder)      | Public origin of the frontend. `http://localhost:5173` locally. **Nothing reads it yet.**  |
-| `DATABASE_URL`                | **yes**                    | `postgres://boilerplate:boilerplate@localhost:5433/boilerplate` against the compose stack. |
-| `REDIS_URL`                   | **yes**                    | `redis://localhost:6380` against the compose stack.                                        |
-| `JWT_ACCESS_SECRET`           | **yes**                    | 32+ characters. Signs and verifies access tokens.                                          |
-| `SESSION_SECRET`              | **yes** (placeholder)      | 32+ characters. **Nothing reads it yet.**                                                  |
-| `ACCESS_TOKEN_TTL`            | no (default `15m`)         | An `ms()`-parseable duration string, e.g. `15m` or `900000`.                               |
-| `REFRESH_TOKEN_TTL`           | no (default `30d`)         | An `ms()`-parseable duration string, e.g. `30d` or `2592000000`.                           |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | no                         | Absent means tracing is disabled — the SDK is never started.                               |
-| `LOG_LEVEL`                   | no (default `info`)        | `error` \| `warn` \| `info` \| `debug`                                                     |
+| Variable                      | Required                   | Notes                                                                                                                 |
+| ----------------------------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `NODE_ENV`                    | no (default `development`) | `development` \| `test` \| `production`                                                                               |
+| `APP_PORT`                    | no (default `4040`)        |                                                                                                                       |
+| `APP_URL`                     | **yes** (placeholder)      | Public origin of this API. `http://localhost:4040` locally. **Nothing reads it yet.**                                 |
+| `WEB_URL`                     | **yes** (placeholder)      | Public origin of the frontend. `http://localhost:5173` locally. **Nothing reads it yet.**                             |
+| `DATABASE_URL`                | **yes**                    | `postgres://boilerplate:boilerplate@localhost:5433/boilerplate` against the compose stack.                            |
+| `REDIS_URL`                   | **yes**                    | `redis://localhost:6380` against the compose stack.                                                                   |
+| `JWT_ACCESS_SECRET`           | **yes**                    | 32+ characters. Signs and verifies access tokens.                                                                     |
+| `SESSION_SECRET`              | **yes** (placeholder)      | 32+ characters. **Nothing reads it yet.**                                                                             |
+| `ACCESS_TOKEN_TTL`            | no (default `15m`)         | An `ms()`-parseable duration string, e.g. `15m` or `900000`.                                                          |
+| `REFRESH_TOKEN_TTL`           | no (default `30d`)         | An `ms()`-parseable duration string, e.g. `30d` or `2592000000`.                                                      |
+| `TRUST_PROXY`                 | no (default `false`)       | **Set this behind a proxy** — see [SECURITY.md](SECURITY.md). `1` for one hop, or an address list. `true` is refused. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | no                         | Absent means tracing is disabled — the SDK is never started.                                                          |
+| `LOG_LEVEL`                   | no (default `info`)        | `error` \| `warn` \| `info` \| `debug`                                                                                |
 
 There is no `JWT_REFRESH_SECRET`: refresh tokens are opaque random strings,
 not JWTs, so nothing ever signs one with a secret — see

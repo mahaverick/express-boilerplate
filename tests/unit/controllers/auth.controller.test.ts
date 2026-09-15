@@ -36,6 +36,7 @@ const baseEnv: Env = {
   SESSION_SECRET: 'c'.repeat(32),
   ACCESS_TOKEN_TTL: '15m',
   REFRESH_TOKEN_TTL: '30d',
+  TRUST_PROXY: 'false',
   LOG_LEVEL: 'info',
 }
 
