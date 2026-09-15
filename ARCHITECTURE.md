@@ -92,7 +92,16 @@ nothing here needs.
 shared by `UserRepository` and `UserTokenRepository`, each of which
 supplies only the four concrete Drizzle queries `BaseRepository` cannot
 express generically (see `base.repository.ts`'s own header comment for
-why). See [DATABASE.md](DATABASE.md) for both models.
+why). See [DATABASE.md](DATABASE.md) for both models. `EmailLogRepository`
+is deliberately NOT one of them — it does not extend `BaseRepository` at
+all. The `email_logs` table it queries is append-only audit data: it has no
+`updatedAt`/`deletedAt` columns for `BaseRepository` to require, nothing
+ever updates or soft-deletes a row once written, and there is no unique
+constraint on the table for a 23505-to-409 translation to have anything to
+translate. Sharing the base class here would mean inheriting `update()` and
+`softDelete()` methods whose very existence contradicts what an audit log
+is — see `email-log.model.ts` and `email-log.repository.ts`'s own header
+comments for the full reasoning.
 
 ## The B3 seam: `email_verified_at` is reserved, not wired up
 
