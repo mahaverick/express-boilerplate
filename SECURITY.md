@@ -196,9 +196,10 @@ account is disabled" is not something this endpoint lets a caller learn.
 #### `/register`: an oracle, bounded by a rate limit, not closed
 
 `POST /api/v1/auth/register` answers **409** for an address that already
-exists and **201** for one that does not (`UserRepository.create` translates
-the `lower(email)` unique-index violation; see "Mass assignment" below for
-the surrounding design). One request per address therefore reads out the
+exists and **201** for one that does not — `BaseRepository.create`
+translates the `lower(email)` unique-index violation (23505) into that 409,
+which is the correct answer to give a real person signing up and is
+simultaneously the whole oracle. One request per address therefore reads out the
 user base, with no password and no account of the attacker's own. That is
 the plain, unavoidable consequence of telling a real person "that address is
 already registered" at signup time, and it means the careful work `/login`
