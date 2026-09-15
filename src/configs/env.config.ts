@@ -42,23 +42,32 @@ const EnvSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   APP_PORT: z.coerce.number().int().positive().default(4040),
 
-  // PLACEHOLDERS. Four of the required variables below are still read by
-  // nothing in src/ today — verified by grep: APP_URL, WEB_URL,
-  // JWT_REFRESH_SECRET and SESSION_SECRET are forward declarations for the
-  // auth/CORS/email plans (see SECURITY.md, "Intended choices"), not
-  // evidence that any of it exists. JWT_ACCESS_SECRET is the exception —
-  // token.utilities.ts (signAccessToken/verifyAccessToken) reads it to sign
-  // and verify every access token, so its own `.describe()` below says what
-  // it actually does rather than carrying the same placeholder note.
+  // PLACEHOLDERS. Three of the required variables below are still read by
+  // nothing in src/ today — verified by grep: APP_URL, WEB_URL and
+  // SESSION_SECRET are forward declarations for the CORS/email/session
+  // plans (see SECURITY.md, "Intended choices"), not evidence that any of
+  // it exists. JWT_ACCESS_SECRET is the exception — token.utilities.ts
+  // (signAccessToken/verifyAccessToken) reads it to sign and verify every
+  // access token, so its own `.describe()` below says what it actually
+  // does rather than carrying the same placeholder note.
   //
-  // They stay REQUIRED rather than optional on purpose: a downstream project
-  // that adds auth should hit a named, fail-fast error at boot for a missing
-  // secret, not discover at runtime that it signed tokens with `undefined`.
-  // The cost of that choice is a cloner generating three 32-character strings
-  // before anything boots, so each `.describe()` below says plainly that any
-  // 32-character string will do for now — the description is what `pnpm
-  // env:example` writes into .env.example as a comment, so this is the one
-  // place that can tell them without drifting.
+  // There is no JWT_REFRESH_SECRET: refresh tokens are opaque random
+  // strings, not JWTs (token.utilities.ts's header comment), so nothing
+  // signs one with a secret, ever — not "not yet". A field that can never
+  // be read is not a placeholder, it is exactly the friction a boilerplate
+  // should not ship: a cloner generating a 32-character secret for a
+  // mechanism that does not exist.
+  //
+  // The remaining placeholders stay REQUIRED rather than optional on
+  // purpose: a downstream project that adds the feature they reserve
+  // should hit a named, fail-fast error at boot for a missing secret, not
+  // discover at runtime that it signed something with `undefined`. The
+  // cost of that choice is a cloner generating a handful of 32-character
+  // strings before anything boots, so each `.describe()` below says
+  // plainly that any 32-character string will do for now — the
+  // description is what `pnpm env:example` writes into .env.example as a
+  // comment, so this is the one place that can tell them without
+  // drifting.
   APP_URL: z
     .url({ protocol: /^https?$/ })
     .describe(
@@ -78,16 +87,6 @@ const EnvSchema = z.object({
     .min(32)
     .describe(
       'Signs and verifies access tokens (token.utilities.ts). Any 32+ character string works; use `openssl rand -hex 32`.'
-    ),
-  // Still a PLACEHOLDER, but not because auth hasn't shipped — this plan's
-  // refresh tokens are deliberately opaque random strings, not JWTs (see
-  // token.utilities.ts's header comment), so nothing ever signs one with
-  // this secret. Kept for a project that reverses that choice.
-  JWT_REFRESH_SECRET: z
-    .string()
-    .min(32)
-    .describe(
-      'PLACEHOLDER — refresh tokens are opaque, not JWTs, so nothing reads this. Any 32+ character string works for now; use `openssl rand -hex 32` if a future project signs refresh tokens instead.'
     ),
   SESSION_SECRET: z
     .string()
