@@ -69,7 +69,7 @@ describe('UserTokenRepository', () => {
     expect(await userTokenRepository.findByHash(uniqueHash())).toBeUndefined()
   })
 
-  it('claimForRotation revokes a live row and returns it', async () => {
+  it('claimOnce revokes a live row of the matching purpose and returns it', async () => {
     const userId = await createUser()
     const tokenHash = uniqueHash()
     await userTokenRepository.create({
@@ -79,20 +79,22 @@ describe('UserTokenRepository', () => {
       expiresAt: new Date(Date.now() + 60_000),
     })
 
-    const claimed = await userTokenRepository.claimForRotation(tokenHash)
-    // RETURNING reflects the row AFTER this UPDATE, so revokedAt is already set.
+    const claimed = await userTokenRepository.claimOnce(tokenHash, 'refresh')
+    // RETURNING reflects the row AFTER this UPDATE, so revokedAt/consumedAt
+    // are already set.
     expect(claimed?.revokedAt).not.toBeNull()
+    expect(claimed?.consumedAt).not.toBeNull()
     expect(claimed?.tokenHash).toBe(tokenHash)
 
     const after = await userTokenRepository.findByHash(tokenHash)
     expect(after?.revokedAt).not.toBeNull()
   })
 
-  it('claimForRotation returns undefined for a hash that does not exist', async () => {
-    expect(await userTokenRepository.claimForRotation(uniqueHash())).toBeUndefined()
+  it('claimOnce returns undefined for a hash that does not exist', async () => {
+    expect(await userTokenRepository.claimOnce(uniqueHash(), 'refresh')).toBeUndefined()
   })
 
-  it('claimForRotation returns undefined for an already-revoked row, without re-revoking it', async () => {
+  it('claimOnce returns undefined for an already-revoked row, without re-revoking it', async () => {
     const userId = await createUser()
     const tokenHash = uniqueHash()
     await userTokenRepository.create({
@@ -102,17 +104,75 @@ describe('UserTokenRepository', () => {
       expiresAt: new Date(Date.now() + 60_000),
     })
 
-    const firstClaim = await userTokenRepository.claimForRotation(tokenHash)
+    const firstClaim = await userTokenRepository.claimOnce(tokenHash, 'refresh')
     const afterFirstClaim = await userTokenRepository.findByHash(tokenHash)
     const firstRevokedAt = afterFirstClaim?.revokedAt
 
-    const secondClaim = await userTokenRepository.claimForRotation(tokenHash)
+    const secondClaim = await userTokenRepository.claimOnce(tokenHash, 'refresh')
     expect(firstClaim).toBeDefined()
     expect(secondClaim).toBeUndefined()
 
     const afterSecondClaim = await userTokenRepository.findByHash(tokenHash)
     const secondRevokedAt = afterSecondClaim?.revokedAt
     expect(secondRevokedAt?.getTime()).toBe(firstRevokedAt?.getTime())
+  })
+
+  // The test that matters most in this task (see task-1-brief.md): without
+  // this predicate, a password-reset token could be spent as an email
+  // verification, or worse, a verification token could reset a password —
+  // turning "I can receive mail at this address" into "I can take over this
+  // account."
+  it('claimOnce rejects a claim for a different purpose than the row was issued for', async () => {
+    const userId = await createUser()
+    const tokenHash = uniqueHash()
+    await userTokenRepository.create({
+      userId,
+      purpose: 'password_reset',
+      tokenHash,
+      expiresAt: new Date(Date.now() + 60_000),
+    })
+
+    // Wrong purpose: the row exists and is still live, but must not be
+    // claimable as anything other than what it was issued for.
+    const wrongPurpose = await userTokenRepository.claimOnce(tokenHash, 'email_verification')
+    expect(wrongPurpose).toBeUndefined()
+
+    // The row must be UNTOUCHED by the rejected claim above — still live,
+    // still claimable under its real purpose. A claimOnce that revoked on a
+    // purpose mismatch would silently burn a legitimate token on a mere
+    // probe.
+    const stillLive = await userTokenRepository.findByHash(tokenHash)
+    expect(stillLive?.revokedAt).toBeNull()
+
+    const rightPurpose = await userTokenRepository.claimOnce(tokenHash, 'password_reset')
+    expect(rightPurpose).toBeDefined()
+    expect(rightPurpose?.revokedAt).not.toBeNull()
+  })
+
+  it('claimOnce rejects a refresh claim for a token issued as a password reset, and vice versa', async () => {
+    const userId = await createUser()
+    const resetHash = uniqueHash()
+    const refreshHash = uniqueHash()
+    await userTokenRepository.create({
+      userId,
+      purpose: 'password_reset',
+      tokenHash: resetHash,
+      expiresAt: new Date(Date.now() + 60_000),
+    })
+    await userTokenRepository.create({
+      userId,
+      purpose: 'refresh',
+      sessionId: randomUUID(),
+      tokenHash: refreshHash,
+      expiresAt: new Date(Date.now() + 60_000),
+    })
+
+    expect(await userTokenRepository.claimOnce(resetHash, 'refresh')).toBeUndefined()
+    expect(await userTokenRepository.claimOnce(refreshHash, 'password_reset')).toBeUndefined()
+
+    // Both remain claimable under their real, original purpose.
+    expect(await userTokenRepository.claimOnce(resetHash, 'password_reset')).toBeDefined()
+    expect(await userTokenRepository.claimOnce(refreshHash, 'refresh')).toBeDefined()
   })
 
   it('revokeAllForSession revokes every row in the session and none outside it', async () => {

@@ -34,16 +34,23 @@ by `check-file` — see [STRUCTURE.md](STRUCTURE.md)):
   `last_logged_in_at`, and the `deleted_at`/`created_at`/`updated_at` trio
   every soft-deletable table carries.
 - **`user-token.model.ts`** — the `user_tokens` table: one row per issued or
-  rotated-to refresh token. `session_id` groups every token descended from
-  one login into a rotation "family"; `session_started_at` records when that
-  family began and is copied forward unchanged by every rotation, which is
-  what makes `SESSION_ABSOLUTE_TTL` an absolute ceiling rather than another
-  sliding window; `token_hash` stores a SHA-256 digest of the raw token,
-  never the token itself; `replaced_by_id` self-references the row a token
-  was rotated into — forensic metadata for tracing a chain after the fact,
-  read by nothing at runtime. See [SECURITY.md](SECURITY.md) for the
-  security reasoning and [ARCHITECTURE.md](ARCHITECTURE.md) for how the
-  repository layer sits on top of both models.
+  rotated-to token, for any of three purposes (`purpose`: `'refresh'`,
+  `'email_verification'`, or `'password_reset'`) — one table rather than
+  three, since all of them share the same hashing, lookup, expiry, and
+  revocation machinery. `session_id`/`session_started_at` are nullable and
+  meaningful only for `'refresh'`: `session_id` groups every token descended
+  from one login into a rotation "family"; `session_started_at` records when
+  that family began and is copied forward unchanged by every rotation, which
+  is what makes `SESSION_ABSOLUTE_TTL` an absolute ceiling rather than
+  another sliding window. `token_hash` stores a SHA-256 digest of the raw
+  token, never the token itself; `consumed_at` is set only by
+  `UserTokenRepository.claimOnce`, distinguishing a row spent through its
+  normal single-use path from one killed by an explicit revoke;
+  `replaced_by_id` self-references the row a token was rotated into —
+  forensic metadata for tracing a chain after the fact, read by nothing at
+  runtime. See [SECURITY.md](SECURITY.md) for the security reasoning and
+  [ARCHITECTURE.md](ARCHITECTURE.md) for how the repository layer sits on
+  top of both models.
 
 ### `user_tokens` grows without bound, and nothing prunes it
 
@@ -77,12 +84,16 @@ picks up a new model automatically — no config change needed to add one.
 
 ## Migrations directory
 
-`src/database/migrations/` is **tracked**, and holds three generated
+`src/database/migrations/` is **tracked**, and holds four generated
 migrations today: `0000_tearful_crusher_hogan.sql` (creates `users`),
 `0001_great_dragon_man.sql` (creates `user_tokens`, with its foreign keys
-to `users` and to itself for `replaced_by_id`), and
-`0002_abandoned_tarantula.sql` (adds `user_tokens.session_started_at`),
-plus `meta/_journal.json` recording all three in order. Everything under this directory is **generated**
+to `users` and to itself for `replaced_by_id`),
+`0002_abandoned_tarantula.sql` (adds `user_tokens.session_started_at`), and
+`0003_regular_lockjaw.sql` (adds `user_tokens.purpose` and `.consumed_at`,
+backfilling every existing row's `purpose` to `'refresh'` in the same
+statement that adds the `NOT NULL` constraint, and makes `session_id`/
+`session_started_at` nullable — see this file's own model description
+above), plus `meta/_journal.json` recording all four in order. Everything under this directory is **generated**
 by `drizzle-kit generate`; nothing here is hand-written, and nothing here
 should be hand-edited.
 

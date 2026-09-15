@@ -12,7 +12,7 @@
 // revoke the new token as a side effect, so test 4 would then only be
 // passing for test 5's reason. Test 5 is the only test that presents an
 // already-rotated token.
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import jwt from 'jsonwebtoken'
 import { afterEach, describe, expect, it } from 'vitest'
 import { getEnv } from '@/configs/env.config'
@@ -23,12 +23,24 @@ import { sql } from '@/services/database.service'
 import { parseDurationMs } from '@/utilities/duration.utilities'
 import {
   issueRefreshToken,
+  issueToken,
   revokeAllSessions,
   revokeSession,
   rotateRefreshToken,
   signAccessToken,
   verifyAccessToken,
 } from '@/utilities/token.utilities'
+
+/**
+ * SHA-256 hash a raw token exactly as token.utilities.ts's own (private)
+ * hashToken does, so a test can look up the row `issueToken` just wrote
+ * without reaching into that module's internals.
+ * @param raw - The raw token.
+ * @returns The hex-encoded digest.
+ */
+function hashRawToken(raw: string): string {
+  return createHash('sha256').update(raw).digest('hex')
+}
 
 const userRepository = new UserRepository()
 const userTokenRepository = new UserTokenRepository()
@@ -304,5 +316,74 @@ describe('refresh token issuance, rotation, and revocation', () => {
 
     await expect(rotateRefreshToken(issuedA.raw)).rejects.toMatchObject({ statusCode: 401 })
     await expect(rotateRefreshToken(issuedB.raw)).rejects.toMatchObject({ statusCode: 401 })
+  })
+})
+
+describe('issueToken and cross-purpose claiming', () => {
+  const createdUserIds: string[] = []
+
+  afterEach(async () => {
+    if (createdUserIds.length === 0) return
+    await sql`delete from users where id = any(${createdUserIds})`
+    createdUserIds.length = 0
+  })
+
+  /**
+   * Create a disposable user for a test and track it for cleanup.
+   * @returns The created user's id.
+   */
+  async function createUser(): Promise<string> {
+    const user = await userRepository.create({ email: `issue-token-${randomUUID()}@example.test` })
+    createdUserIds.push(user.id)
+    return user.id
+  }
+
+  it('issues a token scoped to a purpose, with no session fields set', async () => {
+    const userId = await createUser()
+    const issued = await issueToken(userId, 'password_reset', 60_000)
+
+    expect(issued.userId).toBe(userId)
+    expect(issued.purpose).toBe('password_reset')
+
+    const row = await userTokenRepository.findByHash(hashRawToken(issued.raw))
+    expect(row).toBeDefined()
+    expect(row?.purpose).toBe('password_reset')
+    expect(row?.sessionId).toBeNull()
+    expect(row?.sessionStartedAt).toBeNull()
+    expect(row?.revokedAt).toBeNull()
+    // The raw value is never what's stored — same property issueRefreshToken
+    // is proven against above.
+    expect(row?.tokenHash).not.toBe(issued.raw)
+  })
+
+  // The test that matters most in this task (see task-1-brief.md): a token
+  // issued for one purpose must not be claimable as another. Without this,
+  // a password-reset token could be spent as an email verification, or a
+  // verification token could reset a password — turning "I can receive mail
+  // at this address" into "I can take over this account."
+  it('rejects claiming a password-reset token as an email verification, and vice versa', async () => {
+    const userId = await createUser()
+    const resetIssued = await issueToken(userId, 'password_reset', 60_000)
+    const verifyIssued = await issueToken(userId, 'email_verification', 60_000)
+    const resetHash = hashRawToken(resetIssued.raw)
+    const verifyHash = hashRawToken(verifyIssued.raw)
+
+    const resetClaimedAsVerify = await userTokenRepository.claimOnce(
+      resetHash,
+      'email_verification'
+    )
+    const verifyClaimedAsReset = await userTokenRepository.claimOnce(verifyHash, 'password_reset')
+    expect(resetClaimedAsVerify).toBeUndefined()
+    expect(verifyClaimedAsReset).toBeUndefined()
+
+    // Neither rejected claim touched the row: both remain live and
+    // claimable under their real, original purpose.
+    const resetClaimedCorrectly = await userTokenRepository.claimOnce(resetHash, 'password_reset')
+    const verifyClaimedCorrectly = await userTokenRepository.claimOnce(
+      verifyHash,
+      'email_verification'
+    )
+    expect(resetClaimedCorrectly).toBeDefined()
+    expect(verifyClaimedCorrectly).toBeDefined()
   })
 })
