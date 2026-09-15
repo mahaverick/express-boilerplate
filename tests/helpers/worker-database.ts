@@ -30,10 +30,13 @@
 // repo's convention — see migrate.test.ts) still matters for files sharing
 // one worker sequentially, and is unchanged by this file.
 //
-// WORKER_COUNT mirrors vitest.config.ts's `maxWorkers`. Kept as a
-// cross-referencing comment rather than a shared import, the same way this
-// repo already keeps docker-compose's ports, .env.test, and CI's env block
-// in sync — see that file's own comment for why 8 was chosen.
+// WORKER_COUNT is the single source of truth for how many worker databases
+// exist; vitest.config.ts imports THIS constant for `maxWorkers` rather than
+// repeating the number. A comment cross-referencing two literals was tried
+// first and rejected: the failure mode if they drift is a worker assigned a
+// VITEST_POOL_ID with no database ever provisioned for it — a connection
+// error, not a configuration error, with nothing pointing at the actual
+// cause. One import makes the two values impossible to disagree.
 export const WORKER_COUNT = 8
 
 // Test-infrastructure-only process.env key: the untouched base DATABASE_URL

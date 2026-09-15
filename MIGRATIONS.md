@@ -138,6 +138,7 @@ Current contents, verbatim:
 
 ```yaml
 allowBuilds:
+  bcrypt: true
   esbuild: true
   # unrs-resolver: native binary that eslint-plugin-import-x depends on
   # directly for module/TS-path resolution. Its postinstall only fetches a
@@ -150,6 +151,14 @@ minimumReleaseAgeExclude:
 
 Line-by-line:
 
+- **`allowBuilds.bcrypt: true`** — `bcrypt`'s `install` script runs
+  `node-gyp-build`: fetches a prebuilt native binding for the host platform,
+  or compiles one from source via `node-gyp` if no prebuild matches. Native
+  addon, not pure JS — the build step is required for the package to work
+  at all, not optional tooling. Added centrally, ahead of Tasks 2/3/4/7, to
+  keep every later task's `pnpm add` from racing another task's over
+  `package.json`/`pnpm-lock.yaml`; added but not yet imported or used by
+  any module — that's Task 2.
 - **`allowBuilds.esbuild: true`** — `esbuild` ships a native binary fetched
   by its own postinstall script; pnpm 12 blocks arbitrary postinstall
   scripts by default, and this is the explicit allow for that one. It's a
