@@ -81,7 +81,19 @@ until you check.
   outright. A hook that fails whenever Docker happens to be down gets
   disabled with `--no-verify` permanently and never comes back — which
   protects nothing. `pre-push` runs the full suite via `test:coverage`,
-  where Docker being up is a fair expectation.
+  where Docker being up is a fair expectation. **The exclusion is by path
+  only, not by what a test actually touches** — so a test that hits the
+  real database or Redis MUST live under `tests/integration/`, never
+  `tests/unit/`, regardless of what else is colocated there. This bit
+  during the auth work: an early draft of `auth.middleware.test.ts` was
+  placed under `tests/unit/middlewares/` because it sat next to the
+  middleware's other unit tests, but it called `UserRepository` against the
+  real per-worker Postgres database — so with Docker down, any commit
+  touching that file (or anything importing it) failed pre-commit outright,
+  the exact failure mode this exclusion exists to prevent. It was relocated
+  to `tests/integration/middlewares/auth.middleware.test.ts` once caught.
+  Where a test's assertions live is not evidence of where its dependencies
+  reach — check the second, not the first.
 - **Hooks call `pnpm exec`, never `npx`.** `npx eslint` on a machine
   without `node_modules` populated yet silently downloads the newest
   ESLint and lints against a version this repo never tested against its
@@ -91,6 +103,52 @@ until you check.
   `"prepare": "husky"` actually installs hooks by re-running `pnpm install`
   in a checkout that's already installed — it proves nothing either way.
   Test it from a fresh clone.
+
+## Testing
+
+- **Each vitest worker gets its own, physically separate database, and
+  `WORKER_COUNT` is the one number that drives that.**
+  `tests/helpers/worker-database.ts` provisions `WORKER_COUNT` databases up
+  front (in global setup, before any worker spawns) and assigns one per
+  worker via vitest's own `VITEST_POOL_ID`. `vitest.config.ts` imports
+  `WORKER_COUNT` for `maxWorkers` rather than hard-coding the same number a
+  second time — a worker assigned a pool id with no database provisioned
+  for it fails as a bare connection error, with nothing pointing at
+  "`maxWorkers` and `WORKER_COUNT` disagree" as the actual cause. If you
+  ever need more (or fewer) parallel workers, change `WORKER_COUNT` in that
+  one file; do not add a separate `maxWorkers` override anywhere else. This
+  also means two tests in different files are never racing against the
+  same rows just because they both insert a user — they are in different
+  databases entirely, not merely different transactions.
+
+## Auth and tokens
+
+- **`isPasswordValid`, not `verifyPassword`.**
+  `unicorn/consistent-boolean-name` requires a boolean-returning function to
+  start with `is`/`has`/`can`/etc.; `verifyPassword` doesn't. The
+  alternative — an `ignore` entry in `eslint.config.mjs` carving out that
+  one name — was deliberately rejected in favour of renaming, on the same
+  reasoning this repo already applied to `pingDatabase`/`pingRedis` ->
+  `isDatabaseReachable`/`isRedisReachable`: a boilerplate should answer the
+  same lint rule the same way everywhere, not once by renaming and once by
+  a config carve-out for a name a plan happened to specify first. Don't
+  rename it back to match a spec's literal wording; the lint rule's intent
+  (a boolean-returning name reads as a question) is what should win.
+- **`verifyAccessToken` returns a discriminated result, not a thrown
+  error.** Its type is a union of `{ ok: true; payload }` and
+  `{ ok: false; reason: 'expired' | 'invalid' }`
+  (`src/utilities/token.utilities.ts`) rather than throwing on rejection.
+  This exists so `requireAuth` (`src/middlewares/auth.middleware.ts`) can
+  tell a client "your token expired, try refreshing" apart from "this token
+  is no good, log in again" using only a fact `jsonwebtoken` itself already
+  verified — a caller re-deriving "expired" by peeking at the token's own
+  unverified `exp` claim after a generic thrown rejection would be trusting
+  exactly the data verification just said not to trust. `reason: 'expired'`
+  is set ONLY for `jsonwebtoken`'s own `TokenExpiredError`; every other
+  rejection (bad signature, wrong algorithm, malformed structure, missing
+  `sub`) is `'invalid'`, and that's a closed set of two — don't add a third
+  case based on an error message, since only `verifyAccessToken` ever calls
+  `jwt.verify` and sees what it actually threw.
 
 ## Code conventions
 

@@ -8,17 +8,25 @@ it, so if they ever disagree, the config wins and this file is stale.
 
 ## Governed directories (filename suffix enforced)
 
-| Directory              | Required suffix   | Example                 | Status in this repo                                                                            |
-| ---------------------- | ----------------- | ----------------------- | ---------------------------------------------------------------------------------------------- |
-| `src/controllers/`     | `*.controller.ts` | `user.controller.ts`    | Not created yet — owned by a later plan                                                        |
-| `src/repositories/`    | `*.repository.ts` | `user.repository.ts`    | Not created yet — owned by a later plan                                                        |
-| `src/services/`        | `*.service.ts`    | `database.service.ts`   | `database.service.ts`, `redis.service.ts`                                                      |
-| `src/validators/`      | `*.validators.ts` | `user.validators.ts`    | Not created yet — owned by a later plan                                                        |
-| `src/middlewares/`     | `*.middleware.ts` | `error.middleware.ts`   | `error.middleware.ts`, `request-id.middleware.ts`                                              |
-| `src/database/models/` | `*.model.ts`      | `user.model.ts`         | Not created yet — see [DATABASE.md](DATABASE.md)                                               |
-| `src/utilities/`       | `*.utilities.ts`  | `response.utilities.ts` | `response.utilities.ts`, `sanity.utilities.ts` (scaffolding, deleted once real utilities land) |
-| `src/constants/`       | `*.constants.ts`  | `global.constants.ts`   | `global.constants.ts`                                                                          |
-| `src/configs/`         | `*.config.ts`     | `env.config.ts`         | `env.config.ts` — the only file allowed to read `process.env`                                  |
+| Directory              | Required suffix   | Example                 | Status in this repo                                                                                                                                                                                                                   |
+| ---------------------- | ----------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/controllers/`     | `*.controller.ts` | `user.controller.ts`    | `auth.controller.ts`, `profile.controller.ts`                                                                                                                                                                                         |
+| `src/repositories/`    | `*.repository.ts` | `user.repository.ts`    | `base.repository.ts` (abstract; shared soft-delete/update-tracking policy), `user.repository.ts`, `user-token.repository.ts`                                                                                                          |
+| `src/services/`        | `*.service.ts`    | `database.service.ts`   | `database.service.ts`, `redis.service.ts`                                                                                                                                                                                             |
+| `src/validators/`      | `*.validators.ts` | `user.validators.ts`    | `auth.validators.ts` (also exports `parseBody`, the shared zod-to-`HttpError` bridge every validator uses), `profile.validators.ts`                                                                                                   |
+| `src/routes/`          | `*.routes.ts`     | `user.routes.ts`        | `index.routes.ts` (builds and mounts the versioned `/api/v1` router — a router, not a re-export; see "No barrel files" below), `auth.routes.ts`, `profile.routes.ts`                                                                  |
+| `src/middlewares/`     | `*.middleware.ts` | `error.middleware.ts`   | `error.middleware.ts`, `request-id.middleware.ts`, `auth.middleware.ts` (`requireAuth`), `rate-limit.middleware.ts`                                                                                                                   |
+| `src/database/models/` | `*.model.ts`      | `user.model.ts`         | `user.model.ts`, `user-token.model.ts` — see [DATABASE.md](DATABASE.md)                                                                                                                                                               |
+| `src/utilities/`       | `*.utilities.ts`  | `response.utilities.ts` | `response.utilities.ts`, `duration.utilities.ts`, `password.utilities.ts` (`hashPassword`/`isPasswordValid`), `token.utilities.ts` (JWT + opaque refresh tokens), `sanity.utilities.ts` (scaffolding — still present; see note below) |
+| `src/constants/`       | `*.constants.ts`  | `global.constants.ts`   | `global.constants.ts`, `auth.constants.ts` (`BCRYPT_COST` and password/cookie constants — see [SECURITY.md](SECURITY.md))                                                                                                             |
+| `src/configs/`         | `*.config.ts`     | `env.config.ts`         | `env.config.ts` — the only file allowed to read `process.env` — and `rate-limit-store.config.ts`                                                                                                                                      |
+
+`sanity.utilities.ts` was scaffolding meant to be deleted once real
+utilities landed; real utilities (`password.utilities.ts`, `token.utilities.ts`,
+`duration.utilities.ts`) have landed and it is still here as of this
+writing. Harmless — it costs one trivial colocated test — but worth
+deleting in a future cleanup rather than treating its continued presence as
+intentional.
 
 Mind the asymmetry: the norm is a **singular** suffix regardless of the
 directory's own name — `controller`, `repository`, `service`,
@@ -82,7 +90,7 @@ routed through a barrel is invisible to that rule. See
 ## Adding a new governed directory
 
 If a later plan introduces a new top-level concern under `src/` (e.g.
-`src/routes/`), add its naming rule to
+`src/jobs/` for a queue consumer), add its naming rule to
 `check-file/filename-naming-convention` in `eslint.config.mjs` **and** add a
 row to the "Governed directories" table above in the same change — this
 file drifting from the lint rule is exactly the failure mode it exists to
