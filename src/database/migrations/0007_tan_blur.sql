@@ -1,0 +1,2 @@
+ALTER TABLE "email_logs" ALTER COLUMN "error_code" SET DATA TYPE varchar(32);--> statement-breakpoint
+ALTER TABLE "email_logs" ADD CONSTRAINT "email_logs_error_code_check" CHECK ("email_logs"."error_code" ~ '^[A-Z][A-Z0-9_]*$');

@@ -5,7 +5,7 @@
 // deleted in afterEach.
 import { randomBytes, randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
-import { ERROR_CODE_MAX_LENGTH } from '@/database/models/email-log.model'
+import { UNKNOWN_ERROR_CODE } from '@/database/models/email-log.model'
 import { EmailLogRepository } from '@/repositories/email-log.repository'
 import { sql } from '@/services/database.service'
 
@@ -64,31 +64,35 @@ describe('EmailLogRepository', () => {
     expect(recorded.providerMessageId).toBeNull()
   })
 
-  // Ruling E (task-4-brief.md): a log write must never be the thing that
-  // fails an already-sent email's request. An error_code that somehow
-  // exceeds the column's width must be truncated, not left to throw a
-  // 22001 (string data right truncation) the way an over-length email once
-  // did before MAX_EMAIL_LENGTH existed (see that constant's own comment).
-  it('truncates an over-length error code rather than letting the insert throw', async () => {
+  // Round-1 fix to this task: a raw token (token.utilities.ts) hex-encoded
+  // is EXACTLY 64 characters, so an earlier version of this repository —
+  // which truncated an over-length errorCode to ERROR_CODE_MAX_LENGTH
+  // rather than normalizing it — would have written a 32-character PREFIX
+  // of a live secret into this audit table. Ruling E (task-4-brief.md)
+  // still applies (a log write must never fail an already-sent email's
+  // request), but the remedy for a mis-shaped value is replacement, not
+  // truncation: nothing that looks like a raw token may reach the table in
+  // any form, partial or whole.
+  it('normalizes a raw-token-shaped error code to UNKNOWN_ERROR_CODE rather than storing any part of it', async () => {
     const recipient = uniqueRecipient()
-    const overLong = 'E'.repeat(ERROR_CODE_MAX_LENGTH + 20)
+    const rawToken = randomBytes(32).toString('hex')
 
     const recorded = await emailLogRepository.record({
       recipient,
       templateKey: 'password_reset',
       status: 'failed',
-      errorCode: overLong,
+      errorCode: rawToken,
     })
     createdIds.push(recorded.id)
 
-    expect(recorded.errorCode).toHaveLength(ERROR_CODE_MAX_LENGTH)
-    expect(recorded.errorCode).toBe(overLong.slice(0, ERROR_CODE_MAX_LENGTH))
+    expect(recorded.errorCode).toBe(UNKNOWN_ERROR_CODE)
 
-    // Read the table directly too, not just record()'s return value — the
-    // truncation must have actually landed on disk, not merely on the
-    // object handed back.
-    const [row] = await sql`select error_code from email_logs where id = ${recorded.id}`
-    expect(row?.error_code as string).toHaveLength(ERROR_CODE_MAX_LENGTH)
+    // Read the table directly, not record()'s return value — the token
+    // must not have landed on disk in any form, not even as a fragment of
+    // a longer stored value.
+    const [row] = await sql`select * from email_logs where id = ${recorded.id}`
+    expect(row?.error_code).toBe(UNKNOWN_ERROR_CODE)
+    expect(JSON.stringify(row)).not.toContain(rawToken)
   })
 
   it('findByRecipient returns every row for that recipient, ordered oldest first', async () => {

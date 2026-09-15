@@ -137,6 +137,30 @@ describe('migrations', () => {
     expect(remaining).toHaveLength(0)
   })
 
+  // Migration 0007 adds `email_logs_error_code_check`, replacing a
+  // width-only column (`errorCode` was originally `varchar(64)`, changed to
+  // `varchar(32)` in this same migration) with a shape constraint. Width
+  // alone did not exclude a raw token: RAW_TOKEN_BYTES (token.utilities.ts)
+  // hex-encoded is EXACTLY 64 characters, so the old width was chosen to
+  // fit one perfectly rather than reject it. This proves the actual
+  // guarantee — the uppercase-only shape — at the database level, with a
+  // value chosen specifically to be the thing it must exclude: lowercase
+  // hex, the only alphabet a real raw token can ever be encoded in.
+  it('rejects a lowercase-hex error_code at the database level via its CHECK constraint', async () => {
+    const lowercaseHex = 'a1'.repeat(16) // 32 characters — fits the column width exactly
+    await expect(
+      sql`
+        insert into email_logs (recipient, template_key, status, error_code)
+        values (${'bogus-error-code@example.test'}, 'password_reset', 'failed', ${lowercaseHex})
+      `
+    ).rejects.toThrow()
+
+    const remaining = await sql`
+      select 1 from email_logs where recipient = ${'bogus-error-code@example.test'}
+    `
+    expect(remaining).toHaveLength(0)
+  })
+
   it('enforces case-insensitive email uniqueness at the database level', async () => {
     const email = `dup-${Date.now()}@example.test`
     await sql`insert into users (email) values (${email})`

@@ -15,6 +15,8 @@ import { asc, eq } from 'drizzle-orm'
 import {
   emailLogModel,
   ERROR_CODE_MAX_LENGTH,
+  ERROR_CODE_PATTERN,
+  UNKNOWN_ERROR_CODE,
   type EmailLog,
   type NewEmailLog,
 } from '@/database/models/email-log.model'
@@ -22,18 +24,32 @@ import { HttpError } from '@/middlewares/error.middleware'
 import { db } from '@/services/database.service'
 
 /**
- * Truncate `entry.errorCode` to `ERROR_CODE_MAX_LENGTH` when it is present
- * and over-length, leaving every other field untouched. A value this
- * repository is asked to write must never be the reason an insert throws —
- * see `record`'s own comment (Ruling E, task-4-brief.md).
+ * Replace `entry.errorCode` with `UNKNOWN_ERROR_CODE` unless it already
+ * matches the exact shape `email_logs_error_code_check` (email-log.model.ts)
+ * enforces at the database, leaving every other field untouched.
+ *
+ * NORMALIZE, do not truncate. An earlier version of this repository
+ * truncated an over-length `errorCode` to `ERROR_CODE_MAX_LENGTH` — the
+ * wrong remedy for this class of value: a raw token (token.utilities.ts)
+ * hex-encoded is exactly 64 characters, and truncating it to
+ * `ERROR_CODE_MAX_LENGTH` (32) still writes 128 bits of a live secret into
+ * an audit table, just fewer of them. Checking the SHAPE first means a
+ * mis-extracted token is replaced wholesale, not partially preserved — see
+ * `ERROR_CODE_PATTERN`'s own comment (email-log.model.ts) for why its
+ * uppercase-only shape makes a lowercase hex token match nothing here, at
+ * any length. This also means `record` below can never actually trigger
+ * `email_logs_error_code_check` itself — the shape is enforced here first
+ * — but the constraint stays as the real guarantee: this function is a
+ * convenience that keeps a mismatched value from reaching an insert at
+ * all, not the thing that makes the property true.
  * @param entry - The row about to be inserted.
- * @returns `entry` unchanged, or a shallow copy with `errorCode` truncated.
+ * @returns `entry` unchanged when `errorCode` is absent or already valid, or a shallow copy with `errorCode` replaced by `UNKNOWN_ERROR_CODE`.
  */
-function withErrorCodeTruncated(entry: NewEmailLog): NewEmailLog {
-  if (typeof entry.errorCode !== 'string' || entry.errorCode.length <= ERROR_CODE_MAX_LENGTH) {
-    return entry
-  }
-  return { ...entry, errorCode: entry.errorCode.slice(0, ERROR_CODE_MAX_LENGTH) }
+function withErrorCodeNormalized(entry: NewEmailLog): NewEmailLog {
+  if (typeof entry.errorCode !== 'string') return entry
+  const isValid =
+    entry.errorCode.length <= ERROR_CODE_MAX_LENGTH && ERROR_CODE_PATTERN.test(entry.errorCode)
+  return isValid ? entry : { ...entry, errorCode: UNKNOWN_ERROR_CODE }
 }
 
 /**
@@ -50,19 +66,23 @@ export class EmailLogRepository {
    *
    * A caller that already sent the email must never receive a failure from
    * this method for a reason the email itself did not have — logging is
-   * best-effort observability, not a gate on delivery. An over-length
-   * `errorCode` is truncated rather than left to throw a 22001 (string
-   * data right truncation), the same class of failure `MAX_EMAIL_LENGTH`
-   * exists to prevent on `users.email` (see that constant's own comment).
-   * The caller itself is still responsible for the other half of Ruling E:
-   * catching whatever this rejects with and logging it at pino `error`
-   * rather than failing the request — a log write happens strictly after
-   * the send it describes, so nothing here can undo that.
+   * best-effort observability, not a gate on delivery. An `errorCode` that
+   * does not match the expected shape (wrong length, wrong characters — see
+   * `withErrorCodeNormalized`) is replaced with `UNKNOWN_ERROR_CODE` rather
+   * than left to throw a 22001 (string data right truncation) or a
+   * `email_logs_error_code_check` violation: a log write happens strictly
+   * after the send it describes, so nothing here can undo that send, and a
+   * caller that mis-extracted a value (up to and including passing a raw
+   * token by mistake) must still get a written row, not a request failure
+   * and not a leaked secret. The caller itself is still responsible for the
+   * other half of Ruling E: catching whatever this rejects with (a
+   * genuinely unexpected error, not this normalization) and logging it at
+   * pino `error` rather than failing the request.
    * @param entry - The row to insert: recipient, templateKey, status, and whichever of providerMessageId/errorCode applies to that status.
    * @returns The inserted row, including its generated `id` and `createdAt`.
    */
   async record(entry: NewEmailLog): Promise<EmailLog> {
-    const [row] = await db.insert(emailLogModel).values(withErrorCodeTruncated(entry)).returning()
+    const [row] = await db.insert(emailLogModel).values(withErrorCodeNormalized(entry)).returning()
     // db.insert(...).values(one object).returning() always returns exactly
     // one row when the insert does not throw; the driver's own types just
     // cannot express "same length as input" for a single-row insert.
