@@ -29,20 +29,20 @@ jobs:
       # via Mailpit's own HTTP API on 8025 — not a mock. Default, unremapped
       # ports — unlike postgres/redis above, there is no common native
       # service on 1025/8025 for a GitHub-hosted runner to collide with, so
-      # this needs none of docker-compose.yml's 5433/6380 dodge.
+      # this needs none of docker-compose.yml's 5433/6380 dodge. Pinned, like
+      # every sibling service here and in docker-compose.yml, to the version
+      # this task actually developed and tested against.
       #
       # --health-cmd uses the image's own `readyz` subcommand (verified
       # against the running container: it DOES have a shell — `docker exec
-      # ... sh -c 'echo ok'` succeeds — unlike otel-collector, which this
-      # comment originally, wrongly, assumed the same constraint for without
-      # checking). Without this, a Mailpit that has not finished starting
-      # would surface as a failed real-send test with a MISLEADING message —
-      # Ruling G (mailer.service.ts) swallows the connection error into a
-      # 'failed' delivery-log row, so the actual symptom is
-      # "expected 1 message, found 0", not a connection error naming the
-      # real cause.
+      # ... sh -c 'echo ok'` succeeds). Without this, a Mailpit that has not
+      # finished starting would surface as a failed real-send test with a
+      # MISLEADING message — Ruling G (mailer.service.ts) swallows the
+      # connection error into a 'failed' delivery-log row, so the actual
+      # symptom is "expected 1 message, found 0", not a connection error
+      # naming the real cause.
       mailpit:
-        image: axllent/mailpit:latest
+        image: axllent/mailpit:v1.31.1
         ports: ['1025:1025', '8025:8025']
         options: >-
           --health-cmd="/mailpit readyz" --health-interval=5s --health-timeout=5s --health-retries=10

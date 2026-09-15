@@ -247,6 +247,40 @@ describe('errorHandler', () => {
       expect(JSON.stringify(consoleError.mock.calls)).not.toContain(email)
     })
 
+    // Fix round 2 (task-2-review.md, finding 8): `stackFramesOf` used to
+    // filter with `line.trimStart().startsWith('at ')`, which drops the one
+    // signal (V8's own indentation of at least four spaces on every genuine
+    // frame) that tells a real call frame apart from a message line that
+    // merely happens to start with those two characters. A query error's
+    // own message embeds the SQL text and can be multi-line, and is not
+    // fully attacker-controlled here — but the fix is the same either way,
+    // and this pins it directly rather than by absence.
+    it('drops an unindented line that merely begins "at ", keeping only real indented call frames', () => {
+      const { response } = mockResponse()
+      const craftedStack = [
+        'Error: Failed query',
+        'at RCPT TO: 550 rejected — secret-token-should-not-survive',
+        '    at Object.<anonymous> (/app/src/repositories/user.repository.ts:42:11)',
+      ].join('\n')
+      const queryShaped = {
+        query: 'select 1 from "users" where "email" = $1',
+        params: [email],
+        stack: craftedStack,
+      }
+
+      errorHandler(queryShaped, {} as never, response, vi.fn())
+
+      expect(consoleError).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          stack: '    at Object.<anonymous> (/app/src/repositories/user.repository.ts:42:11)',
+        })
+      )
+      expect(JSON.stringify(consoleError.mock.calls)).not.toContain(
+        'secret-token-should-not-survive'
+      )
+    })
+
     it('answers the client the same masked 500 as any other unexpected error', () => {
       const { response, body, status } = mockResponse()
 
