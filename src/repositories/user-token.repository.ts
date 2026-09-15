@@ -147,6 +147,27 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
   }
 
   /**
+   * Revoke every still-live token a user holds FOR ONE PURPOSE. The
+   * purpose predicate is the whole point: `revokeAllForUser` above matches
+   * on `userId` alone, so using it to clear stale verification links would
+   * take the user's live refresh tokens with it and log them out of every
+   * device as a side effect of requesting an email.
+   * @param userId - The user whose tokens should be revoked.
+   * @param purpose - The only purpose to revoke; every other purpose is untouched.
+   * @returns Resolves once every matching row is revoked.
+   */
+  async revokeAllForUserAndPurpose(userId: string, purpose: TokenPurpose): Promise<void> {
+    await db
+      .update(userTokenModel)
+      .set(this.touched({ revokedAt: sql`now()` }))
+      .where(
+        this.scope(
+          sql`${userTokenModel.userId} = ${userId} and ${userTokenModel.purpose} = ${purpose} and ${userTokenModel.revokedAt} is null`
+        )
+      )
+  }
+
+  /**
    * Select the single token row matching a condition.
    * @param where - The condition to match, or undefined to match every row.
    * @returns The matching row, or undefined when none exists.

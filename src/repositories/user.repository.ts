@@ -49,6 +49,22 @@ export class UserRepository extends BaseRepository<(typeof userModel)['_']['conf
   }
 
   /**
+   * Mark a user's email verified, once. The `email_verified_at is null`
+   * predicate is what makes this idempotent in the database rather than in
+   * a caller's read-then-write: a second valid token, or two tabs
+   * submitting the same one, must not move a timestamp that already
+   * records when the mailbox was first proven.
+   * @param id - The user's id.
+   * @returns The updated row, or undefined when the user does not exist or was already verified.
+   */
+  markEmailVerified(id: string): Promise<User | undefined> {
+    return this.updateOne(
+      this.scope(sql`${userModel.id} = ${id} and ${userModel.emailVerifiedAt} is null`),
+      this.touched({ emailVerifiedAt: new Date() })
+    )
+  }
+
+  /**
    * Select the single user matching a condition.
    * @param where - The condition to match, or undefined to match every row.
    * @returns The matching user, or undefined when none exists.
