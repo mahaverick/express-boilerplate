@@ -65,7 +65,6 @@ jobs:
           DATABASE_URL: postgres://test:test@localhost:5432/boilerplate_test
           REDIS_URL: redis://localhost:6379
           JWT_ACCESS_SECRET: test-access-secret-that-is-long-enough-32
-          JWT_REFRESH_SECRET: test-refresh-secret-that-is-long-enough-3
           SESSION_SECRET: test-session-secret-that-is-long-enough-1
       # The env block above must mirror committed .env.test. When they drift, a
       # test passes locally and fails in CI (or worse, the reverse) for reasons

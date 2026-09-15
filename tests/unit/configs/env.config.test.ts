@@ -9,7 +9,6 @@ const valid = {
   DATABASE_URL: 'postgres://user:pass@localhost:5432/boilerplate',
   REDIS_URL: 'redis://localhost:6379',
   JWT_ACCESS_SECRET: 'a'.repeat(32),
-  JWT_REFRESH_SECRET: 'b'.repeat(32),
   SESSION_SECRET: 'c'.repeat(32),
 }
 

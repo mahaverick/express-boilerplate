@@ -68,30 +68,37 @@ Required keys are emitted blank.
 | `WEB_URL`                     | **yes** (placeholder)      | Public origin of the frontend. `http://localhost:5173` locally. **Nothing reads it yet.**  |
 | `DATABASE_URL`                | **yes**                    | `postgres://boilerplate:boilerplate@localhost:5433/boilerplate` against the compose stack. |
 | `REDIS_URL`                   | **yes**                    | `redis://localhost:6380` against the compose stack.                                        |
-| `JWT_ACCESS_SECRET`           | **yes** (placeholder)      | 32+ characters. **Nothing reads it yet.**                                                  |
-| `JWT_REFRESH_SECRET`          | **yes** (placeholder)      | 32+ characters. **Nothing reads it yet.**                                                  |
+| `JWT_ACCESS_SECRET`           | **yes**                    | 32+ characters. Signs and verifies access tokens.                                          |
 | `SESSION_SECRET`              | **yes** (placeholder)      | 32+ characters. **Nothing reads it yet.**                                                  |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | no                         | Absent means tracing is disabled — the SDK is never started.                               |
 | `LOG_LEVEL`                   | no (default `info`)        | `error` \| `warn` \| `info` \| `debug`                                                     |
 
-### The five placeholders
+There is no `JWT_REFRESH_SECRET`: refresh tokens are opaque random strings,
+not JWTs, so nothing ever signs one with a secret — see
+[SECURITY.md](SECURITY.md). A field that can never be read isn't a
+placeholder; it was removed from the schema rather than kept as one.
 
-`APP_URL`, `WEB_URL`, `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET` and
-`SESSION_SECRET` are **required by the schema and read by nothing in `src/`.**
-No auth, no session, no CORS and no email ship in this boilerplate (see
-[SECURITY.md](SECURITY.md)) — they are forward declarations for a later plan.
+### The remaining placeholders
 
-So **any 32-character string will do for now**: `JWT_ACCESS_SECRET=`
-followed by 32 arbitrary characters boots the app exactly as well as a
+`APP_URL`, `WEB_URL` and `SESSION_SECRET` are **required by the schema and
+read by nothing in `src/`.** No session, no CORS and no email ship in this
+boilerplate (see [SECURITY.md](SECURITY.md)) — they are forward
+declarations for a later plan.
+
+So **any 32-character string will do for now**: `SESSION_SECRET=` followed
+by 32 arbitrary characters boots the app exactly as well as a
 cryptographically generated one, because nothing signs anything with it yet.
-`.env.example` says so on each line.
+`.env.example` says so. `JWT_ACCESS_SECRET` is no longer one of these — it
+is live, and `openssl rand -hex 32` is the right way to generate it even in
+development, not just before shipping.
 
 They stay required rather than optional deliberately: a project that later
-adds auth should get a named, fail-fast error at boot for a missing secret
-instead of discovering at runtime that it signed tokens with `undefined`.
+adds the feature they reserve should get a named, fail-fast error at boot
+for a missing secret instead of discovering at runtime that it signed
+something with `undefined`.
 
-When you do ship auth, generate real ones — `openssl rand -hex 32`, once per
-secret — and rotate whatever placeholder was there.
+When you do ship the feature a placeholder reserves, generate a real
+secret — `openssl rand -hex 32` — and rotate whatever placeholder was there.
 
 **Unsetting or malforming any required variable fails fast with a named
 list, not a stack trace** — verified directly against this repo: dropping

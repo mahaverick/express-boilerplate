@@ -19,21 +19,27 @@ describe('render', () => {
     expect(output).toContain('# Public origin of this API. PLACEHOLDER')
   })
 
-  it('carries the placeholder note into every required-but-unused secret', () => {
+  it('carries the placeholder note into the one remaining required-but-unused secret', () => {
     // JWT_ACCESS_SECRET is deliberately excluded here: token.utilities.ts
     // reads it to sign/verify access tokens, so its .describe() states what
     // it does instead of carrying this placeholder note — see
-    // env.config.ts's own comment on that field.
+    // env.config.ts's own comment on that field. There is no
+    // JWT_REFRESH_SECRET at all: refresh tokens are opaque, not JWTs, so
+    // that field was removed from the schema entirely rather than kept as
+    // a placeholder nothing will ever read.
     //
-    // The remaining two are required by the schema and read by nothing in
+    // SESSION_SECRET is required by the schema and read by nothing in
     // src/. The .describe() text is the only thing that tells a cloner they
     // can put any 32-character string there for now, and .env.example is
     // where they will read it — so assert it actually reaches the file
     // rather than trusting that the generator picks descriptions up.
-    for (const key of ['JWT_REFRESH_SECRET', 'SESSION_SECRET']) {
-      const index = output.indexOf(`${key}=`)
-      expect(output.slice(Math.max(0, index - 200), index)).toContain('PLACEHOLDER')
-    }
+    const index = output.indexOf('SESSION_SECRET=')
+    expect(output.slice(Math.max(0, index - 200), index)).toContain('PLACEHOLDER')
+  })
+
+  it('has no JWT_REFRESH_SECRET field at all — refresh tokens are opaque, not JWTs', () => {
+    expect(Object.keys(EnvSchemaShape)).not.toContain('JWT_REFRESH_SECRET')
+    expect(output).not.toContain('JWT_REFRESH_SECRET')
   })
 
   it('describes what JWT_ACCESS_SECRET actually does, not a stale placeholder note', () => {
