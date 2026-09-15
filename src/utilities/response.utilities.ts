@@ -38,21 +38,28 @@ export function successResponse<T>(
  * handler) rather than accepted as a parameter — every caller already has a
  * response, so passing the same id back in would just be one more thing to
  * get wrong.
+ *
+ * `code` and `errors` are separate, independent fields — see
+ * error.middleware.ts's header comment for why they are not one overloaded
+ * field.
  * @param response - The Express response.
  * @param message - Human-readable summary of what went wrong.
  * @param status - HTTP status.
+ * @param code - Optional stable, machine-readable token a client can branch on, independent of `message` or `errors`.
  * @param errors - Optional field-level detail, e.g. from a validator.
  */
 export function errorResponse(
   response: Response,
   message: string,
   status: number,
+  code?: string,
   errors?: unknown
 ): void {
   response.status(status).json({
     success: false,
     message,
     statusCode: status,
+    ...(code !== undefined && { code }),
     ...(errors !== undefined && { errors }),
     requestId: response.getHeader(REQUEST_ID_HEADER),
   })

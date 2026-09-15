@@ -9,8 +9,11 @@
 //
 //   1. Verify the bearer token's signature — delegated entirely to
 //      `verifyAccessToken` (token.utilities.ts), the one place that knows
-//      the signing secret and the pinned algorithm. This module never
-//      re-implements that check.
+//      the signing secret and the pinned algorithm, and returns a
+//      discriminated result naming why a rejected token was rejected. This
+//      module never re-implements that check, and never re-derives WHY a
+//      token failed from data it cannot itself trust — see
+//      `verifyAccessToken`'s own header comment.
 //   2. Load the user the token claims to be, and confirm the account can
 //      still authenticate at all.
 //
@@ -34,11 +37,10 @@
 // here; this comment is what makes that a chosen trade-off rather than an
 // oversight for the next person to rediscover.
 import { type NextFunction, type Request, type Response } from 'express'
-import jwt from 'jsonwebtoken'
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/middlewares/error.middleware'
 import { UserRepository } from '@/repositories/user.repository'
-import { verifyAccessToken, type AccessTokenPayload } from '@/utilities/token.utilities'
+import { verifyAccessToken } from '@/utilities/token.utilities'
 
 const userRepository = new UserRepository()
 
@@ -49,20 +51,15 @@ const userRepository = new UserRepository()
 const BEARER_PATTERN = /^Bearer\s+(\S+)$/
 
 /**
- * Machine-readable code identifying an expired access token, carried in
- * `HttpError`'s `errors` payload (`{ code: ACCESS_TOKEN_EXPIRED_CODE }`).
+ * Machine-readable code identifying an expired access token, carried in the
+ * error envelope's `code` field (`error.middleware.ts` / `HttpError`).
  *
  * This is the distinction a client needs to act correctly: "my access
  * token expired, try the refresh token" is a silent, automatic recovery;
  * every other 401 from this middleware means the credential itself is no
  * good and the user must sign in again. A client cannot tell those apart
  * safely by matching on `message` — that string is for a human reading
- * logs and is free to change wording — and this response has no field
- * meant for a machine-readable code other than `errors`, which
- * error.middleware.ts's envelope already reserves for exactly this kind of
- * structured, non-prose detail. Reusing it here avoids widening the
- * envelope contract (touching error.middleware.ts / response.utilities.ts)
- * for a single new field.
+ * logs and is free to change wording.
  */
 export const ACCESS_TOKEN_EXPIRED_CODE = 'ACCESS_TOKEN_EXPIRED'
 
@@ -103,47 +100,24 @@ function getBearerToken(request: Request): string {
 }
 
 /**
- * Whether a token's own, UNVERIFIED `exp` claim already names a moment in
- * the past — mirroring the exact boundary `jsonwebtoken` itself uses
- * (`now >= exp`, in whole seconds) so this never disagrees with the
- * rejection `verifyAccessToken` already made.
- *
- * This intentionally never checks the signature. It only ever runs after
- * `verifyAccessToken` has already rejected the token for some reason, and
- * it exists purely to pick a more useful client-facing code for a
- * rejection that is happening either way. Trusting an unverified claim
- * here cannot weaken the real security decision: a forged `exp` on a
- * tampered token can only change WHICH 401 code an already-rejected caller
- * receives (expired vs. generic), never whether the request is let
- * through — that still requires passing `verifyAccessToken`'s signature
- * check, which this function has no part in.
- * @param token - The raw bearer token, already known to fail `verifyAccessToken`.
- * @returns True when the token's own claim says it expired.
- */
-function isExpiredByOwnClaim(token: string): boolean {
-  const decoded = jwt.decode(token, { json: true })
-  const expiresAt = decoded?.exp
-  return typeof expiresAt === 'number' && Math.floor(Date.now() / 1000) >= expiresAt
-}
-
-/**
- * Verify a bearer token, translating an expired token into a distinguishable
- * rejection. Every other failure (bad signature, wrong algorithm, malformed
- * structure, missing `sub`) passes through `verifyAccessToken`'s own generic
- * 401 unchanged.
+ * Verify a bearer token and return its payload, translating
+ * `verifyAccessToken`'s discriminated result into the client-facing
+ * rejection. Both branches of that result come from `jsonwebtoken`'s own
+ * verified judgement of the token — never from an unverified re-reading of
+ * its claims — so this never has to guess why a token failed; it only has
+ * to translate a fact `verifyAccessToken` already established.
  * @param token - The raw bearer token.
  * @returns The token's payload.
- * @throws {HttpError} 401. Carries `errors: { code: ACCESS_TOKEN_EXPIRED_CODE }` when the token is expired.
+ * @throws {HttpError} 401. Carries `code: ACCESS_TOKEN_EXPIRED_CODE` when the token is expired.
  */
-function verifyBearerToken(token: string): AccessTokenPayload {
-  try {
-    return verifyAccessToken(token)
-  } catch (error) {
-    if (isExpiredByOwnClaim(token)) {
-      throw new HttpError('Access token expired', 401, { code: ACCESS_TOKEN_EXPIRED_CODE })
-    }
-    throw error
+function verifyBearerToken(token: string): ReturnType<typeof verifyAccessToken> & { ok: true } {
+  const result = verifyAccessToken(token)
+  if (result.ok) return result
+
+  if (result.reason === 'expired') {
+    throw new HttpError('Access token expired', 401, ACCESS_TOKEN_EXPIRED_CODE)
   }
+  throw new HttpError('Invalid access token', 401)
 }
 
 /**
@@ -191,7 +165,7 @@ export async function requireAuth(
 ): Promise<void> {
   try {
     const token = getBearerToken(request)
-    const payload = verifyBearerToken(token)
+    const { payload } = verifyBearerToken(token)
     request.user = await loadAuthenticatedUser(payload.sub)
     next()
   } catch (error) {

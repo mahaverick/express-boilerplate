@@ -1,14 +1,20 @@
-// tests/unit/middlewares/auth.middleware.test.ts
+// tests/integration/middlewares/auth.middleware.test.ts
 //
-// The header-parsing and token-classification cases (missing/malformed
-// header, generic-invalid vs. expired) need no database and are pure unit
-// tests. The two cases that actually motivate this middleware's existence
-// — a soft-deleted or deactivated user's still-signature-valid token is
-// nonetheless rejected — need a real user row, so this file also creates
-// and cleans up rows against this worker's own database
-// (tests/helpers/worker-database.ts), the same way
-// tests/integration/repositories/user.repository.test.ts does. Every
-// vitest worker owns its own database, so this is safe to run in parallel
+// Lives under tests/integration/, not tests/unit/, even though several
+// cases here (missing/malformed header, generic-invalid vs. expired) need
+// no database at all — because the two cases that actually motivate this
+// middleware's existence (a soft-deleted or deactivated user's
+// still-signature-valid token is nonetheless rejected) need a real user
+// row, and this file creates and cleans up rows against this worker's own
+// database (tests/helpers/worker-database.ts) to get one, the same way
+// tests/integration/repositories/user.repository.test.ts does. A
+// database-touching test under tests/unit/ would run inside
+// `.husky/pre-commit`'s `vitest run --changed HEAD --exclude
+// 'tests/integration/**'`, which is exactly the failure mode CLAUDE.md
+// documents pre-commit as designed to avoid: a hook that fails whenever
+// Docker happens to be down gets `--no-verify`'d permanently and never
+// comes back. `pnpm test` (no --exclude) still runs this file; every
+// vitest worker owns its own database, so it is safe to run in parallel
 // with every other file.
 import { randomUUID } from 'node:crypto'
 import { type NextFunction, type Request, type Response } from 'express'
@@ -127,6 +133,10 @@ describe('requireAuth', () => {
     const error = lastCallArgument()
     expect(error).toBeInstanceOf(HttpError)
     expect((error as HttpError).statusCode).toBe(401)
+    // `code` — not `errors` — is where ACCESS_TOKEN_EXPIRED_CODE actually
+    // lives (HttpError's 3rd constructor argument); asserting its absence
+    // here is the negative half of "distinguishable" for the real field.
+    expect((error as HttpError).code).toBeUndefined()
     expect((error as HttpError).errors).toBeUndefined()
   })
 
@@ -165,7 +175,14 @@ describe('requireAuth', () => {
     const error = lastCallArgument()
     expect(error).toBeInstanceOf(HttpError)
     expect((error as HttpError).statusCode).toBe(401)
-    expect((error as HttpError).errors).toEqual({ code: ACCESS_TOKEN_EXPIRED_CODE })
+    // The distinguishable code is a real `code` field (HttpError's 3rd
+    // constructor argument, threaded through to the JSON envelope's own
+    // `code` key by error.middleware.ts) — not smuggled through `errors`,
+    // which is documented as validator field-detail. Asserting `errors` is
+    // still absent here proves the two fields stay independent even when
+    // one of them (`code`) is set.
+    expect((error as HttpError).code).toBe(ACCESS_TOKEN_EXPIRED_CODE)
+    expect((error as HttpError).errors).toBeUndefined()
   })
 
   it('rejects a valid, unexpired token for a soft-deleted user', async () => {
