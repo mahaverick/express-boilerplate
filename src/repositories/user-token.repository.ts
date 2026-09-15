@@ -64,10 +64,27 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
   /**
    * Atomically claim a not-yet-revoked token row of one purpose: sets
    * `revokedAt` and `consumedAt`, and returns the row, but only if it was
-   * still live, for that exact purpose, the instant this statement ran. A
-   * second, concurrent call for the same hash — including a genuine reuse
-   * attempt racing a legitimate rotation, or a claim for the wrong purpose —
-   * gets undefined, never the same row twice.
+   * still live — meaning `revokedAt IS NULL`, and NOTHING ELSE — for that
+   * exact purpose, the instant this statement ran. A second, concurrent
+   * call for the same hash — including a genuine reuse attempt racing a
+   * legitimate rotation, or a claim for the wrong purpose — gets undefined,
+   * never the same row twice.
+   *
+   * THIS METHOD DOES NOT CHECK `expiresAt`. An expired-but-not-yet-revoked
+   * row is still "live" by the definition above and WILL be claimed —
+   * deliberately, not an oversight: folding expiry into this predicate
+   * would make a merely-expired token indistinguishable from a genuinely
+   * replayed one, so `rotateRefreshToken`'s reuse-detection branch would
+   * revoke an entire session family for a legitimate user whose token
+   * simply aged out (see the existing test `rejects an expired refresh
+   * token without treating it as reuse of a live session`,
+   * token.utilities.test.ts). EVERY CALLER MUST CHECK `expiresAt` on the
+   * returned row itself, immediately after claiming, before treating the
+   * claim as a valid redemption — `rotateRefreshToken` does this for
+   * `'refresh'`; a future `email_verification`/`password_reset` redemption
+   * path must do the same, or it ships a token that is redeemable forever.
+   * Pinned by `claimOnce claims an expired-but-unrevoked row — expiry is
+   * the caller's job, not the predicate's` (user-token.repository.test.ts).
    *
    * `revokedAt` and `consumedAt` are set together, but mean different
    * things: `revokedAt IS NULL` is the one fact every caller checks to
@@ -78,7 +95,7 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    * `revokedAt` alone.
    * @param tokenHash - The SHA-256 hash of the raw token, hex-encoded.
    * @param purpose - The purpose the token must have been issued for; a row that exists but for a different purpose is left untouched and this resolves undefined, exactly as if no row matched at all.
-   * @returns The now-claimed row (its pre-claim `expiresAt`/`userId`/`sessionId` are still the values to act on), or undefined when no live row of that purpose matched.
+   * @returns The now-claimed row, EXPIRY NOT CHECKED — its `expiresAt` is still the pre-claim value the caller must validate (its `userId`/`sessionId` are likewise still the values to act on) — or undefined when no not-yet-revoked row of that purpose matched.
    */
   async claimOnce(tokenHash: string, purpose: TokenPurpose): Promise<UserToken | undefined> {
     const [row] = await db

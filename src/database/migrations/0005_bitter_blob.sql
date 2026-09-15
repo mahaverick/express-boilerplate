@@ -1,0 +1,2 @@
+ALTER TABLE "user_tokens" ALTER COLUMN "purpose" SET DATA TYPE varchar(32);--> statement-breakpoint
+ALTER TABLE "user_tokens" ADD CONSTRAINT "user_tokens_purpose_check" CHECK ("user_tokens"."purpose" in ('refresh', 'email_verification', 'password_reset'));

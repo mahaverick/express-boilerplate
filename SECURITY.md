@@ -61,12 +61,18 @@ deliberately opposite on every axis:
 Every refresh grant rotates: `POST /api/v1/auth/refresh` reads the raw
 token from its httpOnly cookie, exchanges it for a new one, and revokes the
 old row. The exchange is one atomic SQL statement —
-`UPDATE user_tokens SET revoked_at = now() WHERE token_hash = $1 AND
-revoked_at IS NULL RETURNING *` (`UserTokenRepository.claimForRotation`) —
+`UPDATE user_tokens SET revoked_at = now(), consumed_at = now() WHERE
+token_hash = $1 AND purpose = $2 AND revoked_at IS NULL RETURNING *`
+(`UserTokenRepository.claimOnce`, called here with `purpose = 'refresh'`) —
 not a read-then-check-then-write sequence. That matters concretely: a
 read-check-write would let two concurrent requests presenting the same
 stolen token both observe `revoked_at IS NULL` and both succeed, silently
-defeating reuse detection. The atomic claim means Postgres itself decides
+defeating reuse detection. The `purpose` predicate rides in that same
+atomic statement, not a separate check: a token minted for one purpose
+(email verification, password reset) can never be claimed as another,
+including as a refresh token — the claim and the purpose check cannot be
+split by a race, because they are the same UPDATE. The atomic claim means
+Postgres itself decides
 which single caller (if any) wins; a losing concurrent caller — including a
 genuine reuse attempt racing the legitimate client — falls straight into
 the reuse path below.

@@ -21,10 +21,14 @@
 // `tsc -p tsconfig.typecheck.json --noEmit` step turns into a real, red
 // gate, without anyone having to remember this reasoning.
 //
-// No runtime assertions: the entire point is checked by the compiler, not
-// by anything this test executes at runtime. The `it` block exists only so
-// this file behaves like every other test file under `pnpm test`; the
-// object literal inside it is type-checked but never read.
+// The gate itself is checked by the compiler, not by anything this test
+// executes at runtime — `tsc` either reports "Unused '@ts-expect-error'
+// directive" or it doesn't; no assertion below can change that. The one
+// runtime `expect` in the `it` block exists for two narrower reasons: it
+// gives `sonarjs/assertions-in-tests` something real to check, and it
+// proves the object literal is a genuine, read value rather than one a
+// future cleanup could quietly delete or `void`-away — deleting the object
+// would also delete the compile-time check it exists to trigger.
 import { describe, expect, it } from 'vitest'
 import type { NewUserToken } from '@/database/models/user-token.model'
 

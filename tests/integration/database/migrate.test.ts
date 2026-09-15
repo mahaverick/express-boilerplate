@@ -27,14 +27,53 @@ describe('migrations', () => {
       expect.arrayContaining([
         'id',
         'user_id',
+        'purpose',
         'session_id',
         'token_hash',
         'expires_at',
         'revoked_at',
+        'consumed_at',
         'replaced_by_id',
         'created_at',
       ])
     )
+  })
+
+  // Migration 0004's entire job was dropping the transient DEFAULT
+  // 'refresh' that 0003 needed only to backfill pre-existing rows.
+  // tests/unit/database/models/user-token.model.test.ts already pins this
+  // at the Drizzle-schema/TypeScript level; that gate is blind to the
+  // database itself, so a lost or reverted 0004 would leave the type gate
+  // green while `purpose` quietly hands out 'refresh' to any insert that
+  // omits it. This asserts the LIVE column, not the schema file.
+  it('user_tokens.purpose has no default and is not nullable at the database level', async () => {
+    const [column] = await sql`
+      select column_default, is_nullable from information_schema.columns
+      where table_name = 'user_tokens' and column_name = 'purpose'
+    `
+    expect(column).toBeDefined()
+    expect(column?.column_default).toBeNull()
+    expect(column?.is_nullable).toBe('NO')
+  })
+
+  // Migration 0005 adds `user_tokens_purpose_check`. `$type<TokenPurpose>()`
+  // (user-token.model.ts) is compile-time only — this proves the database
+  // itself, not just the application, refuses a value outside the three
+  // real purposes, via a raw SQL insert that bypasses Drizzle's typing
+  // entirely.
+  it('rejects an invalid purpose value at the database level via its CHECK constraint', async () => {
+    const email = `invalid-purpose-${Date.now()}@example.test`
+    const [user] = await sql`insert into users (email) values (${email}) returning id`
+    const userId = user?.id as string
+
+    await expect(
+      sql`
+        insert into user_tokens (user_id, purpose, token_hash, expires_at)
+        values (${userId}, 'bogus', ${'c'.repeat(64)}, now() + interval '1 day')
+      `
+    ).rejects.toThrow()
+
+    await sql`delete from users where id = ${userId}`
   })
 
   it('cascades a user_tokens row when its owning user is deleted', async () => {

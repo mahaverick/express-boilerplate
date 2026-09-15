@@ -35,9 +35,11 @@ by `check-file` — see [STRUCTURE.md](STRUCTURE.md)):
   every soft-deletable table carries.
 - **`user-token.model.ts`** — the `user_tokens` table: one row per issued or
   rotated-to token, for any of three purposes (`purpose`: `'refresh'`,
-  `'email_verification'`, or `'password_reset'`) — one table rather than
-  three, since all of them share the same hashing, lookup, expiry, and
-  revocation machinery. `session_id`/`session_started_at` are nullable and
+  `'email_verification'`, or `'password_reset'`, enforced at the database
+  level by `user_tokens_purpose_check`, not only by TypeScript's
+  `$type<TokenPurpose>()`) — one table rather than three, since all of them
+  share the same hashing, lookup, expiry, and revocation machinery.
+  `session_id`/`session_started_at` are nullable and
   meaningful only for `'refresh'`: `session_id` groups every token descended
   from one login into a rotation "family"; `session_started_at` records when
   that family began and is copied forward unchanged by every rotation, which
@@ -84,16 +86,25 @@ picks up a new model automatically — no config change needed to add one.
 
 ## Migrations directory
 
-`src/database/migrations/` is **tracked**, and holds four generated
+`src/database/migrations/` is **tracked**, and holds six generated
 migrations today: `0000_tearful_crusher_hogan.sql` (creates `users`),
 `0001_great_dragon_man.sql` (creates `user_tokens`, with its foreign keys
 to `users` and to itself for `replaced_by_id`),
-`0002_abandoned_tarantula.sql` (adds `user_tokens.session_started_at`), and
+`0002_abandoned_tarantula.sql` (adds `user_tokens.session_started_at`),
 `0003_regular_lockjaw.sql` (adds `user_tokens.purpose` and `.consumed_at`,
 backfilling every existing row's `purpose` to `'refresh'` in the same
 statement that adds the `NOT NULL` constraint, and makes `session_id`/
 `session_started_at` nullable — see this file's own model description
-above), plus `meta/_journal.json` recording all four in order. Everything under this directory is **generated**
+above), `0004_organic_mauler.sql` (drops the `DEFAULT 'refresh'` migration
+0003 gave `purpose` — that default was transient, needed only for 0003's
+own backfill; dropping it is what makes omitting `purpose` a compile error
+rather than a silent `'refresh'` assignment, see `user-token.model.ts`'s
+comment on that column), and `0005_bitter_blob.sql` (widens `purpose` to
+`varchar(32)` and adds `user_tokens_purpose_check`, a CHECK constraint
+restricting it to the three `TokenPurpose` values at the database level —
+`$type<TokenPurpose>()` is compile-time only, so this is what stops a raw
+SQL insert from writing anything else), plus `meta/_journal.json` recording
+all six in order. Everything under this directory is **generated**
 by `drizzle-kit generate`; nothing here is hand-written, and nothing here
 should be hand-edited.
 

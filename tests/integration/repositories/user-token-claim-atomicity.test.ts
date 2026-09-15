@@ -178,6 +178,11 @@ describe('claimOnce is atomic under real concurrency', () => {
     expect(claimed).toHaveLength(1)
 
     const finalRow = await userTokenRepository.findByHash(tokenHash)
+    // Asserted before the field checks below: `finalRow?.revokedAt` alone
+    // passes when `finalRow` is `undefined` too (undefined is not null) —
+    // this is what actually proves the row still exists and was found, not
+    // just that whatever came back (possibly nothing) lacks a null field.
+    expect(finalRow).toBeDefined()
     expect(finalRow?.revokedAt).not.toBeNull()
     expect(finalRow?.consumedAt).not.toBeNull()
   })
