@@ -1,0 +1,220 @@
+// tests/integration/api/auth-refresh.test.ts
+//
+// Task 7's four security properties, against the real per-worker Postgres
+// database and the real compose Redis — every email used here is unique to
+// this run and every row created is deleted in afterEach, the same
+// convention tests/integration/api/auth.test.ts already follows. This file
+// lives under tests/integration/, never tests/unit/ — see CLAUDE.md's note
+// on why a DB/Redis-dependent test under tests/unit/ breaks
+// .husky/pre-commit whenever Docker is down.
+//
+// Kept as its own file rather than folded into auth.test.ts: refresh/logout
+// exercise a materially different concern (cookie round-tripping, rotation,
+// rate limiting) from register/login, and this file's helpers (raw cookie
+// extraction, replay) have no use for that file's registration-specific
+// assertions.
+import { randomUUID } from 'node:crypto'
+import request from 'supertest'
+import { afterEach, describe, expect, it } from 'vitest'
+import { createApp } from '@/app'
+import { REFRESH_TOKEN_COOKIE_NAME } from '@/constants/auth.constants'
+import { sql } from '@/services/database.service'
+
+const app = createApp()
+
+const VALID_PASSWORD = 'correct horse battery staple'
+
+/**
+ * A disposable email, unique to one test run — avoids colliding with rows
+ * any other test in this worker's shared database (or, for the rate-limit
+ * test below, the shared Redis instance) may be holding onto.
+ * @returns An email guaranteed unique to this call.
+ */
+function uniqueEmail(): string {
+  return `auth-refresh-${randomUUID()}@example.test`
+}
+
+/**
+ * The envelope every controller response is wrapped in
+ * (response.utilities.ts), narrowed to the fields these tests read.
+ */
+interface ApiEnvelope<TData> {
+  success: boolean
+  data?: TData
+  code?: string
+}
+
+/**
+ * Cast a supertest response's body to a known envelope shape.
+ * @param response - The supertest response.
+ * @returns The response body, typed.
+ */
+function envelopeOf<TData>(response: request.Response): ApiEnvelope<TData> {
+  return response.body as ApiEnvelope<TData>
+}
+
+/**
+ * The exact `name=value` pair for the refresh-token cookie out of a
+ * response's raw `Set-Cookie` header — suitable for replaying verbatim via
+ * `.set('Cookie', ...)` on a LATER, unrelated request, which is what proves
+ * a specific raw token was (or was not) accepted, independent of whatever
+ * cookie a test's own supertest call would otherwise be carrying.
+ * @param response - The supertest response.
+ * @returns The `refreshToken=...` pair, or undefined if the cookie was not set.
+ */
+function refreshCookiePair(response: request.Response): string | undefined {
+  const cookieLines = response.headers['set-cookie'] as string[] | undefined
+  const line = cookieLines?.find((cookie) => cookie.startsWith(`${REFRESH_TOKEN_COOKIE_NAME}=`))
+  return line?.split(';', 1)[0]
+}
+
+/**
+ * Register and log in a fresh user through the real HTTP endpoints.
+ * @param createdIds - Array to push the created user's id onto, for `afterEach` cleanup.
+ * @returns The login response (carrying the refresh cookie and the first access token).
+ */
+async function registerAndLogin(createdIds: string[]): Promise<request.Response> {
+  const email = uniqueEmail()
+  const registerResponse = await request(app)
+    .post('/api/v1/auth/register')
+    .send({ email, password: VALID_PASSWORD })
+  const registerBody = envelopeOf<{ id: string }>(registerResponse)
+  if (registerBody.data) createdIds.push(registerBody.data.id)
+
+  return request(app).post('/api/v1/auth/login').send({ email, password: VALID_PASSWORD })
+}
+
+describe('POST /api/v1/auth/refresh and /logout', () => {
+  const createdIds: string[] = []
+
+  afterEach(async () => {
+    if (createdIds.length === 0) return
+    await sql`delete from users where id = any(${createdIds})`
+    createdIds.length = 0
+  })
+
+  describe('refresh', () => {
+    it('rotates: returns a new access/refresh pair, and the new refresh token is itself usable', async () => {
+      const loginResponse = await registerAndLogin(createdIds)
+      const loginBody = envelopeOf<{ accessToken: string }>(loginResponse)
+      const firstCookie = refreshCookiePair(loginResponse)
+      expect(firstCookie).toBeDefined()
+
+      const firstRefresh = await request(app)
+        .post('/api/v1/auth/refresh')
+        .set('Cookie', firstCookie as string)
+      const firstRefreshBody = envelopeOf<{ accessToken: string }>(firstRefresh)
+
+      // The access token is NOT asserted to differ from login's: signing is
+      // deterministic (jsonwebtoken, same secret/payload/second-granularity
+      // `iat`), so two tokens issued for the same user within the same
+      // second are legitimately byte-identical — that would make this
+      // assertion flaky, not meaningful. What "a new pair" actually means
+      // here, and what's worth proving, is the REFRESH token: a freshly
+      // rotated, different raw value (asserted below via `secondCookie`).
+      expect(firstRefresh.status).toBe(200)
+      expect(firstRefreshBody.data?.accessToken).toEqual(expect.any(String))
+      expect(loginBody.data?.accessToken).toEqual(expect.any(String))
+
+      const secondCookie = refreshCookiePair(firstRefresh)
+      expect(secondCookie).toBeDefined()
+      expect(secondCookie).not.toBe(firstCookie)
+
+      // The NEW refresh token must itself be live — rotation produces a
+      // working credential, not a dead end.
+      const secondRefresh = await request(app)
+        .post('/api/v1/auth/refresh')
+        .set('Cookie', secondCookie as string)
+      expect(secondRefresh.status).toBe(200)
+    })
+
+    it('invalidates the old refresh token: presenting it again after rotation fails', async () => {
+      const loginResponse = await registerAndLogin(createdIds)
+      const originalCookie = refreshCookiePair(loginResponse) as string
+
+      // Consume it once — a legitimate rotation.
+      const rotated = await request(app).post('/api/v1/auth/refresh').set('Cookie', originalCookie)
+      expect(rotated.status).toBe(200)
+
+      // Presenting the SAME (now-rotated-out) raw token again must fail —
+      // never be accepted a second time.
+      const replayed = await request(app).post('/api/v1/auth/refresh').set('Cookie', originalCookie)
+      expect(replayed.status).toBe(401)
+    })
+
+    it('rejects a refresh request with no cookie at all', async () => {
+      const response = await request(app).post('/api/v1/auth/refresh')
+      expect(response.status).toBe(401)
+    })
+  })
+
+  describe('logout', () => {
+    it('revokes the session: a subsequent refresh with that token fails', async () => {
+      const loginResponse = await registerAndLogin(createdIds)
+      const cookie = refreshCookiePair(loginResponse) as string
+
+      const logoutResponse = await request(app).post('/api/v1/auth/logout').set('Cookie', cookie)
+      expect(logoutResponse.status).toBe(200)
+
+      const refreshAfterLogout = await request(app)
+        .post('/api/v1/auth/refresh')
+        .set('Cookie', cookie)
+      expect(refreshAfterLogout.status).toBe(401)
+    })
+
+    it('clears the refresh-token cookie in its own response', async () => {
+      const loginResponse = await registerAndLogin(createdIds)
+      const cookie = refreshCookiePair(loginResponse) as string
+
+      const logoutResponse = await request(app).post('/api/v1/auth/logout').set('Cookie', cookie)
+
+      expect(refreshCookiePair(logoutResponse)).toBe(`${REFRESH_TOKEN_COOKIE_NAME}=`)
+    })
+
+    it('succeeds even with no refresh cookie at all — logout never leaks whether a token was live', async () => {
+      const response = await request(app).post('/api/v1/auth/logout')
+      expect(response.status).toBe(200)
+    })
+
+    it('answers identically for an already-revoked token as for one that never existed', async () => {
+      const loginResponse = await registerAndLogin(createdIds)
+      const cookie = refreshCookiePair(loginResponse) as string
+      await request(app).post('/api/v1/auth/logout').set('Cookie', cookie)
+
+      // Logging out again with the SAME (already-revoked) token, and with a
+      // token that never existed, must both simply succeed — a caller
+      // cannot use logout's response to test whether a given raw token was
+      // ever live.
+      const secondLogout = await request(app).post('/api/v1/auth/logout').set('Cookie', cookie)
+      const forgedLogout = await request(app)
+        .post('/api/v1/auth/logout')
+        .set('Cookie', `${REFRESH_TOKEN_COOKIE_NAME}=${'a'.repeat(64)}`)
+
+      expect(secondLogout.status).toBe(200)
+      expect(forgedLogout.status).toBe(200)
+    })
+  })
+
+  describe('login rate limiting (end to end, against the real production limiter and real Redis)', () => {
+    it('returns 429 after the configured number of attempts, with RateLimit-* headers', async () => {
+      const email = uniqueEmail()
+      const attempt = (): request.Test =>
+        request(app).post('/api/v1/auth/login').send({ email, password: 'wrong-password' })
+
+      // The production limiter allows 5 attempts per 15 minutes
+      // (rate-limit.middleware.ts) — the first 5 fail normally (401,
+      // unknown email), the 6th is rate-limited.
+      for (let index = 0; index < 5; index += 1) {
+        // Sequential on purpose: attempts against one shared counter must
+        // happen one after another, not concurrently, for the count to be
+        // deterministic.
+        const response = await attempt()
+        expect(response.status).toBe(401)
+      }
+      const limited = await attempt()
+
+      expect(limited.status).toBe(429)
+      expect(limited.headers).toHaveProperty('ratelimit-limit')
+    })
+  })
+})

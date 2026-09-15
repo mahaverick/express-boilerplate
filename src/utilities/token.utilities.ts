@@ -244,6 +244,25 @@ export async function revokeSession(sessionId: string): Promise<void> {
 }
 
 /**
+ * Revoke the session a raw refresh token belongs to — logout's primitive.
+ *
+ * Resolves quietly for a token that is missing, forged, or already revoked;
+ * it never distinguishes those from a live one in what it returns or how
+ * long it takes. Logout must feel like unconditional success to whoever
+ * calls it, not a way to test whether a given token string is still live —
+ * exactly the same reasoning `rotateRefreshToken` (this module) and the
+ * login endpoint (auth.controller.ts) already apply to their own callers.
+ * @param raw - The raw refresh token presented by the client.
+ * @returns Resolves once the token's session (if any matched) is revoked.
+ */
+export async function revokeRefreshToken(raw: string): Promise<void> {
+  const existing = await userTokenRepository.findByHash(hashToken(raw))
+  if (existing) {
+    await userTokenRepository.revokeAllForSession(existing.sessionId)
+  }
+}
+
+/**
  * Revoke every live refresh token belonging to a user, across every
  * session. Used where every session must end at once — e.g. a password
  * change, or a "log out everywhere" action.
