@@ -52,8 +52,14 @@ const getDummyHash: () => Promise<string> = (() => {
 /**
  * The fields of a user row it is safe to return to a client. An explicit
  * allow-list — see this file's header comment for why.
+ *
+ * Exported so profile.controller.ts (Task 8) can reuse this exact shape for
+ * `GET`/`PATCH /api/v1/profile` instead of defining a second "what a user
+ * looks like to a client" — two independent definitions of that shape are
+ * how one of them drifts and quietly leaks a field the other forgot to
+ * exclude.
  */
-interface PublicUser {
+export interface PublicUser {
   id: string
   email: string
   firstName: string | null
@@ -66,7 +72,7 @@ interface PublicUser {
  * @param user - The full row read from or written to the database.
  * @returns The public projection of that row.
  */
-function toPublicUser(user: User): PublicUser {
+export function toPublicUser(user: User): PublicUser {
   return {
     id: user.id,
     email: user.email,
