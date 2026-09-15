@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "description": "Production-grade Express 5 API boilerplate",
-  "license": "MIT",
+  "license": "UNLICENSED",
   "author": {
     "name": "Mahaverick",
     "email": "support@mahaverick.com"

@@ -153,7 +153,7 @@ mkdir -p src
   "private": true,
   "type": "module",
   "description": "Production-grade Express 5 API boilerplate",
-  "license": "MIT",
+  "license": "UNLICENSED",
   "author": { "name": "Mahaverick", "email": "support@mahaverick.com" },
   "engines": { "node": ">=24" },
   "packageManager": "pnpm@12.4.1",
