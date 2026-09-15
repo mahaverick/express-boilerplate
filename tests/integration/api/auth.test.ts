@@ -422,8 +422,12 @@ describe('POST /api/v1/auth/register and /login', () => {
 
   describe('login', () => {
     it('logs in with correct credentials, returns an access token, and sets a refresh cookie', async () => {
-      const email = uniqueEmail()
-      await registerUser({ email })
+      // registerVerifiedUser, not registerUser: a freshly registered
+      // account is unverified by design (Task 9's guard below refuses it),
+      // so "correct credentials succeed" is only true once the account has
+      // been verified — the same precondition every other successful-login
+      // test in this file already satisfies.
+      const { email } = await registerVerifiedUser()
 
       const { response, body } = await login(email, VALID_PASSWORD)
 
@@ -587,5 +591,152 @@ describe('POST /api/v1/auth/register and /login', () => {
       const reread = await userRepository.findById(user.id)
       expect(reread?.lastLoggedInAt).toBeNull()
     })
+
+    it('refuses an unverified account, identically to a wrong password', async () => {
+      const { email } = await registerUser()
+      const { email: otherEmail } = await registerVerifiedUser()
+      // Fixed across both requests, exactly like the unknown-email/wrong-
+      // password oracle test above: the envelope carries a per-request
+      // `requestId`, so without pinning it the two bodies would never
+      // deep-equal regardless of the guard's behavior.
+      const fixedRequestId = randomUUID()
+
+      const unverified = await request(app)
+        .post('/api/v1/auth/login')
+        .set('X-Request-Id', fixedRequestId)
+        .send({ email, password: VALID_PASSWORD })
+      const wrongPassword = await request(app)
+        .post('/api/v1/auth/login')
+        .set('X-Request-Id', fixedRequestId)
+        .send({ email: otherEmail, password: 'wrong-password-entirely' })
+
+      // Asserted together, not each in isolation: this is the only way to
+      // pin that an unverified account is indistinguishable from a wrong
+      // password, not merely "also a 401".
+      expect(unverified.status).toBe(wrongPassword.status)
+      expect(unverified.body).toEqual(wrongPassword.body)
+      expect(unverified.status).toBe(401)
+    })
+
+    it('lets the same account in once it is verified', async () => {
+      const { email } = await registerUser()
+      const beforeVerification = await login(email, VALID_PASSWORD)
+      expect(beforeVerification.response.status).toBe(401)
+
+      const user = await userRepository.findByEmail(email)
+      if (!user) throw new Error('setup: registration did not create a row')
+      await sql`update users set email_verified_at = now() where id = ${user.id}`
+
+      const afterVerification = await login(email, VALID_PASSWORD)
+      expect(afterVerification.response.status).toBe(200)
+    })
+
+    // Mutation proof for the `!user.emailVerifiedAt` clause, same two-part
+    // shape as tests/integration/utilities/token-reuse-mutation.test.ts:
+    //
+    //   1. Always on: mutate UserRepository.prototype.findByEmail to report
+    //      every row as verified regardless of its real emailVerifiedAt
+    //      value, show a genuinely unverified account logs in anyway, then
+    //      restore and show the SAME account is refused again. Exercises
+    //      the harness against this real guard; always green.
+    //   2. `it.runIf(process.env.MUTATION_PROOF === '1')`, one per test
+    //      above, each reproducing that test's own assertions against the
+    //      mutated dependency — DELIBERATELY red under the flag, skipped
+    //      (green) otherwise. No file under src/ is ever opened for
+    //      writing; see CLAUDE.md.
+    //
+    //     MUTATION_PROOF=1 pnpm exec vitest run tests/integration/api/auth.test.ts   # red
+    //     pnpm exec vitest run tests/integration/api/auth.test.ts                    # green
+    //
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
+    const originalFindByEmail = UserRepository.prototype.findByEmail
+    const mutatedFindByEmail: typeof originalFindByEmail = async function (
+      this: UserRepository,
+      email,
+      options
+    ) {
+      const user = await originalFindByEmail.call(this, email, options)
+      return user ? { ...user, emailVerifiedAt: new Date() } : user
+    }
+
+    it('disabling the emailVerifiedAt check lets an unverified account log in; restoring it brings the gate back', async () => {
+      const { email } = await registerUser()
+
+      await withMutatedMethod(
+        UserRepository.prototype,
+        'findByEmail',
+        mutatedFindByEmail,
+        async () => {
+          const mutated = await login(email, VALID_PASSWORD)
+          // The bug this proves: a genuinely unverified account (real
+          // emailVerifiedAt is still null) logs in anyway.
+          expect(mutated.response.status).toBe(200)
+        }
+      )
+
+      // RESTORED: the same account, still genuinely unverified, is refused
+      // again — same call, harness back to its real implementation.
+      const restored = await login(email, VALID_PASSWORD)
+      expect(restored.response.status).toBe(401)
+    })
+
+    // DELIBERATELY red when run with MUTATION_PROOF=1 — see this block's
+    // header comment. Left unset, this test is skipped and the file is
+    // green.
+    it.runIf(process.env.MUTATION_PROOF === '1')(
+      'reproduces the real "refuses an unverified account" test’s own assertions against the mutated guard',
+      async () => {
+        await withMutatedMethod(
+          UserRepository.prototype,
+          'findByEmail',
+          mutatedFindByEmail,
+          async () => {
+            const { email } = await registerUser()
+            const { email: otherEmail } = await registerVerifiedUser()
+            const fixedRequestId = randomUUID()
+
+            const unverified = await request(app)
+              .post('/api/v1/auth/login')
+              .set('X-Request-Id', fixedRequestId)
+              .send({ email, password: VALID_PASSWORD })
+            const wrongPassword = await request(app)
+              .post('/api/v1/auth/login')
+              .set('X-Request-Id', fixedRequestId)
+              .send({ email: otherEmail, password: 'wrong-password-entirely' })
+
+            // With findByEmail mutated, the unverified account's row looks
+            // verified to the controller, so this login SUCCEEDS (200)
+            // while the wrong-password branch still fails (401) on its own
+            // merits — the two diverge, and this assertion goes RED.
+            expect(unverified.status).toBe(wrongPassword.status)
+            expect(unverified.body).toEqual(wrongPassword.body)
+            expect(unverified.status).toBe(401)
+          }
+        )
+      }
+    )
+
+    // DELIBERATELY red when run with MUTATION_PROOF=1 — see this block's
+    // header comment. Left unset, this test is skipped and the file is
+    // green.
+    it.runIf(process.env.MUTATION_PROOF === '1')(
+      'reproduces the real "lets the same account in once it is verified" test’s own assertions against the mutated guard',
+      async () => {
+        await withMutatedMethod(
+          UserRepository.prototype,
+          'findByEmail',
+          mutatedFindByEmail,
+          async () => {
+            const { email } = await registerUser()
+
+            // With findByEmail mutated, the account logs in while still
+            // genuinely unverified — the real test's "before verification"
+            // assertion (401) goes RED here, immediately.
+            const beforeVerification = await login(email, VALID_PASSWORD)
+            expect(beforeVerification.response.status).toBe(401)
+          }
+        )
+      }
+    )
   })
 })

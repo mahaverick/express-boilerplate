@@ -268,6 +268,24 @@ export async function register(
  * never reaches this function's `user` check at all: `findByEmail` already
  * excludes a soft-deleted row, so that case behaves exactly like an unknown
  * email.
+ *
+ * An unverified account (`emailVerifiedAt` still null) is refused the same
+ * way, through the same guard: joining `!user.emailVerifiedAt` into this
+ * condition, rather than a separate early return placed before or after it,
+ * is load-bearing. `isPasswordCorrect` is computed above the guard and paid
+ * for on every call regardless of which clause ultimately trips, so an
+ * unverified account gets the identical 401 body AND the identical bcrypt
+ * cost as a wrong password. A separate early return keyed only on
+ * `emailVerifiedAt` would let a caller learn "this address exists and is
+ * merely unverified" by the response arriving fast (no bcrypt compare)
+ * instead of at the wrong-password/unknown-email cost — the same timing
+ * oracle this file's header comment already rules out for registration.
+ * `'Invalid email or password'` is, in this case, literally false — the
+ * credentials ARE correct. That falsehood is accepted deliberately, for
+ * the same reason the deactivated-account case accepts it: a truthful
+ * "this account exists but isn't verified yet" would confirm both that the
+ * address is registered AND that the supplied password is the right one,
+ * to anyone merely trying credentials against it.
  * @param request - The incoming request, carrying the login body.
  * @param response - The response.
  * @param next - Forwards a rejection to the terminal error handler.
@@ -283,7 +301,13 @@ export async function login(
     const hashToCompare = user?.passwordHash ?? (await getDummyHash())
     const isPasswordCorrect = await isPasswordValid(input.password, hashToCompare)
 
-    if (!user || !isPasswordCorrect || !user.active || !user.passwordHash) {
+    if (
+      !user ||
+      !isPasswordCorrect ||
+      !user.active ||
+      !user.passwordHash ||
+      !user.emailVerifiedAt
+    ) {
       throw new HttpError('Invalid email or password', 401)
     }
 
