@@ -18,10 +18,20 @@ import {
 
 /**
  * This template's entry in `EMAIL_TEMPLATE_KEYS` (email-template.utilities.ts),
- * typed against that union rather than left a bare string literal — a typo
- * here is a compile error, not a silently-mismatched key.
+ * checked against that union rather than left a bare string literal — a
+ * typo here is a compile error, not a silently-mismatched key.
+ *
+ * `satisfies`, not a `: EmailTemplateKey` annotation — an annotation would
+ * WIDEN this constant's type to the whole union, which is exactly wrong for
+ * `mailer.service.ts`'s `MailMessage` discriminated union: that union
+ * narrows on the LITERAL `'email_verification'`, not on "any
+ * EmailTemplateKey", so a caller passing this key must get
+ * `EmailVerificationVariables` specifically, not a choice of all three
+ * templates' variable shapes. `satisfies` keeps the literal type while
+ * still checking membership in the union — the same compile-error-on-typo
+ * guarantee, without the widening.
  */
-export const EMAIL_VERIFICATION_TEMPLATE_KEY: EmailTemplateKey = 'email_verification'
+export const EMAIL_VERIFICATION_TEMPLATE_KEY = 'email_verification' satisfies EmailTemplateKey
 
 /**
  * The variables `renderEmailVerificationTemplate` needs, all required: a
