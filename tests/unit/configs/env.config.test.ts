@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getDatabaseUrl, getEnv, parseEnv } from '@/configs/env.config'
+import { getDatabaseUrl, getEnv, parseEnv, trustProxySetting } from '@/configs/env.config'
 
 const valid = {
   NODE_ENV: 'test',
@@ -155,5 +155,47 @@ describe('getDatabaseUrl', () => {
     } finally {
       process.env.DATABASE_URL = original
     }
+  })
+})
+
+describe('TRUST_PROXY', () => {
+  it('defaults to "false" — trusting no proxy until an operator says otherwise', () => {
+    // The default has to fail towards OVER-limiting (every client sharing
+    // one bucket behind an unconfigured proxy) rather than towards no limit
+    // at all (a spoofable X-Forwarded-For). See env.config.ts's comment.
+    expect(parseEnv(valid).TRUST_PROXY).toBe('false')
+  })
+
+  it('refuses the literal "true", naming what to set instead', () => {
+    // `trust proxy: true` believes every hop, so any client that can reach
+    // the app can write its own X-Forwarded-For, get a fresh rate-limit
+    // bucket per request, and walk straight through the login limiter.
+    expect(() => parseEnv({ ...valid, TRUST_PROXY: 'true' })).toThrow(/TRUST_PROXY/)
+    expect(() => parseEnv({ ...valid, TRUST_PROXY: 'TRUE' })).toThrow(/TRUST_PROXY/)
+  })
+
+  it('accepts a hop count and an address list', () => {
+    expect(parseEnv({ ...valid, TRUST_PROXY: '1' }).TRUST_PROXY).toBe('1')
+    expect(parseEnv({ ...valid, TRUST_PROXY: 'loopback' }).TRUST_PROXY).toBe('loopback')
+  })
+})
+
+describe('trustProxySetting', () => {
+  it('maps "false" to the boolean Express understands, not the string', () => {
+    // A non-empty string is truthy, and Express reads a string as an address
+    // list — so passing "false" through unconverted would mean "trust the
+    // proxy at the address named `false`", which proxy-addr rejects at boot.
+    expect(trustProxySetting('false')).toBe(false)
+    expect(trustProxySetting('  FALSE  ')).toBe(false)
+  })
+
+  it('maps a whole number to a hop count', () => {
+    expect(trustProxySetting('1')).toBe(1)
+    expect(trustProxySetting('2')).toBe(2)
+  })
+
+  it('passes anything else through as an address list for Express to parse', () => {
+    expect(trustProxySetting('loopback')).toBe('loopback')
+    expect(trustProxySetting('10.0.0.0/8, 172.16.0.0/12')).toBe('10.0.0.0/8, 172.16.0.0/12')
   })
 })

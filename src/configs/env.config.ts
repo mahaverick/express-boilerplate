@@ -125,6 +125,41 @@ const EnvSchema = z.object({
       'Refresh token lifetime, as an ms()-parseable duration string (e.g. "30d"). Defaults to 30d.'
     ),
 
+  // How much of `X-Forwarded-For` Express is allowed to believe. There is
+  // no safe default in either direction, which is why this is a required
+  // decision expressed as configuration rather than a literal in app.ts:
+  //
+  //   - Too little trust (the default, `false`): behind a proxy,
+  //     `request.ip` is the PROXY's address for every request, so every
+  //     IP-keyed rate limiter collapses into ONE bucket for the entire
+  //     deployment. The refresh limiter's 300-per-5-minutes becomes 300
+  //     requests per 5 minutes for all users combined, and one noisy client
+  //     denies refresh to everyone.
+  //   - Too much trust (`true`, or a hop count larger than the number of
+  //     proxies actually in front of this process): `X-Forwarded-For` is
+  //     just a request header, so a client that can reach the app can write
+  //     whatever it likes into it. Express then reads an attacker-chosen
+  //     "client IP", which means a fresh rate-limit bucket on every single
+  //     request — the login limiter (5 attempts per 15 minutes) stops
+  //     existing.
+  //
+  // `false` is the default because it FAILS TOWARDS OVER-LIMITING rather
+  // than towards no limit at all: an operator who never reads this gets a
+  // limiter that is too aggressive behind a proxy, not one that can be
+  // bypassed by adding a header. The literal `true` is refused outright —
+  // it is the shape of this footgun that gets typed by accident, and every
+  // legitimate use of it is expressible as a hop count or an address list.
+  TRUST_PROXY: z
+    .string()
+    .default('false')
+    .refine((value) => value.trim().toLowerCase() !== 'true', {
+      message:
+        'TRUST_PROXY must not be "true": trusting every hop lets any client spoof X-Forwarded-For and bypass the IP-keyed rate limiters. Use the NUMBER of proxies in front of this app (e.g. "1"), or a comma-separated list of trusted addresses/subnets (e.g. "10.0.0.0/8") or presets ("loopback", "uniquelocal").',
+    })
+    .describe(
+      'How much of X-Forwarded-For to believe. "false" (default) trusts none: correct when clients reach this app directly, WRONG behind a proxy, where every IP-keyed rate limiter then shares one bucket for the whole deployment. Behind a proxy set the NUMBER of proxies in front of this app (e.g. "1"), or a comma-separated list of trusted proxy addresses/subnets or presets ("loopback", "linklocal", "uniquelocal"). Never "true" — it is refused, because it lets any client spoof its own IP and bypass the limiters.'
+    ),
+
   OTEL_EXPORTER_OTLP_ENDPOINT: z
     .url({ protocol: /^https?$/ })
     .optional()
@@ -187,6 +222,32 @@ export const getEnv: () => Env = (() => {
     return cached
   }
 })()
+
+/**
+ * Translate `TRUST_PROXY` into the value Express's `trust proxy` setting
+ * expects.
+ *
+ * Kept here, next to the variable it interprets, rather than inline in
+ * app.ts — that is what lets it be unit-tested without importing `@/app`,
+ * which reaches `database.service.ts` at module scope. The mapping is
+ * deliberately total and dumb: `"false"` disables it, a whole number is a
+ * hop count, and anything else is handed to Express verbatim as an address
+ * list, which `proxy-addr` parses and REJECTS by throwing — at boot, from
+ * `createApp()`, not on the first request. That is the intended behaviour
+ * for a typo in a security-relevant setting: a process that refuses to
+ * start, rather than one silently running with the wrong idea of who its
+ * clients are.
+ *
+ * `"true"` never reaches here — `EnvSchema` refuses it; see that field's
+ * comment.
+ * @param value - The validated `TRUST_PROXY` value.
+ * @returns `false`, a hop count, or the address list to hand to `app.set('trust proxy', ...)`.
+ */
+export function trustProxySetting(value: string): boolean | number | string {
+  const normalised = value.trim()
+  if (normalised.toLowerCase() === 'false') return false
+  return /^\d+$/.test(normalised) ? Number(normalised) : normalised
+}
 
 /**
  * Validate and return only `DATABASE_URL`, without requiring the rest of the
