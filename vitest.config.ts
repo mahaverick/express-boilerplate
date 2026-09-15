@@ -10,6 +10,12 @@ export default defineConfig({
     environment: 'node',
     include: ['tests/**/*.test.ts', 'src/**/*.test.ts'],
     setupFiles: ['./tests/helpers/setup-global.ts'],
+    // Runs once, in the main process, before any worker starts — unlike
+    // setupFiles above, which runs per test file inside every forked
+    // worker. Migrating the database from setupFiles would mean up to
+    // maxWorkers processes racing to apply the same migration concurrently.
+    // See tests/helpers/global-setup.ts for the full reasoning.
+    globalSetup: ['./tests/helpers/global-setup.ts'],
     alias: [
       { find: '@/tests', replacement: path.resolve(dirname, './tests') },
       { find: '@', replacement: path.resolve(dirname, './src') },
