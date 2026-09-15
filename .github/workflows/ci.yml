@@ -1,0 +1,154 @@
+name: CI
+on:
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    services:
+      # GitHub's `services:` blocks cannot mount a file, so the init.sql that
+      # docker-compose uses to create the test role/database is unavailable
+      # here. Set the credentials directly instead — they must match .env.test.
+      postgres:
+        image: postgres:18
+        env: { POSTGRES_USER: test, POSTGRES_PASSWORD: test, POSTGRES_DB: boilerplate_test }
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd=pg_isready --health-interval=10s --health-timeout=5s --health-retries=5
+      redis:
+        image: redis:7.2-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd="redis-cli ping" --health-interval=10s --health-timeout=5s --health-retries=5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - name: Lint and type-check
+        run: pnpm lint
+      - name: Format check
+        # Repo-wide (package.json's own format:check script, `prettier --check .`
+        # minus .prettierignore). It used to be scoped to src/**/*.{ts,json,md},
+        # which covered ~11 files and nothing under tests/ at all, while this
+        # step and CONTRIBUTING.md both presented it as the repo-wide standard —
+        # 10 files had drifted, 6 of them tests, before anyone noticed.
+        run: pnpm format:check
+      - name: Test with coverage gate
+        run: pnpm test:coverage
+        env:
+          # services: cannot remap ports, so DATABASE_URL/REDIS_URL here use
+          # the container-default 5432/6379, not the compose stack's
+          # deliberately-nonstandard 5433/6380 (see docker-compose.yml).
+          # Every other key mirrors .env.test's committed value verbatim —
+          # the "Assert the CI env block mirrors .env.test" step below
+          # depends on every key from that file appearing, textually, in
+          # this workflow.
+          NODE_ENV: test
+          APP_PORT: 4040
+          APP_URL: http://localhost:4040
+          WEB_URL: http://localhost:5173
+          DATABASE_URL: postgres://test:test@localhost:5432/boilerplate_test
+          REDIS_URL: redis://localhost:6379
+          JWT_ACCESS_SECRET: test-access-secret-that-is-long-enough-32
+          JWT_REFRESH_SECRET: test-refresh-secret-that-is-long-enough-3
+          SESSION_SECRET: test-session-secret-that-is-long-enough-1
+      # The env block above must mirror committed .env.test. When they drift, a
+      # test passes locally and fails in CI (or worse, the reverse) for reasons
+      # that look nothing like the cause. This asserts every key in .env.test is
+      # accounted for here.
+      #
+      # Anchored to an actual "  KEY:" line, not a bare substring match. An
+      # unanchored `grep -q "$key" ci.yml` is satisfied by a key name that only
+      # appears in a comment — such as the sentence right above this one, which
+      # names every key it's checking for — so the gate could pass while the
+      # real env: block is missing that key entirely. That is the same
+      # pass-while-checking-nothing shape as an inert lint rule: configured,
+      # green, enforcing nothing.
+      - name: Assert the CI env block mirrors .env.test
+        run: |
+          missing=0
+          while IFS='=' read -r key _; do
+            case "$key" in ''|\#*) continue ;; esac
+            if ! grep -qE "^[[:space:]]+${key}:" .github/workflows/ci.yml; then
+              echo "::error::$key is in .env.test but not in the CI env block"
+              missing=1
+            fi
+          done < .env.test
+          exit $missing
+      - name: Build
+        run: pnpm build
+      - name: Audit production dependencies
+        run: pnpm audit --prod
+      # .env.example is generated from the Zod schema. Nothing stops someone
+      # editing EnvSchema and forgetting to regenerate, and the drift is
+      # invisible until a new contributor's first run fails on a variable the
+      # example never mentioned. Regenerate and fail if the file moves.
+      - name: Assert .env.example matches the schema
+        run: |
+          pnpm env:example
+          git diff --exit-code .env.example \
+            || { echo "::error::.env.example is stale — run 'pnpm env:example' and commit"; exit 1; }
+      - name: Reject domain leakage
+        # The boilerplate is derived from a product repo. This gate is why the
+        # derivation can be trusted; without it, a scrub miss ships silently.
+        #
+        # The banned terms live in .github/domain-terms.txt, one extended-regex
+        # per line, for two reasons. First, they are reviewable on their own:
+        # adding or removing a term is a one-line diff in a file that contains
+        # nothing else. Second — and this is what fixed a real blind spot —
+        # this step no longer has to spell the terms out, so it is no longer
+        # its own worst false positive and no longer needs to exempt itself
+        # from the scan. Only the terms file itself is excluded now.
+        #
+        # Anchor each term to how ambiguous it is on its own. A term that is
+        # unambiguous product vocabulary can stay unanchored — any occurrence
+        # anywhere is a real leak. A term that also reads as ordinary English
+        # needs an anchor, or it fails CI on plain prose. Two anchor shapes
+        # cover this: a compound suffix (`term[-_]`) matches only the
+        # compound forms this codebase's own vocabulary actually used, not
+        # the bare English word; a word boundary (`\bterm\b`) is needed
+        # instead when the bare word is itself a substring of a common word
+        # with no boundary before it (e.g. a plain suffix match would trip on
+        # an unrelated verb that happens to end the same way). When adding an
+        # anchored term, verify it the way this file's own terms were
+        # verified: write a sentence of ordinary English using the bare word
+        # and confirm the gate does not trip on it.
+        #
+        # `git ls-files` replaces the old `grep -r --include=<ext>` filter.
+        # That allowlist silently exempted every tracked file without a listed
+        # extension — .env.example, .env.test, docker/postgres/init.sql, the
+        # husky hooks, CODEOWNERS, .gitleaks.toml — precisely the files most
+        # likely to carry a real environment string. It also skipped docs/
+        # wholesale, while docs/superpowers/** is tracked and ships (that
+        # exclusion was hiding 21 hits). Scanning the index instead means
+        # every committed file is covered by construction, and nothing
+        # untracked (node_modules, dist, coverage, .worktrees) is ever walked.
+        run: |
+          terms=.github/domain-terms.txt
+          # A blank line in the terms file is an empty pattern, which matches
+          # every line of every file — the gate would "fail" on the whole tree
+          # and read as a catastrophic leak. Refuse to run instead.
+          if [ ! -s "$terms" ] || grep -qE '^[[:space:]]*$' "$terms"; then
+            echo "::error::$terms is missing, empty, or contains a blank line"
+            exit 1
+          fi
+          # `|| true` sits INSIDE the substitution so a no-match (grep exit 1)
+          # and a partial match across xargs batches (xargs exit 123) both
+          # still yield the hits grep printed. Testing the captured text, not
+          # the pipeline's exit code, is what stops this gate silently
+          # inverting into a pass once the repo outgrows a single xargs batch.
+          # -H forces the filename prefix even when a batch holds one file.
+          hits=$(git ls-files -z | grep -zv '^\.github/domain-terms\.txt$' \
+                   | xargs -0 grep -nHiEf "$terms" || true)
+          if [ -n "$hits" ]; then
+            echo "$hits"
+            echo "::error::Domain reference found — scrub before merging."
+            exit 1
+          fi

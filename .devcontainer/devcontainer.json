@@ -1,0 +1,21 @@
+{
+  "name": "express-boilerplate",
+  "image": "mcr.microsoft.com/devcontainers/typescript-node:24",
+  "features": { "ghcr.io/devcontainers/features/docker-in-docker:2": {} },
+  "postCreateCommand": "corepack enable && pnpm install",
+  // 5433/6380, 8025 — the compose stack's host-side Postgres/Redis/Mailpit
+  // ports (docker-compose.yml), not the container-internal 5432/6379/8025.
+  // Postgres and Redis are deliberately off their defaults so this stack
+  // never collides with a developer's own native services; forwarding the
+  // defaults here would forward the wrong ports.
+  "forwardPorts": [4040, 5433, 6380, 8025],
+  "customizations": {
+    "vscode": {
+      "extensions": ["dbaeumer.vscode-eslint", "esbenp.prettier-vscode"],
+      "settings": {
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "esbenp.prettier-vscode"
+      }
+    }
+  }
+}

@@ -1,0 +1,16 @@
+# .gitleaks.toml
+#
+# Extends gitleaks' default rule set (secrets, tokens, private keys) rather
+# than replacing it. The only local addition is an allowlist for the
+# committed test-environment file: .env.test carries intentionally fake
+# secrets (see setup-global.ts) so the suite and CI can boot without real
+# credentials, and those fake values are exactly the shape generic
+# high-entropy/secret detectors are built to flag.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Committed test fixtures with intentionally fake secrets"
+paths = [
+  '''^\.env\.test$''',
+]

@@ -1,0 +1,26 @@
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+exporters:
+  debug:
+    verbosity: normal
+# Exposes a real /health endpoint on 13133. Not wired into docker-compose.yml
+# as a Docker HEALTHCHECK: otel/opentelemetry-collector-contrib is genuinely
+# distroless (verified — no sh, wget, curl, or which in the image; only the
+# otelcol-contrib binary itself), and a Docker `test:` always execs inside
+# the target container, so there is nothing installed to run the HTTP check
+# with. The endpoint is still real and reachable from the host on 13133 for
+# manual verification, and any future healthcheck approach (a wrapper image,
+# a host-side prober, Docker's own HTTP healthcheck support if it lands)
+# can use it without reworking this config.
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+service:
+  extensions: [health_check]
+  pipelines:
+    traces: { receivers: [otlp], exporters: [debug] }
+    metrics: { receivers: [otlp], exporters: [debug] }
+    logs: { receivers: [otlp], exporters: [debug] }

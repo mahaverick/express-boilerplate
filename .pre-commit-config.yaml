@@ -1,0 +1,27 @@
+# .pre-commit-config.yaml — local secret-scanning layer.
+#
+# Optional install: `pre-commit install`. This is defense in depth, not the
+# blocking layer — a developer can skip it with `git commit --no-verify`.
+# The blocking layer is .github/workflows/gitleaks.yml, which runs on every
+# pull request regardless of what ran (or didn't) on the laptop.
+repos:
+  # Pinned to a tagged release, not a floating tag — re-run this repo's own
+  # history through it before bumping.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.4
+    hooks:
+      - id: gitleaks
+        args:
+          - --config=.gitleaks.toml
+          - --staged
+          - --verbose
+
+  # Defense-in-depth: a large-file gate (avoids the "1 GB blob in git
+  # history" foot-gun) and a private-key detector (any PEM block), in case a
+  # secret's shape doesn't match a known gitleaks rule.
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+      - id: detect-private-key

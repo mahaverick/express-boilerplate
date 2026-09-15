@@ -1,0 +1,3 @@
+set -e
+pnpm lint
+pnpm test:coverage

@@ -1,1 +1,28 @@
-npm run lint
+# Fast checks only — this hook looks at what you changed. The full sweep is
+# in pre-push. If a step here grows past a few seconds, move it.
+set -e
+
+# Lockfile drift: under a second, and it catches the exact mistake that sends
+# PRs to CI red, since CI installs with --frozen-lockfile and refuses.
+pnpm install --frozen-lockfile --lockfile-only --ignore-scripts >/dev/null
+
+pnpm exec lint-staged
+
+# Tests for what you touched AND everything importing it — vitest walks the
+# module graph, so editing one utility pulls in its dependents. Integration
+# tests are excluded here: they need the Docker compose stack (Postgres,
+# Redis) up, and --changed HEAD's fan-in means editing a widely-imported
+# file (e.g. a service or a response utility) pulls them in even when the
+# stack is down — measured at 20s+ per hung health probe and a hard
+# failure, which blocks the commit outright. Pre-push runs the full suite
+# via `pnpm test:coverage`, including integration tests, so nothing skips
+# verification — it just moves to where Docker being up is a fair
+# expectation.
+pnpm exec vitest run --changed HEAD --passWithNoTests --exclude 'tests/integration/**'
+
+# .env.example is generated. Regenerate it when the schema is staged, so the
+# example can never drift from the schema it documents.
+if git diff --cached --name-only | grep -q 'src/configs/env.config.ts'; then
+  pnpm env:example
+  git add .env.example
+fi
