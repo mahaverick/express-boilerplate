@@ -64,20 +64,24 @@ export class EmailLogRepository {
   /**
    * Record one outbound email attempt, sent or failed.
    *
-   * A caller that already sent the email must never receive a failure from
-   * this method for a reason the email itself did not have — logging is
-   * best-effort observability, not a gate on delivery. An `errorCode` that
-   * does not match the expected shape (wrong length, wrong characters — see
-   * `withErrorCodeNormalized`) is replaced with `UNKNOWN_ERROR_CODE` rather
-   * than left to throw a 22001 (string data right truncation) or a
-   * `email_logs_error_code_check` violation: a log write happens strictly
-   * after the send it describes, so nothing here can undo that send, and a
-   * caller that mis-extracted a value (up to and including passing a raw
-   * token by mistake) must still get a written row, not a request failure
-   * and not a leaked secret. The caller itself is still responsible for the
-   * other half of Ruling E: catching whatever this rejects with (a
-   * genuinely unexpected error, not this normalization) and logging it at
-   * pino `error` rather than failing the request.
+   * Round-2 review finding 5: this paragraph used to open with an absolute
+   * "must never receive a failure," which was false — a genuine
+   * infrastructure failure (the database unreachable, a connection reset)
+   * still rejects here, same as any other write in this codebase; nothing
+   * catches that inside this method. What IS guaranteed is narrower and
+   * specific to `errorCode`: a value that does not match the expected
+   * shape (wrong length, wrong characters — see `withErrorCodeNormalized`)
+   * is replaced with `UNKNOWN_ERROR_CODE` rather than left to throw a
+   * 22001 (string data right truncation) or an `email_logs_error_code_check`
+   * violation. That specific guarantee matters because a log write happens
+   * strictly after the send it describes, so nothing here can undo that
+   * send — a caller that mis-extracted a value (up to and including
+   * passing a raw token by mistake) must still get a written row for THAT
+   * reason, not a request failure and not a leaked secret. The caller
+   * itself is still responsible for the other half of Ruling E: catching
+   * whatever this rejects with (a genuine infrastructure failure, not this
+   * normalization) and logging it at pino `error` rather than failing the
+   * request.
    * @param entry - The row to insert: recipient, templateKey, status, and whichever of providerMessageId/errorCode applies to that status.
    * @returns The inserted row, including its generated `id` and `createdAt`.
    */
@@ -94,14 +98,21 @@ export class EmailLogRepository {
    * Every row recorded for one recipient, oldest first. Exists so tests can
    * assert on what `record` actually wrote to the table; nothing in src/
    * calls this yet, and that is fine — see task-4-brief.md.
+   *
+   * Orders by `createdAt` then `id` — `id` is a secondary sort, not a
+   * second meaningful ordering: uuidv7 (every table's `id` default) is
+   * itself time-ordered, so it breaks a tie between two rows that land in
+   * the same millisecond deterministically, rather than leaving their
+   * relative order to whatever Postgres happens to return (round-2 review
+   * finding 7).
    * @param recipient - The recipient address to look up.
-   * @returns Every matching row, ordered by `createdAt` ascending.
+   * @returns Every matching row, ordered by `createdAt` ascending, `id` ascending as a tiebreaker.
    */
   async findByRecipient(recipient: string): Promise<EmailLog[]> {
     return db
       .select()
       .from(emailLogModel)
       .where(eq(emailLogModel.recipient, recipient))
-      .orderBy(asc(emailLogModel.createdAt))
+      .orderBy(asc(emailLogModel.createdAt), asc(emailLogModel.id))
   }
 }

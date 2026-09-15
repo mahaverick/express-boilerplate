@@ -57,6 +57,13 @@
       "when": 1789474664835,
       "tag": "0007_tan_blur",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1789475829985,
+      "tag": "0008_rainy_amphibian",
+      "breakpoints": true
     }
   ]
 }
