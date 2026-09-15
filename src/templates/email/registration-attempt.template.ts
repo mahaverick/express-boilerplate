@@ -16,11 +16,14 @@ import {
 } from '@/utilities/email-template.utilities'
 
 /**
- * This template's entry in `EMAIL_TEMPLATE_KEYS` (email-template.utilities.ts),
- * typed against that union rather than left a bare string literal — a typo
- * here is a compile error, not a silently-mismatched key.
+ * This template's entry in `EMAIL_TEMPLATE_KEYS` (email-template.utilities.ts).
+ * `satisfies`, not a `: EmailTemplateKey` annotation — see
+ * email-verification.template.ts's own comment on
+ * `EMAIL_VERIFICATION_TEMPLATE_KEY` for why: an annotation would widen this
+ * to the whole union, which breaks the literal narrowing
+ * `mailer.service.ts`'s `MailMessage` discriminated union depends on.
  */
-export const REGISTRATION_ATTEMPT_TEMPLATE_KEY: EmailTemplateKey = 'registration_attempt'
+export const REGISTRATION_ATTEMPT_TEMPLATE_KEY = 'registration_attempt' satisfies EmailTemplateKey
 
 /**
  * The variables `renderRegistrationAttemptTemplate` needs, all required: a
