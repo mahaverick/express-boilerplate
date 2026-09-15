@@ -25,6 +25,33 @@
  * and forget. Raising it only affects passwords hashed after the change —
  * bcrypt encodes its own cost in the hash string, so existing rows keep
  * verifying at whatever cost they were created with.
+ *
+ * BEFORE YOU RAISE IT, read this. That last sentence has a consequence for
+ * the login timing defence, and this is the place it will actually be seen.
+ * `login` (auth.controller.ts) answers an unknown email by verifying
+ * against a dummy hash, so both paths pay one real bcrypt comparison and
+ * the response time cannot say whether an address is registered. The dummy
+ * is hashed at the CURRENT value of this constant; every stored hash
+ * verifies at whatever cost it was WRITTEN with. While those agree, the two
+ * paths cost the same. Raise this constant and they stop agreeing, in the
+ * direction that reopens the channel INVERTED: existing users now verify
+ * more cheaply than the dummy, so an unknown email becomes measurably
+ * SLOWER than a wrong password for a real account, and the gap widens with
+ * every increment (each +1 doubles the work). The endpoint's own comment
+ * reasons about a stale hard-coded dummy hash — a different, already-closed
+ * problem. This one is about stale STORED hashes, and no amount of care
+ * inside the controller can fix it, because there is no single cost that
+ * matches every row.
+ *
+ * The standard remedy is rehash-on-login: after a successful verification,
+ * if the stored hash's embedded cost is below this constant, re-hash the
+ * submitted password at the new cost and update the row — the one moment
+ * the plaintext is legitimately in hand. The population converges on the
+ * new cost as users sign in, and the timing gap closes with it. That is NOT
+ * built here (nothing in `src/` reads a hash's embedded cost), so raising
+ * this constant today means accepting a widening timing oracle on
+ * `/login` until every active user has changed their password. Build the
+ * rehash first, or raise the cost knowing the trade.
  */
 export const BCRYPT_COST = 12
 

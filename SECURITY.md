@@ -384,16 +384,16 @@ dropped.
 
 Everything below genuinely ships nothing today, in either direction:
 
-| Control                         | Status              | What that means for you                                                                                                                                   |
-| ------------------------------- | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| CSRF tokens                     | **Not implemented** | See "No CSRF middleware" below — reasoning, not an oversight, and still holds for the shipped cookie/token shape.                                         |
-| Security headers / CSP          | **Not implemented** | `helmet` is not a dependency. Only `x-powered-by` is disabled (`src/app.ts`).                                                                             |
-| CORS                            | **Not implemented** | No `cors` middleware; `WEB_URL` is validated but nothing reads it.                                                                                        |
-| MFA                             | **Not implemented** | No TOTP enrolment, no recovery codes. Owned by a later plan (B4).                                                                                         |
-| Email delivery and verification | **Not implemented** | `users.email_verified_at` exists as a column; nothing issues, sends, or verifies a token yet. Owned by plan B3 — see ARCHITECTURE.md's "B3 seam" section. |
-| OAuth / social login            | **Not implemented** | No provider integration. Owned by a later plan (B4).                                                                                                      |
-| Tenancy / RBAC                  | **Not implemented** | Every authenticated user has the same access to their own resources; there is no role or organization model.                                              |
-| General-purpose rate limiting   | **Partial**         | All four auth routes are covered (above). No limiter exists on the profile routes or any future non-auth route.                                           |
+| Control                         | Status                               | What that means for you                                                                                                                                                                                                                                                                                        |
+| ------------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CSRF tokens                     | **Not implemented**                  | See "No CSRF middleware" below — reasoning, not an oversight. The forced-login direction IS defended, by a content-type gate on the auth router; see the section after it.                                                                                                                                     |
+| Security headers / CSP          | **Not implemented — and unassigned** | `helmet` is not a dependency. Only `x-powered-by` is disabled (`src/app.ts`). Spec §13 mandates "helmet with an explicit Content-Security-Policy"; **no plan owns it** — unlike CORS/MFA/OAuth, which name one. Stated rather than left implied, since an unowned requirement is how one silently never ships. |
+| CORS                            | **Not implemented**                  | No `cors` middleware; `WEB_URL` is validated but nothing reads it.                                                                                                                                                                                                                                             |
+| MFA                             | **Not implemented**                  | No TOTP enrolment, no recovery codes. Owned by a later plan (B4).                                                                                                                                                                                                                                              |
+| Email delivery and verification | **Not implemented**                  | `users.email_verified_at` exists as a column; nothing issues, sends, or verifies a token yet. Owned by plan B3 — see ARCHITECTURE.md's "B3 seam" section.                                                                                                                                                      |
+| OAuth / social login            | **Not implemented**                  | No provider integration. Owned by a later plan (B4).                                                                                                                                                                                                                                                           |
+| Tenancy / RBAC                  | **Not implemented**                  | Every authenticated user has the same access to their own resources; there is no role or organization model.                                                                                                                                                                                                   |
+| General-purpose rate limiting   | **Partial**                          | All four auth routes are covered (above). No limiter exists on the profile routes or any future non-auth route.                                                                                                                                                                                                |
 
 `JWT_ACCESS_SECRET` is required by the environment schema and **is** read —
 by `signAccessToken`/`verifyAccessToken`. `APP_URL`, `WEB_URL` and
@@ -418,6 +418,44 @@ flag). If a project changes `sameSite` away from `'strict'` (the OAuth case
 above is the concrete reason this might happen), or layers a browser
 session on top of this boilerplate (the `SESSION_SECRET` path), this
 conclusion no longer holds and CSRF protection must be revisited explicitly.
+
+### The other CSRF direction: forced login
+
+Everything above reasons about an attacker making a victim's browser act
+**with the victim's credentials**. There is a second direction, and this
+file did not consider it until it was found in review: an attacker making a
+victim's browser log in **with the attacker's credentials**.
+
+`app.ts` mounts `express.urlencoded()` globally, so `POST
+/api/v1/auth/login` used to accept a form-encoded body. An attacker's page
+could auto-submit a cross-site form to it carrying the attacker's own email
+and password. A cross-site form POST needs no CORS permission — the browser
+sends it and merely hides the response — and `sameSite: 'strict'` is no
+defence here, because **it governs when a cookie is sent, not whether a
+cross-site response may set one**. The victim's browser stores the reply's
+`Set-Cookie` and the victim is now silently signed into the attacker's
+account. Everything they do next — a document uploaded, a card saved, a
+search typed — happens inside an account the attacker can log into and read
+at leisure.
+
+Closed by `requireJsonContentType`
+(`src/middlewares/content-type.middleware.ts`), mounted on the whole auth
+router so B3's routes inherit it: a request declaring any content type other
+than `application/json` is refused with **415**, before the handler sees the
+body. An HTML form can only ever submit
+`application/x-www-form-urlencoded`, `multipart/form-data` or `text/plain`,
+so refusing those three removes the form vector by construction; and
+requiring `application/json` forces a CORS preflight on any cross-origin
+script, which nothing here answers.
+
+A content-type gate was chosen over an `Origin`/`Sec-Fetch-Site` check
+because it needs no configuration: an Origin allow-list would have to know
+the frontend's origin, and `WEB_URL` is a placeholder nothing reads (see the
+table above), so that check would have shipped mis-configured — failing
+open, which is worse than not having it. A request declaring **no** content
+type is allowed, because an untyped body is inert: neither body parser
+parses one, so it never reaches a validator, and `/refresh` and `/logout`
+are legitimately called with no body at all.
 
 ## Design decisions that ARE implemented
 

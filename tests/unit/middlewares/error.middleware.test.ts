@@ -230,6 +230,23 @@ describe('errorHandler', () => {
       )
     })
 
+    it('redacts a query-shaped error that carries neither a driver code nor a stack', () => {
+      // The defensive edges of the same path: a query error whose cause is
+      // not an object with a `code` (a dropped connection surfaces one), and
+      // one with no usable stack. Neither may fall back to logging the raw
+      // error — the message embeds the parameters either way.
+      const { response } = mockResponse()
+      const bare = { query: 'select 1 from "users" where "email" = $1', params: [email] }
+
+      errorHandler(bare, {} as never, response, vi.fn())
+
+      expect(consoleError).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ driverCode: undefined, stack: undefined, paramCount: 1 })
+      )
+      expect(JSON.stringify(consoleError.mock.calls)).not.toContain(email)
+    })
+
     it('answers the client the same masked 500 as any other unexpected error', () => {
       const { response, body, status } = mockResponse()
 

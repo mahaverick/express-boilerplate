@@ -293,10 +293,13 @@ security-relevant detail on all of it. It does **not** build:
   Mailpit-backed email sending is expected to land.
 - **Sessions, MFA, or OAuth/social login.** `SESSION_SECRET` remains a
   required-but-unread placeholder. Owned by plan B4.
-- **Security headers/CSP, CORS, or a general-purpose rate limiter.** Only
-  the login and refresh routes are rate-limited (see SECURITY.md);
-  `x-powered-by` is disabled and nothing else touches response headers.
-  `WEB_URL` remains validated but unread.
+- **Security headers/CSP, CORS, or a general-purpose rate limiter.** All
+  four auth routes are rate-limited, each with its own store prefix (see
+  SECURITY.md); no other route is. `x-powered-by` is disabled and nothing
+  else touches response headers. `WEB_URL` remains validated but unread.
+  **Security headers/CSP is unassigned**: spec §13 mandates `helmet` with
+  an explicit Content-Security-Policy and no plan owns it — see
+  SECURITY.md's table.
 - **Tenancy or RBAC.** Every authenticated user acts only on their own
   resources; there is no role or organization model. Owned by plan B5.
 - OpenAPI documentation, or a bootstrap/seed script (`pnpm bootstrap` does
@@ -305,8 +308,16 @@ security-relevant detail on all of it. It does **not** build:
   adopted, in [MIGRATIONS.md](MIGRATIONS.md)). `nodemailer` is the one
   already-listed dependency that plan B3 is expected to actually adopt,
   once email delivery lands.
+- **A retention job for `user_tokens`,** which grows by roughly 2,900 rows
+  per active user per month and is never pruned. Also **unassigned** — a
+  scheduled job needs a scheduler, and there is none yet; see
+  [DATABASE.md](DATABASE.md#user_tokens-grows-without-bound-and-nothing-prunes-it).
 - OpenTelemetry SDK wiring in the app itself — the collector container runs
   and `OTEL_EXPORTER_OTLP_ENDPOINT` is a recognised, optional variable, but
   nothing in `src/` currently starts an SDK or exports a span.
 
-Each of these is explicitly owned by a later plan.
+Most of these are explicitly owned by a later plan (named inline above).
+Two are **not owned by anything**: security headers/CSP and the
+`user_tokens` retention job. That is recorded here deliberately — "a later
+plan will do it" reads the same as "nobody is doing it" right up until
+nobody does.

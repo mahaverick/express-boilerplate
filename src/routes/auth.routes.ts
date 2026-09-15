@@ -21,6 +21,7 @@
 // here.
 import { Router } from 'express'
 import { login, logout, refresh, register } from '@/controllers/auth.controller'
+import { requireJsonContentType } from '@/middlewares/content-type.middleware'
 import {
   createLoginRateLimiter,
   createLogoutRateLimiter,
@@ -34,6 +35,15 @@ import {
  */
 export function createAuthRouter(): Router {
   const router = Router()
+  // Router-wide, ahead of every route: a CSRF control, not a formatting
+  // preference. Without it, `express.urlencoded()` (mounted globally in
+  // app.ts) lets an attacker's page auto-submit a cross-site FORM to
+  // /login and silently log the victim into the attacker's account —
+  // `sameSite: 'strict'` governs when a cookie is SENT, not whether a
+  // cross-site response may SET one. Mounted with `use` rather than
+  // per-route so B3's routes inherit it by default instead of having to
+  // remember. See content-type.middleware.ts.
+  router.use(requireJsonContentType)
   router.post('/register', createRegisterRateLimiter(), register)
   router.post('/login', createLoginRateLimiter(), login)
   router.post('/refresh', createRefreshRateLimiter(), refresh)
