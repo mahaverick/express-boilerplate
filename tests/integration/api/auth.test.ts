@@ -14,6 +14,7 @@ import request from 'supertest'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createApp } from '@/app'
 import {
+  MAX_EMAIL_LENGTH,
   MAX_PASSWORD_BYTES,
   REFRESH_TOKEN_COOKIE_NAME,
   REFRESH_TOKEN_COOKIE_PATH,
@@ -196,6 +197,37 @@ describe('POST /api/v1/auth/register and /login', () => {
       expect(response.status).toBe(400)
       expect(body.success).toBe(false)
       expect(body.errors?.password).toEqual(expect.arrayContaining([expect.any(String)]))
+    })
+
+    it('rejects an email longer than the column can hold as a 400, not a 500', async () => {
+      // Red before the .max() cap on emailSchema: validation passed, the
+      // insert hit users.email's varchar(320) and Postgres answered 22001
+      // (string data right truncation). That is not the unique violation
+      // BaseRepository translates, so it propagated as an unexpected error
+      // — a client error answered 500, and (before the redaction in
+      // error.middleware.ts) logged with the address and bcrypt hash
+      // attached.
+      const domain = '@example.test'
+      const overLong = `${'a'.repeat(MAX_EMAIL_LENGTH + 1 - domain.length)}${domain}`
+      expect(overLong).toHaveLength(MAX_EMAIL_LENGTH + 1)
+
+      const { response, body } = await registerUser({ email: overLong })
+
+      expect(response.status).toBe(400)
+      expect(body.errors?.email).toEqual(expect.arrayContaining([expect.any(String)]))
+    })
+
+    it('accepts an email exactly at the column width', async () => {
+      // The other side of the boundary: the cap must be the column's width,
+      // not one short of it.
+      const domain = '@example.test'
+      const local = `${randomUUID()}${'a'.repeat(MAX_EMAIL_LENGTH - domain.length - 36)}`
+      const exact = `${local}${domain}`
+      expect(exact).toHaveLength(MAX_EMAIL_LENGTH)
+
+      const { response } = await registerUser({ email: exact })
+
+      expect(response.status).toBe(201)
     })
 
     it('rejects a malformed email address with a field-level error', async () => {

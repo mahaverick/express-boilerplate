@@ -57,6 +57,34 @@ export const MAX_PASSWORD_BYTES = 72
 export const MIN_PASSWORD_LENGTH = 8
 
 /**
+ * The longest email address this API stores, in characters — and therefore
+ * the longest one `auth.validators.ts` accepts.
+ *
+ * 320 is the practical maximum for an address (RFC 5321's 64-character
+ * local part, an `@`, and a 255-character domain). It lives here, and is
+ * imported by BOTH `user.model.ts`'s `varchar('email', ...)` and
+ * `emailSchema`, so the validation boundary and the column width are one
+ * value rather than two literals that agree today. They must never
+ * disagree: a schema that accepts more than the column holds turns a client
+ * error into a 500 — Postgres rejects the insert with 22001 (string data
+ * right truncation), which is not a unique violation, so
+ * `BaseRepository.create` does not translate it and it reaches the terminal
+ * error handler as an unexpected failure. A 400-character address did
+ * exactly that before this cap existed.
+ */
+export const MAX_EMAIL_LENGTH = 320
+
+/**
+ * The longest first or last name this API stores, in characters.
+ *
+ * Single-sourced with `users.first_name`/`users.last_name` for the same
+ * reason as `MAX_EMAIL_LENGTH` above — both `registerSchema` and
+ * `updateProfileSchema` (profile.validators.ts) cap at exactly the column
+ * width, so neither can start accepting a value the database will refuse.
+ */
+export const MAX_NAME_LENGTH = 100
+
+/**
  * Name of the httpOnly cookie the refresh token travels in.
  */
 export const REFRESH_TOKEN_COOKIE_NAME = 'refreshToken'
