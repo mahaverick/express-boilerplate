@@ -61,6 +61,15 @@ services:
   mailpit:
     image: axllent/mailpit:latest
     ports: ['1025:1025', '8025:8025']
+    # `readyz` is the image's own subcommand for exactly this — verified
+    # against the running container (it has a working shell, `docker exec
+    # ... sh -c 'echo ok'` succeeds), so this needs none of otel-collector's
+    # "no shell to run a healthcheck from" workaround below.
+    healthcheck:
+      test: ['CMD', '/mailpit', 'readyz']
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
 volumes:
   pgdata:
