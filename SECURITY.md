@@ -62,7 +62,7 @@ after.
 ### Password hashing: bcrypt at cost 12
 
 Implemented: `src/utilities/password.utilities.ts` exports `hashPassword`/
-`verifyPassword`, backed by `BCRYPT_COST = 12` in
+`isPasswordValid`, backed by `BCRYPT_COST = 12` in
 `src/constants/auth.constants.ts`.
 `tests/unit/utilities/password.utilities.test.ts` asserts the cost embedded
 in every hash it produces against that constant, and separately reads this

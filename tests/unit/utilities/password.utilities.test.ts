@@ -3,17 +3,17 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { BCRYPT_COST, MAX_PASSWORD_BYTES } from '@/constants/auth.constants'
-import { hashPassword, verifyPassword } from '@/utilities/password.utilities'
+import { hashPassword, isPasswordValid } from '@/utilities/password.utilities'
 
 describe('password hashing', () => {
   it('produces a verifiable hash', async () => {
     const hash = await hashPassword('correct horse battery staple')
-    expect(await verifyPassword('correct horse battery staple', hash)).toBe(true)
+    expect(await isPasswordValid('correct horse battery staple', hash)).toBe(true)
   })
 
   it('rejects a wrong password', async () => {
     const hash = await hashPassword('right')
-    expect(await verifyPassword('wrong', hash)).toBe(false)
+    expect(await isPasswordValid('wrong', hash)).toBe(false)
   })
 
   it('salts — the same password hashes differently every time', async () => {
@@ -46,7 +46,7 @@ describe('password hashing', () => {
   })
 
   it('returns false rather than throwing on a malformed hash', async () => {
-    expect(await verifyPassword('x', 'not-a-bcrypt-hash')).toBe(false)
+    expect(await isPasswordValid('x', 'not-a-bcrypt-hash')).toBe(false)
   })
 
   it('rejects a password over the bcrypt byte limit instead of silently truncating it', async () => {
@@ -73,7 +73,7 @@ describe('password hashing', () => {
   it('treats an over-length login attempt as a failed match, without ever calling bcrypt', async () => {
     const hash = await hashPassword('short')
     const overLong = 'a'.repeat(MAX_PASSWORD_BYTES + 1)
-    expect(await verifyPassword(overLong, hash)).toBe(false)
+    expect(await isPasswordValid(overLong, hash)).toBe(false)
   })
 
   it('measures length in UTF-8 bytes, not characters — a multi-byte password near the limit is still rejected', async () => {
@@ -92,7 +92,7 @@ describe('password hashing', () => {
     // internal behaviour for any particular string.
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     try {
-      expect(await verifyPassword('x', undefined as unknown as string)).toBe(false)
+      expect(await isPasswordValid('x', undefined as unknown as string)).toBe(false)
       expect(errorSpy).toHaveBeenCalled()
     } finally {
       errorSpy.mockRestore()
