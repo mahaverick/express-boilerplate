@@ -9,12 +9,21 @@
 // THE LOAD-BEARING PROPERTY: a row here must never be able to hold the raw
 // token a verification/reset email carries, or the rendered email body.
 // That is not a convention this file states and hopes callers respect — it
-// is structural: there is no column here wide enough or intended to hold
-// either. `errorCode` is the column most likely to accidentally grow into
-// that role (an SMTP failure routinely echoes message content back in its
-// server response), so it is capped at ERROR_CODE_MAX_LENGTH and
-// deliberately NOT a free-text `message`/`response` column — see that
-// column's own comment below.
+// is structural, and it is NOT just a width limit. `errorCode` is the
+// column most likely to accidentally grow into that role (an SMTP failure
+// routinely echoes message content back in its server response), and an
+// earlier version of this table tried to close that off with width alone
+// (`varchar(64)`) — which was wrong: `RAW_TOKEN_BYTES` (token.utilities.ts)
+// is 32, and hex-encoded that is EXACTLY 64 characters, so a raw token
+// fits an over-generous width perfectly rather than overflowing it. The
+// actual guarantee is `ERROR_CODE_PATTERN`/`email_logs_error_code_check`
+// below: an uppercase-only shape (`^[A-Z][A-Z0-9_]*$`) that a lowercase hex
+// token can never match, at either end of the connection. Width
+// (ERROR_CODE_MAX_LENGTH = 32) is still there, but only as the outer bound
+// on a legitimate short code — it is the SHAPE constraint that makes a raw
+// token unrepresentable, not merely too long to fit. `errorCode` is
+// deliberately NOT a free-text `message`/`response` column either way —
+// see that column's own comment below.
 //
 // APPEND-ONLY, DELIBERATELY: no `updatedAt`, no `deletedAt`. An audit
 // record you can hide (soft-delete) or silently rewrite (update) after the
@@ -58,14 +67,60 @@ export type EmailLogStatus = (typeof EMAIL_LOG_STATUSES)[number]
 /**
  * The widest an `error_code` value is allowed to be. This is meant to hold
  * nodemailer's short `code` field (`ECONNECTION`, `EAUTH`, `EMESSAGE`,
- * ...), or the literal `'UNKNOWN'` when the rejected value has no `code` —
- * never a free-text message or server response. Exported so
- * `EmailLogRepository.record` can truncate an over-length value to this
- * exact width, defensively, rather than duplicating the number: a log
- * write must never be the thing that fails an already-sent email's request
- * (Ruling E, task-4-brief.md).
+ * ...), or the literal `UNKNOWN_ERROR_CODE` when the rejected value has no
+ * `code` — never a free-text message or server response. The longest real
+ * nodemailer code is `ECONNECTION` at 11 characters; 32 is generous
+ * headroom, chosen specifically to stay far short of a 64-character
+ * hex-encoded raw token (see this file's header comment) rather than
+ * merely "wide enough for a short code". Exported so
+ * `EmailLogRepository.record` can check an incoming value against this
+ * exact width, alongside `ERROR_CODE_PATTERN`, rather than duplicating the
+ * number — see that method's own comment for why an over-length or
+ * wrong-shaped value is NORMALIZED to `UNKNOWN_ERROR_CODE`, not truncated
+ * (Ruling E, task-4-brief.md, plus the round-1 fix to this task).
  */
-export const ERROR_CODE_MAX_LENGTH = 64
+export const ERROR_CODE_MAX_LENGTH = 32
+
+// The regex source, as a plain string, single-sourced between
+// `ERROR_CODE_PATTERN` (below, for `EmailLogRepository`'s own
+// pre-insert validation) and `email_logs_error_code_check`'s SQL — same
+// "one array/string drives both the runtime check and the constraint"
+// reasoning as `EMAIL_LOG_STATUS_SQL_LIST` above. An uppercase letter,
+// followed by any number of uppercase letters, digits, or underscores:
+// matches every real nodemailer code (`ECONNECTION`, `EAUTH`, `EENVELOPE`,
+// ...) and `UNKNOWN_ERROR_CODE`, and categorically cannot match a raw
+// token — `generateRawToken` (token.utilities.ts) hex-encodes
+// `crypto.randomBytes`, which is lowercase hex digits only, so a raw token
+// can never contain an uppercase letter at all, anywhere in it.
+const ERROR_CODE_PATTERN_SOURCE = '^[A-Z][A-Z0-9_]*$'
+
+// `ERROR_CODE_PATTERN_SOURCE`, pre-quoted as a SQL string literal — for
+// `email_logs_error_code_check` below. Built once, here, rather than
+// inline inside that `sql` template: nesting this quoting template
+// literal inside the check constraint's own `sql\`...\`` template trips
+// `sonarjs/no-nested-template-literals`, same as `EMAIL_LOG_STATUS_SQL_LIST`
+// above.
+const ERROR_CODE_PATTERN_SQL_LITERAL = `'${ERROR_CODE_PATTERN_SOURCE}'`
+
+/**
+ * The only shape `error_code` may take, checked by `EmailLogRepository`
+ * before every insert — see `ERROR_CODE_PATTERN_SOURCE`'s own comment for
+ * why this specific shape is what makes a raw token unrepresentable, not
+ * merely unlikely. Does not itself bound length; `EmailLogRepository`
+ * checks `ERROR_CODE_MAX_LENGTH` separately, the same way the database
+ * enforces it via the column's own width rather than the CHECK
+ * constraint below.
+ */
+export const ERROR_CODE_PATTERN = new RegExp(ERROR_CODE_PATTERN_SOURCE)
+
+/**
+ * The literal value `EmailLogRepository.record` substitutes for an
+ * `errorCode` that does not match `ERROR_CODE_PATTERN`/`ERROR_CODE_MAX_LENGTH`
+ * — including, deliberately, a value that looks exactly like a raw token.
+ * Exported so nothing (this file, the repository, or a later task's
+ * transport) needs to retype the string.
+ */
+export const UNKNOWN_ERROR_CODE = 'UNKNOWN'
 
 /**
  * The `email_logs` table: one row per outbound email attempt, whether it
@@ -98,12 +153,12 @@ export const emailLogModel = pgTable(
     status: varchar('status', { length: 16 }).$type<EmailLogStatus>().notNull(),
     // The sending provider's message id. Set on success; null on failure.
     providerMessageId: varchar('provider_message_id', { length: 255 }),
-    // nodemailer's short `code` (or the literal 'UNKNOWN' when the
-    // rejected value has no `code`). Null on success. NOT a message or
-    // response column — see ERROR_CODE_MAX_LENGTH's own comment and this
-    // file's header comment for why the width itself, not a convention, is
-    // what keeps this column structurally unable to hold a token or a
-    // rendered body.
+    // nodemailer's short `code` (or `UNKNOWN_ERROR_CODE` when the rejected
+    // value has no `code`, or doesn't match the shape below). Null on
+    // success. NOT a message or response column — see this file's header
+    // comment and `email_logs_error_code_check` below for why the SHAPE
+    // constraint, not the width alone, is what keeps this column
+    // structurally unable to hold a token or a rendered body.
     errorCode: varchar('error_code', { length: ERROR_CODE_MAX_LENGTH }),
     // No updatedAt, no deletedAt — see this file's header comment.
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -127,6 +182,23 @@ export const emailLogModel = pgTable(
     check(
       'email_logs_status_check',
       sql`${table.status} in (${sql.raw(EMAIL_LOG_STATUS_SQL_LIST)})`
+    ),
+    // The database-level half of `errorCode`'s shape guarantee — see
+    // ERROR_CODE_PATTERN_SOURCE's own comment for what this excludes and
+    // why. `sql.raw`, not `sql`-tagged interpolation, for the identical
+    // DDL-can't-bind-a-parameter reason as the status check above: a plain
+    // `${value}` here would compile to `$1`, which Postgres rejects inside
+    // a CHECK expression. Safe here for the same reason: the pattern comes
+    // from a fixed, code-defined string, never external input.
+    //
+    // No explicit `is null or` guard needed: Postgres treats a CHECK
+    // expression that evaluates to NULL (which `error_code ~ pattern`
+    // does whenever `error_code` itself is NULL — success rows have no
+    // code) as satisfied, exactly like TRUE. Only an actual FALSE — a
+    // non-null value that fails to match — is rejected.
+    check(
+      'email_logs_error_code_check',
+      sql`${table.errorCode} ~ ${sql.raw(ERROR_CODE_PATTERN_SQL_LITERAL)}`
     ),
   ]
 )
