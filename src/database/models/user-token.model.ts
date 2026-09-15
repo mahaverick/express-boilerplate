@@ -13,6 +13,14 @@
 // input to a different string every time and could never be looked up by
 // value.
 //
+// THIS TABLE GROWS WITHOUT BOUND AND NOTHING PRUNES IT. Rotation is
+// append-only on purpose — the revoked row has to survive for reuse
+// detection to recognise a replay of it — so a client refreshing on a
+// 15-minute access TTL writes roughly 96 rows a day, ~2,900 a month, and
+// none are ever deleted. No plan owns a retention job; see DATABASE.md's
+// "`user_tokens` grows without bound" for what one would do and why it is
+// not built here.
+//
 // `sessionId` is the session "family" identifier: every refresh token
 // issued at login, and every token rotation produces from it, shares the
 // same sessionId for the life of that session — it does not change on
@@ -52,6 +60,27 @@ export const userTokenModel = pgTable(
       .notNull()
       .references(() => userModel.id, { onDelete: 'cascade' }),
     sessionId: varchar('session_id', { length: 36 }).notNull(),
+    // When the SESSION this token belongs to began — copied forward
+    // unchanged by every rotation, never refreshed. `expiresAt` below is a
+    // sliding window that each rotation resets, so on its own a client that
+    // refreshes normally holds a live session forever and an exfiltrated
+    // refresh cookie stays usable until someone logs out. This column is
+    // what caps that: `rotateRefreshToken` refuses to rotate once
+    // `now() - sessionStartedAt` exceeds SESSION_ABSOLUTE_TTL, however
+    // recently the presented token itself was issued.
+    //
+    // Denormalised rather than derived as `min(created_at) where session_id
+    // = $1`, which the existing session_id index would have served without
+    // a new column. Two reasons: the derived form makes the cap depend on
+    // the oldest row still present, so the retention job this table needs
+    // (see this file's header comment on unbounded growth) would silently
+    // EXTEND every live session the first time it purged one — a data
+    // cleanup task quietly becoming a security regression. And it is read
+    // on the rotation path, where a copied column costs nothing and an
+    // extra aggregate query per refresh costs a round trip.
+    sessionStartedAt: timestamp('session_started_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
     // 64 hex characters = a SHA-256 digest, not the token itself.
     tokenHash: varchar('token_hash', { length: 64 }).notNull(),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),

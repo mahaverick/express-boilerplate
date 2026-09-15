@@ -15,10 +15,12 @@
 import { randomUUID } from 'node:crypto'
 import jwt from 'jsonwebtoken'
 import { afterEach, describe, expect, it } from 'vitest'
+import { getEnv } from '@/configs/env.config'
 import type { User } from '@/database/models/user.model'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
+import { parseDurationMs } from '@/utilities/duration.utilities'
 import {
   issueRefreshToken,
   revokeAllSessions,
@@ -201,6 +203,73 @@ describe('refresh token issuance, rotation, and revocation', () => {
     // expiry is not treated as reuse, so it does not kill the whole family.
     const stillRotatable = await rotateRefreshToken(otherInSameSession.raw)
     expect(stillRotatable.sessionId).toBe(sessionId)
+  })
+
+  it('refuses to rotate once the session passes its absolute lifetime, however fresh the token is', async () => {
+    // The gap this closes: expiresAt is a SLIDING window that every rotation
+    // resets, so a client refreshing every 15 minutes (what a 15-minute
+    // access TTL implies) keeps one login alive forever — and so does
+    // anyone holding a stolen refresh cookie, until an explicit logout.
+    //
+    // The token presented here is brand new and nowhere near its own
+    // expiry; only the SESSION is old. Red before SESSION_ABSOLUTE_TTL
+    // existed: this rotation succeeds, because nothing capped the chain.
+    const userId = await createUser()
+    const sessionId = randomUUID()
+    const issued = await issueRefreshToken(userId, sessionId)
+    // A second live token in the same session, to prove the ceiling applies
+    // to the whole family rather than only the row presented.
+    const sibling = await issueRefreshToken(userId, sessionId)
+
+    // Age the session past the configured ceiling, read from the same
+    // environment the code reads it from rather than hard-coded here, so
+    // this test tracks SESSION_ABSOLUTE_TTL instead of drifting from it.
+    const absoluteTtlMs = parseDurationMs(getEnv().SESSION_ABSOLUTE_TTL)
+    if (absoluteTtlMs === undefined) throw new Error('SESSION_ABSOLUTE_TTL is unparseable')
+    // Passed as an ISO string, not a Date: postgres.js cannot infer a
+    // parameter type for a bare Date in this position and serialises it as
+    // text, which fails in the driver before the statement is ever sent.
+    const startedAt = new Date(Date.now() - absoluteTtlMs - 60_000).toISOString()
+    await sql`
+      update user_tokens set session_started_at = ${startedAt}::timestamptz
+      where session_id = ${sessionId}
+    `
+
+    await expect(rotateRefreshToken(issued.raw)).rejects.toMatchObject({ statusCode: 401 })
+
+    // Every token in the family is revoked, not just the one presented:
+    // they all share the same session start, so all are equally past the
+    // ceiling.
+    await expect(rotateRefreshToken(sibling.raw)).rejects.toMatchObject({ statusCode: 401 })
+    const live = await sql`
+      select 1 from user_tokens where session_id = ${sessionId} and revoked_at is null
+    `
+    expect(live).toHaveLength(0)
+  })
+
+  it('carries the session start forward across rotations rather than resetting it', async () => {
+    // The mechanism the ceiling rests on. If rotation stamped a fresh
+    // session_started_at, the cap above would become a second sliding
+    // window and bound nothing at all.
+    const userId = await createUser()
+    const sessionId = randomUUID()
+    const issued = await issueRefreshToken(userId, sessionId)
+
+    const [before] = await sql`
+      select session_started_at from user_tokens where session_id = ${sessionId}
+    `
+    const rotated = await rotateRefreshToken(issued.raw)
+    await rotateRefreshToken(rotated.raw)
+
+    const rows = await sql`
+      select distinct session_started_at from user_tokens where session_id = ${sessionId}
+    `
+    // One distinct value across all three rows in the chain, and it is the
+    // one the original login wrote. Compared as strings: what the driver
+    // returns for a timestamptz is not guaranteed to be a Date instance,
+    // and the assertion is about the value, not its JavaScript type.
+    expect(rows).toHaveLength(1)
+    expect(String(rows[0]?.session_started_at)).toBe(String(before?.session_started_at))
   })
 
   it('revokeSession revokes every token in that session, and none in another', async () => {

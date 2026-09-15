@@ -134,6 +134,7 @@ Required keys are emitted blank.
 | `SESSION_SECRET`              | **yes** (placeholder)      | 32+ characters. **Nothing reads it yet.**                                                                             |
 | `ACCESS_TOKEN_TTL`            | no (default `15m`)         | An `ms()`-parseable duration string, e.g. `15m` or `900000`.                                                          |
 | `REFRESH_TOKEN_TTL`           | no (default `30d`)         | An `ms()`-parseable duration string, e.g. `30d` or `2592000000`.                                                      |
+| `SESSION_ABSOLUTE_TTL`        | no (default `30d`)         | Hard ceiling on one login session, never reset by rotation. An `ms()`-parseable duration string.                      |
 | `TRUST_PROXY`                 | no (default `false`)       | **Set this behind a proxy** — see [SECURITY.md](SECURITY.md). `1` for one hop, or an address list. `true` is refused. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | no                         | Absent means tracing is disabled — the SDK is never started.                                                          |
 | `LOG_LEVEL`                   | no (default `info`)        | `error` \| `warn` \| `info` \| `debug`                                                                                |

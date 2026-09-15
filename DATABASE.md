@@ -35,24 +35,54 @@ by `check-file` — see [STRUCTURE.md](STRUCTURE.md)):
   every soft-deletable table carries.
 - **`user-token.model.ts`** — the `user_tokens` table: one row per issued or
   rotated-to refresh token. `session_id` groups every token descended from
-  one login into a rotation "family"; `token_hash` stores a SHA-256 digest
-  of the raw token, never the token itself; `replaced_by_id`
-  self-references the row a token was rotated into, which is what lets
-  reuse detection tell "already rotated" apart from "never issued". See
-  [SECURITY.md](SECURITY.md) for the security reasoning and
-  [ARCHITECTURE.md](ARCHITECTURE.md) for how the repository layer sits on
-  top of both models.
+  one login into a rotation "family"; `session_started_at` records when that
+  family began and is copied forward unchanged by every rotation, which is
+  what makes `SESSION_ABSOLUTE_TTL` an absolute ceiling rather than another
+  sliding window; `token_hash` stores a SHA-256 digest of the raw token,
+  never the token itself; `replaced_by_id` self-references the row a token
+  was rotated into — forensic metadata for tracing a chain after the fact,
+  read by nothing at runtime. See [SECURITY.md](SECURITY.md) for the
+  security reasoning and [ARCHITECTURE.md](ARCHITECTURE.md) for how the
+  repository layer sits on top of both models.
+
+### `user_tokens` grows without bound, and nothing prunes it
+
+**No plan currently owns a retention job for this table.** Stating that
+plainly rather than leaving it implied, because the growth is not slow and
+the table has no ceiling of its own:
+
+Every rotation INSERTs a row and leaves the old one in place with
+`revoked_at` set — rotation is append-only by design, since reuse detection
+needs the revoked row to still be there to recognise a replay. With a
+15-minute `ACCESS_TOKEN_TTL`, a client that stays logged in refreshes about
+4 times an hour: roughly **96 rows per active user per day, ~2,900 per
+month**, plus one per login. A modest 10,000-user deployment writes tens of
+millions of rows a year, all of them dead within `REFRESH_TOKEN_TTL` and
+none of them ever deleted. `SESSION_ABSOLUTE_TTL` bounds how long a session
+lives, not how many rows it leaves behind.
+
+What a retention job would do: delete rows that are both revoked and past
+`REFRESH_TOKEN_TTL` (they can never be presented again, so reuse detection
+has no use for them), on a schedule. `user_tokens.deleted_at` exists as the
+seam for a soft-delete variant of that. It is deliberately **not built
+here** — a scheduled job needs a scheduler, and this boilerplate has none:
+BullMQ is listed in [MIGRATIONS.md](MIGRATIONS.md) as a dependency not yet
+adopted. The natural home is whichever plan adopts a queue or scheduler
+first; until one does, a downstream project running this at scale should
+treat it as its own operational task (a cron'd `DELETE`, or a partitioned
+table) rather than assume the boilerplate handles it.
 
 `drizzle.config.ts`'s schema glob (`./src/database/models/*.model.ts`)
 picks up a new model automatically — no config change needed to add one.
 
 ## Migrations directory
 
-`src/database/migrations/` is **tracked**, and holds two generated
-migrations today: `0000_tearful_crusher_hogan.sql` (creates `users`) and
+`src/database/migrations/` is **tracked**, and holds three generated
+migrations today: `0000_tearful_crusher_hogan.sql` (creates `users`),
 `0001_great_dragon_man.sql` (creates `user_tokens`, with its foreign keys
-to `users` and to itself for `replaced_by_id`), plus `meta/_journal.json`
-recording both in order. Everything under this directory is **generated**
+to `users` and to itself for `replaced_by_id`), and
+`0002_abandoned_tarantula.sql` (adds `user_tokens.session_started_at`),
+plus `meta/_journal.json` recording all three in order. Everything under this directory is **generated**
 by `drizzle-kit generate`; nothing here is hand-written, and nothing here
 should be hand-edited.
 
@@ -123,7 +153,7 @@ already have a matching migration, so there is nothing new to write):
 
 ```
 2 tables
-user_tokens 10 columns 3 indexes 2 fks
+user_tokens 11 columns 3 indexes 2 fks
 users 11 columns 1 indexes 0 fks
 
 No schema changes, nothing to migrate 😴
