@@ -1,7 +1,8 @@
 // src/middlewares/rate-limit.middleware.ts
 //
-// Four limiters: `createRegisterRateLimiter`, `createLoginRateLimiter`,
-// `createRefreshRateLimiter` and `createLogoutRateLimiter`. All are
+// Five limiters: `createRegisterRateLimiter`, `createLoginRateLimiter`,
+// `createRefreshRateLimiter`, `createLogoutRateLimiter` and
+// `createVerifyEmailRateLimiter`. All are
 // FACTORIES, never a top-level `const` built at module-import time —
 // `rateLimit(...)` allocates a `Store` instance, and express-rate-limit
 // refuses to let two limiter instances share one (`ERR_ERL_STORE_REUSE`), so
@@ -301,6 +302,32 @@ export function createLogoutRateLimiter(overrides: Partial<Options> = {}): RateL
     standardHeaders: true,
     legacyHeaders: false,
     store: new SharedRateLimitStore('rl:logout:'),
+    handler: sendRateLimitedResponse,
+    ...overrides,
+  })
+}
+
+const VERIFY_EMAIL_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000
+const VERIFY_EMAIL_RATE_LIMIT_MAX_ATTEMPTS = 30
+
+/**
+ * Build a verify-email rate limiter: `limit` attempts per `windowMs`, keyed
+ * on IP. Keyed on IP alone, not IP-and-token: a token is single-use and
+ * high-entropy, so there is no per-token budget worth counting — what this
+ * bounds is a client working through many tokens. A factory, not a
+ * module-scope constant — see this file's header comment.
+ * @param overrides - Options to override, e.g. a small `limit`/`windowMs` for a test.
+ * @returns Express middleware enforcing the limit.
+ */
+export function createVerifyEmailRateLimiter(
+  overrides: Partial<Options> = {}
+): RateLimitRequestHandler {
+  return rateLimit({
+    windowMs: VERIFY_EMAIL_RATE_LIMIT_WINDOW_MS,
+    limit: VERIFY_EMAIL_RATE_LIMIT_MAX_ATTEMPTS,
+    standardHeaders: true,
+    legacyHeaders: false,
+    store: new SharedRateLimitStore('rl:verify-email:'),
     handler: sendRateLimitedResponse,
     ...overrides,
   })
