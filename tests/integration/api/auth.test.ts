@@ -20,9 +20,17 @@ import {
   REFRESH_TOKEN_COOKIE_PATH,
 } from '@/constants/auth.constants'
 import type { User } from '@/database/models/user.model'
+import { HttpError } from '@/middlewares/error.middleware'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import * as passwordUtilities from '@/utilities/password.utilities'
+import {
+  deleteMailpitMessage,
+  drainMailpit,
+  findMailpitMessages,
+  getMailpitMessage,
+} from '../../helpers/mailpit'
+import { withMutatedMethod } from '../../helpers/mutate'
 
 const app = createApp()
 const userRepository = new UserRepository()
@@ -136,8 +144,14 @@ describe('POST /api/v1/auth/register and /login', () => {
   /**
    * Register a user through the real HTTP endpoint and track it for
    * cleanup.
+   *
+   * Looked up by address rather than read out of the response body.
+   * register's response does not carry the user any more (it would be an
+   * enumeration oracle), and a helper that reads `body.data.id` does not
+   * FAIL when that becomes null — it silently stops tracking the row and
+   * leaks it into the shared worker database.
    * @param overrides - Fields to override on the default registration body.
-   * @returns The raw supertest response and its typed envelope.
+   * @returns The raw supertest response, its typed envelope, and the email used.
    */
   async function registerUser(
     overrides: Partial<{
@@ -146,62 +160,62 @@ describe('POST /api/v1/auth/register and /login', () => {
       firstName: string
       lastName: string
     }> = {}
-  ): Promise<{ response: request.Response; body: ApiEnvelope<PublicUserBody> }> {
+  ): Promise<{ response: request.Response; body: ApiEnvelope<PublicUserBody>; email: string }> {
+    const email = overrides.email ?? uniqueEmail()
     const response = await request(app)
       .post('/api/v1/auth/register')
-      .send({ email: uniqueEmail(), password: VALID_PASSWORD, ...overrides })
+      .send({ email, password: VALID_PASSWORD, ...overrides })
     const body = envelopeOf<PublicUserBody>(response)
-    if (response.status === 201 && body.data) createdIds.push(body.data.id)
-    return { response, body }
+    const created = await userRepository.findByEmail(email)
+    if (created) createdIds.push(created.id)
+    return { response, body, email }
   }
 
   /**
-   * Register a user through the real HTTP endpoint, look it up, track it
-   * for cleanup, and mark it verified.
-   *
-   * Marked verified even though nothing checks it yet: a later task adds
-   * the email-verification gate to login, and a helper that marks from the
-   * start means these tests carry over unchanged instead of turning red in
-   * a task that is supposed to be two lines of source.
-   * @returns The seeded (verified) user row and the email it was registered with.
+   * Register a user and mark them verified, so a test that only needs a
+   * usable account does not have to walk the verification flow. Marking is
+   * done here, in the helper — NEVER by weakening login's guard.
+   * @param overrides - Fields to override on the default registration body.
+   * @returns The created user row and the address used.
    */
-  async function seedLoginableUser(): Promise<{ user: User; email: string }> {
-    const email = uniqueEmail()
-    await request(app).post('/api/v1/auth/register').send({ email, password: VALID_PASSWORD })
+  async function registerVerifiedUser(
+    overrides: Partial<{
+      email: string
+      password: string
+      firstName: string
+      lastName: string
+    }> = {}
+  ): Promise<{ user: User; email: string }> {
+    const { email } = await registerUser(overrides)
     const user = await userRepository.findByEmail(email)
-    if (!user) throw new Error(`seedLoginableUser: no user for ${email}`)
-    createdIds.push(user.id)
+    if (!user) throw new Error(`registerVerifiedUser: no user for ${email}`)
     await sql`update users set email_verified_at = now() where id = ${user.id}`
     const verified = await userRepository.findById(user.id)
-    if (!verified) throw new Error(`seedLoginableUser: user vanished for ${email}`)
+    if (!verified) throw new Error(`registerVerifiedUser: user vanished for ${email}`)
     return { user: verified, email }
   }
 
   describe('registration', () => {
-    it('registers a user and returns no password field of any kind', async () => {
-      const email = uniqueEmail()
-      const { response, body } = await registerUser({ email })
+    it('answers 202 with no user data — the response must not leak whether the address was free', async () => {
+      const { response } = await registerUser()
 
-      expect(response.status).toBe(201)
-      // toEqual, not toMatchObject: a leaked passwordHash (or any other
-      // unexpected column) slips past a subset match but must fail this
-      // one — the exact-shape check is what makes this test fail if the
-      // property regresses, not just if the field is renamed.
-      expect(body.data).toEqual({
-        id: ANY_STRING,
-        email,
-        firstName: NO_NAME,
-        lastName: NO_NAME,
-        createdAt: ANY_STRING,
+      expect(response.status).toBe(202)
+      expect(response.body).toEqual({
+        success: true,
+        message: 'If that address can be registered, a verification email has been sent.',
+        statusCode: 202,
+        // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data", not undefined (which JSON.stringify omits entirely)
+        data: null,
       })
-      expect(JSON.stringify(response.body)).not.toMatch(/password/i)
     })
 
-    it('accepts optional firstName and lastName and returns them', async () => {
-      const { response, body } = await registerUser({ firstName: 'Ada', lastName: 'Lovelace' })
+    it('accepts optional firstName and lastName and stores them', async () => {
+      const { response, email } = await registerUser({ firstName: 'Ada', lastName: 'Lovelace' })
 
-      expect(response.status).toBe(201)
-      expect(body.data).toMatchObject({ firstName: 'Ada', lastName: 'Lovelace' })
+      expect(response.status).toBe(202)
+      const stored = await userRepository.findByEmail(email)
+      expect(stored?.firstName).toBe('Ada')
+      expect(stored?.lastName).toBe('Lovelace')
     })
 
     it('rejects a weak password with a field-level error', async () => {
@@ -248,9 +262,13 @@ describe('POST /api/v1/auth/register and /login', () => {
       const exact = `${local}${domain}`
       expect(exact).toHaveLength(MAX_EMAIL_LENGTH)
 
-      const { response } = await registerUser({ email: exact })
+      const { response, email } = await registerUser({ email: exact })
 
-      expect(response.status).toBe(201)
+      expect(response.status).toBe(202)
+      // 202 alone is what the taken branch also returns, so it proves nothing
+      // about the insert — confirm the row was actually created.
+      const stored = await userRepository.findByEmail(email)
+      expect(stored).toBeDefined()
     })
 
     it('rejects a malformed email address with a field-level error', async () => {
@@ -260,23 +278,86 @@ describe('POST /api/v1/auth/register and /login', () => {
       expect(body.errors?.email).toEqual(expect.arrayContaining([expect.any(String)]))
     })
 
-    it('rejects a duplicate email with 409, not 500', async () => {
-      const email = uniqueEmail()
-      const first = await registerUser({ email })
-      expect(first.response.status).toBe(201)
+    it('answers a free address and a taken one identically', async () => {
+      const taken = uniqueEmail()
+      await registerUser({ email: taken })
 
-      const second = await registerUser({ email })
-      expect(second.response.status).toBe(409)
-      expect(second.body.success).toBe(false)
+      const free = await registerUser({ email: uniqueEmail() })
+      const second = await registerUser({ email: taken })
+
+      // Direct equality of status AND body. "Both are 2xx" would pass while
+      // the bodies differed, which is the whole oracle.
+      expect(free.response.status).toBe(second.response.status)
+      expect(free.response.body).toEqual(second.response.body)
+      expect(free.response.status).toBe(202)
+      expect(free.response.body).toEqual({
+        success: true,
+        message: 'If that address can be registered, a verification email has been sent.',
+        statusCode: 202,
+        // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data", not undefined (which JSON.stringify omits entirely)
+        data: null,
+      })
     })
 
-    it('rejects a duplicate email that only differs by case, agreeing with the lower(email) unique index', async () => {
+    it('mails a verification link to a free address', async () => {
       const email = uniqueEmail()
-      const first = await registerUser({ email })
-      expect(first.response.status).toBe(201)
+      await registerUser({ email })
 
-      const second = await registerUser({ email: email.toUpperCase() })
-      expect(second.response.status).toBe(409)
+      const messages = await findMailpitMessages(email)
+      expect(messages).toHaveLength(1)
+      expect(messages[0]?.Subject).toContain('Verify your email')
+      const detail = await getMailpitMessage(messages[0]?.ID ?? '')
+      expect(detail.Text).toContain('/verify-email?token=')
+      await deleteMailpitMessage(messages[0]?.ID ?? '')
+    })
+
+    it('mails a registration-attempt notice to a taken address', async () => {
+      const email = uniqueEmail()
+      await registerUser({ email })
+      await drainMailpit(email)
+
+      // Use toUpperCase: proves the taken branch fires case-insensitively,
+      // covering the assertion the deleted "rejects a duplicate email that
+      // only differs by case" test carried.
+      await registerUser({ email: email.toUpperCase() })
+
+      const messages = await findMailpitMessages(email)
+      expect(messages).toHaveLength(1)
+      // The notice must NOT carry a verification link: the person registering
+      // is not necessarily the person who owns the mailbox, and a link here
+      // would let the second registrant verify an account they do not own.
+      const detail = await getMailpitMessage(messages[0]?.ID ?? '')
+      expect(detail.Text).not.toContain('/verify-email?token=')
+    })
+
+    it('does not leak the stored user when the address is taken', async () => {
+      const email = uniqueEmail()
+      await registerUser({ email, firstName: 'Real' })
+
+      const second = await registerUser({ email, firstName: 'Attacker' })
+
+      expect(JSON.stringify(second.response.body)).not.toContain('Real')
+      expect(envelopeOf<unknown>(second.response).data).toBeNull()
+    })
+
+    it('answers identically for a soft-deleted address', async () => {
+      // The unique index is on lower(email) with no deleted_at predicate
+      // (user.model.ts:46), so create() still raises its 409 — but
+      // findByEmail excludes soft-deleted rows and returns undefined, so the
+      // taken branch has a 409 and NO row to read a name from. Reading
+      // `existing.firstName` there is a null dereference on a path no
+      // happy-path test covers.
+      const email = uniqueEmail()
+      const { email: registered } = await registerUser({ email })
+      const user = await userRepository.findByEmail(registered)
+      await userRepository.softDelete(user?.id ?? '')
+
+      const response = await request(app)
+        .post('/api/v1/auth/register')
+        .send({ email, password: VALID_PASSWORD })
+
+      expect(response.status).toBe(202)
+      expect(envelopeOf<unknown>(response).data).toBeNull()
     })
 
     it('normalises email case on registration, and the stored row agrees', async () => {
@@ -286,16 +367,57 @@ describe('POST /api/v1/auth/register and /login', () => {
         '@EXAMPLE.test'
       )
 
-      const { response, body } = await registerUser({ email: mixedCase })
+      const { response, email: used } = await registerUser({ email: mixedCase })
 
-      expect(response.status).toBe(201)
-      expect(body.data?.email).toBe(mixedCase.toLowerCase())
-      const userId = body.data?.id
-      if (!userId) throw new Error('registration did not return an id')
+      expect(response.status).toBe(202)
+      const stored = await userRepository.findByEmail(used)
+      if (!stored) throw new Error('normalises email: no stored row')
+      expect(stored.email).toBe(mixedCase.toLowerCase())
 
-      const [row] = await sql`select email from users where id = ${userId}`
+      const [row] = await sql`select email from users where id = ${stored.id}`
       expect(row?.email).toBe(mixedCase.toLowerCase())
     })
+
+    // Mutation proof: if the 409 catch is weakened so that a duplicate
+    // re-throws as a non-409 error (making the taken branch answer
+    // differently from the free branch), the oracle test above must go RED.
+    // Uses withMutatedMethod per CLAUDE.md — no source files touched.
+    it.runIf(process.env.MUTATION_PROOF === '1')(
+      'MUTATION PROOF: a non-409 on the taken branch is detected as an oracle',
+      async () => {
+        // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
+        const originalCreate = UserRepository.prototype.create
+        const mutatedCreate: typeof originalCreate = async function (this: UserRepository, data) {
+          try {
+            return await originalCreate.call(this, data)
+          } catch (error) {
+            // Re-throw 409 as 422 — the controller's `statusCode !== 409`
+            // filter lets it through, producing a 422 on the taken branch
+            // while the free branch still gets 202.
+            if (error instanceof HttpError && error.statusCode === 409) {
+              throw new HttpError(error.message, 422)
+            }
+            throw error
+          }
+        }
+        await withMutatedMethod(UserRepository.prototype, 'create', mutatedCreate, async () => {
+          const taken = uniqueEmail()
+          // First register succeeds (no duplicate yet).
+          const firstResponse = await request(app)
+            .post('/api/v1/auth/register')
+            .send({ email: taken, password: VALID_PASSWORD })
+          const firstUser = await userRepository.findByEmail(taken)
+          if (firstUser) createdIds.push(firstUser.id)
+          expect(firstResponse.status).toBe(202)
+
+          // Second register hits the mutated 422, proving the oracle.
+          const secondResponse = await request(app)
+            .post('/api/v1/auth/register')
+            .send({ email: taken, password: VALID_PASSWORD })
+          expect(secondResponse.status).not.toBe(202)
+        })
+      }
+    )
   })
 
   describe('login', () => {
@@ -376,8 +498,10 @@ describe('POST /api/v1/auth/register and /login', () => {
 
     it('refuses login for a soft-deleted user, identically to an unknown email', async () => {
       const email = uniqueEmail()
-      const { body } = await registerUser({ email })
-      if (body.data) await userRepository.softDelete(body.data.id)
+      await registerUser({ email })
+      const user = await userRepository.findByEmail(email)
+      if (!user) throw new Error('setup: registration did not create a row')
+      await userRepository.softDelete(user.id)
 
       const { response } = await login(email, VALID_PASSWORD)
 
@@ -387,8 +511,10 @@ describe('POST /api/v1/auth/register and /login', () => {
 
     it('refuses login for a deactivated (active: false) user, through the same rejection', async () => {
       const email = uniqueEmail()
-      const { body } = await registerUser({ email })
-      if (body.data) await userRepository.update(body.data.id, { active: false })
+      await registerUser({ email })
+      const user = await userRepository.findByEmail(email)
+      if (!user) throw new Error('setup: registration did not create a row')
+      await userRepository.update(user.id, { active: false })
 
       const { response } = await login(email, VALID_PASSWORD)
 
@@ -439,7 +565,7 @@ describe('POST /api/v1/auth/register and /login', () => {
     })
 
     it('records lastLoggedInAt on a successful login', async () => {
-      const { user, email } = await seedLoginableUser()
+      const { user, email } = await registerVerifiedUser()
       expect(user.lastLoggedInAt).toBeNull()
 
       await request(app).post('/api/v1/auth/login').send({ email, password: VALID_PASSWORD })
@@ -452,7 +578,7 @@ describe('POST /api/v1/auth/register and /login', () => {
     })
 
     it('does not record lastLoggedInAt when the password is wrong', async () => {
-      const { user, email } = await seedLoginableUser()
+      const { user, email } = await registerVerifiedUser()
 
       await request(app)
         .post('/api/v1/auth/login')

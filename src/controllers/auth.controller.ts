@@ -26,6 +26,8 @@ import type { User } from '@/database/models/user.model'
 import { toAuthenticatedUser, type AuthenticatedUser } from '@/middlewares/auth.middleware'
 import { HttpError } from '@/middlewares/error.middleware'
 import { UserRepository } from '@/repositories/user.repository'
+import { sendMail } from '@/services/mailer.service'
+import { REGISTRATION_ATTEMPT_TEMPLATE_KEY } from '@/templates/email/registration-attempt.template'
 import { getDummyHash, hashPassword, isPasswordValid } from '@/utilities/password.utilities'
 import { successResponse } from '@/utilities/response.utilities'
 import {
@@ -34,6 +36,10 @@ import {
   rotateRefreshToken,
   signAccessToken,
 } from '@/utilities/token.utilities'
+import {
+  MISSING_FIRST_NAME_FALLBACK,
+  sendVerificationMail,
+} from '@/utilities/verification-mail.utilities'
 import { loginSchema, parseBody, registerSchema } from '@/validators/auth.validators'
 
 const userRepository = new UserRepository()
@@ -159,12 +165,43 @@ function readRefreshTokenCookie(request: Request): string | undefined {
   }
 }
 
+const REGISTER_RESPONSE_MESSAGE =
+  'If that address can be registered, a verification email has been sent.'
+
+/**
+ * Tell the owner of an already-registered address that someone tried to
+ * register it.
+ * @param email - The address that was submitted.
+ */
+async function sendRegistrationAttemptMail(email: string): Promise<void> {
+  const existing = await userRepository.findByEmail(email)
+  await sendMail({
+    to: email,
+    templateKey: REGISTRATION_ATTEMPT_TEMPLATE_KEY,
+    variables: {
+      // The STORED name, never the submitted one: the submitted value is
+      // attacker-chosen text being delivered into the victim's inbox.
+      // `??` covers the soft-deleted case, where the address is taken but
+      // no visible row exists to read a name from.
+      firstName: existing?.firstName ?? MISSING_FIRST_NAME_FALLBACK,
+      appName: getEnv().APP_NAME,
+    },
+  })
+}
+
 /**
  * Register a new user with an email and password.
  *
- * Duplicate-email handling is not implemented here: `UserRepository.create`
- * already translates the table's unique-violation into `HttpError(409)` —
- * re-checking it here would be a second, driftable copy of that decision.
+ * Both a free address and a taken one now answer an identical 202 with
+ * `data: null` — the old `201` / `409` split was an enumeration oracle.
+ * Only the outbound mail differs: a free address gets a verification link,
+ * a taken one gets a "someone tried to register with your email" notice.
+ *
+ * The response is sent BEFORE the mail, so the two branches do not differ
+ * by the latency of an SMTP round trip. The send is deliberately not
+ * awaited — `.catch()` handles any rejection (Ruling T: an unhandled
+ * rejection under Node 24 kills the process on one branch only =
+ * enumeration oracle as denial of service).
  * @param request - The incoming request, carrying the registration body.
  * @param response - The response.
  * @param next - Forwards a rejection to the terminal error handler.
@@ -177,13 +214,43 @@ export async function register(
   try {
     const input = parseBody(registerSchema, request.body)
     const passwordHash = await hashPassword(input.password)
-    const user = await userRepository.create({
-      email: input.email,
-      passwordHash,
-      firstName: input.firstName,
-      lastName: input.lastName,
+
+    let created: User | undefined
+    try {
+      created = await userRepository.create({
+        email: input.email,
+        passwordHash,
+        firstName: input.firstName,
+        lastName: input.lastName,
+      })
+    } catch (error) {
+      // 409 is how UserRepository.create reports the unique violation
+      // (see its own comment). Anything else is a real failure and must
+      // still surface — swallowing every error here would turn a database
+      // outage into a cheerful 202.
+      if (!(error instanceof HttpError) || error.statusCode !== 409) throw error
+    }
+
+    // Respond BEFORE sending, so the two branches do not differ by the
+    // latency of an SMTP round trip. The send is deliberately not awaited.
+    // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data", not undefined (which JSON.stringify omits entirely)
+    successResponse(response, null, REGISTER_RESPONSE_MESSAGE, 202)
+
+    if (created) {
+      // eslint-disable-next-line unicorn/prefer-await -- fire-and-forget: the mail must not block the response, and awaiting would make the two branches differ by SMTP latency (Ruling T)
+      sendVerificationMail(created).catch((error: unknown) => {
+        console.error('Verification mail failed', error)
+      })
+      return
+    }
+
+    // The address is taken. It may STILL have no visible row — the unique
+    // index ignores deleted_at while findByEmail does not — so the name
+    // falls back rather than being dereferenced.
+    // eslint-disable-next-line unicorn/prefer-await -- fire-and-forget: same reasoning as the verification branch above
+    sendRegistrationAttemptMail(input.email).catch((error: unknown) => {
+      console.error('Registration-attempt mail failed', error)
     })
-    successResponse(response, toPublicUser(user), 'Registration successful.', 201)
   } catch (error) {
     next(error)
   }

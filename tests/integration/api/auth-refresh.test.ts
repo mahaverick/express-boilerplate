@@ -72,19 +72,31 @@ function refreshCookiePair(response: request.Response): string | undefined {
 }
 
 /**
- * Register and log in a fresh user through the real HTTP endpoints.
+ * Register a fresh user, mark them verified, and log in through the real
+ * HTTP endpoints.
+ *
+ * Looked up by address rather than read out of the register response body.
+ * register's response does not carry the user any more (it would be an
+ * enumeration oracle), and a helper that reads `registerBody.data.id`
+ * does not FAIL when that becomes null — it silently stops tracking the
+ * row and leaks it into the shared worker database.
  * @param createdIds - Array to push the created user's id onto, for `afterEach` cleanup.
- * @returns The login response (carrying the refresh cookie and the first access token).
+ * @returns The login response, the email used, and the verified user row.
  */
-async function registerAndLogin(createdIds: string[]): Promise<request.Response> {
+async function registerAndLogin(
+  createdIds: string[]
+): Promise<{ response: request.Response; email: string; user: User }> {
   const email = uniqueEmail()
-  const registerResponse = await request(app)
-    .post('/api/v1/auth/register')
-    .send({ email, password: VALID_PASSWORD })
-  const registerBody = envelopeOf<{ id: string }>(registerResponse)
-  if (registerBody.data) createdIds.push(registerBody.data.id)
+  await request(app).post('/api/v1/auth/register').send({ email, password: VALID_PASSWORD })
+  const user = await userRepository.findByEmail(email)
+  if (!user) throw new Error(`registerAndLogin: no user for ${email}`)
+  createdIds.push(user.id)
+  await sql`update users set email_verified_at = now() where id = ${user.id}`
 
-  return request(app).post('/api/v1/auth/login').send({ email, password: VALID_PASSWORD })
+  const response = await request(app)
+    .post('/api/v1/auth/login')
+    .send({ email, password: VALID_PASSWORD })
+  return { response, email, user }
 }
 
 /**
@@ -130,7 +142,7 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
 
   describe('refresh', () => {
     it('rotates: returns a new access/refresh pair, and the new refresh token is itself usable', async () => {
-      const loginResponse = await registerAndLogin(createdIds)
+      const { response: loginResponse } = await registerAndLogin(createdIds)
       const loginBody = envelopeOf<{ accessToken: string }>(loginResponse)
       const firstCookie = refreshCookiePair(loginResponse)
       expect(firstCookie).toBeDefined()
@@ -164,7 +176,7 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
     })
 
     it('invalidates the old refresh token: presenting it again after rotation fails', async () => {
-      const loginResponse = await registerAndLogin(createdIds)
+      const { response: loginResponse } = await registerAndLogin(createdIds)
       const originalCookie = refreshCookiePair(loginResponse) as string
 
       // Consume it once — a legitimate rotation.
@@ -207,7 +219,7 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
 
   describe('logout', () => {
     it('revokes the session: a subsequent refresh with that token fails', async () => {
-      const loginResponse = await registerAndLogin(createdIds)
+      const { response: loginResponse } = await registerAndLogin(createdIds)
       const cookie = refreshCookiePair(loginResponse) as string
 
       const logoutResponse = await request(app).post('/api/v1/auth/logout').set('Cookie', cookie)
@@ -220,7 +232,7 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
     })
 
     it('clears the refresh-token cookie in its own response', async () => {
-      const loginResponse = await registerAndLogin(createdIds)
+      const { response: loginResponse } = await registerAndLogin(createdIds)
       const cookie = refreshCookiePair(loginResponse) as string
 
       const logoutResponse = await request(app).post('/api/v1/auth/logout').set('Cookie', cookie)
@@ -234,7 +246,7 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
     })
 
     it('answers identically for an already-revoked token as for one that never existed', async () => {
-      const loginResponse = await registerAndLogin(createdIds)
+      const { response: loginResponse } = await registerAndLogin(createdIds)
       const cookie = refreshCookiePair(loginResponse) as string
       await request(app).post('/api/v1/auth/logout').set('Cookie', cookie)
 

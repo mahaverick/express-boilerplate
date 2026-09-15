@@ -66,6 +66,12 @@ services:
     # otherwise turn into a red run on an unrelated change. v1.31.1 is the
     # version this task actually developed and tested against.
     image: axllent/mailpit:v1.31.1
+    # --smtp-disable-rdns: Mailpit performs a reverse-DNS lookup on every
+    # connecting IP by default. Inside Docker-for-Mac the lookup targets the
+    # host's gateway address, which has no PTR record and times out after ~8
+    # seconds — long enough for any fire-and-forget test to fail before the
+    # mail arrives. Disabling it brings the SMTP greeting down to < 50ms.
+    command: ['--smtp-disable-rdns']
     ports: ['1025:1025', '8025:8025']
     # `readyz` is the image's own subcommand for exactly this — verified
     # against the running container (it has a working shell, `docker exec

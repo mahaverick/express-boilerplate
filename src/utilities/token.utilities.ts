@@ -86,7 +86,7 @@ export interface IssuedToken {
  * @returns The duration in milliseconds.
  * @throws {Error} Only if that boot-time invariant was somehow violated.
  */
-function requireDurationMs(value: string): number {
+export function requireDurationMs(value: string): number {
   const parsed = parseDurationMs(value)
   if (parsed === undefined) {
     // Unreachable in practice: getEnv() already rejects an unparseable TTL
