@@ -40,6 +40,27 @@ jobs:
         # step and CONTRIBUTING.md both presented it as the repo-wide standard —
         # 10 files had drifted, 6 of them tests, before anyone noticed.
         run: pnpm format:check
+      - name: Run migrations
+        run: pnpm db:migrate
+        env:
+          # db:migrate imports src/services/database.service.ts, which calls
+          # getEnv() at module scope — that validates the ENTIRE schema, not
+          # just DATABASE_URL (unlike drizzle.config.ts's getDatabaseUrl(),
+          # which needs only the connection string). This step therefore
+          # needs the same full env block as the test step below, not just
+          # DATABASE_URL — verified empirically: passing only DATABASE_URL
+          # fails fast with "Invalid environment" naming every other missing
+          # key. Same values as "Test with coverage gate" for the same
+          # reason (services: cannot remap ports; see that step's comment).
+          NODE_ENV: test
+          APP_PORT: 4040
+          APP_URL: http://localhost:4040
+          WEB_URL: http://localhost:5173
+          DATABASE_URL: postgres://test:test@localhost:5432/boilerplate_test
+          REDIS_URL: redis://localhost:6379
+          JWT_ACCESS_SECRET: test-access-secret-that-is-long-enough-32
+          JWT_REFRESH_SECRET: test-refresh-secret-that-is-long-enough-3
+          SESSION_SECRET: test-session-secret-that-is-long-enough-1
       - name: Test with coverage gate
         run: pnpm test:coverage
         env:
