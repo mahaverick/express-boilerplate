@@ -121,6 +121,73 @@ until you check.
   same rows just because they both insert a user — they are in different
   databases entirely, not merely different transactions.
 
+## Proving a security behaviour is real, without hand-editing `src/`
+
+- **Never break `src/` on disk to prove a test would catch the breakage.**
+  Across B1 and B2, temporarily hand-editing a file under `src/` was the
+  single most valuable verification technique this project used — it found
+  six lint gates that reported success while enforcing nothing, a bcrypt
+  cost test that passed when both sides were lowered, and a `no-cycle`
+  fixture blind to the exact bug it existed for. It also has a real cost:
+  four separate CRITICAL/HIGH security-scanner alerts fired on states that
+  were never meant to be committed (reuse detection disabled, a rate-limit
+  key reduced to IP-only, logout not revoking, mass assignment reopened),
+  each needing three independent verifications before it could be
+  dismissed — and the day a real vulnerability appears, it will look
+  exactly like those four. Once, a live mass-assignment hole sat in a
+  **tracked** file while a crashed agent's work was being rescued with
+  `git add -A`; it was not committed, but only because of a marker-grep
+  added after an earlier near-miss. That is a convention holding, not a
+  guarantee.
+- **Use `tests/helpers/mutate.ts` instead, always.** Both of its helpers
+  mutate something held only in process memory, for the lifetime of one
+  callback, and restore it in a `finally` — including when the callback
+  throws or its returned promise rejects. No file under `src/` is ever
+  opened for writing, so `git status --porcelain` cannot show a change that
+  was never made, and there is nothing for a crashed agent's `git add -A`
+  to pick up.
+  - `withMutatedMethod(target, methodName, implementation, run)` — the
+    default. Swaps one method on a shared, already-mutable object
+    (almost always `SomeClass.prototype`) via a plain property assignment,
+    saved and restored around `run`. Reaches every existing instance,
+    including a module-private singleton already constructed elsewhere
+    (e.g. `UserTokenRepository.prototype.revokeAllForSession`, which reaches
+    the private instance `token.utilities.ts` builds at module scope) — no
+    module reloading involved.
+  - `withMutatedModule(dependencyPath, overrides, loadSubject, run)` —
+    only when the export has no shared mutable object to reach, e.g. a
+    plain function captured BY VALUE at another module's load time
+    (`loginRateLimitKey`, passed as `keyGenerator: loginRateLimitKey` inside
+    `rate-limit.middleware.ts`'s factory). Uses `vi.doMock` +
+    `vi.resetModules()`, then a fresh `import()` of the subject so its own
+    imports resolve to the mutated dependency. `loadSubject` must be a
+    thunk whose body is a literal `import('...')` written at the call site
+    — never a path built from a variable — so the bundler can resolve this
+    repo's `@/` alias and infer the subject's type without a cast. This
+    variant is not free: `vi.resetModules()` discards the WHOLE worker
+    module cache, so every module between the subject and the mutated
+    dependency re-evaluates, including ones with real side effects —
+    `database.service.ts` opens a fresh postgres pool every time it is
+    re-evaluated, and nothing closes the previous one. A handful of calls
+    proving one mutation is fine; don't call it in a loop.
+- **Getting red/green evidence needs zero file edits.** Commit the
+  demonstration once, gated behind an environment variable
+  (`it.runIf(process.env.MUTATION_PROOF === '1')(...)`), reproducing the
+  real test's own assertions against the mutated dependency. Running it
+  twice — once with the variable set, once without — produces a red
+  transcript and a green transcript with nothing changed on disk between
+  them; see `tests/integration/utilities/token-reuse-mutation.test.ts` for
+  the pattern proven against reuse detection.
+- **A rule without the reason gets bypassed the first time the harness is
+  inconvenient.** If `withMutatedMethod`/`withMutatedModule` genuinely
+  cannot reach what needs mutating, that is a signal to extend
+  `tests/helpers/mutate.ts` with a third pattern — not license to fall back
+  to editing a file under `src/`, even "just for a minute," even on a
+  branch, even with the intention of reverting it. The whole point is that
+  a hand-edit's window — however short — is a window where a real
+  vulnerability sits on disk in a worktree other sessions and tools can
+  read, stage, and commit.
+
 ## Auth and tokens
 
 - **`isPasswordValid`, not `verifyPassword`.**
