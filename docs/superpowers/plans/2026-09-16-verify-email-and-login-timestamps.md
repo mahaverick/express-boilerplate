@@ -1025,6 +1025,8 @@ export const resendVerificationSchema = z.object({ email: emailSchema })
 export type ResendVerificationInput = z.infer<typeof resendVerificationSchema>
 ```
 
+This file defines **both** schemas, but the controller above imports only `verifyEmailSchema`/`VerifyEmailInput` in this task. An exported-but-unused schema is fine; an unused _import_ fails `pnpm lint`. Task 10 adds `resendVerificationSchema` and `ResendVerificationInput` to that import when it adds the handler.
+
 `emailSchema` is duplicated from `auth.validators.ts:61-66`. **Do not leave it duplicated, and do not restructure the validators either.** Add `export` to the existing `emailSchema` in `auth.validators.ts` and import it here — one word in a B2 file, nothing more. Two copies of an email policy is the drift `MAX_EMAIL_LENGTH`'s own comment warns about; a shared-validators refactor is a bigger change than this task needs.
 
 - [ ] **Step 4: Write the controller**
@@ -1053,12 +1055,7 @@ import { getDummyHash, isPasswordValid } from '@/utilities/password.utilities'
 import { successResponse } from '@/utilities/response.utilities'
 import { claimToken } from '@/utilities/token.utilities'
 import { parseBody } from '@/validators/auth.validators'
-import {
-  resendVerificationSchema,
-  verifyEmailSchema,
-  type ResendVerificationInput,
-  type VerifyEmailInput,
-} from '@/validators/verification.validators'
+import { verifyEmailSchema, type VerifyEmailInput } from '@/validators/verification.validators'
 
 // Module-private instances, matching auth.controller.ts:37 and
 // token.utilities.ts — this codebase does not export repository
@@ -1411,7 +1408,6 @@ Expected: FAIL — free returns `201`, taken returns `409`, no mail at all.
 ```ts
 const REGISTER_RESPONSE_MESSAGE =
   'If that address can be registered, a verification email has been sent.'
-const MISSING_FIRST_NAME_FALLBACK = 'there'
 
 export async function register(
   request: Request,
@@ -1443,7 +1439,7 @@ export async function register(
     successResponse(response, null, REGISTER_RESPONSE_MESSAGE, 202)
 
     if (created) {
-      issueVerificationMail(created).catch((error: unknown) => {
+      sendVerificationMail(created).catch((error: unknown) => {
         console.error('Verification mail failed', error)
       })
       return
@@ -1461,15 +1457,25 @@ export async function register(
 }
 ```
 
-and the two helpers, module-private in the same file:
+`sendVerificationMail` goes in a **new shared module**, `src/utilities/verification-mail.utilities.ts`, not in this controller. Task 10 is its second caller, so writing it in its final home now is cheaper than Task 10 moving reviewed code out of an unrelated file. One caller today is not premature abstraction when the second is already planned.
+
+`src/utilities/verification-mail.utilities.ts`:
 
 ```ts
 /**
- * Issue a verification token for a newly created user and mail them the
- * link.
- * @param user - The user just created.
+ * The name a template greets an unnamed user by. `firstName` is optional
+ * at registration (auth.validators.ts:82) but REQUIRED by every template —
+ * requireEmailVariables throws on a missing one and sendMail catches that
+ * into a 'failed' log row, so without a fallback the mail silently never
+ * arrives and no status-code assertion notices.
  */
-async function issueVerificationMail(user: User): Promise<void> {
+export const MISSING_FIRST_NAME_FALLBACK = 'there'
+
+/**
+ * Issue a verification token for a user and mail them the link.
+ * @param user - The user to verify.
+ */
+export async function sendVerificationMail(user: User): Promise<void> {
   const issued = await issueToken(
     user.id,
     'email_verification',
@@ -1485,7 +1491,11 @@ async function issueVerificationMail(user: User): Promise<void> {
     },
   })
 }
+```
 
+and one helper that stays module-private in `auth.controller.ts`:
+
+```ts
 /**
  * Tell the owner of an already-registered address that someone tried to
  * register it.
@@ -1785,24 +1795,11 @@ async function resendVerificationMail(user: User): Promise<void> {
   // Purpose-scoped: revokeAllForUser would take the user's live REFRESH
   // tokens with it and log them out everywhere.
   await userTokenRepository.revokeAllForUserAndPurpose(user.id, 'email_verification')
-  const issued = await issueToken(
-    user.id,
-    'email_verification',
-    ms(getEnv().EMAIL_VERIFICATION_TTL as StringValue)
-  )
-  await sendMail({
-    to: user.email,
-    templateKey: EMAIL_VERIFICATION_TEMPLATE_KEY,
-    variables: {
-      firstName: user.firstName ?? 'there',
-      verificationUrl: buildVerificationUrl(issued.raw),
-      appName: getEnv().APP_NAME,
-    },
-  })
+  await sendVerificationMail(user)
 }
 ```
 
-`issueVerificationMail` in `auth.controller.ts` (Task 8) and `resendVerificationMail` here now differ only by the revoke. **Extract the shared body** — `sendVerificationMail(user: User): Promise<void>` in a module both can import, with the revoke staying at the resend call site — rather than leaving two copies of a template call and a TTL lookup to drift. The `'there'` fallback must be one constant, not two literals.
+`sendVerificationMail` is imported from `@/utilities/verification-mail.utilities`, which Task 8 created — **do not re-implement the token issue, link build and send here.** The only thing resend adds is the revoke. Add `resendVerificationSchema` and `ResendVerificationInput` to this file's existing import from `@/validators/verification.validators`; Task 7 deliberately left them out, because an unused import fails lint.
 
 - [ ] **Step 4: Add the two limiters**
 
