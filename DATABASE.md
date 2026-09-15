@@ -22,21 +22,39 @@ budget, which only shows up as "too many connections" under load.
 
 ## Models directory
 
-`src/database/models/` **does not exist yet.** This plan wires the
-database client and the migration tooling; it does not port any schema.
-When a later plan adds tables, each one is a `src/database/models/*.model.ts`
-file (the `*.model.ts` suffix is enforced by `check-file` — see
-[STRUCTURE.md](STRUCTURE.md)), and `drizzle.config.ts`'s schema glob
-(`./src/database/models/*.model.ts`) picks it up automatically — no config
-change needed to add a model.
+`src/database/models/` holds two tables today, each a
+`src/database/models/*.model.ts` file (the `*.model.ts` suffix is enforced
+by `check-file` — see [STRUCTURE.md](STRUCTURE.md)):
+
+- **`user.model.ts`** — the `users` table: `id` (a `uuidv7()` primary key —
+  see "Postgres version" below), `email` (case-insensitively unique via a
+  `lower(email)` index, not a plain unique constraint), a nullable
+  `password_hash` (nullable because a federated-identity user, plan B4, has
+  no password), `first_name`/`last_name`, `active`, `email_verified_at`,
+  `last_logged_in_at`, and the `deleted_at`/`created_at`/`updated_at` trio
+  every soft-deletable table carries.
+- **`user-token.model.ts`** — the `user_tokens` table: one row per issued or
+  rotated-to refresh token. `session_id` groups every token descended from
+  one login into a rotation "family"; `token_hash` stores a SHA-256 digest
+  of the raw token, never the token itself; `replaced_by_id`
+  self-references the row a token was rotated into, which is what lets
+  reuse detection tell "already rotated" apart from "never issued". See
+  [SECURITY.md](SECURITY.md) for the security reasoning and
+  [ARCHITECTURE.md](ARCHITECTURE.md) for how the repository layer sits on
+  top of both models.
+
+`drizzle.config.ts`'s schema glob (`./src/database/models/*.model.ts`)
+picks up a new model automatically — no config change needed to add one.
 
 ## Migrations directory
 
-`src/database/migrations/` is **tracked**, and holds one file today:
-`meta/_journal.json` (`{"version":"7","dialect":"postgresql","entries":[]}`)
-— an empty journal, committed so the directory exists on a fresh clone.
-Everything under this directory is **generated** by `drizzle-kit generate`;
-nothing here is hand-written, and nothing here should be hand-edited.
+`src/database/migrations/` is **tracked**, and holds two generated
+migrations today: `0000_tearful_crusher_hogan.sql` (creates `users`) and
+`0001_great_dragon_man.sql` (creates `user_tokens`, with its foreign keys
+to `users` and to itself for `replaced_by_id`), plus `meta/_journal.json`
+recording both in order. Everything under this directory is **generated**
+by `drizzle-kit generate`; nothing here is hand-written, and nothing here
+should be hand-edited.
 
 Generated does not mean disposable. Migrations are the ordered, immutable
 record of how the schema got to its current state — `drizzle-kit migrate`
@@ -93,33 +111,77 @@ All three read `DATABASE_URL` from `process.env`. With a `.env` in place
 inline `DATABASE_URL=...` prefix below is only needed if you don't have one
 — drop it once `.env` exists.
 
-**Generate a migration** from the model files:
+**Generate a migration** from the model files, via `pnpm
+db:migration:generate` (`drizzle-kit generate`):
 
 ```bash
-DATABASE_URL=postgres://boilerplate:boilerplate@localhost:5433/boilerplate pnpm exec drizzle-kit generate
+DATABASE_URL=postgres://boilerplate:boilerplate@localhost:5433/boilerplate pnpm db:migration:generate
 ```
 
-Run today, before any model file exists, this fails — honestly reproduced:
+Verified against this repo's current, up-to-date model set (both models
+already have a matching migration, so there is nothing new to write):
 
 ```
-Error  No schema files found for path config ['./src/database/models/*.model.ts']
+2 tables
+user_tokens 10 columns 3 indexes 2 fks
+users 11 columns 1 indexes 0 fks
+
+No schema changes, nothing to migrate 😴
 ```
 
-That is expected until a later plan adds the first `*.model.ts` file. Once
-one exists, this command writes the SQL migration under
-`src/database/migrations/` and updates `meta/_journal.json`.
+Changing a model file and rerunning this command writes the new SQL
+migration under `src/database/migrations/` and updates `meta/_journal.json`
+— it does not touch the database itself; that is the next command's job.
 
-**Apply pending migrations**:
+**Apply pending migrations**, via `pnpm db:migrate`
+(`src/database/migrate.ts`, run directly with `tsx`):
 
 ```bash
-DATABASE_URL=postgres://boilerplate:boilerplate@localhost:5433/boilerplate pnpm exec drizzle-kit migrate
+pnpm db:migrate
 ```
 
-Verified against the current (empty) migration set:
+`migrate.ts` opens its own short-lived connection from `getDatabaseUrl()`
+(the same `DATABASE_URL`-only slice `drizzle.config.ts` uses — see below),
+not `database.service.ts`'s long-lived pool, and closes it when done. Run
+against a database that is already at the latest migration (the common
+case in local development), Postgres itself reports there is nothing new to
+apply — verified directly against this repo's dev database:
 
 ```
-[✓] migrations applied successfully!
+$ pnpm db:migrate
+
+> express-boilerplate@0.1.0 db:migrate
+> tsx src/database/migrate.ts
+
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P06',
+  message: 'schema "drizzle" already exists, skipping',
+  file: 'schemacmds.c',
+  line: '132',
+  routine: 'CreateSchemaCommand'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "__drizzle_migrations" already exists, skipping',
+  file: 'parse_utilcmd.c',
+  line: '208',
+  routine: 'transformCreateStmt'
+}
 ```
+
+Those two `NOTICE`s (not errors — the command exits 0) are Postgres
+reporting that drizzle's own bookkeeping schema/table already exist from a
+prior run; a genuinely first-ever run against an empty database prints
+neither and exits 0 silently. `pnpm db:migrate:prod` runs the identical
+logic against the built output (`node dist/database/migrate.js`) — this is
+exactly what `Dockerfile`'s build-stage comment refers to, and what
+`.github/workflows/ci.yml`'s "Run migrations" step runs (as `pnpm
+db:migrate`) before the test suite, so CI never tests against a schema its
+own migrations haven't produced.
 
 **Check migration/schema consistency** (useful in CI, before `generate`):
 
@@ -127,12 +189,11 @@ Verified against the current (empty) migration set:
 DATABASE_URL=postgres://boilerplate:boilerplate@localhost:5433/boilerplate pnpm exec drizzle-kit check
 ```
 
-There is no `pnpm db:migrate` package.json script and no
-`src/database/migrate.ts` runner yet — run `drizzle-kit migrate` directly as
-shown above. The Dockerfile's build-stage comment ("Migrations run via
-`dist/database/migrate.js`") describes the intended shape of a later plan,
-not a file that exists today; treat it as a forward reference, not a
-working command.
+Verified against this repo:
+
+```
+Everything's fine 🐶🔥
+```
 
 ## Test database
 

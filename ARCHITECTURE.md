@@ -41,10 +41,82 @@ message) this repo exists to remove.
 database and Redis clients — deliberately in that order.
 
 **`app.ts`** wires, in order: `requestId` middleware, JSON/urlencoded body
-parsing, `GET /health`, `GET /health/ready`, a 404 catch-all, then
-`errorHandler`. Order is load-bearing — Express matches middleware and
-routes in registration order, and the error handler must be registered
-last to see errors from everything before it.
+parsing, `GET /health`, `GET /health/ready`, the versioned API router
+(`createApiRouter()`, mounted at `/api/v1` — see "Request path: auth and
+beyond" below), a 404 catch-all, then `errorHandler`. Order is load-bearing
+— Express matches middleware and routes in registration order, and the
+error handler must be registered last to see errors from everything before
+it.
+
+## Request path: auth and beyond
+
+`createApiRouter()` (`src/routes/index.routes.ts`) mounts one router per
+feature under `/api/v1` — `auth.routes.ts` at `/api/v1/auth`,
+`profile.routes.ts` at `/api/v1/profile` — rather than `app.ts` growing an
+`app.use(...)` call per feature. A new feature router is one more
+`router.use(...)` line in `index.routes.ts`, never a change to `app.ts`
+itself.
+
+**Registration and login** (`POST /api/v1/auth/register`,
+`POST /api/v1/auth/login`) are open routes — no token required to reach
+them, by definition. `register` is the only route that **hashes** a
+password; `login` is the only route that **compares** one — both through
+`src/utilities/password.utilities.ts`, never bcrypt directly. On success,
+`login` mints an access token (`signAccessToken`) and a refresh token
+(`issueRefreshToken`), the latter set as an httpOnly cookie. See
+[SECURITY.md](SECURITY.md) for the full reasoning behind both token types,
+password hashing, user-enumeration resistance, and rate limiting.
+
+**Every other authenticated route** sits behind `requireAuth`
+(`src/middlewares/auth.middleware.ts`), mounted with `router.use(requireAuth)`
+ahead of a feature's routes (see `profile.routes.ts`) rather than repeated
+per-route, so a route added later inherits the gate automatically.
+`requireAuth` verifies the bearer access token (`verifyAccessToken`) and
+then reloads the user by id — a stateless JWT alone would keep answering
+"valid" for a disabled or deleted account until the token's own expiry, so
+this trades one extra database read per authenticated request for that
+account state actually being enforced in real time.
+
+**`POST /api/v1/auth/refresh`** and **`POST /api/v1/auth/logout`** are the
+odd ones out: neither requires a bearer access token (a user's access token
+has often already expired by the time either is called), and both instead
+read the refresh-token cookie directly off the raw `Cookie` header — there
+is no `cookie-parser` dependency in this codebase; the cookie name is known
+in advance (`REFRESH_TOKEN_COOKIE_NAME`), so parsing the one value this API
+cares about by hand costs less than a dependency for the rest of RFC 6265
+nothing here needs.
+
+**The repository layer** (`src/repositories/`) is a thin layer over
+`src/database/models/`: `BaseRepository` owns soft-delete filtering,
+`updatedAt` maintenance, and unique-violation-to-409 translation once,
+shared by `UserRepository` and `UserTokenRepository`, each of which
+supplies only the four concrete Drizzle queries `BaseRepository` cannot
+express generically (see `base.repository.ts`'s own header comment for
+why). See [DATABASE.md](DATABASE.md) for both models.
+
+## The B3 seam: `email_verified_at` is reserved, not wired up
+
+`users.email_verified_at` (`src/database/models/user.model.ts`) exists as a
+column today, and `profile.validators.ts` deliberately excludes `email`
+from the profile-update allow-list partly because of it — changing a
+verified address through that endpoint would leave a stale verified flag
+attached to an address nobody actually verified.
+
+**Stated plainly, so this is not left for a reader to discover by
+grepping:** nothing in this codebase issues an email-verification token,
+nothing verifies one, and nothing sends one. There is no verification-token
+type, no endpoint, and no code path that ever sets `email_verified_at` to a
+non-null value. The `user_tokens` table introduced in this plan is
+refresh-token-specific — its `session_id`/`replaced_by_id` columns encode
+rotation-chain semantics that only make sense for a refresh token — and is
+not a general-purpose token store a verification flow already has a home
+in.
+Mailpit already runs in `docker-compose.yml` as a local SMTP sink, so B3
+has somewhere to send a verification email to on day one; issuing,
+verifying, and sending the email are otherwise entirely B3's to build. (An
+earlier planning note for this work described verification tokens as
+"issued and verifiable" already — that description ran ahead of what
+actually shipped; treat this section, not that note, as current.)
 
 ## Configuration
 
@@ -104,7 +176,18 @@ once in [`src/utilities/response.utilities.ts`](src/utilities/response.utilities
 ```json
 { "success": true, "message": "Success", "statusCode": 200, "data": {} }
 { "success": false, "message": "Not found", "statusCode": 404, "requestId": "…" }
+{ "success": false, "message": "Access token expired", "statusCode": 401, "code": "ACCESS_TOKEN_EXPIRED", "requestId": "…" }
 ```
+
+An error response optionally carries `code`: a single, stable,
+machine-readable token a client branches on (e.g. `ACCESS_TOKEN_EXPIRED`
+from `requireAuth`, `RATE_LIMITED` from the login/refresh limiters — see
+[SECURITY.md](SECURITY.md)), independent of `errors` (field-level
+validation detail, shaped by whatever validator produced it). The two are
+deliberately separate fields rather than one overloaded one — see
+`error.middleware.ts`'s own header comment for why collapsing them would
+make a client parsing `errors` for field errors get something structurally
+different the one time `code` is also present.
 
 `HttpError` (in
 [`src/middlewares/error.middleware.ts`](src/middlewares/error.middleware.ts))
@@ -122,7 +205,7 @@ fewer than four parameters is silently treated as ordinary middleware that
 never sees an error. The unused fourth parameter is prefixed `_next`
 accordingly.
 
-This envelope shape (`{ success, message, statusCode, errors }`) is not RFC
+This envelope shape (`{ success, message, statusCode, code?, errors? }`) is not RFC
 9457 `problem+json`, which is the more modern standard and the better
 choice for a greenfield API. It is kept here because this boilerplate is
 derived from an existing codebase by stripping project-specific code, and
@@ -196,20 +279,32 @@ container.
 
 ## What is deliberately not here yet
 
-This plan builds the platform: environment validation, the database/Redis
-clients, the app/server split, health checks, the error contract, the test
-harness and its coverage gate, git hooks, and CI. It does **not** build:
+An earlier plan built the platform: environment validation, the
+database/Redis clients, the app/server split, health checks, the error
+contract, the test harness and its coverage gate, git hooks, and CI. This
+plan (B2) added registration, login, JWT access + opaque refresh tokens,
+refresh rotation with reuse detection, an authenticated profile endpoint,
+and login/refresh rate limiting — see [SECURITY.md](SECURITY.md) for the
+security-relevant detail on all of it. It does **not** build:
 
-- Any route beyond `/health` and `/health/ready` — no controllers, no
-  repositories, no validators.
-- Authentication, sessions, or MFA.
-- Any Drizzle model — `src/database/models/` does not exist yet. See
-  [DATABASE.md](DATABASE.md).
+- **Email verification delivery, or forgot/reset password.**
+  `users.email_verified_at` is a reserved column with nothing wired to it —
+  see "The B3 seam" above. Owned by plan B3, which is also where
+  Mailpit-backed email sending is expected to land.
+- **Sessions, MFA, or OAuth/social login.** `SESSION_SECRET` remains a
+  required-but-unread placeholder. Owned by plan B4.
+- **Security headers/CSP, CORS, or a general-purpose rate limiter.** Only
+  the login and refresh routes are rate-limited (see SECURITY.md);
+  `x-powered-by` is disabled and nothing else touches response headers.
+  `WEB_URL` remains validated but unread.
+- **Tenancy or RBAC.** Every authenticated user acts only on their own
+  resources; there is no role or organization model. Owned by plan B5.
 - OpenAPI documentation, or a bootstrap/seed script (`pnpm bootstrap` does
   not exist — do not run it).
-- Queues, email sending, or anything else that would consume BullMQ or
-  nodemailer (both listed, not yet adopted, in
-  [MIGRATIONS.md](MIGRATIONS.md)).
+- Queues, or anything else that would consume BullMQ (listed, not yet
+  adopted, in [MIGRATIONS.md](MIGRATIONS.md)). `nodemailer` is the one
+  already-listed dependency that plan B3 is expected to actually adopt,
+  once email delivery lands.
 - OpenTelemetry SDK wiring in the app itself — the collector container runs
   and `OTEL_EXPORTER_OTLP_ENDPOINT` is a recognised, optional variable, but
   nothing in `src/` currently starts an SDK or exports a span.

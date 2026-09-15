@@ -6,9 +6,12 @@ and a git-hook + CI pipeline that enforces all of it.
 
 This repository is a foundation, not a finished product. It ships the
 platform plumbing (env validation, database/Redis clients, health checks,
-error handling, the test harness, the lint gates) with no business logic on
-top — no controllers, no routes beyond `/health`, no auth. See
-[ARCHITECTURE.md](ARCHITECTURE.md) for what is and is not here yet.
+error handling, the test harness, the lint gates) plus a working
+authentication slice on top of it: registration, login, JWT access tokens
+paired with rotating opaque refresh tokens, and an authenticated profile
+endpoint. It does not ship email verification delivery, sessions, MFA,
+OAuth, CORS/CSP, or tenancy — see [ARCHITECTURE.md](ARCHITECTURE.md) and
+[SECURITY.md](SECURITY.md) for exactly what is and is not here yet.
 
 ## Requirements
 
@@ -24,6 +27,7 @@ top — no controllers, no routes beyond `/health`, no auth. See
 pnpm install
 docker compose up -d
 cp .env.example .env    # then fill in the required secrets — see below
+pnpm db:migrate
 pnpm dev
 ```
 
@@ -33,6 +37,64 @@ Then:
 curl http://localhost:4040/health         # {"status":"ok","uptime":...}
 curl http://localhost:4040/health/ready   # {"status":"ready","checks":{"database":true,"redis":true}}
 ```
+
+### Register and log in
+
+Verified directly against this repo, from the same running server:
+
+```bash
+curl -X POST http://localhost:4040/api/v1/auth/register \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"grace@example.com","password":"a very long passphrase"}'
+```
+
+```json
+{
+  "success": true,
+  "message": "Registration successful.",
+  "statusCode": 201,
+  "data": {
+    "id": "01a0a3af-3de4-78d8-96d3-5f970bb45414",
+    "email": "grace@example.com",
+    "firstName": null,
+    "lastName": null,
+    "createdAt": "2026-09-15T06:09:25.987Z"
+  }
+}
+```
+
+```bash
+curl -X POST http://localhost:4040/api/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"grace@example.com","password":"a very long passphrase"}'
+```
+
+```json
+{
+  "success": true,
+  "message": "Login successful.",
+  "statusCode": 200,
+  "data": {
+    "user": {
+      "id": "01a0a3af-3de4-78d8-96d3-5f970bb45414",
+      "email": "grace@example.com",
+      "firstName": null,
+      "lastName": null,
+      "createdAt": "2026-09-15T06:09:25.987Z"
+    },
+    "accessToken": "eyJhbGciOiJIUzI1NiIs..."
+  }
+}
+```
+
+Login also sets an httpOnly `refreshToken` cookie, scoped to
+`/api/v1/auth`. `data.accessToken` above is a JWT — send it as
+`Authorization: Bearer <accessToken>` to reach an authenticated route, e.g.
+`GET /api/v1/profile`. There is no `password` minimum beyond 8 characters
+and no composition rule (uppercase/digit/symbol) — see
+[SECURITY.md](SECURITY.md) for why. See ARCHITECTURE.md's "Request path:
+auth and beyond" for how the rest of the auth routes
+(`/api/v1/auth/refresh`, `/api/v1/auth/logout`) fit together.
 
 `pnpm dev` (`tsx watch src/index.ts`) and `pnpm start` (`node
 dist/index.js`) load `.env` for you via
@@ -70,6 +132,8 @@ Required keys are emitted blank.
 | `REDIS_URL`                   | **yes**                    | `redis://localhost:6380` against the compose stack.                                        |
 | `JWT_ACCESS_SECRET`           | **yes**                    | 32+ characters. Signs and verifies access tokens.                                          |
 | `SESSION_SECRET`              | **yes** (placeholder)      | 32+ characters. **Nothing reads it yet.**                                                  |
+| `ACCESS_TOKEN_TTL`            | no (default `15m`)         | An `ms()`-parseable duration string, e.g. `15m` or `900000`.                               |
+| `REFRESH_TOKEN_TTL`           | no (default `30d`)         | An `ms()`-parseable duration string, e.g. `30d` or `2592000000`.                           |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | no                         | Absent means tracing is disabled — the SDK is never started.                               |
 | `LOG_LEVEL`                   | no (default `info`)        | `error` \| `warn` \| `info` \| `debug`                                                     |
 
@@ -143,6 +207,9 @@ is unaffected. See the header comment in
 | `pnpm test:watch`                   | `vitest watch`.                                                                                                                                                            |
 | `pnpm test:coverage`                | `vitest run --coverage`, gated at 80% lines/functions/branches/statements.                                                                                                 |
 | `pnpm env:example`                  | Regenerates `.env.example` from the Zod schema.                                                                                                                            |
+| `pnpm db:migration:generate`        | `drizzle-kit generate` — writes a new migration from the model files. See [DATABASE.md](DATABASE.md).                                                                      |
+| `pnpm db:migrate`                   | Applies pending migrations (`tsx src/database/migrate.ts`) against `DATABASE_URL`. See [DATABASE.md](DATABASE.md).                                                         |
+| `pnpm db:migrate:prod`              | Same as `pnpm db:migrate`, against the built output (`node dist/database/migrate.js`) — what the production image and CI run.                                              |
 | `pnpm commit`                       | Interactive conventional-commit prompt (`commitizen` + `@commitlint/cz-commitlint`).                                                                                       |
 
 Verified together from a clean clone: `pnpm install && pnpm lint && pnpm
