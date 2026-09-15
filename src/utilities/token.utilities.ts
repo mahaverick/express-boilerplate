@@ -68,12 +68,14 @@ export interface IssuedRefreshToken {
  * password reset): the raw value to hand to the caller (an email link, in
  * practice), and everything about it that isn't recoverable from the raw
  * value alone. No `sessionId` — see user-token.model.ts's header comment for
- * why that field means nothing outside `'refresh'`.
+ * why that field means nothing outside `'refresh'`. `purpose` excludes
+ * `'refresh'` for the same reason `issueToken` itself does — see that
+ * function's own comment.
  */
 export interface IssuedToken {
   raw: string
   userId: string
-  purpose: TokenPurpose
+  purpose: Exclude<TokenPurpose, 'refresh'>
   expiresAt: Date
 }
 
@@ -245,17 +247,25 @@ export async function issueRefreshToken(
 
 /**
  * Issue a new token for a purpose that has no session — email verification
- * or password reset. The shared issuing path every purpose goes through
- * (`createTokenRow`); `issueRefreshToken` above is the `'refresh'`-specific
- * wrapper that also anchors a session.
+ * or password reset. The shared issuing path those two purposes go through
+ * (`createTokenRow`).
+ *
+ * `'refresh'` is excluded from `purpose` at the type level, not just by
+ * convention: `issueToken` has no parameter to supply a session id, so a
+ * `'refresh'` row minted through it would have `sessionId` NULL — a
+ * refresh token with no rotation-chain id that `revokeAllForSession` can
+ * never find and reuse detection can never contain. `issueRefreshToken`
+ * (above) is the one and only entry point for `'refresh'`, precisely
+ * because a session id is mandatory for it and only that function's
+ * signature has one to give.
  * @param userId - The user the token belongs to.
- * @param purpose - Which of `TokenPurpose`'s three things to issue. Passing `'refresh'` here works but is unnecessary — `issueRefreshToken` is that case's own entry point and is the one that anchors a session.
+ * @param purpose - Which non-session purpose to issue — `'email_verification'` or `'password_reset'`.
  * @param ttlMs - How long the token is valid for, in milliseconds.
  * @returns The raw token to hand to the caller, and its metadata.
  */
 export async function issueToken(
   userId: string,
-  purpose: TokenPurpose,
+  purpose: Exclude<TokenPurpose, 'refresh'>,
   ttlMs: number
 ): Promise<IssuedToken> {
   const { raw, expiresAt } = await createTokenRow(userId, purpose, ttlMs, undefined, undefined)

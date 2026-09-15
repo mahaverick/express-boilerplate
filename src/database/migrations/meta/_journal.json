@@ -36,6 +36,13 @@
       "when": 1789470936697,
       "tag": "0004_organic_mauler",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1789472872398,
+      "tag": "0005_bitter_blob",
+      "breakpoints": true
     }
   ]
 }

@@ -55,6 +55,7 @@
 // that description, not on the mechanism claim it used to carry.
 import { sql, type InferInsertModel, type InferSelectModel } from 'drizzle-orm'
 import {
+  check,
   index,
   pgTable,
   timestamp,
@@ -65,13 +66,34 @@ import {
 import { userModel } from '@/database/models/user.model'
 
 /**
+ * The three things a `user_tokens` row can be for — the single source of
+ * truth `TokenPurpose` is derived from, below, and the same array builds
+ * the `purpose` column's CHECK constraint's SQL (this table's
+ * `(table) => [...]`, `user_tokens_purpose_check`). One array, so the set
+ * of valid purposes can never drift between the TypeScript type — which a
+ * raw SQL statement is not bound by, `$type<TokenPurpose>()` is
+ * compile-time only — and the constraint that is the actual last line of
+ * defence against a raw insert writing something else.
+ */
+export const TOKEN_PURPOSES = ['refresh', 'email_verification', 'password_reset'] as const
+
+// `TOKEN_PURPOSES`, pre-rendered as a literal SQL value list —
+// `'refresh', 'email_verification', 'password_reset'` — for
+// `user_tokens_purpose_check` below. Built once, here, rather than inline
+// inside that `sql` template: nesting this array's own template literal
+// inside the check constraint's `sql\`...\`` template trips
+// `sonarjs/no-nested-template-literals`, and pulling it out one level is
+// simpler than fighting the lint rule for no readability gain.
+const TOKEN_PURPOSE_SQL_LIST = TOKEN_PURPOSES.map((purpose) => `'${purpose}'`).join(', ')
+
+/**
  * What a `user_tokens` row is for. Every claim (`UserTokenRepository.
  * claimOnce`) is scoped to exactly one purpose, so a token minted for one
  * can never be redeemed as another — the property that stops a
  * password-reset token being spent as an email verification, or the other
  * way around.
  */
-export type TokenPurpose = 'refresh' | 'email_verification' | 'password_reset'
+export type TokenPurpose = (typeof TOKEN_PURPOSES)[number]
 
 /**
  * The `user_tokens` table: one row per issued or rotated-to token, for any
@@ -101,6 +123,10 @@ export const userTokenModel = pgTable(
     // `tokenHash`, which is already looked up through a unique index, so
     // the predicate costs nothing extra to evaluate.
     //
+    // 32 characters, not 20: `'email_verification'` is already 18, and the
+    // narrower width left no headroom for a longer purpose name a later
+    // plan might add (e.g. an `'email_change_verification'`-shaped value).
+    //
     // NO DEFAULT, DELIBERATELY. The migration that added this column
     // (0003) carried a temporary `DEFAULT 'refresh'` — needed only to
     // backfill every pre-existing row (all of them refresh tokens, the
@@ -115,7 +141,17 @@ export const userTokenModel = pgTable(
     // to compile. Omitting `purpose` is a TypeScript error; see
     // tests/unit/database/models/user-token.model.test.ts for a committed
     // assertion that it stays one.
-    purpose: varchar('purpose', { length: 20 }).$type<TokenPurpose>().notNull(),
+    //
+    // CONSTRAINED AT THE DATABASE TOO, not just by TypeScript —
+    // `user_tokens_purpose_check` below (migration 0005). `$type<T>()` is
+    // compile-time narrowing only: nothing stops a raw SQL statement from
+    // writing `'Refresh'` or `'refresh '`, and a row like that could never
+    // be claimed by anything, forever. This repo already made this exact
+    // argument for `users.email` (`users_email_unique`'s `lower(email)`
+    // index, user.model.ts): "the database is the only thing that can
+    // decide." Making that argument there and not here would be the
+    // inconsistency.
+    purpose: varchar('purpose', { length: 32 }).$type<TokenPurpose>().notNull(),
     // The session "family" this token belongs to — meaningful for
     // `'refresh'` only; null for `'email_verification'`/`'password_reset'`,
     // which have no rotation chain to belong to.
@@ -195,6 +231,26 @@ export const userTokenModel = pgTable(
     // virtue of being a foreign key.
     index('user_tokens_session_id_idx').on(table.sessionId),
     index('user_tokens_user_id_idx').on(table.userId),
+    // The database-level half of `purpose`'s validity check — see that
+    // column's own comment. Built from `TOKEN_PURPOSES` (this file's
+    // header), not a hand-typed SQL list, so the three allowed strings
+    // have exactly one place they are spelled out.
+    //
+    // `sql.raw`, not `sql`-tagged interpolation: a CHECK constraint's
+    // expression is fixed at DDL time, and a plain `${value}` interpolation
+    // compiles to a bound parameter (`$1, $2, $3`) — valid inside a normal
+    // query, but `ALTER TABLE ... ADD CONSTRAINT ... CHECK (...)` has no
+    // parameter list to bind against, so Postgres rejects it outright
+    // ("there is no parameter $1"). Verified directly: the first attempt at
+    // this constraint used `sql\`${purpose}\`` per value, generated exactly
+    // that migration, and running it against this repo's dev database
+    // failed with that error — `sql.raw` (safe here: every value comes from
+    // the fixed, code-defined `TOKEN_PURPOSES` array, never external input)
+    // is what produces literal SQL text instead.
+    check(
+      'user_tokens_purpose_check',
+      sql`${table.purpose} in (${sql.raw(TOKEN_PURPOSE_SQL_LIST)})`
+    ),
   ]
 )
 

@@ -87,6 +87,11 @@ describe('UserTokenRepository', () => {
     })
 
     const claimed = await userTokenRepository.claimOnce(tokenHash, 'refresh')
+    // Asserted before the field checks below: `claimed?.revokedAt` alone
+    // passes when `claimed` is `undefined` too (undefined is not null), so
+    // this is what actually proves a row came back, not just that whatever
+    // came back (possibly nothing) lacks a null field.
+    expect(claimed).toBeDefined()
     // RETURNING reflects the row AFTER this UPDATE, so revokedAt/consumedAt
     // are already set.
     expect(claimed?.revokedAt).not.toBeNull()
@@ -123,6 +128,34 @@ describe('UserTokenRepository', () => {
     const afterSecondClaim = await userTokenRepository.findByHash(tokenHash)
     const secondRevokedAt = afterSecondClaim?.revokedAt
     expect(secondRevokedAt?.getTime()).toBe(firstRevokedAt?.getTime())
+  })
+
+  // Pins the contract documented on claimOnce's own JSDoc: expiry is
+  // deliberately NOT part of this method's predicate. Folding it in would
+  // make an expired-but-unrevoked row indistinguishable, to
+  // rotateRefreshToken's `!claimed` branch, from a genuinely reused one —
+  // which would revoke an entire session family for a legitimate user
+  // whose token simply aged out (see "rejects an expired refresh token
+  // without treating it as reuse of a live session",
+  // token.utilities.test.ts). This is why every caller of claimOnce must
+  // check `expiresAt` on the row it gets back, itself, after claiming.
+  it("claimOnce claims an expired-but-unrevoked row — expiry is the caller's job, not the predicate's", async () => {
+    const userId = await createUser()
+    const tokenHash = uniqueHash()
+    await userTokenRepository.create({
+      userId,
+      purpose: 'refresh',
+      sessionId: randomUUID(),
+      tokenHash,
+      // Already expired when created — this row was never live by an
+      // expiry-aware definition, only by claimOnce's actual one.
+      expiresAt: new Date(Date.now() - 60_000),
+    })
+
+    const claimed = await userTokenRepository.claimOnce(tokenHash, 'refresh')
+    expect(claimed).toBeDefined()
+    expect(claimed?.expiresAt.getTime()).toBeLessThan(Date.now())
+    expect(claimed?.revokedAt).not.toBeNull()
   })
 
   // The test that matters most in this task (see task-1-brief.md): without
