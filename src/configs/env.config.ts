@@ -13,6 +13,7 @@
 // Parsing once, at boot, turns that into one readable list of what is wrong.
 import { config } from 'dotenv'
 import { z } from 'zod'
+import { parseDurationMs } from '@/utilities/duration.utilities'
 
 // Populate process.env from .env before anything below ever reads it.
 // Skipped under Vitest: tests/helpers/setup-global.ts already assembles the
@@ -41,11 +42,14 @@ const EnvSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   APP_PORT: z.coerce.number().int().positive().default(4040),
 
-  // PLACEHOLDERS. Five required variables below are read by nothing in src/
-  // today — verified by grep: APP_URL, WEB_URL, JWT_ACCESS_SECRET,
+  // PLACEHOLDERS. Four of the required variables below are still read by
+  // nothing in src/ today — verified by grep: APP_URL, WEB_URL,
   // JWT_REFRESH_SECRET and SESSION_SECRET are forward declarations for the
   // auth/CORS/email plans (see SECURITY.md, "Intended choices"), not
-  // evidence that any of it exists.
+  // evidence that any of it exists. JWT_ACCESS_SECRET is the exception —
+  // token.utilities.ts (signAccessToken/verifyAccessToken) reads it to sign
+  // and verify every access token, so its own `.describe()` below says what
+  // it actually does rather than carrying the same placeholder note.
   //
   // They stay REQUIRED rather than optional on purpose: a downstream project
   // that adds auth should hit a named, fail-fast error at boot for a missing
@@ -73,19 +77,53 @@ const EnvSchema = z.object({
     .string()
     .min(32)
     .describe(
-      'PLACEHOLDER — no auth ships yet and nothing reads this. Any 32+ character string works for now; use `openssl rand -hex 32` before shipping auth.'
+      'Signs and verifies access tokens (token.utilities.ts). Any 32+ character string works; use `openssl rand -hex 32`.'
     ),
+  // Still a PLACEHOLDER, but not because auth hasn't shipped — this plan's
+  // refresh tokens are deliberately opaque random strings, not JWTs (see
+  // token.utilities.ts's header comment), so nothing ever signs one with
+  // this secret. Kept for a project that reverses that choice.
   JWT_REFRESH_SECRET: z
     .string()
     .min(32)
     .describe(
-      'PLACEHOLDER — no auth ships yet and nothing reads this. Any 32+ character string works for now; use `openssl rand -hex 32` before shipping auth.'
+      'PLACEHOLDER — refresh tokens are opaque, not JWTs, so nothing reads this. Any 32+ character string works for now; use `openssl rand -hex 32` if a future project signs refresh tokens instead.'
     ),
   SESSION_SECRET: z
     .string()
     .min(32)
     .describe(
       'PLACEHOLDER — no session layer ships yet and nothing reads this. Any 32+ character string works for now; use `openssl rand -hex 32` before shipping sessions.'
+    ),
+
+  // Validated with a refinement that actually CALLS ms() and checks its
+  // result, rather than a regex that merely looks duration-shaped. This is
+  // the exact defect this repository was rebuilt to remove: the old
+  // codebase called `ms(process.env.REFRESH_TOKEN_EXPIRY)` directly at
+  // module-import time with the variable unset, `ms()` threw, and that took
+  // down an unrelated test suite before any test body ran — one test passed
+  // in the entire backend, and the failure named a third-party library
+  // rather than the missing variable. Here an unparseable value fails at
+  // boot, inside safeParse, named alongside every other invalid variable —
+  // never as a throw reaching out of this module.
+  ACCESS_TOKEN_TTL: z
+    .string()
+    .default('15m')
+    .refine((value) => parseDurationMs(value) !== undefined, {
+      message: 'ACCESS_TOKEN_TTL must be a duration string ms() can parse, e.g. "15m" or "900000".',
+    })
+    .describe(
+      'Access token lifetime, as an ms()-parseable duration string (e.g. "15m"). Defaults to 15m.'
+    ),
+  REFRESH_TOKEN_TTL: z
+    .string()
+    .default('30d')
+    .refine((value) => parseDurationMs(value) !== undefined, {
+      message:
+        'REFRESH_TOKEN_TTL must be a duration string ms() can parse, e.g. "30d" or "2592000000".',
+    })
+    .describe(
+      'Refresh token lifetime, as an ms()-parseable duration string (e.g. "30d"). Defaults to 30d.'
     ),
 
   OTEL_EXPORTER_OTLP_ENDPOINT: z
