@@ -56,7 +56,13 @@ describe('UserTokenRepository', () => {
     const tokenHash = uniqueHash()
     const expiresAt = new Date(Date.now() + 60_000)
 
-    const created = await userTokenRepository.create({ userId, sessionId, tokenHash, expiresAt })
+    const created = await userTokenRepository.create({
+      userId,
+      purpose: 'refresh',
+      sessionId,
+      tokenHash,
+      expiresAt,
+    })
     expect(created.id).toBeTruthy()
     expect(created.revokedAt).toBeNull()
     expect(created.replacedById).toBeNull()
@@ -74,6 +80,7 @@ describe('UserTokenRepository', () => {
     const tokenHash = uniqueHash()
     await userTokenRepository.create({
       userId,
+      purpose: 'refresh',
       sessionId: randomUUID(),
       tokenHash,
       expiresAt: new Date(Date.now() + 60_000),
@@ -99,6 +106,7 @@ describe('UserTokenRepository', () => {
     const tokenHash = uniqueHash()
     await userTokenRepository.create({
       userId,
+      purpose: 'refresh',
       sessionId: randomUUID(),
       tokenHash,
       expiresAt: new Date(Date.now() + 60_000),
@@ -182,12 +190,14 @@ describe('UserTokenRepository', () => {
 
     const inSession = await userTokenRepository.create({
       userId,
+      purpose: 'refresh',
       sessionId,
       tokenHash: uniqueHash(),
       expiresAt: new Date(Date.now() + 60_000),
     })
     const outsideSession = await userTokenRepository.create({
       userId,
+      purpose: 'refresh',
       sessionId: otherSessionId,
       tokenHash: uniqueHash(),
       expiresAt: new Date(Date.now() + 60_000),
@@ -207,18 +217,21 @@ describe('UserTokenRepository', () => {
 
     const first = await userTokenRepository.create({
       userId,
+      purpose: 'refresh',
       sessionId: randomUUID(),
       tokenHash: uniqueHash(),
       expiresAt: new Date(Date.now() + 60_000),
     })
     const second = await userTokenRepository.create({
       userId,
+      purpose: 'refresh',
       sessionId: randomUUID(),
       tokenHash: uniqueHash(),
       expiresAt: new Date(Date.now() + 60_000),
     })
     const otherUsers = await userTokenRepository.create({
       userId: otherUserId,
+      purpose: 'refresh',
       sessionId: randomUUID(),
       tokenHash: uniqueHash(),
       expiresAt: new Date(Date.now() + 60_000),
@@ -238,6 +251,7 @@ describe('UserTokenRepository', () => {
     const userId = await createUser()
     const created = await userTokenRepository.create({
       userId,
+      purpose: 'refresh',
       sessionId: randomUUID(),
       tokenHash: uniqueHash(),
       expiresAt: new Date(Date.now() + 60_000),

@@ -1,0 +1,1 @@
+ALTER TABLE "user_tokens" ALTER COLUMN "purpose" DROP DEFAULT;

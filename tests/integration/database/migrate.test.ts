@@ -42,8 +42,8 @@ describe('migrations', () => {
     const [user] = await sql`insert into users (email) values (${email}) returning id`
     const userId = user?.id as string
     const [token] = await sql`
-      insert into user_tokens (user_id, session_id, token_hash, expires_at)
-      values (${userId}, ${crypto.randomUUID()}, ${'a'.repeat(64)}, now() + interval '1 day')
+      insert into user_tokens (user_id, purpose, session_id, token_hash, expires_at)
+      values (${userId}, 'refresh', ${crypto.randomUUID()}, ${'a'.repeat(64)}, now() + interval '1 day')
       returning id
     `
 

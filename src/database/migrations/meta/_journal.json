@@ -29,6 +29,13 @@
       "when": 1789469308473,
       "tag": "0003_regular_lockjaw",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1789470936697,
+      "tag": "0004_organic_mauler",
+      "breakpoints": true
     }
   ]
 }
