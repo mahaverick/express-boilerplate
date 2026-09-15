@@ -1,8 +1,10 @@
 // src/middlewares/rate-limit.middleware.ts
 //
-// Five limiters: `createRegisterRateLimiter`, `createLoginRateLimiter`,
-// `createRefreshRateLimiter`, `createLogoutRateLimiter` and
-// `createVerifyEmailRateLimiter`. All are
+// Seven limiters: `createRegisterRateLimiter`, `createLoginRateLimiter`,
+// `createRefreshRateLimiter`, `createLogoutRateLimiter`,
+// `createVerifyEmailRateLimiter`, and the pair for resend-verification —
+// `createResendVerificationIpRateLimiter` /
+// `createResendVerificationEmailRateLimiter`. All are
 // FACTORIES, never a top-level `const` built at module-import time —
 // `rateLimit(...)` allocates a `Store` instance, and express-rate-limit
 // refuses to let two limiter instances share one (`ERR_ERL_STORE_REUSE`), so
@@ -31,16 +33,16 @@
 //      that someone else has been hammering /register from the same key — a
 //      side channel that exists for no reason.
 //
-// B3's `/forgot-password` and `/resend-verification` need their own
-// `rl:forgot-password:` and `rl:resend-verification:` prefixes on exactly
-// this pattern. Both are simultaneously enumeration oracles AND outbound
-// email amplifiers, which makes them the one case where a single key is not
-// enough: an IP-keyed limiter alone lets a distributed attacker mail-bomb
-// one victim address, and an email-keyed limiter alone lets anyone who knows
-// an address deny that user their own password reset. Layer TWO limiters
-// (each with its own prefix) — one keyed on IP, one keyed on the submitted
-// email with a deliberately generous per-address budget — rather than a
-// composite of the two, which bounds neither threat on its own.
+// RESEND-VERIFICATION is exactly the case the paragraph above predicted:
+// simultaneously an enumeration oracle AND an outbound email amplifier, so
+// a single key bounds neither threat. It gets TWO limiters, each with its
+// own prefix (`rl:resend-verification-ip:` / `rl:resend-verification-email:`)
+// — one keyed on IP, one keyed on the submitted email with a deliberately
+// generous per-address budget — layered in series on the route, rather than
+// a composite of the two. See this file's own constants and factories below
+// for the full reasoning on which side is tight and which is generous. B3's
+// still-pending `/forgot-password` needs its own `rl:forgot-password-*`
+// pair on the identical pattern.
 //
 // REGISTER is keyed on the client's IP ALONE — deliberately not the
 // composite login uses. Both threats it bounds come from one caller varying
@@ -328,6 +330,79 @@ export function createVerifyEmailRateLimiter(
     standardHeaders: true,
     legacyHeaders: false,
     store: new SharedRateLimitStore('rl:verify-email:'),
+    handler: sendRateLimitedResponse,
+    ...overrides,
+  })
+}
+
+// The IP budget is TIGHT and the per-address budget GENEROUS, which is the
+// opposite of the obvious arrangement. A tight per-address budget is
+// itself the attack: anyone who knows an address can spend it and deny
+// that user their own verification mail. The address budget bounds
+// mail-bombing one victim; the IP budget is what actually stops the
+// attacker. See this file's header comment, which states the rule for
+// exactly this pair of endpoints.
+const RESEND_VERIFICATION_IP_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000
+const RESEND_VERIFICATION_IP_RATE_LIMIT_MAX_ATTEMPTS = 5
+const RESEND_VERIFICATION_EMAIL_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000
+const RESEND_VERIFICATION_EMAIL_RATE_LIMIT_MAX_ATTEMPTS = 20
+
+/**
+ * The key the email-keyed resend-verification limiter counts attempts by:
+ * the submitted address ALONE — deliberately not composed with IP the way
+ * `loginRateLimitKey` is. A composite key here would make the per-address
+ * budget actually per-address-PER-IP, which bounds nothing: a distributed
+ * attacker gets a fresh counter on every source IP against the same victim
+ * address, defeating the one thing this limiter exists to cap.
+ * @param request - The incoming request.
+ * @returns The submitted, normalised email — or an empty string when the body carries none, a case the IP-keyed limiter above still bounds regardless.
+ */
+function resendVerificationEmailRateLimitKey(request: Request): string {
+  return submittedEmail(request)
+}
+
+/**
+ * Build the IP-keyed resend-verification limiter: `limit` attempts per
+ * `windowMs`, keyed on the client's IP alone (express-rate-limit's own
+ * default key generator). Deliberately TIGHT — see the comment above these
+ * constants. A factory, not a module-scope constant — see this file's
+ * header comment.
+ * @param overrides - Options to override, e.g. a small `limit`/`windowMs` for a test.
+ * @returns Express middleware enforcing the limit.
+ */
+export function createResendVerificationIpRateLimiter(
+  overrides: Partial<Options> = {}
+): RateLimitRequestHandler {
+  return rateLimit({
+    windowMs: RESEND_VERIFICATION_IP_RATE_LIMIT_WINDOW_MS,
+    limit: RESEND_VERIFICATION_IP_RATE_LIMIT_MAX_ATTEMPTS,
+    standardHeaders: true,
+    legacyHeaders: false,
+    store: new SharedRateLimitStore('rl:resend-verification-ip:'),
+    handler: sendRateLimitedResponse,
+    ...overrides,
+  })
+}
+
+/**
+ * Build the email-keyed resend-verification limiter: `limit` attempts per
+ * `windowMs`, keyed on the submitted address alone
+ * (`resendVerificationEmailRateLimitKey`). Deliberately GENEROUS — see the
+ * comment above these constants. A factory, not a module-scope constant —
+ * see this file's header comment.
+ * @param overrides - Options to override, e.g. a small `limit`/`windowMs` for a test.
+ * @returns Express middleware enforcing the limit.
+ */
+export function createResendVerificationEmailRateLimiter(
+  overrides: Partial<Options> = {}
+): RateLimitRequestHandler {
+  return rateLimit({
+    windowMs: RESEND_VERIFICATION_EMAIL_RATE_LIMIT_WINDOW_MS,
+    limit: RESEND_VERIFICATION_EMAIL_RATE_LIMIT_MAX_ATTEMPTS,
+    standardHeaders: true,
+    legacyHeaders: false,
+    store: new SharedRateLimitStore('rl:resend-verification-email:'),
+    keyGenerator: resendVerificationEmailRateLimitKey,
     handler: sendRateLimitedResponse,
     ...overrides,
   })

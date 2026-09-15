@@ -12,14 +12,21 @@
 // be a token-state oracle, and a distinguishable wrong-password failure
 // would tell whoever holds a link that the address is squatted.
 import { type NextFunction, type Request, type Response } from 'express'
+import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/middlewares/error.middleware'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { getDummyHash, isPasswordValid } from '@/utilities/password.utilities'
 import { successResponse } from '@/utilities/response.utilities'
 import { claimToken } from '@/utilities/token.utilities'
+import { sendVerificationMail } from '@/utilities/verification-mail.utilities'
 import { parseBody } from '@/validators/auth.validators'
-import { verifyEmailSchema, type VerifyEmailInput } from '@/validators/verification.validators'
+import {
+  resendVerificationSchema,
+  verifyEmailSchema,
+  type ResendVerificationInput,
+  type VerifyEmailInput,
+} from '@/validators/verification.validators'
 
 // Module-private instances, matching auth.controller.ts:37 and
 // token.utilities.ts — this codebase does not export repository
@@ -84,4 +91,82 @@ export async function verifyEmail(
   } catch (error) {
     next(error)
   }
+}
+
+const RESEND_RESPONSE_MESSAGE = 'If that address needs verification, a new link has been sent.'
+
+/**
+ * Send resend-verification's one response shape. Every case — malformed
+ * body, unknown address, unverified, already verified — answers through
+ * this single call so the envelope can never drift between branches. Also
+ * keeps the `unicorn/no-null` disable to one place instead of one per call
+ * site.
+ * @param response - The response to send on.
+ */
+function respondResendAccepted(response: Response): void {
+  // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data", not undefined (which JSON.stringify omits entirely)
+  successResponse(response, null, RESEND_RESPONSE_MESSAGE, 202)
+}
+
+/**
+ * Send a fresh verification link, if and only if the address belongs to an
+ * existing, unverified account.
+ *
+ * The response is identical in all three cases — unknown address, known
+ * and unverified, known and already verified. Anything else makes this a
+ * cheaper enumeration oracle than register, since it needs no password.
+ * @param request - The incoming request, carrying `{ email }`.
+ * @param response - The response.
+ * @param next - Forwards a rejection to the terminal error handler.
+ */
+export async function resendVerification(
+  request: Request,
+  response: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    // Same reasoning as verifyEmail: a malformed address must not answer
+    // differently from a well-formed unknown one, or this becomes a
+    // cheaper oracle than the one it was built to avoid.
+    let input: ResendVerificationInput
+    try {
+      input = parseBody(resendVerificationSchema, request.body)
+    } catch {
+      respondResendAccepted(response)
+      return
+    }
+    const user = await userRepository.findByEmail(input.email)
+
+    // Respond first: an SMTP round trip on one branch only is a timing
+    // oracle, and this endpoint has no bcrypt cost to hide behind.
+    respondResendAccepted(response)
+
+    if (!user || user.emailVerifiedAt) return
+
+    // eslint-disable-next-line unicorn/prefer-await -- fire-and-forget: the mail must not block the response, and awaiting would make the two branches differ by SMTP latency (Ruling T; see auth.controller.ts's register for the identical pattern)
+    resendVerificationMail(user).catch((error: unknown) => {
+      console.error('Resend verification mail failed', error)
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+/**
+ * Revoke the user's outstanding verification links and mail a new one.
+ *
+ * Revoke FIRST, send SECOND — load-bearing, not incidental.
+ * `revokeAllForUserAndPurpose` revokes every still-live row for this user
+ * and purpose at the instant it runs, with no exception for a row that
+ * does not exist yet. `sendVerificationMail` issues the new token via
+ * `issueToken`, which inserts a fresh row. Reversing the order would mail
+ * a link whose token this same call had just revoked — dead on arrival,
+ * with the 202 response giving no sign anything was wrong.
+ * @param user - The unverified user who asked for another link.
+ */
+async function resendVerificationMail(user: User): Promise<void> {
+  // Purpose-scoped: revokeAllForUser would take the user's live REFRESH
+  // tokens with it and log them out everywhere.
+  await userTokenRepository.revokeAllForUserAndPurpose(user.id, 'email_verification')
+  await sendVerificationMail(user)
 }

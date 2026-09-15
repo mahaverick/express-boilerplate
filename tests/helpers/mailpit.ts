@@ -46,14 +46,25 @@ export async function findMailpitMessages(recipient: string): Promise<MailpitMes
  * rendering failure never reaches the transport at all: unlike
  * `findMailpitMessages`, this polls the FULL budget every time (there is no
  * "arrived" signal to short-circuit on), so it is used sparingly.
+ *
+ * A single unwaited fetch here would pass whether or not anything is ever
+ * going to arrive — CLAUDE.md names this exact shape ("a helper whose
+ * JSDoc claims it polls a budget while its body does one unwaited fetch")
+ * as a real, previously-shipped false-negative. This loops for the whole
+ * budget so a message that lands mid-window — a real risk for a caller
+ * racing a fire-and-forget mail send against a negative assertion — still
+ * fails it.
  * @param recipient - The `To:` address that must never receive anything.
  * @returns Resolves once the budget has elapsed with nothing found.
  */
 export async function assertNoMailpitMessage(recipient: string): Promise<void> {
   const query = `to:${recipient}`
-  const response = await fetch(`${MAILPIT_API}/search?query=${encodeURIComponent(query)}`)
-  const body = (await response.json()) as { messages: MailpitMessage[] }
-  expect(body.messages).toHaveLength(0)
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const response = await fetch(`${MAILPIT_API}/search?query=${encodeURIComponent(query)}`)
+    const body = (await response.json()) as { messages: MailpitMessage[] }
+    expect(body.messages).toHaveLength(0)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
 }
 
 /**

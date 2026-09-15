@@ -235,6 +235,8 @@ describe('store prefixes', () => {
       'rl:refresh:',
       'rl:logout:',
       'rl:verify-email:',
+      'rl:resend-verification-ip:',
+      'rl:resend-verification-email:',
     ])
   })
 
