@@ -60,18 +60,26 @@ export interface RenderedEmail {
   html: string
 }
 
-// & { [key: string]: string } deliberately absent from HTML_ESCAPE_TABLE's
-// type: an object literal keyed by exactly the five characters
-// escapeHtmlForEmail's regex can ever pass it is what lets the `?? character`
-// fallback below be dead code for every real call, not a runtime possibility
-// this function has to reason about.
-const HTML_ESCAPE_TABLE: Readonly<Record<string, string>> = {
+// `as const` (not `Readonly<Record<string, string>>`) so `HtmlEscapable`
+// below can be derived from the table's own keys — the five characters
+// escapeHtmlForEmail's regex can ever match, and nothing else. That is what
+// makes the cast inside escapeHtmlForEmail a real narrowing instead of an
+// unreachable `?? character` fallback masking a lookup that could return
+// undefined for any input the regex could actually produce.
+const HTML_ESCAPE_TABLE = {
   '&': '&amp;',
   '<': '&lt;',
   '>': '&gt;',
   '"': '&quot;',
   "'": '&#39;',
-}
+} as const
+
+/**
+ * One of the five characters `escapeHtmlForEmail`'s regex (`/[&<>"']/g`)
+ * can ever match — exactly `HTML_ESCAPE_TABLE`'s own key set, derived from
+ * it rather than retyped, so the two can never drift apart.
+ */
+type HtmlEscapable = keyof typeof HTML_ESCAPE_TABLE
 
 /**
  * Escape the five HTML-significant characters in `value` so it is safe to
@@ -100,7 +108,12 @@ const HTML_ESCAPE_TABLE: Readonly<Record<string, string>> = {
  * @returns `value` with `& < > " '` replaced by their named HTML entities.
  */
 export function escapeHtmlForEmail(value: string): string {
-  return value.replaceAll(/[&<>"']/g, (character) => HTML_ESCAPE_TABLE[character] ?? character)
+  // The cast is exact, not defensive: the regex character class and the
+  // table's key set name the identical five characters (HtmlEscapable's own
+  // comment), so every value this callback ever receives is a valid key —
+  // there is no "else" branch to fall back to, and no `?? character` this
+  // function would otherwise need to keep untested and unreachable.
+  return value.replaceAll(/[&<>"']/g, (character) => HTML_ESCAPE_TABLE[character as HtmlEscapable])
 }
 
 /**

@@ -191,6 +191,7 @@ export default tseslint.config(
           'src/utilities/**/*.ts': '*.utilities',
           'src/constants/**/*.ts': '*.constants',
           'src/configs/**/*.ts': '*.config',
+          'src/templates/**/*.ts': '*.template',
         },
       ],
       'check-file/folder-naming-convention': ['error', { 'src/**/': 'KEBAB_CASE' }],
