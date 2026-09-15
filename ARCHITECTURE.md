@@ -60,8 +60,9 @@ itself.
 **Registration and login** (`POST /api/v1/auth/register`,
 `POST /api/v1/auth/login`) are open routes — no token required to reach
 them, by definition. `register` is the only route that **hashes** a
-password; `login` is the only route that **compares** one — both through
-`src/utilities/password.utilities.ts`, never bcrypt directly. On success,
+password; `login` and `verify-email` are the only routes that **compare**
+one — both through `src/utilities/password.utilities.ts`, never bcrypt
+directly. On success,
 `login` mints an access token (`signAccessToken`) and a refresh token
 (`issueRefreshToken`), the latter set as an httpOnly cookie. See
 [SECURITY.md](SECURITY.md) for the full reasoning behind both token types,
@@ -103,29 +104,57 @@ translate. Sharing the base class here would mean inheriting `update()` and
 is — see `email-log.model.ts` and `email-log.repository.ts`'s own header
 comments for the full reasoning.
 
-## The B3 seam: `email_verified_at` is reserved, not wired up
+## The B3 seam: email verification is wired up; password recovery is not
 
-`users.email_verified_at` (`src/database/models/user.model.ts`) exists as a
-column today, and `profile.validators.ts` deliberately excludes `email`
-from the profile-update allow-list partly because of it — changing a
-verified address through that endpoint would leave a stale verified flag
-attached to an address nobody actually verified.
+`users.email_verified_at` (`src/database/models/user.model.ts`) is no
+longer a reserved column nothing writes — it is written by a real flow, and
+read by `login` as a gate. `profile.validators.ts` still deliberately
+excludes `email` from the profile-update allow-list, and the reason is now
+current rather than forward-looking: changing a verified address through
+that endpoint would leave a stale verified flag attached to an address
+nobody actually verified for the new value.
 
 **Stated plainly, so this is not left for a reader to discover by
-grepping:** nothing in this codebase issues an email-verification token,
-nothing verifies one, and nothing sends one. There is no verification-token
-type, no endpoint, and no code path that ever sets `email_verified_at` to a
-non-null value. The `user_tokens` table introduced in this plan is
-refresh-token-specific — its `session_id`/`replaced_by_id` columns encode
-rotation-chain semantics that only make sense for a refresh token — and is
-not a general-purpose token store a verification flow already has a home
-in.
-Mailpit already runs in `docker-compose.yml` as a local SMTP sink, so B3
-has somewhere to send a verification email to on day one; issuing,
-verifying, and sending the email are otherwise entirely B3's to build. (An
-earlier planning note for this work described verification tokens as
-"issued and verifiable" already — that description ran ahead of what
-actually shipped; treat this section, not that note, as current.)
+grepping, the way the previous version of this section had to be:**
+
+- `POST /api/v1/auth/register` issues an `email_verification`-purpose token
+  (`user_tokens`, via `issueToken`) and mails a verification link on the
+  free-address branch. `user_tokens` was refresh-token-specific when the
+  previous version of this section was written — B3 Task 1 generalised it
+  with a `purpose` discriminator before Task 5 needed a home for this
+  token, so the table this section once described no longer exists in that
+  shape.
+- `POST /api/v1/auth/verify-email` (`src/controllers/verification.controller.ts`)
+  redeems that token and sets `email_verified_at`. It requires the
+  account's password alongside the token, and a wrong password consumes the
+  token exactly as a correct one would — see SECURITY.md's "Email
+  verification" section for the full reasoning, including the squatting
+  scenario the password requirement exists to defend against.
+- `POST /api/v1/auth/resend-verification` reissues a token for an
+  unverified address, revoking any still-live one first, with a response
+  identical whether the address is unknown, unverified, or already
+  verified.
+- `POST /api/v1/auth/login` refuses any account whose `email_verified_at`
+  is still null, through the same guard and the same misleading-but-
+  deliberate `401` body a wrong password produces (SECURITY.md).
+- Both new routes carry their own rate limiters — three limiters between
+  them, since `resend-verification` carries two in series — on the same
+  one-prefix-per-route convention `auth.routes.ts`'s header comment already
+  states: `rl:verify-email:` and the two-layer
+  `rl:resend-verification-ip:` / `rl:resend-verification-email:` pair.
+
+**What is still not built, and is not confused with the above:**
+forgot/reset password (B3 Task 6). A squatted, unverified address — see
+SECURITY.md's squatting scenario — has no recovery route until that lands;
+a successful reset is also where `email_verified_at` must be set, since
+clicking a reset link proves the same mailbox control a verification click
+does. Mailpit (`docker-compose.yml`) is the local SMTP sink both the
+shipped flow and Task 6 use.
+
+**A deployment upgrading with existing users must backfill
+`email_verified_at` before deploying the `login` gate above**, or every
+account created before this change is locked out simultaneously — see
+SECURITY.md for the exact statement to run and why.
 
 ## Configuration
 
@@ -299,10 +328,10 @@ router that closes forced-login CSRF, and `TRUST_PROXY` as an explicit
 deployment decision — see [SECURITY.md](SECURITY.md) for the
 security-relevant detail on all of it. It does **not** build:
 
-- **Email verification delivery, or forgot/reset password.**
-  `users.email_verified_at` is a reserved column with nothing wired to it —
-  see "The B3 seam" above. Owned by plan B3, which is also where
-  Mailpit-backed email sending is expected to land.
+- **Forgot/reset password.** Email verification itself now ships — see
+  "The B3 seam" above. Reset does not: no `/forgot-password` or
+  `/reset-password` route exists, so a squatted, unverified address has no
+  recovery path yet. Owned by plan B3 Task 6.
 - **Sessions, MFA, or OAuth/social login.** `SESSION_SECRET` remains a
   required-but-unread placeholder. Owned by plan B4.
 - **Security headers/CSP, CORS, or a general-purpose rate limiter.** All
