@@ -14,11 +14,14 @@
 // Rotation and reuse detection (rotateRefreshToken) are the security core
 // of this module: a stolen refresh token is only containable if presenting
 // it AFTER the legitimate client has already rotated it kills the entire
-// session, not just that one token. See UserTokenRepository.claimForRotation
-// for how the race that would otherwise defeat this is closed.
+// session, not just that one token. See UserTokenRepository.claimOnce for
+// how the race that would otherwise defeat this is closed — and how that
+// same primitive now also guards email-verification and password-reset
+// tokens, scoped so one purpose's token can never be claimed as another's.
 import { createHash, randomBytes } from 'node:crypto'
 import jwt from 'jsonwebtoken'
 import { getEnv } from '@/configs/env.config'
+import type { TokenPurpose } from '@/database/models/user-token.model'
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/middlewares/error.middleware'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
@@ -61,6 +64,20 @@ export interface IssuedRefreshToken {
 }
 
 /**
+ * A freshly issued token for a non-session purpose (email verification,
+ * password reset): the raw value to hand to the caller (an email link, in
+ * practice), and everything about it that isn't recoverable from the raw
+ * value alone. No `sessionId` — see user-token.model.ts's header comment for
+ * why that field means nothing outside `'refresh'`.
+ */
+export interface IssuedToken {
+  raw: string
+  userId: string
+  purpose: TokenPurpose
+  expiresAt: Date
+}
+
+/**
  * Resolve a validated TTL string to milliseconds, trusting the invariant
  * `env.config.ts`'s refinement already enforced at boot.
  * @param value - An `ACCESS_TOKEN_TTL`/`REFRESH_TOKEN_TTL`-shaped value already known to be `ms()`-parseable.
@@ -80,9 +97,9 @@ function requireDurationMs(value: string): number {
 }
 
 /**
- * SHA-256 hash a raw refresh token, hex-encoded. Deterministic on purpose —
- * see user-token.model.ts's header comment for why that rules out bcrypt.
- * @param raw - The raw refresh token.
+ * SHA-256 hash a raw token, hex-encoded. Deterministic on purpose — see
+ * user-token.model.ts's header comment for why that rules out bcrypt.
+ * @param raw - The raw token, of any purpose.
  * @returns The hex-encoded digest, as stored in `tokenHash`.
  */
 function hashToken(raw: string): string {
@@ -90,11 +107,47 @@ function hashToken(raw: string): string {
 }
 
 /**
- * Generate a new opaque refresh token.
+ * Generate a new opaque token, for any purpose.
  * @returns A hex-encoded, cryptographically random token.
  */
 function generateRawToken(): string {
   return randomBytes(REFRESH_TOKEN_BYTES).toString('hex')
+}
+
+/**
+ * Generate, hash, and persist one token row — the single insert every
+ * issuing path in this module goes through, so hashing, randomness, and the
+ * write itself have exactly one implementation rather than one per purpose.
+ * Session fields are the one thing callers still supply directly, since
+ * they mean something for `'refresh'` only (user-token.model.ts) and no
+ * other purpose has anything sensible to pass for them.
+ * @param userId - The user the token belongs to.
+ * @param purpose - Which of `TokenPurpose`'s three things this row is.
+ * @param ttlMs - How long the token is valid for, in milliseconds.
+ * @param sessionId - The rotation-chain id, for `'refresh'`; omitted (column stays NULL — neither column has a DB default) for every other purpose.
+ * @param sessionStartedAt - When that chain began, for `'refresh'`; omitted for every other purpose.
+ * @returns The inserted row's id, the raw token to hand back, and its expiry.
+ */
+async function createTokenRow(
+  userId: string,
+  purpose: TokenPurpose,
+  ttlMs: number,
+  sessionId: string | undefined,
+  sessionStartedAt: Date | undefined
+): Promise<{ id: string; raw: string; expiresAt: Date }> {
+  const raw = generateRawToken()
+  const expiresAt = new Date(Date.now() + ttlMs)
+
+  const row = await userTokenRepository.create({
+    userId,
+    purpose,
+    sessionId,
+    sessionStartedAt,
+    tokenHash: hashToken(raw),
+    expiresAt,
+  })
+
+  return { id: row.id, raw, expiresAt }
 }
 
 /**
@@ -169,26 +222,44 @@ export async function issueRefreshToken(
   sessionId: string
 ): Promise<IssuedRefreshToken> {
   const env = getEnv()
-  const raw = generateRawToken()
-  const expiresAt = new Date(Date.now() + requireDurationMs(env.REFRESH_TOKEN_TTL))
+  // This is where a session's absolute clock starts. `rotateRefreshToken`
+  // copies the value forward rather than calling this function, so the
+  // anchor survives every rotation — see that function and the column's own
+  // comment (user-token.model.ts). Calling THIS function a second time for
+  // a sessionId that already exists would restart that clock; nothing in
+  // the application does (login always mints a fresh sessionId), and a
+  // caller that wants a second live token in one session should be aware it
+  // is also extending that session's ceiling.
+  const sessionStartedAt = new Date()
 
-  await userTokenRepository.create({
+  const { raw, expiresAt } = await createTokenRow(
     userId,
+    'refresh',
+    requireDurationMs(env.REFRESH_TOKEN_TTL),
     sessionId,
-    // This is where a session's absolute clock starts. `rotateRefreshToken`
-    // copies the value forward rather than calling this function, so the
-    // anchor survives every rotation — see that function and the column's
-    // own comment (user-token.model.ts). Calling THIS function a second
-    // time for a sessionId that already exists would restart that clock;
-    // nothing in the application does (login always mints a fresh
-    // sessionId), and a caller that wants a second live token in one
-    // session should be aware it is also extending that session's ceiling.
-    sessionStartedAt: new Date(),
-    tokenHash: hashToken(raw),
-    expiresAt,
-  })
+    sessionStartedAt
+  )
 
   return { raw, userId, sessionId, expiresAt }
+}
+
+/**
+ * Issue a new token for a purpose that has no session — email verification
+ * or password reset. The shared issuing path every purpose goes through
+ * (`createTokenRow`); `issueRefreshToken` above is the `'refresh'`-specific
+ * wrapper that also anchors a session.
+ * @param userId - The user the token belongs to.
+ * @param purpose - Which of `TokenPurpose`'s three things to issue. Passing `'refresh'` here works but is unnecessary — `issueRefreshToken` is that case's own entry point and is the one that anchors a session.
+ * @param ttlMs - How long the token is valid for, in milliseconds.
+ * @returns The raw token to hand to the caller, and its metadata.
+ */
+export async function issueToken(
+  userId: string,
+  purpose: TokenPurpose,
+  ttlMs: number
+): Promise<IssuedToken> {
+  const { raw, expiresAt } = await createTokenRow(userId, purpose, ttlMs, undefined, undefined)
+  return { raw, userId, purpose, expiresAt }
 }
 
 /**
@@ -214,16 +285,32 @@ export async function issueRefreshToken(
  */
 export async function rotateRefreshToken(raw: string): Promise<IssuedRefreshToken> {
   const tokenHash = hashToken(raw)
-  const claimed = await userTokenRepository.claimForRotation(tokenHash)
+  const claimed = await userTokenRepository.claimOnce(tokenHash, 'refresh')
 
   if (!claimed) {
-    // Either this hash was never issued, or it was — but is already
-    // revoked, which is the reuse signal. Only the second case has a
-    // session worth containing.
+    // Either this hash was never issued, it was issued for a DIFFERENT
+    // purpose (e.g. a password-reset token presented here by mistake — see
+    // claimOnce's purpose predicate), or it is a refresh token that is
+    // already revoked, which is the reuse signal. Only the last case has a
+    // session worth containing; `findByHash` is purpose-agnostic, so
+    // `existing` may be a row of another purpose, and only a 'refresh' row
+    // ever has a non-null `sessionId` to revoke.
     const existing = await userTokenRepository.findByHash(tokenHash)
-    if (existing) {
+    if (existing && existing.sessionId !== null) {
       await userTokenRepository.revokeAllForSession(existing.sessionId)
     }
+    throw new HttpError('Invalid refresh token', 401)
+  }
+
+  // sessionId/sessionStartedAt are nullable at the column level (they mean
+  // nothing outside 'refresh', see user-token.model.ts), but `claimed` was
+  // just claimed under the 'refresh' predicate above, and issueRefreshToken
+  // — the only writer of a 'refresh' row — always fills both together.
+  // Narrowing here, rather than asserting the type away, so a future bug
+  // that broke that invariant fails loudly as a 401 instead of a runtime
+  // crash further down.
+  const { sessionId, sessionStartedAt } = claimed
+  if (sessionId === null || sessionStartedAt === null) {
     throw new HttpError('Invalid refresh token', 401)
   }
 
@@ -235,7 +322,7 @@ export async function rotateRefreshToken(raw: string): Promise<IssuedRefreshToke
   }
 
   const env = getEnv()
-  const sessionAgeMs = Date.now() - claimed.sessionStartedAt.getTime()
+  const sessionAgeMs = Date.now() - sessionStartedAt.getTime()
   if (sessionAgeMs >= requireDurationMs(env.SESSION_ABSOLUTE_TTL)) {
     // The absolute ceiling, which `expiresAt` above cannot enforce: that is
     // a sliding window every rotation resets, so a client that refreshes
@@ -249,7 +336,7 @@ export async function rotateRefreshToken(raw: string): Promise<IssuedRefreshToke
     // therefore equally past the ceiling. Leaving them nominally live would
     // make the table disagree with the rule this function enforces, for no
     // gain — they could not be rotated either.
-    await userTokenRepository.revokeAllForSession(claimed.sessionId)
+    await userTokenRepository.revokeAllForSession(sessionId)
     // Deliberately the SAME message the expiry branch uses. A third
     // distinguishable rejection would tell a caller holding a valid refresh
     // token which of the two clocks ran out, and "expired" is a true
@@ -257,22 +344,24 @@ export async function rotateRefreshToken(raw: string): Promise<IssuedRefreshToke
     throw new HttpError('Refresh token expired', 401)
   }
 
-  const newRaw = generateRawToken()
-  const expiresAt = new Date(Date.now() + requireDurationMs(env.REFRESH_TOKEN_TTL))
-
-  const created = await userTokenRepository.create({
-    userId: claimed.userId,
-    sessionId: claimed.sessionId,
-    // Copied, never recomputed: this is what makes the ceiling above an
-    // ABSOLUTE limit rather than another sliding one.
-    sessionStartedAt: claimed.sessionStartedAt,
-    tokenHash: hashToken(newRaw),
+  // Copies sessionId/sessionStartedAt forward rather than recomputing them:
+  // this is what makes the ceiling above an ABSOLUTE limit rather than
+  // another sliding one.
+  const {
+    id,
+    raw: newRaw,
     expiresAt,
-  })
+  } = await createTokenRow(
+    claimed.userId,
+    'refresh',
+    requireDurationMs(env.REFRESH_TOKEN_TTL),
+    sessionId,
+    sessionStartedAt
+  )
 
-  await userTokenRepository.update(claimed.id, { replacedById: created.id })
+  await userTokenRepository.update(claimed.id, { replacedById: id })
 
-  return { raw: newRaw, userId: claimed.userId, sessionId: claimed.sessionId, expiresAt }
+  return { raw: newRaw, userId: claimed.userId, sessionId, expiresAt }
 }
 
 /**
@@ -289,18 +378,22 @@ export async function revokeSession(sessionId: string): Promise<void> {
 /**
  * Revoke the session a raw refresh token belongs to — logout's primitive.
  *
- * Resolves quietly for a token that is missing, forged, or already revoked;
- * it never distinguishes those from a live one in what it returns or how
- * long it takes. Logout must feel like unconditional success to whoever
- * calls it, not a way to test whether a given token string is still live —
- * exactly the same reasoning `rotateRefreshToken` (this module) and the
- * login endpoint (auth.controller.ts) already apply to their own callers.
+ * Resolves quietly for a token that is missing, forged, already revoked, or
+ * issued for a different purpose entirely (a password-reset or
+ * email-verification token's raw value presented here has no session to
+ * revoke, and `findByHash` is purpose-agnostic so it would still be found);
+ * it never distinguishes any of those from a live one in what it returns or
+ * how long it takes. Logout must feel like unconditional success to
+ * whoever calls it, not a way to test whether a given token string is
+ * still live — exactly the same reasoning `rotateRefreshToken` (this
+ * module) and the login endpoint (auth.controller.ts) already apply to
+ * their own callers.
  * @param raw - The raw refresh token presented by the client.
  * @returns Resolves once the token's session (if any matched) is revoked.
  */
 export async function revokeRefreshToken(raw: string): Promise<void> {
   const existing = await userTokenRepository.findByHash(hashToken(raw))
-  if (existing) {
+  if (existing && existing.sessionId !== null) {
     await userTokenRepository.revokeAllForSession(existing.sessionId)
   }
 }

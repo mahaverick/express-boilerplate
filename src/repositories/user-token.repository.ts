@@ -6,18 +6,26 @@
 // `db.select()/.insert()/.update()` calls live here, against the concrete
 // `userTokenModel`, rather than in the generic base class.
 //
-// `claimForRotation` exists to close a race `rotateRefreshToken`
-// (token.utilities.ts) would otherwise have: a plain "read, check revokedAt,
+// `claimOnce` exists to close a race any single-use-token redemption would
+// otherwise have — originally written for `rotateRefreshToken`
+// (token.utilities.ts), and generalised here to every purpose
+// (user-token.model.ts's `TokenPurpose`): a plain "read, check revokedAt,
 // then write" sequence lets two concurrent presentations of the same raw
 // token both observe `revokedAt IS NULL` and both proceed, defeating reuse
-// detection entirely. `claimForRotation` instead does the check and the
-// write in one statement — `UPDATE ... WHERE token_hash = $1 AND revoked_at
-// IS NULL RETURNING *` — so Postgres itself decides which single caller (if
-// any) "wins" the claim; only that caller ever sees a defined result.
+// detection (for a refresh token) or double-spending (for a verification or
+// reset token) entirely. `claimOnce` instead does the check and the write in
+// one statement — `UPDATE ... WHERE token_hash = $1 AND purpose = $2 AND
+// revoked_at IS NULL RETURNING *` — so Postgres itself decides which single
+// caller (if any) "wins" the claim; only that caller ever sees a defined
+// result. The `purpose` predicate is what stops a token minted for one
+// purpose from being claimed as another: it participates in the SAME atomic
+// statement as the revocation check, not a separate lookup a caller could
+// perform race-free but forget to.
 import { eq, sql, type SQL } from 'drizzle-orm'
 import {
   userTokenModel,
   type NewUserToken,
+  type TokenPurpose,
   type UserToken,
 } from '@/database/models/user-token.model'
 import { HttpError } from '@/middlewares/error.middleware'
@@ -29,9 +37,9 @@ import {
 import { db } from '@/services/database.service'
 
 /**
- * Query access to the `user_tokens` table: refresh-token issuance, lookup by
- * hash, atomic rotation-claiming, and bulk revocation by session or by
- * user. Every lookup excludes a soft-deleted row by default — see
+ * Query access to the `user_tokens` table: token issuance, lookup by hash,
+ * atomic single-use claiming (`claimOnce`), and bulk revocation by session
+ * or by user. Every lookup excludes a soft-deleted row by default — see
  * `BaseRepository.scope`, which every method below is built on so none of
  * them can drift from that behaviour independently.
  */
@@ -44,8 +52,8 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
   }
 
   /**
-   * Find a token row by its hash.
-   * @param tokenHash - The SHA-256 hash of the raw refresh token, hex-encoded.
+   * Find a token row by its hash, regardless of purpose.
+   * @param tokenHash - The SHA-256 hash of the raw token, hex-encoded.
    * @param options - Soft-delete visibility options.
    * @returns The matching row, or undefined when none exists.
    */
@@ -54,21 +62,31 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
   }
 
   /**
-   * Atomically claim a not-yet-revoked token row for rotation: sets
-   * `revokedAt` and returns the row, but only if it was still live the
-   * instant this statement ran. A second, concurrent call for the same hash
-   * — including a genuine reuse attempt racing the legitimate rotation —
+   * Atomically claim a not-yet-revoked token row of one purpose: sets
+   * `revokedAt` and `consumedAt`, and returns the row, but only if it was
+   * still live, for that exact purpose, the instant this statement ran. A
+   * second, concurrent call for the same hash — including a genuine reuse
+   * attempt racing a legitimate rotation, or a claim for the wrong purpose —
    * gets undefined, never the same row twice.
-   * @param tokenHash - The SHA-256 hash of the raw refresh token, hex-encoded.
-   * @returns The now-revoked row (its pre-claim `expiresAt`/`userId`/`sessionId` are still the values to act on), or undefined when no live row matched.
+   *
+   * `revokedAt` and `consumedAt` are set together, but mean different
+   * things: `revokedAt IS NULL` is the one fact every caller checks to
+   * decide "is this row still claimable" (see this file's header comment);
+   * `consumedAt` is set ONLY here, so it distinguishes a row spent through
+   * this normal single-use path from one killed by an explicit revoke
+   * (`revokeAllForSession`/`revokeAllForUser`, below), which sets
+   * `revokedAt` alone.
+   * @param tokenHash - The SHA-256 hash of the raw token, hex-encoded.
+   * @param purpose - The purpose the token must have been issued for; a row that exists but for a different purpose is left untouched and this resolves undefined, exactly as if no row matched at all.
+   * @returns The now-claimed row (its pre-claim `expiresAt`/`userId`/`sessionId` are still the values to act on), or undefined when no live row of that purpose matched.
    */
-  async claimForRotation(tokenHash: string): Promise<UserToken | undefined> {
+  async claimOnce(tokenHash: string, purpose: TokenPurpose): Promise<UserToken | undefined> {
     const [row] = await db
       .update(userTokenModel)
-      .set(this.touched({ revokedAt: sql`now()` }))
+      .set(this.touched({ revokedAt: sql`now()`, consumedAt: sql`now()` }))
       .where(
         this.scope(
-          sql`${userTokenModel.tokenHash} = ${tokenHash} and ${userTokenModel.revokedAt} is null`
+          sql`${userTokenModel.tokenHash} = ${tokenHash} and ${userTokenModel.purpose} = ${purpose} and ${userTokenModel.revokedAt} is null`
         )
       )
       .returning()

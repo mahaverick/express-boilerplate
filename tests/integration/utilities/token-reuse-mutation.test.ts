@@ -79,8 +79,9 @@ describe('mutation-test harness, proven on reuse detection', () => {
     const userId = await createUser()
 
     // MUTATED: revokeAllForSession is a no-op. rotateRefreshToken still
-    // rejects the reused token itself — claimForRotation already finds it
-    // revoked, and that throw is unconditional — but the tell is whether
+    // rejects the reused token itself — claimOnce already finds it revoked
+    // (and its purpose matches, since only a genuine 'refresh' token is
+    // used here), and that throw is unconditional — but the tell is whether
     // the FAMILY survives. It must not.
     const mutatedSessionId = randomUUID()
     const issued = await issueRefreshToken(userId, mutatedSessionId)
