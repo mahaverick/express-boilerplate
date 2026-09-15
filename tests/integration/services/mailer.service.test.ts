@@ -246,6 +246,68 @@ describe('sendMail', () => {
     // by construction, not re-asserted here.
   })
 
+  // Fix round 1 (coordinator review): recordDelivery used to log the RAW
+  // error from a failed record() call — a Drizzle query error whose bound
+  // parameters include entry.recipient, an email address (PII). This proves
+  // the fix against a REAL failing insert, not a synthetic error shape: an
+  // over-width templateKey (> 32, email-log.model.ts's `template_key`
+  // column width) makes the actual INSERT reject with a genuine
+  // DrizzleQueryError wrapping a real postgres.PostgresError in `.cause` —
+  // exactly the shape `error.middleware.ts`'s `redactedForLog` (now reused
+  // by `recordDelivery`) was built to redact everywhere else in this
+  // codebase.
+  it('redacts a real failed delivery-log write, dropping the recipient PII it would otherwise log', async () => {
+    const transporter = getMailTransporter()
+    const recipient = uniqueRecipient('recorded-write-fails-for-real')
+    const overWidthTemplateKey = 'x'.repeat(64) // > 32: email-log.model.ts's template_key width
+
+    // Plain property assignment, not vi.spyOn — mirrors tests/helpers/mutate.ts's
+    // own stated reason for the identical choice (its header comment): no
+    // mocking-framework state to reconcile with this project's vitest
+    // config, which sets neither restoreMocks nor mockReset. Verified
+    // empirically that this matters here, not just in mutate.ts: vi.spyOn(
+    // console, 'error') reliably missed the call this specific test needs to
+    // capture, while capturing an identical call in isolated repro files —
+    // this project's own console-interception layer appears to reset a
+    // vi.spyOn wrapper mid-test under some condition not tracked down
+    // further; a plain reassignment has no such state to lose.
+    const capturedErrorCalls: unknown[][] = []
+    const originalConsoleError = console.error
+    console.error = (...callArguments: unknown[]): void => {
+      capturedErrorCalls.push(callArguments)
+    }
+    try {
+      await withMutatedMethod(
+        transporter,
+        'sendMail',
+        resolveWithFakeInfo as (typeof transporter)['sendMail'],
+        async () => {
+          await expect(
+            sendMail({ to: recipient, subject: 'x', text: 'x', templateKey: overWidthTemplateKey })
+          ).resolves.toBeUndefined()
+        }
+      )
+    } finally {
+      console.error = originalConsoleError
+    }
+
+    const recordFailureCall = capturedErrorCalls.find(
+      (call) => call[0] === 'Failed to record email delivery log'
+    )
+    expect(recordFailureCall).toBeDefined()
+    const logged = recordFailureCall?.[1] as { driverCode?: unknown } | undefined
+    // The real property: the recipient address never appears anywhere in
+    // what was logged, whether as a top-level field or buried inside a
+    // bound parameter value.
+    expect(JSON.stringify(logged)).not.toContain(recipient)
+    // Not simply omitted by accident — the driver's own SQLSTATE code
+    // (22001, string data right truncation) survives, which is what makes
+    // the log line still worth having at all.
+    expect(logged?.driverCode).toBeDefined()
+
+    // No row to clean up: the insert genuinely failed and nothing landed.
+  })
+
   // CARRY-FORWARD from progress.md's Task-2 dispatch note: Task 4's own
   // leak proof only covers the SUCCESS path (a caller passing a raw
   // errorCode directly to record()). This is the failure-path half: a

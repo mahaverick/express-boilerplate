@@ -80,8 +80,14 @@ export class EmailLogRepository {
    * reason, not a request failure and not a leaked secret. The caller
    * itself is still responsible for the other half of Ruling E: catching
    * whatever this rejects with (a genuine infrastructure failure, not this
-   * normalization) and logging it at pino `error` rather than failing the
-   * request.
+   * normalization) and logging it at `console.error` — redacted the same
+   * way `error.middleware.ts`'s `redactedForLog` already redacts every
+   * other failed write in this codebase (driver error code kept, bound
+   * parameter values dropped; this table's own `recipient` is PII, not a
+   * secret, but the same redaction applies to it for the identical reason)
+   * — rather than failing the request. (This paragraph previously named
+   * "pino" as the logger; there is no pino anywhere in this codebase, and
+   * that was never true — corrected here rather than left standing.)
    * @param entry - The row to insert: recipient, templateKey, status, and whichever of providerMessageId/errorCode applies to that status.
    * @returns The inserted row, including its generated `id` and `createdAt`.
    */
