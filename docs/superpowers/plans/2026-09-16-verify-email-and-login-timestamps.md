@@ -23,7 +23,7 @@
 - **`touched()` writes a database-side `updatedAt`, and `SQL` is not in the insert model's type** (`base.repository.ts:93`) — a `sql` value cannot pass through the public `update()`. Timestamps written from a controller use `new Date()`.
 - **Mail sends are respond-first and use `.catch()`, never `void`.** Under Node 24 an unhandled rejection kills the process, and it would do so on one branch only — which is the enumeration oracle again, escalated into a denial of service.
 - **Every route on `auth.routes.ts` carries a rate limiter with its own store prefix.** That file's header comment states it as a standing rule, not a per-route decision.
-- **Gate before every commit:** `pnpm lint && pnpm test && pnpm format:check`. The baseline this branch starts from is 235 passing tests, lint/build/format clean.
+- **Gate before every commit:** `pnpm lint && pnpm test && pnpm format:check`. The baseline this branch starts from, measured on `c2bd8eb` before Task 1, is **352 passed | 5 skipped across 45 files**. (235 was B2's count, before B3's tasks landed — do not use it as a target.)
 - Commit messages: conventional-commit prefix, and end with:
   ```
   Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
@@ -32,21 +32,21 @@
 
 ## File structure
 
-| File | Responsibility | Task |
-|---|---|---|
-| `tests/helpers/mailpit.ts` | **New.** Mailpit's HTTP API, shared by every test that asserts on mail | 1 |
-| `src/utilities/password.utilities.ts` | Gains `getDummyHash`, moved out of a controller so a second caller can have it | 2 |
-| `src/configs/env.config.ts` | Gains `EMAIL_VERIFICATION_TTL`; `WEB_URL` stops being a placeholder | 3 |
-| `src/utilities/verification-link.utilities.ts` | **New.** Builds the frontend verification URL from `WEB_URL` | 3 |
-| `src/repositories/user.repository.ts` | Gains `markEmailVerified` | 4 |
-| `src/repositories/user-token.repository.ts` | Gains `revokeAllForUserAndPurpose` | 4 |
-| `src/utilities/token.utilities.ts` | Gains `claimToken` — the expiry-checking claim path | 5 |
-| `src/controllers/auth.controller.ts` | `login` writes `lastLoggedInAt` (6) and gains the verified guard (9); `register` becomes oracle-free (8) | 6, 8, 9 |
-| `src/validators/verification.validators.ts` | **New.** Bodies for verify and resend | 7, 10 |
-| `src/controllers/verification.controller.ts` | **New.** `verifyEmail` (7), `resendVerification` (10) | 7, 10 |
-| `src/middlewares/rate-limit.middleware.ts` | Three new limiter factories | 7, 10 |
-| `src/routes/auth.routes.ts` | Two new routes | 7, 10 |
-| `SECURITY.md` | The squatting trade, the burnt-token rule, the backfill requirement | 11 |
+| File                                           | Responsibility                                                                                           | Task    |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------- | ------- |
+| `tests/helpers/mailpit.ts`                     | **New.** Mailpit's HTTP API, shared by every test that asserts on mail                                   | 1       |
+| `src/utilities/password.utilities.ts`          | Gains `getDummyHash`, moved out of a controller so a second caller can have it                           | 2       |
+| `src/configs/env.config.ts`                    | Gains `EMAIL_VERIFICATION_TTL`; `WEB_URL` stops being a placeholder                                      | 3       |
+| `src/utilities/verification-link.utilities.ts` | **New.** Builds the frontend verification URL from `WEB_URL`                                             | 3       |
+| `src/repositories/user.repository.ts`          | Gains `markEmailVerified`                                                                                | 4       |
+| `src/repositories/user-token.repository.ts`    | Gains `revokeAllForUserAndPurpose`                                                                       | 4       |
+| `src/utilities/token.utilities.ts`             | Gains `claimToken` — the expiry-checking claim path                                                      | 5       |
+| `src/controllers/auth.controller.ts`           | `login` writes `lastLoggedInAt` (6) and gains the verified guard (9); `register` becomes oracle-free (8) | 6, 8, 9 |
+| `src/validators/verification.validators.ts`    | **New.** Bodies for verify and resend                                                                    | 7, 10   |
+| `src/controllers/verification.controller.ts`   | **New.** `verifyEmail` (7), `resendVerification` (10)                                                    | 7, 10   |
+| `src/middlewares/rate-limit.middleware.ts`     | Three new limiter factories                                                                              | 7, 10   |
+| `src/routes/auth.routes.ts`                    | Two new routes                                                                                           | 7, 10   |
+| `SECURITY.md`                                  | The squatting trade, the burnt-token rule, the backfill requirement                                      | 11      |
 
 **Sequencing constraint:** Tasks 7, 8, 9 and 10 all modify `auth.routes.ts` and/or `auth.controller.ts`. They are **strictly sequential** and must not be dispatched in parallel. Tasks 1–5 touch disjoint files and could run in parallel, but Task 8 consumes all of them.
 
@@ -57,10 +57,12 @@
 Every test from Task 7 onward asserts on mail. The helpers to do that already exist, but they are module-scope functions private to one test file, so nothing else can use them. Test-only task: no file under `src/` changes.
 
 **Files:**
+
 - Create: `tests/helpers/mailpit.ts`
 - Modify: `tests/integration/services/mailer.service.test.ts:45-100` (delete the local copies, import instead) and its later `fetch(`${MAILPIT_API}/message/...`)` call at `:498`
 
 **Interfaces:**
+
 - Consumes: nothing.
 - Produces:
   - `findMailpitMessages(recipient: string): Promise<MailpitMessage[]>`
@@ -196,7 +198,7 @@ const detail = await getMailpitMessage(messageId ?? '')
 - [ ] **Step 3: Run the full suite — this is the whole proof**
 
 Run: `pnpm test`
-Expected: PASS, the same count as the baseline (235). A pure move changes no behaviour, so an unchanged suite is exactly the evidence wanted. If the count *rises or falls*, something else changed and you should stop and say what.
+Expected: PASS, the same count as the baseline — **352 passed | 5 skipped (357) across 45 files**. A pure move changes no behaviour, so an unchanged suite is exactly the evidence wanted. If the count _rises or falls_, something else changed and you should stop and say what.
 
 - [ ] **Step 4: Gate and commit**
 
@@ -213,10 +215,12 @@ git commit -m "test: extract the Mailpit helpers so more than one file can asser
 `verification.controller.ts` (Task 7) needs the same constant-time comparison `login` uses. `getDummyHash` is a module-private IIFE in `auth.controller.ts:62`. It must **move**, not be copied: a second dummy hash is a second bcrypt cost to keep in step with `BCRYPT_COST`.
 
 **Files:**
+
 - Modify: `src/utilities/password.utilities.ts` (add the export), `src/controllers/auth.controller.ts:55-68` (delete the IIFE, import instead)
 - Test: `tests/unit/utilities/password.utilities.test.ts`
 
 **Interfaces:**
+
 - Consumes: nothing.
 - Produces: `getDummyHash(): Promise<string>` exported from `@/utilities/password.utilities`.
 
@@ -256,7 +260,7 @@ Expected: FAIL — `getDummyHash is not exported` / TypeScript error at the impo
 
 - [ ] **Step 3: Move the IIFE**
 
-Cut `getDummyHash` from `auth.controller.ts:62-68` and paste it into `src/utilities/password.utilities.ts` below `isPasswordValid`, adding `export` and keeping **every line of its comment** — including the paragraph explaining why the cache lives in the closure rather than a top-level variable (it satisfies `unicorn/no-top-level-assignment-in-function` without a disable). Also move the part of `auth.controller.ts`'s header comment that explains *why* a dummy hash exists, or leave a one-line pointer to its new home; do not let the reasoning be orphaned.
+Cut `getDummyHash` from `auth.controller.ts:62-68` and paste it into `src/utilities/password.utilities.ts` below `isPasswordValid`, adding `export` and keeping **every line of its comment** — including the paragraph explaining why the cache lives in the closure rather than a top-level variable (it satisfies `unicorn/no-top-level-assignment-in-function` without a disable). Also move the part of `auth.controller.ts`'s header comment that explains _why_ a dummy hash exists, or leave a one-line pointer to its new home; do not let the reasoning be orphaned.
 
 ```ts
 export const getDummyHash: () => Promise<string> = (() => {
@@ -288,11 +292,13 @@ git commit -m "refactor: move getDummyHash to the password utilities for a secon
 ### Task 3: `EMAIL_VERIFICATION_TTL`, and the link `WEB_URL` finally builds
 
 **Files:**
+
 - Modify: `src/configs/env.config.ts` (the TTL block at `:108-146`, and `WEB_URL` at `:76`)
 - Create: `src/utilities/verification-link.utilities.ts`
 - Test: `tests/unit/configs/env.config.test.ts`, `tests/unit/utilities/verification-link.utilities.test.ts`
 
 **Interfaces:**
+
 - Consumes: nothing.
 - Produces:
   - `EMAIL_VERIFICATION_TTL` on the validated env, a duration string, default `'24h'`
@@ -443,10 +449,12 @@ Confirm `.env.example` actually changed and is tracked. If `pnpm env:example` wr
 ### Task 4: The two repository methods
 
 **Files:**
+
 - Modify: `src/repositories/user.repository.ts`, `src/repositories/user-token.repository.ts`
 - Test: `tests/integration/repositories/user.repository.test.ts`, `tests/integration/repositories/user-token.repository.test.ts`
 
 **Interfaces:**
+
 - Consumes: nothing.
 - Produces:
   - `userRepository.markEmailVerified(id: string): Promise<User | undefined>` — sets `email_verified_at = now()` **only when it is null**; returns `undefined` when the row was already verified or does not exist.
@@ -597,10 +605,12 @@ git commit -m "feat: add markEmailVerified and a purpose-scoped token revoke"
 `claimOnce` deliberately does not check expiry; its doc comment says so in capitals and a test named `claimOnce claims an expired-but-unrevoked row — expiry is the caller's job, not the predicate's` pins that. `rotateRefreshToken` does its own expiry check. The two non-session purposes need the same, and they cannot do it themselves because `hashToken` is module-private.
 
 **Files:**
+
 - Modify: `src/utilities/token.utilities.ts` (add the export near `issueToken` at `:266`)
 - Test: `tests/integration/utilities/token.utilities.test.ts`
 
 **Interfaces:**
+
 - Consumes: `userTokenRepository.claimOnce`, module-private `hashToken`.
 - Produces: `claimToken(raw: string, purpose: Exclude<TokenPurpose, 'refresh'>): Promise<UserToken | undefined>` — claims atomically, returns `undefined` for unknown, wrong-purpose, already-claimed **and expired**.
 
@@ -727,10 +737,12 @@ git commit -m "feat: add claimToken, the claim path that enforces expiry"
 Independent of the verification work and shippable on its own. Do it before the verification gate lands so it is not hostage to it.
 
 **Files:**
+
 - Modify: `src/controllers/auth.controller.ts` — `login`, around `:245-258`
 - Test: `tests/integration/api/auth.test.ts`
 
 **Interfaces:**
+
 - Consumes: `userRepository.update` (`base.repository.ts:199`).
 - Produces: nothing other tasks depend on.
 
@@ -812,22 +824,22 @@ Expected: FAIL — `lastLoggedInAt` stays null after a successful login.
 In `login`, between the guard and token issuance:
 
 ```ts
-    if (!user || !isPasswordCorrect || !user.active || !user.passwordHash) {
-      throw new HttpError('Invalid email or password', 401)
-    }
+if (!user || !isPasswordCorrect || !user.active || !user.passwordHash) {
+  throw new HttpError('Invalid email or password', 401)
+}
 
-    // AFTER the guard, so a failed attempt leaves no trace on the row, and
-    // BEFORE tokens are issued, so a failed UPDATE answers 500 without
-    // having already set a refresh cookie for a login the caller is being
-    // told did not happen.
-    //
-    // `new Date()` rather than sql`now()`: this goes through the public
-    // `update()`, whose value type is the insert model, and SQL is not
-    // part of it (base.repository.ts:93). `update()` also bumps
-    // `updated_at` via `touched()`, which is why this is not a raw query.
-    await userRepository.update(user.id, { lastLoggedInAt: new Date() })
+// AFTER the guard, so a failed attempt leaves no trace on the row, and
+// BEFORE tokens are issued, so a failed UPDATE answers 500 without
+// having already set a refresh cookie for a login the caller is being
+// told did not happen.
+//
+// `new Date()` rather than sql`now()`: this goes through the public
+// `update()`, whose value type is the insert model, and SQL is not
+// part of it (base.repository.ts:93). `update()` also bumps
+// `updated_at` via `touched()`, which is why this is not a raw query.
+await userRepository.update(user.id, { lastLoggedInAt: new Date() })
 
-    const sessionId = randomUUID()
+const sessionId = randomUUID()
 ```
 
 - [ ] **Step 4: Run the tests**
@@ -850,11 +862,13 @@ git commit -m "feat: record lastLoggedInAt on a successful login"
 The endpoint takes **`{ token, password }`**. Read the spec's "Squatting, and why verification needs the password" section before writing a line of this — the password field is the whole security argument, and an implementer who trims it as redundant reopens a silent account-takeover path.
 
 **Files:**
+
 - Create: `src/validators/verification.validators.ts`, `src/controllers/verification.controller.ts`
 - Modify: `src/middlewares/rate-limit.middleware.ts`, `src/routes/auth.routes.ts:47-50`
 - Test: `tests/integration/api/verification.test.ts` (new)
 
 **Interfaces:**
+
 - Consumes: `claimToken` (Task 5), `markEmailVerified` (Task 4), `getDummyHash`/`isPasswordValid` (Task 2), `revokeAllForUserAndPurpose` (Task 4).
 - Produces: `verifyEmail` (an Express handler), `verifyEmailSchema`, `createVerifyEmailRateLimiter(overrides?: Partial<Options>): RateLimitRequestHandler`.
 
@@ -1033,17 +1047,17 @@ export type ResendVerificationInput = z.infer<typeof resendVerificationSchema>
 // would tell whoever holds a link that the address is squatted.
 import { type NextFunction, type Request, type Response } from 'express'
 import { HttpError } from '@/middlewares/error.middleware'
-import { UserRepository } from '@/repositories/user.repository'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
+import { UserRepository } from '@/repositories/user.repository'
 import { getDummyHash, isPasswordValid } from '@/utilities/password.utilities'
 import { successResponse } from '@/utilities/response.utilities'
 import { claimToken } from '@/utilities/token.utilities'
 import { parseBody } from '@/validators/auth.validators'
 import {
-  verifyEmailSchema,
-  type VerifyEmailInput,
-  type ResendVerificationInput,
   resendVerificationSchema,
+  verifyEmailSchema,
+  type ResendVerificationInput,
+  type VerifyEmailInput,
 } from '@/validators/verification.validators'
 
 // Module-private instances, matching auth.controller.ts:37 and
@@ -1154,7 +1168,7 @@ export function createVerifyEmailRateLimiter(
 In `src/routes/auth.routes.ts`, after the four existing routes:
 
 ```ts
-  router.post('/verify-email', createVerifyEmailRateLimiter(), verifyEmail)
+router.post('/verify-email', createVerifyEmailRateLimiter(), verifyEmail)
 ```
 
 with `verifyEmail` imported from `@/controllers/verification.controller` and the limiter added to the existing `@/middlewares/rate-limit.middleware` import. The file's header comment names B3's routes as ones that "must follow" the per-route-limiter rule — update that paragraph to say this one has landed rather than leaving it describing the future.
@@ -1166,7 +1180,7 @@ Expected: PASS — the new file plus every existing test untouched. Nothing in t
 
 - [ ] **Step 8: Prove the password check is load-bearing**
 
-First add the test that needs no harness at all, because neither existing test fails if the comparison is deleted — with `isPasswordValid` always true, the wrong-password call simply *succeeds*, and `burns the token` still sees a 400 on its second call:
+First add the test that needs no harness at all, because neither existing test fails if the comparison is deleted — with `isPasswordValid` always true, the wrong-password call simply _succeeds_, and `burns the token` still sees a 400 on its second call:
 
 ```ts
 it('does not verify the account when the password is wrong', async () => {
@@ -1210,15 +1224,17 @@ git commit -m "feat: add POST /auth/verify-email, requiring the account password
 
 ### Task 8: Registration stops answering two different ways
 
-The biggest task here, and most of it is test work. `register` currently answers `201` with the created user for a free address and `409` for a taken one — that difference *is* the enumeration oracle. Both branches now answer an identical `202` with `data: null`, and only the outbound mail differs.
+The biggest task here, and most of it is test work. `register` currently answers `201` with the created user for a free address and `409` for a taken one — that difference _is_ the enumeration oracle. Both branches now answer an identical `202` with `data: null`, and only the outbound mail differs.
 
 Because the response no longer carries the user, **both test helpers break silently**: each reads the created id out of the response to track it for cleanup, and with `data: null` those conditions simply go false. No error, no failure — every test quietly leaks rows into the shared worker database. Fix the helpers first.
 
 **Files:**
+
 - Modify: `src/controllers/auth.controller.ts` — `register` at `:200-218`
 - Modify: `tests/integration/api/auth.test.ts` (helper at `:146-155`, assertions at `:162`, `:246`, `:256`), `tests/integration/api/auth-refresh.test.ts` (helper at `:76-85`)
 
 **Interfaces:**
+
 - Consumes: `issueToken` + `EMAIL_VERIFICATION_TTL` (Task 3), `buildVerificationUrl` (Task 3), `sendMail`, both templates, `findMailpitMessages` (Task 1).
 - Produces: `registerVerifiedUser(overrides?)` and `registerAndLogin(createdIds)` test helpers that Task 9 depends on.
 
@@ -1227,48 +1243,48 @@ Because the response no longer carries the user, **both test helpers break silen
 In `tests/integration/api/auth.test.ts`, `registerUser` currently ends:
 
 ```ts
-    if (response.status === 201 && body.data) createdIds.push(body.data.id)
+if (response.status === 201 && body.data) createdIds.push(body.data.id)
 ```
 
 Replace the id-from-response read with a lookup by the address just used, which works under both the old and the new contract:
 
 ```ts
-  async function registerUser(
-    overrides: Partial<{ email: string; password: string; firstName: string; lastName: string }> = {}
-  ): Promise<{ response: request.Response; body: ApiEnvelope<PublicUserBody>; email: string }> {
-    const email = overrides.email ?? uniqueEmail()
-    const response = await request(app)
-      .post('/api/v1/auth/register')
-      .send({ email, password: VALID_PASSWORD, ...overrides })
-    const body = envelopeOf<PublicUserBody>(response)
-    // Looked up by address rather than read out of the response body.
-    // register's response does not carry the user any more (it would be an
-    // enumeration oracle), and a helper that reads `body.data.id` does not
-    // FAIL when that becomes null — it silently stops tracking the row and
-    // leaks it into the shared worker database.
-    const created = await userRepository.findByEmail(email)
-    if (created) createdIds.push(created.id)
-    return { response, body, email }
-  }
+async function registerUser(
+  overrides: Partial<{ email: string; password: string; firstName: string; lastName: string }> = {}
+): Promise<{ response: request.Response; body: ApiEnvelope<PublicUserBody>; email: string }> {
+  const email = overrides.email ?? uniqueEmail()
+  const response = await request(app)
+    .post('/api/v1/auth/register')
+    .send({ email, password: VALID_PASSWORD, ...overrides })
+  const body = envelopeOf<PublicUserBody>(response)
+  // Looked up by address rather than read out of the response body.
+  // register's response does not carry the user any more (it would be an
+  // enumeration oracle), and a helper that reads `body.data.id` does not
+  // FAIL when that becomes null — it silently stops tracking the row and
+  // leaks it into the shared worker database.
+  const created = await userRepository.findByEmail(email)
+  if (created) createdIds.push(created.id)
+  return { response, body, email }
+}
 
-  /**
-   * Register a user and mark them verified, so a test that only needs a
-   * usable account does not have to walk the verification flow. Marking is
-   * done here, in the helper — NEVER by weakening login's guard.
-   * @param overrides - Fields to override on the default registration body.
-   * @returns The created user row and the address used.
-   */
-  async function registerVerifiedUser(
-    overrides: Partial<{ email: string; password: string; firstName: string; lastName: string }> = {}
-  ): Promise<{ user: User; email: string }> {
-    const { email } = await registerUser(overrides)
-    const user = await userRepository.findByEmail(email)
-    if (!user) throw new Error(`registerVerifiedUser: no user for ${email}`)
-    await sql`update users set email_verified_at = now() where id = ${user.id}`
-    const verified = await userRepository.findById(user.id)
-    if (!verified) throw new Error(`registerVerifiedUser: user vanished for ${email}`)
-    return { user: verified, email }
-  }
+/**
+ * Register a user and mark them verified, so a test that only needs a
+ * usable account does not have to walk the verification flow. Marking is
+ * done here, in the helper — NEVER by weakening login's guard.
+ * @param overrides - Fields to override on the default registration body.
+ * @returns The created user row and the address used.
+ */
+async function registerVerifiedUser(
+  overrides: Partial<{ email: string; password: string; firstName: string; lastName: string }> = {}
+): Promise<{ user: User; email: string }> {
+  const { email } = await registerUser(overrides)
+  const user = await userRepository.findByEmail(email)
+  if (!user) throw new Error(`registerVerifiedUser: no user for ${email}`)
+  await sql`update users set email_verified_at = now() where id = ${user.id}`
+  const verified = await userRepository.findById(user.id)
+  if (!verified) throw new Error(`registerVerifiedUser: user vanished for ${email}`)
+  return { user: verified, email }
+}
 ```
 
 Raw `sql` is used for the marking because both files already use raw `sql` for cleanup; follow the file, not a new convention.
@@ -1299,7 +1315,7 @@ async function registerAndLogin(
 - [ ] **Step 2: Run the suite, still on the old controller**
 
 Run: `pnpm test`
-Expected: PASS, 235 + whatever Tasks 1–7 added. The helpers changed, behaviour did not. If anything fails here, the helper rewrite is wrong and fixing it now is far cheaper than after the controller moves.
+Expected: PASS, 352 + whatever Tasks 1–7 added (baseline was 352 passed | 5 skipped). The helpers changed, behaviour did not. If anything fails here, the helper rewrite is wrong and fixing it now is far cheaper than after the controller moves.
 
 - [ ] **Step 3: Write the failing tests for the new contract**
 
@@ -1504,6 +1520,7 @@ The block above is already written without `void`; keep it that way.
 
 Run: `pnpm test`
 Expected: PASS. The `201`-shape test at `auth.test.ts:162` and the two `409` tests at `:246`/`:256` will fail — they assert exactly what this task removes. Rewrite them:
+
 - `:162`'s "no password field of any kind" assertion is the point of that test and must survive. Move it onto **login's** response, which still returns the user.
 - `:246` and `:256` both assert `409` on a duplicate address. **Delete them**; Step 3's `answers a free address and a taken one identically` is their replacement and is already written. Do not write a third copy. Before deleting, read each one for any assertion the replacement does not make — if one checks something else as well, carry that across.
 
@@ -1528,10 +1545,12 @@ git commit -m "feat: answer registration identically for free and taken addresse
 Two lines of source, and the reason the previous four tasks were ordered the way they were.
 
 **Files:**
+
 - Modify: `src/controllers/auth.controller.ts` — the guard at `:248`
 - Test: `tests/integration/api/auth.test.ts`
 
 **Interfaces:**
+
 - Consumes: `registerUser` / `registerVerifiedUser` (Task 8).
 - Produces: nothing.
 
@@ -1580,9 +1599,9 @@ Expected: FAIL — the unverified login returns `200`.
 - [ ] **Step 3: Add the clause to the existing guard**
 
 ```ts
-    if (!user || !isPasswordCorrect || !user.active || !user.passwordHash || !user.emailVerifiedAt) {
-      throw new HttpError('Invalid email or password', 401)
-    }
+if (!user || !isPasswordCorrect || !user.active || !user.passwordHash || !user.emailVerifiedAt) {
+  throw new HttpError('Invalid email or password', 401)
+}
 ```
 
 **In that condition, not a separate early return.** `isPasswordCorrect` is computed above it, so joining the existing guard inherits both the identical body and the bcrypt cost. An early return would be a timing oracle in its own right: a fast 401 for unverified against a slow 401 for a wrong password.
@@ -1611,10 +1630,12 @@ git commit -m "feat: refuse login for an unverified account, indistinguishably"
 ### Task 10: `POST /auth/resend-verification`
 
 **Files:**
+
 - Modify: `src/controllers/verification.controller.ts`, `src/middlewares/rate-limit.middleware.ts`, `src/routes/auth.routes.ts`
 - Test: `tests/integration/api/verification.test.ts`
 
 **Interfaces:**
+
 - Consumes: `resendVerificationSchema` (Task 7), `issueToken`, `revokeAllForUserAndPurpose`, `buildVerificationUrl`, `sendMail`.
 - Produces: `resendVerification`, `createResendVerificationIpRateLimiter`, `createResendVerificationEmailRateLimiter`.
 
@@ -1813,12 +1834,12 @@ A dedicated `keyGenerator` for the email-keyed limiter must still be IP-independ
 - [ ] **Step 5: Wire the route with both limiters**
 
 ```ts
-  router.post(
-    '/resend-verification',
-    createResendVerificationIpRateLimiter(),
-    createResendVerificationEmailRateLimiter(),
-    resendVerification
-  )
+router.post(
+  '/resend-verification',
+  createResendVerificationIpRateLimiter(),
+  createResendVerificationEmailRateLimiter(),
+  resendVerification
+)
 ```
 
 Two limiters in series, not a composite key — each bounds its own threat, and either firing alone must be enough.
@@ -1843,6 +1864,7 @@ git commit -m "feat: add POST /auth/resend-verification behind two rate limiters
 The findings below are worth more than the code: the previous run of this project lost most of its security reasoning because it lived only in a gitignored scratch directory.
 
 **Files:**
+
 - Modify: `SECURITY.md`, `ARCHITECTURE.md` (the "B3 seam"), `docs/superpowers/plans/README.md`, `docs/superpowers/plans/2026-09-15-email-and-recovery.md`
 
 - [ ] **Step 1: `SECURITY.md` — five entries**

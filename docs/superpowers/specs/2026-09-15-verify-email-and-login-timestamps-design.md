@@ -61,7 +61,7 @@ a defect that tests can easily pass over.
    `claimToken` export below.
 3. **`issueToken(userId, purpose, ttlMs)`** — `token.utilities.ts:266` — takes
    `Exclude<TokenPurpose, 'refresh'>` and returns `{ raw, userId, purpose,
-   expiresAt }`. It is already the correct entry point; nothing about it changes.
+expiresAt }`. It is already the correct entry point; nothing about it changes.
 4. **`sendMail` takes one argument**, a `MailMessage` discriminated union
    (`mailer.service.ts:128, 343`) of `{ to, templateKey, variables }`. It renders
    internally and never throws for a render failure.
@@ -82,10 +82,10 @@ a defect that tests can easily pass over.
    `userId` alone, so it takes refresh tokens with it. Anything purpose-scoped
    needs a new method.
 10. **Registration's 409 comes from the repository, not the controller.**
-   `UserRepository.create` translates the unique violation
-   (`auth.controller.ts:194`). Closing the oracle means catching that, not
-   adding a pre-check — a pre-check would be a second, driftable copy of the
-   decision and racy besides.
+    `UserRepository.create` translates the unique violation
+    (`auth.controller.ts:194`). Closing the oracle means catching that, not
+    adding a pre-check — a pre-check would be a second, driftable copy of the
+    decision and racy besides.
 
 ## Squatting, and why verification needs the password
 
@@ -98,11 +98,11 @@ The harmful step, in every variant of this, is the same one: **`emailVerifiedAt`
 being written at click time on a row whose password the clicker did not set.**
 Who registered first does not matter.
 
-- *Newest registrant wins* (overwrite the password on a taken-but-unverified
+- _Newest registrant wins_ (overwrite the password on a taken-but-unverified
   address) fails when the victim registered first and has not yet clicked: the
   attacker overwrites the password and a fresh link goes to the victim's inbox,
   so the victim's own click verifies the attacker's credentials.
-- *Taken writes nothing* fails too, and through the only door left open to the
+- _Taken writes nothing_ fails too, and through the only door left open to the
   victim. A squatted address is "known and unverified", so
   `resend-verification` mails it a link; the victim clicks, the column is
   written, and the attacker logs in with the password they chose.
@@ -170,7 +170,7 @@ branch the value must be the **stored** user's `firstName`, never the submitted
 one: the submitted value is attacker-chosen text being delivered into the
 victim's inbox.
 
-**A taken address may have no *visible* row.** The unique index is on
+**A taken address may have no _visible_ row.** The unique index is on
 `lower(email)` with no `deleted_at` predicate (`user.model.ts:46`), so
 registering a soft-deleted user's address still raises the 409 — but
 `findByEmail` excludes soft-deleted rows (`user.repository.ts:45`) and returns
@@ -186,7 +186,7 @@ is recorded as accepted rather than closed, which is what the plan asked for.
 
 Both sends respond-first and use `.catch()`, never `void` — Ruling T, at
 `2026-09-15-email-and-recovery.md`'s findings section: under Node 24 an unhandled
-rejection kills the process, and it would do so *only* on one branch, which is
+rejection kills the process, and it would do so _only_ on one branch, which is
 the enumeration oracle again, escalated into a denial of service.
 
 ### `POST /api/v1/auth/verify-email`
@@ -202,7 +202,7 @@ nothing reads).
   token's `userId`.
 - Every failure — unknown token, wrong purpose, already consumed, expired, **wrong
   password**, or no such user — returns byte-identical: `400`, `'Invalid or
-  expired verification token.'`, `data: null`. Distinguishable failures would be a
+expired verification token.'`, `data: null`. Distinguishable failures would be a
   token-state oracle, and a distinguishable wrong-password failure would tell an
   attacker holding a link that the address is squatted.
 - **Order: claim first, compare second.** `claimToken` consumes the row, then
@@ -250,7 +250,7 @@ sent only in the middle case.
 if (!user || !isPasswordCorrect || !user.active || !user.passwordHash) {
 ```
 
-It must go in *that* condition, not a separate early return. The controller
+It must go in _that_ condition, not a separate early return. The controller
 already computes `isPasswordCorrect` before the guard (B2's constant-time
 handling of a non-existent user), so joining it inherits both the identical `401`
 body and the bcrypt cost for free. A separate early return would be a timing
@@ -297,11 +297,11 @@ an IP-keyed limiter alone lets a distributed attacker mail-bomb one address, and
 an email-keyed limiter alone lets anyone who knows an address deny that user
 their own verification mail.
 
-| Limiter | Prefix | Key | Window | Limit |
-|---|---|---|---|---|
-| `createVerifyEmailRateLimiter` | `rl:verify-email:` | IP | 15 min | 30 |
-| `createResendVerificationIpRateLimiter` | `rl:resend-verification-ip:` | IP | 60 min | 5 |
-| `createResendVerificationEmailRateLimiter` | `rl:resend-verification-email:` | submitted email | 60 min | 20 |
+| Limiter                                    | Prefix                          | Key             | Window | Limit |
+| ------------------------------------------ | ------------------------------- | --------------- | ------ | ----- |
+| `createVerifyEmailRateLimiter`             | `rl:verify-email:`              | IP              | 15 min | 30    |
+| `createResendVerificationIpRateLimiter`    | `rl:resend-verification-ip:`    | IP              | 60 min | 5     |
+| `createResendVerificationEmailRateLimiter` | `rl:resend-verification-email:` | submitted email | 60 min | 20    |
 
 The **IP** layer is the tight one and the **email** layer the generous one, in
 that order deliberately. `rate-limit.middleware.ts:39-42` says why: a tight
@@ -361,13 +361,13 @@ across `tests/integration/api/auth.test.ts` and
 `tests/integration/api/auth-refresh.test.ts`, plus 9 `auth/login` call sites.
 
 Both files' helpers break on the register contract change, and they break
-*silently* rather than loudly — each tracks created users for `afterEach` cleanup
+_silently_ rather than loudly — each tracks created users for `afterEach` cleanup
 by reading the id out of the register response:
 
 - `auth.test.ts:153` — `if (response.status === 201 && body.data)
-  createdIds.push(body.data.id)`.
+createdIds.push(body.data.id)`.
 - `auth-refresh.test.ts:82` — `if (registerBody.data)
-  createdIds.push(registerBody.data.id)`.
+createdIds.push(registerBody.data.id)`.
 
 With `data: null` and a `202`, both conditions simply go false: no error, no
 failure, and every test leaks its rows into the shared worker database. So the
