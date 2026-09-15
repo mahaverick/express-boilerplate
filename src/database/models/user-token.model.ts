@@ -101,18 +101,21 @@ export const userTokenModel = pgTable(
     // `tokenHash`, which is already looked up through a unique index, so
     // the predicate costs nothing extra to evaluate.
     //
-    // DEFAULTS TO 'refresh' — chosen so the migration that added this
-    // column could backfill every pre-existing row (all of them refresh
-    // tokens, the only purpose that existed before this column did) in the
-    // same ALTER TABLE that added the NOT NULL constraint, without a
-    // separate UPDATE pass. The tradeoff: 'refresh' is the highest-
-    // privilege purpose (it can mint a fresh session), and a default makes
-    // it the type also assigned to a `create()` call that forgot to specify
-    // one — a mistake that would otherwise be a compile error. This is
-    // mitigated, not eliminated: after this task, `createTokenRow`
-    // (token.utilities.ts) is the ONLY call to `userTokenRepository.create`
-    // in `src/`, and it always passes `purpose` explicitly.
-    purpose: varchar('purpose', { length: 20 }).$type<TokenPurpose>().notNull().default('refresh'),
+    // NO DEFAULT, DELIBERATELY. The migration that added this column
+    // (0003) carried a temporary `DEFAULT 'refresh'` — needed only to
+    // backfill every pre-existing row (all of them refresh tokens, the
+    // only purpose that existed before this column did) in the same ALTER
+    // TABLE that added the NOT NULL constraint — and migration 0004 drops
+    // it immediately after, once that one-time backfill is done. The
+    // schema here was never given that default: a Drizzle column with a
+    // default makes the field OPTIONAL in `NewUserToken`, and 'refresh' is
+    // the highest-privilege purpose (the one that can mint a session) — an
+    // optional `purpose` would mean a `create()` call that forgot to
+    // specify one silently mints a refresh-capable row instead of failing
+    // to compile. Omitting `purpose` is a TypeScript error; see
+    // tests/unit/database/models/user-token.model.test.ts for a committed
+    // assertion that it stays one.
+    purpose: varchar('purpose', { length: 20 }).$type<TokenPurpose>().notNull(),
     // The session "family" this token belongs to — meaningful for
     // `'refresh'` only; null for `'email_verification'`/`'password_reset'`,
     // which have no rotation chain to belong to.
