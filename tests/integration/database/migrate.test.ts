@@ -17,6 +17,42 @@ describe('migrations', () => {
     expect(columns).toEqual(expect.arrayContaining(['id', 'email', 'password_hash', 'created_at']))
   })
 
+  it('creates the user_tokens table', async () => {
+    const rows = await sql`
+      select column_name from information_schema.columns
+      where table_name = 'user_tokens'
+    `
+    const columns = rows.map((r) => r.column_name as string)
+    expect(columns).toEqual(
+      expect.arrayContaining([
+        'id',
+        'user_id',
+        'session_id',
+        'token_hash',
+        'expires_at',
+        'revoked_at',
+        'replaced_by_id',
+        'created_at',
+      ])
+    )
+  })
+
+  it('cascades a user_tokens row when its owning user is deleted', async () => {
+    const email = `token-cascade-${Date.now()}@example.test`
+    const [user] = await sql`insert into users (email) values (${email}) returning id`
+    const userId = user?.id as string
+    const [token] = await sql`
+      insert into user_tokens (user_id, session_id, token_hash, expires_at)
+      values (${userId}, ${crypto.randomUUID()}, ${'a'.repeat(64)}, now() + interval '1 day')
+      returning id
+    `
+
+    await sql`delete from users where id = ${userId}`
+
+    const remaining = await sql`select 1 from user_tokens where id = ${token?.id as string}`
+    expect(remaining).toHaveLength(0)
+  })
+
   it('enforces case-insensitive email uniqueness at the database level', async () => {
     const email = `dup-${Date.now()}@example.test`
     await sql`insert into users (email) values (${email})`

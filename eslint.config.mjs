@@ -223,7 +223,11 @@ export default tseslint.config(
       'check-file/filename-naming-convention': 'off',
       // Fixture credentials in tests are not real secrets — they exist so
       // the test can assert against a known value, never to guard anything.
+      // hardcoded-secret-signatures is the same false-positive class as
+      // no-hardcoded-passwords above, tripped by token.utilities.test.ts
+      // signing a JWT with a deliberately-wrong secret to prove rejection.
       'sonarjs/no-hardcoded-passwords': 'off',
+      'sonarjs/hardcoded-secret-signatures': 'off',
       'no-restricted-properties': 'off',
     },
   },

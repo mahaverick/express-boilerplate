@@ -20,15 +20,27 @@ describe('render', () => {
   })
 
   it('carries the placeholder note into every required-but-unused secret', () => {
-    // These five are required by the schema and read by nothing in src/.
-    // The .describe() text is the only thing that tells a cloner they can
-    // put any 32-character string there for now, and .env.example is where
-    // they will read it — so assert it actually reaches the file rather
-    // than trusting that the generator picks descriptions up.
-    for (const key of ['JWT_ACCESS_SECRET', 'JWT_REFRESH_SECRET', 'SESSION_SECRET']) {
+    // JWT_ACCESS_SECRET is deliberately excluded here: token.utilities.ts
+    // reads it to sign/verify access tokens, so its .describe() states what
+    // it does instead of carrying this placeholder note — see
+    // env.config.ts's own comment on that field.
+    //
+    // The remaining two are required by the schema and read by nothing in
+    // src/. The .describe() text is the only thing that tells a cloner they
+    // can put any 32-character string there for now, and .env.example is
+    // where they will read it — so assert it actually reaches the file
+    // rather than trusting that the generator picks descriptions up.
+    for (const key of ['JWT_REFRESH_SECRET', 'SESSION_SECRET']) {
       const index = output.indexOf(`${key}=`)
       expect(output.slice(Math.max(0, index - 200), index)).toContain('PLACEHOLDER')
     }
+  })
+
+  it('describes what JWT_ACCESS_SECRET actually does, not a stale placeholder note', () => {
+    const index = output.indexOf('JWT_ACCESS_SECRET=')
+    const preceding = output.slice(Math.max(0, index - 200), index)
+    expect(preceding).toContain('Signs and verifies access tokens')
+    expect(preceding).not.toContain('PLACEHOLDER')
   })
 
   it('renders a schema default value', () => {

@@ -71,6 +71,60 @@ describe('parseEnv', () => {
     }
     expect(message).toContain('DATABASE_URL')
   })
+
+  it('defaults ACCESS_TOKEN_TTL to 15m and REFRESH_TOKEN_TTL to 30d when absent', () => {
+    const parsed = parseEnv(valid)
+    expect(parsed.ACCESS_TOKEN_TTL).toBe('15m')
+    expect(parsed.REFRESH_TOKEN_TTL).toBe('30d')
+  })
+
+  it('accepts a custom, ms()-parseable TTL for either token', () => {
+    const parsed = parseEnv({ ...valid, ACCESS_TOKEN_TTL: '1h', REFRESH_TOKEN_TTL: '7d' })
+    expect(parsed.ACCESS_TOKEN_TTL).toBe('1h')
+    expect(parsed.REFRESH_TOKEN_TTL).toBe('7d')
+  })
+
+  // This is the exact defect the whole rebuild was justified by: the old
+  // codebase called `ms(process.env.REFRESH_TOKEN_EXPIRY)` directly, and an
+  // unparseable (here: unset) value made `ms()` itself throw at
+  // module-import time — a failure that named a third-party library instead
+  // of the missing environment variable, and took down an unrelated test
+  // suite before any test body ran. Pinning both halves of that property:
+  // the failure is named, and it never originates from inside `ms`.
+  it('rejects a malformed ACCESS_TOKEN_TTL with a validation error naming the field, not a throw from inside ms', () => {
+    let message = ''
+    let didThrowFromMs = false
+    try {
+      parseEnv({ ...valid, ACCESS_TOKEN_TTL: 'not-a-duration' })
+    } catch (error) {
+      message = (error as Error).message
+      // ms()'s own thrown message, verbatim from its source: "val is not a
+      // non-empty string or a valid number". If this ever appears here, the
+      // refinement stopped catching ms() and let it throw straight through.
+      didThrowFromMs = message.includes('val is not a non-empty string')
+    }
+    expect(message).toContain('ACCESS_TOKEN_TTL')
+    expect(didThrowFromMs).toBe(false)
+  })
+
+  it('rejects a malformed REFRESH_TOKEN_TTL the same way', () => {
+    expect(() => parseEnv({ ...valid, REFRESH_TOKEN_TTL: 'not-a-duration' })).toThrow(
+      /REFRESH_TOKEN_TTL/
+    )
+  })
+
+  it('rejects an unparseable env var by name alongside every other problem, not alone', () => {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { DATABASE_URL, ...rest } = valid
+    let message = ''
+    try {
+      parseEnv({ ...rest, ACCESS_TOKEN_TTL: 'not-a-duration' })
+    } catch (error) {
+      message = (error as Error).message
+    }
+    expect(message).toContain('ACCESS_TOKEN_TTL')
+    expect(message).toContain('DATABASE_URL')
+  })
 })
 
 describe('getEnv', () => {
