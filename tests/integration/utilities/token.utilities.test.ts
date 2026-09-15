@@ -22,6 +22,7 @@ import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { parseDurationMs } from '@/utilities/duration.utilities'
 import {
+  claimToken,
   issueRefreshToken,
   issueToken,
   revokeAllSessions,
@@ -385,5 +386,87 @@ describe('issueToken and cross-purpose claiming', () => {
     )
     expect(resetClaimedCorrectly).toBeDefined()
     expect(verifyClaimedCorrectly).toBeDefined()
+  })
+})
+
+describe('claimToken', () => {
+  const createdUserIds: string[] = []
+
+  afterEach(async () => {
+    if (createdUserIds.length === 0) return
+    await sql`delete from users where id = any(${createdUserIds})`
+    createdUserIds.length = 0
+  })
+
+  /**
+   * Create a disposable user for a test and track it for cleanup.
+   * @returns The created user's id.
+   */
+  async function createUser(): Promise<string> {
+    const user = await userRepository.create({ email: `claim-token-${randomUUID()}@example.test` })
+    createdUserIds.push(user.id)
+    return user.id
+  }
+
+  it('claims a live token once', async () => {
+    const userId = await createUser()
+    const issued = await issueToken(userId, 'email_verification', 60_000)
+
+    const claimed = await claimToken(issued.raw, 'email_verification')
+
+    expect(claimed?.userId).toBe(userId)
+    // Single-use: the same raw token cannot be claimed a second time —
+    // claimOnce already revoked it on the first, successful claim above.
+    expect(await claimToken(issued.raw, 'email_verification')).toBeUndefined()
+  })
+
+  it('refuses a token issued for another purpose', async () => {
+    const userId = await createUser()
+    const issued = await issueToken(userId, 'password_reset', 60_000)
+
+    expect(await claimToken(issued.raw, 'email_verification')).toBeUndefined()
+  })
+
+  it('refuses an EXPIRED token', async () => {
+    // THE load-bearing test in this task. claimOnce's WHERE clause has no
+    // expiry predicate — it will happily claim this row and return it. If
+    // claimToken forwarded that row instead of checking expiresAt, every
+    // other test in this describe block would still pass, and the product
+    // would ship a verification link that works forever. The mutation
+    // proof in claim-token-mutation.test.ts makes this provable, not just
+    // assumed: it disables exactly this check and shows this exact
+    // assertion goes red.
+    const userId = await createUser()
+    const issued = await issueToken(userId, 'email_verification', -1000)
+
+    expect(await claimToken(issued.raw, 'email_verification')).toBeUndefined()
+  })
+
+  it('consumes an expired token rather than leaving it claimable', async () => {
+    // claimOnce already revoked the row by the time expiry is checked.
+    // That is the correct order — one presentation is one attempt — and
+    // this pins it so a later "fix" that checks expiry first does not
+    // quietly make an expired link retryable.
+    const userId = await createUser()
+    const issued = await issueToken(userId, 'email_verification', -1000)
+
+    await claimToken(issued.raw, 'email_verification')
+
+    const row = await userTokenRepository.findByHash(hashRawToken(issued.raw))
+    // Found FIRST, and separately: `expect(row?.revokedAt).not.toBeNull()`
+    // passes against `undefined` too, so if the row had vanished (or never
+    // matched) this assertion alone would stay green while reading as
+    // though it had checked something — the same trap this file's header
+    // comment already calls out for test 5.
+    expect(row).toBeDefined()
+    expect(row?.revokedAt).not.toBeNull()
+    // consumedAt is set ONLY by claimOnce's claim path (never by a bare
+    // revoke) — asserting it too proves the row was actually spent through
+    // claimToken, not merely revoked by some other means.
+    expect(row?.consumedAt).not.toBeNull()
+  })
+
+  it('refuses an unknown token', async () => {
+    expect(await claimToken('deadbeef', 'email_verification')).toBeUndefined()
   })
 })

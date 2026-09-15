@@ -21,7 +21,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import jwt from 'jsonwebtoken'
 import { getEnv } from '@/configs/env.config'
-import type { TokenPurpose } from '@/database/models/user-token.model'
+import type { TokenPurpose, UserToken } from '@/database/models/user-token.model'
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/middlewares/error.middleware'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
@@ -270,6 +270,34 @@ export async function issueToken(
 ): Promise<IssuedToken> {
   const { raw, expiresAt } = await createTokenRow(userId, purpose, ttlMs, undefined, undefined)
   return { raw, userId, purpose, expiresAt }
+}
+
+/**
+ * Claim a non-session token — email verification or password reset — once,
+ * atomically, and only while it is still live.
+ *
+ * The expiry check is HERE, not in the predicate, and that is deliberate:
+ * `claimOnce` (user-token.repository.ts) matches on hash, purpose and
+ * `revoked_at is null` and says in its own comment that expiry is the
+ * caller's job. `rotateRefreshToken` below does the same check for
+ * `'refresh'`. A caller that skipped it would ship a link that is
+ * redeemable forever, and no other test in this file would notice.
+ *
+ * The row is claimed BEFORE expiry is judged, so presenting an expired
+ * token still spends it. One presentation is one attempt; a token that
+ * could be retried after failing is not single-use.
+ * @param raw - The raw token presented by the caller.
+ * @param purpose - The purpose it must have been issued for.
+ * @returns The claimed row, or undefined when the token is unknown, of another purpose, already claimed, or expired.
+ */
+export async function claimToken(
+  raw: string,
+  purpose: Exclude<TokenPurpose, 'refresh'>
+): Promise<UserToken | undefined> {
+  const claimed = await userTokenRepository.claimOnce(hashToken(raw), purpose)
+  if (!claimed) return undefined
+  if (claimed.expiresAt.getTime() <= Date.now()) return undefined
+  return claimed
 }
 
 /**
