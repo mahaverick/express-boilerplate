@@ -51,7 +51,33 @@ const ruleIdsFor = async (filePath: string, source: string): Promise<string[]> =
   return messages.map((message) => message.ruleId ?? '')
 }
 
-describe('lint gates actually fire', () => {
+// This suite gets its own timeout instead of the global 20s (vitest.config.ts),
+// which stays right for every other file.
+//
+// Measured on an idle machine, per test: 1101ms for the first `lintText`
+// (ESLint config resolution plus parser init) and 1474ms for the first
+// `lintFiles` (typescript-eslint building the real TS program the no-cycle
+// fixtures need). Every later test in each group costs 7-40ms, because both
+// ESLint instances above are module-scoped and reused — so the file is ~4s
+// end to end, comfortably inside 20s.
+//
+// It is the VARIANCE that made this file flaky, not the mean. Run
+// immediately after `pnpm lint && pnpm build` — which is exactly the
+// sequence CI runs — those same two cold tests were observed at 20.2s and
+// once at 61s: eight vitest workers, v8 coverage instrumentation, and a
+// just-finished `tsc` all compete for the CPU while ESLint type-checks the
+// project from cold. A 229ms overrun was enough to fail a run.
+//
+// A gate test that flakes is worse than a slow one: it gets labelled flaky,
+// then skipped, and the thing this file proves — that the lint gates
+// actually FIRE rather than merely being configured — is this repository's
+// most valuable single test. So the timeout is generous (2x the worst
+// contended run ever observed here) rather than tuned close to the mean.
+// Raising the GLOBAL timeout instead was rejected: that would hide a real
+// slowdown anywhere else in the suite.
+const LINT_GATE_TIMEOUT_MS = 120_000
+
+describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS }, () => {
   it('rejects an undocumented export', async () => {
     const messages = await messagesFor(
       'src/utilities/probe.utilities.ts',
