@@ -58,8 +58,14 @@
 // stating deliberately rather than leaving implicit: "no token may appear
 // in a subject line" (task-3-brief.md) used to be a convention a caller
 // could violate by constructing its own subject string. It is now
-// unenforceable-by-construction — there is no field left for a caller to
-// put a token into. Re-exposing a caller-suppliable `subject` (or `text`/
+// structural for the message FIELDS: there is no caller-suppliable
+// `subject`/`text`/`html` left to put a token into. It is NOT yet total, and
+// the gap is worth naming rather than glossing: `variables.appName` is typed
+// plain `string` and is interpolated into one template's subject
+// (registration-attempt.template.ts), so a caller that put content there would
+// still reach a Subject header. Closing that properly means sourcing `appName`
+// from config instead of accepting it per-message — see the plan's "Execution
+// status" section. Re-exposing a caller-suppliable `subject` (or `text`/
 // `html`) on this interface would silently reopen both of these; don't, no
 // matter how convenient it looks for a one-off caller.
 //
