@@ -11,11 +11,18 @@
 // it exists only so a request has somewhere to land after the limiter lets
 // it through, so these tests prove the LIMITER's behaviour, not the login
 // controller's (that's tests/integration/api/auth.test.ts's job).
-import express, { type Express } from 'express'
+import fs from 'node:fs'
+import path from 'node:path'
+import express, { type Express, type RequestHandler } from 'express'
 import request from 'supertest'
 import { describe, expect, it, vi } from 'vitest'
 import { errorHandler } from '@/middlewares/error.middleware'
-import { createLoginRateLimiter, RATE_LIMITED_CODE } from '@/middlewares/rate-limit.middleware'
+import {
+  createLoginRateLimiter,
+  createLogoutRateLimiter,
+  createRegisterRateLimiter,
+  RATE_LIMITED_CODE,
+} from '@/middlewares/rate-limit.middleware'
 
 vi.mock('@/services/redis.service', () => ({
   getRedis: vi.fn(() => Promise.reject(new Error('no redis in unit tests'))),
@@ -33,6 +40,24 @@ function buildApp(limit: number): Express {
   app.use(express.json())
   app.post('/login', createLoginRateLimiter({ limit, windowMs: 60_000 }), (_request, response) => {
     response.status(401).json({ success: false, message: 'Invalid email or password' })
+  })
+  app.use(errorHandler)
+  return app
+}
+
+/**
+ * Build a bare app behind an arbitrary limiter, answering 201 when the
+ * request gets through. Used for the limiters that are NOT keyed on the
+ * request body, where the stub's own status only has to be distinguishable
+ * from a 429.
+ * @param limiter - The limiter middleware to put in front of the stub handler.
+ * @returns The app.
+ */
+function buildAppBehind(limiter: RequestHandler): Express {
+  const app = express()
+  app.use(express.json())
+  app.post('/endpoint', limiter, (_request, response) => {
+    response.status(201).json({ success: true })
   })
   app.use(errorHandler)
   return app
@@ -120,5 +145,94 @@ describe('createLoginRateLimiter', () => {
 
     expect(first.status).toBe(401)
     expect(second.status).toBe(429)
+  })
+})
+
+describe('createRegisterRateLimiter', () => {
+  it('returns 429 with standardized RateLimit-* headers once the limit is exceeded', async () => {
+    const app = buildAppBehind(createRegisterRateLimiter({ limit: 2, windowMs: 60_000 }))
+
+    const first = await request(app).post('/endpoint').send({ email: 'a@example.com' })
+    const second = await request(app).post('/endpoint').send({ email: 'b@example.com' })
+    const limited = await request(app).post('/endpoint').send({ email: 'c@example.com' })
+
+    expect(first.status).toBe(201)
+    expect(second.status).toBe(201)
+
+    expect(limited.status).toBe(429)
+    expect(limited.body).toMatchObject({ success: false, code: RATE_LIMITED_CODE })
+    expect(limited.headers).toHaveProperty('ratelimit-limit')
+    expect(limited.headers).not.toHaveProperty('x-ratelimit-limit')
+  })
+
+  // The property that makes this limiter useful at all, and the one thing
+  // that must differ from the login limiter: registration is keyed on IP
+  // ALONE. An attacker enumerating addresses varies the email on every
+  // request by construction, so a key containing the email would hand them
+  // a fresh counter each time and bound nothing. Red if the register
+  // limiter is given loginRateLimitKey (or any email-aware key): each of
+  // these three emails would get its own budget and none would be limited.
+  it('keys on IP alone: a different email on every request shares one counter', async () => {
+    const app = buildAppBehind(createRegisterRateLimiter({ limit: 2, windowMs: 60_000 }))
+
+    await request(app).post('/endpoint').send({ email: 'first@example.com' })
+    await request(app).post('/endpoint').send({ email: 'second@example.com' })
+    const third = await request(app).post('/endpoint').send({ email: 'third@example.com' })
+
+    expect(third.status).toBe(429)
+  })
+
+  it('counts a request carrying no email at all against the same IP counter', async () => {
+    const app = buildAppBehind(createRegisterRateLimiter({ limit: 1, windowMs: 60_000 }))
+
+    await request(app).post('/endpoint').send({ email: 'someone@example.com' })
+    const bodyless = await request(app).post('/endpoint')
+
+    expect(bodyless.status).toBe(429)
+  })
+})
+
+describe('createLogoutRateLimiter', () => {
+  it('returns 429 once the limit is exceeded, keyed on IP alone', async () => {
+    const app = buildAppBehind(createLogoutRateLimiter({ limit: 1, windowMs: 60_000 }))
+
+    const allowed = await request(app).post('/endpoint')
+    const limited = await request(app).post('/endpoint')
+
+    expect(allowed.status).toBe(201)
+    expect(limited.status).toBe(429)
+    expect(limited.body).toMatchObject({ success: false, code: RATE_LIMITED_CODE })
+  })
+})
+
+describe('store prefixes', () => {
+  // The convention rate-limit.middleware.ts's header comment establishes,
+  // pinned as a test rather than only as prose: every limiter carries its
+  // own SharedRateLimitStore prefix, so no two endpoints can ever spend each
+  // other's budget once the store latches onto Redis. B3 adds
+  // forgot-password and resend-verification, and this is the assertion that
+  // fails if either copies an existing prefix.
+  //
+  // Asserted against the committed source, the same way
+  // tests/unit/connection-target.test.ts guards the compose ports and
+  // password.utilities.test.ts guards SECURITY.md's stated bcrypt cost: a
+  // built limiter exposes only `resetKey`/`getKey` (verified — no `store`
+  // property), so the invariant simply is not observable at runtime. The
+  // file that declares the prefixes is the thing worth guarding.
+  const source = fs.readFileSync(
+    path.resolve(process.cwd(), 'src/middlewares/rate-limit.middleware.ts'),
+    'utf8'
+  )
+  const prefixes = Array.from(
+    source.matchAll(/new SharedRateLimitStore\('([^']+)'\)/g),
+    (match) => match[1]
+  )
+
+  it('builds one store per limiter, each with its own prefix', () => {
+    expect(prefixes).toEqual(['rl:register:', 'rl:login:', 'rl:refresh:', 'rl:logout:'])
+  })
+
+  it('never reuses a prefix across two limiters', () => {
+    expect(new Set(prefixes).size).toBe(prefixes.length)
   })
 })
