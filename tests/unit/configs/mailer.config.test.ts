@@ -137,6 +137,7 @@ describe('getMailTransporter — half-set credential warning', () => {
     SMTP_USER: 'only-the-username-is-set',
     SMTP_PASS: undefined,
     MAIL_FROM: 'no-reply@example.com',
+    APP_NAME: 'Test App',
     SMTP_CONNECTION_TIMEOUT: 5000,
     SMTP_GREETING_TIMEOUT: 5000,
     SMTP_SOCKET_TIMEOUT: 10_000,

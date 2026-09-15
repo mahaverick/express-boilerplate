@@ -42,6 +42,7 @@ const baseEnv: Env = {
   SMTP_HOST: 'localhost',
   SMTP_PORT: 1025,
   MAIL_FROM: 'no-reply@example.com',
+  APP_NAME: 'Test App',
   SMTP_CONNECTION_TIMEOUT: 5000,
   SMTP_GREETING_TIMEOUT: 5000,
   SMTP_SOCKET_TIMEOUT: 10_000,

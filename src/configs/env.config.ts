@@ -234,6 +234,27 @@ const EnvSchema = z.object({
       'The From address on every outbound email. Mailpit accepts any value; a real provider may require this to be a verified sender.'
     ),
 
+  // The product name Task 3's email templates (src/templates/email/) put in
+  // their subject lines and sign-offs (e.g. "Verify your email for
+  // <APP_NAME>") — never hardcoded into a template, per this repo's own
+  // "anything configurable goes in this schema" convention. PLACEHOLDER at
+  // THIS layer specifically: nothing in src/ calls `getEnv().APP_NAME` yet,
+  // because the controller that would (Task 5/6) does not exist in this
+  // plan's execution order yet — every template function takes `appName` as
+  // an ordinary string argument, not by reading this schema itself, so it
+  // stays a pure function with no config dependency of its own to mock in a
+  // unit test. Defaulted, unlike APP_URL/WEB_URL's required-placeholder
+  // pattern: a product name carries no security consequence the way a
+  // missing secret or a wrong CORS origin would, so there is no fail-fast
+  // argument for making a cloner set this before anything boots.
+  APP_NAME: z
+    .string()
+    .min(1)
+    .default('Express Boilerplate')
+    .describe(
+      'Product name used in outbound email copy (src/templates/email/). PLACEHOLDER — nothing in src/ reads it yet; reserved for a later task\'s controller to pass into a template\'s appName variable. Defaults to "Express Boilerplate".'
+    ),
+
   // THESE THREE BOUND A TIMING ORACLE, NOT MERELY A RESOURCE LEAK — read
   // this before raising any of them to "fix" a flaky provider.
   //
