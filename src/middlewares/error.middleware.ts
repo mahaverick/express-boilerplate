@@ -90,6 +90,108 @@ function clientMessageOf(error: unknown, statusCode: number): string {
 }
 
 /**
+ * The shape of a failed database query as the ORM reports it: the SQL text
+ * and the bound parameter values. Matched structurally rather than with
+ * `instanceof DrizzleQueryError`, so this module — the error contract —
+ * does not take a runtime dependency on the ORM. The fallback is the safe
+ * direction anyway: a foreign error that merely looks like this is logged
+ * redacted, which costs nothing.
+ */
+interface QueryErrorShape {
+  query: string
+  params: unknown[]
+  cause?: unknown
+}
+
+/**
+ * Whether an error carries a SQL query and its bound parameters.
+ * @param error - The thrown or forwarded error.
+ * @returns True when the error exposes both `query` and `params`.
+ */
+function isQueryError(error: unknown): error is QueryErrorShape {
+  if (typeof error !== 'object' || error === null) return false
+  const candidate = error as { query?: unknown; params?: unknown }
+  return typeof candidate.query === 'string' && Array.isArray(candidate.params)
+}
+
+/**
+ * The Postgres `SQLSTATE` code a driver error carries, if any — e.g.
+ * `22001` (string too long for its column) or `23505` (unique violation).
+ * @param cause - The driver error a query error wraps.
+ * @returns The five-character code, or undefined when the cause carries none.
+ */
+function driverCodeOf(cause: unknown): string | undefined {
+  if (typeof cause !== 'object' || cause === null) return undefined
+  const code = (cause as { code?: unknown }).code
+  return typeof code === 'string' ? code : undefined
+}
+
+/**
+ * The stack of a query error with its message line removed — call frames
+ * only.
+ *
+ * The message line is exactly what must not be logged (see
+ * `redactedForLog`), and `error.stack` embeds it verbatim on the first
+ * line, so logging the stack whole would leak the parameters straight back
+ * through the channel the redaction closed. The frames themselves name the
+ * repository and controller the query came from, which is the genuinely
+ * useful half.
+ * @param error - The query error.
+ * @returns The `at ...` frames, or undefined when there is no usable stack.
+ */
+function stackFramesOf(error: QueryErrorShape): string | undefined {
+  const { stack } = error as { stack?: unknown }
+  if (typeof stack !== 'string') return undefined
+  const frames = stack
+    .split('\n')
+    .filter((line) => line.trimStart().startsWith('at '))
+    .join('\n')
+  return frames === '' ? undefined : frames
+}
+
+/**
+ * What a failed database query may be logged as.
+ *
+ * A query error's `message` is built as `` `Failed query: ${query}\nparams:
+ * ${params}` `` — the BOUND PARAMETER VALUES are part of the string. For a
+ * failed `insert into users`, those parameters are the registrant's email
+ * address and their bcrypt hash, and `console.error(error)` prints the
+ * message (via the stack) in full. Every write that fails for any reason
+ * other than the unique violation `BaseRepository` already translates to a
+ * 409 therefore used to put credentials into the log — the one place a
+ * masked 500 is supposed to make an error safely recoverable, not the place
+ * to write the data the masking exists to protect.
+ *
+ * What survives is the SQL TEXT (parameterised, so it names columns and
+ * tables and contains no values), the driver's `SQLSTATE` code, and the
+ * call frames. That is enough to identify the failing statement and look
+ * the failure up in
+ * https://www.postgresql.org/docs/current/errcodes-appendix.html — which is
+ * what makes a 500 diagnosable. Truncating the message instead was
+ * considered and rejected: a shorter leak is still a leak, and where the
+ * truncation lands would depend on the length of the query text, so the same
+ * bug would leak on one table and not another.
+ *
+ * The driver error's own message is deliberately NOT carried over either,
+ * for the same reason at one remove: Postgres embeds offending values in
+ * some of them (`invalid input syntax for type uuid: "..."`), and its
+ * `detail` field does so routinely (`Key (lower(email))=(...) already
+ * exists.`). The code says the same thing without the value.
+ * @param error - The thrown or forwarded error.
+ * @returns The error itself when it is not a query error; a redacted, parameter-free record when it is.
+ */
+function redactedForLog(error: unknown): unknown {
+  if (!isQueryError(error)) return error
+  return {
+    name: (error as { name?: unknown }).name ?? 'QueryError',
+    query: error.query,
+    driverCode: driverCodeOf(error.cause),
+    paramCount: error.params.length,
+    stack: stackFramesOf(error),
+  }
+}
+
+/**
  * Terminal error handler. Must be registered last and must take four
  * parameters — Express identifies error handlers by arity, so dropping the
  * unused `next` silently turns this into ordinary middleware.
@@ -111,8 +213,12 @@ export function errorHandler(
   // "server-side" must mean somewhere, not nowhere. Masking the message from
   // the client without logging the original anywhere leaves an operator with
   // nothing to search and a user's bug report with nothing to point at.
+  //
+  // "Server-side" is not the same as "safe", though: a failed database write
+  // carries the values it was writing. `redactedForLog` strips those and
+  // keeps what actually makes a 500 diagnosable — see its own comment.
   if (statusCode >= 500) {
-    console.error(`[${String(response.getHeader(REQUEST_ID_HEADER))}]`, error)
+    console.error(`[${String(response.getHeader(REQUEST_ID_HEADER))}]`, redactedForLog(error))
   }
 
   errorResponse(

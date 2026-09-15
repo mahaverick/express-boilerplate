@@ -37,6 +37,7 @@
 // exists, this endpoint simply does not move that field — a sent `email` is
 // silently dropped, exactly like every other unrecognised key.
 import { z } from 'zod'
+import { MAX_NAME_LENGTH } from '@/constants/auth.constants'
 
 // `.nullable().optional()` gives each field three distinguishable states in
 // the parsed result, which is exactly the distinction PATCH semantics need:
@@ -55,7 +56,7 @@ const optionalNameField = z
   .string()
   .trim()
   .min(1, 'Must not be empty.')
-  .max(100, 'Must be at most 100 characters.')
+  .max(MAX_NAME_LENGTH, `Must be at most ${MAX_NAME_LENGTH} characters.`)
   .nullable()
   .optional()
 

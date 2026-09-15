@@ -15,8 +15,32 @@
 // a bare `Error` — not `HttpError` — for input over bcrypt's 72-byte limit.
 // Rejecting that here, as an ordinary validation failure, is what stands
 // between a too-long password and an unhandled 500.
+//
+// The LENGTH CEILINGS below exist for the same class of reason, one step
+// further down: every string field this file accepts is bounded by exactly
+// the width of the column it is written to (MAX_EMAIL_LENGTH /
+// MAX_NAME_LENGTH, auth.constants.ts — the same constants user.model.ts
+// declares those columns with, so the two cannot drift). A schema that
+// accepts more than its column holds does not merely fail: it fails as a
+// 500. Postgres rejects an over-long value with 22001, which is not the
+// unique violation `BaseRepository.create` translates to a 409, so it
+// propagates as an unexpected error — a client error answered as a server
+// error. A 400-character address did exactly that before this cap.
+//
+// Audited against the schema at the time of writing, as one pass rather
+// than field by field: `email` -> users.email (320, capped here);
+// `firstName`/`lastName` -> users.first_name/last_name (100, capped here
+// and in profile.validators.ts). `password` is never stored as given —
+// only its 60-character bcrypt hash is, a width bcrypt fixes, not input —
+// and every remaining column on either table is server-generated (ids,
+// token hashes, timestamps) and reachable from no request body at all.
 import { z } from 'zod'
-import { MAX_PASSWORD_BYTES, MIN_PASSWORD_LENGTH } from '@/constants/auth.constants'
+import {
+  MAX_EMAIL_LENGTH,
+  MAX_NAME_LENGTH,
+  MAX_PASSWORD_BYTES,
+  MIN_PASSWORD_LENGTH,
+} from '@/constants/auth.constants'
 import { HttpError } from '@/middlewares/error.middleware'
 
 // z.email() validates the email FORMAT before any transform chained after
@@ -29,7 +53,17 @@ import { HttpError } from '@/middlewares/error.middleware'
 // registered row's stored email agreeing with the table's `lower(email)`
 // unique index (user.model.ts) — the value validated here is the value the
 // controller inserts, not a copy normalised separately at the call site.
-const emailSchema = z.string().trim().toLowerCase().pipe(z.email())
+// `.max()` sits BEFORE the pipe, so it measures the trimmed, lowercased
+// value — the exact string the controller goes on to insert — rather than
+// whatever whitespace the client happened to send around it. A too-long
+// address therefore fails validation here (400) instead of the column
+// (22001 -> 500); see this file's header comment.
+const emailSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .max(MAX_EMAIL_LENGTH, `Email must be at most ${MAX_EMAIL_LENGTH} characters.`)
+  .pipe(z.email())
 
 const registrationPasswordSchema = z
   .string()
@@ -45,8 +79,8 @@ const registrationPasswordSchema = z
 export const registerSchema = z.object({
   email: emailSchema,
   password: registrationPasswordSchema,
-  firstName: z.string().trim().min(1).max(100).optional(),
-  lastName: z.string().trim().min(1).max(100).optional(),
+  firstName: z.string().trim().min(1).max(MAX_NAME_LENGTH).optional(),
+  lastName: z.string().trim().min(1).max(MAX_NAME_LENGTH).optional(),
 })
 
 /**

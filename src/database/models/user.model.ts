@@ -4,6 +4,7 @@
 // reads is a field every derived project inherits and has to decide about.
 import { sql, type InferInsertModel, type InferSelectModel } from 'drizzle-orm'
 import { boolean, pgTable, timestamp, uniqueIndex, varchar } from 'drizzle-orm/pg-core'
+import { MAX_EMAIL_LENGTH, MAX_NAME_LENGTH } from '@/constants/auth.constants'
 
 /**
  * The `users` table. Most columns are read and written by this plan's
@@ -23,11 +24,14 @@ export const userModel = pgTable(
     id: varchar('id', { length: 36 })
       .primaryKey()
       .default(sql`uuidv7()`),
-    email: varchar('email', { length: 320 }).notNull(),
+    // Width shared with the schema that validates an inbound address
+    // (auth.validators.ts) rather than written twice — see
+    // MAX_EMAIL_LENGTH's own comment for what a disagreement costs.
+    email: varchar('email', { length: MAX_EMAIL_LENGTH }).notNull(),
     // Nullable: a federated-identity user (plan B4) has no password.
     passwordHash: varchar('password_hash', { length: 60 }),
-    firstName: varchar('first_name', { length: 100 }),
-    lastName: varchar('last_name', { length: 100 }),
+    firstName: varchar('first_name', { length: MAX_NAME_LENGTH }),
+    lastName: varchar('last_name', { length: MAX_NAME_LENGTH }),
     active: boolean('active').notNull().default(true),
     emailVerifiedAt: timestamp('email_verified_at', { withTimezone: true }),
     lastLoggedInAt: timestamp('last_logged_in_at', { withTimezone: true }),

@@ -1,4 +1,5 @@
 // tests/unit/middlewares/error.middleware.test.ts
+import { DrizzleQueryError } from 'drizzle-orm'
 import { type Response } from 'express'
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { errorHandler, HttpError } from '@/middlewares/error.middleware'
@@ -170,6 +171,74 @@ describe('errorHandler', () => {
     errorHandler(new HttpError('nope', 404), {} as never, response, vi.fn())
 
     expect(body()).toMatchObject({ requestId: 'req-id-1' })
+  })
+
+  // A failed database write is the one 5xx that arrives carrying the data it
+  // was trying to write. drizzle-orm builds DrizzleQueryError's message as
+  // `Failed query: ${query}\nparams: ${params}` (verified against
+  // node_modules/drizzle-orm/errors.js), so `console.error(error)` used to
+  // print a registrant's email address and bcrypt hash into the log on any
+  // insert failure that is not the unique violation BaseRepository already
+  // turns into a 409 — an over-length email (22001), for instance.
+  //
+  // The real class is constructed here, not a hand-rolled look-alike: the
+  // handler matches this shape structurally (so the error contract takes no
+  // runtime dependency on the ORM), and this test is what pins that
+  // structural match to the actual class it is meant to catch.
+  describe('a failed database query', () => {
+    const email = 'victim@example.com'
+    const passwordHash = '$2b$12$abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQR'
+
+    /**
+     * Build the error drizzle's postgres-js driver actually throws for a
+     * failed insert, wrapping a driver error carrying a SQLSTATE code.
+     * @returns The query error, carrying real credentials as bound parameters.
+     */
+    function failedInsert(): DrizzleQueryError {
+      const cause = Object.assign(new Error('value too long for type character varying(320)'), {
+        code: '22001',
+      })
+      return new DrizzleQueryError(
+        'insert into "users" ("email", "password_hash") values ($1, $2) returning *',
+        [email, passwordHash],
+        cause
+      )
+    }
+
+    it('logs neither the bound parameters nor the message that embeds them', () => {
+      const { response } = mockResponse()
+
+      errorHandler(failedInsert(), {} as never, response, vi.fn())
+
+      const logged = JSON.stringify(consoleError.mock.calls)
+      expect(logged).not.toContain(email)
+      expect(logged).not.toContain(passwordHash)
+      expect(logged).not.toContain('params:')
+    })
+
+    it('still logs the query text and the driver code, so the 500 stays diagnosable', () => {
+      const { response } = mockResponse()
+
+      errorHandler(failedInsert(), {} as never, response, vi.fn())
+
+      expect(consoleError).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          query: 'insert into "users" ("email", "password_hash") values ($1, $2) returning *',
+          driverCode: '22001',
+        })
+      )
+    })
+
+    it('answers the client the same masked 500 as any other unexpected error', () => {
+      const { response, body, status } = mockResponse()
+
+      errorHandler(failedInsert(), {} as never, response, vi.fn())
+
+      expect(status).toHaveBeenCalledWith(500)
+      expect(body()).toMatchObject({ success: false, message: 'Internal server error' })
+      expect(JSON.stringify(body())).not.toContain(email)
+    })
   })
 
   // Express's body parser throws `http-errors` instances, not HttpError.

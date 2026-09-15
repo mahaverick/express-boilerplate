@@ -353,6 +353,34 @@ Each is written down because "we have no protection here" and "this attack
 does not apply to this design" look identical in a code review, and only one
 of them is a finding.
 
+### Error logs never carry bound query parameters
+
+A 5xx is logged server-side (`src/middlewares/error.middleware.ts`) so a
+masked "Internal server error" is still diagnosable. What gets logged is
+redacted first: a failed database query is recorded as its **SQL text**
+(parameterised, so it names tables and columns and holds no values), the
+driver's `SQLSTATE` code, and the call frames — never its bound parameters.
+
+This is not a theoretical precaution. `drizzle-orm` builds
+`DrizzleQueryError`'s message as `` `Failed query: ${query}\nparams:
+${params}` `` (`node_modules/drizzle-orm/errors.js`), so logging the error
+object put the parameters of the failing statement into the log. For a
+failed `insert into users` those parameters are the registrant's **email
+address and bcrypt hash**. `BaseRepository` intercepts only `23505` (unique
+violation, answered 409); every other failure — an over-long value, a check
+violation, a dropped connection mid-statement — propagated intact. The
+driver error's own message and `detail` are dropped for the same reason at
+one remove: Postgres embeds offending values in some of them (`Key
+(lower(email))=(...) already exists.`).
+
+Separately, and for the same underlying bug: every string field a request
+body can set is now capped at exactly the width of the column it is written
+to (`MAX_EMAIL_LENGTH`/`MAX_NAME_LENGTH`, `src/constants/auth.constants.ts`
+— the same constants `user.model.ts` declares those columns with). A schema
+looser than its column does not just fail; it fails as a **500**, because
+Postgres's `22001` is not a unique violation and nothing translates it. A
+400-character email address did exactly that.
+
 ### Secret scanning at two layers
 
 [`gitleaks`](https://github.com/gitleaks/gitleaks) runs as an optional local
