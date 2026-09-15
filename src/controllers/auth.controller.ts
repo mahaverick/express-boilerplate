@@ -25,7 +25,12 @@ import { HttpError } from '@/middlewares/error.middleware'
 import { UserRepository } from '@/repositories/user.repository'
 import { hashPassword, isPasswordValid } from '@/utilities/password.utilities'
 import { successResponse } from '@/utilities/response.utilities'
-import { issueRefreshToken, signAccessToken } from '@/utilities/token.utilities'
+import {
+  issueRefreshToken,
+  revokeRefreshToken,
+  rotateRefreshToken,
+  signAccessToken,
+} from '@/utilities/token.utilities'
 import { loginSchema, parseBody, registerSchema } from '@/validators/auth.validators'
 
 const userRepository = new UserRepository()
@@ -122,6 +127,55 @@ function setRefreshTokenCookie(response: Response, rawToken: string, expiresAt: 
 }
 
 /**
+ * Clear the refresh-token cookie on logout.
+ *
+ * The options passed to `clearCookie` must agree with the ones
+ * `setRefreshTokenCookie` set it with — `path` in particular — or the
+ * browser treats this as clearing a DIFFERENT cookie and the original one
+ * survives.
+ * @param response - The response to clear the cookie on.
+ */
+function clearRefreshTokenCookie(response: Response): void {
+  response.clearCookie(REFRESH_TOKEN_COOKIE_NAME, {
+    httpOnly: true,
+    secure: isSecureCookieEnvironment(),
+    sameSite: 'strict',
+    path: REFRESH_TOKEN_COOKIE_PATH,
+  })
+}
+
+/**
+ * Read the refresh-token cookie off an incoming request.
+ *
+ * Parsed directly off the raw `Cookie` header rather than via a
+ * `request.cookies` populated by cookie-parser middleware: this API has
+ * exactly one cookie, whose name it already knows, so adding a dependency
+ * (or hand-rolling more of RFC 6265 than a single named value needs) buys
+ * nothing here. Decodes the value the same way Express's `response.cookie`
+ * encoded it (`encodeURIComponent`, by default).
+ * @param request - The incoming request.
+ * @returns The raw refresh token, or undefined when the cookie is absent.
+ */
+function readRefreshTokenCookie(request: Request): string | undefined {
+  const header = request.headers.cookie
+  if (!header) return undefined
+
+  const prefix = `${REFRESH_TOKEN_COOKIE_NAME}=`
+  const match = header
+    .split(';')
+    .map((part) => part.trim())
+    .find((part) => part.startsWith(prefix))
+  if (!match) return undefined
+
+  const rawValue = match.slice(prefix.length)
+  try {
+    return decodeURIComponent(rawValue)
+  } catch {
+    return rawValue
+  }
+}
+
+/**
  * Register a new user with an email and password.
  *
  * Duplicate-email handling is not implemented here: `UserRepository.create`
@@ -188,6 +242,85 @@ export async function login(
     setRefreshTokenCookie(response, refreshToken.raw, refreshToken.expiresAt)
 
     successResponse(response, { user: toPublicUser(user), accessToken }, 'Login successful.')
+  } catch (error) {
+    next(error)
+  }
+}
+
+/**
+ * Rotate a refresh token for a new access/refresh token pair.
+ *
+ * Reads the refresh token from its httpOnly cookie ONLY — never from the
+ * request body, even as a fallback. The cookie is httpOnly specifically so
+ * no script on the frontend origin can ever read the raw value
+ * (`setRefreshTokenCookie`'s own header comment); accepting the same token
+ * from the body as well would only matter to a client that already has the
+ * raw value some other way, and would then let ANY page that can make the
+ * browser send a POST with an attacker-chosen body attempt a refresh with
+ * whatever token it supplies — exactly the surface `sameSite: 'strict'`
+ * exists to narrow for the cookie itself. A non-browser client (a mobile
+ * app, a CLI) is served fine by sending the same `Cookie` header; nothing
+ * about this endpoint depends on being called from a browser.
+ *
+ * The rotated user's `active` status is re-checked here — the same check
+ * `requireAuth` (auth.middleware.ts) makes for every bearer-token request —
+ * so a deactivated account cannot mint a fresh, working access token merely
+ * because it still held a live refresh token.
+ * @param request - The incoming request, carrying the refresh cookie.
+ * @param response - The response.
+ * @param next - Forwards a rejection (missing cookie, or `rotateRefreshToken`'s own 401s) to the terminal error handler.
+ */
+export async function refresh(
+  request: Request,
+  response: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const rawToken = readRefreshTokenCookie(request)
+    if (!rawToken) {
+      throw new HttpError('Missing refresh token', 401)
+    }
+
+    const rotated = await rotateRefreshToken(rawToken)
+    const user = await userRepository.findById(rotated.userId)
+    if (!user || !user.active) {
+      throw new HttpError('Account no longer exists or is inactive', 401)
+    }
+
+    setRefreshTokenCookie(response, rotated.raw, rotated.expiresAt)
+    successResponse(response, { accessToken: signAccessToken(user) }, 'Token refreshed.')
+  } catch (error) {
+    next(error)
+  }
+}
+
+/**
+ * Log out: revoke the session the presented refresh token belongs to, and
+ * clear the cookie either way.
+ *
+ * Reads the same cookie `refresh` above does — see that function's header
+ * comment for why not the body too. Deliberately does not require a valid
+ * access token: a user wanting to log out has often just watched their
+ * access token expire, and revocation only ever needs the refresh cookie.
+ * A missing, forged, or already-revoked token is treated identically to a
+ * live one — see `revokeRefreshToken`'s own header comment for why logout
+ * must never let a caller learn which raw value was actually live.
+ * @param request - The incoming request, carrying the refresh cookie if any.
+ * @param response - The response.
+ * @param next - Forwards an unexpected failure to the terminal error handler.
+ */
+export async function logout(
+  request: Request,
+  response: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const rawToken = readRefreshTokenCookie(request)
+    if (rawToken) {
+      await revokeRefreshToken(rawToken)
+    }
+    clearRefreshTokenCookie(response)
+    successResponse(response, undefined, 'Logged out.')
   } catch (error) {
     next(error)
   }
