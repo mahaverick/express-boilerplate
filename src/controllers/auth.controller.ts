@@ -220,6 +220,17 @@ export async function login(
       throw new HttpError('Invalid email or password', 401)
     }
 
+    // AFTER the guard, so a failed attempt leaves no trace on the row, and
+    // BEFORE tokens are issued, so a failed UPDATE answers 500 without
+    // having already set a refresh cookie for a login the caller is being
+    // told did not happen.
+    //
+    // `new Date()` rather than sql`now()`: this goes through the public
+    // `update()`, whose value type is the insert model, and SQL is not
+    // part of it (base.repository.ts:93). `update()` also bumps
+    // `updated_at` via `touched()`, which is why this is not a raw query.
+    await userRepository.update(user.id, { lastLoggedInAt: new Date() })
+
     const sessionId = randomUUID()
     const accessToken = signAccessToken(user)
     const refreshToken = await issueRefreshToken(user.id, sessionId)

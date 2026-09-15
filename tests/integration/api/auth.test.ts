@@ -19,6 +19,7 @@ import {
   REFRESH_TOKEN_COOKIE_NAME,
   REFRESH_TOKEN_COOKIE_PATH,
 } from '@/constants/auth.constants'
+import type { User } from '@/database/models/user.model'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import * as passwordUtilities from '@/utilities/password.utilities'
@@ -152,6 +153,28 @@ describe('POST /api/v1/auth/register and /login', () => {
     const body = envelopeOf<PublicUserBody>(response)
     if (response.status === 201 && body.data) createdIds.push(body.data.id)
     return { response, body }
+  }
+
+  /**
+   * Register a user through the real HTTP endpoint, look it up, track it
+   * for cleanup, and mark it verified.
+   *
+   * Marked verified even though nothing checks it yet: a later task adds
+   * the email-verification gate to login, and a helper that marks from the
+   * start means these tests carry over unchanged instead of turning red in
+   * a task that is supposed to be two lines of source.
+   * @returns The seeded (verified) user row and the email it was registered with.
+   */
+  async function seedLoginableUser(): Promise<{ user: User; email: string }> {
+    const email = uniqueEmail()
+    await request(app).post('/api/v1/auth/register').send({ email, password: VALID_PASSWORD })
+    const user = await userRepository.findByEmail(email)
+    if (!user) throw new Error(`seedLoginableUser: no user for ${email}`)
+    createdIds.push(user.id)
+    await sql`update users set email_verified_at = now() where id = ${user.id}`
+    const verified = await userRepository.findById(user.id)
+    if (!verified) throw new Error(`seedLoginableUser: user vanished for ${email}`)
+    return { user: verified, email }
   }
 
   describe('registration', () => {
@@ -413,6 +436,30 @@ describe('POST /api/v1/auth/register and /login', () => {
 
       expect(response.status).toBe(400)
       expect(body.errors?.password).toEqual(expect.arrayContaining([expect.any(String)]))
+    })
+
+    it('records lastLoggedInAt on a successful login', async () => {
+      const { user, email } = await seedLoginableUser()
+      expect(user.lastLoggedInAt).toBeNull()
+
+      await request(app).post('/api/v1/auth/login').send({ email, password: VALID_PASSWORD })
+
+      const reread = await userRepository.findById(user.id)
+      expect(reread?.lastLoggedInAt).toBeInstanceOf(Date)
+      // updated_at must move with it — the row is not allowed to claim it
+      // was last touched before the login that just wrote to it.
+      expect(reread?.updatedAt.getTime()).toBeGreaterThan(user.updatedAt.getTime())
+    })
+
+    it('does not record lastLoggedInAt when the password is wrong', async () => {
+      const { user, email } = await seedLoginableUser()
+
+      await request(app)
+        .post('/api/v1/auth/login')
+        .send({ email, password: 'wrong-password-entirely' })
+
+      const reread = await userRepository.findById(user.id)
+      expect(reread?.lastLoggedInAt).toBeNull()
     })
   })
 })
