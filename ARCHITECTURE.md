@@ -283,8 +283,11 @@ An earlier plan built the platform: environment validation, the
 database/Redis clients, the app/server split, health checks, the error
 contract, the test harness and its coverage gate, git hooks, and CI. This
 plan (B2) added registration, login, JWT access + opaque refresh tokens,
-refresh rotation with reuse detection, an authenticated profile endpoint,
-and login/refresh rate limiting — see [SECURITY.md](SECURITY.md) for the
+refresh rotation with reuse detection bounded by an absolute session
+lifetime, an authenticated profile endpoint, a rate limiter on every auth
+route (each with its own store prefix), a content-type gate on the auth
+router that closes forced-login CSRF, and `TRUST_PROXY` as an explicit
+deployment decision — see [SECURITY.md](SECURITY.md) for the
 security-relevant detail on all of it. It does **not** build:
 
 - **Email verification delivery, or forgot/reset password.**
