@@ -75,11 +75,48 @@ a defect that tests can easily pass over.
    use `new Date()`.
 7. **Raw tokens are 32 random bytes, hex** (`token.utilities.ts:42,116`) — opaque,
    never JWTs.
-8. **Registration's 409 comes from the repository, not the controller.**
+8. **`revokeAllForUser` ignores purpose.** `user-token.repository.ts:138` matches
+   `userId` alone, so it takes refresh tokens with it. Anything purpose-scoped
+   needs a new method.
+9. **Registration's 409 comes from the repository, not the controller.**
    `UserRepository.create` translates the unique violation
    (`auth.controller.ts:194`). Closing the oracle means catching that, not
    adding a pre-check — a pre-check would be a second, driftable copy of the
    decision and racy besides.
+
+## Squatting: the case this design bounds but does not close
+
+An attacker registers `victim@example.com` with a password they chose. The row
+now exists, unverified. The real owner later registers the same address, is told
+nothing (the response is identical by design), and receives the
+"someone tried to register with your address" mail. They cannot log in — Ruling S
+refuses an unverified account — and, until Task 6 ships, they have no route to
+the account at all.
+
+**The obvious fix is wrong.** Overwriting `passwordHash` and the names on a
+taken-but-unverified address, so the newest registrant wins, looks like it hands
+the account to the mailbox owner. Run it the other way round: the victim
+registers first and has not yet clicked their link; the attacker then registers
+the same address, overwriting the password with their own and mailing a fresh
+link to the victim's inbox. The victim clicks the link they were expecting and
+verifies an account whose password belongs to the attacker, who can now log in.
+That converts a denial of service into a silent account takeover, using the
+victim's own click as the final step. A lockout is the better failure.
+
+**Decision: the taken branch writes nothing.** `resend-verification` carries the
+same hazard for the same reason and likewise never writes.
+
+Consequences that must be recorded in `SECURITY.md` rather than discovered later:
+
+- A squatted address is unrecoverable until password reset exists.
+- **Task 6 must set `emailVerifiedAt` on a successful password reset.** Clicking a
+  reset link proves mailbox control, which is the same proof verification asks
+  for, and it is what makes reset the escape route from a squatted address. Task 6
+  as currently written does not mention the column.
+- Verification proves control of the mailbox. It does **not** prove that the
+  stored password belongs to the mailbox owner. Binding a token to the password
+  hash it was issued against would close that, at the cost of another
+  `user_tokens` column; it is deliberately out of scope here and recorded as open.
 
 ## Endpoint contracts
 
@@ -110,7 +147,17 @@ which email goes out:
   with `EMAIL_VERIFICATION_TEMPLATE_KEY`.
 - address taken → no write at all, `sendMail` with
   `REGISTRATION_ATTEMPT_TEMPLATE_KEY` ("someone tried to register with your
-  address").
+  address"). See "Squatting" below for why nothing is overwritten.
+
+**`firstName` needs a fallback, and on the taken branch it must come from the
+stored row.** `firstName` is `.optional()` at registration
+(`auth.validators.ts:82`) and both templates require it —
+`requireEmailVariables` throws when it is missing, and `sendMail` catches that
+into a `'failed'` log row (fact 4), so the mail silently never arrives and no
+test that only asserts a 202 would notice. Fall back to `'there'`. On the taken
+branch the value must be the **stored** user's `firstName`, never the submitted
+one: the submitted value is attacker-chosen text being delivered into the
+victim's inbox.
 
 Both sends respond-first and use `.catch()`, never `void` — Ruling T, at
 `2026-09-15-email-and-recovery.md`'s findings section: under Node 24 an unhandled
@@ -131,7 +178,26 @@ nothing reads).
   returns byte-identical: `400`, `'Invalid or expired verification token.'`,
   `data: null`. Four distinguishable failures would be a token-state oracle.
 - Idempotence: a user already verified presenting a fresh valid token succeeds
-  and leaves the original `emailVerifiedAt` unchanged (write only when null).
+  and leaves the original `emailVerifiedAt` unchanged. Mechanism, since fact 6
+  rules out a `coalesce` through the typed `update()`: a new
+  `markEmailVerified(id)` on `UserRepository` whose predicate carries
+  `and email_verified_at is null`. A read-then-write in the controller would also
+  work and its race is harmless, but the repository method keeps the decision in
+  one place and needs no comment explaining a benign race.
+- **Prior verification tokens are revoked** — after a successful verify, and on
+  every fresh issue from `resend-verification` — so several live links never
+  coexist. Leaving earlier links valid means a token from an older mail still
+  works after the user re-requested, which is the state a single-use design
+  exists to avoid.
+
+  **Not with `revokeAllForUser`.** That method
+  (`user-token.repository.ts:138`) matches on `userId` alone with no purpose
+  predicate, so it revokes the user's live **refresh** tokens too — calling it
+  here would silently log the user out of every device as a side effect of
+  requesting a verification mail. This needs a new purpose-scoped
+  `revokeAllForUserAndPurpose(userId, purpose)` alongside it, matching
+  `userId AND purpose AND revoked_at IS NULL`, with a test proving a live
+  `'refresh'` row survives it.
 
 ### `POST /api/v1/auth/resend-verification`
 
@@ -170,6 +236,10 @@ await userRepository.update(user.id, { lastLoggedInAt: new Date() })
 ```
 
 - After the guard, not before: a failed login must leave no trace on the row.
+- **Before `issueRefreshToken`/`setRefreshTokenCookie`**, not after. If the UPDATE
+  fails, the 500 then leaves no session row and no `Set-Cookie` header behind —
+  ordering it after issuance would hand the client a cookie for a login the
+  caller was told had failed.
 - Through `update()`, not a raw query, so `touched()` bumps `updated_at` with it
   and the row does not go stale.
 - `new Date()` rather than ``sql`now()` ``, for the typing reason in fact 6 above.
@@ -195,8 +265,14 @@ their own verification mail.
 | Limiter | Prefix | Key | Window | Limit |
 |---|---|---|---|---|
 | `createVerifyEmailRateLimiter` | `rl:verify-email:` | IP | 15 min | 30 |
-| `createResendVerificationIpRateLimiter` | `rl:resend-verification-ip:` | IP | 60 min | 20 |
-| `createResendVerificationEmailRateLimiter` | `rl:resend-verification-email:` | submitted email | 60 min | 5 |
+| `createResendVerificationIpRateLimiter` | `rl:resend-verification-ip:` | IP | 60 min | 5 |
+| `createResendVerificationEmailRateLimiter` | `rl:resend-verification-email:` | submitted email | 60 min | 20 |
+
+The **IP** layer is the tight one and the **email** layer the generous one, in
+that order deliberately. `rate-limit.middleware.ts:39-42` says why: a tight
+per-address budget is itself the attack, because anyone who knows an address can
+spend it and deny that user their own verification mail. The address budget
+bounds mail-bombing; the IP budget is what actually stops the attacker.
 
 Constants live in `rate-limit.middleware.ts` beside the existing four pairs
 (`REGISTER_*`, `LOGIN_*`, `REFRESH_*`, `LOGOUT_*` at lines 151-169), same naming.
@@ -259,6 +335,18 @@ helper change is not cosmetic and is most of this task's actual work:
 2. Look the user up by the email just used, to get the id for cleanup.
 3. Mark the user verified — **in the helper, never by weakening the gate** — so
    the existing register→login tests keep testing what they were written to test.
+   Mechanism: raw `sql`, the way both files already do their cleanup —
+   `` sql`update users set email_verified_at = now() where id = ${id}` ``.
+
+Assertions that fail **loudly** and need rewriting, not just the helpers:
+
+- `auth.test.ts:162` — the `201` plus exact-shape `toEqual` on the returned public
+  user. Its "no password field of any kind" check is the point of the test and
+  needs a new home, since register no longer returns a user; login's response
+  still does.
+- `auth.test.ts:246` and `:256` — both assert `409` on a duplicate address. That
+  status is exactly what this design removes; they become the identical-response
+  test.
 
 Tests to write (red first):
 
@@ -279,6 +367,14 @@ Tests to write (red first):
 - `refresh` does not write `lastLoggedInAt`.
 - `resend-verification` returns an identical response for unknown,
   unverified and already-verified addresses, and mails only the middle one.
+- Issuing a fresh verification token revokes the user's outstanding
+  `email_verification` rows and leaves a live `'refresh'` row untouched.
+
+**Mailpit assertions need a shared helper first.** `findMailpitMessages`,
+`assertNoMailpitMessage` and `deleteMailpitMessage` exist but are module-scope
+functions private to `tests/integration/services/mailer.service.test.ts:60-95`,
+not exported. Extracting them to `tests/helpers/mailpit.ts` is a task in its own
+right, not a step inside another one.
 
 ## Out of scope
 
