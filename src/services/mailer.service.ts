@@ -2,8 +2,15 @@
 //
 // Ruling G (task-2-brief.md, "Controller addendum"): a mail-send failure
 // must NEVER propagate to the caller. `sendMail` below is structured so
-// that is true by construction, not by convention — read this comment
-// before touching the control flow.
+// that holds for every failure mode nodemailer itself produces — read this
+// comment before touching the control flow. (Not an absolute "cannot ever
+// reject" guarantee: both catch BODIES run unguarded code —
+// `redactedMailErrorForLog`/`extractErrorCode` read a handful of properties
+// off `error`, and `console.error` itself could theoretically throw — so a
+// sufficiently poisoned getter or a broken output stream would still
+// escape. Nodemailer constructs plain `Error`s with plain data properties,
+// so that is not reachable through any error this transport actually
+// produces; the claim is scoped to that, not to arbitrary JavaScript.)
 //
 // WHY. Tasks 5/6 require `POST /auth/register`,
 // `POST /auth/resend-verification`, and `POST /auth/forgot-password` to
@@ -37,7 +44,6 @@
 // recorded as a FAILED send with a Postgres error code, which is simply
 // wrong: the mail sent. Keeping them structurally separate means either one
 // can be read, tested, and broken independently of the other.
-import type SMTPTransport from 'nodemailer/lib/smtp-transport'
 import { getMailTransporter } from '@/configs/mailer.config'
 import { UNKNOWN_ERROR_CODE, type NewEmailLog } from '@/database/models/email-log.model'
 import { redactedForLog } from '@/middlewares/error.middleware'
@@ -96,6 +102,16 @@ export function extractErrorCode(error: unknown): string {
  * that (checking it again here would be a branch no real call site can ever
  * take the other side of, which is exactly the kind of untested,
  * unreachable condition this project treats as a defect in itself).
+ *
+ * Matches `/^\s+at /` — a real frame, NOT `line.trimStart().startsWith('at
+ * ')`. V8 always indents a genuine call frame with at least four spaces;
+ * requiring leading whitespace before `at ` is what makes an UNINDENTED
+ * line that merely happens to begin with those two characters fail to
+ * match. That matters specifically because the message this function
+ * strips is server-controlled and multi-line: `trimStart()` before the
+ * check would throw away the exact signal (indentation) that separates a
+ * true stack frame from a message line, so a message crafted to start a
+ * line with `at ` would have survived into the log.
  * @param error - The thrown or rejected value, already known to be object-shaped.
  * @returns The call frames, or undefined when there is no usable stack.
  */
@@ -104,7 +120,7 @@ function callFramesOf(error: object): string | undefined {
   if (typeof stack !== 'string') return undefined
   const frames = stack
     .split('\n')
-    .filter((line) => line.trimStart().startsWith('at '))
+    .filter((line) => /^\s+at /.test(line))
     .join('\n')
   return frames === '' ? undefined : frames
 }
@@ -181,24 +197,16 @@ async function recordDelivery(entry: NewEmailLog): Promise<void> {
 export async function sendMail(message: MailMessage): Promise<void> {
   let entry: NewEmailLog
   try {
-    // Cast, not inference: `sendMail(...)`'s return type resolves to `any`
-    // somewhere in this installed @types/nodemailer version's generic
-    // `Transporter<T, D>` chain — the SYMPTOM is verified empirically
-    // (assigning the un-cast result to a `string`-typed local produced no
-    // type error, which only happens for `any`); the exact place inside
-    // nodemailer's own type definitions this collapses was not tracked down
-    // further. `SMTPTransport.SentMessageInfo`
-    // is the concrete, documented shape a real SMTP transport resolves
-    // with (`messageId`, `envelope`, `accepted`, `rejected`, `pending`,
-    // `response`); this cast states that real shape explicitly rather than
-    // silently propagating `any` (and the unsafe-assignment/member-access it
-    // would trip) through the rest of this function.
-    const info = (await getMailTransporter().sendMail({
+    // `info` is inferred as `SMTPTransport.SentMessageInfo` directly, no
+    // cast — `getMailTransporter`'s own return type annotation
+    // (mailer.config.ts) names the exact overload of nodemailer's
+    // `createTransport` this app uses.
+    const info = await getMailTransporter().sendMail({
       to: message.to,
       subject: message.subject,
       text: message.text,
       html: message.html,
-    })) as SMTPTransport.SentMessageInfo
+    })
     entry = {
       recipient: message.to,
       templateKey: message.templateKey,

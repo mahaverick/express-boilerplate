@@ -136,6 +136,13 @@ function driverCodeOf(cause: unknown): string | undefined {
  * through the channel the redaction closed. The frames themselves name the
  * repository and controller the query came from, which is the genuinely
  * useful half.
+ *
+ * Matches `/^\s+at /` — a real frame, NOT `line.trimStart().startsWith('at
+ * ')`. V8 always indents a genuine call frame with at least four spaces;
+ * requiring leading whitespace before `at ` is what makes an UNINDENTED
+ * line that merely happens to begin with those two characters fail to
+ * match, which matters because the message this strips can itself be
+ * multi-line (a query error's message embeds the SQL text).
  * @param error - The query error.
  * @returns The `at ...` frames, or undefined when there is no usable stack.
  */
@@ -144,7 +151,7 @@ function stackFramesOf(error: QueryErrorShape): string | undefined {
   if (typeof stack !== 'string') return undefined
   const frames = stack
     .split('\n')
-    .filter((line) => line.trimStart().startsWith('at '))
+    .filter((line) => /^\s+at /.test(line))
     .join('\n')
   return frames === '' ? undefined : frames
 }

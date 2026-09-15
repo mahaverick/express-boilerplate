@@ -188,6 +188,32 @@ describe('SMTP configuration', () => {
   it('rejects a malformed MAIL_FROM', () => {
     expect(() => parseEnv({ ...valid, MAIL_FROM: 'not-an-address' })).toThrow(/MAIL_FROM/)
   })
+
+  // Fix round 2 (task-2-review.md, finding 2): these bound a TIMING oracle
+  // (Ruling G reopened through latency, not status), not merely a resource
+  // leak — the defaults must stay bounded to tens of seconds, far below
+  // nodemailer's own multi-minute defaults. Not single-digit seconds: this
+  // project's own shared Mailpit measured at ~8.3s to send its greeting
+  // (env.config.ts's own comment on SMTP_GREETING_TIMEOUT has the
+  // measurement), so 15s is the real floor, not an arbitrary round number.
+  it('defaults SMTP_CONNECTION_TIMEOUT/SMTP_GREETING_TIMEOUT/SMTP_SOCKET_TIMEOUT to bounded values, far below nodemailer', () => {
+    const parsed = parseEnv(valid)
+    expect(parsed.SMTP_CONNECTION_TIMEOUT).toBe(10_000)
+    expect(parsed.SMTP_GREETING_TIMEOUT).toBe(15_000)
+    expect(parsed.SMTP_SOCKET_TIMEOUT).toBe(20_000)
+  })
+
+  it('coerces the SMTP timeout variables from strings to numbers', () => {
+    const parsed = parseEnv({
+      ...valid,
+      SMTP_CONNECTION_TIMEOUT: '1000',
+      SMTP_GREETING_TIMEOUT: '2000',
+      SMTP_SOCKET_TIMEOUT: '3000',
+    })
+    expect(parsed.SMTP_CONNECTION_TIMEOUT).toBe(1000)
+    expect(parsed.SMTP_GREETING_TIMEOUT).toBe(2000)
+    expect(parsed.SMTP_SOCKET_TIMEOUT).toBe(3000)
+  })
 })
 
 describe('TRUST_PROXY', () => {

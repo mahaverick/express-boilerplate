@@ -15,13 +15,14 @@
 // boundary. The end-to-end, byte-identical-HTTP-response assertion belongs
 // to Task 6.
 import { randomBytes, randomUUID } from 'node:crypto'
+import { inspect } from 'node:util'
 import { afterEach, describe, expect, it } from 'vitest'
 import { getMailTransporter } from '@/configs/mailer.config'
 import { UNKNOWN_ERROR_CODE } from '@/database/models/email-log.model'
 import { EmailLogRepository } from '@/repositories/email-log.repository'
 import { sql } from '@/services/database.service'
 import { sendMail } from '@/services/mailer.service'
-import { withMutatedMethod } from '../../helpers/mutate'
+import { withMutatedMethod, withMutatedModule } from '../../helpers/mutate'
 
 const emailLogRepository = new EmailLogRepository()
 const MAILPIT_API = 'http://localhost:8025/api/v1'
@@ -77,17 +78,18 @@ function uniqueRecipient(label: string): string {
   return `mailer-service-${label}-${randomUUID()}@example.test`
 }
 
-// Nodemailer's `sendMail` is a four-way overload (promise/callback x
-// with/without per-call transport-option overrides — see
-// node_modules/@types/nodemailer/lib/mailer/index.d.ts). A plain stub
-// implementing only the promise form is not structurally assignable to that
-// whole overloaded type, so `withMutatedMethod`'s `implementation` parameter
-// needs the cast below. This is a type-system limitation of stubbing an
-// overloaded third-party method, not a loosening of what the stub actually
-// does at runtime — every test below drives it strictly through the
-// `sendMail(mailOptions): Promise<T>` overload, the only one this codebase
-// ever calls (mailer.config.ts's `getMailTransporter`/mailer.service.ts's
-// `sendMail`).
+// Nodemailer's own `sendMail` (node_modules/nodemailer/dist/cjs/mailer/index.d.ts
+// — nodemailer 10 ships first-party types; nothing here resolves against
+// @types/nodemailer, which this task does not depend on) is a two-way
+// overload: `sendMail(data): Promise<T>` and `sendMail(data, callback):
+// void`. A plain stub implementing only the promise form is not
+// structurally assignable to that whole overloaded type, so
+// `withMutatedMethod`'s `implementation` parameter needs the cast below.
+// This is a type-system limitation of stubbing an overloaded third-party
+// method, not a loosening of what the stub actually does at runtime — every
+// test below drives it strictly through the `sendMail(mailOptions):
+// Promise<T>` overload, the only one this codebase ever calls
+// (mailer.config.ts's `getMailTransporter`/mailer.service.ts's `sendMail`).
 type StubbedSendMail = (mailOptions: unknown) => Promise<{
   messageId: string
   envelope: unknown
@@ -315,7 +317,7 @@ describe('sendMail', () => {
   // rendered body — the realistic shape of a real SMTP rejection, which
   // routinely echoes content back from the server — must still never reach
   // the table. extractErrorCode (mailer.service.ts) reads ONLY `.code`.
-  it('never lets an error message or the message body reach the delivery log', async () => {
+  it('never lets an error message or the message body reach the delivery log or the log stream', async () => {
     const transporter = getMailTransporter()
     const recipient = uniqueRecipient('leak-proof')
     const rawToken = randomBytes(32).toString('hex')
@@ -324,21 +326,38 @@ describe('sendMail', () => {
 
     const rejectWithLeakyMessage: StubbedSendMail = () => Promise.reject(new Error(leakyMessage))
 
-    await withMutatedMethod(
-      transporter,
-      'sendMail',
-      rejectWithLeakyMessage as (typeof transporter)['sendMail'],
-      async () => {
-        await expect(
-          sendMail({
-            to: recipient,
-            subject: 'irrelevant',
-            text: bodyText,
-            templateKey: 'password_reset',
-          })
-        ).resolves.toBeUndefined()
-      }
-    )
+    // Fix round 2 (task-2-review.md, finding 1): this test used to check
+    // ONLY the email_logs row. `recordDelivery`'s redaction (Ruling E) had
+    // its own dedicated test after fix round 1; `sendMail`'s SEND-path
+    // catch — the one that actually receives the SMTP server's echoed
+    // reply — had none. Reverting `redactedMailErrorForLog(error)` to plain
+    // `error` in that catch made every test in this file still pass before
+    // this addition. Plain console.error reassignment, not vi.spyOn — same
+    // reasoning as the sibling test in this file.
+    const capturedErrorCalls: unknown[][] = []
+    const originalConsoleError = console.error
+    console.error = (...callArguments: unknown[]): void => {
+      capturedErrorCalls.push(callArguments)
+    }
+    try {
+      await withMutatedMethod(
+        transporter,
+        'sendMail',
+        rejectWithLeakyMessage as (typeof transporter)['sendMail'],
+        async () => {
+          await expect(
+            sendMail({
+              to: recipient,
+              subject: 'irrelevant',
+              text: bodyText,
+              templateKey: 'password_reset',
+            })
+          ).resolves.toBeUndefined()
+        }
+      )
+    } finally {
+      console.error = originalConsoleError
+    }
 
     // Read the table directly — not record()'s return value, not
     // findByRecipient — a proof that only reads back its own argument
@@ -353,10 +372,35 @@ describe('sendMail', () => {
     // address actually mailed, not derived from the error in any way.
     expect(row?.recipient).toBe(recipient)
     expect(row?.error_code).toBe(UNKNOWN_ERROR_CODE)
-    const serialized = JSON.stringify(row)
-    expect(serialized).not.toContain(rawToken)
-    expect(serialized).not.toContain(bodyText)
-    expect(serialized).not.toContain('550 rejected')
+    const serializedRow = JSON.stringify(row)
+    expect(serializedRow).not.toContain(rawToken)
+    expect(serializedRow).not.toContain(bodyText)
+    expect(serializedRow).not.toContain('550 rejected')
+
+    // The log-stream half: what actually reached console.error for the
+    // SEND failure (distinct from recordDelivery's own 'Failed to record
+    // email delivery log' line, which this test never triggers — the log
+    // write itself succeeds).
+    //
+    // util.inspect, NOT JSON.stringify, on the captured payload — verified
+    // empirically that this distinction is load-bearing, not stylistic:
+    // `JSON.stringify(new Error('...'))` is `"{}"`, because Error's own
+    // `message`/`stack` are NON-ENUMERABLE own properties, which
+    // JSON.stringify skips. A plain `JSON.stringify(sendFailureCall?.[1])`
+    // check here would have reported "clean" whether or not the code
+    // redacted anything — the exact "gate that reports success while
+    // enforcing nothing" pattern this fix round exists to close, and it
+    // would have shipped inside the test meant to prove the fix.
+    // util.inspect is what Node's own console formatting actually uses for
+    // a non-string argument, so it reveals an Error's message the way a
+    // real operator's terminal or log aggregator would.
+    const sendFailureCall = capturedErrorCalls.find((call) => call[0] === 'Mail send failed')
+    expect(sendFailureCall).toBeDefined()
+    // eslint-disable-next-line unicorn/no-null -- node:util's own inspect() API requires literal null for "unlimited depth"
+    const inspectedLogged = inspect(sendFailureCall?.[1], { depth: null })
+    expect(inspectedLogged).not.toContain(rawToken)
+    expect(inspectedLogged).not.toContain(bodyText)
+    expect(inspectedLogged).not.toContain('550 rejected')
   })
 
   it('carries a real nodemailer error code through to the log unchanged', async () => {
@@ -394,6 +438,51 @@ describe('sendMail', () => {
 
     const rows = await emailLogRepository.findByRecipient(recipient)
     createdLogIds.push(...rows.map((row) => row.id))
+    expect(rows[0]?.errorCode).toBe(UNKNOWN_ERROR_CODE)
+  })
+
+  // Fix round 2 (task-2-review.md, finding 6): `getMailTransporter()`
+  // sitting INSIDE sendMail's try (mailer.service.ts) is correct by
+  // construction today, but nothing PINS it there — hoisting it to
+  // `const transporter = getMailTransporter()` above the try is a natural,
+  // innocent-looking refactor that would silently reopen Ruling G on the
+  // transport-CREATION path, and every other test in this file would stay
+  // green (they all mutate an already-created transporter's own `sendMail`
+  // method, never the creation step itself). `withMutatedMethod` cannot
+  // reach this — there is no already-constructed transporter to mutate
+  // before one exists — so this uses `withMutatedModule` instead, mocking
+  // `getMailTransporter` itself as a dependency of a freshly reloaded
+  // `mailer.service` module. This is the intended shape for that helper
+  // (mailer.config.ts's `getMailTransporter` is imported BY VALUE, not a
+  // shared prototype method), and it is a genuinely committable proof, not
+  // an uncommitted TDD red run — unlike the Ruling G gate itself, which
+  // has no dependency edge to intercept at all.
+  it('does not reject even when creating the transporter itself throws', async () => {
+    const recipient = uniqueRecipient('transport-creation-fails')
+
+    await withMutatedModule(
+      '@/configs/mailer.config',
+      {
+        getMailTransporter: () => {
+          throw new Error('boom: transport creation failed')
+        },
+      },
+      () => import('@/services/mailer.service'),
+      async (mailerServiceModule) => {
+        await expect(
+          mailerServiceModule.sendMail({
+            to: recipient,
+            subject: 'x',
+            text: 'x',
+            templateKey: 'password_reset',
+          })
+        ).resolves.toBeUndefined()
+      }
+    )
+
+    const rows = await emailLogRepository.findByRecipient(recipient)
+    createdLogIds.push(...rows.map((row) => row.id))
+    expect(rows[0]?.status).toBe('failed')
     expect(rows[0]?.errorCode).toBe(UNKNOWN_ERROR_CODE)
   })
 })

@@ -59,7 +59,13 @@ services:
     ports: ['4318:4318', '13133:13133']
 
   mailpit:
-    image: axllent/mailpit:latest
+    # Pinned, like every other service on this file — an unpinned :latest
+    # here is the one inconsistency task-2-review.md's finding 5 caught:
+    # every sibling service (postgres:18, redis:7.2-alpine) is pinned, and a
+    # silent upstream change to Mailpit's API or its readyz subcommand would
+    # otherwise turn into a red run on an unrelated change. v1.31.1 is the
+    # version this task actually developed and tested against.
+    image: axllent/mailpit:v1.31.1
     ports: ['1025:1025', '8025:8025']
     # `readyz` is the image's own subcommand for exactly this — verified
     # against the running container (it has a working shell, `docker exec

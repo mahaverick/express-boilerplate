@@ -7,13 +7,18 @@
 // cases again. Same reasoning `trustProxySetting` (env.config.ts) is
 // unit-tested as a pure function rather than through `getEnv()`.
 import { describe, expect, it } from 'vitest'
+import type { Env } from '@/configs/env.config'
 import { getMailTransporter, mailTransportOptions, requiresTls } from '@/configs/mailer.config'
+import { withMutatedModule } from '../../helpers/mutate'
 
 const baseEnv = {
   SMTP_HOST: 'localhost',
   SMTP_PORT: 1025,
   SMTP_USER: undefined,
   SMTP_PASS: undefined,
+  SMTP_CONNECTION_TIMEOUT: 5000,
+  SMTP_GREETING_TIMEOUT: 5000,
+  SMTP_SOCKET_TIMEOUT: 10_000,
 }
 
 describe('mailTransportOptions', () => {
@@ -52,6 +57,23 @@ describe('mailTransportOptions', () => {
     const options = mailTransportOptions({ ...baseEnv, SMTP_PASS: 'secret' })
     expect(options.auth).toBeUndefined()
   })
+
+  // Fix round 2 (task-2-review.md, finding 2): these bound a TIMING oracle
+  // (Ruling G reopened through latency, not status) — see
+  // SMTP_CONNECTION_TIMEOUT's own comment (env.config.ts). Pinned here so
+  // nothing can silently stop wiring them into the options nodemailer
+  // actually receives.
+  it('always sets connectionTimeout/greetingTimeout/socketTimeout, never left to nodemailer defaults', () => {
+    const options = mailTransportOptions({
+      ...baseEnv,
+      SMTP_CONNECTION_TIMEOUT: 1234,
+      SMTP_GREETING_TIMEOUT: 2345,
+      SMTP_SOCKET_TIMEOUT: 3456,
+    })
+    expect(options.connectionTimeout).toBe(1234)
+    expect(options.greetingTimeout).toBe(2345)
+    expect(options.socketTimeout).toBe(3456)
+  })
 })
 
 describe('requiresTls', () => {
@@ -83,5 +105,95 @@ describe('getMailTransporter', () => {
   it('does not require TLS in this (test) process', () => {
     const options = getMailTransporter().options as { requireTLS?: boolean }
     expect(options.requireTLS).toBe(false)
+  })
+})
+
+// Fix round 2 (task-2-review.md, finding 9): a half-set SMTP_USER/SMTP_PASS
+// pair sends unauthenticated in production and nothing says why — restore
+// the boot-time signal. `getMailTransporter` reads the memoised `getEnv()`
+// exactly once per worker (same constraint `requiresTls`'s own tests are
+// built around), so exercising this specific env shape needs a fresh module
+// instance — `withMutatedModule` mocks `@/configs/env.config` and reloads
+// `@/configs/mailer.config` against it, the intended use of that helper
+// (mailer.config.ts has no shared prototype method `withMutatedMethod`
+// could reach instead).
+describe('getMailTransporter — half-set credential warning', () => {
+  const halfSetUserOnlyEnv: Env = {
+    NODE_ENV: 'test',
+    APP_PORT: 4040,
+    APP_URL: 'http://localhost:4040',
+    WEB_URL: 'http://localhost:5173',
+    DATABASE_URL: 'postgres://user:pass@localhost:5432/boilerplate',
+    REDIS_URL: 'redis://localhost:6379',
+    JWT_ACCESS_SECRET: 'a'.repeat(32),
+    SESSION_SECRET: 'b'.repeat(32),
+    ACCESS_TOKEN_TTL: '15m',
+    REFRESH_TOKEN_TTL: '30d',
+    SESSION_ABSOLUTE_TTL: '30d',
+    TRUST_PROXY: 'false',
+    LOG_LEVEL: 'info',
+    SMTP_HOST: 'localhost',
+    SMTP_PORT: 1025,
+    SMTP_USER: 'only-the-username-is-set',
+    SMTP_PASS: undefined,
+    MAIL_FROM: 'no-reply@example.com',
+    SMTP_CONNECTION_TIMEOUT: 5000,
+    SMTP_GREETING_TIMEOUT: 5000,
+    SMTP_SOCKET_TIMEOUT: 10_000,
+  }
+
+  it('warns when exactly one of SMTP_USER/SMTP_PASS is set', async () => {
+    // Plain reassignment, not vi.spyOn — see
+    // tests/integration/services/mailer.service.test.ts's identical choice
+    // for console.error and its own comment on why.
+    const capturedWarnCalls: unknown[][] = []
+    const originalConsoleWarn = console.warn
+    console.warn = (...callArguments: unknown[]): void => {
+      capturedWarnCalls.push(callArguments)
+    }
+    try {
+      await withMutatedModule(
+        '@/configs/env.config',
+        { getEnv: () => halfSetUserOnlyEnv },
+        () => import('@/configs/mailer.config'),
+        (mailerConfig) => {
+          mailerConfig.getMailTransporter()
+        }
+      )
+    } finally {
+      console.warn = originalConsoleWarn
+    }
+
+    expect(capturedWarnCalls).toHaveLength(1)
+    const [message] = capturedWarnCalls[0] ?? []
+    expect(message).toContain('SMTP_USER')
+    expect(message).toContain('SMTP_PASS')
+  })
+
+  it('does not warn when both SMTP_USER and SMTP_PASS are set', async () => {
+    const bothSetEnv: Env = {
+      ...halfSetUserOnlyEnv,
+      SMTP_USER: 'apikey',
+      SMTP_PASS: 'secret',
+    }
+    const capturedWarnCalls: unknown[][] = []
+    const originalConsoleWarn = console.warn
+    console.warn = (...callArguments: unknown[]): void => {
+      capturedWarnCalls.push(callArguments)
+    }
+    try {
+      await withMutatedModule(
+        '@/configs/env.config',
+        { getEnv: () => bothSetEnv },
+        () => import('@/configs/mailer.config'),
+        (mailerConfig) => {
+          mailerConfig.getMailTransporter()
+        }
+      )
+    } finally {
+      console.warn = originalConsoleWarn
+    }
+
+    expect(capturedWarnCalls).toHaveLength(0)
   })
 })

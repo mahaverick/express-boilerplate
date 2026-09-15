@@ -85,9 +85,7 @@ export class EmailLogRepository {
    * other failed write in this codebase (driver error code kept, bound
    * parameter values dropped; this table's own `recipient` is PII, not a
    * secret, but the same redaction applies to it for the identical reason)
-   * — rather than failing the request. (This paragraph previously named
-   * "pino" as the logger; there is no pino anywhere in this codebase, and
-   * that was never true — corrected here rather than left standing.)
+   * — rather than failing the request.
    * @param entry - The row to insert: recipient, templateKey, status, and whichever of providerMessageId/errorCode applies to that status.
    * @returns The inserted row, including its generated `id` and `createdAt`.
    */

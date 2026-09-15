@@ -86,4 +86,25 @@ describe('redactedMailErrorForLog', () => {
     }
     expect(redacted.stack).toBeUndefined()
   })
+
+  // Fix round 2 (task-2-review.md, finding 8): the frame filter used to be
+  // `line.trimStart().startsWith('at ')`, which drops V8's own indentation
+  // (at least four spaces on every genuine frame) — the one signal that
+  // tells a real call frame apart from an UNINDENTED line that merely
+  // happens to start with those two characters. `.stack` is server-derived
+  // here (nodemailer builds it from the rejection, which for an SMTP
+  // failure can echo server-controlled, multi-line content), so this
+  // matters. Pinned directly, not by absence.
+  it('drops an unindented line that merely begins "at ", keeping only real indented call frames', () => {
+    const craftedStack = [
+      'Error: 550 rejected',
+      'at RCPT TO: 550 rejected — secret-token-should-not-survive',
+      '    at Object.<anonymous> (/app/src/services/mailer.service.ts:10:5)',
+    ].join('\n')
+    const redacted = redactedMailErrorForLog({ stack: craftedStack }) as { stack?: string }
+    expect(redacted.stack).toBe(
+      '    at Object.<anonymous> (/app/src/services/mailer.service.ts:10:5)'
+    )
+    expect(redacted.stack).not.toContain('secret-token-should-not-survive')
+  })
 })
