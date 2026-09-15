@@ -18,10 +18,17 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import { inspect } from 'node:util'
 import { afterEach, describe, expect, it } from 'vitest'
 import { getMailTransporter } from '@/configs/mailer.config'
-import { UNKNOWN_ERROR_CODE } from '@/database/models/email-log.model'
+import {
+  emailLogModel,
+  UNKNOWN_ERROR_CODE,
+  type EmailLog,
+  type NewEmailLog,
+} from '@/database/models/email-log.model'
+import { HttpError } from '@/middlewares/error.middleware'
 import { EmailLogRepository } from '@/repositories/email-log.repository'
-import { sql } from '@/services/database.service'
+import { db, sql } from '@/services/database.service'
 import { sendMail } from '@/services/mailer.service'
+import type { EmailTemplateKey } from '@/utilities/email-template.utilities'
 import { withMutatedMethod, withMutatedModule } from '../../helpers/mutate'
 
 const emailLogRepository = new EmailLogRepository()
@@ -125,6 +132,25 @@ const rejectWithAuthError: StubbedSendMail = () => {
 
 // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- deliberately a non-Error rejection, to prove extractErrorCode never assumes an object shape
 const rejectWithAString: StubbedSendMail = () => Promise.reject('smtp exploded')
+
+/**
+ * `record()` with every Task 3 width-normalization guard removed — a plain
+ * insert of whatever `entry` already is, unnormalized. Exists ONLY so the
+ * "redacts a real failed delivery-log write" test below can still reach a
+ * genuine Postgres 22001 through `sendMail`, now that `record()` itself
+ * normalizes an over-width `templateKey`/`recipient`/`providerMessageId`
+ * before any insert is attempted (email-log.repository.ts). Mirrors
+ * email-log-error-code-shape-mutation.test.ts's `recordWithLengthOnlyGuard`
+ * — same technique, same reason: keep the error real, bypass only the guard
+ * that would otherwise intercept it first.
+ * @param entry - The row to insert, exactly as given.
+ * @returns The inserted row.
+ */
+async function recordWithoutNormalization(entry: NewEmailLog): Promise<EmailLog> {
+  const [row] = await db.insert(emailLogModel).values(entry).returning()
+  if (row === undefined) throw new HttpError('Insert returned no row', 500)
+  return row
+}
 
 describe('sendMail', () => {
   const createdLogIds: string[] = []
@@ -258,10 +284,31 @@ describe('sendMail', () => {
   // exactly the shape `error.middleware.ts`'s `redactedForLog` (now reused
   // by `recordDelivery`) was built to redact everywhere else in this
   // codebase.
+  //
+  // Task 3 (task-3-brief.md's Controller addendum, item 2) changed what an
+  // over-width `templateKey` does: `EmailLogRepository.record` now
+  // NORMALIZES it to a fixed placeholder before the insert, precisely so
+  // the audit row is never silently lost the way this test's own header
+  // comment above describes — so the value that used to make the real
+  // INSERT reject no longer does, on the code path this test actually
+  // exercises through `sendMail`. To keep this test's proof against a REAL
+  // DrizzleQueryError (not a synthetic stand-in), `record()` itself is
+  // temporarily replaced with an unnormalized raw insert for the duration
+  // of this one test — the same "keep the error real, bypass the guard"
+  // technique as
+  // tests/integration/repositories/email-log-error-code-shape-mutation.test.ts's
+  // `recordWithLengthOnlyGuard`. The over-width value, the real 22001, and
+  // the redaction this test actually proves are all unchanged; only the
+  // normalization that would otherwise intercept it first is switched off.
   it('redacts a real failed delivery-log write, dropping the recipient PII it would otherwise log', async () => {
     const transporter = getMailTransporter()
     const recipient = uniqueRecipient('recorded-write-fails-for-real')
-    const overWidthTemplateKey = 'x'.repeat(64) // > 32: email-log.model.ts's template_key width
+    // > 32: email-log.model.ts's template_key width. Cast past
+    // EmailTemplateKey deliberately — this value is never a real template
+    // key; it exists to reach record() as an already-invalid runtime
+    // string, the same way a caller bypassing the type system entirely
+    // could.
+    const overWidthTemplateKey = 'x'.repeat(64) as unknown as EmailTemplateKey
 
     // Plain property assignment, not vi.spyOn — mirrors tests/helpers/mutate.ts's
     // own stated reason for the identical choice (its header comment): no
@@ -280,13 +327,25 @@ describe('sendMail', () => {
     }
     try {
       await withMutatedMethod(
-        transporter,
-        'sendMail',
-        resolveWithFakeInfo as (typeof transporter)['sendMail'],
+        EmailLogRepository.prototype,
+        'record',
+        recordWithoutNormalization,
         async () => {
-          await expect(
-            sendMail({ to: recipient, subject: 'x', text: 'x', templateKey: overWidthTemplateKey })
-          ).resolves.toBeUndefined()
+          await withMutatedMethod(
+            transporter,
+            'sendMail',
+            resolveWithFakeInfo as (typeof transporter)['sendMail'],
+            async () => {
+              await expect(
+                sendMail({
+                  to: recipient,
+                  subject: 'x',
+                  text: 'x',
+                  templateKey: overWidthTemplateKey,
+                })
+              ).resolves.toBeUndefined()
+            }
+          )
         }
       )
     } finally {

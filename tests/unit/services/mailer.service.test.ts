@@ -12,7 +12,11 @@
 // network failure to shape one.
 import { describe, expect, it } from 'vitest'
 import { UNKNOWN_ERROR_CODE } from '@/database/models/email-log.model'
-import { extractErrorCode, redactedMailErrorForLog } from '@/services/mailer.service'
+import {
+  extractErrorCode,
+  redactedMailErrorForLog,
+  type MailMessage,
+} from '@/services/mailer.service'
 
 describe('extractErrorCode', () => {
   it('reads a real nodemailer-shaped code', () => {
@@ -106,5 +110,34 @@ describe('redactedMailErrorForLog', () => {
       '    at Object.<anonymous> (/app/src/services/mailer.service.ts:10:5)'
     )
     expect(redacted.stack).not.toContain('secret-token-should-not-survive')
+  })
+})
+
+// Task 3's addendum item 1: `MailMessage.templateKey` closes from Task 2's
+// unconstrained `string` into `EmailTemplateKey`. This is a compile-time-only
+// property — no assertion below can check it, `tsc` either reports "Unused
+// '@ts-expect-error' directive" or it doesn't (pnpm lint runs
+// tsconfig.typecheck.json's tsc over this file). Mirrors
+// tests/unit/database/models/user-token.model.test.ts's own
+// `@ts-expect-error` pattern for `NewUserToken['purpose']`.
+describe('MailMessage.templateKey', () => {
+  it('a template key outside EmailTemplateKey is a compile error', () => {
+    const invalid: MailMessage = {
+      to: 'user@example.test',
+      subject: 'x',
+      text: 'x',
+      // @ts-expect-error — templateKey is closed to EmailTemplateKey's
+      // three literals; a typo (hyphen instead of underscore) must fail to
+      // compile, not silently build a message logged under a key no
+      // template ever renders. TS reports a wrong-type property error on
+      // the property's own line, not the object literal's declaration
+      // line — the directive has to sit directly above this line to be
+      // consumed.
+      templateKey: 'password-reset',
+    }
+    // A real assertion, not a throwaway — see
+    // tests/unit/database/models/user-token.model.test.ts's own comment on
+    // why the compile-time check needs one genuine read of the value.
+    expect(invalid.templateKey).toBe('password-reset')
   })
 })
