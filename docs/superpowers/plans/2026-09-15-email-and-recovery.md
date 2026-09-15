@@ -316,3 +316,30 @@ when B3 was halted, so they remain open. None is a vulnerability; all are the
   app-authored ("missing required variable resetUrl") and carries no SMTP echo,
   so the message was its only useful content. Redact what the transport rejected
   with; preserve what our own rendering threw.
+
+## Known flaky test — `auth-refresh.test.ts`, roughly 1 run in 8
+
+Two failures in about twelve full-suite runs, both in
+`tests/integration/api/auth-refresh.test.ts`, both a **400** where the test
+expected something else (once `200` on logout, once `401` on a cookieless
+refresh). Never reproducible on demand: the file passes 3/3 in isolation, and the
+full suite has run green four times consecutively since.
+
+What is known:
+
+- The file is B2 code and was **not modified by B3**.
+- No `400` is reachable on that path in application code — `refresh` throws only
+  `401`, and `requireJsonContentType` throws `415`, not `400`. The remaining
+  candidate is `express.json()` rejecting a body it considers malformed, which
+  would make this a supertest/Express interaction under parallel load rather
+  than an application defect.
+- B3 grew the suite from 235 tests to 352, so it plausibly aggravated an existing
+  race by adding contention without introducing the cause.
+
+What is NOT established: the mechanism. It is recorded rather than diagnosed
+because two confident-but-wrong diagnoses have already been made on this plan,
+and a third guess is worth less than an honest "unknown".
+
+**CI will hit this eventually.** Whoever sees it should resist the reflex to add
+a retry: capture the failing response _body_ first — that names which handler
+produced the 400 and would likely settle the mechanism in one run.
