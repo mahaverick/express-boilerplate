@@ -38,3 +38,11 @@ while enforcing nothing; a fifteen-task plan would have hidden more of them.
 Write each plan immediately before executing it, not all up front — later plans
 depend on interfaces earlier ones actually produce, and a plan written against
 a guess is a plan that gets rewritten.
+
+**Correction to B2's scope, found by its own Task 9.** B2's plan asserted in its
+self-review that "email verification tokens are issued and verifiable here;
+delivery belongs to B3". That was wrong: no task in B2 built a token flow, and
+only the reserved `email_verified_at` column exists. The spec-coverage check that
+made the claim did not verify it. B3 therefore owns the whole flow — issuing,
+verifying and delivering — not delivery alone. The documentation shipped in B2
+describes the real state rather than the planned one.
