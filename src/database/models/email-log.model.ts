@@ -6,24 +6,49 @@
 // writes through it yet — the mail transport that will (a later task) does
 // not exist here, deliberately.
 //
-// THE LOAD-BEARING PROPERTY: a row here must never be able to hold the raw
-// token a verification/reset email carries, or the rendered email body.
-// That is not a convention this file states and hopes callers respect — it
-// is structural, and it is NOT just a width limit. `errorCode` is the
-// column most likely to accidentally grow into that role (an SMTP failure
-// routinely echoes message content back in its server response), and an
-// earlier version of this table tried to close that off with width alone
-// (`varchar(64)`) — which was wrong: `RAW_TOKEN_BYTES` (token.utilities.ts)
-// is 32, and hex-encoded that is EXACTLY 64 characters, so a raw token
-// fits an over-generous width perfectly rather than overflowing it. The
-// actual guarantee is `ERROR_CODE_PATTERN`/`email_logs_error_code_check`
-// below: an uppercase-only shape (`^[A-Z][A-Z0-9_]*$`) that a lowercase hex
-// token can never match, at either end of the connection. Width
-// (ERROR_CODE_MAX_LENGTH = 32) is still there, but only as the outer bound
-// on a legitimate short code — it is the SHAPE constraint that makes a raw
-// token unrepresentable, not merely too long to fit. `errorCode` is
-// deliberately NOT a free-text `message`/`response` column either way —
-// see that column's own comment below.
+// THE LOAD-BEARING PROPERTY, SCOPED TO WHAT THIS SCHEMA ACTUALLY ENFORCES
+// (round-2 review finding 3: an earlier version of this comment claimed
+// the guarantee table-wide, which overclaimed — the exact category of bug
+// this task exists to avoid, restated at a smaller scale). Column by
+// column:
+//
+//   - `errorCode` is STRUCTURALLY guaranteed never to hold a raw token or
+//     rendered body — genuinely, not by convention. `errorCode` is the
+//     column most likely to accidentally grow into that role (an SMTP
+//     failure routinely echoes message content back in its server
+//     response), and an earlier version of this table tried to close that
+//     off with width alone (`varchar(64)`) — which was wrong:
+//     `RAW_TOKEN_BYTES` (token.utilities.ts) is 32, and hex-encoded that is
+//     EXACTLY 64 characters, so a raw token fit an over-generous width
+//     perfectly rather than overflowing it. The actual guarantee is
+//     `ERROR_CODE_PATTERN`/`email_logs_error_code_check` below: an
+//     uppercase-only shape (`^[A-Z][A-Z0-9_]*$`) that a lowercase hex token
+//     can never match, enforced at both the repository (normalization) and
+//     the database (the CHECK constraint) — see `EmailLogRepository`'s own
+//     comment for why normalization, not truncation, is what makes this
+//     true rather than merely likely. `errorCode` is deliberately NOT a
+//     free-text `message`/`response` column either way.
+//   - `templateKey` is width-bounded to 32 — narrower than a 64-character
+//     hex-encoded raw token, so a FULL token cannot fit — but that is a
+//     weaker claim than `errorCode`'s: there is no shape CHECK here, and
+//     none is needed FOR THE SAME REASON `errorCode` needed one: nothing
+//     error-derived or user-derived reaches this column today, only this
+//     codebase's own fixed template names (`'password_reset'`,
+//     `'email_verification'`, ...). Width is a real gate here because
+//     nothing legitimate approaches it, not because the column is
+//     shape-unrepresentable the way `errorCode` is. A 32-character
+//     FRAGMENT of a token would still fit and would not be caught by
+//     anything — this column's protection is "nothing plausible reaches
+//     it", not "nothing possible could".
+//   - `providerMessageId` (255) carries NO structural protection at all.
+//     It is provider-derived, genuinely variable-length (a Message-ID can
+//     legitimately be long), and trusted by convention exactly the way
+//     `errorCode` used to be — flagged to the plan/Task 2, not addressed
+//     here; see task-4-report.md's round-2 notes.
+//   - `recipient` (MAX_EMAIL_LENGTH) carries no structural protection
+//     either, by design: it is the send's actual destination address, not
+//     derived from an error or the rendered body, so this table's load-
+//     bearing property was never about this column.
 //
 // APPEND-ONLY, DELIBERATELY: no `updatedAt`, no `deletedAt`. An audit
 // record you can hide (soft-delete) or silently rewrite (update) after the
@@ -143,9 +168,15 @@ export const emailLogModel = pgTable(
     // user.model.ts's own email column does.
     recipient: varchar('recipient', { length: MAX_EMAIL_LENGTH }).notNull(),
     // Which template rendered the email (e.g. 'password_reset',
-    // 'email_verification') — NOT the rendered body itself. See this
-    // file's header comment: no column here ever holds rendered content.
-    templateKey: varchar('template_key', { length: 64 }).notNull(),
+    // 'email_verification') — NOT the rendered body itself. 32, not the
+    // original 64: round-2 review finding 2 — 64 was the exact width that
+    // let a hex-encoded raw token (see this file's header comment) fit
+    // perfectly, the identical mistake `errorCode` made and for the
+    // identical reason ("the value that can reach it is trusted today" is
+    // not a width justification). No shape CHECK here, unlike
+    // `errorCode` — see this file's header comment for why width alone is
+    // an adequate (if weaker) gate for this specific column.
+    templateKey: varchar('template_key', { length: 32 }).notNull(),
     // 'sent' | 'failed'. varchar + $type<>(), NOT pgEnum — matching
     // `purpose` on user_tokens (user-token.model.ts), plus the CHECK
     // constraint below: `$type<>()` alone is compile-time-only narrowing,

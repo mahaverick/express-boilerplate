@@ -1,0 +1,1 @@
+ALTER TABLE "email_logs" ALTER COLUMN "template_key" SET DATA TYPE varchar(32);

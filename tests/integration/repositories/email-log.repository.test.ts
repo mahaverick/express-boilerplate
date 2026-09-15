@@ -95,6 +95,37 @@ describe('EmailLogRepository', () => {
     expect(JSON.stringify(row)).not.toContain(rawToken)
   })
 
+  // Round-2 review finding 1: the test above uses a 64-character token,
+  // which fails withErrorCodeNormalized's LENGTH check alone — it never
+  // exercises ERROR_CODE_PATTERN, because the length check short-circuits
+  // first. Deleting the regex clause from the guard entirely still passed
+  // the full suite before this test existed (see
+  // email-log-error-code-shape-mutation.test.ts for the load-bearing
+  // proof). This value is deliberately 32 characters — exactly
+  // ERROR_CODE_MAX_LENGTH, so it passes the length check and the regex
+  // clause is the ONLY thing standing between it and the database — and
+  // it is also the realistic leak: a 32-character lowercase-hex fragment
+  // is exactly what a truncated (or otherwise mis-derived) raw token would
+  // look like.
+  it('normalizes a wrong-shaped-but-within-width error code to UNKNOWN_ERROR_CODE', async () => {
+    const recipient = uniqueRecipient()
+    const wrongShaped = 'a1'.repeat(16) // 32 lowercase-hex characters
+
+    const recorded = await emailLogRepository.record({
+      recipient,
+      templateKey: 'password_reset',
+      status: 'failed',
+      errorCode: wrongShaped,
+    })
+    createdIds.push(recorded.id)
+
+    expect(recorded.errorCode).toBe(UNKNOWN_ERROR_CODE)
+
+    const [row] = await sql`select * from email_logs where id = ${recorded.id}`
+    expect(row?.error_code).toBe(UNKNOWN_ERROR_CODE)
+    expect(JSON.stringify(row)).not.toContain(wrongShaped)
+  })
+
   it('findByRecipient returns every row for that recipient, ordered oldest first', async () => {
     const recipient = uniqueRecipient()
 
@@ -121,61 +152,59 @@ describe('EmailLogRepository', () => {
     expect(await emailLogRepository.findByRecipient(uniqueRecipient())).toEqual([])
   })
 
-  // THE ASSERTION THAT MATTERS (task-4-brief.md): the row must never
-  // contain the token a verification/reset email carries, or the rendered
-  // email body — proved by reading the TABLE ITSELF, not by re-reading
-  // what record() was handed. Same shape of proof as
-  // "issues a refresh token whose hash — never the raw value — is stored"
-  // (tests/integration/utilities/token.utilities.test.ts): query for the
-  // raw sensitive value directly and confirm nothing on disk matches it.
-  it('never contains the raw token or the rendered email body it accompanied', async () => {
-    const recipient = uniqueRecipient()
-    // Neither of these is ever passed to record() below — NewEmailLog has
-    // no field that could carry either. They stand in for what a real
-    // password-reset send would have handled upstream of this repository.
-    const rawToken = randomBytes(32).toString('hex')
-    const renderedBody = `<p>Reset your password: https://example.test/reset?token=${rawToken}</p>`
+  // Round-2 review finding 4. The version this replaced generated a raw
+  // token and a rendered body and then asserted they weren't in the table
+  // — but never actually passed either to record(); `NewEmailLog` has no
+  // field for a rendered body at all, so that assertion could not have
+  // gone red for any real defect in this repository. This version DRIVES
+  // the token through record()'s actual input, field by field, and checks
+  // the table itself.
+  //
+  // Deliberately scoped to the two fields this schema actually guards —
+  // `errorCode` (normalization) and `templateKey` (width, post round-2
+  // finding 2) — not "every string field": `recipient` (MAX_EMAIL_LENGTH)
+  // and `providerMessageId` (255) carry no structural protection at all,
+  // confirmed empirically (a raw token passed as either lands verbatim in
+  // the table — see task-4-report.md's round-2 notes) and by design —
+  // this table's load-bearing property was never a claim about those two
+  // columns (see email-log.model.ts's header comment, round-2 finding 3).
+  // Writing this test against a claim the schema does not make would just
+  // be a second version of finding 4's original defect: an assertion that
+  // cannot mean what it appears to mean.
+  it('never contains the raw token, driven through every field this schema actually guards', async () => {
+    const rawToken = randomBytes(32).toString('hex') // 64 lowercase-hex characters
 
-    const recorded = await emailLogRepository.record({
-      recipient,
+    // errorCode: guarded by normalization — the row is written, but with
+    // errorCode replaced, never the token itself. Scoped to this test's
+    // own row (by id), not the whole table, so a concurrently-running test
+    // elsewhere can't affect this assertion.
+    const errorCodeRecipient = uniqueRecipient()
+    const viaErrorCode = await emailLogRepository.record({
+      recipient: errorCodeRecipient,
       templateKey: 'password_reset',
-      status: 'sent',
-      providerMessageId: 'provider-message-id-2',
+      status: 'failed',
+      errorCode: rawToken,
     })
-    createdIds.push(recorded.id)
+    createdIds.push(viaErrorCode.id)
 
-    // Exact-match proof, mirroring token.utilities.test.ts's
-    // `select 1 from user_tokens where token_hash = ${issued.raw}`: query
-    // every text column of the real table for the raw value itself.
-    const byToken = await sql`
-      select 1 from email_logs
-      where id = ${rawToken}
-         or recipient = ${rawToken}
-         or template_key = ${rawToken}
-         or status = ${rawToken}
-         or provider_message_id = ${rawToken}
-         or error_code = ${rawToken}
+    const [errorCodeRow] = await sql`select * from email_logs where id = ${viaErrorCode.id}`
+    expect(JSON.stringify(errorCodeRow)).not.toContain(rawToken)
+
+    // templateKey: guarded by width alone (32, narrower than a 64-char
+    // token) — the insert itself must reject; no row can land with the
+    // token as its templateKey, full stop.
+    const templateKeyRecipient = uniqueRecipient()
+    await expect(
+      emailLogRepository.record({
+        recipient: templateKeyRecipient,
+        templateKey: rawToken,
+        status: 'sent',
+      })
+    ).rejects.toThrow()
+
+    const rowsForRejectedAttempt = await sql`
+      select 1 from email_logs where recipient = ${templateKeyRecipient}
     `
-    expect(byToken).toHaveLength(0)
-
-    const byBody = await sql`
-      select 1 from email_logs
-      where id = ${renderedBody}
-         or recipient = ${renderedBody}
-         or template_key = ${renderedBody}
-         or status = ${renderedBody}
-         or provider_message_id = ${renderedBody}
-         or error_code = ${renderedBody}
-    `
-    expect(byBody).toHaveLength(0)
-
-    // Substring proof: read the actual row back from the table (never
-    // `recorded`, which only proves record() echoed its own argument) and
-    // confirm the token/body do not appear anywhere inside it, not even as
-    // a fragment of some other column.
-    const [row] = await sql`select * from email_logs where id = ${recorded.id}`
-    const serialized = JSON.stringify(row)
-    expect(serialized).not.toContain(rawToken)
-    expect(serialized).not.toContain(renderedBody)
+    expect(rowsForRejectedAttempt).toHaveLength(0)
   })
 })
