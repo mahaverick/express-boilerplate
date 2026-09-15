@@ -59,15 +59,37 @@ a project that wants a different model (opaque tokens in Redis, a
 third-party IdP) should change it before writing routes against it, not
 after.
 
-### Password hashing: argon2id, or bcrypt at cost >= 12
+### Password hashing: bcrypt at cost 12
 
-When user credentials arrive, [OWASP's current
+Implemented: `src/utilities/password.utilities.ts` exports `hashPassword`/
+`verifyPassword`, backed by `BCRYPT_COST = 12` in
+`src/constants/auth.constants.ts`.
+`tests/unit/utilities/password.utilities.test.ts` asserts the cost embedded
+in every hash it produces against that constant, and separately reads this
+file off disk and asserts the number in the heading above still matches
+`BCRYPT_COST` — so this sentence cannot drift from the code the way an
+earlier revision of this file did (see the warning above this table).
+
+[OWASP's current
 guidance](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html)
-prefers argon2id; a greenfield project has no migration to plan and should
-take it. bcrypt at cost 12 remains an accepted, well-understood fallback
-where an existing user table forces it. The reason to decide this before the
-first user row exists: switching hashing algorithms afterwards requires
-either a dual-verify migration path or a forced reset for everyone.
+still prefers argon2id over bcrypt; a greenfield project with no existing
+password column has no migration to plan and should take it instead. This
+boilerplate already committed a `users` table with a bcrypt-shaped
+`password_hash varchar(60)` column before this decision was revisited, so
+bcrypt at cost 12 is the accepted, well-understood choice made here —
+switching hashing algorithms afterwards requires either a dual-verify
+migration path or a forced reset for everyone, which is the reason to decide
+this deliberately rather than default into it.
+
+Every password is also capped at 72 bytes (`MAX_PASSWORD_BYTES`, same file):
+bcrypt itself silently ignores anything past that point, so without a cap
+two different passwords sharing that 72-byte prefix would hash identically
+and either would then verify successfully against the other's hash.
+Hashing or verifying refuses an over-length password outright instead of
+silently truncating it.
+
+This is the hashing primitive only: no registration or login route calls it
+yet, and nothing writes a `password_hash` outside this section's own test.
 
 ### Security headers: an explicit Content-Security-Policy
 
