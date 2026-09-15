@@ -70,7 +70,7 @@ describe('errorResponse', () => {
   it('includes field-level errors when supplied', () => {
     const { response, body, status } = mockResponse()
     const fieldErrors = { email: ['is required'] }
-    errorResponse(response, 'invalid', 422, fieldErrors)
+    errorResponse(response, 'invalid', 422, undefined, fieldErrors)
 
     expect(status).toHaveBeenCalledWith(422)
     expect(body()).toMatchObject({ statusCode: 422, errors: fieldErrors })
@@ -81,6 +81,32 @@ describe('errorResponse', () => {
     errorResponse(response, 'invalid', 422)
 
     expect(body()).not.toHaveProperty('errors')
+  })
+
+  it('includes a code when supplied, independent of errors', () => {
+    const { response, body } = mockResponse()
+    errorResponse(response, 'Access token expired', 401, 'ACCESS_TOKEN_EXPIRED')
+
+    expect(body()).toMatchObject({ statusCode: 401, code: 'ACCESS_TOKEN_EXPIRED' })
+    // No field-level detail was supplied, so errors must stay absent even
+    // though code is present — the two are independent fields, not one
+    // overloaded one.
+    expect(body()).not.toHaveProperty('errors')
+  })
+
+  it('omits the code key when none is supplied', () => {
+    const { response, body } = mockResponse()
+    errorResponse(response, 'invalid', 422)
+
+    expect(body()).not.toHaveProperty('code')
+  })
+
+  it('includes both code and errors when both are supplied', () => {
+    const { response, body } = mockResponse()
+    const fieldErrors = { email: ['is required'] }
+    errorResponse(response, 'invalid', 422, 'VALIDATION_FAILED', fieldErrors)
+
+    expect(body()).toMatchObject({ code: 'VALIDATION_FAILED', errors: fieldErrors })
   })
 
   it('reads the correlation id off the response via the shared header constant', () => {

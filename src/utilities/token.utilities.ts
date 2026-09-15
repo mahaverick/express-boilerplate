@@ -112,27 +112,49 @@ export function signAccessToken(user: User): string {
 }
 
 /**
- * Verify an access token and return its payload.
+ * The outcome of verifying an access token: its payload, or WHICH of two
+ * reasons verification failed for.
  *
- * Never returns for a token that is malformed, expired, or signed with any
- * key or algorithm other than this server's own `JWT_ACCESS_SECRET` under
- * HS256 — `algorithms: ['HS256']` is pinned explicitly so a token signed
- * with a different algorithm can never be accepted, regardless of what its
- * own (attacker-controlled) header claims.
- * @param token - The bearer token presented by the client.
- * @returns The token's payload.
- * @throws {HttpError} 401, for any verification failure.
+ * A caller (auth.middleware.ts) needs that distinction to tell a client
+ * "refresh me" from "log in again" — but only this module has anything
+ * trustworthy to say about why a token was rejected, since only this module
+ * ever calls `jwt.verify` and sees what `jsonwebtoken` actually threw. A
+ * caller re-deriving "expired" from the token's own, unverified claims after
+ * a generic rejection would be trusting exactly the data verification just
+ * said not to trust; a discriminated result here means it never has to.
  */
-export function verifyAccessToken(token: string): AccessTokenPayload {
+export type VerifyAccessTokenResult =
+  { ok: true; payload: AccessTokenPayload } | { ok: false; reason: 'expired' | 'invalid' }
+
+/**
+ * Verify an access token.
+ *
+ * Never resolves `ok: true` for a token that is malformed, expired, or
+ * signed with any key or algorithm other than this server's own
+ * `JWT_ACCESS_SECRET` under HS256 — `algorithms: ['HS256']` is pinned
+ * explicitly so a token signed with a different algorithm can never be
+ * accepted, regardless of what its own (attacker-controlled) header claims.
+ *
+ * `reason: 'expired'` is reported ONLY for `jsonwebtoken`'s own
+ * `TokenExpiredError` — i.e. only when the signature and every other check
+ * already passed and the sole remaining problem is `exp`. Every other
+ * failure (bad signature, wrong algorithm, malformed structure, missing
+ * `sub`) is `'invalid'`. The two carry no information beyond that label —
+ * in particular `'invalid'` never says which of its causes applied — so
+ * resolving the distinction can never teach an unauthenticated caller
+ * anything more than "your token is stale" versus "your token is no good."
+ * @param token - The bearer token presented by the client.
+ * @returns The verified payload, or which of the two reasons verification failed.
+ */
+export function verifyAccessToken(token: string): VerifyAccessTokenResult {
   try {
     const decoded = jwt.verify(token, getEnv().JWT_ACCESS_SECRET, { algorithms: ['HS256'] })
     if (typeof decoded === 'string' || typeof decoded.sub !== 'string') {
-      throw new HttpError('Invalid access token', 401)
+      return { ok: false, reason: 'invalid' }
     }
-    return { sub: decoded.sub }
+    return { ok: true, payload: { sub: decoded.sub } }
   } catch (error) {
-    if (error instanceof HttpError) throw error
-    throw new HttpError('Invalid or expired access token', 401)
+    return { ok: false, reason: error instanceof jwt.TokenExpiredError ? 'expired' : 'invalid' }
   }
 }
 

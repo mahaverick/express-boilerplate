@@ -1,10 +1,21 @@
 // src/middlewares/error.middleware.ts
 //
-// The envelope is core's: { success, message, statusCode, errors }. RFC 9457
-// problem+json is the modern standard and is the better choice for a new
-// API — but switching it here would mean rewriting every ported controller
-// and the frontend's interceptors, which defeats derive-and-strip. It ships
-// as a recipe instead. See spec §13.
+// The envelope is core's: { success, message, statusCode, code?, errors? }.
+// RFC 9457 problem+json is the modern standard and is the better choice for
+// a new API — but switching it here would mean rewriting every ported
+// controller and the frontend's interceptors, which defeats
+// derive-and-strip. It ships as a recipe instead. See spec §13.
+//
+// `code` and `errors` are deliberately separate fields, not one overloaded
+// one. `errors` is field-level validation detail (e.g. `{ email: ['is
+// required'] }`) — shaped by whatever validator produced it, and absent
+// most of the time. `code` is a single, stable, machine-readable token (e.g.
+// `ACCESS_TOKEN_EXPIRED`) a client branches on to decide what to do next,
+// independent of whatever `errors` may or may not also be carrying for the
+// same response. Putting both in `errors` would mean a client parsing it for
+// field errors gets something structurally different the one time `code` is
+// also present, and the next caller who adds real field-level errors to a
+// response that also sets `code` would collide with it.
 import { STATUS_CODES } from 'node:http'
 import { type NextFunction, type Request, type Response } from 'express'
 import { REQUEST_ID_HEADER } from '@/middlewares/request-id.middleware'
@@ -17,11 +28,13 @@ export class HttpError extends Error {
   /**
    * @param message - Message safe to return to the client.
    * @param statusCode - HTTP status. Defaults to 500.
+   * @param code - Optional stable, machine-readable token a client can branch on (e.g. `ACCESS_TOKEN_EXPIRED`), independent of `message` or `errors`.
    * @param errors - Optional field-level detail, e.g. from a validator.
    */
   constructor(
     message: string,
     public readonly statusCode = 500,
+    public readonly code?: string,
     public readonly errors?: unknown
   ) {
     super(message)
@@ -102,7 +115,13 @@ export function errorHandler(
     console.error(`[${String(response.getHeader(REQUEST_ID_HEADER))}]`, error)
   }
 
-  errorResponse(response, messageFor(error, httpError, statusCode), statusCode, httpError?.errors)
+  errorResponse(
+    response,
+    messageFor(error, httpError, statusCode),
+    statusCode,
+    httpError?.code,
+    httpError?.errors
+  )
 }
 
 /**

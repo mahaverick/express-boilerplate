@@ -80,7 +80,12 @@ describe('refresh token issuance, rotation, and revocation', () => {
     expect(typeof decoded.iat).toBe('number')
     expect(decoded.exp).toBeGreaterThan(decoded.iat as number)
 
-    expect(verifyAccessToken(token)).toEqual({ sub: user.id })
+    // verifyAccessToken returns a discriminated result, not the bare
+    // payload — see token.utilities.ts's own header comment on
+    // VerifyAccessTokenResult. Asserting the full `{ ok: true, payload }`
+    // shape (not just `payload`) proves acceptance, not merely that a
+    // payload-shaped object came back.
+    expect(verifyAccessToken(token)).toEqual({ ok: true, payload: { sub: user.id } })
   })
 
   it('issues a refresh token whose hash — never the raw value — is stored', async () => {

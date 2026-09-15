@@ -7,10 +7,20 @@
 // signAccessToken's User parameter has non-optional `T | null` fields
 // (mirroring Postgres NULL), and a real row is the natural way to get one
 // without constructing null literals by hand.
+//
+// verifyAccessToken returns a discriminated result rather than throwing
+// (VerifyAccessTokenResult, token.utilities.ts) — every case below asserts
+// the FULL literal `{ ok: false, reason }` via toEqual, not just `ok` or
+// just `reason` in isolation. That is deliberate: a bare `result.ok` check
+// would still pass if a mutation flipped every rejection to the same
+// `reason`, and a bare `reason` check would still pass if a mutation somehow
+// returned `ok: true` alongside it (impossible today, but the type only
+// forbids that by convention, not by a runtime check this test relies on).
+// asserting the whole object is what proves both "rejected" and "rejected
+// for the right, specific reason" at once.
 import jwt from 'jsonwebtoken'
 import { describe, expect, it } from 'vitest'
 import { getEnv } from '@/configs/env.config'
-import { HttpError } from '@/middlewares/error.middleware'
 import { verifyAccessToken } from '@/utilities/token.utilities'
 
 describe('verifyAccessToken', () => {
@@ -21,37 +31,51 @@ describe('verifyAccessToken', () => {
       expiresIn: '15m',
     })
 
-    expect(() => verifyAccessToken(token)).toThrow(HttpError)
-    try {
-      verifyAccessToken(token)
-      expect.unreachable('verifyAccessToken should have thrown')
-    } catch (error) {
-      expect(error).toBeInstanceOf(HttpError)
-      expect((error as HttpError).statusCode).toBe(401)
-    }
+    expect(verifyAccessToken(token)).toEqual({ ok: false, reason: 'invalid' })
   })
 
-  it('rejects an expired access token', () => {
+  it('rejects an expired access token, distinguishing it from other rejections', () => {
     const token = jwt.sign({ sub: 'someone' }, getEnv().JWT_ACCESS_SECRET, {
       algorithm: 'HS256',
       // Already expired the moment it's signed.
       expiresIn: -10,
     })
 
-    expect(() => verifyAccessToken(token)).toThrow(HttpError)
+    // 'expired' specifically, not just "rejected" — this is the entire
+    // point of the discriminated result: a caller (auth.middleware.ts)
+    // needs to tell "refresh me" apart from "log in again", and only this
+    // module has anything trustworthy to say about which one applies.
+    expect(verifyAccessToken(token)).toEqual({ ok: false, reason: 'expired' })
   })
 
   it('rejects a token signed with a different algorithm than HS256 expects', () => {
     // 'none' with an empty signature is the classic alg-confusion probe —
-    // pinning `algorithms: ['HS256']` on verify is what stops this.
+    // pinning `algorithms: ['HS256']` on verify is what stops this. This
+    // must resolve 'invalid', not 'expired' — an alg-confusion forgery has
+    // no real signature to have expired against; the distinction still
+    // needs to name the right bucket, not just "not ok".
     const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url')
     const payload = Buffer.from(JSON.stringify({ sub: 'someone' })).toString('base64url')
     const forged = `${header}.${payload}.`
 
-    expect(() => verifyAccessToken(forged)).toThrow(HttpError)
+    expect(verifyAccessToken(forged)).toEqual({ ok: false, reason: 'invalid' })
   })
 
   it('rejects a malformed token string', () => {
-    expect(() => verifyAccessToken('not-a-jwt')).toThrow(HttpError)
+    expect(verifyAccessToken('not-a-jwt')).toEqual({ ok: false, reason: 'invalid' })
+  })
+
+  it('rejects a validly signed token with no sub claim', () => {
+    // A verified signature is not by itself a verified PAYLOAD — this is
+    // the one branch inside the `ok: true` path that decides the payload
+    // itself is unusable (`typeof decoded.sub !== 'string'`) despite the
+    // signature checking out. Signed with the REAL secret, so nothing about
+    // signature or algorithm is in play here; only the missing `sub` is.
+    const token = jwt.sign({}, getEnv().JWT_ACCESS_SECRET, {
+      algorithm: 'HS256',
+      expiresIn: '15m',
+    })
+
+    expect(verifyAccessToken(token)).toEqual({ ok: false, reason: 'invalid' })
   })
 })

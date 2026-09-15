@@ -53,7 +53,12 @@ describe('errorHandler', () => {
   it('includes field-level errors when HttpError carries them', () => {
     const { response, body } = mockResponse()
     const fieldErrors = { email: ['is required'] }
-    errorHandler(new HttpError('invalid', 422, fieldErrors), {} as never, response, vi.fn())
+    errorHandler(
+      new HttpError('invalid', 422, undefined, fieldErrors),
+      {} as never,
+      response,
+      vi.fn()
+    )
 
     expect(body()).toMatchObject({ statusCode: 422, errors: fieldErrors })
   })
@@ -63,6 +68,55 @@ describe('errorHandler', () => {
     errorHandler(new HttpError('invalid', 422), {} as never, response, vi.fn())
 
     expect(body()).not.toHaveProperty('errors')
+  })
+
+  it('includes a machine-readable code when HttpError carries one', () => {
+    const { response, body } = mockResponse()
+    errorHandler(
+      new HttpError('Access token expired', 401, 'ACCESS_TOKEN_EXPIRED'),
+      {} as never,
+      response,
+      vi.fn()
+    )
+
+    expect(body()).toMatchObject({ statusCode: 401, code: 'ACCESS_TOKEN_EXPIRED' })
+  })
+
+  it('omits the code key when HttpError carries none', () => {
+    const { response, body } = mockResponse()
+    errorHandler(new HttpError('invalid', 422), {} as never, response, vi.fn())
+
+    expect(body()).not.toHaveProperty('code')
+  })
+
+  it('carries both code and errors independently when HttpError sets both', () => {
+    const { response, body } = mockResponse()
+    const fieldErrors = { email: ['is required'] }
+    errorHandler(
+      new HttpError('invalid', 422, 'VALIDATION_FAILED', fieldErrors),
+      {} as never,
+      response,
+      vi.fn()
+    )
+
+    expect(body()).toMatchObject({ code: 'VALIDATION_FAILED', errors: fieldErrors })
+  })
+
+  it('does not forward a foreign error carrying its own .code property', () => {
+    // Node's own system errors (ENOENT, ECONNREFUSED, ...) and many
+    // third-party errors already carry a `.code` string. Only an HttpError's
+    // OWN, deliberately-set `code` is client-facing — forwarding any
+    // foreign error's `.code` here would leak internal detail the same way
+    // an unmasked message would.
+    const { response, body } = mockResponse()
+    errorHandler(
+      Object.assign(new Error('boom'), { code: 'ECONNREFUSED' }),
+      {} as never,
+      response,
+      vi.fn()
+    )
+
+    expect(body()).not.toHaveProperty('code')
   })
 
   it('masks the message and defaults to 500 for a non-HttpError', () => {
