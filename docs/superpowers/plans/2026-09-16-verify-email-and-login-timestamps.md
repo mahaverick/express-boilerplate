@@ -321,9 +321,12 @@ New file `tests/unit/utilities/verification-link.utilities.test.ts`:
 ```ts
 describe('buildVerificationUrl', () => {
   it('points at the frontend WEB_URL, not the API', () => {
-    const url = new URL(buildVerificationUrl('abc123'))
+    // The base is passed explicitly in every test here. This is a unit
+    // test — it must not depend on a validated env being loadable, and
+    // getEnv() throws when one is not.
+    const url = new URL(buildVerificationUrl('abc123', 'https://app.example.com'))
 
-    expect(url.origin).toBe(new URL(getEnv().WEB_URL).origin)
+    expect(url.origin).toBe('https://app.example.com')
     expect(url.pathname).toBe('/verify-email')
     expect(url.searchParams.get('token')).toBe('abc123')
   })
@@ -334,7 +337,7 @@ describe('buildVerificationUrl', () => {
     // changes, a '+' or '/' in a query string silently decodes to
     // something else, and a verification link stops working for a
     // fraction of users with no error anywhere.
-    const url = new URL(buildVerificationUrl('a+b/c=='))
+    const url = new URL(buildVerificationUrl('a+b/c==', 'https://app.example.com'))
 
     expect(url.searchParams.get('token')).toBe('a+b/c==')
   })
@@ -503,12 +506,16 @@ describe('revokeAllForUserAndPurpose', () => {
     // silently log the user out of every device as a side effect of them
     // asking for a verification mail.
     expect(await rotateRefreshToken(refresh.raw)).toBeDefined()
-    expect(await claimToken(verification.raw, 'email_verification')).toBeUndefined()
+    const [remaining] = await db
+      .select()
+      .from(userTokenModel)
+      .where(eq(userTokenModel.id, verification.id))
+    expect(remaining?.revokedAt).not.toBeNull()
   })
 })
 ```
 
-That test consumes `claimToken`, which Task 5 builds. Write it now and expect it red until Task 5 lands, **or** assert the same fact through `userTokenRepository.claimOnce(...)` with the hash — say in your report which you chose and why. Do not leave the assertion out.
+The verification side is asserted by reading the row directly rather than through `claimToken`, which Task 5 has not built yet — and `hashToken` is not exported, so there is no way to look the row up by hash from here. Use whatever `issueToken` returns to identify the row; if `IssuedToken` carries no id (`token.utilities.ts:75` — read it), select by `userId` and `purpose` instead. The `rotateRefreshToken` line is the assertion that matters and needs nothing new.
 
 - [ ] **Step 2: Run them and watch them fail**
 
@@ -532,16 +539,14 @@ In `src/repositories/user.repository.ts`, as a public method beside `findByEmail
   markEmailVerified(id: string): Promise<User | undefined> {
     return this.updateOne(
       this.scope(sql`${userModel.id} = ${id} and ${userModel.emailVerifiedAt} is null`),
-      this.touched({ emailVerifiedAt: sql`now()` }) as Parameters<
-        UserRepository['updateOne']
-      >[1]
+      this.touched({ emailVerifiedAt: new Date() })
     )
   }
 ```
 
-Before writing that cast, read `base.repository.ts:157-165` (`touched`) and `:247-253` (`updateOne`'s signature). If `touched` already accommodates a `sql` value without a cast — as `claimOnce` at `user-token.repository.ts:100-110` appears to manage — then follow `claimOnce`'s exact pattern and **delete the cast**. A cast that is not needed is worse than none. Report which was true.
+No cast, and `new Date()` rather than a database-side `now()`. `updateOne`'s own signature is the constraint (`user.repository.ts:81-84`): its `values` parameter is `Touched<Partial<Omit<typeof userModel.$inferInsert, 'id' | 'createdAt' | 'updatedAt'>>>`, and `Touched<T>` intersects in `updatedAt: SQL` **only** — every other column keeps its insert-model type, which for `emailVerifiedAt` is a `Date`. A `sql` value there is a type error, and casting around it would be casting around the one thing stopping a wrong write.
 
-`now()` is used here rather than `new Date()` because this runs inside the repository, where `claimOnce` and `touched` already write database-side time; the controller-level rule about `new Date()` (Global Constraints) applies to values passed *through* the public `update()`, which this does not use.
+`claimOnce` gets to use `sql` because it calls `db.update(...).set(...)` directly rather than going through `updateOne`. Do not copy that here: `updateOne` is the path this repository's other writes take, and the `Date` is a millisecond of clock skew nobody can observe.
 
 - [ ] **Step 4: Implement `revokeAllForUserAndPurpose`**
 
@@ -875,11 +880,17 @@ it('verifies with a valid token and the account password', async () => {
   expect((await userRepository.findById(user.id))?.emailVerifiedAt).toBeInstanceOf(Date)
 })
 
-it('answers identically for a wrong password and an unknown token', async () => {
+it('answers identically for a wrong password, an unknown token, and a malformed body', async () => {
   const { token } = await seedUnverifiedUser()
 
   const wrongPassword = await verify(token, 'not-the-right-password')
   const unknownToken = await verify('deadbeef', VALID_PASSWORD)
+  // No `password` field at all. Without the try/catch around parseBody in
+  // the controller, this returns Validation failed with fieldErrors and
+  // the assertion below fails — which is the point of including it.
+  const malformed = await request(app).post('/api/v1/auth/verify-email').send({ token })
+
+  expect(malformed.body).toEqual(unknownToken.body)
 
   // Direct equality, not "both are 4xx". A distinguishable wrong-password
   // failure tells an attacker holding a link that the address is squatted.
@@ -973,14 +984,7 @@ Expected: FAIL — 404, no such route.
 // differently for a password that was legal when it was set and is not
 // now. auth.validators.ts makes the same call for loginSchema.
 import { z } from 'zod'
-import { MAX_EMAIL_LENGTH } from '@/constants/auth.constants'
-
-const emailSchema = z
-  .string()
-  .trim()
-  .toLowerCase()
-  .max(MAX_EMAIL_LENGTH, `Email must be at most ${MAX_EMAIL_LENGTH} characters.`)
-  .pipe(z.email())
+import { emailSchema } from '@/validators/auth.validators'
 
 /**
  * Verify-email request body: the raw token from the link, plus the
@@ -1007,7 +1011,7 @@ export const resendVerificationSchema = z.object({ email: emailSchema })
 export type ResendVerificationInput = z.infer<typeof resendVerificationSchema>
 ```
 
-`emailSchema` is duplicated from `auth.validators.ts:61-66`. **Do not leave it duplicated** — export it from `auth.validators.ts` and import it here, or move it to a shared validator module. Two copies of an email policy is exactly the drift `MAX_EMAIL_LENGTH`'s own comment warns about. Say which you did.
+`emailSchema` is duplicated from `auth.validators.ts:61-66`. **Do not leave it duplicated, and do not restructure the validators either.** Add `export` to the existing `emailSchema` in `auth.validators.ts` and import it here — one word in a B2 file, nothing more. Two copies of an email policy is the drift `MAX_EMAIL_LENGTH`'s own comment warns about; a shared-validators refactor is a bigger change than this task needs.
 
 - [ ] **Step 4: Write the controller**
 
@@ -1035,7 +1039,12 @@ import { getDummyHash, isPasswordValid } from '@/utilities/password.utilities'
 import { successResponse } from '@/utilities/response.utilities'
 import { claimToken } from '@/utilities/token.utilities'
 import { parseBody } from '@/validators/auth.validators'
-import { verifyEmailSchema } from '@/validators/verification.validators'
+import {
+  verifyEmailSchema,
+  type VerifyEmailInput,
+  type ResendVerificationInput,
+  resendVerificationSchema,
+} from '@/validators/verification.validators'
 
 // Module-private instances, matching auth.controller.ts:37 and
 // token.utilities.ts — this codebase does not export repository
@@ -1058,7 +1067,18 @@ export async function verifyEmail(
   next: NextFunction
 ): Promise<void> {
   try {
-    const input = parseBody(verifyEmailSchema, request.body)
+    // parseBody throws HttpError('Validation failed', 400, ..., fieldErrors)
+    // (auth.validators.ts:130-143). That envelope is DISTINGUISHABLE from
+    // this endpoint's identical-failure envelope, so a body missing
+    // `password` would answer differently from a wrong password — the
+    // oracle this endpoint exists to avoid, reintroduced through the
+    // validator. Rethrow it as the one failure this endpoint has.
+    let input: VerifyEmailInput
+    try {
+      input = parseBody(verifyEmailSchema, request.body)
+    } catch {
+      throw new HttpError(INVALID_TOKEN_MESSAGE, 400)
+    }
 
     // Claim FIRST, compare SECOND. One presentation is one attempt, so a
     // wrong password spends the token — see SECURITY.md. The order also
@@ -1146,7 +1166,37 @@ Expected: PASS — the new file plus every existing test untouched. Nothing in t
 
 - [ ] **Step 8: Prove the password check is load-bearing**
 
-With `tests/helpers/mutate.ts`: make `isPasswordValid` always return `true`, run the suite, and confirm `answers identically for a wrong password and an unknown token` and `burns the token on a wrong password` go RED. Restore, confirm green, `git status` clean. Record the output.
+First add the test that needs no harness at all, because neither existing test fails if the comparison is deleted — with `isPasswordValid` always true, the wrong-password call simply *succeeds*, and `burns the token` still sees a 400 on its second call:
+
+```ts
+it('does not verify the account when the password is wrong', async () => {
+  const { user, token } = await seedUnverifiedUser()
+
+  await verify(token, 'not-the-right-password')
+
+  // The assertion the other tests cannot make: a status code cannot tell
+  // you whether the column was written.
+  expect((await userRepository.findById(user.id))?.emailVerifiedAt).toBeNull()
+})
+```
+
+Then prove it with `withMutatedModule` (`tests/helpers/mutate.ts:114`), which is the export that reaches a **named import** — `withMutatedMethod` only replaces a property on a shared object, and `verification.controller.ts` imports `isPasswordValid` by name:
+
+```ts
+await withMutatedModule(
+  '@/utilities/password.utilities',
+  { isPasswordValid: async () => true },
+  // A literal import() thunk, and the app must be re-imported INSIDE it —
+  // the module-scope `app` this file already imported was built against
+  // the real module and will not see the mutation.
+  () => import('@/app'),
+  async (subject) => {
+    /* drive the re-loaded app and assert the new test goes RED */
+  }
+)
+```
+
+Read `withMutatedModule`'s own comment on why `loadSubject` must be a literal `import()` thunk before writing this. Restore, confirm green, `git status` clean throughout, and record the red output. If re-importing the app proves impractical inside this suite's database fixtures, say so and rely on the new test — it is a real assertion either way, not a proxy.
 
 - [ ] **Step 9: Gate and commit**
 
@@ -1377,7 +1427,7 @@ export async function register(
     successResponse(response, null, REGISTER_RESPONSE_MESSAGE, 202)
 
     if (created) {
-      void issueVerificationMail(created).catch((error: unknown) => {
+      issueVerificationMail(created).catch((error: unknown) => {
         console.error('Verification mail failed', error)
       })
       return
@@ -1386,7 +1436,7 @@ export async function register(
     // The address is taken. It may STILL have no visible row — the unique
     // index ignores deleted_at while findByEmail does not — so the name
     // falls back rather than being dereferenced.
-    void sendRegistrationAttemptMail(input.email).catch((error: unknown) => {
+    sendRegistrationAttemptMail(input.email).catch((error: unknown) => {
       console.error('Registration-attempt mail failed', error)
     })
   } catch (error) {
@@ -1442,17 +1492,20 @@ async function sendRegistrationAttemptMail(email: string): Promise<void> {
 }
 ```
 
-Three things to verify against source before this compiles:
-- `ms` and its `StringValue` type — copy the exact import and cast `token.utilities.ts:89` (`requireDurationMs`) uses. If a shared duration helper exists there, **use it** instead of calling `ms` again here.
-- `getEnv().APP_NAME` — `env.config.ts:241` notes nothing in `src/` calls it yet. This is its first caller; check the name is exactly `APP_NAME`.
-- Whether `.catch()` on a `void`-ed promise satisfies this repo's lint rules; `void x.catch(...)` and `x.catch(...)` differ under `no-floating-promises`. Match whatever the codebase already does, and keep the `.catch()` either way — Ruling T: an unhandled rejection under Node 24 kills the process, and it would do so on one branch only, which is the oracle again as a denial of service.
+Three decisions already made for you, so you do not have to guess:
+
+- **`requireDurationMs` is module-private** to `token.utilities.ts:89` — there is no shared duration helper to reuse. Import `ms` and its `StringValue` type directly here, copying the exact import line and cast that file uses. If you would rather export `requireDurationMs` and reuse it, that is a better answer — do it, and say so.
+- **`getEnv().APP_NAME`** — `env.config.ts:241` notes nothing in `src/` calls it yet, so this is its first caller. Confirm the key is exactly `APP_NAME`.
+- **Write `promise.catch(...)`, not `void promise.catch(...)`.** A promise with a `.catch()` attached is already handled, so `no-floating-promises` accepts it without the `void` — and `void` is precisely what Ruling T identified as the defect, because it discards the rejection instead of handling it. The code block above still shows `void`; drop it. An unhandled rejection under Node 24 kills the process, and it would do so on the created branch only, which is the enumeration oracle again as a denial of service.
+
+The block above is already written without `void`; keep it that way.
 
 - [ ] **Step 6: Run the tests**
 
 Run: `pnpm test`
 Expected: PASS. The `201`-shape test at `auth.test.ts:162` and the two `409` tests at `:246`/`:256` will fail — they assert exactly what this task removes. Rewrite them:
 - `:162`'s "no password field of any kind" assertion is the point of that test and must survive. Move it onto **login's** response, which still returns the user.
-- `:246` and `:256` become the identical-response test from Step 3, if they are not already covered by it. Delete them only once you can point at the test that replaced each.
+- `:246` and `:256` both assert `409` on a duplicate address. **Delete them**; Step 3's `answers a free address and a taken one identically` is their replacement and is already written. Do not write a third copy. Before deleting, read each one for any assertion the replacement does not make — if one checks something else as well, carry that across.
 
 Say in your report, per test, whether it was moved, replaced, or deleted, and why. A test deleted without a named replacement is a regression.
 
@@ -1591,6 +1644,15 @@ it('answers identically for unknown, unverified and already-verified addresses',
   }
 })
 
+it('answers a malformed address identically', async () => {
+  const response = await request(app)
+    .post('/api/v1/auth/resend-verification')
+    .send({ email: 'not-an-address' })
+
+  expect(response.status).toBe(202)
+  expect(response.body).toEqual(RESEND_BODY)
+})
+
 it('mails only the unverified address', async () => {
   const unknown = uniqueEmail()
   const { email: unverified } = await registerUser()
@@ -1668,7 +1730,16 @@ export async function resendVerification(
   next: NextFunction
 ): Promise<void> {
   try {
-    const input = parseBody(resendVerificationSchema, request.body)
+    // Same reasoning as verifyEmail: a malformed address must not answer
+    // differently from a well-formed unknown one, or this becomes a
+    // cheaper oracle than the one it was built to avoid.
+    let input: ResendVerificationInput
+    try {
+      input = parseBody(resendVerificationSchema, request.body)
+    } catch {
+      successResponse(response, null, RESEND_RESPONSE_MESSAGE, 202)
+      return
+    }
     const user = await userRepository.findByEmail(input.email)
 
     // Respond first: an SMTP round trip on one branch only is a timing
@@ -1677,7 +1748,7 @@ export async function resendVerification(
 
     if (!user || user.emailVerifiedAt) return
 
-    void resendVerificationMail(user).catch((error: unknown) => {
+    resendVerificationMail(user).catch((error: unknown) => {
       console.error('Resend verification mail failed', error)
     })
   } catch (error) {
