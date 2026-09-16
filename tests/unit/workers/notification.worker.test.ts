@@ -25,10 +25,20 @@ import { NotificationPreferenceRepository } from '@/repositories/notification-pr
 import { NotificationRepository } from '@/repositories/notification.repository'
 import { logger } from '@/services/logger.service'
 import type { MailMessage } from '@/services/mailer.service'
+import * as notificationEmitter from '@/services/notification-emitter.service'
 import { processNotificationJob } from '@/workers/notification.worker'
 
 vi.mock('@/jobs/email.job', () => ({
   addEmailJob: vi.fn(),
+}))
+
+// `emitNotification` (notification-emitter.service.ts) is a plain exported
+// function, not a class method — there is no prototype for
+// `vi.spyOn(NotificationRepository.prototype, 'create')`'s own pattern to
+// reach, so this is mocked at the module level instead, same as
+// `addEmailJob` immediately above.
+vi.mock('@/services/notification-emitter.service', () => ({
+  emitNotification: vi.fn(),
 }))
 
 /**
@@ -104,6 +114,7 @@ describe('processNotificationJob', () => {
     insertSpy = vi.spyOn(NotificationRepository.prototype, 'create')
     channelEnabledSpy = vi.spyOn(NotificationPreferenceRepository.prototype, 'isChannelEnabled')
     vi.mocked(emailJob.addEmailJob).mockReset()
+    vi.mocked(notificationEmitter.emitNotification).mockReset()
   })
 
   afterEach(() => {
@@ -123,6 +134,26 @@ describe('processNotificationJob', () => {
       title: 'Verify your email',
       body: 'Click the link to verify your email address.',
     })
+  })
+
+  it('publishes the inserted row to the notification emitter after the in-app insert succeeds', async () => {
+    channelEnabledSpy.mockResolvedValue(true)
+    insertSpy.mockResolvedValue(mockNotificationRow)
+
+    await processNotificationJob(mockJob())
+
+    expect(notificationEmitter.emitNotification).toHaveBeenCalledWith(
+      'user-123',
+      mockNotificationRow
+    )
+  })
+
+  it('does not publish to the notification emitter when the in_app channel is disabled', async () => {
+    channelEnabledSpy.mockResolvedValue(false)
+
+    await processNotificationJob(mockJob())
+
+    expect(notificationEmitter.emitNotification).not.toHaveBeenCalled()
   })
 
   it('strips variables out of metadata before the in-app insert', async () => {
