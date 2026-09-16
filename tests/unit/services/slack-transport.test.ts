@@ -16,6 +16,7 @@
 // after any `process.nextTick`-scheduled stream plumbing has already
 // flushed.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { requestContextStore } from '@/middlewares/request-context.middleware'
 import { createWinstonLogger } from '@/services/logger.service'
 
 // Narrower than the global RequestInit on purpose: SlackTransport always
@@ -29,7 +30,10 @@ interface SlackFetchInit {
   body: string
 }
 
-type FetchProcedure = (url: string, init: SlackFetchInit) => Promise<{ ok: boolean }>
+type FetchProcedure = (
+  url: string,
+  init: SlackFetchInit
+) => Promise<{ ok: boolean; status?: number }>
 
 describe('Slack transport', () => {
   const mockFetch = vi.fn<FetchProcedure>()
@@ -181,6 +185,49 @@ describe('Slack transport', () => {
       setImmediate(() => {
         expect(consoleErrorSpy).toHaveBeenCalledWith('Slack webhook failed', expect.any(Error))
         consoleErrorSpy.mockRestore()
+        resolve()
+      })
+    }))
+
+  it('logs to console when the webhook responds with a non-OK status', () =>
+    new Promise<void>((resolve) => {
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 404 })
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+      const log = createWinstonLogger({
+        level: 'error',
+        isProduction: true,
+        slackWebhookUrl: 'https://hooks.slack.com/services/T/B/X',
+        slackLogLevel: 'error',
+      })
+
+      log.error('webhook revoked', { source: 'test.ts:1' })
+
+      setImmediate(() => {
+        expect(consoleErrorSpy).toHaveBeenCalledWith('Slack webhook failed', 404)
+        consoleErrorSpy.mockRestore()
+        resolve()
+      })
+    }))
+
+  it('includes the ALS requestId in a *Request:* field of the Slack payload', () =>
+    new Promise<void>((resolve) => {
+      const log = createWinstonLogger({
+        level: 'error',
+        isProduction: true,
+        slackWebhookUrl: 'https://hooks.slack.com/services/T/B/X',
+        slackLogLevel: 'error',
+      })
+
+      requestContextStore.run({ requestId: 'test-123' }, () => {
+        log.error('correlated failure', { source: 'test.ts:1' })
+      })
+
+      setImmediate(() => {
+        expect(mockFetch).toHaveBeenCalledOnce()
+        const [, options] = mockFetch.mock.calls[0] as [string, SlackFetchInit]
+        expect(options.body).toContain('*Request:*')
+        expect(options.body).toContain('test-123')
         resolve()
       })
     }))

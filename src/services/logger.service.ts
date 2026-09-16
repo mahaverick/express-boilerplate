@@ -176,11 +176,19 @@ class SlackTransport extends Transport {
 
   private async sendToSlack(payload: Record<string, unknown>): Promise<void> {
     try {
-      await fetch(this.webhookUrl, {
+      const response = await fetch(this.webhookUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       })
+      if (!response.ok) {
+        // Same reasoning as the catch block below: direct console.error, not
+        // logger.error, to avoid re-entering this transport. A non-OK
+        // response (revoked webhook, bad payload, gone endpoint) does not
+        // throw — fetch() only rejects on network errors — so it needs its
+        // own check here.
+        console.error('Slack webhook failed', response.status)
+      }
     } catch (error: unknown) {
       // Direct console.error, NOT logger.error — using the logger here would
       // re-enter this transport's own log() and create a feedback loop where
@@ -309,15 +317,20 @@ class SlackTransport extends Transport {
  * @returns A configured Winston Logger.
  */
 export function createWinstonLogger(options: LoggerOptions): Logger {
+  // addRequestContext/timestamp/serializeErrors used to live inside each
+  // transport's own format.combine(), which meant SlackTransport — added
+  // via log.add()-style transports array below, with no format of its own —
+  // never saw a requestId: info reached its log() raw. Hoisting these three
+  // to the logger-level format runs them once, upstream of every transport,
+  // so Slack alerts get the same requestId/timestamp/serialized-error
+  // fields the console output does.
+  const timestampFormat = options.isProduction
+    ? format.timestamp()
+    : format.timestamp({ format: 'HH:mm:ss' })
+
   const consoleFormat = options.isProduction
-    ? format.combine(addRequestContext(), format.timestamp(), serializeErrors(), format.json())
-    : format.combine(
-        addRequestContext(),
-        format.timestamp({ format: 'HH:mm:ss' }),
-        serializeErrors(),
-        format.colorize(),
-        developmentFormat
-      )
+    ? format.json()
+    : format.combine(format.colorize(), developmentFormat)
 
   const logTransports: Transport[] = [new transports.Console({ format: consoleFormat })]
 
@@ -332,6 +345,7 @@ export function createWinstonLogger(options: LoggerOptions): Logger {
 
   return createLogger({
     level: options.level,
+    format: format.combine(addRequestContext(), timestampFormat, serializeErrors()),
     transports: logTransports,
   })
 }
