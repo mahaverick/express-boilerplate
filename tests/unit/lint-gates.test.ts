@@ -162,6 +162,38 @@ describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS }, () => {
     )
   })
 
+  // tracing.ts loads via `--import`, before getEnv() has ever run, so it is
+  // the one other module (alongside env.config.ts/logger.service.ts/index.ts
+  // above) allowed to read process.env directly and to use console.* instead
+  // of the logger — both for the same load-order reason. A sibling file
+  // under the same directory must NOT inherit the exemption: it is scoped to
+  // this one filename, not the whole src/observability/ directory.
+  it('allows process.env and console.* inside tracing.ts but blocks them in a sibling file', async () => {
+    const processEnvSource = 'export const x = process.env.FOO\n'
+    const consoleSource = 'export function f(): void { console.info("x") }\n'
+
+    expect(await ruleIdsFor('src/observability/tracing.ts', processEnvSource)).not.toContain(
+      'no-restricted-properties'
+    )
+    expect(await ruleIdsFor('src/observability/tracing.ts', consoleSource)).not.toContain(
+      'no-restricted-properties'
+    )
+    expect(await ruleIdsFor('src/observability/other.ts', processEnvSource)).toContain(
+      'no-restricted-properties'
+    )
+    expect(await ruleIdsFor('src/observability/other.ts', consoleSource)).toContain(
+      'no-restricted-properties'
+    )
+  })
+
+  it('does not enforce filename-naming-convention under src/observability/', async () => {
+    const ids = await ruleIdsFor(
+      'src/observability/tracing.ts',
+      '/**\n * P.\n * @returns text\n */\nexport function p(): string { return "x" }\n'
+    )
+    expect(ids).not.toContain('check-file/filename-naming-convention')
+  })
+
   it('allows a deliberately-unused underscore-prefixed handler parameter', async () => {
     // Express identifies an error handler by arity (four parameters); the
     // fourth is almost never used. `response` is used in the body (matching

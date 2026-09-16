@@ -140,6 +140,29 @@ until you check.
   pub/sub works for single-pod deployments; upgrade to Redis Pub/Sub for
   multi-pod with separate worker processes.
 
+## Observability
+
+- **`src/observability/tracing.ts` loads via `--import` before the app.**
+  It reads `process.env` directly (not `getEnv()`) because it must
+  initialize before env validation. When `OTEL_EXPORTER_OTLP_ENDPOINT` is
+  unset, the file is a complete no-op — no SDK started, no spans generated.
+- **Trace-id appears in log output** as `traceId` and `spanId` fields when
+  OTEL is active. When disabled, these fields are simply absent.
+- **`IORedisInstrumentation` covers BullMQ's Redis traffic, not
+  `redis.service.ts`'s.** This codebase has two Redis clients:
+  `redis.service.ts` (direct app code — health checks, rate limiting) uses
+  the `redis` package (node-redis); `queue.service.ts` (BullMQ) uses
+  `ioredis`. `@opentelemetry/instrumentation-ioredis` only patches
+  `ioredis`, so BullMQ's queue operations get spans and `redis.service.ts`'s
+  direct calls do not. There is no `instrumentation-redis` (node-redis)
+  package installed — adding one is a follow-up, not an oversight.
+- **No Postgres instrumentation.** This codebase uses `postgres` (postgres.js),
+  not `pg`. `@opentelemetry/instrumentation-pg` only instruments `pg`.
+  Express + HTTP + ioredis(BullMQ) covers the request lifecycle; database
+  calls appear as gaps in traces.
+- **Grafana** at `http://localhost:3100` with Tempo as the default data
+  source. Anonymous admin access enabled for local dev.
+
 ## Git hooks and CI
 
 - **Pre-commit takes ~4.6s, and that is a deliberate trade, not a

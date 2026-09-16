@@ -39,6 +39,7 @@ const baseEnv: Env = {
   SESSION_ABSOLUTE_TTL: '30d',
   EMAIL_VERIFICATION_TTL: '24h',
   TRUST_PROXY: 'false',
+  OTEL_SERVICE_NAME: 'express-boilerplate',
   LOG_LEVEL: 'info',
   SLACK_LOG_LEVEL: 'error',
   WORKER_ENABLED: true,

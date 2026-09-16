@@ -211,6 +211,31 @@ describe('logger singleton', () => {
     }))
 })
 
+describe('trace-id correlation', () => {
+  // OTEL is not active in this test run — .env.test (tests/helpers/setup-global.ts)
+  // never sets OTEL_EXPORTER_OTLP_ENDPOINT, so src/observability/tracing.ts's
+  // SDK is never started and no global tracer provider is registered.
+  // trace.getActiveSpan() (addRequestContext, logger.service.ts) is then
+  // guaranteed to return undefined regardless of call site — there is no
+  // "active span" to be outside of. Exercising that with OTEL genuinely
+  // active would mean starting a real NodeSDK, which is the integration
+  // concern tracing.test.ts's own header comment defers.
+  it('omits traceId/spanId from log output when no span is active', () =>
+    new Promise<void>((resolve) => {
+      const output = captureStdout()
+      const log = createWinstonLogger({ level: 'info', isProduction: true })
+
+      log.info('no active span', { source: 'test.ts:1' })
+
+      setImmediate(() => {
+        const parsed = parseLastRecord(output)
+        expect(parsed.traceId).toBeUndefined()
+        expect(parsed.spanId).toBeUndefined()
+        resolve()
+      })
+    }))
+})
+
 describe('caller location extraction', () => {
   it('source field names the calling file, not logger.service.ts', () =>
     new Promise<void>((resolve) => {
