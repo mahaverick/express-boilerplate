@@ -1,0 +1,29 @@
+# docker/tempo/config.yaml — minimal single-binary Tempo, local dev only.
+#
+# Receives OTLP/HTTP directly from the app (OTEL_EXPORTER_OTLP_ENDPOINT) and,
+# forwarded a second time, from otel-collector.yaml's own otlphttp exporter —
+# both point at the same 4318. Storage is local disk inside the container
+# (the tempo-data volume in docker-compose.yml), not S3/GCS — there is no
+# retention/replication story here, only "traces survive a container
+# restart, not a volume prune".
+server:
+  http_listen_port: 3200
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        http:
+          endpoint: 0.0.0.0:4318
+
+storage:
+  trace:
+    backend: local
+    local:
+      path: /var/tempo/traces
+    wal:
+      path: /var/tempo/wal
+
+metrics_generator:
+  storage:
+    path: /var/tempo/metrics

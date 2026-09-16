@@ -7,6 +7,7 @@
 // through JSON.stringify (message/stack/name are non-enumerable), and Winston
 // has no built-in way to pull correlation data out of an AsyncLocalStorage
 // context — see serializeErrors and addRequestContext below.
+import { trace } from '@opentelemetry/api'
 import { createLogger, format, transports, type Logger } from 'winston'
 import Transport from 'winston-transport'
 import { getEnv } from '@/configs/env.config'
@@ -88,10 +89,24 @@ export function getCallerSource(): string {
   return 'unknown'
 }
 
+// `trace.getActiveSpan()` is an @opentelemetry/api call, not a dependency on
+// the SDK itself — the api package is always installed and always safe to
+// import, and returns `undefined` here with zero cost whenever no SDK is
+// registered (OTEL_EXPORTER_OTLP_ENDPOINT unset; see
+// src/observability/tracing.ts). No conditional/env check is needed in this
+// file for that reason: an inactive tracer is indistinguishable from "no
+// span in scope", which is exactly the case this already has to handle for
+// code running outside any request.
 const addRequestContext = format((info) => {
   const context = requestContextStore.getStore()
   if (context?.requestId) {
     info.requestId = context.requestId
+  }
+  const span = trace.getActiveSpan()
+  if (span) {
+    const spanContext = span.spanContext()
+    info.traceId = spanContext.traceId
+    info.spanId = spanContext.spanId
   }
   return info
 })

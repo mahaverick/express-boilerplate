@@ -264,9 +264,14 @@ response.
 ## Local infrastructure
 
 `docker-compose.yml` provides Postgres, Redis, an OpenTelemetry Collector,
-and Mailpit (a local SMTP sink with a web UI at `:8025`) — everything the
-app needs to boot locally, none of it currently required to be exercised
-by the app itself outside the database/Redis clients.
+Tempo (trace storage), Grafana (`:3100`, Tempo pre-provisioned as its data
+source), and Mailpit (a local SMTP sink with a web UI at `:8025`) —
+everything the app needs to boot locally, none of it currently required to
+be exercised by the app itself outside the database/Redis clients. The
+collector forwards traces to Tempo; the app can also be pointed at the
+collector directly via `OTEL_EXPORTER_OTLP_ENDPOINT` — see CLAUDE.md's
+"Observability" section for what `src/observability/tracing.ts` does and
+does not instrument.
 
 **Postgres is pinned to major version 18** because generated migrations may
 use `uuidv7()` as a column default, which is built into Postgres from 18
