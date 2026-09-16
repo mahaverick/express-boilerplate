@@ -127,6 +127,17 @@ describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS }, () => {
     )
   })
 
+  it('allows console.error inside logger.service.ts and index.ts but blocks it elsewhere', async () => {
+    const source = 'export function f(): void { console.error("x") }\n'
+    expect(await ruleIdsFor('src/services/logger.service.ts', source)).not.toContain(
+      'no-restricted-properties'
+    )
+    expect(await ruleIdsFor('src/index.ts', source)).not.toContain('no-restricted-properties')
+    expect(await ruleIdsFor('src/services/other.service.ts', source)).toContain(
+      'no-restricted-properties'
+    )
+  })
+
   it('allows a deliberately-unused underscore-prefixed handler parameter', async () => {
     // Express identifies an error handler by arity (four parameters); the
     // fourth is almost never used. `response` is used in the body (matching
