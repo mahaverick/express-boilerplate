@@ -223,6 +223,27 @@ const EnvSchema = z.object({
     'Minimum log level that triggers a Slack notification. Defaults to error; set to warn if you want Slack alerts for warnings too.'
   ),
 
+  // z.stringbool(), NOT z.coerce.boolean(): `Boolean("false")` is `true` in
+  // JavaScript, so z.coerce.boolean() (which coerces via `Boolean(value)`)
+  // would make `WORKER_ENABLED=false` in a .env file silently ENABLE the
+  // worker — the exact opposite of what an operator wrote. z.stringbool()
+  // (Zod 4) parses the string content itself ("false"/"0"/"no" -> false,
+  // "true"/"1"/"yes" -> true), which is what a boolean-shaped env var
+  // actually needs.
+  WORKER_ENABLED: z
+    .stringbool()
+    .default(true)
+    .describe(
+      'Whether the BullMQ worker starts in-process alongside the HTTP server. Set to false for API-only pods behind a load balancer; a separate worker deployment sets this to true.'
+    ),
+  QUEUE_PREFIX: z
+    .string()
+    .min(1)
+    .default('bull')
+    .describe(
+      'BullMQ Redis key prefix. Tests override this per vitest worker to prevent cross-worker job leaks.'
+    ),
+
   // SMTP configuration for mailer.service.ts (src/services/mailer.service.ts)
   // / mailer.config.ts. Defaulted to docker-compose.yml's Mailpit service
   // (SMTP on 1025) so a fresh clone can send mail with zero configuration —

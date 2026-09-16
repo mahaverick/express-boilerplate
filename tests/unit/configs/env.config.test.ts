@@ -248,6 +248,48 @@ describe('TRUST_PROXY', () => {
   })
 })
 
+describe('WORKER_ENABLED', () => {
+  // The one regression this field exists to prevent: z.coerce.boolean()
+  // coerces via JavaScript's own `Boolean(value)`, and `Boolean("false")` is
+  // `true` — a `.env` file with `WORKER_ENABLED=false` would silently START
+  // the worker. z.stringbool() (Zod 4) parses the string's actual content
+  // instead, so this must resolve to the real boolean `false`, not the
+  // string `"false"` and not `true`.
+  it('parses WORKER_ENABLED=false as boolean false', () => {
+    const env = parseEnv({ ...valid, WORKER_ENABLED: 'false' })
+    expect(env.WORKER_ENABLED).toBe(false)
+  })
+
+  it('parses WORKER_ENABLED=true as boolean true', () => {
+    const env = parseEnv({ ...valid, WORKER_ENABLED: 'true' })
+    expect(env.WORKER_ENABLED).toBe(true)
+  })
+
+  it('defaults WORKER_ENABLED to true when unset', () => {
+    const env = parseEnv(valid)
+    expect(env.WORKER_ENABLED).toBe(true)
+  })
+})
+
+describe('QUEUE_PREFIX', () => {
+  it('defaults to "bull" when unset', () => {
+    expect(parseEnv(valid).QUEUE_PREFIX).toBe('bull')
+  })
+
+  it('accepts a custom prefix — tests override this per vitest worker', () => {
+    expect(parseEnv({ ...valid, QUEUE_PREFIX: 'bull:test-w3' }).QUEUE_PREFIX).toBe('bull:test-w3')
+  })
+
+  it('rejects an empty QUEUE_PREFIX', () => {
+    expect(() => parseEnv({ ...valid, QUEUE_PREFIX: '' })).not.toThrow()
+    // An empty string is dropped as "absent" (same treatment as every other
+    // optional/defaulted field — see the "empty-string optional value"
+    // test above), so it falls back to the default rather than failing
+    // min(1) directly. Confirms the two rules AGREE rather than fighting.
+    expect(parseEnv({ ...valid, QUEUE_PREFIX: '' }).QUEUE_PREFIX).toBe('bull')
+  })
+})
+
 describe('trustProxySetting', () => {
   it('maps "false" to the boolean Express understands, not the string', () => {
     // A non-empty string is truthy, and Express reads a string as an address

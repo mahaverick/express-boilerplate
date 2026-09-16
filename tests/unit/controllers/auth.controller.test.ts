@@ -41,6 +41,8 @@ const baseEnv: Env = {
   TRUST_PROXY: 'false',
   LOG_LEVEL: 'info',
   SLACK_LOG_LEVEL: 'error',
+  WORKER_ENABLED: true,
+  QUEUE_PREFIX: 'bull',
   SMTP_HOST: 'localhost',
   SMTP_PORT: 1025,
   MAIL_FROM: 'no-reply@example.com',

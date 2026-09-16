@@ -200,6 +200,8 @@ export default tseslint.config(
           'src/constants/**/*.ts': '*.constants',
           'src/configs/**/*.ts': '*.config',
           'src/templates/**/*.ts': '*.template',
+          'src/jobs/**/*.ts': '*.job',
+          'src/workers/**/*.ts': '*.worker',
         },
       ],
       'check-file/folder-naming-convention': ['error', { 'src/**/': 'KEBAB_CASE' }],

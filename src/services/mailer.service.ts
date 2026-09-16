@@ -339,9 +339,9 @@ async function recordDelivery(entry: NewEmailLog): Promise<void> {
  * logged key always names the template that was really invoked, whether it
  * succeeded or not.
  * @param message - The email to render and send.
- * @returns Resolves once the send has been attempted and the outcome recorded, regardless of whether rendering, sending, or recording actually succeeded.
+ * @returns `'sent'` or `'failed'`, reflecting the recorded `email_logs` status — resolves once the send has been attempted and the outcome recorded, regardless of whether rendering, sending, or recording actually succeeded. Callers that need to decide whether to retry (e.g. `email.worker.ts`) read this; callers that don't (every caller before Task 2) can keep ignoring it.
  */
-export async function sendMail(message: MailMessage): Promise<void> {
+export async function sendMail(message: MailMessage): Promise<'sent' | 'failed'> {
   let entry: NewEmailLog
   try {
     // Rendering runs INSIDE this try — see this file's header comment for
@@ -374,4 +374,5 @@ export async function sendMail(message: MailMessage): Promise<void> {
     }
   }
   await recordDelivery(entry)
+  return entry.status === 'sent' ? 'sent' : 'failed'
 }

@@ -22,12 +22,13 @@ import { randomUUID } from 'node:crypto'
 import { type NextFunction, type Request, type Response } from 'express'
 import { getEnv } from '@/configs/env.config'
 import { REFRESH_TOKEN_COOKIE_NAME, REFRESH_TOKEN_COOKIE_PATH } from '@/constants/auth.constants'
+import { JobPriority } from '@/constants/queue.constants'
 import type { User } from '@/database/models/user.model'
+import { addEmailJob } from '@/jobs/email.job'
 import { toAuthenticatedUser, type AuthenticatedUser } from '@/middlewares/auth.middleware'
 import { HttpError } from '@/middlewares/error.middleware'
 import { UserRepository } from '@/repositories/user.repository'
 import { logger } from '@/services/logger.service'
-import { sendMail } from '@/services/mailer.service'
 import { REGISTRATION_ATTEMPT_TEMPLATE_KEY } from '@/templates/email/registration-attempt.template'
 import { getDummyHash, hashPassword, isPasswordValid } from '@/utilities/password.utilities'
 import { successResponse } from '@/utilities/response.utilities'
@@ -176,18 +177,26 @@ const REGISTER_RESPONSE_MESSAGE =
  */
 async function sendRegistrationAttemptMail(email: string): Promise<void> {
   const existing = await userRepository.findByEmail(email)
-  await sendMail({
-    to: email,
-    templateKey: REGISTRATION_ATTEMPT_TEMPLATE_KEY,
-    variables: {
-      // The STORED name, never the submitted one: the submitted value is
-      // attacker-chosen text being delivered into the victim's inbox.
-      // `??` covers the soft-deleted case, where the address is taken but
-      // no visible row exists to read a name from.
-      firstName: existing?.firstName ?? MISSING_FIRST_NAME_FALLBACK,
-      appName: getEnv().APP_NAME,
+  await addEmailJob(
+    {
+      to: email,
+      templateKey: REGISTRATION_ATTEMPT_TEMPLATE_KEY,
+      variables: {
+        // The STORED name, never the submitted one: the submitted value is
+        // attacker-chosen text being delivered into the victim's inbox.
+        // `??` covers the soft-deleted case, where the address is taken but
+        // no visible row exists to read a name from.
+        firstName: existing?.firstName ?? MISSING_FIRST_NAME_FALLBACK,
+        appName: getEnv().APP_NAME,
+      },
     },
-  })
+    // Soft-deleted case: the address is taken but findByEmail returns no
+    // visible row, so there is no id to correlate the job to. '' rather than
+    // a lookup fallback — this is logging/correlation only (email.job.ts),
+    // never a DB key.
+    existing?.id ?? '',
+    { priority: JobPriority.normal }
+  )
 }
 
 /**

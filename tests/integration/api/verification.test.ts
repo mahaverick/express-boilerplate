@@ -11,16 +11,20 @@
 // token-state oracle, and a distinguishable wrong-password failure would
 // tell whoever holds a link that the address is squatted.
 import { randomUUID } from 'node:crypto'
+import type { Worker } from 'bullmq'
 import request from 'supertest'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
 import { REFRESH_TOKEN_COOKIE_NAME } from '@/constants/auth.constants'
 import type { User } from '@/database/models/user.model'
+import type { EmailJobData } from '@/jobs/email.job'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
+import { closeQueue, getEmailQueue } from '@/services/queue.service'
 import { getRedis } from '@/services/redis.service'
 import { hashPassword } from '@/utilities/password.utilities'
 import { issueToken } from '@/utilities/token.utilities'
+import { startEmailWorker } from '@/workers/email.worker'
 import {
   assertNoMailpitMessage,
   drainMailpit,
@@ -30,6 +34,19 @@ import {
 
 const app = createApp()
 const userRepository = new UserRepository()
+
+// verifyEmail/resendVerification/register now enqueue via BullMQ
+// (addEmailJob) instead of calling sendMail() directly — see
+// tests/integration/api/auth.test.ts's identical comment for why every
+// mail-delivery assertion in this file needs a live Worker to actually
+// process what these endpoints enqueue.
+const worker: Worker<EmailJobData> = startEmailWorker()
+
+afterAll(async () => {
+  await worker.close()
+  await getEmailQueue().obliterate({ force: true })
+  await closeQueue()
+})
 
 const VALID_PASSWORD = 'correct horse battery staple'
 
