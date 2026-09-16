@@ -158,8 +158,15 @@ function isNewerThan(candidate: Notification, cursor: Notification): boolean {
 }
 
 /**
- * Replay every notification the client missed while disconnected, on
- * reconnect.
+ * Fetch every notification the client missed while disconnected — the pure
+ * query half of the `Last-Event-ID` replay.
+ *
+ * Deliberately split from writing the frames out (that happens in
+ * `streamNotifications` itself, not here): this function performs the ONLY
+ * `await` in the reconnect path, and `streamNotifications` needs its live
+ * listener, heartbeat, and close handler already registered before that
+ * await starts — see its own comment for why a version that awaited this
+ * query before registering them was a real bug, not a hypothetical one.
  *
  * Bounded to the single most-recent page `NotificationRepository.list`
  * returns (`MAX_NOTIFICATION_PAGE_SIZE` — the same cap
@@ -167,45 +174,59 @@ function isNewerThan(candidate: Notification, cursor: Notification): boolean {
  * enforces for `GET /api/v1/notifications`): a client that missed more
  * notifications than that in one disconnect still gets caught up on the
  * most recent ones, and can page through the rest via the ordinary REST
- * endpoint, rather than this burst issuing an unbounded number of `list()`
- * calls before the live stream can even start.
+ * endpoint, rather than this issuing an unbounded number of `list()` calls
+ * before the live stream can even start.
  *
- * A silent no-op — not a 400/404 — when `lastEventId` does not resolve to a
- * notification this user still owns: it may have been deleted (`DELETE
- * /api/v1/notifications/:id`) since the client last saw it, and a reconnect
- * is exactly the moment that should recover gracefully. The live stream
- * below still starts either way.
- * @param response - The open SSE response to write the replay burst to.
+ * Resolves to an empty array — not a 400/404 — when `lastEventId` does not
+ * resolve to a notification this user still owns: it may have been deleted
+ * (`DELETE /api/v1/notifications/:id`) since the client last saw it, and a
+ * reconnect is exactly the moment that should recover gracefully.
  * @param userId - The authenticated connection's owner.
  * @param lastEventId - The `Last-Event-ID` header value the client sent on reconnect.
+ * @returns The missed notifications, oldest first — the order they should be replayed in, matching the order the live stream itself delivers in.
  */
-async function replayMissedNotifications(
-  response: Response,
+async function fetchMissedNotifications(
   userId: string,
   lastEventId: string
-): Promise<void> {
+): Promise<Notification[]> {
   const cursor = await notificationRepository.findByIdAndUser(lastEventId, userId)
-  if (!cursor) return
+  if (!cursor) return []
 
   const { notifications } = await notificationRepository.list(userId, {
     limit: MAX_NOTIFICATION_PAGE_SIZE,
   })
 
-  // list() returns newest-first; replay oldest-first so each frame's `id:`
-  // line only ever advances, matching the order the live stream itself
-  // delivers in.
-  const missed = notifications
-    .filter((notification) => isNewerThan(notification, cursor))
-    .toReversed()
-
-  for (const notification of missed) {
-    writeNotificationEvent(response, notification)
-  }
+  // list() returns newest-first; the caller replays oldest-first.
+  return notifications.filter((notification) => isNewerThan(notification, cursor)).toReversed()
 }
 
 /**
  * `GET /api/v1/notifications/stream` — open a Server-Sent Events connection
  * for the authenticated user's notifications.
+ *
+ * EVERYTHING SYNCHRONOUS-UP-FRONT, THE REPLAY QUERY LAST — not the more
+ * obvious "replay, then subscribe" order. `fetchMissedNotifications`
+ * (above) awaits the database twice; if the live listener, heartbeat, and
+ * close handler were registered only after that awaits resolved, two things
+ * could go wrong in that window:
+ *
+ *   - A notification emitted while the query was in flight would be in
+ *     neither the replay burst (already queried) nor the live stream (not
+ *     subscribed yet) — silently lost until the next reconnect, which is
+ *     the exact gap `Last-Event-ID` exists to close.
+ *   - A client that disconnects while the query is in flight would fire
+ *     `request`'s `'close'` event before this function ever attached a
+ *     listener for it — `offNotification`/`clearInterval` would never run,
+ *     leaking the subscription and a heartbeat timer for as long as the
+ *     process lives.
+ *
+ * `onNotification`/the heartbeat/`request.on('close')` are registered
+ * first, unconditionally, before the one `await` on the reconnect path.
+ * While that query is in flight, `isReplaying` routes any live notification
+ * into `pendingDuringReplay` instead of writing it immediately; once the
+ * queried burst is written, the pending queue is flushed, deduplicated
+ * against ids the burst already covered (the two windows can legitimately
+ * overlap by one notification).
  * @param request - The incoming request, carrying the access token as `?token=` and, on reconnect, a `Last-Event-ID` header.
  * @param response - The response, upgraded to an SSE stream once authenticated.
  * @param next - Forwards an authentication failure to the terminal error handler.
@@ -240,11 +261,18 @@ export async function streamNotifications(
     })
 
     const lastEventId = request.get('Last-Event-ID')
-    if (lastEventId) {
-      await replayMissedNotifications(response, userId, lastEventId)
-    }
+
+    // See this function's own comment for why this is `true` from the
+    // start on a reconnect, and why registration below cannot wait for
+    // `fetchMissedNotifications` to resolve first.
+    let isReplaying = Boolean(lastEventId)
+    const pendingDuringReplay: Notification[] = []
 
     const handleNotification = (notification: Notification): void => {
+      if (isReplaying) {
+        pendingDuringReplay.push(notification)
+        return
+      }
       writeNotificationEvent(response, notification)
     }
     onNotification(userId, handleNotification)
@@ -259,10 +287,32 @@ export async function streamNotifications(
     // test (or a graceful shutdown) waiting on a timer nothing else needs.
     heartbeat.unref()
 
+    let isClosed = false
     request.on('close', () => {
+      isClosed = true
       offNotification(userId, handleNotification)
       clearInterval(heartbeat)
     })
+
+    if (lastEventId) {
+      const missed = await fetchMissedNotifications(userId, lastEventId)
+      // The client disconnected while that query was in flight — the
+      // `'close'` handler above already unsubscribed and cleared the
+      // heartbeat; there is nothing left to write.
+      if (isClosed) return
+
+      const missedIds = new Set(missed.map((notification) => notification.id))
+      for (const notification of missed) {
+        writeNotificationEvent(response, notification)
+      }
+
+      isReplaying = false
+      for (const notification of pendingDuringReplay) {
+        if (!missedIds.has(notification.id)) {
+          writeNotificationEvent(response, notification)
+        }
+      }
+    }
   } catch (error) {
     next(error)
   }

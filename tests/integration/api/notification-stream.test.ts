@@ -428,6 +428,65 @@ describe('GET /api/v1/notifications/stream', () => {
     expect(replayed.map((frame) => frame.id)).toEqual([second.id, third.id])
   })
 
+  it('does not lose a notification emitted while a reconnect’s replay query is still in flight', async () => {
+    // Regression test for a real ordering bug: an earlier version of
+    // streamNotifications (notification-stream.controller.ts) awaited
+    // `fetchMissedNotifications` BEFORE calling `onNotification`, so a
+    // notification published during that database round trip landed in
+    // neither the replay burst nor the live stream — lost until the next
+    // reconnect. This test does not control exactly when the emit lands
+    // relative to the query (that race is inherent to the scenario), but it
+    // does not need to: emitting immediately after the connection's headers
+    // arrive — before any `await` in this test — gives the emit its best
+    // chance of landing inside that window, and the assertion (delivered
+    // exactly once) holds regardless of which side of the query it actually
+    // lands on.
+    const { user, token } = await createAuthenticatedUser()
+    const first = await seedNotification(user.id, 'First')
+
+    const connection = openStream(
+      `/api/v1/notifications/stream?token=${encodeURIComponent(token)}`,
+      { 'Last-Event-ID': first.id }
+    )
+    await connection.waitForResponse()
+
+    const live = await seedNotification(user.id, 'Live during replay')
+    emitNotification(user.id, live)
+
+    await waitUntil(() => connection.frames.some((frame) => frame.event === 'notification'), 5000)
+    // A fixed settle time, not another `waitUntil`: this asserts an upper
+    // bound (never delivered twice), which a condition-based wait cannot
+    // express — there is no "it stayed at 1" event to poll for.
+    await sleep(200)
+
+    const delivered = connection.frames.filter((frame) => frame.event === 'notification')
+    expect(delivered.map((frame) => frame.id)).toEqual([live.id])
+  })
+
+  it('does not leak its listener when the client disconnects while a reconnect’s replay query is still in flight', async () => {
+    // Regression test for the other half of the same bug: the old ordering
+    // also registered `request.on('close')` only after the replay query
+    // resolved, so a disconnect during that window fired 'close' before any
+    // handler was attached — `offNotification` never ran, leaking the
+    // subscription and the heartbeat timer for the life of the process.
+    // Destroying as soon as the response headers arrive, before any
+    // `await` in this test, gives the disconnect its best chance of
+    // landing inside that window; `listenerCount` reaching 0 either way is
+    // what the fix guarantees.
+    const { user, token } = await createAuthenticatedUser()
+    const first = await seedNotification(user.id, 'First')
+
+    const connection = openStream(
+      `/api/v1/notifications/stream?token=${encodeURIComponent(token)}`,
+      { 'Last-Event-ID': first.id }
+    )
+    await connection.waitForResponse()
+    connection.destroy()
+
+    await waitUntil(() => listenerCount(user.id) === 0, 2000)
+    expect(listenerCount(user.id)).toBe(0)
+  })
+
   it('does not replay anything when Last-Event-ID does not resolve to a notification this user owns', async () => {
     const { user, token } = await createAuthenticatedUser()
     await seedNotification(user.id, 'Only notification')

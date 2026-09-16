@@ -249,4 +249,25 @@ describe('processNotificationJob', () => {
       loggerErrorSpy.mockRestore()
     }
   })
+
+  it('does not throw when emitNotification itself throws — the insert already committed', async () => {
+    channelEnabledSpy.mockResolvedValue(true)
+    insertSpy.mockResolvedValue(mockNotificationRow)
+    vi.mocked(notificationEmitter.emitNotification).mockImplementation(() => {
+      throw new Error('a listener blew up')
+    })
+    const loggerErrorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {
+      // No-op: only that the failure was logged, not printed, is asserted.
+    })
+
+    try {
+      await expect(processNotificationJob(mockJob())).resolves.toBeUndefined()
+      expect(loggerErrorSpy).toHaveBeenCalledWith(
+        'Failed to publish notification to the SSE emitter',
+        expect.objectContaining({ notificationId: mockNotificationRow.id })
+      )
+    } finally {
+      loggerErrorSpy.mockRestore()
+    }
+  })
 })

@@ -98,7 +98,24 @@ export async function processNotificationJob(job: Job<NotificationJobData>): Pro
     // this is a same-process, in-memory emit rather than something durable:
     // a connection with nothing subscribed just misses it, the same as any
     // other client that was not listening at the time.
-    emitNotification(userId, created)
+    //
+    // Caught, not left to propagate — same "the insert already committed,
+    // so nothing after it may fail the job" reasoning this file's header
+    // comment gives for the email channel. `EventEmitter#emit` runs every
+    // subscribed SSE connection's listener synchronously and re-throws
+    // whatever the first one throws; an uncaught throw here would reject
+    // this job and BullMQ would retry the WHOLE thing, producing a second
+    // in-app row for a failure that has nothing to do with the insert that
+    // already succeeded.
+    try {
+      emitNotification(userId, created)
+    } catch (error) {
+      logger.error('Failed to publish notification to the SSE emitter', {
+        error: redactedForLog(error),
+        notificationId: created.id,
+        type,
+      })
+    }
   }
 
   if (email) {
