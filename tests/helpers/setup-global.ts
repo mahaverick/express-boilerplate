@@ -20,3 +20,9 @@ import { useWorkerDatabase } from './worker-database'
 
 loadTestEnv()
 useWorkerDatabase()
+
+// Per-worker BullMQ prefix — same mechanism as per-worker DATABASE_URL.
+// Without this, a Worker started in pool 1 would process pool 2's jobs
+// and write email_logs into the wrong database.
+const poolId = process.env.VITEST_POOL_ID ?? '0'
+process.env.QUEUE_PREFIX = `bull:test-w${poolId}`

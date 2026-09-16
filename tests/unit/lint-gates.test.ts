@@ -98,24 +98,48 @@ describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS }, () => {
     expect(ids).not.toContain('jsdoc/require-jsdoc')
   })
 
-  it('accepts a correctly named file in a governed directory', async () => {
-    const ids = await ruleIdsFor(
-      'src/controllers/user.controller.ts',
-      '/**\n * P.\n * @returns text\n */\nexport function p(): string { return "x" }\n'
-    )
-    expect(ids).not.toContain('check-file/filename-naming-convention')
-  })
+  // Parameterized (sonarjs/parameterized-tests) rather than one it() pair per
+  // directory: three near-identical "accepts"/"rejects" pairs tripped the
+  // rule once src/jobs/ and src/workers/ joined src/controllers/ as a third
+  // governed-directory case — this is that rule's own fix, not a workaround.
+  const governedDirectoryCases = [
+    {
+      label: 'a governed directory',
+      validPath: 'src/controllers/user.controller.ts',
+      invalidPath: 'src/controllers/user.ts',
+    },
+    { label: 'src/jobs/', validPath: 'src/jobs/email.job.ts', invalidPath: 'src/jobs/email.ts' },
+    {
+      label: 'src/workers/',
+      validPath: 'src/workers/email.worker.ts',
+      invalidPath: 'src/workers/email.ts',
+    },
+  ]
 
-  it('rejects a wrongly named file in a governed directory', async () => {
-    const messages = await messagesFor(
-      'src/controllers/user.ts',
-      '/**\n * P.\n * @returns text\n */\nexport function p(): string { return "x" }\n'
-    )
-    const checkFileMessage = messages.find(
-      (message) => message.ruleId === 'check-file/filename-naming-convention'
-    )
-    expect(checkFileMessage?.severity).toBe(2)
-  })
+  it.each(governedDirectoryCases)(
+    'accepts a correctly named file in $label',
+    async ({ validPath }) => {
+      const ids = await ruleIdsFor(
+        validPath,
+        '/**\n * P.\n * @returns text\n */\nexport function p(): string { return "x" }\n'
+      )
+      expect(ids).not.toContain('check-file/filename-naming-convention')
+    }
+  )
+
+  it.each(governedDirectoryCases)(
+    'rejects a wrongly named file in $label',
+    async ({ invalidPath }) => {
+      const messages = await messagesFor(
+        invalidPath,
+        '/**\n * P.\n * @returns text\n */\nexport function p(): string { return "x" }\n'
+      )
+      const checkFileMessage = messages.find(
+        (message) => message.ruleId === 'check-file/filename-naming-convention'
+      )
+      expect(checkFileMessage?.severity).toBe(2)
+    }
+  )
 
   it('allows process.env inside env.config and blocks it elsewhere', async () => {
     const source = 'export const x = process.env.FOO\n'

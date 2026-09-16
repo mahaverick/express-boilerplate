@@ -6,6 +6,12 @@ allowBuilds:
   # library this plan's Task 2 adds. See MIGRATIONS.md.
   bcrypt: true
   esbuild: true
+  # msgpackr-extract: transitive dependency of bullmq (via msgpackr, which
+  # BullMQ uses to encode job data for Redis). Same profile as bcrypt/
+  # unrs-resolver above — its install script only fetches a prebuilt native
+  # binding for the host platform, or falls back to msgpackr's pure-JS
+  # encoder when none matches; no arbitrary script.
+  msgpackr-extract: true
   # unrs-resolver: native binary that eslint-plugin-import-x depends on
   # directly for module/TS-path resolution. Its postinstall only fetches a
   # prebuilt binary for the host platform; no arbitrary script.
