@@ -7,7 +7,7 @@
 // premature abstraction when the second is already planned.
 import { getEnv } from '@/configs/env.config'
 import type { User } from '@/database/models/user.model'
-import { sendMail } from '@/services/mailer.service'
+import { addEmailJob } from '@/jobs/email.job'
 import { EMAIL_VERIFICATION_TEMPLATE_KEY } from '@/templates/email/email-verification.template'
 import { issueToken, requireDurationMs } from '@/utilities/token.utilities'
 import { buildVerificationUrl } from '@/utilities/verification-link.utilities'
@@ -31,13 +31,16 @@ export async function sendVerificationMail(user: User): Promise<void> {
     'email_verification',
     requireDurationMs(getEnv().EMAIL_VERIFICATION_TTL)
   )
-  await sendMail({
-    to: user.email,
-    templateKey: EMAIL_VERIFICATION_TEMPLATE_KEY,
-    variables: {
-      firstName: user.firstName ?? MISSING_FIRST_NAME_FALLBACK,
-      verificationUrl: buildVerificationUrl(issued.raw),
-      appName: getEnv().APP_NAME,
+  await addEmailJob(
+    {
+      to: user.email,
+      templateKey: EMAIL_VERIFICATION_TEMPLATE_KEY,
+      variables: {
+        firstName: user.firstName ?? MISSING_FIRST_NAME_FALLBACK,
+        verificationUrl: buildVerificationUrl(issued.raw),
+        appName: getEnv().APP_NAME,
+      },
     },
-  })
+    user.id
+  )
 }

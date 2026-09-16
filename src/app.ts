@@ -11,6 +11,7 @@ import { requestContext } from '@/middlewares/request-context.middleware'
 import { requestId } from '@/middlewares/request-id.middleware'
 import { createApiRouter } from '@/routes/index.routes'
 import { isDatabaseReachable } from '@/services/database.service'
+import { isQueueReachable } from '@/services/queue.service'
 import { isRedisReachable } from '@/services/redis.service'
 
 /**
@@ -58,11 +59,15 @@ export function createApp(): Express {
 
   // Readiness: deep. Safe to fail — it only removes the pod from rotation.
   app.get('/health/ready', async (_request, response) => {
-    const [database, redis] = await Promise.all([isDatabaseReachable(), isRedisReachable()])
-    const isReady = database && redis
+    const [database, redis, queue] = await Promise.all([
+      isDatabaseReachable(),
+      isRedisReachable(),
+      isQueueReachable(),
+    ])
+    const isReady = database && redis && queue
     response.status(isReady ? 200 : 503).json({
       status: isReady ? 'ready' : 'not-ready',
-      checks: { database, redis },
+      checks: { database, redis, queue },
     })
   })
 

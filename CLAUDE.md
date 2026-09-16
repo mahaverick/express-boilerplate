@@ -81,6 +81,31 @@ until you check.
   occurrence sends immediately; duplicates within a 60-second window are
   suppressed. A summary is sent after the window expires if any were suppressed.
 
+## Job queue
+
+- **`addEmailJob()` from `@/jobs/email.job`, not `sendMail()` directly.**
+  Email sending goes through a BullMQ queue. The existing helpers
+  (`sendVerificationMail`, `sendRegistrationAttemptMail`,
+  `resendVerificationMail`) enqueue internally — controllers call the
+  same helpers with the same `.catch()` pattern they always did.
+- **`WORKER_ENABLED` gates the in-process worker.** Default `true` (API +
+  worker in one process). Set `false` for API-only pods; a separate worker
+  deployment sets `true` and processes jobs from the shared Redis queue.
+- **`QUEUE_PREFIX` isolates test queues.** Each vitest worker gets
+  `bull:test-w${VITEST_POOL_ID}` — same mechanism as per-worker databases.
+  Without it, a Worker in pool 1 processes pool 2's jobs.
+- **`sendMail()` returns `'sent' | 'failed'`**, not `void`. The worker uses
+  this to decide whether BullMQ should retry. The never-reject guarantee
+  (Ruling G) is unchanged.
+- **An integration test that asserts mail was delivered must run its own
+  `startEmailWorker()`.** Nothing else in the test process consumes a queued
+  job — `createApp()`/`startServer()` never start one, only `index.ts`'s
+  `boot()` does, and tests never import that. See
+  `tests/integration/api/auth.test.ts` and `verification.test.ts` for the
+  pattern: one `Worker` for the whole file, started in `beforeAll`, closed
+  in `afterAll` before `getEmailQueue().obliterate({ force: true })` and
+  `closeQueue()` — same ordering `gracefulShutdown` uses.
+
 ## Git hooks and CI
 
 - **Pre-commit takes ~4.6s, and that is a deliberate trade, not a

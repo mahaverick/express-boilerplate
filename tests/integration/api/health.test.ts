@@ -19,6 +19,7 @@ describe('health probes', () => {
     expect([200, 503]).toContain(response.status)
     expect(response.body).toHaveProperty('checks.database')
     expect(response.body).toHaveProperty('checks.redis')
+    expect(response.body).toHaveProperty('checks.queue')
   })
 
   it('stamps a request id on every response', async () => {

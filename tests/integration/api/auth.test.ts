@@ -10,8 +10,9 @@
 // see CLAUDE.md's note on why a DB-dependent test under tests/unit/ breaks
 // .husky/pre-commit whenever Docker is down.
 import { randomUUID } from 'node:crypto'
+import type { Worker } from 'bullmq'
 import request from 'supertest'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { createApp } from '@/app'
 import {
   MAX_EMAIL_LENGTH,
@@ -20,10 +21,13 @@ import {
   REFRESH_TOKEN_COOKIE_PATH,
 } from '@/constants/auth.constants'
 import type { User } from '@/database/models/user.model'
+import type { EmailJobData } from '@/jobs/email.job'
 import { HttpError } from '@/middlewares/error.middleware'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
+import { closeQueue, getEmailQueue } from '@/services/queue.service'
 import * as passwordUtilities from '@/utilities/password.utilities'
+import { startEmailWorker } from '@/workers/email.worker'
 import {
   deleteMailpitMessage,
   drainMailpit,
@@ -34,6 +38,26 @@ import { withMutatedMethod } from '../../helpers/mutate'
 
 const app = createApp()
 const userRepository = new UserRepository()
+
+// register/resendVerification now enqueue via BullMQ (addEmailJob) instead
+// of calling sendMail() directly — nothing in this file's own request cycle
+// ever processes that job, so without a live Worker every `findMailpitMessages`
+// assertion below would poll its budget and find nothing, and every
+// `assertNoMailpitMessage`-shaped assertion would pass for the wrong reason.
+// One Worker for the whole file (not one per test) — Worker construction
+// opens a real connection and BullMQ blocking commands, which is not
+// something to pay for per test.
+const worker: Worker<EmailJobData> = startEmailWorker()
+
+afterAll(async () => {
+  // Same ordering as tests/integration/workers/email.worker.test.ts: worker
+  // first (drains anything in flight), then obliterate so no job this file
+  // enqueued lingers under this vitest worker's shared QUEUE_PREFIX for the
+  // next test file to trip over, then the shared connection.
+  await worker.close()
+  await getEmailQueue().obliterate({ force: true })
+  await closeQueue()
+})
 
 // A valid registration password everywhere it's needed as a fixture, not
 // itself the thing under test — 8+ characters, comfortably under the byte

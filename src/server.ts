@@ -1,9 +1,11 @@
 // src/server.ts — owns the socket and the shutdown sequence.
 import { type Server } from 'node:http'
+import type { Worker } from 'bullmq'
 import { createApp } from '@/app'
 import { getEnv } from '@/configs/env.config'
 import { closeDatabase } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
+import { closeQueue } from '@/services/queue.service'
 import { closeRedis } from '@/services/redis.service'
 
 /**
@@ -40,10 +42,21 @@ export function startServer(port: number = getEnv().APP_PORT): Server {
  * not from one. The backstop timer lives in index.ts's signal handler
  * instead, which both satisfies the lint rule and keeps this function fully
  * testable (it can safely resolve without ever touching `process.exit`).
+ *
+ * `worker` closes AFTER the socket and BEFORE the shared dependencies:
+ * `Worker#close()` drains whatever job is currently being processed rather
+ * than killing it mid-flight, and that in-flight job's `processEmailJob`
+ * (email.worker.ts) calls `sendMail`, which needs the database (email_logs)
+ * and Redis still up. Closing `closeQueue()` first would pull the
+ * connection the worker is still using; closing it after is what lets the
+ * drain actually finish cleanly. `worker` is optional so this still works
+ * for a `WORKER_ENABLED=false` pod, which never started one.
  * @param server - The server returned by `startServer`.
+ * @param worker - The email worker, if this process started one (`WORKER_ENABLED`).
  * @returns Resolves once everything is closed.
  */
-export async function gracefulShutdown(server: Server): Promise<void> {
+export async function gracefulShutdown(server: Server, worker?: Worker): Promise<void> {
   await new Promise<void>((resolve) => server.close(() => resolve()))
-  await Promise.allSettled([closeDatabase(), closeRedis()])
+  if (worker) await worker.close()
+  await Promise.allSettled([closeDatabase(), closeRedis(), closeQueue()])
 }
