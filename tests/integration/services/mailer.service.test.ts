@@ -409,7 +409,7 @@ describe('sendMail', () => {
     // No transport mutation needed: renderForMessage's default branch
     // throws synchronously, before the transport is ever reached — the
     // real transporter is never touched by this test.
-    await expect(sendMail(bogusMessage)).resolves.toBeUndefined()
+    await expect(sendMail(bogusMessage)).resolves.toBe('failed')
 
     await assertNoMailpitMessage(recipient)
 
@@ -473,13 +473,17 @@ describe('sendMail', () => {
           'record',
           () => Promise.reject(new Error('database unreachable')),
           async () => {
+            // The transport call itself succeeds (resolveWithFakeInfo,
+            // mutated above); only the delivery-log write fails, and Ruling
+            // E keeps that failure from affecting what sendMail reports —
+            // so this still resolves 'sent'.
             await expect(
               sendMail({
                 to: recipient,
                 templateKey: 'password_reset',
                 variables: validPasswordResetVariables(),
               })
-            ).resolves.toBeUndefined()
+            ).resolves.toBe('sent')
           }
         )
       }
@@ -541,13 +545,17 @@ describe('sendMail', () => {
             'sendMail',
             resolveWithFakeInfo as (typeof transporter)['sendMail'],
             async () => {
+              // Same reasoning as the sibling "still resolves when
+              // recording the delivery log fails" test above: the transport
+              // call succeeds, only the (unnormalized) insert fails, so
+              // this resolves 'sent'.
               await expect(
                 sendMail({
                   to: overWidthRecipient,
                   templateKey: 'password_reset',
                   variables: validPasswordResetVariables(),
                 })
-              ).resolves.toBeUndefined()
+              ).resolves.toBe('sent')
             }
           )
         }
@@ -616,7 +624,7 @@ describe('sendMail', () => {
               templateKey: 'password_reset',
               variables: { firstName: 'Ada', resetUrl, appName: 'Test App' },
             })
-          ).resolves.toBeUndefined()
+          ).resolves.toBe('failed')
         }
       )
 
@@ -704,7 +712,7 @@ describe('sendMail', () => {
             templateKey: 'password_reset',
             variables: validPasswordResetVariables(),
           })
-        ).resolves.toBeUndefined()
+        ).resolves.toBe('failed')
       }
     )
 
@@ -747,7 +755,7 @@ describe('sendMail', () => {
             templateKey: 'password_reset',
             variables: validPasswordResetVariables(),
           })
-        ).resolves.toBeUndefined()
+        ).resolves.toBe('failed')
       }
     )
 
