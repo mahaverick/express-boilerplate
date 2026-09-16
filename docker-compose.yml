@@ -58,6 +58,31 @@ services:
     # container (verified; see otel-collector.yaml's comment).
     ports: ['4318:4318', '13133:13133']
 
+  tempo:
+    # Single-binary Tempo (all components in one process) — the local-dev
+    # profile, not what a real deployment would run. See docker/tempo/config.yaml.
+    image: grafana/tempo:2.6.1
+    command: ['-config.file=/etc/tempo/config.yaml']
+    volumes:
+      - ./docker/tempo/config.yaml:/etc/tempo/config.yaml:ro
+      - tempo-data:/var/tempo
+    ports: ['3200:3200'] # Tempo API + query frontend
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    environment:
+      # Anonymous admin access — this stack is local-dev only (no auth
+      # anywhere else in it either: the collector, Tempo, and Mailpit are all
+      # unauthenticated on their own ports). Do not carry this env block into
+      # any shared/hosted environment.
+      GF_AUTH_ANONYMOUS_ENABLED: 'true'
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: 'true'
+    ports: ['3100:3000'] # 3100, not the image's default 3000 — avoids colliding with a locally-run frontend dev server.
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on: [tempo]
+
   mailpit:
     # Pinned, like every other service on this file — an unpinned :latest
     # here is the one inconsistency task-2-review.md's finding 5 caught:
@@ -85,3 +110,4 @@ services:
 
 volumes:
   pgdata:
+  tempo-data:

@@ -1,0 +1,13 @@
+# docker/grafana/provisioning/datasources/tempo.yaml — auto-provisions the
+# Tempo data source on Grafana boot, so a fresh clone gets working trace
+# search at http://localhost:3100 with zero manual setup. `editable: false`
+# keeps it from being edited/deleted through the UI and silently drifting
+# from this file.
+apiVersion: 1
+datasources:
+  - name: Tempo
+    type: tempo
+    access: proxy
+    url: http://tempo:3200
+    isDefault: true
+    editable: false

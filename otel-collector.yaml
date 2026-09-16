@@ -6,6 +6,14 @@ receivers:
 exporters:
   debug:
     verbosity: normal
+  # Forwards traces to the tempo service (docker-compose.yml), which itself
+  # receives OTLP/HTTP on the same 4318 port — container-to-container, not
+  # the host-published 4318 this collector's own receiver listens on.
+  # `debug` stays wired alongside it (service.pipelines.traces below) so
+  # traces remain visible in `docker compose logs otel-collector` even
+  # without opening Grafana.
+  otlphttp:
+    endpoint: http://tempo:4318
 # Exposes a real /health endpoint on 13133. Not wired into docker-compose.yml
 # as a Docker HEALTHCHECK: otel/opentelemetry-collector-contrib is genuinely
 # distroless (verified — no sh, wget, curl, or which in the image; only the
@@ -21,6 +29,6 @@ extensions:
 service:
   extensions: [health_check]
   pipelines:
-    traces: { receivers: [otlp], exporters: [debug] }
+    traces: { receivers: [otlp], exporters: [otlphttp, debug] }
     metrics: { receivers: [otlp], exporters: [debug] }
     logs: { receivers: [otlp], exporters: [debug] }
