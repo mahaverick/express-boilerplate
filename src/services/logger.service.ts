@@ -8,6 +8,7 @@
 // has no built-in way to pull correlation data out of an AsyncLocalStorage
 // context — see serializeErrors and addRequestContext below.
 import { createLogger, format, transports, type Logger } from 'winston'
+import Transport from 'winston-transport'
 import { getEnv } from '@/configs/env.config'
 import { requestContextStore } from '@/middlewares/request-context.middleware'
 
@@ -127,6 +128,173 @@ const developmentFormat = format.printf((info) => {
 interface LoggerOptions {
   level: string
   isProduction: boolean
+  slackWebhookUrl?: string
+  slackLogLevel?: string
+}
+
+// How long duplicate (same source + message) log entries are suppressed
+// after the first one triggers a Slack send, before a single summary
+// message reports how many were suppressed.
+const DEDUP_WINDOW_MS = 60_000
+
+const LEVEL_COLORS: Record<string, string> = {
+  error: '#E01E5A',
+  warn: '#ECB22E',
+  info: '#2EB67D',
+  debug: '#36C5F0',
+}
+
+const LEVEL_EMOJI: Record<string, string> = {
+  error: '🔴',
+  warn: '🟡',
+  info: '🔵',
+  debug: '⚪',
+}
+
+interface DedupEntry {
+  count: number
+  firstSeen: number
+  timer: ReturnType<typeof setTimeout>
+}
+
+/**
+ * A Winston transport that POSTs log entries to a Slack Incoming Webhook.
+ *
+ * Deduplicates by `source:message`: the first occurrence within a 60s
+ * window is sent immediately, every repeat in that window is counted but
+ * suppressed, and — only if there were repeats — a single summary message
+ * reports the suppressed count once the window closes.
+ */
+class SlackTransport extends Transport {
+  private readonly webhookUrl: string
+  private readonly dedup = new Map<string, DedupEntry>()
+
+  constructor(options: { webhookUrl: string; level?: string }) {
+    super({ level: options.level ?? 'error' })
+    this.webhookUrl = options.webhookUrl
+  }
+
+  private async sendToSlack(payload: Record<string, unknown>): Promise<void> {
+    try {
+      await fetch(this.webhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+    } catch (error: unknown) {
+      // Direct console.error, NOT logger.error — using the logger here would
+      // re-enter this transport's own log() and create a feedback loop where
+      // a failed Slack send generates another Slack send that also fails,
+      // forever. No `eslint-disable` sits here yet because no rule bans
+      // `console` today — this repo's own `eslint --fix` (run by lint-staged
+      // on every commit) deletes an unused disable directive automatically,
+      // verified empirically. Task 3, which adds the console-ban rule and
+      // this file's exemption from it, must add the disable comment back
+      // above this line at the same time it adds the rule.
+      console.error('Slack webhook failed', error)
+    }
+  }
+
+  // `info`'s values are `unknown` (winston's own Info shape carries no
+  // guarantee about what a caller passed as meta), so every field below is
+  // narrowed with a `typeof` check rather than blindly `String(...)`-coerced
+  // — a plain object landing in `info.source` would otherwise stringify to
+  // the meaningless "[object Object]" (@typescript-eslint/no-base-to-string
+  // catches exactly this), the same reasoning `developmentFormat` above
+  // already applies to `source`/`requestId`.
+  private buildPayload(info: Record<string, unknown>): Record<string, unknown> {
+    const level = typeof info.level === 'string' ? info.level : 'error'
+    const message = typeof info.message === 'string' ? info.message : ''
+    const source = typeof info.source === 'string' ? info.source : 'unknown'
+    const requestId = typeof info.requestId === 'string' ? info.requestId : undefined
+    const timestamp = typeof info.timestamp === 'string' ? info.timestamp : new Date().toISOString()
+    const errorStack =
+      info.error && typeof info.error === 'object' && 'stack' in info.error
+        ? info.error.stack
+        : undefined
+    const stack = typeof errorStack === 'string' ? errorStack : undefined
+
+    const fields = [
+      { type: 'mrkdwn', text: `*Source:* \`${source}\`` },
+      { type: 'mrkdwn', text: `*Time:* ${timestamp}` },
+    ]
+    if (requestId) {
+      fields.push({ type: 'mrkdwn', text: `*Request:* \`${requestId}\`` })
+    }
+
+    const blocks: Record<string, unknown>[] = [
+      {
+        type: 'header',
+        text: {
+          type: 'plain_text',
+          text: `${LEVEL_EMOJI[level] ?? '⚪'} ${message}`.slice(0, 150),
+        },
+      },
+      { type: 'section', fields },
+    ]
+
+    if (stack) {
+      blocks.push({
+        type: 'section',
+        text: { type: 'mrkdwn', text: `\`\`\`${stack.slice(0, 2900)}\`\`\`` },
+      })
+    }
+
+    return {
+      attachments: [
+        {
+          color: LEVEL_COLORS[level] ?? '#808080',
+          blocks,
+        },
+      ],
+    }
+  }
+
+  private buildSummaryPayload(
+    source: string,
+    message: string,
+    suppressedCount: number
+  ): Record<string, unknown> {
+    return {
+      text: `⚠️ Suppressed ${suppressedCount} duplicate occurrence${suppressedCount === 1 ? '' : 's'} of "${message}" from \`${source}\` in the last 60s`,
+    }
+  }
+
+  override log(info: Record<string, unknown>, callback: () => void): void {
+    const source = typeof info.source === 'string' ? info.source : 'unknown'
+    const message = typeof info.message === 'string' ? info.message : ''
+    const key = `${source}:${message}`
+
+    const existing = this.dedup.get(key)
+    if (existing) {
+      existing.count++
+      callback()
+      return
+    }
+
+    const timer = setTimeout(() => {
+      const entry = this.dedup.get(key)
+      this.dedup.delete(key)
+      if (entry && entry.count > 1) {
+        // Fire-and-forget: sendToSlack handles its own failures internally
+        // (see its own comment), so there is nothing for a setTimeout
+        // callback to await or react to.
+        void this.sendToSlack(this.buildSummaryPayload(source, message, entry.count - 1))
+      }
+    }, DEDUP_WINDOW_MS)
+    // Without this, the pending timer keeps a module-scope singleton (and
+    // therefore the Node event loop) alive past its test, hanging vitest
+    // workers. unref() lets the process exit naturally once nothing else is
+    // pending.
+    timer.unref()
+
+    this.dedup.set(key, { count: 1, firstSeen: Date.now(), timer })
+    // Fire-and-forget for the same reason as above — Winston's `callback()`
+    // signals "this transport is done with this entry", which must happen
+    // synchronously so the logger doesn't block on network I/O.
+    void this.sendToSlack(this.buildPayload(info))
+    callback()
+  }
 }
 
 /**
@@ -149,18 +317,37 @@ export function createWinstonLogger(options: LoggerOptions): Logger {
         developmentFormat
       )
 
+  const logTransports: Transport[] = [new transports.Console({ format: consoleFormat })]
+
+  if (options.slackWebhookUrl) {
+    logTransports.push(
+      new SlackTransport({
+        webhookUrl: options.slackWebhookUrl,
+        level: options.slackLogLevel ?? 'error',
+      })
+    )
+  }
+
   return createLogger({
     level: options.level,
-    transports: [new transports.Console({ format: consoleFormat })],
+    transports: logTransports,
   })
 }
 
 const getLogger: () => Logger = (() => {
   let cached: Logger | undefined
   return (): Logger => {
+    const env = getEnv()
     cached ??= createWinstonLogger({
-      level: getEnv().LOG_LEVEL,
-      isProduction: getEnv().NODE_ENV === 'production',
+      level: env.LOG_LEVEL,
+      isProduction: env.NODE_ENV === 'production',
+      // Spread rather than `slackWebhookUrl: env.SLACK_WEBHOOK_URL` directly:
+      // tsconfig's `exactOptionalPropertyTypes` treats an optional property
+      // as "string or absent", not "string or undefined", so explicitly
+      // assigning `undefined` to it is a type error. Same pattern
+      // mailer.config.ts uses for SMTP_USER/SMTP_PASS.
+      ...(env.SLACK_WEBHOOK_URL !== undefined && { slackWebhookUrl: env.SLACK_WEBHOOK_URL }),
+      slackLogLevel: env.SLACK_LOG_LEVEL,
     })
     return cached
   }

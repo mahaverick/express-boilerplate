@@ -40,6 +40,7 @@ const baseEnv: Env = {
   EMAIL_VERIFICATION_TTL: '24h',
   TRUST_PROXY: 'false',
   LOG_LEVEL: 'info',
+  SLACK_LOG_LEVEL: 'error',
   SMTP_HOST: 'localhost',
   SMTP_PORT: 1025,
   MAIL_FROM: 'no-reply@example.com',

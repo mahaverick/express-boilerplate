@@ -133,6 +133,7 @@ describe('getMailTransporter — half-set credential warning', () => {
     EMAIL_VERIFICATION_TTL: '24h',
     TRUST_PROXY: 'false',
     LOG_LEVEL: 'info',
+    SLACK_LOG_LEVEL: 'error',
     SMTP_HOST: 'localhost',
     SMTP_PORT: 1025,
     SMTP_USER: 'only-the-username-is-set',
