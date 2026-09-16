@@ -61,18 +61,32 @@ export interface NotificationPreferenceMatrixEntry {
  */
 export type PreferenceMatrix = NotificationPreferenceMatrixEntry[]
 
-// Notification types whose email channel a user may never disable. Only
-// `'verify_email'` today: a user who could turn off email for their OWN
+// Notification types whose email channel a user may never disable.
+// `'verify_email'`: a user who could turn off email for their OWN
 // verification message would lock themselves out of ever verifying their
 // account, with no other channel able to reach them (in-app notifications
 // are only visible to a user who is already logged in, which an unverified
 // account may not even be able to do, depending on how a later task gates
-// login). `ReadonlySet<string>`, not `ReadonlySet<NotificationType>`: `type`
-// below is already narrowed to `NotificationType` by
-// `isChannelEnabled`'s own parameter, so the wider element type costs
-// nothing and avoids this set needing to be updated every time
-// `NOTIFICATION_TYPES` gains an entry that ISN'T meant to join it.
-const NON_DISABLEABLE_EMAIL_TYPES: ReadonlySet<string> = new Set<string>(['verify_email'])
+// login). `'password_reset_requested'` is the identical lockout, one step
+// earlier: the whole point of forgot-password is that the user CANNOT log
+// in, so a disabled email channel would leave them with no channel at all —
+// worse than verify_email's case, since in-app is unreachable by
+// definition here, not merely by timing. `ReadonlySet<string>`, not
+// `ReadonlySet<NotificationType>`: `type` below is already narrowed to
+// `NotificationType` by `isChannelEnabled`'s own parameter, so the wider
+// element type costs nothing and avoids this set needing to be updated
+// every time `NOTIFICATION_TYPES` gains an entry that ISN'T meant to join
+// it.
+//
+// Kept in sync BY HAND with `NON_DISABLEABLE_NOTIFICATION_TYPES`
+// (notification.validators.ts) — that set is the WRITE-side mirror of this
+// one (its own comment explains why it cannot simply import this one), and
+// letting the two disagree would let a client `PUT` a preference row this
+// repository then silently ignores.
+const NON_DISABLEABLE_EMAIL_TYPES: ReadonlySet<string> = new Set<string>([
+  'verify_email',
+  'password_reset_requested',
+])
 
 /**
  * Query access to the `notification_preferences` table: read a user's

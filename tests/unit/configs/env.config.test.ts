@@ -122,6 +122,14 @@ describe('parseEnv', () => {
     )
   })
 
+  it('defaults PASSWORD_RESET_TTL to 1h', () => {
+    expect(parseEnv(valid).PASSWORD_RESET_TTL).toBe('1h')
+  })
+
+  it('rejects a PASSWORD_RESET_TTL that ms() cannot parse', () => {
+    expect(() => parseEnv({ ...valid, PASSWORD_RESET_TTL: 'soon' })).toThrow(/PASSWORD_RESET_TTL/)
+  })
+
   it('rejects an unparseable env var by name alongside every other problem, not alone', () => {
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { DATABASE_URL, ...rest } = valid

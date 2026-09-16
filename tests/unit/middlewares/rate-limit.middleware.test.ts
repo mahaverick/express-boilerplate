@@ -18,9 +18,12 @@ import request from 'supertest'
 import { describe, expect, it, vi } from 'vitest'
 import { errorHandler } from '@/middlewares/error.middleware'
 import {
+  createForgotPasswordEmailRateLimiter,
+  createForgotPasswordIpRateLimiter,
   createLoginRateLimiter,
   createLogoutRateLimiter,
   createRegisterRateLimiter,
+  createResetPasswordRateLimiter,
   RATE_LIMITED_CODE,
 } from '@/middlewares/rate-limit.middleware'
 
@@ -205,6 +208,54 @@ describe('createLogoutRateLimiter', () => {
   })
 })
 
+describe('createForgotPasswordIpRateLimiter', () => {
+  it('returns 429 once the limit is exceeded, keyed on IP alone', async () => {
+    const app = buildAppBehind(createForgotPasswordIpRateLimiter({ limit: 2, windowMs: 60_000 }))
+
+    const first = await request(app).post('/endpoint').send({ email: 'first@example.com' })
+    const second = await request(app).post('/endpoint').send({ email: 'second@example.com' })
+    const limited = await request(app).post('/endpoint').send({ email: 'third@example.com' })
+
+    expect(first.status).toBe(201)
+    expect(second.status).toBe(201)
+    expect(limited.status).toBe(429)
+    expect(limited.body).toMatchObject({ success: false, code: RATE_LIMITED_CODE })
+  })
+})
+
+describe('createForgotPasswordEmailRateLimiter', () => {
+  it('keys on the submitted address alone: a different address is unaffected by the victim’s counter', async () => {
+    const app = buildAppBehind(createForgotPasswordEmailRateLimiter({ limit: 2, windowMs: 60_000 }))
+
+    await request(app).post('/endpoint').send({ email: 'victim@example.com' })
+    await request(app).post('/endpoint').send({ email: 'victim@example.com' })
+    const victimBlocked = await request(app).post('/endpoint').send({ email: 'victim@example.com' })
+    expect(victimBlocked.status).toBe(429)
+
+    // A different address, same supertest agent (same client IP) — must be
+    // entirely unaffected by victim@example.com's counter, since an
+    // attacker who knows only the victim's address must not be able to
+    // spend anyone else's budget.
+    const bystander = await request(app)
+      .post('/endpoint')
+      .send({ email: 'someone-else@example.com' })
+    expect(bystander.status).toBe(201)
+  })
+})
+
+describe('createResetPasswordRateLimiter', () => {
+  it('returns 429 once the limit is exceeded, keyed on IP alone', async () => {
+    const app = buildAppBehind(createResetPasswordRateLimiter({ limit: 1, windowMs: 60_000 }))
+
+    const allowed = await request(app).post('/endpoint')
+    const limited = await request(app).post('/endpoint')
+
+    expect(allowed.status).toBe(201)
+    expect(limited.status).toBe(429)
+    expect(limited.body).toMatchObject({ success: false, code: RATE_LIMITED_CODE })
+  })
+})
+
 describe('store prefixes', () => {
   // The convention rate-limit.middleware.ts's header comment establishes,
   // pinned as a test rather than only as prose: every limiter carries its
@@ -237,6 +288,9 @@ describe('store prefixes', () => {
       'rl:verify-email:',
       'rl:resend-verification-ip:',
       'rl:resend-verification-email:',
+      'rl:forgot-password-ip:',
+      'rl:forgot-password-email:',
+      'rl:reset-password:',
     ])
   })
 

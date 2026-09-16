@@ -25,24 +25,37 @@ import { REFRESH_TOKEN_COOKIE_NAME, REFRESH_TOKEN_COOKIE_PATH } from '@/constant
 import { JobPriority } from '@/constants/queue.constants'
 import type { User } from '@/database/models/user.model'
 import { addEmailJob } from '@/jobs/email.job'
+import { addNotificationJob } from '@/jobs/notification.job'
 import { toAuthenticatedUser, type AuthenticatedUser } from '@/middlewares/auth.middleware'
 import { HttpError } from '@/middlewares/error.middleware'
 import { UserRepository } from '@/repositories/user.repository'
 import { logger } from '@/services/logger.service'
+import { PASSWORD_RESET_TEMPLATE_KEY } from '@/templates/email/password-reset.template'
 import { REGISTRATION_ATTEMPT_TEMPLATE_KEY } from '@/templates/email/registration-attempt.template'
 import { getDummyHash, hashPassword, isPasswordValid } from '@/utilities/password.utilities'
 import { successResponse } from '@/utilities/response.utilities'
 import {
+  claimToken,
   issueRefreshToken,
+  issueToken,
+  requireDurationMs,
+  revokeAllSessions,
   revokeRefreshToken,
   rotateRefreshToken,
   signAccessToken,
 } from '@/utilities/token.utilities'
+import { buildPasswordResetUrl } from '@/utilities/verification-link.utilities'
 import {
   MISSING_FIRST_NAME_FALLBACK,
   sendVerificationMail,
 } from '@/utilities/verification-mail.utilities'
-import { loginSchema, parseBody, registerSchema } from '@/validators/auth.validators'
+import {
+  forgotPasswordSchema,
+  loginSchema,
+  parseBody,
+  registerSchema,
+  resetPasswordSchema,
+} from '@/validators/auth.validators'
 
 const userRepository = new UserRepository()
 
@@ -417,6 +430,158 @@ export async function logout(
     }
     clearRefreshTokenCookie(response)
     successResponse(response, undefined, 'Logged out.')
+  } catch (error) {
+    next(error)
+  }
+}
+
+const FORGOT_PASSWORD_RESPONSE_MESSAGE =
+  'If that address has an account, a password reset email has been sent.'
+
+/**
+ * Issue a password-reset token and mail the link — but only when `email`
+ * belongs to an existing account. Runs entirely AFTER `forgotPassword` has
+ * already responded (see that function's own comment), the same
+ * fire-and-forget shape `sendRegistrationAttemptMail` above uses: a single
+ * caller today, so this stays a private helper rather than joining
+ * verification-mail.utilities.ts — see that file's own header comment on
+ * when a second caller justifies the move.
+ * @param email - The address submitted to `/forgot-password`.
+ */
+async function sendPasswordResetMailIfRegistered(email: string): Promise<void> {
+  const user = await userRepository.findByEmail(email)
+  if (!user) return
+
+  const issued = await issueToken(
+    user.id,
+    'password_reset',
+    requireDurationMs(getEnv().PASSWORD_RESET_TTL)
+  )
+
+  await addNotificationJob({
+    userId: user.id,
+    type: 'password_reset_requested',
+    title: 'Password reset requested',
+    body: `We received a request to reset your ${getEnv().APP_NAME} password.`,
+    metadata: { templateKey: PASSWORD_RESET_TEMPLATE_KEY },
+    email: {
+      to: user.email,
+      templateKey: PASSWORD_RESET_TEMPLATE_KEY,
+      variables: {
+        firstName: user.firstName ?? MISSING_FIRST_NAME_FALLBACK,
+        resetUrl: buildPasswordResetUrl(issued.raw),
+        appName: getEnv().APP_NAME,
+      },
+    },
+  })
+}
+
+/**
+ * Request a password-reset email.
+ *
+ * Answers an identical 202 with `data: null` for every address, registered
+ * or not — see this file's header comment (Ruling G). Stricter than
+ * `register`/`resendVerification` about WHEN it responds: those two still
+ * run a database lookup or insert before responding (a cost both of their
+ * branches pay alike), but this endpoint has nothing shared between
+ * branches to hide behind, so the response is sent before the lookup even
+ * starts. Everything from the lookup onward is fire-and-forget
+ * (`sendPasswordResetMailIfRegistered`), with `.catch()` (Ruling T) so a
+ * rejection there can never surface — not as a status code, not as an
+ * unhandled rejection that would crash the process on this branch only.
+ * Synchronous, deliberately — not `async` — because nothing in this
+ * function's own body is ever awaited: `parseBody`/`successResponse` are
+ * synchronous, and `sendPasswordResetMailIfRegistered` below is called but
+ * never awaited (see this comment's own paragraph above). An `async`
+ * signature with no `await` inside it is exactly what
+ * `@typescript-eslint/require-await` exists to catch.
+ * @param request - The incoming request, carrying `{ email }`.
+ * @param response - The response.
+ * @param next - Forwards a validation failure to the terminal error handler.
+ */
+export function forgotPassword(request: Request, response: Response, next: NextFunction): void {
+  try {
+    const input = parseBody(forgotPasswordSchema, request.body)
+
+    // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data", not undefined (which JSON.stringify omits entirely)
+    successResponse(response, null, FORGOT_PASSWORD_RESPONSE_MESSAGE, 202)
+
+    // eslint-disable-next-line unicorn/prefer-await -- fire-and-forget: everything here runs after the response above, so nothing it does (or fails to do) can affect what the caller already received
+    sendPasswordResetMailIfRegistered(input.email).catch((error: unknown) => {
+      logger.error('Forgot-password mail failed', { error })
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+const INVALID_RESET_TOKEN_MESSAGE = 'Invalid or expired reset link.'
+
+/**
+ * Reset a password with a token from the mailed link.
+ *
+ * Unlike `verifyEmail`, a weak or missing password is NOT folded into the
+ * same generic failure as an invalid token: `parseBody` throws its ordinary
+ * field-level 400 first, before the token is even looked at. That is safe
+ * here in a way it is not for `verifyEmail` — the password there is a
+ * SECOND proof of ownership over a possibly-squatted account, so a
+ * distinguishable wrong-password response would tell an attacker holding a
+ * link that the address is squatted. Here the token itself is the only
+ * secret in play (a 256-bit value from a mailed link, not a guessable
+ * credential), so telling a caller "your new password is too short" leaks
+ * nothing about the token's validity.
+ *
+ * `claimToken` both atomically claims the token AND checks its `purpose`
+ * and expiry (token.utilities.ts) — a claim that resolves undefined for ANY
+ * reason (unknown, wrong purpose, already used, expired) answers the same
+ * generic 400, so a caller cannot learn which of those actually happened. A
+ * soft-deleted user, or one deleted between issuing and claiming, is folded
+ * into the same case: `findById` excludes a soft-deleted row by default, so
+ * `!user` covers both "the token is bad" and "the account is gone" with the
+ * one response neither should be able to tell apart from the other.
+ * @param request - The incoming request, carrying `{ token, password }`.
+ * @param response - The response.
+ * @param next - Forwards a rejection to the terminal error handler.
+ */
+export async function resetPassword(
+  request: Request,
+  response: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const input = parseBody(resetPasswordSchema, request.body)
+
+    const claimed = await claimToken(input.token, 'password_reset')
+    const user = claimed ? await userRepository.findById(claimed.userId) : undefined
+    if (!claimed || !user) {
+      throw new HttpError(INVALID_RESET_TOKEN_MESSAGE, 400)
+    }
+
+    const passwordHash = await hashPassword(input.password)
+
+    await userRepository.update(user.id, {
+      passwordHash,
+      // Set ONLY when the user had never verified — a successful reset
+      // proves the caller controls the mailbox, which is sufficient first
+      // proof for an unverified account, but must not overwrite an
+      // EARLIER, real timestamp for one that already had it. Mirrors
+      // `markEmailVerified`'s own "never move a timestamp that already
+      // records the first proof" idempotence.
+      ...(!user.emailVerifiedAt && { emailVerifiedAt: new Date() }),
+    })
+
+    // Revokes every live token this user holds, of EVERY purpose —
+    // `revokeAllSessions`/`revokeAllForUser` has no purpose predicate. That
+    // is intended, not merely tolerated: it takes every refresh token
+    // (every session, on every device) with it, which is the point of a
+    // password reset, and it also kills any OTHER outstanding
+    // `password_reset` link the same user requested earlier, so a stale
+    // link from an older request cannot be redeemed after this one already
+    // succeeded.
+    await revokeAllSessions(user.id)
+
+    // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data", not undefined (which JSON.stringify omits entirely)
+    successResponse(response, null, 'Password has been reset.')
   } catch (error) {
     next(error)
   }

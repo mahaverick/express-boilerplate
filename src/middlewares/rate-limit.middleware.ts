@@ -1,11 +1,13 @@
 // src/middlewares/rate-limit.middleware.ts
 //
-// Seven limiters: `createRegisterRateLimiter`, `createLoginRateLimiter`,
+// Ten limiters: `createRegisterRateLimiter`, `createLoginRateLimiter`,
 // `createRefreshRateLimiter`, `createLogoutRateLimiter`,
-// `createVerifyEmailRateLimiter`, and the pair for resend-verification —
+// `createVerifyEmailRateLimiter`, `createResetPasswordRateLimiter`, and the
+// two pairs for resend-verification and forgot-password —
 // `createResendVerificationIpRateLimiter` /
-// `createResendVerificationEmailRateLimiter`. All are
-// FACTORIES, never a top-level `const` built at module-import time —
+// `createResendVerificationEmailRateLimiter`, and
+// `createForgotPasswordIpRateLimiter` / `createForgotPasswordEmailRateLimiter`.
+// All are FACTORIES, never a top-level `const` built at module-import time —
 // `rateLimit(...)` allocates a `Store` instance, and express-rate-limit
 // refuses to let two limiter instances share one (`ERR_ERL_STORE_REUSE`), so
 // a factory is also what lets a test build a fresh instance with a small
@@ -40,9 +42,13 @@
 // — one keyed on IP, one keyed on the submitted email with a deliberately
 // generous per-address budget — layered in series on the route, rather than
 // a composite of the two. See this file's own constants and factories below
-// for the full reasoning on which side is tight and which is generous. B3's
-// still-pending `/forgot-password` needs its own `rl:forgot-password-*`
-// pair on the identical pattern.
+// for the full reasoning on which side is tight and which is generous.
+// FORGOT-PASSWORD is the identical shape and gets the identical treatment —
+// `rl:forgot-password-ip:` / `rl:forgot-password-email:`, mirroring
+// resend-verification's own constants — see the comment beside those two
+// factories, further down this file, for why Ruling G (an identical 202
+// response either way) closes the enumeration half of the threat but does
+// nothing to bound the outbound-mail-amplifier half.
 //
 // REGISTER is keyed on the client's IP ALONE — deliberately not the
 // composite login uses. Both threats it bounds come from one caller varying
@@ -358,16 +364,20 @@ const RESEND_VERIFICATION_EMAIL_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000
 const RESEND_VERIFICATION_EMAIL_RATE_LIMIT_MAX_ATTEMPTS = 20
 
 /**
- * The key the email-keyed resend-verification limiter counts attempts by:
- * the submitted address ALONE — deliberately not composed with IP the way
- * `loginRateLimitKey` is. A composite key here would make the per-address
- * budget actually per-address-PER-IP, which bounds nothing: a distributed
- * attacker gets a fresh counter on every source IP against the same victim
- * address, defeating the one thing this limiter exists to cap.
+ * The key an email-keyed limiter counts attempts by: the submitted address
+ * ALONE — deliberately not composed with IP the way `loginRateLimitKey` is.
+ * A composite key here would make the per-address budget actually
+ * per-address-PER-IP, which bounds nothing: a distributed attacker gets a
+ * fresh counter on every source IP against the same victim address,
+ * defeating the one thing this limiter exists to cap. Shared by
+ * `createResendVerificationEmailRateLimiter` and
+ * `createForgotPasswordEmailRateLimiter` — both endpoints face the identical
+ * mail-amplification shape (this file's header comment), so the key logic
+ * has exactly one implementation rather than one per endpoint.
  * @param request - The incoming request.
  * @returns The submitted, normalised email — or an empty string when the body carries none, a case the IP-keyed limiter above still bounds regardless.
  */
-function resendVerificationEmailRateLimitKey(request: Request): string {
+function submittedEmailRateLimitKey(request: Request): string {
   return submittedEmail(request)
 }
 
@@ -412,7 +422,100 @@ export function createResendVerificationEmailRateLimiter(
     standardHeaders: true,
     legacyHeaders: false,
     store: new SharedRateLimitStore('rl:resend-verification-email:'),
-    keyGenerator: resendVerificationEmailRateLimitKey,
+    keyGenerator: submittedEmailRateLimitKey,
+    handler: sendRateLimitedResponse,
+    ...overrides,
+  })
+}
+
+// FORGOT-PASSWORD is the identical shape RESEND-VERIFICATION already is,
+// down to the reasoning: `forgotPassword` (auth.controller.ts) sends mail
+// only to a real address, and answers the same 202 either way (Ruling G), so
+// there is no enumeration oracle left to close — but that response-content
+// guarantee does nothing to bound an outbound-mail amplifier. An IP-only
+// limiter would let a distributed attacker (many source IPs) still mail-bomb
+// one victim's inbox by varying the source IP on every request; an
+// address-only limiter would let anyone who merely knows a victim's address
+// spend their budget and deny them their own reset mail. Both defects, and
+// both fixes, are exactly RESEND-VERIFICATION's; these two limiters mirror
+// its constants (same window, same thresholds) rather than inventing new
+// ones with no comparable precedent in this file.
+const FORGOT_PASSWORD_IP_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000
+const FORGOT_PASSWORD_IP_RATE_LIMIT_MAX_ATTEMPTS = 5
+const FORGOT_PASSWORD_EMAIL_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000
+const FORGOT_PASSWORD_EMAIL_RATE_LIMIT_MAX_ATTEMPTS = 20
+
+/**
+ * Build the IP-keyed forgot-password limiter: `limit` attempts per
+ * `windowMs`, keyed on the client's IP alone (express-rate-limit's own
+ * default key generator). Deliberately TIGHT — see the comment above these
+ * constants, and `createResendVerificationIpRateLimiter`'s identical
+ * reasoning. A factory, not a module-scope constant — see this file's header
+ * comment.
+ * @param overrides - Options to override, e.g. a small `limit`/`windowMs` for a test.
+ * @returns Express middleware enforcing the limit.
+ */
+export function createForgotPasswordIpRateLimiter(
+  overrides: Partial<Options> = {}
+): RateLimitRequestHandler {
+  return rateLimit({
+    windowMs: FORGOT_PASSWORD_IP_RATE_LIMIT_WINDOW_MS,
+    limit: FORGOT_PASSWORD_IP_RATE_LIMIT_MAX_ATTEMPTS,
+    standardHeaders: true,
+    legacyHeaders: false,
+    store: new SharedRateLimitStore('rl:forgot-password-ip:'),
+    handler: sendRateLimitedResponse,
+    ...overrides,
+  })
+}
+
+/**
+ * Build the email-keyed forgot-password limiter: `limit` attempts per
+ * `windowMs`, keyed on the submitted address alone
+ * (`submittedEmailRateLimitKey`). Deliberately GENEROUS — see the comment
+ * above these constants. A factory, not a module-scope constant — see this
+ * file's header comment.
+ * @param overrides - Options to override, e.g. a small `limit`/`windowMs` for a test.
+ * @returns Express middleware enforcing the limit.
+ */
+export function createForgotPasswordEmailRateLimiter(
+  overrides: Partial<Options> = {}
+): RateLimitRequestHandler {
+  return rateLimit({
+    windowMs: FORGOT_PASSWORD_EMAIL_RATE_LIMIT_WINDOW_MS,
+    limit: FORGOT_PASSWORD_EMAIL_RATE_LIMIT_MAX_ATTEMPTS,
+    standardHeaders: true,
+    legacyHeaders: false,
+    store: new SharedRateLimitStore('rl:forgot-password-email:'),
+    keyGenerator: submittedEmailRateLimitKey,
+    handler: sendRateLimitedResponse,
+    ...overrides,
+  })
+}
+
+const RESET_PASSWORD_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000
+const RESET_PASSWORD_RATE_LIMIT_MAX_ATTEMPTS = 10
+
+/**
+ * Build a reset-password rate limiter: `limit` attempts per `windowMs`,
+ * keyed on IP alone. Same reasoning as `createVerifyEmailRateLimiter`: the
+ * token is single-use and high-entropy (256 bits, token.utilities.ts), so
+ * there is no per-token budget worth counting — this bounds a client working
+ * through many tokens (or many malformed attempts), volume protection rather
+ * than a security boundary. A factory, not a module-scope constant — see
+ * this file's header comment.
+ * @param overrides - Options to override, e.g. a small `limit`/`windowMs` for a test.
+ * @returns Express middleware enforcing the limit.
+ */
+export function createResetPasswordRateLimiter(
+  overrides: Partial<Options> = {}
+): RateLimitRequestHandler {
+  return rateLimit({
+    windowMs: RESET_PASSWORD_RATE_LIMIT_WINDOW_MS,
+    limit: RESET_PASSWORD_RATE_LIMIT_MAX_ATTEMPTS,
+    standardHeaders: true,
+    legacyHeaders: false,
+    store: new SharedRateLimitStore('rl:reset-password:'),
     handler: sendRateLimitedResponse,
     ...overrides,
   })

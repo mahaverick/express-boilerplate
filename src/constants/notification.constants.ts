@@ -11,15 +11,15 @@
 // it, is this list's only enforcement for now.
 
 /**
- * Every in-app notification type this codebase can currently produce. Only
- * `'verify_email'` today — the notification worker (a later task) is its
- * first and only producer; a type is added here once something in `src/`
- * actually enqueues it, not speculatively. Deliberately not
- * `'email_verified'`: the notification fires when a verification link is
- * SENT, before the user has clicked it, so the past-tense name would
+ * Every in-app notification type this codebase can currently produce.
+ * `'verify_email'` (register/resend-verification) and
+ * `'password_reset_requested'` (forgot-password) — a type is added here once
+ * something in `src/` actually enqueues it, not speculatively. Deliberately
+ * not `'email_verified'`/`'password_reset'`: each notification fires when its
+ * link is SENT, before the user has clicked it, so a past-tense name would
  * misdescribe an event that has not happened yet.
  */
-export const NOTIFICATION_TYPES = ['verify_email'] as const
+export const NOTIFICATION_TYPES = ['verify_email', 'password_reset_requested'] as const
 
 /**
  * One of the fixed set of notification types a `notifications` or
