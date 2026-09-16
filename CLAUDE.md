@@ -131,6 +131,14 @@ until you check.
   Verification tokens live in `variables`. The worker strips them before
   the database insert — the email fan-out reads them from the job payload,
   not from the stored row.
+- **SSE stream at `GET /api/v1/notifications/stream`** authenticates via
+  `?token=<jwt>` query param because `EventSource` cannot set custom
+  headers. This means the access token appears in server/proxy access logs
+  and browser history. **Hardening follow-up:** replace with a short-lived
+  single-use SSE ticket obtained from a POST endpoint, or use cookie-based
+  auth with `{ withCredentials: true }`. The in-process `EventEmitter`
+  pub/sub works for single-pod deployments; upgrade to Redis Pub/Sub for
+  multi-pod with separate worker processes.
 
 ## Git hooks and CI
 
