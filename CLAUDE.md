@@ -102,9 +102,12 @@ until you check.
   job — `createApp()`/`startServer()` never start one, only `index.ts`'s
   `boot()` does, and tests never import that. See
   `tests/integration/api/auth.test.ts` and `verification.test.ts` for the
-  pattern: one `Worker` for the whole file, started in `beforeAll`, closed
-  in `afterAll` before `getEmailQueue().obliterate({ force: true })` and
-  `closeQueue()` — same ordering `gracefulShutdown` uses.
+  pattern: one `Worker` for the whole file, started as a module-level
+  `const worker = startEmailWorker()` (not `beforeAll` — `unicorn/no-top-level-assignment-in-function`
+  rejects reassigning a top-level `let` from inside it, and `startEmailWorker()`
+  is synchronous so a plain `const` works), closed in `afterAll` before
+  `getEmailQueue().obliterate({ force: true })` and `closeQueue()` — same
+  ordering `gracefulShutdown` uses.
 
 ## Git hooks and CI
 
