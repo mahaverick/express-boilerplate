@@ -88,6 +88,10 @@ until you check.
   (`sendVerificationMail`, `sendRegistrationAttemptMail`,
   `resendVerificationMail`) enqueue internally — controllers call the
   same helpers with the same `.catch()` pattern they always did.
+  `sendVerificationMail` enqueues via `addNotificationJob()` (see
+  "Notifications" below), not `addEmailJob()` directly —
+  `sendRegistrationAttemptMail` is the one exception that still calls
+  `addEmailJob()` itself.
 - **`WORKER_ENABLED` gates the in-process worker.** Default `true` (API +
   worker in one process). Set `false` for API-only pods; a separate worker
   deployment sets `true` and processes jobs from the shared Redis queue.
@@ -107,7 +111,26 @@ until you check.
   rejects reassigning a top-level `let` from inside it, and `startEmailWorker()`
   is synchronous so a plain `const` works), closed in `afterAll` before
   `getEmailQueue().obliterate({ force: true })` and `closeQueue()` — same
-  ordering `gracefulShutdown` uses.
+  ordering `gracefulShutdown` uses. A test asserting _verification_ mail
+  delivery specifically also needs a `startNotificationWorker()` alongside
+  it — that mail only reaches the "email" queue after the notification
+  worker fans the `verify_email` job out to it (see "Notifications" below);
+  the same two files show both workers started and closed together.
+
+## Notifications
+
+- **`addNotificationJob()` from `@/jobs/notification.job`, not `addEmailJob()`
+  directly,** for events that have both in-app and email channels. The
+  notification worker checks preferences and fans out. `registration_attempt`
+  is the exception — email-only, never routed through the notification worker
+  (an in-app row would be an enumeration oracle — see Ruling G).
+- **`verify_email` email channel is not user-disableable.** A user who
+  disables email for verification locks themselves out. The preference
+  repository returns `true` for it regardless.
+- **`metadata` on the notifications table must NOT contain `variables`.**
+  Verification tokens live in `variables`. The worker strips them before
+  the database insert — the email fan-out reads them from the job payload,
+  not from the stored row.
 
 ## Git hooks and CI
 

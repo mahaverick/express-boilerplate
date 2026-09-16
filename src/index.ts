@@ -33,27 +33,31 @@ async function boot(): Promise<void> {
   const server = startServer()
 
   // Dynamic, same reasoning as `@/server` above and for the same effect:
-  // `@/workers/email.worker` -> `@/services/queue.service` opens no
-  // connection at import time (lazy, like every other service here), but a
-  // STATIC import would still pull the whole `bullmq`/`ioredis` module graph
-  // into every process that imports index.ts's module scope — including
+  // `@/workers/email.worker` / `@/workers/notification.worker` ->
+  // `@/services/queue.service` opens no connection at import time (lazy,
+  // like every other service here), but a STATIC import would still pull
+  // the whole `bullmq`/`ioredis` module graph into every process that
+  // imports index.ts's module scope — including
   // tests/integration/server.test.ts's `startServer(0)` lifecycle test,
   // which never sets WORKER_ENABLED and has no business loading BullMQ at
   // all. Gating the import itself, not just the call, is what keeps that
   // test free of it.
-  let worker: Worker | undefined
+  let emailWorker: Worker | undefined
+  let notificationWorker: Worker | undefined
   if (getEnv().WORKER_ENABLED) {
     const { startEmailWorker } = await import('@/workers/email.worker')
-    worker = startEmailWorker()
+    const { startNotificationWorker } = await import('@/workers/notification.worker')
+    emailWorker = startEmailWorker()
+    notificationWorker = startNotificationWorker()
     // logger is available here — getEnv() already succeeded in main().
     const { logger } = await import('@/services/logger.service')
-    logger.info('Email worker started')
+    logger.info('Workers started (email + notification)')
   }
 
   for (const signal of ['SIGTERM', 'SIGINT'] as const) {
     process.on(signal, () => {
       const forced = setTimeout(() => process.exit(1), GRACEFUL_SHUTDOWN_TIMEOUT_MS)
-      void gracefulShutdown(server, worker).then(() => {
+      void gracefulShutdown(server, emailWorker, notificationWorker).then(() => {
         clearTimeout(forced)
         process.exit(0)
       })

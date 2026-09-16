@@ -64,6 +64,13 @@
       "when": 1789475829985,
       "tag": "0008_rainy_amphibian",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1789580363046,
+      "tag": "0009_narrow_proteus",
+      "breakpoints": true
     }
   ]
 }

@@ -21,8 +21,9 @@ import { logger } from '@/services/logger.service'
 const state: {
   connection: IORedis | undefined
   emailQueue: Queue | undefined
+  notificationQueue: Queue | undefined
   closed: boolean
-} = { connection: undefined, emailQueue: undefined, closed: false }
+} = { connection: undefined, emailQueue: undefined, notificationQueue: undefined, closed: false }
 
 /**
  * Get the shared ioredis connection used by every BullMQ Queue/Worker,
@@ -89,6 +90,25 @@ export function getEmailQueue(): Queue {
 }
 
 /**
+ * Get the shared "notification" queue, creating it on first use. Same
+ * lazy-singleton shape as `getEmailQueue()` — a separate BullMQ Queue,
+ * still over the one shared connection `getQueueConnection()` returns.
+ * @returns The notification queue.
+ */
+export function getNotificationQueue(): Queue {
+  if (!state.notificationQueue) {
+    state.notificationQueue = new Queue('notification', {
+      connection: getQueueConnection(),
+      prefix: getEnv().QUEUE_PREFIX,
+    })
+    state.notificationQueue.on('error', (error: unknown) => {
+      logger.error('Notification queue error', { error })
+    })
+  }
+  return state.notificationQueue
+}
+
+/**
  * Enqueue a job. A thin, generically-typed wrapper over `Queue#add` so
  * callers depend on this module's surface rather than importing BullMQ's
  * `Queue` type directly everywhere a job is enqueued.
@@ -152,6 +172,14 @@ export async function closeQueue(): Promise<void> {
     // `shared` is true. So `getQueueConnection()`'s connection outlives
     // this call — good, since Worker/QueueEvents (Task 2/3) reuse it too.
     await emailQueue.close()
+  }
+  if (state.notificationQueue) {
+    const notificationQueue = state.notificationQueue
+    state.notificationQueue = undefined
+    // Same "shared connection" reasoning as the emailQueue.close() call
+    // above — this queue was also built from the already-constructed
+    // ioredis instance, so this does not touch state.connection either.
+    await notificationQueue.close()
   }
   if (state.connection) {
     const connection = state.connection

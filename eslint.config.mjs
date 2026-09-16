@@ -30,6 +30,7 @@ export default tseslint.config(
       'tests/fixtures/**',
       'src/lint-fixtures/**',
       '.worktrees/**',
+      '.claude/**',
     ],
   },
   js.configs.recommended,

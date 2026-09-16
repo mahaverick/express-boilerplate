@@ -234,7 +234,7 @@ const EnvSchema = z.object({
     .stringbool()
     .default(true)
     .describe(
-      'Whether the BullMQ worker starts in-process alongside the HTTP server. Set to false for API-only pods behind a load balancer; a separate worker deployment sets this to true.'
+      'Whether the BullMQ workers (email + notification) start in-process alongside the HTTP server. Set to false for API-only pods behind a load balancer; a separate worker deployment sets this to true.'
     ),
   QUEUE_PREFIX: z
     .string()

@@ -7,7 +7,7 @@
 // premature abstraction when the second is already planned.
 import { getEnv } from '@/configs/env.config'
 import type { User } from '@/database/models/user.model'
-import { addEmailJob } from '@/jobs/email.job'
+import { addNotificationJob } from '@/jobs/notification.job'
 import { EMAIL_VERIFICATION_TEMPLATE_KEY } from '@/templates/email/email-verification.template'
 import { issueToken, requireDurationMs } from '@/utilities/token.utilities'
 import { buildVerificationUrl } from '@/utilities/verification-link.utilities'
@@ -22,7 +22,11 @@ import { buildVerificationUrl } from '@/utilities/verification-link.utilities'
 export const MISSING_FIRST_NAME_FALLBACK = 'there'
 
 /**
- * Issue a verification token for a user and mail them the link.
+ * Issue a verification token for a user, then enqueue a `verify_email`
+ * notification job for them — the notification worker fans that out into an
+ * in-app row (if the `in_app` channel is enabled) and the paired mail
+ * carrying the verification link (email is not user-disableable for this
+ * type — see `NotificationPreferenceRepository`).
  * @param user - The user to verify.
  */
 export async function sendVerificationMail(user: User): Promise<void> {
@@ -31,8 +35,13 @@ export async function sendVerificationMail(user: User): Promise<void> {
     'email_verification',
     requireDurationMs(getEnv().EMAIL_VERIFICATION_TTL)
   )
-  await addEmailJob(
-    {
+  await addNotificationJob({
+    userId: user.id,
+    type: 'verify_email',
+    title: 'Verify your email',
+    body: `Please verify your email address for ${getEnv().APP_NAME}.`,
+    metadata: { templateKey: EMAIL_VERIFICATION_TEMPLATE_KEY },
+    email: {
       to: user.email,
       templateKey: EMAIL_VERIFICATION_TEMPLATE_KEY,
       variables: {
@@ -41,6 +50,5 @@ export async function sendVerificationMail(user: User): Promise<void> {
         appName: getEnv().APP_NAME,
       },
     },
-    user.id
-  )
+  })
 }

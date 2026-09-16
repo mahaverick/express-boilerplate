@@ -43,20 +43,36 @@ export function startServer(port: number = getEnv().APP_PORT): Server {
  * instead, which both satisfies the lint rule and keeps this function fully
  * testable (it can safely resolve without ever touching `process.exit`).
  *
- * `worker` closes AFTER the socket and BEFORE the shared dependencies:
+ * Both workers close AFTER the socket and BEFORE the shared dependencies:
  * `Worker#close()` drains whatever job is currently being processed rather
- * than killing it mid-flight, and that in-flight job's `processEmailJob`
- * (email.worker.ts) calls `sendMail`, which needs the database (email_logs)
- * and Redis still up. Closing `closeQueue()` first would pull the
- * connection the worker is still using; closing it after is what lets the
- * drain actually finish cleanly. `worker` is optional so this still works
- * for a `WORKER_ENABLED=false` pod, which never started one.
+ * than killing it mid-flight, and an in-flight job on either queue —
+ * `processEmailJob` (email.worker.ts) calling `sendMail`, or
+ * `processNotificationJob` (notification.worker.ts) inserting a row and
+ * itself calling `addEmailJob` — needs the database and Redis still up.
+ * Closing `closeQueue()` first would pull the connection both workers are
+ * still using; closing it after is what lets the drain actually finish
+ * cleanly. Both are optional so this still works for a `WORKER_ENABLED=false`
+ * pod, which never started either.
  * @param server - The server returned by `startServer`.
- * @param worker - The email worker, if this process started one (`WORKER_ENABLED`).
+ * @param emailWorker - The email worker, if this process started one (`WORKER_ENABLED`).
+ * @param notificationWorker - The notification worker, if this process started one (`WORKER_ENABLED`).
  * @returns Resolves once everything is closed.
  */
-export async function gracefulShutdown(server: Server, worker?: Worker): Promise<void> {
+export async function gracefulShutdown(
+  server: Server,
+  emailWorker?: Worker,
+  notificationWorker?: Worker
+): Promise<void> {
   await new Promise<void>((resolve) => server.close(() => resolve()))
-  if (worker) await worker.close()
+  // `.filter(Boolean)` alone leaves this typed as `(Promise<void> |
+  // undefined)[]` — `Boolean` is not a type predicate, so TypeScript never
+  // narrows `undefined` back out, which trips
+  // `@typescript-eslint/await-thenable` on an iterable that may still
+  // contain a non-promise value. An explicit type-guard predicate removes
+  // `undefined` at the type level too, not just at runtime.
+  const workerCloses = [emailWorker?.close(), notificationWorker?.close()].filter(
+    (close): close is Promise<void> => close !== undefined
+  )
+  await Promise.allSettled(workerCloses)
   await Promise.allSettled([closeDatabase(), closeRedis(), closeQueue()])
 }
