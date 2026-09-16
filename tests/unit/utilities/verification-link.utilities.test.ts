@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { buildVerificationUrl } from '@/utilities/verification-link.utilities'
+import {
+  buildPasswordResetUrl,
+  buildVerificationUrl,
+} from '@/utilities/verification-link.utilities'
 
 describe('buildVerificationUrl', () => {
   it('points at the frontend WEB_URL, not the API', () => {
@@ -29,6 +32,28 @@ describe('buildVerificationUrl', () => {
     // https://app.example.com, and //verify-email 404s on most routers.
     expect(buildVerificationUrl('t', 'https://app.example.com/')).toBe(
       'https://app.example.com/verify-email?token=t'
+    )
+  })
+})
+
+describe('buildPasswordResetUrl', () => {
+  it('points at the frontend WEB_URL, not the API', () => {
+    const url = new URL(buildPasswordResetUrl('abc123', 'https://app.example.com'))
+
+    expect(url.origin).toBe('https://app.example.com')
+    expect(url.pathname).toBe('/reset-password')
+    expect(url.searchParams.get('token')).toBe('abc123')
+  })
+
+  it('percent-encodes the token rather than concatenating it raw', () => {
+    const url = new URL(buildPasswordResetUrl('a+b/c==', 'https://app.example.com'))
+
+    expect(url.searchParams.get('token')).toBe('a+b/c==')
+  })
+
+  it('does not double a slash when WEB_URL has a trailing one', () => {
+    expect(buildPasswordResetUrl('t', 'https://app.example.com/')).toBe(
+      'https://app.example.com/reset-password?token=t'
     )
   })
 })

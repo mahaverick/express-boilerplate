@@ -109,6 +109,39 @@ export const loginSchema = z.object({
 export type LoginInput = z.infer<typeof loginSchema>
 
 /**
+ * Forgot-password request body: just an email. Malformed or well-formed,
+ * known or unknown, this schema never produces a distinguishable outcome —
+ * `forgotPassword` (auth.controller.ts) answers the same 202 either way.
+ */
+export const forgotPasswordSchema = z.object({
+  email: emailSchema,
+})
+
+/**
+ * The validated shape of a forgot-password request body.
+ */
+export type ForgotPasswordInput = z.infer<typeof forgotPasswordSchema>
+
+/**
+ * Reset-password request body: the raw token from the mailed link, and a new
+ * password. The password goes through the SAME `registrationPasswordSchema`
+ * registration uses — not a fresh `z.string().min(8)` — for the exact reason
+ * this file's header comment gives for that schema existing at all: without
+ * the byte-ceiling refine, a password past bcrypt's 72-byte limit would reach
+ * `hashPassword` (password.utilities.ts) and throw a bare `Error`, answering
+ * a client-error case as a 500.
+ */
+export const resetPasswordSchema = z.object({
+  token: z.string().min(1, 'Token is required.'),
+  password: registrationPasswordSchema,
+})
+
+/**
+ * The validated shape of a reset-password request body.
+ */
+export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>
+
+/**
  * Parse a request body against a schema, translating a failure into the
  * envelope's field-level `errors` (error.middleware.ts / HttpError) rather
  * than a caller having to know to look for a zod-shaped error some other

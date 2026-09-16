@@ -172,6 +172,31 @@ const EnvSchema = z.object({
       'How long an email-verification link stays valid. Defaulted to 24h; a link the user finds the next morning should still work.'
     ),
 
+  // How long a password-reset link stays valid, from issue to click. A
+  // SHORTER default than EMAIL_VERIFICATION_TTL, deliberately, despite both
+  // being "a link mailed to a user" at a glance: redeeming this one grants
+  // immediate account takeover (a new password, plus every existing session
+  // revoked) the instant it is claimed, where an email-verification link
+  // only ever proves mailbox ownership. A reset link sitting in an inbox (or
+  // a mail-server log, or a compromised mail account) for 24h is 24h of
+  // takeover exposure; 1h keeps the window closer to how someone actually
+  // uses the flow — request it, check mail, click it — while still
+  // tolerating a few minutes' delivery lag. A separate variable, not a
+  // second purpose reusing EMAIL_VERIFICATION_TTL, so the two can be tuned
+  // independently — see this schema's own precedent
+  // (ACCESS_TOKEN_TTL/REFRESH_TOKEN_TTL/SESSION_ABSOLUTE_TTL are three
+  // separate knobs for the same reason).
+  PASSWORD_RESET_TTL: z
+    .string()
+    .default('1h')
+    .refine((value) => parseDurationMs(value) !== undefined, {
+      message:
+        'PASSWORD_RESET_TTL must be a duration string ms() can parse, e.g. "1h" or "3600000".',
+    })
+    .describe(
+      'How long a password-reset link stays valid. Defaulted to 1h — shorter than EMAIL_VERIFICATION_TTL, because redeeming it grants immediate account takeover rather than merely proving mailbox ownership.'
+    ),
+
   // How much of `X-Forwarded-For` Express is allowed to believe. There is
   // no safe default in either direction, which is why this is a required
   // decision expressed as configuration rather than a literal in app.ts:
