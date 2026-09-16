@@ -26,6 +26,7 @@ import type { User } from '@/database/models/user.model'
 import { toAuthenticatedUser, type AuthenticatedUser } from '@/middlewares/auth.middleware'
 import { HttpError } from '@/middlewares/error.middleware'
 import { UserRepository } from '@/repositories/user.repository'
+import { logger } from '@/services/logger.service'
 import { sendMail } from '@/services/mailer.service'
 import { REGISTRATION_ATTEMPT_TEMPLATE_KEY } from '@/templates/email/registration-attempt.template'
 import { getDummyHash, hashPassword, isPasswordValid } from '@/utilities/password.utilities'
@@ -239,7 +240,7 @@ export async function register(
     if (created) {
       // eslint-disable-next-line unicorn/prefer-await -- fire-and-forget: the mail must not block the response, and awaiting would make the two branches differ by SMTP latency (Ruling T)
       sendVerificationMail(created).catch((error: unknown) => {
-        console.error('Verification mail failed', error)
+        logger.error('Verification mail failed', { error })
       })
       return
     }
@@ -249,7 +250,7 @@ export async function register(
     // falls back rather than being dereferenced.
     // eslint-disable-next-line unicorn/prefer-await -- fire-and-forget: same reasoning as the verification branch above
     sendRegistrationAttemptMail(input.email).catch((error: unknown) => {
-      console.error('Registration-attempt mail failed', error)
+      logger.error('Registration-attempt mail failed', { error })
     })
   } catch (error) {
     next(error)

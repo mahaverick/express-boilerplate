@@ -18,7 +18,7 @@
 // response that also sets `code` would collide with it.
 import { STATUS_CODES } from 'node:http'
 import { type NextFunction, type Request, type Response } from 'express'
-import { REQUEST_ID_HEADER } from '@/middlewares/request-id.middleware'
+import { logger } from '@/services/logger.service'
 import { errorResponse } from '@/utilities/response.utilities'
 
 /**
@@ -234,7 +234,7 @@ export function errorHandler(
   // carries the values it was writing. `redactedForLog` strips those and
   // keeps what actually makes a 500 diagnosable — see its own comment.
   if (statusCode >= 500) {
-    console.error(`[${String(response.getHeader(REQUEST_ID_HEADER))}]`, redactedForLog(error))
+    logger.error('Unhandled server error', { error: redactedForLog(error) })
   }
 
   errorResponse(

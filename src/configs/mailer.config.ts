@@ -18,6 +18,7 @@
 import nodemailer, { type Transporter } from 'nodemailer'
 import type SMTPTransport from 'nodemailer/lib/smtp-transport'
 import { getEnv, type Env } from '@/configs/env.config'
+import { logger } from '@/services/logger.service'
 
 /**
  * Build nodemailer's `createTransport` options from the SMTP slice of the
@@ -162,8 +163,8 @@ export const getMailTransporter: () => Transporter<SMTPTransport.SentMessageInfo
     if (!cached) {
       const env = getEnv()
       if ((env.SMTP_USER === undefined) !== (env.SMTP_PASS === undefined)) {
-        console.warn(
-          'mailer.config: exactly one of SMTP_USER/SMTP_PASS is set — no SMTP authentication will be attempted, so every send will fail with EAUTH against a provider that requires it. Set both, or neither (Mailpit needs neither).'
+        logger.warn(
+          'Exactly one of SMTP_USER/SMTP_PASS is set — no SMTP authentication will be attempted, so every send will fail with EAUTH against a provider that requires it. Set both, or neither (Mailpit needs neither).'
         )
       }
       cached = nodemailer.createTransport(

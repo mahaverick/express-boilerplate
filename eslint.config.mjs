@@ -169,7 +169,9 @@ export default tseslint.config(
       'jsdoc/check-tag-names': 'error',
       'jsdoc/no-undefined-types': 'error',
 
-      // Secrets are read in exactly one place.
+      // Secrets are read in exactly one place. Logs go through the
+      // structured logger, not console.*, everywhere except the two files
+      // exempted below.
       'no-restricted-properties': [
         'error',
         {
@@ -177,6 +179,11 @@ export default tseslint.config(
           property: 'env',
           message: 'Read configuration from @/configs/env.config, not process.env. See spec §5.1.',
         },
+        { object: 'console', property: 'error', message: 'Use logger from @/services/logger.service.' },
+        { object: 'console', property: 'warn', message: 'Use logger from @/services/logger.service.' },
+        { object: 'console', property: 'info', message: 'Use logger from @/services/logger.service.' },
+        { object: 'console', property: 'log', message: 'Use logger from @/services/logger.service.' },
+        { object: 'console', property: 'debug', message: 'Use logger from @/services/logger.service.' },
       ],
 
       'check-file/filename-naming-convention': [
@@ -202,6 +209,18 @@ export default tseslint.config(
     // env.config.ts is the one module allowed to read process.env — it is the
     // module whose whole job is to parse it.
     files: ['src/configs/env.config.ts'],
+    rules: { 'no-restricted-properties': 'off' },
+  },
+  {
+    // logger.service.ts is the one module that talks to Winston's console
+    // transport, and its SlackTransport.sendToSlack uses console.error for
+    // failure logging to avoid re-entering the logger.
+    // index.ts is the pre-boot error path where the logger is not yet
+    // available (env validation failed before any service could initialize).
+    // Both rules (process.env and console.*) are lifted — the process.env
+    // exemption is a side effect, not the intent, but harmless: neither
+    // module reads process.env.
+    files: ['src/services/logger.service.ts', 'src/index.ts'],
     rules: { 'no-restricted-properties': 'off' },
   },
   {

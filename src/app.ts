@@ -7,6 +7,7 @@
 import express, { type Express } from 'express'
 import { getEnv, trustProxySetting } from '@/configs/env.config'
 import { errorHandler, HttpError } from '@/middlewares/error.middleware'
+import { requestContext } from '@/middlewares/request-context.middleware'
 import { requestId } from '@/middlewares/request-id.middleware'
 import { createApiRouter } from '@/routes/index.routes'
 import { isDatabaseReachable } from '@/services/database.service'
@@ -44,6 +45,7 @@ export function createApp(): Express {
   app.set('trust proxy', trustProxySetting(getEnv().TRUST_PROXY))
 
   app.use(requestId)
+  app.use(requestContext)
   app.use(express.json({ limit: '1mb' }))
   app.use(express.urlencoded({ extended: false }))
 

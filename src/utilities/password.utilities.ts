@@ -6,6 +6,7 @@
 // live in exactly one place instead of being re-decided at every call site.
 import * as bcrypt from 'bcrypt'
 import { BCRYPT_COST, MAX_PASSWORD_BYTES } from '@/constants/auth.constants'
+import { logger } from '@/services/logger.service'
 
 /**
  * Hash a plaintext password with bcrypt at `BCRYPT_COST`.
@@ -70,10 +71,7 @@ export async function isPasswordValid(plain: string, hash: string): Promise<bool
     // installed bcrypt version). The catch stays regardless: it is what
     // keeps this function's "never throws" contract true even if that
     // binding detail changes.
-    console.error(
-      '[password.utilities] isPasswordValid: comparison threw, treating as no match',
-      error
-    )
+    logger.error('isPasswordValid: comparison threw, treating as no match', { error })
     return false
   }
 }

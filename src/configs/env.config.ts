@@ -38,6 +38,8 @@ if (!process.env.VITEST) {
 // for APP_URL/WEB_URL/OTEL_EXPORTER_OTLP_ENDPOINT in this schema.
 // z.url({ protocol: /^https?$/ }) keeps the "http or https only" restriction
 // while accepting any hostname, including localhost.
+const LogLevelSchema = z.enum(['error', 'warn', 'info', 'debug'])
+
 const EnvSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   APP_PORT: z.coerce.number().int().positive().default(4040),
@@ -209,7 +211,17 @@ const EnvSchema = z.object({
     .url({ protocol: /^https?$/ })
     .optional()
     .describe('Absent means tracing is disabled; the SDK is never started.'),
-  LOG_LEVEL: z.enum(['error', 'warn', 'info', 'debug']).default('info'),
+  LOG_LEVEL: LogLevelSchema.default('info'),
+
+  SLACK_WEBHOOK_URL: z
+    .url({ protocol: /^https?$/ })
+    .optional()
+    .describe(
+      'Slack Incoming Webhook URL for log alerting. When unset, no Slack transport is registered.'
+    ),
+  SLACK_LOG_LEVEL: LogLevelSchema.default('error').describe(
+    'Minimum log level that triggers a Slack notification. Defaults to error; set to warn if you want Slack alerts for warnings too.'
+  ),
 
   // SMTP configuration for mailer.service.ts (src/services/mailer.service.ts)
   // / mailer.config.ts. Defaulted to docker-compose.yml's Mailpit service

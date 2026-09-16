@@ -6,7 +6,7 @@
 // worker has called it, SMTP_USER/SMTP_PASS can never be varied between
 // cases again. Same reasoning `trustProxySetting` (env.config.ts) is
 // unit-tested as a pure function rather than through `getEnv()`.
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { Env } from '@/configs/env.config'
 import { getMailTransporter, mailTransportOptions, requiresTls } from '@/configs/mailer.config'
 import { withMutatedModule } from '../../helpers/mutate'
@@ -133,6 +133,7 @@ describe('getMailTransporter — half-set credential warning', () => {
     EMAIL_VERIFICATION_TTL: '24h',
     TRUST_PROXY: 'false',
     LOG_LEVEL: 'info',
+    SLACK_LOG_LEVEL: 'error',
     SMTP_HOST: 'localhost',
     SMTP_PORT: 1025,
     SMTP_USER: 'only-the-username-is-set',
@@ -145,31 +146,38 @@ describe('getMailTransporter — half-set credential warning', () => {
   }
 
   it('warns when exactly one of SMTP_USER/SMTP_PASS is set', async () => {
-    // Plain reassignment, not vi.spyOn — see
-    // tests/integration/services/mailer.service.test.ts's identical choice
-    // for console.error and its own comment on why.
-    const capturedWarnCalls: unknown[][] = []
-    const originalConsoleWarn = console.warn
-    console.warn = (...callArguments: unknown[]): void => {
-      capturedWarnCalls.push(callArguments)
-    }
-    try {
-      await withMutatedModule(
-        '@/configs/env.config',
-        { getEnv: () => halfSetUserOnlyEnv },
-        () => import('@/configs/mailer.config'),
-        (mailerConfig) => {
+    // vi.spyOn on a FRESH `logger` module instance, not the one imported at
+    // the top of this file: withMutatedModule calls vi.resetModules()
+    // before loadSubject runs, which discards this worker's entire module
+    // cache — the freshly (re)loaded mailer.config below therefore resolves
+    // its own `import { logger } from '@/services/logger.service'` against
+    // a NEW module namespace object, distinct from the one this file
+    // already imported. Spying on the top-level `logger` would watch a
+    // different object than the one mailer.config actually calls, and the
+    // assertion below would see zero calls. Loading logger.service.ts
+    // yourself, after the reset, inside loadSubject, is what makes the spy
+    // and the call land on the same instance.
+    await withMutatedModule(
+      '@/configs/env.config',
+      { getEnv: () => halfSetUserOnlyEnv },
+      async () => ({
+        mailerConfig: await import('@/configs/mailer.config'),
+        loggerService: await import('@/services/logger.service'),
+      }),
+      ({ mailerConfig, loggerService }) => {
+        const warnSpy = vi.spyOn(loggerService.logger, 'warn').mockImplementation(() => {})
+        try {
           mailerConfig.getMailTransporter()
-        }
-      )
-    } finally {
-      console.warn = originalConsoleWarn
-    }
 
-    expect(capturedWarnCalls).toHaveLength(1)
-    const [message] = capturedWarnCalls[0] ?? []
-    expect(message).toContain('SMTP_USER')
-    expect(message).toContain('SMTP_PASS')
+          expect(warnSpy).toHaveBeenCalledTimes(1)
+          const [message] = warnSpy.mock.calls[0] ?? []
+          expect(message).toContain('SMTP_USER')
+          expect(message).toContain('SMTP_PASS')
+        } finally {
+          warnSpy.mockRestore()
+        }
+      }
+    )
   })
 
   it('does not warn when both SMTP_USER and SMTP_PASS are set', async () => {
@@ -178,24 +186,23 @@ describe('getMailTransporter — half-set credential warning', () => {
       SMTP_USER: 'apikey',
       SMTP_PASS: 'secret',
     }
-    const capturedWarnCalls: unknown[][] = []
-    const originalConsoleWarn = console.warn
-    console.warn = (...callArguments: unknown[]): void => {
-      capturedWarnCalls.push(callArguments)
-    }
-    try {
-      await withMutatedModule(
-        '@/configs/env.config',
-        { getEnv: () => bothSetEnv },
-        () => import('@/configs/mailer.config'),
-        (mailerConfig) => {
+    await withMutatedModule(
+      '@/configs/env.config',
+      { getEnv: () => bothSetEnv },
+      async () => ({
+        mailerConfig: await import('@/configs/mailer.config'),
+        loggerService: await import('@/services/logger.service'),
+      }),
+      ({ mailerConfig, loggerService }) => {
+        const warnSpy = vi.spyOn(loggerService.logger, 'warn').mockImplementation(() => {})
+        try {
           mailerConfig.getMailTransporter()
-        }
-      )
-    } finally {
-      console.warn = originalConsoleWarn
-    }
 
-    expect(capturedWarnCalls).toHaveLength(0)
+          expect(warnSpy).not.toHaveBeenCalled()
+        } finally {
+          warnSpy.mockRestore()
+        }
+      }
+    )
   })
 })

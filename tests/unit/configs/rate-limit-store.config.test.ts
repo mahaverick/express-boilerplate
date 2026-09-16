@@ -9,6 +9,7 @@
 // the real thing, in tests/integration/.
 import { describe, expect, it, vi, type Mock } from 'vitest'
 import { SharedRateLimitStore } from '@/configs/rate-limit-store.config'
+import { logger } from '@/services/logger.service'
 import { getRedis } from '@/services/redis.service'
 
 vi.mock('@/services/redis.service', () => ({ getRedis: vi.fn() }))
@@ -51,7 +52,7 @@ function fakeRedisClient(): { client: { sendCommand: Mock }; commands: string[][
 describe('SharedRateLimitStore', () => {
   it('starts on memory, counts hits normally while Redis is unreachable, and warns only once', async () => {
     vi.mocked(getRedis).mockRejectedValue(new Error('Redis unreachable'))
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
     const store = new SharedRateLimitStore('rl:test:')
     store.init(testOptions)
 
@@ -73,7 +74,7 @@ describe('SharedRateLimitStore', () => {
 
   it('keeps two clients independent on the memory fallback', async () => {
     vi.mocked(getRedis).mockRejectedValue(new Error('Redis unreachable'))
-    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(logger, 'warn').mockImplementation(() => {})
     const store = new SharedRateLimitStore('rl:test:')
     store.init(testOptions)
 
@@ -86,7 +87,7 @@ describe('SharedRateLimitStore', () => {
 
   it('decrements and resets a client, delegating to the active backend', async () => {
     vi.mocked(getRedis).mockRejectedValue(new Error('Redis unreachable'))
-    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(logger, 'warn').mockImplementation(() => {})
     const store = new SharedRateLimitStore('rl:test:')
     store.init(testOptions)
 
@@ -131,7 +132,7 @@ describe('SharedRateLimitStore', () => {
         ? Promise.resolve(client as never)
         : Promise.reject(new Error('Redis client is closed; the process is shutting down'))
     )
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
     const store = new SharedRateLimitStore('rl:test:')
     store.init(testOptions)
 

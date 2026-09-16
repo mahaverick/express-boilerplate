@@ -3,6 +3,7 @@ import { type Server } from 'node:http'
 import { createApp } from '@/app'
 import { getEnv } from '@/configs/env.config'
 import { closeDatabase } from '@/services/database.service'
+import { logger } from '@/services/logger.service'
 import { closeRedis } from '@/services/redis.service'
 
 /**
@@ -20,7 +21,7 @@ import { closeRedis } from '@/services/redis.service'
  */
 export function startServer(port: number = getEnv().APP_PORT): Server {
   return createApp().listen(port, () => {
-    console.info(`listening on :${port}`)
+    logger.info(`Listening on :${port}`)
   })
 }
 

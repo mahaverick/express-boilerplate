@@ -36,6 +36,7 @@
 // blocking the module-import path on a network call.
 import { MemoryStore, type IncrementResponse, type Options, type Store } from 'express-rate-limit'
 import { RedisStore } from 'rate-limit-redis'
+import { logger } from '@/services/logger.service'
 import { getRedis } from '@/services/redis.service'
 
 /**
@@ -89,9 +90,7 @@ export class SharedRateLimitStore implements Store {
       await getRedis()
     } catch {
       if (!this.loggedFallback) {
-        console.warn(
-          'rate-limit-store: Redis is not reachable yet; falling back to an in-memory rate-limit store'
-        )
+        logger.warn('Redis is not reachable yet; falling back to an in-memory rate-limit store')
         this.loggedFallback = true
       }
       // Allow a LATER call to retry: this attempt failed before ever

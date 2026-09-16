@@ -63,6 +63,24 @@ until you check.
   JWT/session secrets that have nothing to do with writing a migration. See
   DATABASE.md.
 
+## Logging
+
+- **`logger` from `@/services/logger.service`, not `console.*`.** An ESLint
+  `no-restricted-properties` rule enforces this for `src/`. Two files are
+  exempt: `logger.service.ts` (talks to Winston's console transport and uses
+  `console.error` in the Slack transport's failure path to avoid re-entry) and
+  `index.ts` (pre-boot error path where the logger is not available).
+- **Request-id correlation is automatic.** The `requestContext` middleware
+  wraps each request in an `AsyncLocalStorage` context. The logger reads from
+  it on every call — callers never pass the id. Code outside a request (startup,
+  Redis error handler) simply omits the field.
+- **Caller file:line is automatic.** The logger parses `new Error().stack` on
+  each call. The `[moduleName]` prefixes that some call sites used to include
+  in their messages are redundant — the `source` field handles it.
+- **Slack transport deduplicates by `${source}:${message}`.** The first
+  occurrence sends immediately; duplicates within a 60-second window are
+  suppressed. A summary is sent after the window expires if any were suppressed.
+
 ## Git hooks and CI
 
 - **Pre-commit takes ~4.6s, and that is a deliberate trade, not a
