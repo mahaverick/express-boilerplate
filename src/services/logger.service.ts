@@ -185,13 +185,14 @@ class SlackTransport extends Transport {
       // Direct console.error, NOT logger.error — using the logger here would
       // re-enter this transport's own log() and create a feedback loop where
       // a failed Slack send generates another Slack send that also fails,
-      // forever. This file is also exempted at the file level from
-      // no-restricted-properties (eslint.config.mjs), so the inline disable
-      // below is redundant in principle — but it documents intent at the
-      // call site, and this repo's own `eslint --fix` (run by lint-staged on
-      // every commit) deletes it automatically the moment it becomes an
-      // unused directive, so its presence here costs nothing to keep.
-
+      // forever. No `eslint-disable` comment sits above this line: this
+      // file is exempted at the FILE level from no-restricted-properties
+      // (eslint.config.mjs), which already covers it, and this repo's own
+      // `eslint --fix` (run by lint-staged on every commit) deletes an
+      // inline disable the moment it becomes an unused directive — verified
+      // empirically when Task 3 added the rule and the exemption in the
+      // same commit as an inline disable here; the fix step of the very
+      // commit that added it removed it again.
       console.error('Slack webhook failed', error)
     }
   }
