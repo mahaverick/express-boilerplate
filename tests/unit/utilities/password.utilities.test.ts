@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { BCRYPT_COST, MAX_PASSWORD_BYTES } from '@/constants/auth.constants'
+import { logger } from '@/services/logger.service'
 import { getDummyHash, hashPassword, isPasswordValid } from '@/utilities/password.utilities'
 
 describe('password hashing', () => {
@@ -90,7 +91,7 @@ describe('password hashing', () => {
     // for a malformed-but-string one (see password.utilities.ts) — this
     // exercises that throwing path directly, without depending on bcrypt's
     // internal behaviour for any particular string.
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {})
     try {
       expect(await isPasswordValid('x', undefined as unknown as string)).toBe(false)
       expect(errorSpy).toHaveBeenCalled()

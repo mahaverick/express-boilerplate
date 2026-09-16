@@ -5,6 +5,7 @@
 // a socket — and fail on a machine with no Redis running.
 import { createClient, type RedisClientType } from 'redis'
 import { getEnv } from '@/configs/env.config'
+import { logger } from '@/services/logger.service'
 
 // A mutable property on a top-level `const` (rather than a top-level `let`)
 // so getRedis()/closeRedis() can share state without either function
@@ -49,7 +50,7 @@ export async function getRedis(): Promise<RedisClientType> {
           retries > 3 ? new Error('Redis unreachable') : Math.min(retries * 100, 1000),
       },
     })
-    client.on('error', (error) => console.error('redis error', error))
+    client.on('error', (error: unknown) => logger.error('Redis error', { error }))
     await client.connect()
     state.client = client
   }

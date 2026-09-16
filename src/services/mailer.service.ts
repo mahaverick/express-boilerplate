@@ -92,6 +92,7 @@ import { getMailTransporter } from '@/configs/mailer.config'
 import { UNKNOWN_ERROR_CODE, type NewEmailLog } from '@/database/models/email-log.model'
 import { redactedForLog } from '@/middlewares/error.middleware'
 import { EmailLogRepository } from '@/repositories/email-log.repository'
+import { logger } from '@/services/logger.service'
 import {
   EMAIL_VERIFICATION_TEMPLATE_KEY,
   renderEmailVerificationTemplate,
@@ -317,7 +318,7 @@ async function recordDelivery(entry: NewEmailLog): Promise<void> {
   try {
     await emailLogRepository.record(entry)
   } catch (error) {
-    console.error('Failed to record email delivery log', redactedForLog(error))
+    logger.error('Failed to record email delivery log', { error: redactedForLog(error) })
   }
 }
 
@@ -364,7 +365,7 @@ export async function sendMail(message: MailMessage): Promise<void> {
       providerMessageId: info.messageId,
     }
   } catch (error) {
-    console.error('Mail send failed', redactedMailErrorForLog(error))
+    logger.error('Mail send failed', { error: redactedMailErrorForLog(error) })
     entry = {
       recipient: message.to,
       templateKey: message.templateKey,

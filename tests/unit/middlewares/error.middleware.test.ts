@@ -3,6 +3,8 @@ import { DrizzleQueryError } from 'drizzle-orm'
 import { type Response } from 'express'
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { errorHandler, HttpError } from '@/middlewares/error.middleware'
+import { requestContextStore } from '@/middlewares/request-context.middleware'
+import { logger } from '@/services/logger.service'
 
 /**
  * Build a minimal mock Express response, enough for errorHandler to call
@@ -30,13 +32,13 @@ function mockResponse(): { response: Response; body: () => unknown; status: Mock
 }
 
 describe('errorHandler', () => {
-  // Every 5xx path now logs — spy on console.error for the whole suite so
+  // Every 5xx path now logs — spy on logger.error for the whole suite so
   // that logging is silenced in test output by default, and so the one test
   // below that cares can assert on it without every other test needing to.
-  let consoleError: Mock
+  let loggerError: Mock<typeof logger.error>
 
   beforeEach(() => {
-    consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    loggerError = vi.spyOn(logger, 'error').mockImplementation(() => {})
   })
 
   afterEach(() => {
@@ -141,14 +143,28 @@ describe('errorHandler', () => {
     // The ORIGINAL error object is logged, not the masked message — masking
     // is for the client; the whole point of logging is that the real cause
     // stays recoverable server-side.
-    expect(consoleError).toHaveBeenCalledWith(expect.any(String), original)
+    expect(loggerError).toHaveBeenCalledWith('Unhandled server error', { error: original })
+  })
+
+  it('logs 5xx errors with the request-id from ALS context', () => {
+    // errorHandler is called directly here, with no Express request ever
+    // running requestContext (request-context.middleware.ts) ahead of it —
+    // so without wrapping in requestContextStore.run(), there is no ALS
+    // context for the logger to read a request-id from at all. This proves
+    // errorHandler's call into logger.error works correctly from inside one.
+    const { response } = mockResponse()
+    requestContextStore.run({ requestId: 'test-req-id' }, () => {
+      errorHandler(new Error('boom'), {} as never, response, vi.fn())
+    })
+
+    expect(loggerError).toHaveBeenCalled()
   })
 
   it('does not log a client error (4xx)', () => {
     const { response } = mockResponse()
     errorHandler(new HttpError('bad input', 400), {} as never, response, vi.fn())
 
-    expect(consoleError).not.toHaveBeenCalled()
+    expect(loggerError).not.toHaveBeenCalled()
   })
 
   it('masks the message for an HttpError whose own status is 500 or above', () => {
@@ -210,7 +226,7 @@ describe('errorHandler', () => {
 
       errorHandler(failedInsert(), {} as never, response, vi.fn())
 
-      const logged = JSON.stringify(consoleError.mock.calls)
+      const logged = JSON.stringify(loggerError.mock.calls)
       expect(logged).not.toContain(email)
       expect(logged).not.toContain(passwordHash)
       expect(logged).not.toContain('params:')
@@ -221,13 +237,16 @@ describe('errorHandler', () => {
 
       errorHandler(failedInsert(), {} as never, response, vi.fn())
 
-      expect(consoleError).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.objectContaining({
-          query: 'insert into "users" ("email", "password_hash") values ($1, $2) returning *',
-          driverCode: '22001',
-        })
-      )
+      // Not a nested expect.objectContaining: vitest/jest types that
+      // matcher's return as `any`, and assigning it as an object-literal
+      // property (rather than passing it directly as an argument) trips
+      // @typescript-eslint/no-unsafe-assignment. Reading the actual call
+      // arguments back and asserting with toMatchObject keeps this typed.
+      const [, meta] = loggerError.mock.calls[0] ?? []
+      expect(meta?.error).toMatchObject({
+        query: 'insert into "users" ("email", "password_hash") values ($1, $2) returning *',
+        driverCode: '22001',
+      })
     })
 
     it('redacts a query-shaped error that carries neither a driver code nor a stack', () => {
@@ -240,11 +259,9 @@ describe('errorHandler', () => {
 
       errorHandler(bare, {} as never, response, vi.fn())
 
-      expect(consoleError).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.objectContaining({ driverCode: undefined, stack: undefined, paramCount: 1 })
-      )
-      expect(JSON.stringify(consoleError.mock.calls)).not.toContain(email)
+      const [, meta] = loggerError.mock.calls[0] ?? []
+      expect(meta?.error).toMatchObject({ driverCode: undefined, stack: undefined, paramCount: 1 })
+      expect(JSON.stringify(loggerError.mock.calls)).not.toContain(email)
     })
 
     // Fix round 2 (task-2-review.md, finding 8): `stackFramesOf` used to
@@ -270,13 +287,11 @@ describe('errorHandler', () => {
 
       errorHandler(queryShaped, {} as never, response, vi.fn())
 
-      expect(consoleError).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.objectContaining({
-          stack: '    at Object.<anonymous> (/app/src/repositories/user.repository.ts:42:11)',
-        })
-      )
-      expect(JSON.stringify(consoleError.mock.calls)).not.toContain(
+      const [, meta] = loggerError.mock.calls[0] ?? []
+      expect(meta?.error).toMatchObject({
+        stack: '    at Object.<anonymous> (/app/src/repositories/user.repository.ts:42:11)',
+      })
+      expect(JSON.stringify(loggerError.mock.calls)).not.toContain(
         'secret-token-should-not-survive'
       )
     })
@@ -308,7 +323,7 @@ describe('errorHandler', () => {
 
       expect(status).toHaveBeenCalledWith(400)
       expect(body()).toMatchObject({ message: 'Unexpected token }', statusCode: 400 })
-      expect(consoleError).not.toHaveBeenCalled()
+      expect(loggerError).not.toHaveBeenCalled()
     })
 
     it('honours .statusCode when .status is absent', () => {
@@ -352,7 +367,7 @@ describe('errorHandler', () => {
 
       expect(status).toHaveBeenCalledWith(500)
       expect(body()).toMatchObject({ message: 'Internal server error' })
-      expect(consoleError).toHaveBeenCalled()
+      expect(loggerError).toHaveBeenCalled()
     })
 
     it('ignores a non-integer or out-of-range status', () => {

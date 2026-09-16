@@ -9,14 +9,15 @@
 import request from 'supertest'
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { createApp } from '@/app'
+import { logger } from '@/services/logger.service'
 
 const app = createApp()
 
 describe('body-parser errors reach the client as client errors', () => {
-  let consoleError: Mock
+  let loggerError: Mock
 
   beforeEach(() => {
-    consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    loggerError = vi.spyOn(logger, 'error').mockImplementation(() => {})
   })
 
   afterEach(() => {
@@ -35,11 +36,11 @@ describe('body-parser errors reach the client as client errors', () => {
 
   it('does not log malformed JSON at server severity', async () => {
     // A typo'd client request is not a server fault. Logging it through
-    // console.error dilutes the one signal that branch exists to preserve:
+    // logger.error dilutes the one signal that branch exists to preserve:
     // "we got something wrong".
     await request(app).post('/health').set('Content-Type', 'application/json').send('{"broken":')
 
-    expect(consoleError).not.toHaveBeenCalled()
+    expect(loggerError).not.toHaveBeenCalled()
   })
 
   it('answers 413, not 500, for a body over the 1mb limit', async () => {
@@ -59,7 +60,7 @@ describe('body-parser errors reach the client as client errors', () => {
     const oversize = JSON.stringify({ blob: 'a'.repeat(1024 * 1024) })
     await request(app).post('/health').set('Content-Type', 'application/json').send(oversize)
 
-    expect(consoleError).not.toHaveBeenCalled()
+    expect(loggerError).not.toHaveBeenCalled()
   })
 
   it('still reaches the 404 catch-all for a well-formed body on an unknown route', async () => {

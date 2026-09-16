@@ -24,7 +24,7 @@
 // change closes.
 import { randomBytes, randomUUID } from 'node:crypto'
 import { inspect } from 'node:util'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { getMailTransporter } from '@/configs/mailer.config'
 import {
   emailLogModel,
@@ -35,6 +35,7 @@ import {
 import { HttpError } from '@/middlewares/error.middleware'
 import { EmailLogRepository } from '@/repositories/email-log.repository'
 import { db, sql } from '@/services/database.service'
+import { logger } from '@/services/logger.service'
 import { sendMail, type MailMessage } from '@/services/mailer.service'
 import { renderEmailVerificationTemplate } from '@/templates/email/email-verification.template'
 import { renderPasswordResetTemplate } from '@/templates/email/password-reset.template'
@@ -513,21 +514,22 @@ describe('sendMail', () => {
     // > MAX_EMAIL_LENGTH (320): email-log.model.ts's recipient width.
     const overWidthRecipient = `${'a'.repeat(400)}@example.test`
 
-    // Plain property assignment, not vi.spyOn — mirrors tests/helpers/mutate.ts's
-    // own stated reason for the identical choice (its header comment): no
-    // mocking-framework state to reconcile with this project's vitest
-    // config, which sets neither restoreMocks nor mockReset. Verified
-    // empirically that this matters here, not just in mutate.ts: vi.spyOn(
-    // console, 'error') reliably missed the call this specific test needs to
-    // capture, while capturing an identical call in isolated repro files —
-    // this project's own console-interception layer appears to reset a
-    // vi.spyOn wrapper mid-test under some condition not tracked down
-    // further; a plain reassignment has no such state to lose.
-    const capturedErrorCalls: unknown[][] = []
-    const originalConsoleError = console.error
-    console.error = (...callArguments: unknown[]): void => {
-      capturedErrorCalls.push(callArguments)
-    }
+    // vi.spyOn on logger.error, not a plain reassignment: the original
+    // console-interception unreliability this comment used to describe was
+    // specific to the `console` global — some layer of the test/runtime
+    // stack appeared to reset a vi.spyOn wrapper against it mid-test, under
+    // a condition never fully tracked down. `logger` is a plain
+    // module-scope object exported from logger.service.ts, not a global
+    // anything intercepts or rewraps, so vi.spyOn against it is reliable.
+    // `.mockRestore()` in a `finally`, not a bare afterEach: this project's
+    // vitest config sets neither restoreMocks nor mockReset
+    // (tests/helpers/mutate.ts's header comment gives the identical reason
+    // for withMutatedMethod/withMutatedModule's own restore-in-finally
+    // shape), so nothing else undoes this spy if the test doesn't.
+    const capturedErrorCalls: [string, Record<string, unknown> | undefined][] = []
+    const loggerErrorSpy = vi.spyOn(logger, 'error').mockImplementation((message, meta) => {
+      capturedErrorCalls.push([message, meta])
+    })
     try {
       await withMutatedMethod(
         EmailLogRepository.prototype,
@@ -550,23 +552,23 @@ describe('sendMail', () => {
           )
         }
       )
-    } finally {
-      console.error = originalConsoleError
-    }
 
-    const recordFailureCall = capturedErrorCalls.find(
-      (call) => call[0] === 'Failed to record email delivery log'
-    )
-    expect(recordFailureCall).toBeDefined()
-    const logged = recordFailureCall?.[1] as { driverCode?: unknown } | undefined
-    // The real property: the recipient address never appears anywhere in
-    // what was logged, whether as a top-level field or buried inside a
-    // bound parameter value.
-    expect(JSON.stringify(logged)).not.toContain(overWidthRecipient)
-    // Not simply omitted by accident — the driver's own SQLSTATE code
-    // (22001, string data right truncation) survives, which is what makes
-    // the log line still worth having at all.
-    expect(logged?.driverCode).toBeDefined()
+      const recordFailureCall = capturedErrorCalls.find(
+        (call) => call[0] === 'Failed to record email delivery log'
+      )
+      expect(recordFailureCall).toBeDefined()
+      const logged = recordFailureCall?.[1] as { error?: { driverCode?: unknown } } | undefined
+      // The real property: the recipient address never appears anywhere in
+      // what was logged, whether as a top-level field or buried inside a
+      // bound parameter value.
+      expect(JSON.stringify(logged)).not.toContain(overWidthRecipient)
+      // Not simply omitted by accident — the driver's own SQLSTATE code
+      // (22001, string data right truncation) survives, which is what makes
+      // the log line still worth having at all.
+      expect(logged?.error?.driverCode).toBeDefined()
+    } finally {
+      loggerErrorSpy.mockRestore()
+    }
 
     // No row to clean up: the insert genuinely failed and nothing landed.
 
@@ -596,13 +598,12 @@ describe('sendMail', () => {
     // catch — the one that actually receives the SMTP server's echoed
     // reply — had none. Reverting `redactedMailErrorForLog(error)` to plain
     // `error` in that catch made every test in this file still pass before
-    // this addition. Plain console.error reassignment, not vi.spyOn — same
-    // reasoning as the sibling test in this file.
-    const capturedErrorCalls: unknown[][] = []
-    const originalConsoleError = console.error
-    console.error = (...callArguments: unknown[]): void => {
-      capturedErrorCalls.push(callArguments)
-    }
+    // this addition. vi.spyOn(logger, 'error'), not a plain reassignment —
+    // same reasoning as the sibling test above in this file.
+    const capturedErrorCalls: [string, Record<string, unknown> | undefined][] = []
+    const loggerErrorSpy = vi.spyOn(logger, 'error').mockImplementation((message, meta) => {
+      capturedErrorCalls.push([message, meta])
+    })
     try {
       await withMutatedMethod(
         transporter,
@@ -618,52 +619,52 @@ describe('sendMail', () => {
           ).resolves.toBeUndefined()
         }
       )
+
+      // Read the table directly — not record()'s return value, not
+      // findByRecipient — a proof that only reads back its own argument
+      // proves nothing about what actually landed on disk (the same
+      // reasoning task-4-report.md gives for the identical proof one layer
+      // down).
+      const [row] = await sql`select * from email_logs where recipient = ${recipient}`
+      if (row) createdLogIds.push(row.id as string)
+
+      expect(row).toBeDefined()
+      // Positive claim (Ruling O, this task's dispatch): the recipient IS the
+      // address actually mailed, not derived from the error in any way.
+      expect(row?.recipient).toBe(recipient)
+      expect(row?.error_code).toBe(UNKNOWN_ERROR_CODE)
+      const serializedRow = JSON.stringify(row)
+      expect(serializedRow).not.toContain(rawToken)
+      expect(serializedRow).not.toContain(resetUrl)
+      expect(serializedRow).not.toContain('550 rejected')
+
+      // The log-stream half: what actually reached logger.error for the
+      // SEND failure (distinct from recordDelivery's own 'Failed to record
+      // email delivery log' line, which this test never triggers — the log
+      // write itself succeeds).
+      //
+      // util.inspect, NOT JSON.stringify, on the captured payload — verified
+      // empirically that this distinction is load-bearing, not stylistic:
+      // `JSON.stringify(new Error('...'))` is `"{}"`, because Error's own
+      // `message`/`stack` are NON-ENUMERABLE own properties, which
+      // JSON.stringify skips. A plain `JSON.stringify(sendFailureCall?.[1])`
+      // check here would have reported "clean" whether or not the code
+      // redacted anything — the exact "gate that reports success while
+      // enforcing nothing" pattern this fix round exists to close, and it
+      // would have shipped inside the test meant to prove the fix.
+      // util.inspect is what Node's own console formatting actually uses for
+      // a non-string argument, so it reveals an Error's message the way a
+      // real operator's terminal or log aggregator would.
+      const sendFailureCall = capturedErrorCalls.find((call) => call[0] === 'Mail send failed')
+      expect(sendFailureCall).toBeDefined()
+      // eslint-disable-next-line unicorn/no-null -- node:util's own inspect() API requires literal null for "unlimited depth"
+      const inspectedLogged = inspect(sendFailureCall?.[1], { depth: null })
+      expect(inspectedLogged).not.toContain(rawToken)
+      expect(inspectedLogged).not.toContain(resetUrl)
+      expect(inspectedLogged).not.toContain('550 rejected')
     } finally {
-      console.error = originalConsoleError
+      loggerErrorSpy.mockRestore()
     }
-
-    // Read the table directly — not record()'s return value, not
-    // findByRecipient — a proof that only reads back its own argument
-    // proves nothing about what actually landed on disk (the same
-    // reasoning task-4-report.md gives for the identical proof one layer
-    // down).
-    const [row] = await sql`select * from email_logs where recipient = ${recipient}`
-    if (row) createdLogIds.push(row.id as string)
-
-    expect(row).toBeDefined()
-    // Positive claim (Ruling O, this task's dispatch): the recipient IS the
-    // address actually mailed, not derived from the error in any way.
-    expect(row?.recipient).toBe(recipient)
-    expect(row?.error_code).toBe(UNKNOWN_ERROR_CODE)
-    const serializedRow = JSON.stringify(row)
-    expect(serializedRow).not.toContain(rawToken)
-    expect(serializedRow).not.toContain(resetUrl)
-    expect(serializedRow).not.toContain('550 rejected')
-
-    // The log-stream half: what actually reached console.error for the
-    // SEND failure (distinct from recordDelivery's own 'Failed to record
-    // email delivery log' line, which this test never triggers — the log
-    // write itself succeeds).
-    //
-    // util.inspect, NOT JSON.stringify, on the captured payload — verified
-    // empirically that this distinction is load-bearing, not stylistic:
-    // `JSON.stringify(new Error('...'))` is `"{}"`, because Error's own
-    // `message`/`stack` are NON-ENUMERABLE own properties, which
-    // JSON.stringify skips. A plain `JSON.stringify(sendFailureCall?.[1])`
-    // check here would have reported "clean" whether or not the code
-    // redacted anything — the exact "gate that reports success while
-    // enforcing nothing" pattern this fix round exists to close, and it
-    // would have shipped inside the test meant to prove the fix.
-    // util.inspect is what Node's own console formatting actually uses for
-    // a non-string argument, so it reveals an Error's message the way a
-    // real operator's terminal or log aggregator would.
-    const sendFailureCall = capturedErrorCalls.find((call) => call[0] === 'Mail send failed')
-    expect(sendFailureCall).toBeDefined()
-    // eslint-disable-next-line unicorn/no-null -- node:util's own inspect() API requires literal null for "unlimited depth"
-    const inspectedLogged = inspect(sendFailureCall?.[1], { depth: null })
-    expect(inspectedLogged).not.toContain(rawToken)
-    expect(inspectedLogged).not.toContain(resetUrl)
-    expect(inspectedLogged).not.toContain('550 rejected')
   })
 
   it('carries a real nodemailer error code through to the log unchanged', async () => {

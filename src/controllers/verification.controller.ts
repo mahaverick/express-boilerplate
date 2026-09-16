@@ -16,6 +16,7 @@ import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/middlewares/error.middleware'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
+import { logger } from '@/services/logger.service'
 import { getDummyHash, isPasswordValid } from '@/utilities/password.utilities'
 import { successResponse } from '@/utilities/response.utilities'
 import { claimToken } from '@/utilities/token.utilities'
@@ -145,7 +146,7 @@ export async function resendVerification(
 
     // eslint-disable-next-line unicorn/prefer-await -- fire-and-forget: the mail must not block the response, and awaiting would make the two branches differ by SMTP latency (Ruling T; see auth.controller.ts's register for the identical pattern)
     resendVerificationMail(user).catch((error: unknown) => {
-      console.error('Resend verification mail failed', error)
+      logger.error('Resend verification mail failed', { error })
     })
   } catch (error) {
     next(error)
