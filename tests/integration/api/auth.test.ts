@@ -25,9 +25,10 @@ import type { EmailJobData } from '@/jobs/email.job'
 import { HttpError } from '@/middlewares/error.middleware'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
-import { closeQueue, getEmailQueue } from '@/services/queue.service'
+import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
 import * as passwordUtilities from '@/utilities/password.utilities'
 import { startEmailWorker } from '@/workers/email.worker'
+import { startNotificationWorker } from '@/workers/notification.worker'
 import {
   deleteMailpitMessage,
   drainMailpit,
@@ -39,23 +40,29 @@ import { withMutatedMethod } from '../../helpers/mutate'
 const app = createApp()
 const userRepository = new UserRepository()
 
-// register/resendVerification now enqueue via BullMQ (addEmailJob) instead
-// of calling sendMail() directly — nothing in this file's own request cycle
-// ever processes that job, so without a live Worker every `findMailpitMessages`
-// assertion below would poll its budget and find nothing, and every
-// `assertNoMailpitMessage`-shaped assertion would pass for the wrong reason.
-// One Worker for the whole file (not one per test) — Worker construction
-// opens a real connection and BullMQ blocking commands, which is not
-// something to pay for per test.
+// register/resendVerification now enqueue via BullMQ (addNotificationJob for
+// verification mail, addEmailJob directly for the registration-attempt
+// notice) instead of calling sendMail() directly — nothing in this file's own
+// request cycle ever processes those jobs, so without live Workers every
+// `findMailpitMessages` assertion below would poll its budget and find
+// nothing, and every `assertNoMailpitMessage`-shaped assertion would pass for
+// the wrong reason. The notification worker is required too: a verification
+// email only reaches the "email" queue AFTER the notification worker fans
+// the notification job out to it. One Worker of each kind for the whole file
+// (not one per test) — Worker construction opens a real connection and
+// BullMQ blocking commands, which is not something to pay for per test.
 const worker: Worker<EmailJobData> = startEmailWorker()
+const notificationWorker = startNotificationWorker()
 
 afterAll(async () => {
-  // Same ordering as tests/integration/workers/email.worker.test.ts: worker
+  // Same ordering as tests/integration/workers/email.worker.test.ts: workers
   // first (drains anything in flight), then obliterate so no job this file
   // enqueued lingers under this vitest worker's shared QUEUE_PREFIX for the
   // next test file to trip over, then the shared connection.
   await worker.close()
+  await notificationWorker.close()
   await getEmailQueue().obliterate({ force: true })
+  await getNotificationQueue().obliterate({ force: true })
   await closeQueue()
 })
 
@@ -333,6 +340,19 @@ describe('POST /api/v1/auth/register and /login', () => {
       const detail = await getMailpitMessage(messages[0]?.ID ?? '')
       expect(detail.Text).toContain('/verify-email?token=')
       await deleteMailpitMessage(messages[0]?.ID ?? '')
+
+      // The actual proof that sendVerificationMail now routes through
+      // addNotificationJob rather than addEmailJob directly: an in-app row
+      // must also exist. No race to poll for — processNotificationJob
+      // (notification.worker.ts) inserts this row BEFORE it enqueues the
+      // paired email, so Mailpit already having the message above proves
+      // this row was written first.
+      const user = await userRepository.findByEmail(email)
+      if (!user) throw new Error('mails a verification link: no stored row')
+      const notifications = await sql`
+        select * from notifications where user_id = ${user.id} and type = 'verify_email'
+      `
+      expect(notifications).toHaveLength(1)
     })
 
     it('mails a registration-attempt notice to a taken address', async () => {

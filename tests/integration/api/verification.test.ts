@@ -20,11 +20,12 @@ import type { User } from '@/database/models/user.model'
 import type { EmailJobData } from '@/jobs/email.job'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
-import { closeQueue, getEmailQueue } from '@/services/queue.service'
+import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
 import { getRedis } from '@/services/redis.service'
 import { hashPassword } from '@/utilities/password.utilities'
 import { issueToken } from '@/utilities/token.utilities'
 import { startEmailWorker } from '@/workers/email.worker'
+import { startNotificationWorker } from '@/workers/notification.worker'
 import {
   assertNoMailpitMessage,
   drainMailpit,
@@ -36,15 +37,21 @@ const app = createApp()
 const userRepository = new UserRepository()
 
 // verifyEmail/resendVerification/register now enqueue via BullMQ
-// (addEmailJob) instead of calling sendMail() directly — see
+// (addNotificationJob for verification mail, addEmailJob directly for the
+// registration-attempt notice) instead of calling sendMail() directly — see
 // tests/integration/api/auth.test.ts's identical comment for why every
-// mail-delivery assertion in this file needs a live Worker to actually
-// process what these endpoints enqueue.
+// mail-delivery assertion in this file needs both a live email Worker AND a
+// live notification Worker to actually process what these endpoints
+// enqueue: a verification email only lands on the "email" queue after the
+// notification worker fans the notification job out to it.
 const worker: Worker<EmailJobData> = startEmailWorker()
+const notificationWorker = startNotificationWorker()
 
 afterAll(async () => {
   await worker.close()
+  await notificationWorker.close()
   await getEmailQueue().obliterate({ force: true })
+  await getNotificationQueue().obliterate({ force: true })
   await closeQueue()
 })
 
