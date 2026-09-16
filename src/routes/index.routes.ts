@@ -14,6 +14,7 @@
 // `app.use(...)` in app.ts.
 import { Router } from 'express'
 import { createAuthRouter } from '@/routes/auth.routes'
+import { createNotificationRouter } from '@/routes/notification.routes'
 import { createProfileRouter } from '@/routes/profile.routes'
 
 /**
@@ -25,5 +26,6 @@ export function createApiRouter(): Router {
   const router = Router()
   router.use('/auth', createAuthRouter())
   router.use('/profile', createProfileRouter())
+  router.use('/notifications', createNotificationRouter())
   return router
 }
