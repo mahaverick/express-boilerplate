@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { BCRYPT_COST, MAX_PASSWORD_BYTES } from '@/constants/auth.constants'
-import { hashPassword, isPasswordValid } from '@/utilities/password.utilities'
+import { getDummyHash, hashPassword, isPasswordValid } from '@/utilities/password.utilities'
 
 describe('password hashing', () => {
   it('produces a verifiable hash', async () => {
@@ -97,5 +97,26 @@ describe('password hashing', () => {
     } finally {
       errorSpy.mockRestore()
     }
+  })
+})
+
+describe('getDummyHash', () => {
+  it('returns a bcrypt hash that no real password validates against', async () => {
+    const hash = await getDummyHash()
+
+    expect(hash).toMatch(/^\$2[aby]\$/)
+    expect(await isPasswordValid('not-a-real-password-used-only-to-pay-bcrypts-cost', hash)).toBe(
+      true
+    )
+  })
+
+  it('memoises, so the bcrypt cost is paid once per process', async () => {
+    const first = await getDummyHash()
+    const second = await getDummyHash()
+
+    // Identity, not equality: bcrypt salts every call, so two separate
+    // hashings of the same string would NOT be equal. Same string object
+    // is the only thing that proves the cache was used.
+    expect(second).toBe(first)
   })
 })

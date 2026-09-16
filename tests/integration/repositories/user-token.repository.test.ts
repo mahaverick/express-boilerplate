@@ -6,10 +6,13 @@
 // (ON DELETE CASCADE on user_tokens.user_id) to every token row it owns, so
 // there is nothing separate to clean up there.
 import { randomBytes, randomUUID } from 'node:crypto'
+import { and, eq } from 'drizzle-orm'
 import { afterEach, describe, expect, it } from 'vitest'
+import { userTokenModel } from '@/database/models/user-token.model'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
-import { sql } from '@/services/database.service'
+import { db, sql } from '@/services/database.service'
+import { issueRefreshToken, issueToken, rotateRefreshToken } from '@/utilities/token.utilities'
 
 const userRepository = new UserRepository()
 const userTokenRepository = new UserTokenRepository()
@@ -295,5 +298,36 @@ describe('UserTokenRepository', () => {
 
     const rows = await sql`select 1 from user_tokens where id = ${created.id}`
     expect(rows).toHaveLength(0)
+  })
+
+  describe('revokeAllForUserAndPurpose', () => {
+    it('revokes the named purpose and leaves a live refresh token alone', async () => {
+      const userId = await createUser()
+      const refresh = await issueRefreshToken(userId, randomUUID())
+      await issueToken(userId, 'email_verification', 60_000)
+
+      await userTokenRepository.revokeAllForUserAndPurpose(userId, 'email_verification')
+
+      // This assertion is the entire reason the method exists.
+      // revokeAllForUser matches on userId ALONE, so calling it here would
+      // silently log the user out of every device as a side effect of them
+      // asking for a verification mail.
+      expect(await rotateRefreshToken(refresh.raw)).toBeDefined()
+
+      // IssuedToken (token.utilities.ts) carries no row id, and hashToken
+      // is not exported, so the verification row is identified by
+      // userId + purpose rather than by hash or id.
+      const [remaining] = await db
+        .select()
+        .from(userTokenModel)
+        .where(
+          and(eq(userTokenModel.userId, userId), eq(userTokenModel.purpose, 'email_verification'))
+        )
+      // Proves a row was actually found — `remaining?.revokedAt` alone
+      // passes when `remaining` is `undefined` too, which would prove
+      // nothing about revocation.
+      expect(remaining).toBeDefined()
+      expect(remaining?.revokedAt).not.toBeNull()
+    })
   })
 })

@@ -155,4 +155,39 @@ describe('UserRepository', () => {
     )
     expect(updated?.firstName).toBe('Ghost')
   })
+
+  describe('markEmailVerified', () => {
+    it('sets email_verified_at and bumps updated_at', async () => {
+      const user = await userRepository.create({ email: uniqueEmail(), passwordHash: 'x' })
+      createdIds.push(user.id)
+
+      const verified = await userRepository.markEmailVerified(user.id)
+
+      expect(verified?.emailVerifiedAt).toBeInstanceOf(Date)
+      expect(verified?.updatedAt.getTime()).toBeGreaterThan(user.updatedAt.getTime())
+    })
+
+    it('leaves an already-verified timestamp untouched and returns undefined', async () => {
+      const user = await userRepository.create({ email: uniqueEmail(), passwordHash: 'x' })
+      createdIds.push(user.id)
+      const first = await userRepository.markEmailVerified(user.id)
+      // Must prove the first call actually verified the row — otherwise
+      // `first?.emailVerifiedAt` below is `undefined`, and comparing it
+      // against a second `undefined` would pass without proving anything.
+      expect(first).toBeDefined()
+
+      const second = await userRepository.markEmailVerified(user.id)
+
+      // undefined is SUCCESS here, not failure — it is how the caller learns
+      // the row was already verified. verification.controller.ts depends on
+      // this: a second valid token must answer 200, not 400.
+      expect(second).toBeUndefined()
+      const reread = await userRepository.findById(user.id)
+      expect(reread?.emailVerifiedAt?.getTime()).toBe(first?.emailVerifiedAt?.getTime())
+    })
+
+    it('returns undefined for a user that does not exist', async () => {
+      expect(await userRepository.markEmailVerified(randomUUID())).toBeUndefined()
+    })
+  })
 })

@@ -120,16 +120,32 @@ B2 left registration as a bounded-but-open enumeration oracle: a duplicate addre
 
 **Files:** Create `src/controllers/recovery.controller.ts`, `src/validators/recovery.validators.ts`, `src/routes/recovery.routes.ts`; modify `src/routes/index.routes.ts`.
 
+**A successful reset must also set `emailVerifiedAt`.** Task 5 shipped
+`POST /auth/verify-email` requiring `{ token, password }`, specifically
+because a token alone cannot distinguish the mailbox owner from an attacker
+who squatted the address with a password of their own choosing (see
+SECURITY.md's "Email verification" section and the design doc's
+"Squatting" section for the full argument). Clicking a **reset** link is
+the same proof of mailbox control that a verify link is — the caller
+received it at the address in question — so a reset that changes the
+password without also setting `emailVerifiedAt` leaves a squatted address
+permanently unverified even after its real owner has proven they control
+the mailbox. This is not an incidental side effect to add if convenient:
+until this task sets the column, a squatted, unverified address recorded in
+SECURITY.md as an open gap has **no** recovery route at all, and this is
+the only one. Do not scope this task as "change the password" alone.
+
 - [ ] **Step 1: Write the failing tests.**
   - `POST /auth/forgot-password` returns an **identical** response for a registered and an unregistered address.
   - A registered address receives a reset email; an unregistered one receives **nothing** — and no error is raised.
   - `POST /auth/reset-password` with a valid token sets the new password and **consumes** the token.
+  - **A successful reset sets `emailVerifiedAt` when it was previously null** — the squatted-address recovery path above — and leaves it unchanged (still set) when the account was already verified.
   - The same token fails the second time.
   - An `email_verification` token is rejected by the reset endpoint.
   - **A successful reset revokes every existing session** — the user's other refresh tokens stop working. This is the property that matters: a password reset that leaves an attacker's session alive has achieved nothing.
   - The new password must satisfy the same policy registration enforces.
 - [ ] **Step 2: Run and verify they fail.**
-- [ ] **Step 3: Implement.** Reset tokens get a **short** TTL — an hour, not a day — and it goes in `EnvSchema` so it is visible and changeable.
+- [ ] **Step 3: Implement.** Reset tokens get a **short** TTL — an hour, not a day — and it goes in `EnvSchema` so it is visible and changeable. The password update and the `emailVerifiedAt` write are one successful reset, not two independent decisions — implement both before calling this task done.
 - [ ] **Step 4: Verify and commit.**
 
 ---
@@ -273,12 +289,22 @@ No plan owns adding retention. A derived project must add it (cron, `pg_cron`, o
 a queue). This was to be documented in Task 8, which was not built; it is
 recorded here instead so it is not lost.
 
-## Also unbuilt
+## Also unbuilt (as of 2026-09-15, when B3 stopped)
 
-`POST /auth/resend-verification` (Task 5), forgot/reset password (Task 6), rate
-limiting for all of those (Task 7), and the documentation pass (Task 8). The
-`users.email_verified_at` column exists and is still written by nothing — the
-"B3 seam" described in ARCHITECTURE.md remains a seam.
+`POST /auth/verify-email`, `POST /auth/resend-verification` (Task 5), forgot/reset
+password (Task 6), rate limiting for all of those (Task 7), and the
+documentation pass (Task 8). The `users.email_verified_at` column exists and is
+still written by nothing — the "B3 seam" described in ARCHITECTURE.md remains a
+seam.
+
+**Resumed 2026-09-16, on `feat/verify-email`.** Task 5 (verification,
+`resend-verification`, and the `login` guard from finding 1 above) and the
+`/verify-email`/`resend-verification` slice of Task 7's rate limiting are now
+built — see `docs/superpowers/specs/2026-09-15-verify-email-and-login-timestamps-design.md`
+and ARCHITECTURE.md's "B3 seam" section, which is no longer a seam for
+verification. Task 6 (forgot/reset password), the rest of Task 7
+(`/forgot-password`/`/reset-password` limiters), and Task 8 (the full
+documentation pass) remain unbuilt; see `plans/README.md`'s B3 row.
 
 ## Known open findings in the MERGED code (Task 3 review, fix round not completed)
 

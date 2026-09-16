@@ -229,7 +229,15 @@ describe('store prefixes', () => {
   )
 
   it('builds one store per limiter, each with its own prefix', () => {
-    expect(prefixes).toEqual(['rl:register:', 'rl:login:', 'rl:refresh:', 'rl:logout:'])
+    expect(prefixes).toEqual([
+      'rl:register:',
+      'rl:login:',
+      'rl:refresh:',
+      'rl:logout:',
+      'rl:verify-email:',
+      'rl:resend-verification-ip:',
+      'rl:resend-verification-email:',
+    ])
   })
 
   it('never reuses a prefix across two limiters', () => {

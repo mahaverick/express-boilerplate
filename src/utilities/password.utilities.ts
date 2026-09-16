@@ -77,3 +77,43 @@ export async function isPasswordValid(plain: string, hash: string): Promise<bool
     return false
   }
 }
+
+/**
+ * A fixed, non-secret plaintext — never a real password, never compared
+ * against a real account. Hashed lazily (only once actually needed) and
+ * memoised for the life of the process, using the SAME `hashPassword` every
+ * real password goes through — so it always costs the current BCRYPT_COST,
+ * never a stale cost captured in a hard-coded hash string that would
+ * silently stop matching the moment that constant changes and quietly
+ * reopen the timing gap this exists to close.
+ *
+ * That closes the STALE DUMMY half of the problem, and only that half. The
+ * dummy tracks BCRYPT_COST; a stored hash does not — bcrypt encodes the
+ * cost it was written with, so an existing row keeps verifying at that
+ * cost forever. Raise BCRYPT_COST and the two stop agreeing, inverted:
+ * existing users verify more cheaply than the dummy, and an unknown email
+ * becomes measurably SLOWER than a wrong password rather than identical.
+ * Nothing this function can do fixes that — there is no single cost that
+ * matches every row. The remedy (rehash-on-successful-login) and the
+ * decision it belongs to are documented on BCRYPT_COST itself
+ * (auth.constants.ts), which is where someone about to raise the cost is
+ * actually looking.
+ *
+ * The memoisation cache lives inside this IIFE's closure rather than as a
+ * top-level module variable, mirroring env.config.ts's `getEnv` — satisfying
+ * unicorn/no-top-level-assignment-in-function without disabling it.
+ *
+ * Used by auth.controller.ts's `login` so an unknown email still pays a
+ * real bcrypt compare — see login's own header comment for why that
+ * matters. Lives here, not in auth.controller.ts, so any other caller
+ * needing the same constant-time handling can reuse it without paying a
+ * second bcrypt cost to keep in step with BCRYPT_COST.
+ * @returns A memoised promise of a bcrypt hash of a fixed, non-secret plaintext.
+ */
+export const getDummyHash: () => Promise<string> = (() => {
+  let cached: Promise<string> | undefined
+  return (): Promise<string> => {
+    cached ??= hashPassword('not-a-real-password-used-only-to-pay-bcrypts-cost')
+    return cached
+  }
+})()

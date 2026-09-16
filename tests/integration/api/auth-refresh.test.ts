@@ -18,9 +18,12 @@ import request from 'supertest'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
 import { REFRESH_TOKEN_COOKIE_NAME } from '@/constants/auth.constants'
+import type { User } from '@/database/models/user.model'
+import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 
 const app = createApp()
+const userRepository = new UserRepository()
 
 const VALID_PASSWORD = 'correct horse battery staple'
 
@@ -69,19 +72,63 @@ function refreshCookiePair(response: request.Response): string | undefined {
 }
 
 /**
- * Register and log in a fresh user through the real HTTP endpoints.
+ * Register a fresh user, mark them verified, and log in through the real
+ * HTTP endpoints.
+ *
+ * Looked up by address rather than read out of the register response body.
+ * register's response does not carry the user any more (it would be an
+ * enumeration oracle), and a helper that reads `registerBody.data.id`
+ * does not FAIL when that becomes null — it silently stops tracking the
+ * row and leaks it into the shared worker database.
  * @param createdIds - Array to push the created user's id onto, for `afterEach` cleanup.
- * @returns The login response (carrying the refresh cookie and the first access token).
+ * @returns The login response, the email used, and the verified user row.
  */
-async function registerAndLogin(createdIds: string[]): Promise<request.Response> {
+async function registerAndLogin(
+  createdIds: string[]
+): Promise<{ response: request.Response; email: string; user: User }> {
   const email = uniqueEmail()
-  const registerResponse = await request(app)
-    .post('/api/v1/auth/register')
-    .send({ email, password: VALID_PASSWORD })
-  const registerBody = envelopeOf<{ id: string }>(registerResponse)
-  if (registerBody.data) createdIds.push(registerBody.data.id)
+  await request(app).post('/api/v1/auth/register').send({ email, password: VALID_PASSWORD })
+  const user = await userRepository.findByEmail(email)
+  if (!user) throw new Error(`registerAndLogin: no user for ${email}`)
+  createdIds.push(user.id)
+  await sql`update users set email_verified_at = now() where id = ${user.id}`
 
-  return request(app).post('/api/v1/auth/login').send({ email, password: VALID_PASSWORD })
+  const response = await request(app)
+    .post('/api/v1/auth/login')
+    .send({ email, password: VALID_PASSWORD })
+  return { response, email, user }
+}
+
+/**
+ * Register a user through the real HTTP endpoint, look it up, track it for
+ * cleanup, and mark it verified.
+ *
+ * Own copy of auth.test.ts's helper of the same name, not a shared import:
+ * this file's helpers take `createdIds` as a parameter (see
+ * `registerAndLogin` above) rather than closing over a describe-scoped
+ * array, so the signature follows this file's own convention instead of
+ * the other file's.
+ *
+ * Marked verified even though nothing checks it yet — a later task adds
+ * the email-verification gate to login, and a helper that marks from the
+ * start means a test built on it keeps testing what it claims to test
+ * instead of quietly starting to pass for the wrong reason (login itself
+ * getting rejected pre-gate would make a before/after comparison of two
+ * `null`s look like proof rotation doesn't write, when it would really be
+ * proof login never happened).
+ * @param createdIds - Array to push the created user's id onto, for `afterEach` cleanup.
+ * @returns The seeded (verified) user row and the email it was registered with.
+ */
+async function seedLoginableUser(createdIds: string[]): Promise<{ user: User; email: string }> {
+  const email = uniqueEmail()
+  await request(app).post('/api/v1/auth/register').send({ email, password: VALID_PASSWORD })
+  const user = await userRepository.findByEmail(email)
+  if (!user) throw new Error(`seedLoginableUser: no user for ${email}`)
+  createdIds.push(user.id)
+  await sql`update users set email_verified_at = now() where id = ${user.id}`
+  const verified = await userRepository.findById(user.id)
+  if (!verified) throw new Error(`seedLoginableUser: user vanished for ${email}`)
+  return { user: verified, email }
 }
 
 describe('POST /api/v1/auth/refresh and /logout', () => {
@@ -95,7 +142,7 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
 
   describe('refresh', () => {
     it('rotates: returns a new access/refresh pair, and the new refresh token is itself usable', async () => {
-      const loginResponse = await registerAndLogin(createdIds)
+      const { response: loginResponse } = await registerAndLogin(createdIds)
       const loginBody = envelopeOf<{ accessToken: string }>(loginResponse)
       const firstCookie = refreshCookiePair(loginResponse)
       expect(firstCookie).toBeDefined()
@@ -129,7 +176,7 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
     })
 
     it('invalidates the old refresh token: presenting it again after rotation fails', async () => {
-      const loginResponse = await registerAndLogin(createdIds)
+      const { response: loginResponse } = await registerAndLogin(createdIds)
       const originalCookie = refreshCookiePair(loginResponse) as string
 
       // Consume it once — a legitimate rotation.
@@ -146,11 +193,33 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
       const response = await request(app).post('/api/v1/auth/refresh')
       expect(response.status).toBe(401)
     })
+
+    it('does not record lastLoggedInAt on refresh — a rotation is not a sign-in', async () => {
+      const { user, email } = await seedLoginableUser(createdIds)
+      const login = await request(app)
+        .post('/api/v1/auth/login')
+        .send({ email, password: VALID_PASSWORD })
+      expect(login.status).toBe(200)
+      const before = await userRepository.findById(user.id)
+      // Without this, a before/after comparison of two `null`s (e.g. login
+      // itself failing) would look identical to proof that refresh doesn't
+      // write — pin that login actually recorded a sign-in first.
+      expect(before?.lastLoggedInAt).toBeInstanceOf(Date)
+
+      await request(app)
+        .post('/api/v1/auth/refresh')
+        // The raw Set-Cookie line, replayable verbatim — this file's own
+        // helper, not a hand-built cookie.
+        .set('Cookie', refreshCookiePair(login) as string)
+
+      const after = await userRepository.findById(user.id)
+      expect(after?.lastLoggedInAt?.getTime()).toBe(before?.lastLoggedInAt?.getTime())
+    })
   })
 
   describe('logout', () => {
     it('revokes the session: a subsequent refresh with that token fails', async () => {
-      const loginResponse = await registerAndLogin(createdIds)
+      const { response: loginResponse } = await registerAndLogin(createdIds)
       const cookie = refreshCookiePair(loginResponse) as string
 
       const logoutResponse = await request(app).post('/api/v1/auth/logout').set('Cookie', cookie)
@@ -163,7 +232,7 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
     })
 
     it('clears the refresh-token cookie in its own response', async () => {
-      const loginResponse = await registerAndLogin(createdIds)
+      const { response: loginResponse } = await registerAndLogin(createdIds)
       const cookie = refreshCookiePair(loginResponse) as string
 
       const logoutResponse = await request(app).post('/api/v1/auth/logout').set('Cookie', cookie)
@@ -177,7 +246,7 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
     })
 
     it('answers identically for an already-revoked token as for one that never existed', async () => {
-      const loginResponse = await registerAndLogin(createdIds)
+      const { response: loginResponse } = await registerAndLogin(createdIds)
       const cookie = refreshCookiePair(loginResponse) as string
       await request(app).post('/api/v1/auth/logout').set('Cookie', cookie)
 

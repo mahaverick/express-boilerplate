@@ -29,6 +29,7 @@ export default tseslint.config(
       'node_modules/**',
       'tests/fixtures/**',
       'src/lint-fixtures/**',
+      '.worktrees/**',
     ],
   },
   js.configs.recommended,

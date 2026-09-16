@@ -1,8 +1,8 @@
 // src/routes/auth.routes.ts
 //
-// Registration, login, refresh, and logout — all four share the one
-// `/api/v1/auth` mount point wired in index.routes.ts, so they live in this
-// one router.
+// Registration, login, refresh, logout, verify-email, and
+// resend-verification — all six share the one `/api/v1/auth` mount point
+// wired in index.routes.ts, so they live in this one router.
 //
 // Built and returned by a function, not registered as a top-level side
 // effect on an exported const: the latter is exactly what
@@ -13,20 +13,28 @@
 // same reason — see rate-limit.middleware.ts's header comment.
 //
 // EVERY route on this router carries a limiter, each with its own store
-// prefix. That is the standing rule for this file, not four independent
+// prefix. That is the standing rule for this file, not six independent
 // decisions: an unlimited auth route is either an enumeration oracle, a
 // bcrypt/email amplifier, or both. rate-limit.middleware.ts's header
-// comment holds the per-endpoint reasoning and the convention B3's
-// forgot-password/resend-verification routes must follow when they land
-// here.
+// comment holds the per-endpoint reasoning and the convention B3's still-
+// pending forgot-password route must follow when it lands here.
+// verify-email has its own `rl:verify-email:` prefix on this pattern;
+// resend-verification carries TWO limiters in series, each with its own
+// prefix (`rl:resend-verification-ip:` / `rl:resend-verification-email:`)
+// — see rate-limit.middleware.ts for why one composite key is not enough
+// for this pair of threats.
 import { Router } from 'express'
 import { login, logout, refresh, register } from '@/controllers/auth.controller'
+import { resendVerification, verifyEmail } from '@/controllers/verification.controller'
 import { requireJsonContentType } from '@/middlewares/content-type.middleware'
 import {
   createLoginRateLimiter,
   createLogoutRateLimiter,
   createRefreshRateLimiter,
   createRegisterRateLimiter,
+  createResendVerificationEmailRateLimiter,
+  createResendVerificationIpRateLimiter,
+  createVerifyEmailRateLimiter,
 } from '@/middlewares/rate-limit.middleware'
 
 /**
@@ -48,5 +56,15 @@ export function createAuthRouter(): Router {
   router.post('/login', createLoginRateLimiter(), login)
   router.post('/refresh', createRefreshRateLimiter(), refresh)
   router.post('/logout', createLogoutRateLimiter(), logout)
+  router.post('/verify-email', createVerifyEmailRateLimiter(), verifyEmail)
+  // Two limiters in series, not a composite key — each bounds its own
+  // threat, and either firing alone must be enough. See
+  // rate-limit.middleware.ts's header comment.
+  router.post(
+    '/resend-verification',
+    createResendVerificationIpRateLimiter(),
+    createResendVerificationEmailRateLimiter(),
+    resendVerification
+  )
   return router
 }

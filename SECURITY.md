@@ -173,14 +173,13 @@ distinct validation error first would leak that distinction to an
 unauthenticated caller before the controller ever gets a chance to make the
 two paths agree.
 
-### User enumeration: closed on `/login`, bounded on `/register`
+### User enumeration: closed on `/login` and `/register`
 
 **Scope this claim to the endpoint.** What follows is a property of
-`POST /api/v1/auth/login` and of nothing else. It is not a property of this
-API: `POST /api/v1/auth/register` is, by construction, an enumeration
-oracle, and reading the next two paragraphs as "this boilerplate does not
-leak which addresses are registered" would be exactly the false conclusion
-this file's own preamble warns about.
+`POST /api/v1/auth/login` and `POST /api/v1/auth/register`. Both used to
+leak whether an address was registered — login through response timing,
+register through its status code — and both are closed now, register at
+the cost of one accepted residual timing difference (below), not zero cost.
 
 #### `/login`: identical responses, identical timing
 
@@ -199,48 +198,148 @@ account (`active: false`) is rejected the same way, after the same
 comparison, through the same error — "these credentials are correct but the
 account is disabled" is not something this endpoint lets a caller learn.
 
-#### `/register`: an oracle, bounded by a rate limit, not closed
+**An unverified account is rejected the same way, and the message is
+deliberately misleading.** `login`'s guard also rejects any account whose
+`emailVerifiedAt` is still null, joined into the same combined condition
+rather than a separate early return — so an unverified account gets the
+identical `401` body and the identical bcrypt cost a wrong password would.
+`'Invalid email or password'` is, in this case, literally false: the
+credentials are correct, the account simply has not clicked its
+verification link yet. That falsehood is accepted on purpose, for the same
+reason the deactivated-account case accepts it — a truthful "this account
+exists but isn't verified" would confirm both that the address is
+registered and that the submitted password is right, to anyone merely
+trying credentials against it. This trade is recorded here because it has a
+real, ongoing cost: a legitimate user who registered and has not yet
+checked their inbox sees the same generic error a mistyped password
+produces, and files a support ticket that says "login is broken" rather
+than "I haven't verified yet." That ticket is the accepted cost of not
+handing an attacker a working oracle.
 
-`POST /api/v1/auth/register` answers **409** for an address that already
-exists and **201** for one that does not — `BaseRepository.create`
-translates the `lower(email)` unique-index violation (23505) into that 409,
-which is the correct answer to give a real person signing up and is
-simultaneously the whole oracle. One request per address therefore reads out the
-user base, with no password and no account of the attacker's own. That is
-the plain, unavoidable consequence of telling a real person "that address is
-already registered" at signup time, and it means the careful work `/login`
-does above is worth exactly as much as registration's rate limit — not
-more.
+#### `/register`: closed by an identical response, not by a rate limit
 
-What actually constrains it today is the registration limiter below: 100
-attempts per hour from one IP. That is a bound on the oracle, **not a
-closure of it** — an attacker with many source addresses still enumerates,
-just far more slowly and visibly than the unlimited endpoint that shipped
-before this.
+`POST /api/v1/auth/register` now answers **every** request identically —
+`202`, `'If that address can be registered, a verification email has been
+sent.'`, `data: null` — whether the address is free, already taken, or
+belongs to a soft-deleted row. `BaseRepository.create`'s unique-violation-
+to-409 translation still fires on the duplicate; this endpoint catches that
+specific failure and proceeds to the same response rather than letting it
+become the answer. What differs between the two
+branches is invisible to the caller: a free address gets a
+verification-link email (`EMAIL_VERIFICATION_TEMPLATE_KEY`); a taken
+address gets a "someone tried to register with your address" notice sent
+to the account's **stored** name, never the submitted one. Nothing is
+overwritten on the taken branch — see "Email verification" below for why
+that specific choice matters.
 
-Closing it properly means never telling an unauthenticated caller anything:
-answer every registration with the same 202-style "check your email", and
-send the address either a "finish signing up" or a "you already have an
-account, here is a reset link" message, so the only party who learns
-anything is whoever controls the mailbox. That requires email delivery,
-which this boilerplate does not have — it is owned by plan B3 (see
-ARCHITECTURE.md's "B3 seam"). A downstream project that cannot wait for
-that should lower `REGISTER_RATE_LIMIT_MAX_ATTEMPTS`
-(`src/middlewares/rate-limit.middleware.ts`), accepting that a tighter
-limit is also felt by every legitimate user behind a shared egress address.
+**Residual timing, accepted.** Both branches already pay one full bcrypt
+hash — `hashPassword` runs before the `create` call regardless of whether
+the row is ultimately kept (`auth.controller.ts`) — so the two branches
+differ only by one extra token `INSERT` on the free branch, an indexed
+write on the order of a millisecond against a ~250ms bcrypt cost. That gap
+is dominated by ordinary network jitter, not a signal an attacker can use,
+and is recorded as accepted rather than engineered away.
+
+What still constrains this endpoint is the registration limiter below: 100
+attempts per hour from one IP. With the status-code oracle gone, that
+limiter's job is no longer bounding enumeration — it is bounding the two
+things register was already rate-limited for independently of the oracle:
+bcrypt CPU exhaustion, and now, outbound mail volume, since every accepted
+request sends an email down one branch or the other.
+
+### Email verification: the password requirement, the token-burn trade, and an open gap
+
+`POST /api/v1/auth/verify-email` takes `{ token, password }`, not the token
+alone. That second field is load-bearing, not a UX nicety — see the
+squatting scenario below for why omitting it would reopen a worse hole than
+the one this feature closes.
+
+**A wrong password burns the token.** `verifyEmail` claims the token row
+(`claimToken`, which marks it consumed) **before** comparing the password —
+so presenting a token is what spends it, correct password or not. A wrong
+password on a genuine link fails exactly like an unknown token, and the
+link is now dead: the same link with the correct password afterward still
+fails. One link is one attempt. A legitimate typo costs the user a resend,
+not a retry — accept that trade deliberately, since it generates its own
+support tickets ("my verification link stopped working") that a retry-
+tolerant design would not.
+
+**Why the token alone is not enough — the squatting scenario.** An
+attacker registers `victim@example.com` with a password of their own
+choosing. The row now exists, unverified — and who registered first does
+not matter to what follows, because the harmful step is always the same
+one: `emailVerifiedAt` getting written at click time on a row whose
+password the clicker did not set. If verification accepted the token
+alone, both candidate policies for what happens next end in a silent
+takeover, not a stalemate:
+
+- _Overwrite the password on a taken-but-unverified address (newest
+  registrant wins)_ — fails when the **victim** registered first and has
+  not yet clicked. The attacker's later registration of the same address
+  overwrites the victim's password, and a fresh verification link goes out
+  to the victim's own inbox as if nothing had happened. The victim's own
+  click then verifies the address with the attacker's chosen credentials.
+- _Write nothing on the taken branch_ (what actually shipped) closes that
+  specific hole and still fails through the only door left open: the
+  address is "known and unverified," so `resend-verification` will mail
+  the victim a fresh, live link for that row, and the victim's own click on
+  it verifies the address the **attacker's** password is sitting on.
+
+Both variants turn a denial of service into a silent account takeover using
+the victim's own click as the final step. Requiring the password in the
+verify call closes both at once: the attacker knows the password but can
+never produce the mailed token; the mailbox owner can produce the token but
+not the attacker's password. Neither half can complete verification alone,
+so the worst outcome becomes a lockout — never a handover.
+
+**That lockout is an open gap, named here rather than left as a footnote.**
+Until password reset exists (B3 Task 6), a squatted address has **no**
+recovery path: the real owner cannot verify it, because they do not know
+the attacker's password, and the attacker cannot either, because they do
+not control the mailbox. The row sits permanently unverified and
+permanently unusable by the person who actually owns the address. This is
+the accepted lesser failure — a denial of service the real owner can at
+least notice and report, rather than a takeover they might never notice —
+but it is a real, currently-unrecoverable state, not a theoretical one.
+Task 6 closes it: a successful password reset must also set
+`emailVerifiedAt`, since clicking a reset link is the same proof of mailbox
+control verification already asks for.
+
+**Backfilling `email_verified_at` before deploying the login gate.**
+`login` now refuses any account whose `emailVerifiedAt` is null. Any
+deployment upgrading from a version before this change has existing users
+sitting at `email_verified_at IS NULL`, because until now nothing ever set
+that column for anyone. Deploying the gate without a backfill first locks
+out every existing user simultaneously, on the same release. Run this
+**before** the deploy that adds the gate, not after and not alongside it:
+
+```sql
+UPDATE users SET email_verified_at = created_at WHERE email_verified_at IS NULL;
+```
+
+This treats every pre-existing account as already verified, on the
+reasoning that those users were already logging in successfully before this
+feature existed at all — there is no attacker/victim ambiguity to resolve
+for a row that predates the mechanism that creates that ambiguity. A fresh
+deployment with no existing users has nothing to backfill.
 
 ### Rate limiting: one limiter per auth route, one store prefix each
 
-`src/middlewares/rate-limit.middleware.ts` ships four limiters — one for
-every route on the auth router, which is a standing rule for that router
-rather than four separate decisions. Each is backed by its **own**
-`SharedRateLimitStore`, with its own key prefix (`rl:register:`,
-`rl:login:`, `rl:refresh:`, `rl:logout:`), so no endpoint can spend
-another's budget and a 429 is only ever a statement about the endpoint that
-returned it. A new auth route — B3's `/forgot-password` and
-`/resend-verification` are next — takes its own prefix on the same pattern;
-`tests/unit/middlewares/rate-limit.middleware.test.ts` fails if two ever
-collide. The store starts on an in-memory store and latches,
+`src/middlewares/rate-limit.middleware.ts` ships seven limiters — one for
+every route on the auth router, `/verify-email` included, and
+`/resend-verification` carrying two in series — which is a standing rule
+for that router rather than seven separate decisions. Each is backed by its
+**own** `SharedRateLimitStore`, with its own key prefix (`rl:register:`,
+`rl:login:`, `rl:refresh:`, `rl:logout:`, `rl:verify-email:`,
+`rl:resend-verification-ip:`, `rl:resend-verification-email:`), so no
+endpoint can spend another's budget and a 429 is only ever a statement
+about the endpoint that returned it. A new auth route — B3's
+`/forgot-password` and `/reset-password` (Task 6) are next — takes its own
+prefix on the same pattern; `tests/unit/middlewares/rate-limit.middleware.test.ts`
+fails if two ever collide. `/verify-email` and `/resend-verification`'s
+own per-limiter reasoning — including why `/resend-verification`'s IP layer
+is the tight one and its email layer the generous one — lives in
+`rate-limit.middleware.ts`'s own header comment. The store starts on an in-memory store and latches,
 once, to a Redis-backed one the first time Redis is confirmed reachable —
 never back — so the limit ends up shared across replicas rather than
 per-process as soon as Redis is up. Until that first successful latch (or
@@ -391,16 +490,16 @@ dropped.
 
 Everything below genuinely ships nothing today, in either direction:
 
-| Control                         | Status                               | What that means for you                                                                                                                                                                                                                                                                                        |
-| ------------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| CSRF tokens                     | **Not implemented**                  | See "No CSRF middleware" below — reasoning, not an oversight. The forced-login direction IS defended, by a content-type gate on the auth router; see the section after it.                                                                                                                                     |
-| Security headers / CSP          | **Not implemented — and unassigned** | `helmet` is not a dependency. Only `x-powered-by` is disabled (`src/app.ts`). Spec §13 mandates "helmet with an explicit Content-Security-Policy"; **no plan owns it** — unlike CORS/MFA/OAuth, which name one. Stated rather than left implied, since an unowned requirement is how one silently never ships. |
-| CORS                            | **Not implemented**                  | No `cors` middleware; `WEB_URL` is validated but nothing reads it.                                                                                                                                                                                                                                             |
-| MFA                             | **Not implemented**                  | No TOTP enrolment, no recovery codes. Owned by a later plan (B4).                                                                                                                                                                                                                                              |
-| Email delivery and verification | **Not implemented**                  | `users.email_verified_at` exists as a column; nothing issues, sends, or verifies a token yet. Owned by plan B3 — see ARCHITECTURE.md's "B3 seam" section.                                                                                                                                                      |
-| OAuth / social login            | **Not implemented**                  | No provider integration. Owned by a later plan (B4).                                                                                                                                                                                                                                                           |
-| Tenancy / RBAC                  | **Not implemented**                  | Every authenticated user has the same access to their own resources; there is no role or organization model.                                                                                                                                                                                                   |
-| General-purpose rate limiting   | **Partial**                          | All four auth routes are covered (above). No limiter exists on the profile routes or any future non-auth route.                                                                                                                                                                                                |
+| Control                       | Status                               | What that means for you                                                                                                                                                                                                                                                                                        |
+| ----------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CSRF tokens                   | **Not implemented**                  | See "No CSRF middleware" below — reasoning, not an oversight. The forced-login direction IS defended, by a content-type gate on the auth router; see the section after it.                                                                                                                                     |
+| Security headers / CSP        | **Not implemented — and unassigned** | `helmet` is not a dependency. Only `x-powered-by` is disabled (`src/app.ts`). Spec §13 mandates "helmet with an explicit Content-Security-Policy"; **no plan owns it** — unlike CORS/MFA/OAuth, which name one. Stated rather than left implied, since an unowned requirement is how one silently never ships. |
+| CORS                          | **Not implemented**                  | No `cors` middleware; `WEB_URL` is validated but nothing reads it.                                                                                                                                                                                                                                             |
+| MFA                           | **Not implemented**                  | No TOTP enrolment, no recovery codes. Owned by a later plan (B4).                                                                                                                                                                                                                                              |
+| Forgot / reset password       | **Not implemented**                  | No `/forgot-password` or `/reset-password` route exists — email _verification_ is implemented (see "Email verification" above); this is the recovery half. It is also the only recovery path for a squatted address. Owned by plan B3 Task 6 — see ARCHITECTURE.md's "B3 seam" section.                        |
+| OAuth / social login          | **Not implemented**                  | No provider integration. Owned by a later plan (B4).                                                                                                                                                                                                                                                           |
+| Tenancy / RBAC                | **Not implemented**                  | Every authenticated user has the same access to their own resources; there is no role or organization model.                                                                                                                                                                                                   |
+| General-purpose rate limiting | **Partial**                          | All six auth routes are covered (above, seven limiters total — `resend-verification` carries two). No limiter exists on the profile routes or any future non-auth route.                                                                                                                                       |
 
 `JWT_ACCESS_SECRET` is required by the environment schema and **is** read —
 by `signAccessToken`/`verifyAccessToken`. `APP_URL`, `WEB_URL` and

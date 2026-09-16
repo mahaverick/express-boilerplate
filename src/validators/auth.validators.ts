@@ -58,7 +58,13 @@ import { HttpError } from '@/middlewares/error.middleware'
 // whatever whitespace the client happened to send around it. A too-long
 // address therefore fails validation here (400) instead of the column
 // (22001 -> 500); see this file's header comment.
-const emailSchema = z
+/**
+ * Normalised email: trimmed, lowercased, max-length-capped, then piped
+ * through `z.email()` for format validation. Shared between registration,
+ * login, and verification schemas — a single definition of the email policy
+ * so two copies cannot drift.
+ */
+export const emailSchema = z
   .string()
   .trim()
   .toLowerCase()

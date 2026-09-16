@@ -130,6 +130,7 @@ describe('getMailTransporter — half-set credential warning', () => {
     ACCESS_TOKEN_TTL: '15m',
     REFRESH_TOKEN_TTL: '30d',
     SESSION_ABSOLUTE_TTL: '30d',
+    EMAIL_VERIFICATION_TTL: '24h',
     TRUST_PROXY: 'false',
     LOG_LEVEL: 'info',
     SMTP_HOST: 'localhost',

@@ -112,6 +112,16 @@ describe('parseEnv', () => {
     )
   })
 
+  it('defaults EMAIL_VERIFICATION_TTL to 24h', () => {
+    expect(parseEnv(valid).EMAIL_VERIFICATION_TTL).toBe('24h')
+  })
+
+  it('rejects an EMAIL_VERIFICATION_TTL that ms() cannot parse', () => {
+    expect(() => parseEnv({ ...valid, EMAIL_VERIFICATION_TTL: 'soon' })).toThrow(
+      /EMAIL_VERIFICATION_TTL/
+    )
+  })
+
   it('rejects an unparseable env var by name alongside every other problem, not alone', () => {
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { DATABASE_URL, ...rest } = valid

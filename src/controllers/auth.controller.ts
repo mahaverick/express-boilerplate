@@ -13,9 +13,11 @@
 //    which addresses are registered, just through response TIMING instead
 //    of response content — a wrong password pays for a real bcrypt compare
 //    and an unknown email would otherwise return almost immediately.
-//    `getDummyHash` below exists so both paths always run one real
-//    comparison, at the same configured cost (BCRYPT_COST), regardless of
-//    whether a matching row exists.
+//    `getDummyHash` (@/utilities/password.utilities) exists so both paths
+//    always run one real comparison, at the same configured cost
+//    (BCRYPT_COST), regardless of whether a matching row exists. See its
+//    own header comment there for how it stays in step with BCRYPT_COST and
+//    why it's memoised.
 import { randomUUID } from 'node:crypto'
 import { type NextFunction, type Request, type Response } from 'express'
 import { getEnv } from '@/configs/env.config'
@@ -24,7 +26,9 @@ import type { User } from '@/database/models/user.model'
 import { toAuthenticatedUser, type AuthenticatedUser } from '@/middlewares/auth.middleware'
 import { HttpError } from '@/middlewares/error.middleware'
 import { UserRepository } from '@/repositories/user.repository'
-import { hashPassword, isPasswordValid } from '@/utilities/password.utilities'
+import { sendMail } from '@/services/mailer.service'
+import { REGISTRATION_ATTEMPT_TEMPLATE_KEY } from '@/templates/email/registration-attempt.template'
+import { getDummyHash, hashPassword, isPasswordValid } from '@/utilities/password.utilities'
 import { successResponse } from '@/utilities/response.utilities'
 import {
   issueRefreshToken,
@@ -32,40 +36,13 @@ import {
   rotateRefreshToken,
   signAccessToken,
 } from '@/utilities/token.utilities'
+import {
+  MISSING_FIRST_NAME_FALLBACK,
+  sendVerificationMail,
+} from '@/utilities/verification-mail.utilities'
 import { loginSchema, parseBody, registerSchema } from '@/validators/auth.validators'
 
 const userRepository = new UserRepository()
-
-// A fixed, non-secret plaintext — never a real password, never compared
-// against a real account. Hashed lazily (only once actually needed) and
-// memoised for the life of the process, using the SAME `hashPassword` every
-// real password goes through — so it always costs the current BCRYPT_COST,
-// never a stale cost captured in a hard-coded hash string that would
-// silently stop matching the moment that constant changes and quietly
-// reopen the timing gap this exists to close.
-//
-// That closes the STALE DUMMY half of the problem, and only that half. The
-// dummy tracks BCRYPT_COST; a stored hash does not — bcrypt encodes the
-// cost it was written with, so an existing row keeps verifying at that
-// cost forever. Raise BCRYPT_COST and the two stop agreeing, inverted:
-// existing users verify more cheaply than the dummy, and an unknown email
-// becomes measurably SLOWER than a wrong password rather than identical.
-// Nothing this function can do fixes that — there is no single cost that
-// matches every row. The remedy (rehash-on-successful-login) and the
-// decision it belongs to are documented on BCRYPT_COST itself
-// (auth.constants.ts), which is where someone about to raise the cost is
-// actually looking.
-//
-// The memoisation cache lives inside this IIFE's closure rather than as a
-// top-level module variable, mirroring env.config.ts's `getEnv` — satisfying
-// unicorn/no-top-level-assignment-in-function without disabling it.
-const getDummyHash: () => Promise<string> = (() => {
-  let cached: Promise<string> | undefined
-  return (): Promise<string> => {
-    cached ??= hashPassword('not-a-real-password-used-only-to-pay-bcrypts-cost')
-    return cached
-  }
-})()
 
 /**
  * The fields of a user row it is safe to return to a client. An explicit
@@ -188,12 +165,43 @@ function readRefreshTokenCookie(request: Request): string | undefined {
   }
 }
 
+const REGISTER_RESPONSE_MESSAGE =
+  'If that address can be registered, a verification email has been sent.'
+
+/**
+ * Tell the owner of an already-registered address that someone tried to
+ * register it.
+ * @param email - The address that was submitted.
+ */
+async function sendRegistrationAttemptMail(email: string): Promise<void> {
+  const existing = await userRepository.findByEmail(email)
+  await sendMail({
+    to: email,
+    templateKey: REGISTRATION_ATTEMPT_TEMPLATE_KEY,
+    variables: {
+      // The STORED name, never the submitted one: the submitted value is
+      // attacker-chosen text being delivered into the victim's inbox.
+      // `??` covers the soft-deleted case, where the address is taken but
+      // no visible row exists to read a name from.
+      firstName: existing?.firstName ?? MISSING_FIRST_NAME_FALLBACK,
+      appName: getEnv().APP_NAME,
+    },
+  })
+}
+
 /**
  * Register a new user with an email and password.
  *
- * Duplicate-email handling is not implemented here: `UserRepository.create`
- * already translates the table's unique-violation into `HttpError(409)` —
- * re-checking it here would be a second, driftable copy of that decision.
+ * Both a free address and a taken one now answer an identical 202 with
+ * `data: null` — the old `201` / `409` split was an enumeration oracle.
+ * Only the outbound mail differs: a free address gets a verification link,
+ * a taken one gets a "someone tried to register with your email" notice.
+ *
+ * The response is sent BEFORE the mail, so the two branches do not differ
+ * by the latency of an SMTP round trip. The send is deliberately not
+ * awaited — `.catch()` handles any rejection (Ruling T: an unhandled
+ * rejection under Node 24 kills the process on one branch only =
+ * enumeration oracle as denial of service).
  * @param request - The incoming request, carrying the registration body.
  * @param response - The response.
  * @param next - Forwards a rejection to the terminal error handler.
@@ -206,13 +214,43 @@ export async function register(
   try {
     const input = parseBody(registerSchema, request.body)
     const passwordHash = await hashPassword(input.password)
-    const user = await userRepository.create({
-      email: input.email,
-      passwordHash,
-      firstName: input.firstName,
-      lastName: input.lastName,
+
+    let created: User | undefined
+    try {
+      created = await userRepository.create({
+        email: input.email,
+        passwordHash,
+        firstName: input.firstName,
+        lastName: input.lastName,
+      })
+    } catch (error) {
+      // 409 is how UserRepository.create reports the unique violation
+      // (see its own comment). Anything else is a real failure and must
+      // still surface — swallowing every error here would turn a database
+      // outage into a cheerful 202.
+      if (!(error instanceof HttpError) || error.statusCode !== 409) throw error
+    }
+
+    // Respond BEFORE sending, so the two branches do not differ by the
+    // latency of an SMTP round trip. The send is deliberately not awaited.
+    // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data", not undefined (which JSON.stringify omits entirely)
+    successResponse(response, null, REGISTER_RESPONSE_MESSAGE, 202)
+
+    if (created) {
+      // eslint-disable-next-line unicorn/prefer-await -- fire-and-forget: the mail must not block the response, and awaiting would make the two branches differ by SMTP latency (Ruling T)
+      sendVerificationMail(created).catch((error: unknown) => {
+        console.error('Verification mail failed', error)
+      })
+      return
+    }
+
+    // The address is taken. It may STILL have no visible row — the unique
+    // index ignores deleted_at while findByEmail does not — so the name
+    // falls back rather than being dereferenced.
+    // eslint-disable-next-line unicorn/prefer-await -- fire-and-forget: same reasoning as the verification branch above
+    sendRegistrationAttemptMail(input.email).catch((error: unknown) => {
+      console.error('Registration-attempt mail failed', error)
     })
-    successResponse(response, toPublicUser(user), 'Registration successful.', 201)
   } catch (error) {
     next(error)
   }
@@ -230,6 +268,24 @@ export async function register(
  * never reaches this function's `user` check at all: `findByEmail` already
  * excludes a soft-deleted row, so that case behaves exactly like an unknown
  * email.
+ *
+ * An unverified account (`emailVerifiedAt` still null) is refused the same
+ * way, through the same guard: joining `!user.emailVerifiedAt` into this
+ * condition, rather than a separate early return placed before or after it,
+ * is load-bearing. `isPasswordCorrect` is computed above the guard and paid
+ * for on every call regardless of which clause ultimately trips, so an
+ * unverified account gets the identical 401 body AND the identical bcrypt
+ * cost as a wrong password. A separate early return keyed only on
+ * `emailVerifiedAt` would let a caller learn "this address exists and is
+ * merely unverified" by the response arriving fast (no bcrypt compare)
+ * instead of at the wrong-password/unknown-email cost — the same timing
+ * oracle this file's header comment already rules out for registration.
+ * `'Invalid email or password'` is, in this case, literally false — the
+ * credentials ARE correct. That falsehood is accepted deliberately, for
+ * the same reason the deactivated-account case accepts it: a truthful
+ * "this account exists but isn't verified yet" would confirm both that the
+ * address is registered AND that the supplied password is the right one,
+ * to anyone merely trying credentials against it.
  * @param request - The incoming request, carrying the login body.
  * @param response - The response.
  * @param next - Forwards a rejection to the terminal error handler.
@@ -245,9 +301,26 @@ export async function login(
     const hashToCompare = user?.passwordHash ?? (await getDummyHash())
     const isPasswordCorrect = await isPasswordValid(input.password, hashToCompare)
 
-    if (!user || !isPasswordCorrect || !user.active || !user.passwordHash) {
+    if (
+      !user ||
+      !isPasswordCorrect ||
+      !user.active ||
+      !user.passwordHash ||
+      !user.emailVerifiedAt
+    ) {
       throw new HttpError('Invalid email or password', 401)
     }
+
+    // AFTER the guard, so a failed attempt leaves no trace on the row, and
+    // BEFORE tokens are issued, so a failed UPDATE answers 500 without
+    // having already set a refresh cookie for a login the caller is being
+    // told did not happen.
+    //
+    // `new Date()` rather than sql`now()`: this goes through the public
+    // `update()`, whose value type is the insert model, and SQL is not
+    // part of it (base.repository.ts:93). `update()` also bumps
+    // `updated_at` via `touched()`, which is why this is not a raw query.
+    await userRepository.update(user.id, { lastLoggedInAt: new Date() })
 
     const sessionId = randomUUID()
     const accessToken = signAccessToken(user)

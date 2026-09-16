@@ -42,14 +42,17 @@ const EnvSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   APP_PORT: z.coerce.number().int().positive().default(4040),
 
-  // PLACEHOLDERS. Three of the required variables below are still read by
-  // nothing in src/ today — verified by grep: APP_URL, WEB_URL and
-  // SESSION_SECRET are forward declarations for the CORS/email/session
-  // plans (see SECURITY.md, "Intended choices"), not evidence that any of
-  // it exists. JWT_ACCESS_SECRET is the exception — token.utilities.ts
-  // (signAccessToken/verifyAccessToken) reads it to sign and verify every
-  // access token, so its own `.describe()` below says what it actually
-  // does rather than carrying the same placeholder note.
+  // PLACEHOLDERS. Two of the required variables below are still read by
+  // nothing in src/ today — verified by grep: APP_URL and SESSION_SECRET
+  // are forward declarations for the CORS/session plans (see SECURITY.md,
+  // "Intended choices"), not evidence that either exists yet. WEB_URL is no
+  // longer one of them — verification-link.utilities.ts reads
+  // `getEnv().WEB_URL` to build the link mailed to a user, so its own
+  // `.describe()` below says what it actually does rather than carrying the
+  // placeholder note too. JWT_ACCESS_SECRET is the other exception —
+  // token.utilities.ts (signAccessToken/verifyAccessToken) reads it to sign
+  // and verify every access token, so its own `.describe()` below says what
+  // it actually does rather than carrying the same placeholder note.
   //
   // There is no JWT_REFRESH_SECRET: refresh tokens are opaque random
   // strings, not JWTs (token.utilities.ts's header comment), so nothing
@@ -76,7 +79,7 @@ const EnvSchema = z.object({
   WEB_URL: z
     .url({ protocol: /^https?$/ })
     .describe(
-      'Public origin of the frontend. PLACEHOLDER — nothing reads it yet; reserved for CORS and redirect targets. http://localhost:5173 locally.'
+      'Public origin of the frontend. Email verification links are built from it — the link points at your frontend, which POSTs the token to this API. http://localhost:5173 locally.'
     ),
 
   DATABASE_URL: z.url(),
@@ -147,6 +150,24 @@ const EnvSchema = z.object({
     })
     .describe(
       'Hard ceiling on one login session, measured from the login itself and never reset by rotation, as an ms()-parseable duration string (e.g. "30d"). Past it, refreshing fails and the user signs in again. Defaults to 30d.'
+    ),
+
+  // How long an email-verification link stays valid, from issue to click.
+  // Same `parseDurationMs` validation as ACCESS_TOKEN_TTL/REFRESH_TOKEN_TTL/
+  // SESSION_ABSOLUTE_TTL above — one helper for "is this an ms()-parseable
+  // duration", not a second inline refinement repeating the same check.
+  // Defaulted to 24h rather than something short-lived like ACCESS_TOKEN_TTL:
+  // a verification email is read on the user's own schedule, not machine
+  // speed, and a link the user finds the next morning should still work.
+  EMAIL_VERIFICATION_TTL: z
+    .string()
+    .default('24h')
+    .refine((value) => parseDurationMs(value) !== undefined, {
+      message:
+        'EMAIL_VERIFICATION_TTL must be a duration string ms() can parse, e.g. "24h" or "86400000".',
+    })
+    .describe(
+      'How long an email-verification link stays valid. Defaulted to 24h; a link the user finds the next morning should still work.'
     ),
 
   // How much of `X-Forwarded-For` Express is allowed to believe. There is

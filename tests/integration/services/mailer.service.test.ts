@@ -39,68 +39,15 @@ import { sendMail, type MailMessage } from '@/services/mailer.service'
 import { renderEmailVerificationTemplate } from '@/templates/email/email-verification.template'
 import { renderPasswordResetTemplate } from '@/templates/email/password-reset.template'
 import { renderRegistrationAttemptTemplate } from '@/templates/email/registration-attempt.template'
+import {
+  assertNoMailpitMessage,
+  deleteMailpitMessage,
+  findMailpitMessages,
+  getMailpitMessage,
+} from '../../helpers/mailpit'
 import { withMutatedMethod, withMutatedModule } from '../../helpers/mutate'
 
 const emailLogRepository = new EmailLogRepository()
-const MAILPIT_API = 'http://localhost:8025/api/v1'
-
-interface MailpitMessage {
-  ID: string
-  To: { Address: string }[]
-  Subject: string
-}
-
-/**
- * Poll Mailpit's own HTTP API for messages to one recipient, retrying
- * briefly — a real SMTP delivery is not synchronous with Mailpit's search
- * index becoming queryable.
- * @param recipient - The `To:` address to search for.
- * @returns Every matching message; empty if none arrived within the budget.
- */
-async function findMailpitMessages(recipient: string): Promise<MailpitMessage[]> {
-  const query = `to:${recipient}`
-  for (let attempt = 0; attempt < 30; attempt += 1) {
-    const response = await fetch(`${MAILPIT_API}/search?query=${encodeURIComponent(query)}`)
-    const body = (await response.json()) as { messages: MailpitMessage[] }
-    if (body.messages.length > 0) return body.messages
-    await new Promise((resolve) => setTimeout(resolve, 100))
-  }
-  return []
-}
-
-/**
- * Confirm no message ever arrives for one recipient, within a short budget
- * — the negative counterpart of `findMailpitMessages`. Used to prove a
- * rendering failure never reaches the transport at all: unlike
- * `findMailpitMessages`, this polls the FULL budget every time (there is no
- * "arrived" signal to short-circuit on), so it is used sparingly.
- * @param recipient - The `To:` address that must never receive anything.
- * @returns Resolves once the budget has elapsed with nothing found.
- */
-async function assertNoMailpitMessage(recipient: string): Promise<void> {
-  const query = `to:${recipient}`
-  const response = await fetch(`${MAILPIT_API}/search?query=${encodeURIComponent(query)}`)
-  const body = (await response.json()) as { messages: MailpitMessage[] }
-  expect(body.messages).toHaveLength(0)
-}
-
-/**
- * Delete one message from Mailpit by id. Best-effort tidiness only, for a
- * mailbox shared across the whole test run — never asserted on, and scoped
- * to one message id so it cannot touch another test's in-flight mail.
- * @param id - The Mailpit message id.
- */
-async function deleteMailpitMessage(id: string): Promise<void> {
-  try {
-    await fetch(`${MAILPIT_API}/messages`, {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ IDs: [id] }),
-    })
-  } catch {
-    // Best-effort only — see this function's own comment.
-  }
-}
 
 /**
  * A disposable recipient address, unique to one test.
@@ -495,8 +442,7 @@ describe('sendMail', () => {
     const messageId = messages[0]?.ID
     expect(messageId).toBeDefined()
 
-    const detailResponse = await fetch(`${MAILPIT_API}/message/${messageId}`)
-    const detail = (await detailResponse.json()) as { HTML: string; Text: string }
+    const detail = await getMailpitMessage(messageId ?? '')
     await deleteMailpitMessage(messageId ?? '')
 
     expect(detail.HTML).not.toContain(payload)
