@@ -12,6 +12,13 @@ allowBuilds:
   # binding for the host platform, or falls back to msgpackr's pure-JS
   # encoder when none matches; no arbitrary script.
   msgpackr-extract: true
+  # protobufjs: transitive dependency of @opentelemetry/exporter-trace-otlp-http
+  # (via @opentelemetry/otlp-transformer). Its postinstall only reads
+  # package.json files to print a stderr warning if a *dependent* pins an
+  # incompatible version scheme for protobufjs itself — verified by reading
+  # scripts/postinstall.js; no network access, no compilation, no arbitrary
+  # code.
+  protobufjs: true
   # unrs-resolver: native binary that eslint-plugin-import-x depends on
   # directly for module/TS-path resolution. Its postinstall only fetches a
   # prebuilt binary for the host platform; no arbitrary script.

@@ -180,11 +180,31 @@ export default tseslint.config(
           property: 'env',
           message: 'Read configuration from @/configs/env.config, not process.env. See spec §5.1.',
         },
-        { object: 'console', property: 'error', message: 'Use logger from @/services/logger.service.' },
-        { object: 'console', property: 'warn', message: 'Use logger from @/services/logger.service.' },
-        { object: 'console', property: 'info', message: 'Use logger from @/services/logger.service.' },
-        { object: 'console', property: 'log', message: 'Use logger from @/services/logger.service.' },
-        { object: 'console', property: 'debug', message: 'Use logger from @/services/logger.service.' },
+        {
+          object: 'console',
+          property: 'error',
+          message: 'Use logger from @/services/logger.service.',
+        },
+        {
+          object: 'console',
+          property: 'warn',
+          message: 'Use logger from @/services/logger.service.',
+        },
+        {
+          object: 'console',
+          property: 'info',
+          message: 'Use logger from @/services/logger.service.',
+        },
+        {
+          object: 'console',
+          property: 'log',
+          message: 'Use logger from @/services/logger.service.',
+        },
+        {
+          object: 'console',
+          property: 'debug',
+          message: 'Use logger from @/services/logger.service.',
+        },
       ],
 
       'check-file/filename-naming-convention': [
@@ -209,6 +229,18 @@ export default tseslint.config(
     },
   },
   {
+    // src/observability/ holds exactly one file, tracing.ts, which is not a
+    // module TYPE the way controllers/services/repositories/etc. are — it is
+    // a single fixed-name entrypoint loaded by path via `--import` (package.json's
+    // "dev"/"start" scripts), so it can never carry one of the *.suffix
+    // patterns every other governed directory above requires (there is no
+    // "tracing.observability.ts" to rename it to). Turned off outright,
+    // rather than adding a pattern that would fail on the file's own name —
+    // same reasoning tests/**/*.ts gets below for the same rule.
+    files: ['src/observability/**/*.ts'],
+    rules: { 'check-file/filename-naming-convention': 'off' },
+  },
+  {
     // env.config.ts is the one module allowed to read process.env — it is the
     // module whose whole job is to parse it.
     files: ['src/configs/env.config.ts'],
@@ -224,6 +256,19 @@ export default tseslint.config(
     // exemption is a side effect, not the intent, but harmless: neither
     // module reads process.env.
     files: ['src/services/logger.service.ts', 'src/index.ts'],
+    rules: { 'no-restricted-properties': 'off' },
+  },
+  {
+    // tracing.ts loads via `--import` before env.config.ts's own
+    // `getEnv()` has ever run (before `src/index.ts` itself, in fact), so it
+    // cannot go through `getEnv()` the way every other module must — it reads
+    // `process.env.OTEL_EXPORTER_OTLP_ENDPOINT`/`NODE_ENV`/`OTEL_SERVICE_NAME`
+    // directly. For the same load-order reason it cannot use the Winston
+    // logger (not loaded yet, and must not depend on the library it
+    // instruments) — it uses `console.info`/`console.error` for its own
+    // diagnostics instead. Both rules lifted, same shape as the exemption
+    // above.
+    files: ['src/observability/tracing.ts'],
     rules: { 'no-restricted-properties': 'off' },
   },
   {

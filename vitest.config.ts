@@ -90,6 +90,16 @@ export default defineConfig({
         // exercised for real in Task 6 Step 7. server.ts is deliberately NOT
         // excluded — Task 6 tests it against an ephemeral port.
         'src/index.ts',
+        // Same reasoning as src/index.ts above: this module's real branch
+        // (OTEL_EXPORTER_OTLP_ENDPOINT set, building and starting a real
+        // NodeSDK) is process bootstrap wiring loaded via `--import`, before
+        // any test framework is attached — not meaningfully unit-testable.
+        // tests/unit/observability/tracing.test.ts still exercises the
+        // module (import succeeds, shutdownOtel() no-ops) in its default,
+        // endpoint-unset state; only the "endpoint set" branch is excluded
+        // here in spirit — this exclusion just covers the whole file, same
+        // granularity as src/index.ts's.
+        'src/observability/tracing.ts',
       ],
       thresholds: { lines: 80, functions: 80, branches: 80, statements: 80 },
     },

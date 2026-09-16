@@ -211,6 +211,20 @@ const EnvSchema = z.object({
     .url({ protocol: /^https?$/ })
     .optional()
     .describe('Absent means tracing is disabled; the SDK is never started.'),
+  // Read directly, never through this schema: src/observability/tracing.ts
+  // loads via `--import`, before getEnv() has run, so it reads
+  // process.env.OTEL_SERVICE_NAME itself (see that file's own header
+  // comment). It is still declared here — same as every other environment
+  // variable — so pnpm env:example documents it and a downstream project has
+  // exactly one place to look up every variable this app reads. The default
+  // is duplicated in tracing.ts's own `?? 'express-boilerplate'` fallback,
+  // which is unavoidable given tracing.ts cannot import this module; keep
+  // the two in sync by hand if this default ever changes.
+  OTEL_SERVICE_NAME: z
+    .string()
+    .min(1)
+    .default('express-boilerplate')
+    .describe('Service name reported in OTEL traces.'),
   LOG_LEVEL: LogLevelSchema.default('info'),
 
   SLACK_WEBHOOK_URL: z
