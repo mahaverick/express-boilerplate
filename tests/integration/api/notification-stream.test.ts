@@ -1,0 +1,519 @@
+// tests/integration/api/notification-stream.test.ts
+//
+// Integration test against the real per-worker Postgres database (see
+// tests/helpers/worker-database.ts) — same convention as
+// tests/integration/api/notification.test.ts: every user created here is
+// deleted in afterEach, and notifications cascade off that delete (ON
+// DELETE CASCADE, notification.model.ts).
+//
+// This is the one file in tests/integration/api/ that cannot use
+// `request(app)` (supertest) end-to-end: supertest resolves a request once
+// its response has fully ENDED, and an SSE response — by design — never
+// ends on its own. Instead, this file opens its own real, ephemeral
+// `http.Server` (same as tests/integration/server.test.ts's own
+// `startServer(0)` pattern, but a dedicated server rather than that shared
+// helper — see the "server lifecycle" comment below for why) and drives it
+// with a plain `node:http` client, parsing the raw SSE byte stream itself.
+//
+// `emitNotification` is imported and called DIRECTLY in several tests,
+// rather than going through a real `NotificationWorker` job — the same
+// "test this layer, not the whole pipeline" reasoning
+// tests/unit/workers/notification.worker.test.ts already applies to the
+// worker in the other direction. `notification.worker.test.ts` (both the
+// unit and integration variants) already covers that `processNotificationJob`
+// calls `emitNotification` after a successful insert; this file only needs
+// to prove the SSE endpoint reacts correctly once that call happens.
+import { randomUUID } from 'node:crypto'
+import http, { type IncomingMessage } from 'node:http'
+import type { AddressInfo } from 'node:net'
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { createApp } from '@/app'
+import type { Notification } from '@/database/models/notification.model'
+import type { User } from '@/database/models/user.model'
+import { NotificationRepository } from '@/repositories/notification.repository'
+import { UserRepository } from '@/repositories/user.repository'
+import { sql } from '@/services/database.service'
+import { emitNotification, listenerCount } from '@/services/notification-emitter.service'
+import { signAccessToken } from '@/utilities/token.utilities'
+
+const userRepository = new UserRepository()
+const notificationRepository = new NotificationRepository()
+
+/**
+ * One parsed SSE event — the fields `notification-stream.controller.ts`'s
+ * `formatNotificationFrame` actually writes, plus whatever any other named
+ * field (`retry`) happened to land in the same raw block. See
+ * `parseSseBlock`'s own comment for why a block can contain more than one
+ * logical field set.
+ */
+interface SseFrame {
+  id?: string
+  event?: string
+  data?: string
+}
+
+/**
+ * Parse one `\n`-joined block of SSE field lines — everything between two
+ * `\n\n` boundaries — into an `SseFrame`. Comment lines (`:ping`, and any
+ * line with no `:`) are skipped, not just `id`/`event`/`data`: the very
+ * first block this file's client ever parses is the server's `retry:
+ * 3000\n` line merged with whatever the next real write turns out to be,
+ * since `retry` is sent with only a single trailing `\n`, not a blank line
+ * (matching this codebase's own SSE endpoint exactly). Parsing field-by-field
+ * rather than assuming one block is exactly one dispatched event is what
+ * makes that merge harmless here.
+ * @param raw - The raw block, without its trailing blank line.
+ * @returns The fields found in this block.
+ */
+function parseSseBlock(raw: string): SseFrame {
+  const frame: SseFrame = {}
+  for (const line of raw.split('\n')) {
+    if (line === '' || line.startsWith(':')) continue
+    const separatorIndex = line.indexOf(':')
+    if (separatorIndex === -1) continue
+    const field = line.slice(0, separatorIndex)
+    const value = line.slice(separatorIndex + 1).trimStart()
+    applyField(frame, field, value)
+  }
+  return frame
+}
+
+/**
+ * Apply one parsed `field: value` pair to `frame`. A standalone function,
+ * not a `switch` inlined into `parseSseBlock`'s own `for` loop — this
+ * codebase's lint rules require a `switch` over three-or-more `else if`
+ * branches, but also forbid a `break` inside a `switch` nested in a loop;
+ * pulling the `switch` out into its own, non-nested function satisfies
+ * both.
+ * @param frame - The frame being built. Mutated in place.
+ * @param field - The field name, e.g. `id`, `event`, `data`, or `retry`.
+ * @param value - The field's value, already trimmed of its leading space.
+ */
+function applyField(frame: SseFrame, field: string, value: string): void {
+  switch (field) {
+    case 'id': {
+      frame.id = value
+      break
+    }
+    case 'event': {
+      frame.event = value
+      break
+    }
+    case 'data': {
+      frame.data = value
+      break
+    }
+    // Any other field (e.g. `retry`) is parsed but deliberately not
+    // captured — nothing in this file asserts on it.
+    default:
+  }
+}
+
+/**
+ * A raw `node:http` connection to `/api/v1/notifications/stream`, buffering
+ * and incrementally parsing the SSE byte stream as it arrives — the "small
+ * helper that reads chunks from the response stream" the task brief itself
+ * calls for, since neither supertest nor a plain `await` can observe a
+ * response that never ends.
+ */
+class SseConnection {
+  private buffer = ''
+  private readonly ready: Promise<IncomingMessage>
+  private readonly ended: Promise<void>
+  readonly request: http.ClientRequest
+  response: IncomingMessage | undefined
+  /**
+   * Every frame parsed so far, in arrival order.
+   */
+  readonly frames: SseFrame[] = []
+  /**
+   * The full, unparsed byte stream received so far — for assertions (the
+   * heartbeat test) that only care about a raw substring, not framing.
+   */
+  rawText = ''
+
+  /**
+   * Open the connection.
+   * @param baseUrl - The test server's own `http://127.0.0.1:<port>` origin.
+   * @param path - The request path, including any query string.
+   * @param headers - Extra request headers, e.g. `Last-Event-ID`.
+   */
+  constructor(baseUrl: string, path: string, headers: Record<string, string> = {}) {
+    let resolveReady: (response: IncomingMessage) => void
+    // eslint-disable-next-line unicorn/prefer-promise-with-resolvers -- tsconfig.json pins `lib: ["ES2023"]` deliberately (see MIGRATIONS.md); `Promise.withResolvers` is ES2024 and untyped under that lib.
+    this.ready = new Promise((resolve) => {
+      resolveReady = resolve
+    })
+    let resolveEnded: () => void
+    // eslint-disable-next-line unicorn/prefer-promise-with-resolvers -- see the disable above.
+    this.ended = new Promise((resolve) => {
+      resolveEnded = resolve
+    })
+
+    this.request = http.get(`${baseUrl}${path}`, { headers }, (response) => {
+      this.response = response
+      response.setEncoding('utf8')
+      response.on('data', (chunk: string) => {
+        this.rawText += chunk
+        this.buffer += chunk
+        let boundary = this.buffer.indexOf('\n\n')
+        while (boundary !== -1) {
+          this.frames.push(parseSseBlock(this.buffer.slice(0, boundary)))
+          this.buffer = this.buffer.slice(boundary + 2)
+          boundary = this.buffer.indexOf('\n\n')
+        }
+      })
+      response.on('end', () => resolveEnded())
+      resolveReady(response)
+    })
+
+    // Destroying an in-flight request (this file's own cleanup, and the
+    // "client disconnects" test) can surface as an 'error' event on the
+    // request itself — an unlistened 'error' event on a Node stream throws,
+    // which would otherwise fail whichever test happened to be running when
+    // cleanup destroyed a still-open connection.
+    this.request.on('error', () => {
+      // Expected on a deliberate destroy(); nothing to act on.
+    })
+  }
+
+  /**
+   * Wait for the response's headers to arrive.
+   * @returns The response, with `.statusCode`/`.headers` already populated.
+   */
+  async waitForResponse(): Promise<IncomingMessage> {
+    return this.ready
+  }
+
+  /**
+   * Wait for a non-streaming response (the 401 rejections) to finish, and
+   * return everything it sent.
+   * @returns The full response body.
+   */
+  async collectBody(): Promise<string> {
+    await this.ended
+    return this.rawText
+  }
+
+  /**
+   * Close the connection. Idempotent — safe to call from both a test's own
+   * assertions and this file's `afterEach` cleanup.
+   */
+  destroy(): void {
+    this.request.destroy()
+  }
+}
+
+/**
+ * Poll `isConditionMet` until it is true, or fail after `timeoutMs`.
+ * @param isConditionMet - Checked every `intervalMs` until it returns true.
+ * @param timeoutMs - How long to keep polling before giving up.
+ * @param intervalMs - How often to poll. Defaults to 20ms.
+ * @returns Resolves once `isConditionMet()` is true.
+ * @throws {Error} When `timeoutMs` elapses with `isConditionMet` still false.
+ */
+async function waitUntil(
+  isConditionMet: () => boolean,
+  timeoutMs: number,
+  intervalMs = 20
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!isConditionMet()) {
+    if (Date.now() > deadline) {
+      throw new Error(`Condition not met within ${timeoutMs}ms`)
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs))
+  }
+}
+
+/**
+ * Pause for a fixed duration.
+ * @param ms - How long to pause for.
+ * @returns Resolves after `ms` milliseconds.
+ */
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * A disposable email, unique to one test run.
+ * @returns An email guaranteed unique to this call.
+ */
+function uniqueEmail(): string {
+  return `notification-stream-${randomUUID()}@example.test`
+}
+
+/**
+ * Insert one `verify_email` notification directly through the repository —
+ * mirrors what `processNotificationJob` (notification.worker.ts) does
+ * before it calls `emitNotification`, without running BullMQ or the worker
+ * itself.
+ * @param userId - The owning user's id.
+ * @param title - The notification's title. Defaults to a fixed string when omitted.
+ * @returns The inserted notification.
+ */
+async function seedNotification(
+  userId: string,
+  title = 'Verify your email'
+): Promise<Notification> {
+  return notificationRepository.create({
+    userId,
+    type: 'verify_email',
+    title,
+    body: 'Click the link to verify your email address.',
+  })
+}
+
+describe('GET /api/v1/notifications/stream', () => {
+  let server: http.Server
+  let baseUrl: string
+  const createdUserIds: string[] = []
+  const openConnections: SseConnection[] = []
+
+  beforeAll(async () => {
+    // A dedicated server, not tests/integration/server.test.ts's own
+    // `startServer`/`gracefulShutdown`: this file's cleanup must destroy
+    // every still-open SSE connection before the server can close at all
+    // (an SSE response never ends on its own, so `server.close()`'s
+    // callback would otherwise never fire) — a concern specific to this
+    // file, not something to route through a shared helper that also tears
+    // down the database/Redis/queue connections every other test file in
+    // this worker still needs.
+    server = createApp().listen(0)
+    await new Promise<void>((resolve) => server.once('listening', resolve))
+    const address = server.address() as AddressInfo
+    baseUrl = `http://127.0.0.1:${address.port}`
+  })
+
+  afterAll(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+  })
+
+  afterEach(async () => {
+    for (const connection of openConnections) connection.destroy()
+    openConnections.length = 0
+
+    if (createdUserIds.length > 0) {
+      await sql`delete from users where id = any(${createdUserIds})`
+      createdUserIds.length = 0
+    }
+  })
+
+  /**
+   * Open a tracked SSE connection — tracked so `afterEach` destroys it even
+   * if the test that opened it never does.
+   * @param path - The request path, including any query string.
+   * @param headers - Extra request headers, e.g. `Last-Event-ID`.
+   * @returns The opened connection.
+   */
+  function openStream(path: string, headers: Record<string, string> = {}): SseConnection {
+    const connection = new SseConnection(baseUrl, path, headers)
+    openConnections.push(connection)
+    return connection
+  }
+
+  /**
+   * Create a disposable user row, sign an access token for it, and track
+   * the row for cleanup.
+   * @returns The created row and a valid bearer token for it.
+   */
+  async function createAuthenticatedUser(): Promise<{ user: User; token: string }> {
+    const user = await userRepository.create({ email: uniqueEmail() })
+    createdUserIds.push(user.id)
+    return { user, token: signAccessToken(user) }
+  }
+
+  it('opens an SSE stream with the expected headers for a valid token', async () => {
+    const { token } = await createAuthenticatedUser()
+
+    const connection = openStream(`/api/v1/notifications/stream?token=${encodeURIComponent(token)}`)
+    const response = await connection.waitForResponse()
+
+    expect(response.statusCode).toBe(200)
+    expect(response.headers['content-type']).toBe('text/event-stream')
+    expect(response.headers['cache-control']).toBe('no-cache')
+    expect(response.headers.connection).toBe('keep-alive')
+    expect(response.headers['x-accel-buffering']).toBe('no')
+  })
+
+  it('rejects a connection with no token, as an ordinary 401 JSON response, not a stream', async () => {
+    const connection = openStream('/api/v1/notifications/stream')
+    const response = await connection.waitForResponse()
+
+    expect(response.statusCode).toBe(401)
+    expect(response.headers['content-type']).not.toContain('text/event-stream')
+
+    const body = await connection.collectBody()
+    expect((JSON.parse(body) as { success: boolean }).success).toBe(false)
+  })
+
+  it('rejects a connection with an invalid token', async () => {
+    const connection = openStream('/api/v1/notifications/stream?token=not-a-real-jwt')
+    const response = await connection.waitForResponse()
+
+    expect(response.statusCode).toBe(401)
+  })
+
+  it('rejects a connection whose token belongs to no active user', async () => {
+    const { user, token } = await createAuthenticatedUser()
+    await sql`delete from users where id = ${user.id}`
+    createdUserIds.length = 0 // already deleted directly above
+
+    const connection = openStream(`/api/v1/notifications/stream?token=${encodeURIComponent(token)}`)
+    const response = await connection.waitForResponse()
+
+    expect(response.statusCode).toBe(401)
+  })
+
+  // Real time, not a fake timer: HEARTBEAT_INTERVAL_MS
+  // (notification-stream.controller.ts) is a fixed 30s, and this proves the
+  // actual `setInterval` wired into a live connection fires — a mocked
+  // clock would only prove this file's own mock advances correctly.
+  it('sends a heartbeat comment within 35 seconds', async () => {
+    const { token } = await createAuthenticatedUser()
+    const connection = openStream(`/api/v1/notifications/stream?token=${encodeURIComponent(token)}`)
+    await connection.waitForResponse()
+
+    await waitUntil(() => connection.rawText.includes(':ping'), 35_000, 250)
+    expect(connection.rawText).toContain(':ping')
+  }, 40_000)
+
+  it('delivers a notification published via the emitter, in the documented SSE frame format', async () => {
+    const { user, token } = await createAuthenticatedUser()
+    const connection = openStream(`/api/v1/notifications/stream?token=${encodeURIComponent(token)}`)
+    await connection.waitForResponse()
+    // The handler registers synchronously once `authenticateStreamRequest`
+    // resolves (streamNotifications, notification-stream.controller.ts) —
+    // by the time this client has received any bytes at all, the server has
+    // already run past `onNotification`. This sleep is slack against
+    // scheduling jitter, not a requirement of that ordering.
+    await sleep(50)
+
+    const notification = await seedNotification(user.id, 'Pushed live')
+    emitNotification(user.id, notification)
+
+    await waitUntil(() => connection.frames.some((frame) => frame.event === 'notification'), 5000)
+
+    const frame = connection.frames.find((candidate) => candidate.event === 'notification')
+    expect(frame?.id).toBe(notification.id)
+    expect(JSON.parse(frame?.data ?? '{}')).toEqual({
+      id: notification.id,
+      type: 'verify_email',
+      title: 'Pushed live',
+      body: notification.body,
+      // eslint-disable-next-line unicorn/no-null -- asserting against the actual wire value: the SSE payload serializes an unread notification's readAt as JSON `null` (notification-stream.controller.ts's toStreamPayload), and `JSON.parse` produces a real `null` here, not `undefined`.
+      readAt: null,
+      createdAt: notification.createdAt.toISOString(),
+    })
+  })
+
+  it('replays notifications created after Last-Event-ID on reconnect, oldest first', async () => {
+    const { user, token } = await createAuthenticatedUser()
+    const first = await seedNotification(user.id, 'First')
+    const second = await seedNotification(user.id, 'Second')
+    const third = await seedNotification(user.id, 'Third')
+
+    const connection = openStream(
+      `/api/v1/notifications/stream?token=${encodeURIComponent(token)}`,
+      { 'Last-Event-ID': first.id }
+    )
+    await connection.waitForResponse()
+
+    await waitUntil(
+      () => connection.frames.filter((frame) => frame.event === 'notification').length >= 2,
+      5000
+    )
+
+    const replayed = connection.frames.filter((frame) => frame.event === 'notification')
+    expect(replayed.map((frame) => frame.id)).toEqual([second.id, third.id])
+  })
+
+  it('does not lose a notification emitted while a reconnect’s replay query is still in flight', async () => {
+    // Regression test for a real ordering bug: an earlier version of
+    // streamNotifications (notification-stream.controller.ts) awaited
+    // `fetchMissedNotifications` BEFORE calling `onNotification`, so a
+    // notification published during that database round trip landed in
+    // neither the replay burst nor the live stream — lost until the next
+    // reconnect. This test does not control exactly when the emit lands
+    // relative to the query (that race is inherent to the scenario), but it
+    // does not need to: emitting immediately after the connection's headers
+    // arrive — before any `await` in this test — gives the emit its best
+    // chance of landing inside that window, and the assertion (delivered
+    // exactly once) holds regardless of which side of the query it actually
+    // lands on.
+    const { user, token } = await createAuthenticatedUser()
+    const first = await seedNotification(user.id, 'First')
+
+    const connection = openStream(
+      `/api/v1/notifications/stream?token=${encodeURIComponent(token)}`,
+      { 'Last-Event-ID': first.id }
+    )
+    await connection.waitForResponse()
+
+    const live = await seedNotification(user.id, 'Live during replay')
+    emitNotification(user.id, live)
+
+    await waitUntil(() => connection.frames.some((frame) => frame.event === 'notification'), 5000)
+    // A fixed settle time, not another `waitUntil`: this asserts an upper
+    // bound (never delivered twice), which a condition-based wait cannot
+    // express — there is no "it stayed at 1" event to poll for.
+    await sleep(200)
+
+    const delivered = connection.frames.filter((frame) => frame.event === 'notification')
+    expect(delivered.map((frame) => frame.id)).toEqual([live.id])
+  })
+
+  it('does not leak its listener when the client disconnects while a reconnect’s replay query is still in flight', async () => {
+    // Regression test for the other half of the same bug: the old ordering
+    // also registered `request.on('close')` only after the replay query
+    // resolved, so a disconnect during that window fired 'close' before any
+    // handler was attached — `offNotification` never ran, leaking the
+    // subscription and the heartbeat timer for the life of the process.
+    // Destroying as soon as the response headers arrive, before any
+    // `await` in this test, gives the disconnect its best chance of
+    // landing inside that window; `listenerCount` reaching 0 either way is
+    // what the fix guarantees.
+    const { user, token } = await createAuthenticatedUser()
+    const first = await seedNotification(user.id, 'First')
+
+    const connection = openStream(
+      `/api/v1/notifications/stream?token=${encodeURIComponent(token)}`,
+      { 'Last-Event-ID': first.id }
+    )
+    await connection.waitForResponse()
+    connection.destroy()
+
+    await waitUntil(() => listenerCount(user.id) === 0, 2000)
+    expect(listenerCount(user.id)).toBe(0)
+  })
+
+  it('does not replay anything when Last-Event-ID does not resolve to a notification this user owns', async () => {
+    const { user, token } = await createAuthenticatedUser()
+    await seedNotification(user.id, 'Only notification')
+
+    const connection = openStream(
+      `/api/v1/notifications/stream?token=${encodeURIComponent(token)}`,
+      { 'Last-Event-ID': randomUUID() }
+    )
+    const response = await connection.waitForResponse()
+    await sleep(200) // give a wrongly-replayed burst a chance to arrive before asserting it didn't
+
+    expect(response.statusCode).toBe(200)
+    expect(connection.frames.some((frame) => frame.event === 'notification')).toBe(false)
+  })
+
+  it('stops delivering events and removes its listener once the client disconnects', async () => {
+    const { user, token } = await createAuthenticatedUser()
+    const connection = openStream(`/api/v1/notifications/stream?token=${encodeURIComponent(token)}`)
+    await connection.waitForResponse()
+    await waitUntil(() => listenerCount(user.id) === 1, 2000)
+
+    connection.destroy()
+    await waitUntil(() => listenerCount(user.id) === 0, 2000)
+
+    const notification = await seedNotification(user.id, 'After close')
+    expect(() => emitNotification(user.id, notification)).not.toThrow()
+    await sleep(100)
+    expect(connection.frames.some((frame) => frame.event === 'notification')).toBe(false)
+  })
+})

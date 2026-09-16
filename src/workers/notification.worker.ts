@@ -5,7 +5,11 @@
 // notification.job.ts. Fans one job out to up to two channels, each gated
 // by its own `notification_preferences` check:
 //
-//   - in-app: insert a row into `notifications` via `NotificationRepository`.
+//   - in-app: insert a row into `notifications` via `NotificationRepository`,
+//     then publish it to `notification-emitter.service.ts`'s in-process
+//     emitter so a live `GET /api/v1/notifications/stream` connection
+//     (notification-stream.controller.ts) sees it immediately, without
+//     polling.
 //   - email: enqueue onto the "email" queue via `addEmailJob` — this worker
 //     never calls `sendMail` directly, the same "go through the queue"
 //     convention CLAUDE.md documents for every other email send.
@@ -30,6 +34,7 @@ import { redactedForLog } from '@/middlewares/error.middleware'
 import { NotificationPreferenceRepository } from '@/repositories/notification-preference.repository'
 import { NotificationRepository } from '@/repositories/notification.repository'
 import { logger } from '@/services/logger.service'
+import { emitNotification } from '@/services/notification-emitter.service'
 import { getQueueConnection } from '@/services/queue.service'
 
 const notificationRepository = new NotificationRepository()
@@ -75,16 +80,41 @@ export async function processNotificationJob(job: Job<NotificationJobData>): Pro
     // wants to omit must be left out of the object literal, the same
     // conditional-construction pattern `NotificationRepository.list` already
     // uses for `nextCursor` (notification.repository.ts).
-    if (metadata) {
-      await notificationRepository.create({
-        userId,
+    const created = metadata
+      ? await notificationRepository.create({
+          userId,
+          type,
+          title,
+          body,
+          metadata: metadataWithoutVariables(metadata),
+        })
+      : await notificationRepository.create({ userId, type, title, body })
+
+    // Fire only after the insert has actually committed — never before, and
+    // never for a channel that is disabled — so an SSE connection can never
+    // observe a notification via the live stream before `GET
+    // /api/v1/notifications` (or a reconnect's replay burst) can also see
+    // it. See notification-emitter.service.ts's own header comment for why
+    // this is a same-process, in-memory emit rather than something durable:
+    // a connection with nothing subscribed just misses it, the same as any
+    // other client that was not listening at the time.
+    //
+    // Caught, not left to propagate — same "the insert already committed,
+    // so nothing after it may fail the job" reasoning this file's header
+    // comment gives for the email channel. `EventEmitter#emit` runs every
+    // subscribed SSE connection's listener synchronously and re-throws
+    // whatever the first one throws; an uncaught throw here would reject
+    // this job and BullMQ would retry the WHOLE thing, producing a second
+    // in-app row for a failure that has nothing to do with the insert that
+    // already succeeded.
+    try {
+      emitNotification(userId, created)
+    } catch (error) {
+      logger.error('Failed to publish notification to the SSE emitter', {
+        error: redactedForLog(error),
+        notificationId: created.id,
         type,
-        title,
-        body,
-        metadata: metadataWithoutVariables(metadata),
       })
-    } else {
-      await notificationRepository.create({ userId, type, title, body })
     }
   }
 
