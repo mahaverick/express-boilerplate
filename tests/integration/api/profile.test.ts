@@ -23,6 +23,7 @@ import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { hashPassword } from '@/utilities/password.utilities'
 import { signAccessToken } from '@/utilities/token.utilities'
+import { withMutatedMethod } from '../../helpers/mutate'
 
 const app = createApp()
 const userRepository = new UserRepository()
@@ -133,6 +134,38 @@ describe('/api/v1/profile', () => {
       expect(response.status).toBe(401)
       expect(envelopeOf<PublicUserBody>(response).success).toBe(false)
     })
+
+    // A real race, not a hypothetical one: profile.controller.ts's own
+    // `getProfile` loads the user a SECOND time (requireAuth,
+    // auth.middleware.ts, already loaded it once to authenticate the
+    // request) and 404s if that second lookup comes back empty. Simulating
+    // the row vanishing in that exact gap needs `findById` to answer
+    // truthfully once (requireAuth's own check, which must succeed or every
+    // request here 401s before reaching the controller at all) and then
+    // report "gone" from the very next call on — the real implementation
+    // stays real up to that count, `withMutatedMethod` reaches every
+    // existing `UserRepository` instance including this file's own and
+    // auth.middleware.ts's, and restores the original afterwards
+    // (tests/helpers/mutate.ts).
+    it('returns 404 when the user is deleted between requireAuth loading it and the handler loading it again', async () => {
+      const { token } = await createAuthenticatedUser()
+      // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
+      const realFindById = UserRepository.prototype.findById
+      let callCount = 0
+      const mutatedFindById: typeof realFindById = function (this: UserRepository, id, options) {
+        callCount += 1
+        return callCount === 1 ? realFindById.call(this, id, options) : Promise.resolve(undefined)
+      }
+
+      await withMutatedMethod(UserRepository.prototype, 'findById', mutatedFindById, async () => {
+        const response = await request(app)
+          .get('/api/v1/profile')
+          .set('Authorization', `Bearer ${token}`)
+
+        expect(response.status).toBe(404)
+        expect(envelopeOf<PublicUserBody>(response).success).toBe(false)
+      })
+    })
   })
 
   describe('PATCH /api/v1/profile', () => {
@@ -161,6 +194,32 @@ describe('/api/v1/profile', () => {
       const response = await request(app).patch('/api/v1/profile').send({ firstName: 'Ada' })
 
       expect(response.status).toBe(401)
+    })
+
+    // The `hasChanges` branch of the same race the GET test above proves —
+    // here the second lookup is `UserRepository.update`, not `findById`
+    // (toUpdateValues produced at least one column, so updateProfile takes
+    // the `userRepository.update(...)` arm of its ternary, not
+    // `findById`). `update()` itself already returns undefined for "no
+    // matching row" (base.repository.ts), so no counter is needed here —
+    // unlike `findById`, requireAuth never calls `update`, so mutating it
+    // unconditionally cannot make an earlier, unrelated lookup fail first.
+    it('returns 404 from an update when the user is deleted first', async () => {
+      const { token } = await createAuthenticatedUser()
+
+      await withMutatedMethod(
+        UserRepository.prototype,
+        'update',
+        () => Promise.resolve(undefined),
+        async () => {
+          const response = await request(app)
+            .patch('/api/v1/profile')
+            .set('Authorization', `Bearer ${token}`)
+            .send({ firstName: 'Ada' })
+
+          expect(response.status).toBe(404)
+        }
+      )
     })
 
     it('treats an explicit null as clearing a field, distinct from omitting it', async () => {

@@ -298,6 +298,23 @@ describe('QUEUE_PREFIX', () => {
   })
 })
 
+describe('SSE_HEARTBEAT_INTERVAL_MS', () => {
+  it('defaults to 30000 when unset', () => {
+    expect(parseEnv(valid).SSE_HEARTBEAT_INTERVAL_MS).toBe(30_000)
+  })
+
+  it('coerces a string value to a number — tests override this per .env.test', () => {
+    expect(
+      parseEnv({ ...valid, SSE_HEARTBEAT_INTERVAL_MS: '1000' }).SSE_HEARTBEAT_INTERVAL_MS
+    ).toBe(1000)
+  })
+
+  it('rejects a non-positive value', () => {
+    expect(() => parseEnv({ ...valid, SSE_HEARTBEAT_INTERVAL_MS: '0' })).toThrow()
+    expect(() => parseEnv({ ...valid, SSE_HEARTBEAT_INTERVAL_MS: '-1' })).toThrow()
+  })
+})
+
 describe('trustProxySetting', () => {
   it('maps "false" to the boolean Express understands, not the string', () => {
     // A non-empty string is truthy, and Express reads a string as an address

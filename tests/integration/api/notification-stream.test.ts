@@ -26,15 +26,19 @@
 import { randomUUID } from 'node:crypto'
 import http, { type IncomingMessage } from 'node:http'
 import type { AddressInfo } from 'node:net'
+import jwt from 'jsonwebtoken'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
+import { getEnv } from '@/configs/env.config'
 import type { Notification } from '@/database/models/notification.model'
 import type { User } from '@/database/models/user.model'
+import { ACCESS_TOKEN_EXPIRED_CODE } from '@/middlewares/auth.middleware'
 import { NotificationRepository } from '@/repositories/notification.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { emitNotification, listenerCount } from '@/services/notification-emitter.service'
 import { signAccessToken } from '@/utilities/token.utilities'
+import { withMutatedMethod } from '../../helpers/mutate'
 
 const userRepository = new UserRepository()
 const notificationRepository = new NotificationRepository()
@@ -354,6 +358,24 @@ describe('GET /api/v1/notifications/stream', () => {
     expect(response.statusCode).toBe(401)
   })
 
+  it('rejects a connection with an expired token, carrying the distinguishable code', async () => {
+    const token = jwt.sign({ sub: randomUUID() }, getEnv().JWT_ACCESS_SECRET, {
+      algorithm: 'HS256',
+      // Already expired the moment it's signed — mirrors
+      // tests/integration/middlewares/auth.middleware.test.ts's own
+      // "rejects an expired access token" case, the one other place this
+      // codebase manufactures an expired token by hand.
+      expiresIn: -10,
+    })
+
+    const connection = openStream(`/api/v1/notifications/stream?token=${encodeURIComponent(token)}`)
+    const response = await connection.waitForResponse()
+
+    expect(response.statusCode).toBe(401)
+    const body = await connection.collectBody()
+    expect((JSON.parse(body) as { code?: string }).code).toBe(ACCESS_TOKEN_EXPIRED_CODE)
+  })
+
   it('rejects a connection whose token belongs to no active user', async () => {
     const { user, token } = await createAuthenticatedUser()
     await sql`delete from users where id = ${user.id}`
@@ -365,18 +387,22 @@ describe('GET /api/v1/notifications/stream', () => {
     expect(response.statusCode).toBe(401)
   })
 
-  // Real time, not a fake timer: HEARTBEAT_INTERVAL_MS
-  // (notification-stream.controller.ts) is a fixed 30s, and this proves the
-  // actual `setInterval` wired into a live connection fires — a mocked
-  // clock would only prove this file's own mock advances correctly.
-  it('sends a heartbeat comment within 35 seconds', async () => {
+  // Real time, not a fake timer: this proves the actual `setInterval` wired
+  // into a live connection fires — a mocked clock would only prove this
+  // file's own mock advances correctly. SSE_HEARTBEAT_INTERVAL_MS
+  // (env.config.ts, read by notification-stream.controller.ts) is set to
+  // 1000ms in .env.test specifically so this test doesn't have to wait out
+  // the real 30-second production interval — it was the single slowest test
+  // in the whole suite before that config was pulled out of a hardcoded
+  // controller constant.
+  it('sends a heartbeat comment within a few seconds', async () => {
     const { token } = await createAuthenticatedUser()
     const connection = openStream(`/api/v1/notifications/stream?token=${encodeURIComponent(token)}`)
     await connection.waitForResponse()
 
-    await waitUntil(() => connection.rawText.includes(':ping'), 35_000, 250)
+    await waitUntil(() => connection.rawText.includes(':ping'), 5000, 100)
     expect(connection.rawText).toContain(':ping')
-  }, 40_000)
+  }, 10_000)
 
   it('delivers a notification published via the emitter, in the documented SSE frame format', async () => {
     const { user, token } = await createAuthenticatedUser()
@@ -461,6 +487,73 @@ describe('GET /api/v1/notifications/stream', () => {
 
     const delivered = connection.frames.filter((frame) => frame.event === 'notification')
     expect(delivered.map((frame) => frame.id)).toEqual([live.id])
+  })
+
+  // The deterministic version of the race the test above only ever WINS by
+  // chance: `withMutatedMethod` delays `findByIdAndUser` — the first of
+  // `fetchMissedNotifications`'s two queries — by 100ms, guaranteeing
+  // `isReplaying` (streamNotifications, notification-stream.controller.ts)
+  // is still true when both notifications below are emitted, so this
+  // reliably exercises BOTH branches the flush loop has: a notification
+  // that ALSO landed in the missed burst (persisted before the replay
+  // query ran) must be delivered exactly once, deduped out of
+  // `pendingDuringReplay` by its own `missedIds` check; a notification with
+  // no corresponding row at all (never persisted — `emitNotification` is
+  // called directly here, same as this file's header comment establishes
+  // for every other test in it) can never appear in that burst, and must
+  // still reach the client via the flush loop itself.
+  it('routes notifications emitted during replay through the pending queue — deduping one already in the missed burst, flushing one that is not', async () => {
+    const { user, token } = await createAuthenticatedUser()
+    const first = await seedNotification(user.id, 'First')
+
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
+    const realFindByIdAndUser = NotificationRepository.prototype.findByIdAndUser
+    const delayedFindByIdAndUser: typeof realFindByIdAndUser = async function (
+      this: NotificationRepository,
+      id,
+      userId
+    ) {
+      const result = await realFindByIdAndUser.call(this, id, userId)
+      await sleep(100)
+      return result
+    }
+
+    await withMutatedMethod(
+      NotificationRepository.prototype,
+      'findByIdAndUser',
+      delayedFindByIdAndUser,
+      async () => {
+        const connection = openStream(
+          `/api/v1/notifications/stream?token=${encodeURIComponent(token)}`,
+          { 'Last-Event-ID': first.id }
+        )
+        await connection.waitForResponse()
+
+        const persistedLive = await seedNotification(user.id, 'Persisted, in the missed burst')
+        emitNotification(user.id, persistedLive)
+
+        // Never inserted — the replay query's own `list()` call can never
+        // find it, so it cannot be in `missedIds` no matter how long the
+        // delay above runs.
+        const ephemeralLive: Notification = {
+          ...persistedLive,
+          id: randomUUID(),
+          title: 'Ephemeral, never persisted',
+          createdAt: new Date(persistedLive.createdAt.getTime() + 1),
+        }
+        emitNotification(user.id, ephemeralLive)
+
+        await waitUntil(
+          () => connection.frames.filter((frame) => frame.event === 'notification').length >= 2,
+          5000
+        )
+        await sleep(200)
+
+        const delivered = connection.frames.filter((frame) => frame.event === 'notification')
+        expect(delivered.filter((frame) => frame.id === persistedLive.id)).toHaveLength(1)
+        expect(delivered.filter((frame) => frame.id === ephemeralLive.id)).toHaveLength(1)
+      }
+    )
   })
 
   it('does not leak its listener when the client disconnects while a reconnect’s replay query is still in flight', async () => {

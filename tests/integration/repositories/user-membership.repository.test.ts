@@ -140,6 +140,26 @@ describe('UserMembershipRepository', () => {
       ).rejects.toMatchObject({ name: 'HttpError', statusCode: 409 })
     })
 
+    // The catch block's OTHER branch: `isUniqueViolation` false, so the
+    // original error propagates unchanged rather than becoming an
+    // HttpError(409) meant for a (userId, tenantId) collision specifically.
+    // A foreign-key violation on `userId` (naming no real user) is a real,
+    // different failure — mirrors tenant.repository.test.ts's and
+    // auth-provider.repository.test.ts's identical case for their own
+    // `create`.
+    it('propagates a non-collision database error unchanged, e.g. a foreign-key violation on userId', async () => {
+      const owner = await createUser()
+      const tenant = await createTenant(owner.id)
+
+      await expect(
+        userMembershipRepository.create({
+          userId: randomUUID(),
+          tenantId: tenant.id,
+          role: 'viewer',
+        })
+      ).rejects.not.toMatchObject({ name: 'HttpError' })
+    })
+
     it('rejects an unknown role at the database, not just in TypeScript', async () => {
       // Load-bearing for this task's own schema guarantee
       // (`user_memberships_role_check`, user-membership.model.ts) — same

@@ -153,6 +153,17 @@ describe('TenantRepository', () => {
       ).toBeUndefined()
     })
 
+    // The catch block's OTHER branch: `isUniqueViolation` false, so the
+    // original error propagates unchanged rather than becoming an
+    // HttpError(409) meant for a slug collision specifically. A foreign-key
+    // violation on the owner membership insert (an `ownerId` naming no real
+    // user) is a real, different failure the same transaction can hit.
+    it('propagates a non-slug-collision database error unchanged, e.g. a foreign-key violation on ownerId', async () => {
+      const bogusOwnerId = randomUUID()
+
+      await expect(createTenant(bogusOwnerId)).rejects.not.toMatchObject({ name: 'HttpError' })
+    })
+
     it('allows reusing a slug once the original tenant is soft-deleted', async () => {
       const firstOwnerId = await createUser()
       const secondOwnerId = await createUser()

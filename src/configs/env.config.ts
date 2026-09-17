@@ -305,6 +305,24 @@ const EnvSchema = z.object({
       'BullMQ Redis key prefix. Tests override this per vitest worker to prevent cross-worker job leaks.'
     ),
 
+  // How often notification-stream.controller.ts writes a `:ping\n\n` comment
+  // line to an open SSE connection, to keep it alive through an intermediary
+  // (a load balancer, an nginx proxy) that would otherwise time out an
+  // idle-looking socket. Was a hardcoded 30_000 constant in that controller;
+  // pulled into this schema so .env.test can set it to something short —
+  // waiting on a real 30-second `setInterval` made
+  // tests/integration/api/notification-stream.test.ts's own heartbeat test
+  // the single slowest thing in the entire suite. Defaulted to 30s, matching
+  // the former hardcoded value.
+  SSE_HEARTBEAT_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(30_000)
+    .describe(
+      'Milliseconds between `:ping` heartbeat comments on an open notification SSE stream (notification-stream.controller.ts). Defaults to 30000 (30s).'
+    ),
+
   // SMTP configuration for mailer.service.ts (src/services/mailer.service.ts)
   // / mailer.config.ts. Defaulted to docker-compose.yml's Mailpit service
   // (SMTP on 1025) so a fresh clone can send mail with zero configuration —

@@ -14,6 +14,7 @@
 // answers with this codebase's ordinary JSON 401 envelope — not an
 // event-stream response that immediately closes.
 import { type NextFunction, type Request, type Response } from 'express'
+import { getEnv } from '@/configs/env.config'
 import { MAX_NOTIFICATION_PAGE_SIZE } from '@/constants/notification.constants'
 import type { Notification } from '@/database/models/notification.model'
 import { ACCESS_TOKEN_EXPIRED_CODE } from '@/middlewares/auth.middleware'
@@ -26,11 +27,6 @@ import { verifyAccessToken } from '@/utilities/token.utilities'
 
 const userRepository = new UserRepository()
 const notificationRepository = new NotificationRepository()
-
-// How often a `:ping\n\n` comment line is written to an open connection, to
-// keep it alive through an intermediary (a load balancer, an nginx proxy)
-// that would otherwise time out an idle-looking socket.
-const HEARTBEAT_INTERVAL_MS = 30_000
 
 // Sent once, in the `retry:` field of the initial response — how long the
 // browser's own `EventSource` should wait before reconnecting after this
@@ -280,7 +276,7 @@ export async function streamNotifications(
     const heartbeat = setInterval(() => {
       if (response.writableEnded || response.destroyed) return
       response.write(':ping\n\n')
-    }, HEARTBEAT_INTERVAL_MS)
+    }, getEnv().SSE_HEARTBEAT_INTERVAL_MS)
     // Without this, a pending heartbeat timer keeps the Node event loop
     // alive for as long as the connection is open — fine in production,
     // where the process is meant to stay up, but it would otherwise hang a

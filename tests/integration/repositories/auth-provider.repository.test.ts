@@ -114,6 +114,23 @@ describe('AuthProviderRepository', () => {
       ).rejects.toMatchObject({ name: 'HttpError', statusCode: 409 })
     })
 
+    // The catch block's OTHER branch: `isUniqueViolation` false, so the
+    // original error propagates unchanged rather than becoming an
+    // HttpError(409) meant for a (provider, providerId) collision
+    // specifically. A foreign-key violation on `userId` (naming no real
+    // user) is a real, different failure `create`'s own transaction-free
+    // insert can hit — mirrors tenant.repository.test.ts's identical case
+    // for `TenantRepository.create`.
+    it('propagates a non-collision database error unchanged, e.g. a foreign-key violation on userId', async () => {
+      await expect(
+        authProviderRepository.create({
+          userId: randomUUID(),
+          provider: 'email',
+          providerId: uniqueEmail(),
+        })
+      ).rejects.not.toMatchObject({ name: 'HttpError' })
+    })
+
     it('allows the same providerId under different providers', async () => {
       const userId = await createUser()
       const sharedValue = randomUUID()

@@ -283,6 +283,31 @@ describe('UserTokenRepository', () => {
     expect(otherUsersRow?.revokedAt).toBeNull()
   })
 
+  // `softDelete`/`markDeleted` (BaseRepository, base.repository.ts) — this
+  // file's other tests never call it, since real token lifecycle uses
+  // `claimOnce`/`revokeAllFor*` (a `revokedAt` column) rather than
+  // soft-delete. Still real, inherited public API: proven the same way
+  // tenant.repository.test.ts's own "excludes a soft-deleted tenant from
+  // findById" case proves it for a different table.
+  it('softDelete sets deletedAt and excludes the row from findById by default', async () => {
+    const userId = await createUser()
+    const created = await userTokenRepository.create({
+      userId,
+      purpose: 'refresh',
+      sessionId: randomUUID(),
+      tokenHash: uniqueHash(),
+      expiresAt: new Date(Date.now() + 60_000),
+    })
+
+    const deleted = await userTokenRepository.softDelete(created.id)
+    expect(deleted?.deletedAt).not.toBeNull()
+
+    expect(await userTokenRepository.findById(created.id)).toBeUndefined()
+    expect(await userTokenRepository.findById(created.id, { includeDeleted: true })).toMatchObject({
+      id: created.id,
+    })
+  })
+
   it('deleting the owning user cascades to its token rows', async () => {
     const userId = await createUser()
     const created = await userTokenRepository.create({
