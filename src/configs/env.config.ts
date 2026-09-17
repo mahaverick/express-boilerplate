@@ -44,17 +44,19 @@ const EnvSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   APP_PORT: z.coerce.number().int().positive().default(4040),
 
-  // PLACEHOLDERS. Two of the required variables below are still read by
-  // nothing in src/ today — verified by grep: APP_URL and SESSION_SECRET
-  // are forward declarations for the CORS/session plans (see SECURITY.md,
-  // "Intended choices"), not evidence that either exists yet. WEB_URL is no
-  // longer one of them — verification-link.utilities.ts reads
-  // `getEnv().WEB_URL` to build the link mailed to a user, so its own
-  // `.describe()` below says what it actually does rather than carrying the
-  // placeholder note too. JWT_ACCESS_SECRET is the other exception —
+  // FORMER PLACEHOLDERS. APP_URL and SESSION_SECRET used to be forward
+  // declarations for the CORS/session plans (see SECURITY.md, "Intended
+  // choices") that nothing in src/ read yet. Both are read now:
+  // passport.config.ts's `configurePassport()` reads `APP_URL` to build the
+  // Google OAuth `callbackURL`, and `createOAuthSessionMiddleware()` reads
+  // `SESSION_SECRET` to sign the express-session cookie used for the OAuth
+  // round-trip's CSRF `state` parameter — so each field's own `.describe()`
+  // below says what it actually does rather than carrying the placeholder
+  // note. WEB_URL was the first of these to graduate —
+  // verification-link.utilities.ts reads `getEnv().WEB_URL` to build the
+  // link mailed to a user. JWT_ACCESS_SECRET graduated earlier still —
   // token.utilities.ts (signAccessToken/verifyAccessToken) reads it to sign
-  // and verify every access token, so its own `.describe()` below says what
-  // it actually does rather than carrying the same placeholder note.
+  // and verify every access token.
   //
   // There is no JWT_REFRESH_SECRET: refresh tokens are opaque random
   // strings, not JWTs (token.utilities.ts's header comment), so nothing
@@ -76,7 +78,7 @@ const EnvSchema = z.object({
   APP_URL: z
     .url({ protocol: /^https?$/ })
     .describe(
-      'Public origin of this API. PLACEHOLDER — nothing reads it yet; reserved for OAuth callbacks and email links. http://localhost:4040 locally.'
+      'Public origin of this API. Used to build the Google OAuth callback URL (passport.config.ts) — must match a redirect URI registered in Google Cloud Console exactly, including scheme and trailing slash. http://localhost:4040 locally.'
     ),
   WEB_URL: z
     .url({ protocol: /^https?$/ })
@@ -97,8 +99,28 @@ const EnvSchema = z.object({
     .string()
     .min(32)
     .describe(
-      'PLACEHOLDER — no session layer ships yet and nothing reads this. Any 32+ character string works for now; use `openssl rand -hex 32` before shipping sessions.'
+      'Signs the express-session cookie used during the Google OAuth round-trip (passport.config.ts). Any 32+ character string works; use `openssl rand -hex 32`.'
     ),
+
+  // Both OPTIONAL, deliberately, even though Google login only works when
+  // BOTH are set together — Zod cannot express "required together" with a
+  // schema-level `.refine()` here: `getDatabaseUrl()`'s own comment already
+  // establishes that ANY `.refine()` on `EnvSchema` itself breaks
+  // `EnvSchema.pick(...)`, which drizzle-kit's entry point depends on. The
+  // pairing is instead enforced in code, at strategy-registration time
+  // (`configurePassport()`, passport.config.ts): absent `GOOGLE_CLIENT_ID`
+  // disables Google login entirely (no route mounted), and `GOOGLE_CLIENT_ID`
+  // set without `GOOGLE_CLIENT_SECRET` throws at boot — the same
+  // refuse-to-start posture `trustProxySetting`'s own comment describes for
+  // a different misconfiguration.
+  GOOGLE_CLIENT_ID: z
+    .string()
+    .optional()
+    .describe('Google OAuth 2.0 client ID. When absent, Google login is disabled.'),
+  GOOGLE_CLIENT_SECRET: z
+    .string()
+    .optional()
+    .describe('Google OAuth 2.0 client secret. Required when GOOGLE_CLIENT_ID is set.'),
 
   // Validated with a refinement that actually CALLS ms() and checks its
   // result, rather than a regex that merely looks duration-shaped. This is
