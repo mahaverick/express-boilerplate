@@ -24,9 +24,17 @@
 // `rl:resend-verification-email:`, `rl:forgot-password-ip:` /
 // `rl:forgot-password-email:`) — see rate-limit.middleware.ts for why one
 // composite key is not enough for either pair of threats.
-import { Router } from 'express'
+import { Router, type RequestHandler } from 'express'
+import passport from 'passport'
+import {
+  configurePassport,
+  createOAuthSessionMiddleware,
+  GOOGLE_STRATEGY_NAME,
+  isGoogleOAuthEnabled,
+} from '@/configs/passport.config'
 import {
   forgotPassword,
+  handleGoogleCallback,
   login,
   logout,
   refresh,
@@ -38,6 +46,8 @@ import { requireJsonContentType } from '@/middlewares/content-type.middleware'
 import {
   createForgotPasswordEmailRateLimiter,
   createForgotPasswordIpRateLimiter,
+  createGoogleOAuthCallbackRateLimiter,
+  createGoogleOAuthRateLimiter,
   createLoginRateLimiter,
   createLogoutRateLimiter,
   createRefreshRateLimiter,
@@ -89,5 +99,77 @@ export function createAuthRouter(): Router {
     forgotPassword
   )
   router.post('/reset-password', createResetPasswordRateLimiter(), resetPassword)
+
+  // Google OAuth — only mounted when GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET
+  // are configured (isGoogleOAuthEnabled(), passport.config.ts); an
+  // unconfigured deployment never exposes this route at all rather than
+  // exposing one that would fail on first use. `router.use(requireJsonContentType)`
+  // above still runs ahead of this route, deliberately not bypassed: a GET
+  // navigation (a real browser redirect, or supertest's `.get()`) sends no
+  // `Content-Type` header, which `mediaTypeOf` normalises to `''` —
+  // `ACCEPTED_MEDIA_TYPES` already allows that (content-type.middleware.ts's
+  // own header comment: "a request with no content type at all is allowed,
+  // on purpose"), so this GET route passes through the same middleware
+  // every POST route does without needing a different position on the
+  // router or an exemption.
+  //
+  // `configurePassport()` is called here, not at module scope: it must run
+  // exactly once before either OAuth route can handle a request, and
+  // `createAuthRouter()` is that one guaranteed call site — see
+  // passport.config.ts's own header comment for why it is safe to call on
+  // every `createAuthRouter()` invocation (idempotent registration) rather
+  // than needing a separate boot-time hook.
+  //
+  // `createGoogleOAuthRateLimiter()` is listed FIRST in the chain, ahead of
+  // `oauthSession` — same ordering every other route on this router uses
+  // (the limiter runs before the handler it protects), and load-bearing
+  // here specifically: it must reject an over-budget caller with a 429
+  // BEFORE `oauthSession` ever writes a session to Redis, or the limiter
+  // would still let an attacker spend the exact resource
+  // (rate-limit.middleware.ts's own comment on this limiter) it exists to
+  // bound.
+  if (isGoogleOAuthEnabled()) {
+    configurePassport()
+    const oauthSession = createOAuthSessionMiddleware()
+    router.get(
+      '/google',
+      createGoogleOAuthRateLimiter(),
+      oauthSession,
+      passport.initialize(),
+      // `as RequestHandler`: `@types/passport`'s `Authenticator.authenticate`
+      // resolves to `any` for the `PassportStatic` singleton — its
+      // `AuthenticateRet` generic parameter defaults to `any` and nothing in
+      // this project instantiates `Authenticator` with a narrower one, which
+      // holds regardless of `GOOGLE_STRATEGY_NAME` vs the `'google'` literal.
+      // Left uncast, `@typescript-eslint/no-unsafe-argument` correctly flags
+      // handing an `any` into `router.get`'s `RequestHandler` parameter.
+      passport.authenticate(GOOGLE_STRATEGY_NAME, {
+        scope: ['profile', 'email'],
+      }) as RequestHandler
+    )
+    // The callback route: Google redirects here after the user completes
+    // (or abandons) its consent screen. `createGoogleOAuthCallbackRateLimiter()`
+    // runs first, ahead of `oauthSession`, for the same ordering reason as
+    // `/google` above — a 429 must land before `oauthSession` (or
+    // `handleGoogleCallback`'s own database work) spends anything. Reuses
+    // the SAME `oauthSession` middleware instance built above rather than a
+    // second `createOAuthSessionMiddleware()` call: both routes read/write
+    // one session (the `state` value `/google` wrote, `passport-oauth2`
+    // reads back here for its CSRF check), so both must resolve to the same
+    // underlying express-session configuration — a second call would still
+    // work (it lazily builds an equivalent middleware) but would needlessly
+    // duplicate the Redis-latch machinery `createOAuthSessionMiddleware`'s
+    // own header comment describes. `handleGoogleCallback` (auth.controller.ts)
+    // is where the actual account-linking policy — and Task 3's
+    // `findOrCreateByGoogle` — lives.
+    router.get(
+      '/google/callback',
+      createGoogleOAuthCallbackRateLimiter(),
+      oauthSession,
+      passport.initialize(),
+      handleGoogleCallback
+    )
+  }
+
   return router
 }

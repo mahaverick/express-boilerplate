@@ -1,10 +1,11 @@
 // src/middlewares/rate-limit.middleware.ts
 //
-// Ten limiters: `createRegisterRateLimiter`, `createLoginRateLimiter`,
+// Twelve limiters: `createRegisterRateLimiter`, `createLoginRateLimiter`,
 // `createRefreshRateLimiter`, `createLogoutRateLimiter`,
-// `createVerifyEmailRateLimiter`, `createResetPasswordRateLimiter`, and the
-// two pairs for resend-verification and forgot-password —
-// `createResendVerificationIpRateLimiter` /
+// `createVerifyEmailRateLimiter`, `createResetPasswordRateLimiter`,
+// `createGoogleOAuthRateLimiter`, `createGoogleOAuthCallbackRateLimiter`,
+// and the two pairs for resend-verification
+// and forgot-password — `createResendVerificationIpRateLimiter` /
 // `createResendVerificationEmailRateLimiter`, and
 // `createForgotPasswordIpRateLimiter` / `createForgotPasswordEmailRateLimiter`.
 // All are FACTORIES, never a top-level `const` built at module-import time —
@@ -516,6 +517,83 @@ export function createResetPasswordRateLimiter(
     standardHeaders: true,
     legacyHeaders: false,
     store: new SharedRateLimitStore('rl:reset-password:'),
+    handler: sendRateLimitedResponse,
+    ...overrides,
+  })
+}
+
+// Same generosity, same reasoning as refresh/logout above: keyed on IP
+// alone, and volume protection rather than a security boundary. `/auth/google`
+// never touches bcrypt or sends mail — the two threats this file's header
+// comment names for most other endpoints — but it does write a fresh
+// session to Redis on every hit (createOAuthSessionMiddleware,
+// passport.config.ts) before ever redirecting anywhere, so an unlimited
+// route here is still a real amplifier for Redis writes and connections,
+// just not an enumeration oracle. Google's own OAuth consent screen is the
+// thing that would actually rate-limit a REAL login attempt; this bound
+// exists so a client hammering the redirect step alone cannot turn it into
+// a Redis-write flood.
+const GOOGLE_OAUTH_RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000
+const GOOGLE_OAUTH_RATE_LIMIT_MAX_ATTEMPTS = 300
+
+/**
+ * Build the Google OAuth redirect rate limiter: `limit` requests per
+ * `windowMs`, keyed on IP alone. See this file's header comment for why
+ * this bounds Redis-write volume rather than any of the enumeration/bcrypt/
+ * email threats most other limiters in this file exist for. A factory, not
+ * a module-scope constant — see this file's header comment.
+ * @param overrides - Options to override, e.g. a small `limit`/`windowMs` for a test.
+ * @returns Express middleware enforcing the limit.
+ */
+export function createGoogleOAuthRateLimiter(
+  overrides: Partial<Options> = {}
+): RateLimitRequestHandler {
+  return rateLimit({
+    windowMs: GOOGLE_OAUTH_RATE_LIMIT_WINDOW_MS,
+    limit: GOOGLE_OAUTH_RATE_LIMIT_MAX_ATTEMPTS,
+    standardHeaders: true,
+    legacyHeaders: false,
+    store: new SharedRateLimitStore('rl:google-oauth:'),
+    handler: sendRateLimitedResponse,
+    ...overrides,
+  })
+}
+
+// The Google OAuth CALLBACK gets its OWN prefix, separate from the redirect
+// step's `rl:google-oauth:` bucket above — see this file's header comment
+// (ONE STORE PREFIX PER ENDPOINT) for why sharing one would let traffic on
+// either step spend the other's budget. This route does real work per
+// request that the redirect step never does: `findOrCreateByGoogle`
+// (auth.controller.ts) runs a `findByProviderAndId` lookup, potentially a
+// `findByEmail` lookup, and — for a first-time Google sign-in — an atomic
+// user-plus-two-providers INSERT inside a database transaction, then a
+// `user_tokens` INSERT to issue the refresh token. Kept at the same
+// generous, volume-protection-only limit as the redirect step rather than a
+// tighter one, for the identical reason: Google's own consent screen
+// already gates how often a REAL login reaches this route (it requires a
+// live OAuth grant first), so what this bounds is a client hitting the
+// callback URL directly/repeatedly, not a realistic login rate.
+const GOOGLE_OAUTH_CALLBACK_RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000
+const GOOGLE_OAUTH_CALLBACK_RATE_LIMIT_MAX_ATTEMPTS = 300
+
+/**
+ * Build the Google OAuth callback rate limiter: `limit` requests per
+ * `windowMs`, keyed on IP alone. See the comment above these constants for
+ * why this is a separate limiter from `createGoogleOAuthRateLimiter` rather
+ * than a shared one. A factory, not a module-scope constant — see this
+ * file's header comment.
+ * @param overrides - Options to override, e.g. a small `limit`/`windowMs` for a test.
+ * @returns Express middleware enforcing the limit.
+ */
+export function createGoogleOAuthCallbackRateLimiter(
+  overrides: Partial<Options> = {}
+): RateLimitRequestHandler {
+  return rateLimit({
+    windowMs: GOOGLE_OAUTH_CALLBACK_RATE_LIMIT_WINDOW_MS,
+    limit: GOOGLE_OAUTH_CALLBACK_RATE_LIMIT_MAX_ATTEMPTS,
+    standardHeaders: true,
+    legacyHeaders: false,
+    store: new SharedRateLimitStore('rl:google-oauth-callback:'),
     handler: sendRateLimitedResponse,
     ...overrides,
   })

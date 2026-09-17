@@ -291,6 +291,8 @@ describe('store prefixes', () => {
       'rl:forgot-password-ip:',
       'rl:forgot-password-email:',
       'rl:reset-password:',
+      'rl:google-oauth:',
+      'rl:google-oauth-callback:',
     ])
   })
 

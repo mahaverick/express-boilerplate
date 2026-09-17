@@ -16,25 +16,7 @@ describe('render', () => {
   })
 
   it('renders the description for a documented field as a comment', () => {
-    expect(output).toContain('# Public origin of this API. PLACEHOLDER')
-  })
-
-  it('carries the placeholder note into the one remaining required-but-unused secret', () => {
-    // JWT_ACCESS_SECRET is deliberately excluded here: token.utilities.ts
-    // reads it to sign/verify access tokens, so its .describe() states what
-    // it does instead of carrying this placeholder note — see
-    // env.config.ts's own comment on that field. There is no
-    // JWT_REFRESH_SECRET at all: refresh tokens are opaque, not JWTs, so
-    // that field was removed from the schema entirely rather than kept as
-    // a placeholder nothing will ever read.
-    //
-    // SESSION_SECRET is required by the schema and read by nothing in
-    // src/. The .describe() text is the only thing that tells a cloner they
-    // can put any 32-character string there for now, and .env.example is
-    // where they will read it — so assert it actually reaches the file
-    // rather than trusting that the generator picks descriptions up.
-    const index = output.indexOf('SESSION_SECRET=')
-    expect(output.slice(Math.max(0, index - 200), index)).toContain('PLACEHOLDER')
+    expect(output).toContain('# Public origin of the frontend.')
   })
 
   it('has no JWT_REFRESH_SECRET field at all — refresh tokens are opaque, not JWTs', () => {
@@ -42,12 +24,32 @@ describe('render', () => {
     expect(output).not.toContain('JWT_REFRESH_SECRET')
   })
 
-  it('describes what JWT_ACCESS_SECRET actually does, not a stale placeholder note', () => {
-    const index = output.indexOf('JWT_ACCESS_SECRET=')
-    const preceding = output.slice(Math.max(0, index - 200), index)
-    expect(preceding).toContain('Signs and verifies access tokens')
-    expect(preceding).not.toContain('PLACEHOLDER')
-  })
+  // Three fields that all graduated out of the same "PLACEHOLDER — nothing
+  // reads this yet" note, at three different points in this repo's history,
+  // once something in src/ actually started reading them:
+  // JWT_ACCESS_SECRET earliest (token.utilities.ts signs/verifies access
+  // tokens with it), then APP_URL and SESSION_SECRET together in this task
+  // (passport.config.ts's `configurePassport()`/`createOAuthSessionMiddleware()`
+  // read them respectively). One parameterized test, not three near-identical
+  // ones (sonarjs/parameterized-tests) — each case still pins its own
+  // `.describe()` text landing in the generated file, not merely that SOME
+  // description exists.
+  it.each([
+    { field: 'JWT_ACCESS_SECRET', expectedText: 'Signs and verifies access tokens' },
+    {
+      field: 'APP_URL',
+      expectedText: 'Used to build the Google OAuth callback URL',
+    },
+    { field: 'SESSION_SECRET', expectedText: 'Signs the express-session cookie' },
+  ])(
+    'describes what $field actually does, not a stale placeholder note',
+    ({ field, expectedText }) => {
+      const index = output.indexOf(`${field}=`)
+      const preceding = output.slice(Math.max(0, index - 300), index)
+      expect(preceding).toContain(expectedText)
+      expect(preceding).not.toContain('PLACEHOLDER')
+    }
+  )
 
   it('renders a schema default value', () => {
     expect(output).toContain('APP_PORT=4040')

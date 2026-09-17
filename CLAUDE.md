@@ -140,6 +140,31 @@ until you check.
   pub/sub works for single-pod deployments; upgrade to Redis Pub/Sub for
   multi-pod with separate worker processes.
 
+## OAuth
+
+- **Google OAuth is optional.** When `GOOGLE_CLIENT_ID` is unset, the OAuth
+  routes are not mounted. `passport.config.ts`'s `configurePassport()`
+  throws at boot if `GOOGLE_CLIENT_ID` is set without `GOOGLE_CLIENT_SECRET`
+  — the reverse (a secret with no client id) is not checked, since
+  `GOOGLE_CLIENT_ID` alone already gates whether Google login is enabled at
+  all, and a lone `GOOGLE_CLIENT_SECRET` never reaches that check.
+- **`auth_providers` tracks all auth methods.** Email users get a row with
+  `provider: 'email'` at registration. Google users get both an `'email'`
+  and a `'google'` row. A user with `passwordHash: null` is federated-only
+  (they use forgot-password to set a password if they want one).
+- **Email-match linking requires Google's `email_verified`.** An unverified
+  Google email matching an existing account is rejected — linking without
+  verification would be an account takeover.
+- **The OAuth callback's refresh cookie uses `sameSite: 'lax'`**, not the
+  regular login's `'strict'`. The callback is a cross-site redirect from
+  Google; `strict` can fail in Safari on the immediate next same-site request.
+- **`APP_URL` must match Google Cloud Console's redirect URI exactly** —
+  including scheme and trailing slash. `http://localhost:4040` works for
+  development.
+- **Sessions are OAuth-scoped only.** `express-session` runs on
+  `/auth/google` and `/auth/google/callback` only (5-minute TTL). The rest
+  of the API is stateless (JWT).
+
 ## Observability
 
 - **`src/observability/tracing.ts` loads via `--import` before the app.**

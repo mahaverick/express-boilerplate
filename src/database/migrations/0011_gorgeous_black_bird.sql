@@ -1,0 +1,1 @@
+ALTER TABLE "auth_providers" ALTER COLUMN "provider_id" SET DATA TYPE varchar(320);
