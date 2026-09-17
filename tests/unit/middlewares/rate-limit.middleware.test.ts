@@ -11,6 +11,7 @@
 // it exists only so a request has somewhere to land after the limiter lets
 // it through, so these tests prove the LIMITER's behaviour, not the login
 // controller's (that's tests/integration/api/auth.test.ts's job).
+import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import express, { type Express, type RequestHandler } from 'express'
@@ -18,6 +19,8 @@ import request from 'supertest'
 import { describe, expect, it, vi } from 'vitest'
 import { errorHandler } from '@/middlewares/error.middleware'
 import {
+  createAddTenantMemberRateLimiter,
+  createCreateTenantRateLimiter,
   createForgotPasswordEmailRateLimiter,
   createForgotPasswordIpRateLimiter,
   createLoginRateLimiter,
@@ -59,6 +62,44 @@ function buildApp(limit: number): Express {
 function buildAppBehind(limiter: RequestHandler): Express {
   const app = express()
   app.use(express.json())
+  app.post('/endpoint', limiter, (_request, response) => {
+    response.status(201).json({ success: true })
+  })
+  app.use(errorHandler)
+  return app
+}
+
+/**
+ * Build a bare app behind an arbitrary limiter, the same as `buildAppBehind`
+ * except a stub middleware runs FIRST and populates `request.user` from a
+ * test-only `x-test-user-id` header — standing in for `requireAuth`
+ * (tenant.routes.ts mounts the real one router-wide ahead of both limiters
+ * this app exercises). A header, not a fixed id baked into the app, so one
+ * app instance (and therefore one shared limiter/store) can simulate
+ * several different authenticated callers across separate requests — the
+ * same "vary the identity per request, not per app" shape
+ * `loginRateLimitKey`'s own discriminator test achieves by varying the
+ * submitted email.
+ * @param limiter - The limiter middleware to put in front of the stub handler.
+ * @returns The app.
+ */
+function buildAppBehindAsUser(limiter: RequestHandler): Express {
+  const app = express()
+  app.use(express.json())
+  app.use((thisRequest, _response, next) => {
+    const userId = thisRequest.get('x-test-user-id')
+    if (userId) {
+      thisRequest.user = {
+        id: userId,
+        email: 'stub@example.test',
+        // eslint-disable-next-line unicorn/no-null -- AuthenticatedUser.firstName/lastName are `string | null`.
+        firstName: null,
+        // eslint-disable-next-line unicorn/no-null -- see comment above.
+        lastName: null,
+      }
+    }
+    next()
+  })
   app.post('/endpoint', limiter, (_request, response) => {
     response.status(201).json({ success: true })
   })
@@ -256,6 +297,103 @@ describe('createResetPasswordRateLimiter', () => {
   })
 })
 
+describe('createCreateTenantRateLimiter', () => {
+  it('returns 429 with standardized RateLimit-* headers once the limit is exceeded', async () => {
+    const app = buildAppBehindAsUser(createCreateTenantRateLimiter({ limit: 2, windowMs: 60_000 }))
+    const userId = randomUUID()
+
+    const first = await request(app).post('/endpoint').set('x-test-user-id', userId)
+    const second = await request(app).post('/endpoint').set('x-test-user-id', userId)
+    const limited = await request(app).post('/endpoint').set('x-test-user-id', userId)
+
+    expect(first.status).toBe(201)
+    expect(second.status).toBe(201)
+    expect(limited.status).toBe(429)
+    expect(limited.body).toMatchObject({ success: false, code: RATE_LIMITED_CODE })
+    expect(limited.headers).toHaveProperty('ratelimit-limit')
+    expect(limited.headers).not.toHaveProperty('x-ratelimit-limit')
+  })
+
+  // The property that makes this limiter genuinely different from every
+  // IP-keyed one above, and the one this file's own precedent
+  // (`loginRateLimitKey`'s "keys on IP AND email" test, and
+  // `createForgotPasswordEmailRateLimiter`'s "a different address is
+  // unaffected" test) already establishes matters enough to prove directly:
+  // two different authenticated callers behind the SAME client IP (one
+  // supertest agent, so one shared underlying connection/IP) must not share
+  // a counter. Red if `createCreateTenantRateLimiter` were built with
+  // express-rate-limit's default IP-based `keyGenerator` instead of
+  // `authenticatedUserRateLimitKey` — every request in this test would then
+  // land in the same bucket regardless of `x-test-user-id`, and `bystander`
+  // below would come back 429 instead of 201.
+  it('keys on the authenticated user id, not IP: a different user is unaffected by another user’s counter', async () => {
+    const app = buildAppBehindAsUser(createCreateTenantRateLimiter({ limit: 1, windowMs: 60_000 }))
+    const victim = randomUUID()
+    const other = randomUUID()
+
+    const first = await request(app).post('/endpoint').set('x-test-user-id', victim)
+    const victimBlocked = await request(app).post('/endpoint').set('x-test-user-id', victim)
+    expect(first.status).toBe(201)
+    expect(victimBlocked.status).toBe(429)
+
+    const bystander = await request(app).post('/endpoint').set('x-test-user-id', other)
+    expect(bystander.status).toBe(201)
+  })
+
+  // `authenticatedUserRateLimitKey`'s own `?? 'anonymous'` fallback, proven
+  // directly: with no `request.user` at all (no `x-test-user-id` header),
+  // every request collapses onto the one shared `'anonymous'` bucket rather
+  // than the key generator throwing — the fail-SAFE direction its own
+  // comment describes (more restrictive, never less), not a crash.
+  it('falls back to one shared bucket when request.user is unset, rather than throwing', async () => {
+    const app = buildAppBehindAsUser(createCreateTenantRateLimiter({ limit: 1, windowMs: 60_000 }))
+
+    const first = await request(app).post('/endpoint')
+    const second = await request(app).post('/endpoint')
+
+    expect(first.status).toBe(201)
+    expect(second.status).toBe(429)
+  })
+})
+
+describe('createAddTenantMemberRateLimiter', () => {
+  it('returns 429 with standardized RateLimit-* headers once the limit is exceeded', async () => {
+    const app = buildAppBehindAsUser(
+      createAddTenantMemberRateLimiter({ limit: 2, windowMs: 60_000 })
+    )
+    const userId = randomUUID()
+
+    const first = await request(app).post('/endpoint').set('x-test-user-id', userId)
+    const second = await request(app).post('/endpoint').set('x-test-user-id', userId)
+    const limited = await request(app).post('/endpoint').set('x-test-user-id', userId)
+
+    expect(first.status).toBe(201)
+    expect(second.status).toBe(201)
+    expect(limited.status).toBe(429)
+    expect(limited.body).toMatchObject({ success: false, code: RATE_LIMITED_CODE })
+  })
+
+  // Same discriminator as `createCreateTenantRateLimiter` above, proven
+  // again for this limiter specifically — the two do not share a factory
+  // implementation, only the same `authenticatedUserRateLimitKey` function,
+  // so each is proven independently rather than one standing in for both.
+  it('keys on the authenticated user id, not IP: a different user is unaffected by another user’s counter', async () => {
+    const app = buildAppBehindAsUser(
+      createAddTenantMemberRateLimiter({ limit: 1, windowMs: 60_000 })
+    )
+    const victim = randomUUID()
+    const other = randomUUID()
+
+    const first = await request(app).post('/endpoint').set('x-test-user-id', victim)
+    const victimBlocked = await request(app).post('/endpoint').set('x-test-user-id', victim)
+    expect(first.status).toBe(201)
+    expect(victimBlocked.status).toBe(429)
+
+    const bystander = await request(app).post('/endpoint').set('x-test-user-id', other)
+    expect(bystander.status).toBe(201)
+  })
+})
+
 describe('store prefixes', () => {
   // The convention rate-limit.middleware.ts's header comment establishes,
   // pinned as a test rather than only as prose: every limiter carries its
@@ -293,6 +431,8 @@ describe('store prefixes', () => {
       'rl:reset-password:',
       'rl:google-oauth:',
       'rl:google-oauth-callback:',
+      'rl:create-tenant:',
+      'rl:add-tenant-member:',
     ])
   })
 

@@ -102,6 +102,14 @@ const addRequestContext = format((info) => {
   if (context?.requestId) {
     info.requestId = context.requestId
   }
+  // Present only once `resolveTenant` (tenant.middleware.ts) has extended
+  // the SAME store with `.tenant` — most requests (anything not under a
+  // tenant-scoped route) never populate it, so this stays absent exactly
+  // like `requestId` does outside a request. See
+  // request-context.middleware.ts's `TenantContext` for the field's shape.
+  if (context?.tenant?.tenantId) {
+    info.tenantId = context.tenant.tenantId
+  }
   const span = trace.getActiveSpan()
   if (span) {
     const spanContext = span.spanContext()

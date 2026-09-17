@@ -1,10 +1,11 @@
 // src/middlewares/rate-limit.middleware.ts
 //
-// Twelve limiters: `createRegisterRateLimiter`, `createLoginRateLimiter`,
+// Fourteen limiters: `createRegisterRateLimiter`, `createLoginRateLimiter`,
 // `createRefreshRateLimiter`, `createLogoutRateLimiter`,
 // `createVerifyEmailRateLimiter`, `createResetPasswordRateLimiter`,
 // `createGoogleOAuthRateLimiter`, `createGoogleOAuthCallbackRateLimiter`,
-// and the two pairs for resend-verification
+// `createCreateTenantRateLimiter`, `createAddTenantMemberRateLimiter`, and
+// the two pairs for resend-verification
 // and forgot-password — `createResendVerificationIpRateLimiter` /
 // `createResendVerificationEmailRateLimiter`, and
 // `createForgotPasswordIpRateLimiter` / `createForgotPasswordEmailRateLimiter`.
@@ -594,6 +595,97 @@ export function createGoogleOAuthCallbackRateLimiter(
     standardHeaders: true,
     legacyHeaders: false,
     store: new SharedRateLimitStore('rl:google-oauth-callback:'),
+    handler: sendRateLimitedResponse,
+    ...overrides,
+  })
+}
+
+// CREATE-TENANT and ADD-TENANT-MEMBER are keyed on the CALLER'S id
+// (`request.user.id`), not IP — the one pair in this file keyed that way.
+// Both sit entirely behind `requireAuth` (tenant.routes.ts mounts it
+// router-wide), so a stable, unspoofable identity is already available by
+// the time either limiter runs, and IP would be the wrong choice for the
+// same reason it is the right one for register/refresh/logout: those are
+// UNAUTHENTICATED, so IP is the only identity a caller cannot simply swap
+// out; these two are authenticated, so keying on IP would let one
+// legitimate office (shared NAT'd egress) throttle every OTHER user behind
+// it out of creating a tenant or adding a member, and would let a single
+// attacker with many source IPs but ONE stolen/created account bypass the
+// limit entirely — the identical "IP alone is the wrong axis" reasoning
+// `loginRateLimitKey`'s own comment gives for composing IP with email
+// there. Neither threat here is enumeration or bcrypt cost (both
+// endpoints already require an authenticated, tenant-scoped, owner/admin
+// caller for `createAddTenantMemberRateLimiter`, and merely an
+// authenticated caller for `createCreateTenantRateLimiter`): this is
+// volume protection against one account creating tenants or spamming
+// membership-add calls in a loop.
+const CREATE_TENANT_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000
+const CREATE_TENANT_RATE_LIMIT_MAX_ATTEMPTS = 20
+
+const ADD_TENANT_MEMBER_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000
+const ADD_TENANT_MEMBER_RATE_LIMIT_MAX_ATTEMPTS = 30
+
+/**
+ * The key `createCreateTenantRateLimiter`/`createAddTenantMemberRateLimiter`
+ * count attempts by: the authenticated caller's id.
+ *
+ * `request.user?.id`, not `request.user!.id` — note what the `??
+ * 'anonymous'` fallback is (and is not) for: both limiters are only ever
+ * mounted after `requireAuth` (tenant.routes.ts), so `request.user` is
+ * always set on every real request this key generator ever sees. The
+ * fallback exists purely so a future misordered mount fails SAFE — every
+ * caller with no `request.user` collapses onto one shared `'anonymous'`
+ * bucket, which is MORE restrictive than intended, never less — rather
+ * than throwing inside express-rate-limit's synchronous `keyGenerator`
+ * call and turning a routing mistake into an unhandled exception.
+ * @param request - The incoming request.
+ * @returns The authenticated caller's id, or `'anonymous'` when unset.
+ */
+function authenticatedUserRateLimitKey(request: Request): string {
+  return request.user?.id ?? 'anonymous'
+}
+
+/**
+ * Build a create-tenant rate limiter: `limit` attempts per `windowMs`,
+ * keyed on the authenticated caller's id. See this file's header comment
+ * for why this pair is keyed on the user rather than IP. A factory, not a
+ * module-scope constant — see this file's header comment.
+ * @param overrides - Options to override, e.g. a small `limit`/`windowMs` for a test.
+ * @returns Express middleware enforcing the limit.
+ */
+export function createCreateTenantRateLimiter(
+  overrides: Partial<Options> = {}
+): RateLimitRequestHandler {
+  return rateLimit({
+    windowMs: CREATE_TENANT_RATE_LIMIT_WINDOW_MS,
+    limit: CREATE_TENANT_RATE_LIMIT_MAX_ATTEMPTS,
+    standardHeaders: true,
+    legacyHeaders: false,
+    store: new SharedRateLimitStore('rl:create-tenant:'),
+    keyGenerator: authenticatedUserRateLimitKey,
+    handler: sendRateLimitedResponse,
+    ...overrides,
+  })
+}
+
+/**
+ * Build an add-tenant-member rate limiter: `limit` attempts per `windowMs`,
+ * keyed on the authenticated caller's id. See this file's header comment
+ * for why this pair is keyed on the user rather than IP. A factory, not a
+ * module-scope constant — see this file's header comment.
+ * @param overrides - Options to override, e.g. a small `limit`/`windowMs` for a test.
+ * @returns Express middleware enforcing the limit.
+ */
+export function createAddTenantMemberRateLimiter(
+  overrides: Partial<Options> = {}
+): RateLimitRequestHandler {
+  return rateLimit({
+    windowMs: ADD_TENANT_MEMBER_RATE_LIMIT_WINDOW_MS,
+    limit: ADD_TENANT_MEMBER_RATE_LIMIT_MAX_ATTEMPTS,
+    standardHeaders: true,
+    legacyHeaders: false,
+    store: new SharedRateLimitStore('rl:add-tenant-member:'),
+    keyGenerator: authenticatedUserRateLimitKey,
     handler: sendRateLimitedResponse,
     ...overrides,
   })
