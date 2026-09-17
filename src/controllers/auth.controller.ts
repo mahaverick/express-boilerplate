@@ -19,9 +19,11 @@
 //    own header comment there for how it stays in step with BCRYPT_COST and
 //    why it's memoised.
 import { randomUUID } from 'node:crypto'
+import { DrizzleQueryError } from 'drizzle-orm'
 import { type NextFunction, type Request, type RequestHandler, type Response } from 'express'
 import passport from 'passport'
 import type { Profile as GoogleProfile } from 'passport-google-oauth20'
+import postgres from 'postgres'
 import { getEnv } from '@/configs/env.config'
 import {
   GOOGLE_STRATEGY_NAME,
@@ -260,6 +262,32 @@ async function sendRegistrationAttemptMail(email: string): Promise<void> {
   )
 }
 
+// Postgres error code for a unique-constraint violation. Same source and
+// same value as base.repository.ts's and auth-provider.repository.ts's own
+// copies of this check — see the latter's header comment for why this is a
+// deliberate per-caller duplication rather than an import: `register`
+// below is a SECOND caller in this file that needs an atomic, multi-table
+// write through a raw `db.transaction()` handle (`tx`), which — same as
+// `findOrCreateByGoogle`'s own transaction below — bypasses
+// `UserRepository.create`'s built-in translation of this exact error into
+// `HttpError(409)`. A `tx.insert(...)` raises the raw driver error, so
+// register() needs its own copy of the check to keep answering the
+// identical enumeration-safe 202 a duplicate email got before this task.
+const UNIQUE_VIOLATION_CODE = '23505'
+
+/**
+ * Whether an error thrown by a write through `db.transaction()` is a
+ * Postgres unique-constraint violation. See the constant above for why
+ * this exists here instead of reusing `UserRepository.create`'s own
+ * translation.
+ * @param error - The error thrown by the transaction.
+ * @returns True when the error is (or wraps) a 23505 unique violation.
+ */
+function isUniqueViolation(error: unknown): boolean {
+  const cause = error instanceof DrizzleQueryError ? error.cause : error
+  return cause instanceof postgres.PostgresError && cause.code === UNIQUE_VIOLATION_CODE
+}
+
 /**
  * Register a new user with an email and password.
  *
@@ -273,6 +301,31 @@ async function sendRegistrationAttemptMail(email: string): Promise<void> {
  * awaited — `.catch()` handles any rejection (Ruling T: an unhandled
  * rejection under Node 24 kills the process on one branch only =
  * enumeration oracle as denial of service).
+ *
+ * The user row AND its `'email'` auth_providers row are written together in
+ * one `db.transaction()`, through the raw `tx` handle rather than
+ * `userRepository.create()`/`authProviderRepository.create()` — those two
+ * repositories each call the top-level `db` internally (never a handle
+ * passed in), so wrapping calls to THEM in `db.transaction()` would only
+ * sequence two independent, separately-committed writes, not make them
+ * atomic: a `tx.insert(...).returning()` after the repository call would
+ * roll back its OWN insert, but the repository's write already committed
+ * on its own connection the moment it resolved, with nothing left in this
+ * function able to undo it. Mirrors `findOrCreateByGoogle`'s own
+ * new-account branch below, which bypasses both repositories for the exact
+ * same reason.
+ *
+ * `providerId` is `input.email.toLowerCase()`, though `emailSchema`
+ * (auth.validators.ts) already lowercases every registration email before
+ * this function ever sees it — the explicit call here is what keeps this
+ * insert correct on its own terms, independent of that upstream schema
+ * ever changing, and matches `findOrCreateByGoogle`'s own `'email'` row
+ * (its own `email` local is already lowercased, from `verifiedGoogleEmail`).
+ * The `auth_providers_provider_provider_id_unique` index has no case-
+ * folding of its own (auth-provider.model.ts) — a caller that inserted the
+ * raw-cased submitted address here, while the Google path inserts the
+ * lowercased one, could let the same address collide inconsistently
+ * between the two creation paths.
  * @param request - The incoming request, carrying the registration body.
  * @param response - The response.
  * @param next - Forwards a rejection to the terminal error handler.
@@ -288,18 +341,42 @@ export async function register(
 
     let created: User | undefined
     try {
-      created = await userRepository.create({
-        email: input.email,
-        passwordHash,
-        firstName: input.firstName,
-        lastName: input.lastName,
+      created = await db.transaction(async (tx) => {
+        const [user] = await tx
+          .insert(userModel)
+          .values({
+            email: input.email,
+            passwordHash,
+            firstName: input.firstName,
+            lastName: input.lastName,
+          })
+          .returning()
+
+        // Same "cannot happen but guard anyway" reasoning as
+        // UserRepository's own insertOne (user.repository.ts): a
+        // single-row insert.returning() that does not throw always
+        // returns exactly one row.
+        if (!user) throw new HttpError('Insert returned no row', 500)
+
+        await tx.insert(authProviderModel).values({
+          userId: user.id,
+          provider: 'email',
+          providerId: input.email.toLowerCase(),
+        })
+
+        return user
       })
     } catch (error) {
-      // 409 is how UserRepository.create reports the unique violation
-      // (see its own comment). Anything else is a real failure and must
-      // still surface — swallowing every error here would turn a database
-      // outage into a cheerful 202.
-      if (!(error instanceof HttpError) || error.statusCode !== 409) throw error
+      // A 23505 here almost always comes from the USER insert (the
+      // `auth_providers` row can only collide on an address already
+      // claimed as someone's login identity, which the user insert's own
+      // `users_email_unique` would already have rejected first) — but
+      // either way, the transaction has rolled back the whole write, so
+      // treating any unique violation from this block as "the address is
+      // taken" is correct, not merely a fallback. Anything else is a real
+      // failure and must still surface — swallowing every error here would
+      // turn a database outage into a cheerful 202.
+      if (!isUniqueViolation(error)) throw error
     }
 
     // Respond BEFORE sending, so the two branches do not differ by the

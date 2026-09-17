@@ -31,6 +31,7 @@
 import { sql, type InferInsertModel, type InferSelectModel } from 'drizzle-orm'
 import { check, index, pgTable, timestamp, uniqueIndex, varchar } from 'drizzle-orm/pg-core'
 import { AUTH_PROVIDERS, type AuthProvider } from '@/constants/auth-provider.constants'
+import { MAX_EMAIL_LENGTH } from '@/constants/auth.constants'
 import { userModel } from '@/database/models/user.model'
 
 // `AUTH_PROVIDERS`, pre-rendered as a literal SQL value list —
@@ -75,10 +76,19 @@ export const authProviderModel = pgTable(
     provider: varchar('provider', { length: 20 }).$type<AuthProvider>().notNull(),
     // The external identity within `provider`'s namespace: the user's own
     // email address for `'email'`, or Google's stable profile id (`sub` /
-    // `profile.id`) for `'google'`. 255 chars — wide enough for either, and
-    // matches this codebase's other externally-sourced identifier columns
-    // (e.g. `email_logs.provider_message_id`).
-    providerId: varchar('provider_id', { length: 255 }).notNull(),
+    // `profile.id`) for `'google'`. Sized to `MAX_EMAIL_LENGTH` (320,
+    // auth.constants.ts), not a round number picked independently of what
+    // this column actually stores — the `'email'` row's `providerId` IS
+    // the address, so this column must be at least as wide as
+    // `users.email` (also `MAX_EMAIL_LENGTH`) or a registration for a
+    // legitimately long-but-valid address succeeds inserting into `users`
+    // and then fails inserting here, inside the SAME transaction
+    // (`register`, auth.controller.ts) — a 500 for input `registerSchema`
+    // already accepted. Verified empirically, not assumed: this column was
+    // first sized at 255 and a boundary test ("accepts an email exactly at
+    // the column width", auth.test.ts) caught the mismatch the moment
+    // `register()` started writing this row (Task 4).
+    providerId: varchar('provider_id', { length: MAX_EMAIL_LENGTH }).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },

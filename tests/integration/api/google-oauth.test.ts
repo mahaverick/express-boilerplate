@@ -463,10 +463,11 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
       expect(user.id).toBe(existing.id)
       const link = await authProviderRepository.findByProviderAndId('google', profile.id)
       expect(link?.userId).toBe(existing.id)
-      // No second `'email'` row is created — `register`'s own provider row
-      // (out of this task's scope, Task 4) does not exist yet for a user
-      // seeded directly through the repository, and linking must not
-      // fabricate one; it only adds the `'google'` row.
+      // No second `'email'` row is created. `existing` is seeded directly
+      // through `userRepository.create` above, bypassing `register()` —
+      // the only place an `'email'` row is written (Task 4,
+      // auth.controller.ts) — so this user genuinely has none, and linking
+      // must not fabricate one; it only adds the `'google'` row.
       const providers = await authProviderRepository.findByUser(existing.id)
       expect(providers.map((provider) => provider.provider)).toEqual(['google'])
     })
