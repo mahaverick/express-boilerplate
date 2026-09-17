@@ -145,6 +145,40 @@ describe('Slack transport', () => {
       })
     }))
 
+  it('pluralizes the summary message when more than one occurrence was suppressed', () =>
+    new Promise<void>((resolve) => {
+      // Same shape as the singular test above, but THREE calls (two
+      // suppressed, not one) — the summary's own grammar ternary
+      // (buildSummaryPayload, logger.service.ts) is `count === 1 ? '' :
+      // 's'`, and the singular test above only ever proves the `''` arm.
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+
+      const log = createWinstonLogger({
+        level: 'error',
+        isProduction: true,
+        slackWebhookUrl: 'https://hooks.slack.com/services/T/B/X',
+        slackLogLevel: 'error',
+      })
+
+      log.error('flaky dependency', { source: 'test.ts:1' })
+      log.error('flaky dependency', { source: 'test.ts:1' })
+      log.error('flaky dependency', { source: 'test.ts:1' })
+
+      setImmediate(() => {
+        expect(mockFetch).toHaveBeenCalledOnce()
+
+        vi.advanceTimersByTime(60_000)
+
+        setImmediate(() => {
+          expect(mockFetch).toHaveBeenCalledTimes(2)
+          const [, options] = mockFetch.mock.calls[1] as [string, SlackFetchInit]
+          const body = JSON.parse(options.body) as { text: string }
+          expect(body.text).toContain('Suppressed 2 duplicate occurrences of "flaky dependency"')
+          resolve()
+        })
+      })
+    }))
+
   it('includes the error stack trace when an Error is present in meta', () =>
     new Promise<void>((resolve) => {
       const log = createWinstonLogger({

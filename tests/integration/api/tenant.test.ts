@@ -28,11 +28,13 @@ import { createApp } from '@/app'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
+import { TenantSettingsRepository } from '@/repositories/tenant-settings.repository'
 import { TenantRepository, type CreateTenantInput } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { signAccessToken } from '@/utilities/token.utilities'
+import { withMutatedMethod } from '../../helpers/mutate'
 
 const app = createApp()
 const tenantRepository = new TenantRepository()
@@ -305,6 +307,31 @@ describe('/api/v1/tenants', () => {
 
       expect(response.status).toBe(404)
     })
+
+    // A real race, not a hypothetical one — same reasoning as
+    // profile.test.ts's own "deleted between requireAuth loading it and the
+    // handler loading it again" test: `resolveTenant` (tenant.middleware.ts)
+    // resolves the tenant via `findActiveBySlug`, a DIFFERENT method from
+    // `getTenant`'s own `findById` call — so mutating `findById` alone
+    // cannot make `resolveTenant` itself fail first, and needs no call
+    // counter the way profile.test.ts's `findById` mutation does.
+    it('404s when the tenant is deleted between resolveTenant loading it and the handler loading it again', async () => {
+      const { user, token } = await createAuthenticatedUser()
+      const tenant = await createTenant(user.id)
+
+      await withMutatedMethod(
+        TenantRepository.prototype,
+        'findById',
+        () => Promise.resolve(undefined),
+        async () => {
+          const response = await request(app)
+            .get(`/api/v1/tenants/${tenant.slug}`)
+            .set('Authorization', `Bearer ${token}`)
+
+          expect(response.status).toBe(404)
+        }
+      )
+    })
   })
 
   describe('PATCH /api/v1/tenants/:slug', () => {
@@ -315,12 +342,19 @@ describe('/api/v1/tenants', () => {
       const response = await request(app)
         .patch(`/api/v1/tenants/${tenant.slug}`)
         .set('Authorization', `Bearer ${token}`)
-        .send({ name: 'Renamed Inc', logo: 'https://example.test/new-logo.png' })
+        .send({
+          name: 'Renamed Inc',
+          description: 'A brand new description',
+          logo: 'https://example.test/new-logo.png',
+          website: 'https://example.test',
+        })
 
       expect(response.status).toBe(200)
       expect(envelopeOf<Tenant>(response).data).toMatchObject({
         name: 'Renamed Inc',
+        description: 'A brand new description',
         logo: 'https://example.test/new-logo.png',
+        website: 'https://example.test',
       })
     })
 
@@ -402,6 +436,28 @@ describe('/api/v1/tenants', () => {
 
       const [row] = await sql`select slug from tenants where id = ${tenant.id}`
       expect(row).toEqual({ slug: tenant.slug })
+    })
+
+    // Same TOCTOU shape as the GET test above, for `updateTenant`'s own
+    // second lookup — `tenantRepository.update`, taken here because the
+    // request body carries a real change (`hasChanges` is true).
+    it('404s when the tenant is deleted between resolveTenant loading it and the update itself', async () => {
+      const { user, token } = await createAuthenticatedUser()
+      const tenant = await createTenant(user.id)
+
+      await withMutatedMethod(
+        TenantRepository.prototype,
+        'update',
+        () => Promise.resolve(undefined),
+        async () => {
+          const response = await request(app)
+            .patch(`/api/v1/tenants/${tenant.slug}`)
+            .set('Authorization', `Bearer ${token}`)
+            .send({ name: 'Renamed' })
+
+          expect(response.status).toBe(404)
+        }
+      )
     })
   })
 
@@ -700,6 +756,33 @@ describe('/api/v1/tenants', () => {
 
       expect(response.status).toBe(404)
     })
+
+    // The SECOND "Member not found" — a real race, not the "target user was
+    // never a member" 404 two tests above: `findByUserAndTenant` and every
+    // permission/last-owner check already pass, and the membership row
+    // vanishes only in the gap before `updateRole`'s own write. Mutating
+    // `updateRole` (not `findByUserAndTenant`) is what isolates this branch
+    // from the one above.
+    it('404s when the membership is deleted between the permission check and the role update itself', async () => {
+      const { user: ownerUser, token: ownerToken } = await createAuthenticatedUser()
+      const { user: targetUser } = await createAuthenticatedUser()
+      const tenant = await createTenant(ownerUser.id)
+      await addMembership(targetUser.id, tenant.id, 'viewer')
+
+      await withMutatedMethod(
+        UserMembershipRepository.prototype,
+        'updateRole',
+        () => Promise.resolve(undefined),
+        async () => {
+          const response = await request(app)
+            .patch(`/api/v1/tenants/${tenant.slug}/members/${targetUser.id}`)
+            .set('Authorization', `Bearer ${ownerToken}`)
+            .send({ role: 'manager' })
+
+          expect(response.status).toBe(404)
+        }
+      )
+    })
   })
 
   describe('DELETE /api/v1/tenants/:slug/members/:userId (role matrix)', () => {
@@ -868,6 +951,29 @@ describe('/api/v1/tenants', () => {
 
       expect(response.status).toBe(404)
     })
+
+    // The SECOND "Member not found" — same race as updateMemberRole's own
+    // version above: the permission and last-owner checks already pass, and
+    // the row vanishes only in the gap before the delete itself.
+    it('404s when the membership is deleted between the permission check and the delete itself', async () => {
+      const { user: ownerUser, token: ownerToken } = await createAuthenticatedUser()
+      const { user: targetUser } = await createAuthenticatedUser()
+      const tenant = await createTenant(ownerUser.id)
+      await addMembership(targetUser.id, tenant.id, 'viewer')
+
+      await withMutatedMethod(
+        UserMembershipRepository.prototype,
+        'delete',
+        () => Promise.resolve(false),
+        async () => {
+          const response = await request(app)
+            .delete(`/api/v1/tenants/${tenant.slug}/members/${targetUser.id}`)
+            .set('Authorization', `Bearer ${ownerToken}`)
+
+          expect(response.status).toBe(404)
+        }
+      )
+    })
   })
 
   describe('GET /api/v1/tenants/:slug/settings', () => {
@@ -900,6 +1006,30 @@ describe('/api/v1/tenants', () => {
         .set('Authorization', `Bearer ${outsiderToken}`)
 
       expect(response.status).toBe(404)
+    })
+
+    // Defensive, not reachable through any real gap in practice —
+    // `TenantRepository.create` writes the settings row atomically alongside
+    // the tenant itself (getSettings's own comment, tenant.controller.ts) —
+    // but proven the same way as this file's other TOCTOU tests: mutate the
+    // repository call directly, since `resolveTenant` never touches
+    // `tenant_settings` at all and so cannot be tripped up by this.
+    it('404s when the settings row is unexpectedly missing', async () => {
+      const { user, token } = await createAuthenticatedUser()
+      const tenant = await createTenant(user.id)
+
+      await withMutatedMethod(
+        TenantSettingsRepository.prototype,
+        'findByTenantId',
+        () => Promise.resolve(undefined),
+        async () => {
+          const response = await request(app)
+            .get(`/api/v1/tenants/${tenant.slug}/settings`)
+            .set('Authorization', `Bearer ${token}`)
+
+          expect(response.status).toBe(404)
+        }
+      )
     })
   })
 
@@ -969,6 +1099,28 @@ describe('/api/v1/tenants', () => {
         .send({ locale: 'fr' })
 
       expect(response.status).toBe(404)
+    })
+
+    // Same shape as GET settings' own defensive test above, for
+    // `updateSettings`'s own second lookup — `tenantSettingsRepository.update`,
+    // taken here because the request body carries a real change.
+    it('404s when the settings row is unexpectedly missing at update time', async () => {
+      const { user, token } = await createAuthenticatedUser()
+      const tenant = await createTenant(user.id)
+
+      await withMutatedMethod(
+        TenantSettingsRepository.prototype,
+        'update',
+        () => Promise.resolve(undefined),
+        async () => {
+          const response = await request(app)
+            .patch(`/api/v1/tenants/${tenant.slug}/settings`)
+            .set('Authorization', `Bearer ${token}`)
+            .send({ locale: 'fr' })
+
+          expect(response.status).toBe(404)
+        }
+      )
     })
   })
 })

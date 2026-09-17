@@ -78,6 +78,17 @@ export default defineConfig({
         // (tsconfig.json), so counting it here would permanently drag the
         // gate down for code that never runs.
         'src/lint-fixtures/**',
+        // Drizzle table/relation definitions and their InferSelectModel/
+        // InferInsertModel type exports — schema metadata, not branching
+        // logic. `pgTable(...)`'s column builders and `relations(...)`'s
+        // callback bodies only ever execute once, at module-import time, to
+        // build the schema drizzle-orm hands to the query builder; nothing
+        // under tests/ calls them directly; the actual read/write behaviour
+        // they describe is exercised through the repositories that query
+        // through them instead (src/repositories/**, already covered).
+        // Counting this directory dragged the whole-repo statement average
+        // down to ~59% for a folder that has no meaningful branches to miss.
+        'src/database/models/**',
         // Deliberately NOT '**/*.config.ts': root-level tool configs
         // (vitest.config.ts, drizzle.config.ts) already sit outside
         // src/**/*.ts and so are already excluded by `include` above.
