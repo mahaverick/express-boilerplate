@@ -71,6 +71,13 @@
       "when": 1789580363046,
       "tag": "0009_narrow_proteus",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1789619864508,
+      "tag": "0010_worthless_red_skull",
+      "breakpoints": true
     }
   ]
 }
