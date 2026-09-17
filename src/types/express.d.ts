@@ -33,6 +33,7 @@
 // extends it — so there is no second, conflicting declaration left for
 // `skipLibCheck` to silently arbitrate between.
 import type { AuthenticatedUser } from '@/middlewares/auth.middleware'
+import type { RequestPrincipal } from '@/middlewares/tenant.middleware'
 
 declare global {
   namespace Express {
@@ -44,6 +45,25 @@ declare global {
        * Correlation id, set by requestId middleware.
        */
       id: string
+
+      /**
+       * The caller's tenant-scoped identity, set by `resolveTenant`
+       * (tenant.middleware.ts) once it confirms the caller belongs to the
+       * tenant the route names. Absent on every request that does not pass
+       * through `resolveTenant` — most of them.
+       *
+       * A SEPARATE property from `user`, not folded into it: `user` is
+       * `AuthenticatedUser`, and that interface's own header comment already
+       * warns that server-only principal data (a role, a tenant id) must
+       * never be added there — it is the CLIENT-VISIBLE projection
+       * (`GET /api/v1/profile` returns it verbatim). `principal` does not
+       * collide with `@types/passport`'s own global `Request` augmentation
+       * (which declares only `user`, `login`/`logout`, `isAuthenticated`,
+       * `isUnauthenticated`, and session helpers — no `principal`), so this
+       * declaration is the only one for this property, the same guarantee
+       * `id` above already has.
+       */
+      principal?: RequestPrincipal
     }
   }
 }
