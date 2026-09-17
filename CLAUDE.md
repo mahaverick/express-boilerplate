@@ -165,6 +165,51 @@ until you check.
   `/auth/google` and `/auth/google/callback` only (5-minute TTL). The rest
   of the API is stateless (JWT).
 
+## Multi-tenancy and RBAC
+
+- **Opt-in seam.** Existing routes are unaffected. New routes compose
+  `resolveTenant()` and `requireRole(...)` middleware as needed.
+- **`resolveTenant({ from: 'param' })`** (default) reads the tenant slug
+  from `request.params.slug`. `{ from: 'header' }` reads `X-Tenant-Id`.
+  Use the param form for `/tenants/:slug/*` routes; the header form for
+  future tenant-scoped resource routes (`/projects`, `/invoices`).
+- **Non-members get 404** (not 403). Ruling G — don't leak tenant existence.
+- **5-tier roles:** owner > admin > manager > editor > viewer. The
+  actor→target matrix gates who can modify/remove whom (see
+  `tenant.controller.ts`'s `canActorModifyTarget`).
+- **`request.principal`** carries `{ tenantId, tenantSlug, role }` after
+  `resolveTenant` runs. Separate from `request.user` (which is the
+  authenticated identity, not the authorization context).
+- **Tenant context in logs.** `tenantId` appears in every log line for
+  tenant-scoped requests, read from the same `RequestContext`
+  AsyncLocalStorage store the request-id uses.
+
+### How to scope your own model by tenant
+
+1. Add `tenantId` column to your model:
+   ```typescript
+   tenantId: varchar('tenant_id', { length: 36 })
+     .notNull()
+     .references(() => tenantModel.id, { onDelete: 'cascade' })
+   ```
+2. In your repository, filter by tenant:
+   ```typescript
+   const tenantId = requestContextStore.getStore()?.tenant?.tenantId
+   if (!tenantId) throw new Error('Tenant context required')
+   // Add .where(eq(model.tenantId, tenantId)) to your queries
+   ```
+3. Mount the route behind `resolveTenant()`. A `/tenants/:slug/*` route
+   uses the default (`{ from: 'param' }`); a resource route with no
+   `:slug` segment of its own, like `/projects`, needs the header form —
+   the default would read `request.params.slug`, find nothing, and 404
+   every request:
+   ```typescript
+   router.get('/projects', requireAuth, resolveTenant({ from: 'header' }), listProjects)
+   ```
+   The client sends the tenant's _slug_ in the `X-Tenant-Id` header
+   despite the name — `resolveTenant` looks it up with `findActiveBySlug`
+   for both sources, not a slug-or-id lookup.
+
 ## Observability
 
 - **`src/observability/tracing.ts` loads via `--import` before the app.**

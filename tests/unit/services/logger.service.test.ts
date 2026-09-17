@@ -127,6 +127,44 @@ describe('createWinstonLogger', () => {
           resolve()
         })
       }))
+
+    it('includes tenantId when the ALS context carries a tenant', () =>
+      new Promise<void>((resolve) => {
+        const output = captureStdout()
+        const log = createWinstonLogger({ level: 'info', isProduction: true })
+
+        requestContextStore.run(
+          {
+            requestId: 'abc-123',
+            tenant: { tenantId: 'tenant-1', tenantSlug: 'acme', role: 'admin' },
+          },
+          () => {
+            log.info('inside tenant-scoped request', { source: 'test.ts:1' })
+          }
+        )
+
+        setImmediate(() => {
+          const parsed = parseLastRecord(output)
+          expect(parsed.tenantId).toBe('tenant-1')
+          resolve()
+        })
+      }))
+
+    it('omits tenantId when the ALS context carries no tenant', () =>
+      new Promise<void>((resolve) => {
+        const output = captureStdout()
+        const log = createWinstonLogger({ level: 'info', isProduction: true })
+
+        requestContextStore.run({ requestId: 'abc-123' }, () => {
+          log.info('request with no tenant', { source: 'test.ts:1' })
+        })
+
+        setImmediate(() => {
+          const parsed = parseLastRecord(output)
+          expect(parsed.tenantId).toBeUndefined()
+          resolve()
+        })
+      }))
   })
 
   describe('development format (human-readable)', () => {
