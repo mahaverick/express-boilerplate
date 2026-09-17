@@ -7,45 +7,19 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Two parallel jobs, not one: `lint` needs nothing but the checked-out repo
+# and node_modules — no Docker services, no database, no build — so it was
+# paying to wait behind postgres/redis/mailpit health checks it never
+# touches. Splitting it out means a lint failure surfaces as fast as
+# `pnpm lint` itself runs, and the two jobs run concurrently rather than
+# lint's ~seconds being serialized in front of test's services startup +
+# full suite. `test` keeps every Docker-dependent step (migrations,
+# `pnpm test:coverage`, the build — `pnpm build` needs no live service
+# itself, but it belongs next to the job that already carries the full env
+# block, not duplicated into a job that has none).
 jobs:
-  ci:
+  lint:
     runs-on: ubuntu-latest
-    services:
-      # GitHub's `services:` blocks cannot mount a file, so the init.sql that
-      # docker-compose uses to create the test role/database is unavailable
-      # here. Set the credentials directly instead — they must match .env.test.
-      postgres:
-        image: postgres:18
-        env: { POSTGRES_USER: test, POSTGRES_PASSWORD: test, POSTGRES_DB: boilerplate_test }
-        ports: ['5432:5432']
-        options: >-
-          --health-cmd=pg_isready --health-interval=10s --health-timeout=5s --health-retries=5
-      redis:
-        image: redis:7.2-alpine
-        ports: ['6379:6379']
-        options: >-
-          --health-cmd="redis-cli ping" --health-interval=10s --health-timeout=5s --health-retries=5
-      # mailer.service.test.ts sends real mail through this and reads it back
-      # via Mailpit's own HTTP API on 8025 — not a mock. Default, unremapped
-      # ports — unlike postgres/redis above, there is no common native
-      # service on 1025/8025 for a GitHub-hosted runner to collide with, so
-      # this needs none of docker-compose.yml's 5433/6380 dodge. Pinned, like
-      # every sibling service here and in docker-compose.yml, to the version
-      # this task actually developed and tested against.
-      #
-      # --health-cmd uses the image's own `readyz` subcommand (verified
-      # against the running container: it DOES have a shell — `docker exec
-      # ... sh -c 'echo ok'` succeeds). Without this, a Mailpit that has not
-      # finished starting would surface as a failed real-send test with a
-      # MISLEADING message — Ruling G (mailer.service.ts) swallows the
-      # connection error into a 'failed' delivery-log row, so the actual
-      # symptom is "expected 1 message, found 0", not a connection error
-      # naming the real cause.
-      mailpit:
-        image: axllent/mailpit:v1.31.1
-        ports: ['1025:1025', '8025:8025']
-        options: >-
-          --health-cmd="/mailpit readyz" --health-interval=5s --health-timeout=5s --health-retries=10
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
@@ -61,68 +35,6 @@ jobs:
         # step and CONTRIBUTING.md both presented it as the repo-wide standard —
         # 10 files had drifted, 6 of them tests, before anyone noticed.
         run: pnpm format:check
-      - name: Run migrations
-        run: pnpm db:migrate
-        env:
-          # migrate.ts opens its own connection from getDatabaseUrl(), not
-          # database.service.ts's db/sql — so this step needs only
-          # DATABASE_URL, the same as drizzle-kit's own generate/migrate/check
-          # commands (see DATABASE.md).
-          DATABASE_URL: postgres://test:test@localhost:5432/boilerplate_test
-      - name: Test with coverage gate
-        run: pnpm test:coverage
-        env:
-          # services: cannot remap ports, so DATABASE_URL/REDIS_URL here use
-          # the container-default 5432/6379, not the compose stack's
-          # deliberately-nonstandard 5433/6380 (see docker-compose.yml).
-          # Every other key mirrors .env.test's committed value verbatim —
-          # the "Assert the CI env block mirrors .env.test" step below
-          # depends on every key from that file appearing, textually, in
-          # this workflow.
-          NODE_ENV: test
-          APP_PORT: 4040
-          APP_URL: http://localhost:4040
-          WEB_URL: http://localhost:5173
-          DATABASE_URL: postgres://test:test@localhost:5432/boilerplate_test
-          REDIS_URL: redis://localhost:6379
-          JWT_ACCESS_SECRET: test-access-secret-that-is-long-enough-32
-          SESSION_SECRET: test-session-secret-that-is-long-enough-1
-      # The env block above must mirror committed .env.test. When they drift, a
-      # test passes locally and fails in CI (or worse, the reverse) for reasons
-      # that look nothing like the cause. This asserts every key in .env.test is
-      # accounted for here.
-      #
-      # Anchored to an actual "  KEY:" line, not a bare substring match. An
-      # unanchored `grep -q "$key" ci.yml` is satisfied by a key name that only
-      # appears in a comment — such as the sentence right above this one, which
-      # names every key it's checking for — so the gate could pass while the
-      # real env: block is missing that key entirely. That is the same
-      # pass-while-checking-nothing shape as an inert lint rule: configured,
-      # green, enforcing nothing.
-      - name: Assert the CI env block mirrors .env.test
-        run: |
-          missing=0
-          while IFS='=' read -r key _; do
-            case "$key" in ''|\#*) continue ;; esac
-            if ! grep -qE "^[[:space:]]+${key}:" .github/workflows/ci.yml; then
-              echo "::error::$key is in .env.test but not in the CI env block"
-              missing=1
-            fi
-          done < .env.test
-          exit $missing
-      - name: Build
-        run: pnpm build
-      - name: Audit production dependencies
-        run: pnpm audit --prod
-      # .env.example is generated from the Zod schema. Nothing stops someone
-      # editing EnvSchema and forgetting to regenerate, and the drift is
-      # invisible until a new contributor's first run fails on a variable the
-      # example never mentioned. Regenerate and fail if the file moves.
-      - name: Assert .env.example matches the schema
-        run: |
-          pnpm env:example
-          git diff --exit-code .env.example \
-            || { echo "::error::.env.example is stale — run 'pnpm env:example' and commit"; exit 1; }
       - name: Reject domain leakage
         # The boilerplate is derived from a product repo. This gate is why the
         # derivation can be trusted; without it, a scrub miss ships silently.
@@ -180,3 +92,111 @@ jobs:
             echo "::error::Domain reference found — scrub before merging."
             exit 1
           fi
+
+  test:
+    runs-on: ubuntu-latest
+    services:
+      # GitHub's `services:` blocks cannot mount a file, so the init.sql that
+      # docker-compose uses to create the test role/database is unavailable
+      # here. Set the credentials directly instead — they must match .env.test.
+      postgres:
+        image: postgres:18
+        env: { POSTGRES_USER: test, POSTGRES_PASSWORD: test, POSTGRES_DB: boilerplate_test }
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd=pg_isready --health-interval=10s --health-timeout=5s --health-retries=5
+      redis:
+        image: redis:7.2-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd="redis-cli ping" --health-interval=10s --health-timeout=5s --health-retries=5
+      # mailer.service.test.ts sends real mail through this and reads it back
+      # via Mailpit's own HTTP API on 8025 — not a mock. Default, unremapped
+      # ports — unlike postgres/redis above, there is no common native
+      # service on 1025/8025 for a GitHub-hosted runner to collide with, so
+      # this needs none of docker-compose.yml's 5433/6380 dodge. Pinned, like
+      # every sibling service here and in docker-compose.yml, to the version
+      # this task actually developed and tested against.
+      #
+      # --health-cmd uses the image's own `readyz` subcommand (verified
+      # against the running container: it DOES have a shell — `docker exec
+      # ... sh -c 'echo ok'` succeeds). Without this, a Mailpit that has not
+      # finished starting would surface as a failed real-send test with a
+      # MISLEADING message — Ruling G (mailer.service.ts) swallows the
+      # connection error into a 'failed' delivery-log row, so the actual
+      # symptom is "expected 1 message, found 0", not a connection error
+      # naming the real cause.
+      mailpit:
+        image: axllent/mailpit:v1.31.1
+        ports: ['1025:1025', '8025:8025']
+        options: >-
+          --health-cmd="/mailpit readyz" --health-interval=5s --health-timeout=5s --health-retries=10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with: { node-version: 24, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - name: Run migrations
+        run: pnpm db:migrate
+        env:
+          # migrate.ts opens its own connection from getDatabaseUrl(), not
+          # database.service.ts's db/sql — so this step needs only
+          # DATABASE_URL, the same as drizzle-kit's own generate/migrate/check
+          # commands (see DATABASE.md).
+          DATABASE_URL: postgres://test:test@localhost:5432/boilerplate_test
+      - name: Test with coverage gate
+        run: pnpm test:coverage
+        env:
+          # services: cannot remap ports, so DATABASE_URL/REDIS_URL here use
+          # the container-default 5432/6379, not the compose stack's
+          # deliberately-nonstandard 5433/6380 (see docker-compose.yml).
+          # Every other key mirrors .env.test's committed value verbatim —
+          # the "Assert the CI env block mirrors .env.test" step below
+          # depends on every key from that file appearing, textually, in
+          # this workflow.
+          NODE_ENV: test
+          APP_PORT: 4040
+          APP_URL: http://localhost:4040
+          WEB_URL: http://localhost:5173
+          DATABASE_URL: postgres://test:test@localhost:5432/boilerplate_test
+          REDIS_URL: redis://localhost:6379
+          JWT_ACCESS_SECRET: test-access-secret-that-is-long-enough-32
+          SESSION_SECRET: test-session-secret-that-is-long-enough-1
+          SSE_HEARTBEAT_INTERVAL_MS: 1000
+      # The env block above must mirror committed .env.test. When they drift, a
+      # test passes locally and fails in CI (or worse, the reverse) for reasons
+      # that look nothing like the cause. This asserts every key in .env.test is
+      # accounted for here.
+      #
+      # Anchored to an actual "  KEY:" line, not a bare substring match. An
+      # unanchored `grep -q "$key" ci.yml` is satisfied by a key name that only
+      # appears in a comment — such as the sentence right above this one, which
+      # names every key it's checking for — so the gate could pass while the
+      # real env: block is missing that key entirely. That is the same
+      # pass-while-checking-nothing shape as an inert lint rule: configured,
+      # green, enforcing nothing.
+      - name: Assert the CI env block mirrors .env.test
+        run: |
+          missing=0
+          while IFS='=' read -r key _; do
+            case "$key" in ''|\#*) continue ;; esac
+            if ! grep -qE "^[[:space:]]+${key}:" .github/workflows/ci.yml; then
+              echo "::error::$key is in .env.test but not in the CI env block"
+              missing=1
+            fi
+          done < .env.test
+          exit $missing
+      - name: Build
+        run: pnpm build
+      - name: Audit production dependencies
+        run: pnpm audit --prod
+      # .env.example is generated from the Zod schema. Nothing stops someone
+      # editing EnvSchema and forgetting to regenerate, and the drift is
+      # invisible until a new contributor's first run fails on a variable the
+      # example never mentioned. Regenerate and fail if the file moves.
+      - name: Assert .env.example matches the schema
+        run: |
+          pnpm env:example
+          git diff --exit-code .env.example \
+            || { echo "::error::.env.example is stale — run 'pnpm env:example' and commit"; exit 1; }
