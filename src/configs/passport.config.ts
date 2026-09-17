@@ -60,19 +60,18 @@ import {
   type VerifyCallback,
 } from 'passport-google-oauth20'
 import { getEnv } from '@/configs/env.config'
+import { GOOGLE_STRATEGY_NAME } from '@/constants/auth.constants'
 import { isSecureCookieEnvironment } from '@/controllers/auth.controller'
 import { logger } from '@/services/logger.service'
 import { getRedis } from '@/services/redis.service'
 
-/**
- * The strategy name every `passport.use`/`passport.authenticate` call in
- * this codebase refers to. A named constant rather than the string literal
- * `'google'` repeated in `auth.routes.ts` and (in a later task)
- * `auth.controller.ts` — the two call sites must agree exactly, or
- * `passport.authenticate` throws `Unknown authentication strategy` at
- * request time instead of at a typo's actual source line.
- */
-export const GOOGLE_STRATEGY_NAME = 'google'
+// `GOOGLE_STRATEGY_NAME` itself now lives in constants/auth.constants.ts —
+// see that constant's own header comment for why it moved (breaking a
+// cycle with auth.controller.ts, this file's own Task 3 consumer of it).
+// Re-exported from here too, via `export…from`, so `auth.routes.ts`'s
+// existing `import { ..., GOOGLE_STRATEGY_NAME, ... } from
+// '@/configs/passport.config'` needs no change.
+export { GOOGLE_STRATEGY_NAME } from '@/constants/auth.constants'
 
 /**
  * Whether Google login is configured for this deployment.

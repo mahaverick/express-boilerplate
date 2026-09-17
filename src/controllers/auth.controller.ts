@@ -19,16 +19,26 @@
 //    own header comment there for how it stays in step with BCRYPT_COST and
 //    why it's memoised.
 import { randomUUID } from 'node:crypto'
-import { type NextFunction, type Request, type Response } from 'express'
+import { type NextFunction, type Request, type RequestHandler, type Response } from 'express'
+import passport from 'passport'
+import type { Profile as GoogleProfile } from 'passport-google-oauth20'
 import { getEnv } from '@/configs/env.config'
-import { REFRESH_TOKEN_COOKIE_NAME, REFRESH_TOKEN_COOKIE_PATH } from '@/constants/auth.constants'
+import {
+  GOOGLE_STRATEGY_NAME,
+  REFRESH_TOKEN_COOKIE_NAME,
+  REFRESH_TOKEN_COOKIE_PATH,
+} from '@/constants/auth.constants'
 import { JobPriority } from '@/constants/queue.constants'
+import { authProviderModel } from '@/database/models/auth-provider.model'
 import type { User } from '@/database/models/user.model'
+import { userModel } from '@/database/models/user.model'
 import { addEmailJob } from '@/jobs/email.job'
 import { addNotificationJob } from '@/jobs/notification.job'
 import { toAuthenticatedUser, type AuthenticatedUser } from '@/middlewares/auth.middleware'
 import { HttpError } from '@/middlewares/error.middleware'
+import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
 import { UserRepository } from '@/repositories/user.repository'
+import { db } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
 import { PASSWORD_RESET_TEMPLATE_KEY } from '@/templates/email/password-reset.template'
 import { REGISTRATION_ATTEMPT_TEMPLATE_KEY } from '@/templates/email/registration-attempt.template'
@@ -58,6 +68,7 @@ import {
 } from '@/validators/auth.validators'
 
 const userRepository = new UserRepository()
+const authProviderRepository = new AuthProviderRepository()
 
 /**
  * The fields of a user row it is safe to return to a client. An explicit
@@ -117,18 +128,55 @@ export function isSecureCookieEnvironment(): boolean {
  * registrable domain (eTLD+1). A deployment that splits them across
  * different top-level domains would need `'lax'` or a real CSRF token
  * instead, since `'strict'` would then never send this cookie back at all.
+ *
+ * `sameSite` is a parameter, defaulting to `'strict'`, rather than a second
+ * copy of this function — `setOAuthRefreshTokenCookie` below is the one
+ * caller that passes `'lax'` explicitly, for a reason specific to ITS
+ * request, not a reason to weaken every other caller's default.
+ * @param response - The response to set the cookie on.
+ * @param rawToken - The raw refresh token.
+ * @param expiresAt - When the token expires.
+ * @param sameSite - The cookie's `SameSite` attribute. Defaults to `'strict'`.
+ */
+function setRefreshTokenCookie(
+  response: Response,
+  rawToken: string,
+  expiresAt: Date,
+  sameSite: 'strict' | 'lax' = 'strict'
+): void {
+  response.cookie(REFRESH_TOKEN_COOKIE_NAME, rawToken, {
+    httpOnly: true,
+    secure: isSecureCookieEnvironment(),
+    sameSite,
+    path: REFRESH_TOKEN_COOKIE_PATH,
+    expires: expiresAt,
+  })
+}
+
+/**
+ * Attach a freshly issued refresh token to the response for the Google
+ * OAuth callback specifically — identical to `setRefreshTokenCookie` except
+ * `sameSite: 'lax'` in place of its `'strict'` default.
+ *
+ * `'strict'` would not survive the very request this cookie is set for: the
+ * browser reaches `handleGoogleCallback` via a top-level navigation
+ * REDIRECTED FROM `accounts.google.com` — a cross-site origin from this
+ * cookie's point of view — and a `'strict'` cookie set here would then be
+ * withheld on the very next request too, since that next request (the
+ * browser following `handleGoogleCallback`'s own redirect to
+ * `${WEB_URL}/auth/callback`) is issued by a document that just loaded
+ * arriving from that same cross-site hop. `'lax'` still withholds the
+ * cookie on cross-site subresource requests and cross-site unsafe (non-GET)
+ * requests — the actual CSRF surface `'strict'` exists to close for every
+ * other endpoint — while allowing it on this top-level GET redirect chain,
+ * which is the one shape every other caller of `setRefreshTokenCookie`
+ * never needs to allow for.
  * @param response - The response to set the cookie on.
  * @param rawToken - The raw refresh token.
  * @param expiresAt - When the token expires.
  */
-function setRefreshTokenCookie(response: Response, rawToken: string, expiresAt: Date): void {
-  response.cookie(REFRESH_TOKEN_COOKIE_NAME, rawToken, {
-    httpOnly: true,
-    secure: isSecureCookieEnvironment(),
-    sameSite: 'strict',
-    path: REFRESH_TOKEN_COOKIE_PATH,
-    expires: expiresAt,
-  })
+function setOAuthRefreshTokenCookie(response: Response, rawToken: string, expiresAt: Date): void {
+  setRefreshTokenCookie(response, rawToken, expiresAt, 'lax')
 }
 
 /**
@@ -585,4 +633,265 @@ export async function resetPassword(
   } catch (error) {
     next(error)
   }
+}
+
+// == Google OAuth ==
+//
+// `findOrCreateByGoogle` is the account-linking policy passport.config.ts's
+// own header comment says belongs here, not in the Passport verify
+// function: `passthroughGoogleProfile` hands `handleGoogleCallback`'s
+// `passport.authenticate('google', { session: false }, ...)` the RAW
+// Google profile, and deciding what that profile means — a returning
+// Google user, a new link to an existing email/password account, an
+// outright new account, or a rejection — is this function's job alone.
+
+/**
+ * The primary email address a Google profile carries, lowercased, plus
+ * whether GOOGLE ITSELF has verified that address.
+ *
+ * `profile.emails` is guarded rather than assumed present: the OAuth scope
+ * this app requests (`['profile', 'email']`, auth.routes.ts/
+ * passport.config.ts) is a REQUEST, and a Google Workspace admin can still
+ * restrict which fields a consenting user's organization exposes, so an
+ * absent or empty array is a real response shape, not defensive-programming
+ * theatre. Verification is read from BOTH `emails[0].verified` and
+ * `_json.email_verified` and OR'd together, rather than trusting either
+ * alone — `@types/passport-google-oauth20` types the first as always
+ * present, but that is the library's approximation of Google's actual wire
+ * format, not a guarantee this function should stake an account-takeover
+ * decision on.
+ * @param profile - The raw Google profile handed to `passport.authenticate`'s custom callback.
+ * @returns The lowercased email and Google's own verification claim for it.
+ * @throws {HttpError} 400, `google_email_missing`, when the profile carries no email at all.
+ */
+function verifiedGoogleEmail(profile: GoogleProfile): { email: string; isVerified: boolean } {
+  const primary = profile.emails?.[0]
+  if (!primary?.value) {
+    throw new HttpError('Google did not share an email address', 400, 'google_email_missing')
+  }
+  const isVerified = primary.verified || profile._json.email_verified === true
+  return { email: primary.value.toLowerCase(), isVerified }
+}
+
+/**
+ * Link a Google identity to an existing user, tolerating the exact race
+ * `AuthProviderRepository.create`'s own header comment names: two requests
+ * for the SAME not-yet-linked Google account (e.g. a double-submitted
+ * callback) can both pass `findByProviderAndId` and then race this insert.
+ * Both requests resolve the SAME `userId` — they came from the same Google
+ * account authenticating twice, hence the same email, hence the same
+ * `findByEmail` result — so losing the race and treating the identity as
+ * already-linked is equivalent to winning it, never a genuine conflict
+ * between two different local accounts.
+ * @param userId - The user to link the identity to.
+ * @param googleId - Google's stable profile id (`profile.id`).
+ */
+async function linkGoogleProvider(userId: string, googleId: string): Promise<void> {
+  try {
+    await authProviderRepository.create({ userId, provider: 'google', providerId: googleId })
+  } catch (error) {
+    if (error instanceof HttpError && error.statusCode === 409) return
+    throw error
+  }
+}
+
+/**
+ * Resolve the user a Google Sign-In should resolve to — creating or linking
+ * one when necessary. Entirely this task's own policy; see this section's
+ * header comment for why none of it lives in the Passport strategy.
+ *
+ * Order of operations, and why:
+ *
+ * 1. `(google, profile.id)` is checked FIRST, ahead of email. It is the
+ *    only lookup here safe to trust on a RETURNING user without a second
+ *    opinion: Google's `profile.id` (the OIDC `sub`) never changes even
+ *    when the account's email does, so a returning user's login stays
+ *    correct independent of anything that happened to their inbox since
+ *    they last signed in.
+ * 2. An email match against an EXISTING user is only ever accepted when
+ *    `verifiedGoogleEmail` says Google verified it. Google does not require
+ *    owning an address to add it to an account as an unverified one, so
+ *    accepting an unverified match would let anyone claiming
+ *    `victim@example.com` at Google sign in as whichever local user already
+ *    owns that address — the account-takeover this file's `handleGoogleCallback`
+ *    header comment warns about.
+ * 3. Linking does NOT set `emailVerifiedAt` on the existing account, even
+ *    though Google just proved control of the mailbox. That proof is not
+ *    equivalent to `resetPassword`'s (this file): a reset OVERWRITES the
+ *    password, which is what evicts a squatter who registered the address
+ *    first and never verified it. Linking touches no password at all, so
+ *    setting `emailVerifiedAt` here would flip `login`'s guard
+ *    (`!user.emailVerifiedAt`) to true for the SQUATTER's password too —
+ *    the exact account-takeover `verifyEmail`'s own two-factor design
+ *    (mailbox token AND password) exists to prevent. It also buys the
+ *    Google user nothing: neither `refresh` nor `requireAuth`
+ *    (auth.middleware.ts) gate on `emailVerifiedAt`, only `login` does, and
+ *    a Google user never calls `login`.
+ * 4. A brand-new account (no provider link, no email match) is created with
+ *    its `'email'` and `'google'` provider rows in ONE transaction — see
+ *    `auth-provider.model.ts`'s own header comment for why an `'email'` row
+ *    exists for federated users too (it is what lets `findByUser` answer
+ *    "does this user have a password login" without a second query against
+ *    `users.password_hash`), and this SDD plan's Task 1 carry-forward for
+ *    why repositories are bypassed in favour of `db.transaction` here:
+ *    `UserRepository`/`AuthProviderRepository` accept no transaction handle,
+ *    so an atomic multi-row write goes directly through `tx.insert(...)`
+ *    against the Drizzle tables instead.
+ * @param profile - The raw Google profile handed to `passport.authenticate`'s custom callback.
+ * @returns The user this Google identity resolves to — existing, newly linked, or newly created.
+ * @throws {HttpError} 400 `google_email_missing` (no email in the profile), 403 `email_not_verified` (an existing account's email, claimed by a Google identity Google has not verified), or a translated/raw database error from the write itself.
+ */
+export async function findOrCreateByGoogle(profile: GoogleProfile): Promise<User> {
+  const existingLink = await authProviderRepository.findByProviderAndId('google', profile.id)
+  if (existingLink) {
+    const user = await userRepository.findById(existingLink.userId)
+    if (!user) {
+      // REACHABLE, not a "cannot happen" guard: `auth_providers.user_id`
+      // cascades on a hard delete, but this codebase's own delete is a
+      // SOFT one (`UserRepository.softDelete`, sets `deletedAt`, never
+      // removes the row) — so a user who soft-deleted (or was
+      // soft-deleted) keeps their `auth_providers` rows while
+      // `findById`'s default `SoftDeleteOptions` excludes them here. A
+      // real Google account signing in again after that lands here, and
+      // gets a 4xx it can act on rather than an opaque 500.
+      throw new HttpError(
+        'This Google account is no longer linked to an active user',
+        401,
+        'google_auth_failed'
+      )
+    }
+    return user
+  }
+
+  const { email, isVerified } = verifiedGoogleEmail(profile)
+  const existingUser = await userRepository.findByEmail(email)
+
+  if (existingUser) {
+    if (!isVerified) {
+      throw new HttpError(
+        'This email is registered, but Google has not verified this address',
+        403,
+        'email_not_verified'
+      )
+    }
+
+    await linkGoogleProvider(existingUser.id, profile.id)
+    return existingUser
+  }
+
+  return db.transaction(async (tx) => {
+    const [createdUser] = await tx
+      .insert(userModel)
+      .values({
+        email,
+        // eslint-disable-next-line unicorn/no-null -- passwordHash is nullable specifically for a federated-only user (user.model.ts's own comment) — this account IS that case, not merely "no value given yet"
+        passwordHash: null,
+        ...(isVerified && { emailVerifiedAt: new Date() }),
+      })
+      .returning()
+
+    // Same "cannot happen but guard anyway" reasoning as UserRepository's
+    // own insertOne (user.repository.ts): a single-row insert.returning()
+    // that does not throw always returns exactly one row.
+    if (!createdUser) throw new HttpError('Insert returned no row', 500)
+
+    await tx.insert(authProviderModel).values([
+      { userId: createdUser.id, provider: 'email', providerId: email },
+      { userId: createdUser.id, provider: 'google', providerId: profile.id },
+    ])
+
+    return createdUser
+  })
+}
+
+/**
+ * Handle Google's redirect back to this API once the user completes (or
+ * abandons) Google's consent screen.
+ *
+ * `session: false` on `passport.authenticate`: this API is stateless JWT
+ * end to end, and the OAuth `express-session`
+ * (`createOAuthSessionMiddleware`, passport.config.ts) exists ONLY to carry
+ * the CSRF `state` value across the redirect round-trip. Letting Passport
+ * call `req.login()` here would additionally try to SERIALIZE this Google
+ * profile into that same session — and nothing in this app ever
+ * deserializes a session-backed user back out again.
+ *
+ * The custom three-argument `passport.authenticate` callback below receives
+ * exactly what `passthroughGoogleProfile` (passport.config.ts) handed to
+ * `done()`: the raw Google profile, not a resolved user. That callback is
+ * NOT awaited by Passport itself, so its body is wrapped in an
+ * immediately-invoked async function — an `async` callback passed directly
+ * to `passport.authenticate` would turn a rejection (e.g.
+ * `findOrCreateByGoogle` throwing) into an unhandled promise rejection
+ * instead of a response.
+ *
+ * Every failure redirects to the FRONTEND's `/login?error=...`, never
+ * answers this API's own JSON error envelope: the browser arrives here via
+ * a full-page navigation FROM Google, not a fetch/XHR call that envelope
+ * was ever built to answer. `HttpError.code` (when `findOrCreateByGoogle`
+ * threw one — `google_email_missing`, `email_not_verified`) is forwarded
+ * into the query string verbatim so the frontend can show a specific
+ * message; anything else (a raw database error, a translated 500) collapses
+ * to the generic `processing_failed`, and Google reporting `error`/no
+ * profile at all (the user cancelled, or denied consent) is its own
+ * `google_auth_failed`.
+ * @param request - The incoming callback request, carrying Google's `code`/`state` query parameters.
+ * @param response - The response.
+ * @param next - Forwards a synchronous failure from `passport.authenticate` itself to the terminal error handler. Every failure from this handler's own async body redirects instead — see this comment's own note on why that body cannot simply throw into `next`.
+ */
+export function handleGoogleCallback(
+  request: Request,
+  response: Response,
+  next: NextFunction
+): void {
+  const env = getEnv()
+
+  const authenticate = passport.authenticate(
+    GOOGLE_STRATEGY_NAME,
+    { session: false },
+    (error: unknown, profile: GoogleProfile | false | null) => {
+      void (async () => {
+        if (error || !profile) {
+          logger.error('Google OAuth callback failed', { error })
+          response.redirect(`${env.WEB_URL}/login?error=google_auth_failed`)
+          return
+        }
+
+        try {
+          const user = await findOrCreateByGoogle(profile)
+
+          // Same guard `login` (above) makes before issuing anything: a
+          // deactivated account must not walk away with a live refresh
+          // token just because it still owns a valid Google identity.
+          // `refresh`'s own re-check of `active` would eventually catch
+          // this on the first rotation attempt, but only after this
+          // handler had already written a `user_tokens` row and told the
+          // browser (via the redirect below) that sign-in succeeded.
+          if (!user.active) {
+            throw new HttpError('Account is inactive', 401, 'google_auth_failed')
+          }
+
+          await userRepository.update(user.id, { lastLoggedInAt: new Date() })
+
+          const sessionId = randomUUID()
+          const refreshToken = await issueRefreshToken(user.id, sessionId)
+          setOAuthRefreshTokenCookie(response, refreshToken.raw, refreshToken.expiresAt)
+
+          response.redirect(`${env.WEB_URL}/auth/callback`)
+        } catch (innerError) {
+          logger.error('Google OAuth callback failed', { error: innerError })
+          const code =
+            innerError instanceof HttpError && innerError.code
+              ? innerError.code
+              : 'processing_failed'
+          response.redirect(`${env.WEB_URL}/login?error=${code}`)
+        }
+      })()
+    }
+    // `as RequestHandler`: identical cast, for the identical reason, as the
+    // `/google` redirect route's own `passport.authenticate(...)` call —
+    // see auth.routes.ts's header comment beside that cast.
+  ) as RequestHandler
+
+  authenticate(request, response, next)
 }

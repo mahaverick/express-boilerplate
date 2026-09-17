@@ -34,6 +34,7 @@ import {
 } from '@/configs/passport.config'
 import {
   forgotPassword,
+  handleGoogleCallback,
   login,
   logout,
   refresh,
@@ -45,6 +46,7 @@ import { requireJsonContentType } from '@/middlewares/content-type.middleware'
 import {
   createForgotPasswordEmailRateLimiter,
   createForgotPasswordIpRateLimiter,
+  createGoogleOAuthCallbackRateLimiter,
   createGoogleOAuthRateLimiter,
   createLoginRateLimiter,
   createLogoutRateLimiter,
@@ -145,8 +147,28 @@ export function createAuthRouter(): Router {
         scope: ['profile', 'email'],
       }) as RequestHandler
     )
-    // GET /google/callback is wired in a later task, once the account-linking
-    // handler it needs (`handleGoogleCallback`, auth.controller.ts) exists.
+    // The callback route: Google redirects here after the user completes
+    // (or abandons) its consent screen. `createGoogleOAuthCallbackRateLimiter()`
+    // runs first, ahead of `oauthSession`, for the same ordering reason as
+    // `/google` above — a 429 must land before `oauthSession` (or
+    // `handleGoogleCallback`'s own database work) spends anything. Reuses
+    // the SAME `oauthSession` middleware instance built above rather than a
+    // second `createOAuthSessionMiddleware()` call: both routes read/write
+    // one session (the `state` value `/google` wrote, `passport-oauth2`
+    // reads back here for its CSRF check), so both must resolve to the same
+    // underlying express-session configuration — a second call would still
+    // work (it lazily builds an equivalent middleware) but would needlessly
+    // duplicate the Redis-latch machinery `createOAuthSessionMiddleware`'s
+    // own header comment describes. `handleGoogleCallback` (auth.controller.ts)
+    // is where the actual account-linking policy — and Task 3's
+    // `findOrCreateByGoogle` — lives.
+    router.get(
+      '/google/callback',
+      createGoogleOAuthCallbackRateLimiter(),
+      oauthSession,
+      passport.initialize(),
+      handleGoogleCallback
+    )
   }
 
   return router
