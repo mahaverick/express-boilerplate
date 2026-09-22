@@ -127,9 +127,20 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
           sql`${userTokenModel.sessionId} = ${sessionId} and ${userTokenModel.revokedAt} is null`
         )
       )
-    // The one write point. Logout, password change and refresh-token REUSE
-    // DETECTION all funnel through this method already, so denying here
-    // covers all three — and no call site can forget.
+    // Logout and refresh-token REUSE DETECTION both funnel through this
+    // method already (token.utilities.ts's revokeRefreshToken and
+    // rotateRefreshToken), so denying here covers both without a call site
+    // having to remember to.
+    //
+    // Password change/reset does NOT go through here — revokeAllSessions
+    // (token.utilities.ts) calls revokeAllForUser below instead, a
+    // separate query keyed on userId with no sessionId to deny by. That
+    // means a password reset today revokes the DB rows (no new refresh is
+    // possible) but does NOT deny any access token already issued — it
+    // stays valid until it naturally expires. Closing that gap needs
+    // revokeAllForUser to learn which session ids it just revoked (e.g. a
+    // RETURNING clause) before it can deny each one; that is a real change
+    // to a different method, not something this call site can paper over.
     await denySession(sessionId)
   }
 
