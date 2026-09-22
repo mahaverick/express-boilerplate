@@ -9,9 +9,11 @@ platform plumbing (env validation, database/Redis clients, health checks,
 error handling, the test harness, the lint gates) plus a working
 authentication slice on top of it: registration, login, JWT access tokens
 paired with rotating opaque refresh tokens, and an authenticated profile
-endpoint. It does not ship email verification delivery, sessions, MFA,
-OAuth, CORS/CSP, or tenancy — see [ARCHITECTURE.md](ARCHITECTURE.md) and
-[SECURITY.md](SECURITY.md) for exactly what is and is not here yet.
+endpoint, plus a CORS origin allowlist for a second frontend on a sibling
+subdomain. It does not ship email verification delivery, sessions, MFA,
+OAuth, security headers/CSP, or tenancy — see
+[ARCHITECTURE.md](ARCHITECTURE.md) and [SECURITY.md](SECURITY.md) for
+exactly what is and is not here yet.
 
 ## Requirements
 
@@ -128,22 +130,23 @@ An optional key with no default (currently only
 `.env.example`, so a reader can tell "no value needed" from "fill this in."
 Required keys are emitted blank.
 
-| Variable                      | Required                   | Notes                                                                                                                 |
-| ----------------------------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `NODE_ENV`                    | no (default `development`) | `development` \| `test` \| `production`                                                                               |
-| `APP_PORT`                    | no (default `4040`)        |                                                                                                                       |
-| `APP_URL`                     | **yes** (placeholder)      | Public origin of this API. `http://localhost:4040` locally. **Nothing reads it yet.**                                 |
-| `WEB_URL`                     | **yes** (placeholder)      | Public origin of the frontend. `http://localhost:5173` locally. **Nothing reads it yet.**                             |
-| `DATABASE_URL`                | **yes**                    | `postgres://boilerplate:boilerplate@localhost:5433/boilerplate` against the compose stack.                            |
-| `REDIS_URL`                   | **yes**                    | `redis://localhost:6380` against the compose stack.                                                                   |
-| `JWT_ACCESS_SECRET`           | **yes**                    | 32+ characters. Signs and verifies access tokens.                                                                     |
-| `SESSION_SECRET`              | **yes** (placeholder)      | 32+ characters. **Nothing reads it yet.**                                                                             |
-| `ACCESS_TOKEN_TTL`            | no (default `15m`)         | An `ms()`-parseable duration string, e.g. `15m` or `900000`.                                                          |
-| `REFRESH_TOKEN_TTL`           | no (default `30d`)         | An `ms()`-parseable duration string, e.g. `30d` or `2592000000`.                                                      |
-| `SESSION_ABSOLUTE_TTL`        | no (default `30d`)         | Hard ceiling on one login session, never reset by rotation. An `ms()`-parseable duration string.                      |
-| `TRUST_PROXY`                 | no (default `false`)       | **Set this behind a proxy** — see [SECURITY.md](SECURITY.md). `1` for one hop, or an address list. `true` is refused. |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | no                         | Absent means tracing is disabled — the SDK is never started.                                                          |
-| `LOG_LEVEL`                   | no (default `info`)        | `error` \| `warn` \| `info` \| `debug`                                                                                |
+| Variable                      | Required                   | Notes                                                                                                                                                                                     |
+| ----------------------------- | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NODE_ENV`                    | no (default `development`) | `development` \| `test` \| `production`                                                                                                                                                   |
+| `APP_PORT`                    | no (default `4040`)        |                                                                                                                                                                                           |
+| `APP_URL`                     | **yes** (placeholder)      | Public origin of this API. `http://localhost:4040` locally. **Nothing reads it yet.**                                                                                                     |
+| `WEB_URL`                     | **yes**                    | Public origin of the frontend. `http://localhost:5173` locally. Read by the email-verification link builder and — always allowed in the CORS origin allowlist — by `origin.utilities.ts`. |
+| `CORS_ALLOWED_ORIGINS`        | no                         | Extra browser origins allowed to call this API, comma-separated. `WEB_URL` is always allowed without listing it here.                                                                     |
+| `DATABASE_URL`                | **yes**                    | `postgres://boilerplate:boilerplate@localhost:5433/boilerplate` against the compose stack.                                                                                                |
+| `REDIS_URL`                   | **yes**                    | `redis://localhost:6380` against the compose stack.                                                                                                                                       |
+| `JWT_ACCESS_SECRET`           | **yes**                    | 32+ characters. Signs and verifies access tokens.                                                                                                                                         |
+| `SESSION_SECRET`              | **yes** (placeholder)      | 32+ characters. **Nothing reads it yet.**                                                                                                                                                 |
+| `ACCESS_TOKEN_TTL`            | no (default `15m`)         | An `ms()`-parseable duration string, e.g. `15m` or `900000`.                                                                                                                              |
+| `REFRESH_TOKEN_TTL`           | no (default `30d`)         | An `ms()`-parseable duration string, e.g. `30d` or `2592000000`.                                                                                                                          |
+| `SESSION_ABSOLUTE_TTL`        | no (default `30d`)         | Hard ceiling on one login session, never reset by rotation. An `ms()`-parseable duration string.                                                                                          |
+| `TRUST_PROXY`                 | no (default `false`)       | **Set this behind a proxy** — see [SECURITY.md](SECURITY.md). `1` for one hop, or an address list. `true` is refused.                                                                     |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | no                         | Absent means tracing is disabled — the SDK is never started.                                                                                                                              |
+| `LOG_LEVEL`                   | no (default `info`)        | `error` \| `warn` \| `info` \| `debug`                                                                                                                                                    |
 
 There is no `JWT_REFRESH_SECRET`: refresh tokens are opaque random strings,
 not JWTs, so nothing ever signs one with a secret — see
@@ -152,10 +155,11 @@ placeholder; it was removed from the schema rather than kept as one.
 
 ### The remaining placeholders
 
-`APP_URL`, `WEB_URL` and `SESSION_SECRET` are **required by the schema and
-read by nothing in `src/`.** No session, no CORS and no email ship in this
-boilerplate (see [SECURITY.md](SECURITY.md)) — they are forward
-declarations for a later plan.
+`APP_URL` and `SESSION_SECRET` remain required by the schema (see
+[SECURITY.md](SECURITY.md) for what reads them). `WEB_URL` is no longer a
+placeholder: it is read by the email-verification link builder and by the
+CORS origin allowlist (see the table above and SECURITY.md's "CORS"
+section).
 
 So **any 32-character string will do for now**: `SESSION_SECRET=` followed
 by 32 arbitrary characters boots the app exactly as well as a

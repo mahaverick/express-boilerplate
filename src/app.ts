@@ -4,7 +4,9 @@
 // that is what makes supertest able to import it, and it is why this is a
 // separate file from server.ts. core's single 38k index.ts is the thing this
 // split exists to avoid.
+import cors from 'cors'
 import express, { type Express } from 'express'
+import { corsOptions } from '@/configs/cors.config'
 import { getEnv, trustProxySetting } from '@/configs/env.config'
 import { errorHandler, HttpError } from '@/middlewares/error.middleware'
 import { requestContext } from '@/middlewares/request-context.middleware'
@@ -44,6 +46,19 @@ export function createApp(): Express {
   // for what an operator must set. A malformed value throws here, at boot,
   // rather than being discovered later from a rate limiter that never fires.
   app.set('trust proxy', trustProxySetting(getEnv().TRUST_PROXY))
+
+  // BEFORE requestId and the body parsers: for an ALLOWED origin, a
+  // preflight is an OPTIONS request that `cors` answers and ends right
+  // here, so requestId and the body parsers never run for it. For a
+  // DISALLOWED origin, `cors` withholds the grant header but does NOT end
+  // the request — it calls `next()` and the preflight falls through into
+  // the rest of the stack, landing on whatever that route does with a
+  // method it has no handler for (measured: Express's own OPTIONS
+  // auto-responder for one route, an auth check's 401 for another — it
+  // varies by route, see cors.test.ts). Either way is harmless: a browser
+  // blocks the response the moment the grant header is missing, regardless
+  // of status code.
+  app.use(cors(corsOptions))
 
   app.use(requestId)
   app.use(requestContext)

@@ -54,7 +54,9 @@ const EnvSchema = z.object({
   // below says what it actually does rather than carrying the placeholder
   // note. WEB_URL was the first of these to graduate —
   // verification-link.utilities.ts reads `getEnv().WEB_URL` to build the
-  // link mailed to a user. JWT_ACCESS_SECRET graduated earlier still —
+  // link mailed to a user, and it now has a second reader:
+  // origin.utilities.ts reads it to decide whether a browser's Origin
+  // header may receive a CORS grant. JWT_ACCESS_SECRET graduated earlier still —
   // token.utilities.ts (signAccessToken/verifyAccessToken) reads it to sign
   // and verify every access token.
   //
@@ -252,6 +254,19 @@ const EnvSchema = z.object({
     })
     .describe(
       'How much of X-Forwarded-For to believe. "false" (default) trusts none: correct when clients reach this app directly, WRONG behind a proxy, where every IP-keyed rate limiter then shares one bucket for the whole deployment. Behind a proxy set the NUMBER of proxies in front of this app (e.g. "1"), or a comma-separated list of trusted proxy addresses/subnets or presets ("loopback", "linklocal", "uniquelocal"). Never "true" — it is refused, because it lets any client spoof its own IP and bypass the limiters.'
+    ),
+
+  // Extra browser origins allowed to call this API, comma-separated, e.g.
+  // "https://admin.example.com,https://shop.example.com". WEB_URL is ALWAYS
+  // allowed and does not need listing. Same-origin requests send no Origin
+  // header at all and are always allowed. Never a wildcard: `cors` refuses
+  // `*` together with `credentials: true`, which this API needs for the
+  // refresh cookie.
+  CORS_ALLOWED_ORIGINS: z
+    .string()
+    .optional()
+    .describe(
+      'Extra browser origins allowed to call this API, comma-separated (e.g. "https://admin.example.com,https://shop.example.com"). WEB_URL is ALWAYS allowed and does not need listing here, and same-origin requests send no Origin header at all. Leave empty for a single-frontend deployment. Never a wildcard: this API sends credentials, and the CORS spec forbids "*" with credentials.'
     ),
 
   OTEL_EXPORTER_OTLP_ENDPOINT: z
