@@ -1,9 +1,11 @@
 // src/middlewares/request-id.middleware.ts
 //
 // Every response carries an id, and a caller-supplied one is honoured so a
-// trace survives the hop from the frontend. This runs first in the chain:
-// the error handler reads the header back off the response, so anything
-// registered before this would produce errors with no id.
+// trace survives the hop from the frontend. `cors(corsOptions)` (app.ts) is
+// mounted ahead of this, but its origin callback never passes an Error
+// (cors.config.ts) — so this is still the first thing in the chain that can
+// produce or observe one, and the error handler reading the header back off
+// the response always finds one there.
 import { randomUUID } from 'node:crypto'
 import { type NextFunction, type Request, type Response } from 'express'
 

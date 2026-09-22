@@ -47,10 +47,17 @@ export function createApp(): Express {
   // rather than being discovered later from a rate limiter that never fires.
   app.set('trust proxy', trustProxySetting(getEnv().TRUST_PROXY))
 
-  // BEFORE requestId and the body parsers: a preflight is an OPTIONS request
-  // that must be answered and ended here, not carried through the rest of
-  // the stack. Mounting it later means preflights allocate a request id and
-  // walk middleware that has nothing to say about them.
+  // BEFORE requestId and the body parsers: for an ALLOWED origin, a
+  // preflight is an OPTIONS request that `cors` answers and ends right
+  // here, so requestId and the body parsers never run for it. For a
+  // DISALLOWED origin, `cors` withholds the grant header but does NOT end
+  // the request — it calls `next()` and the preflight falls through into
+  // the rest of the stack, landing on whatever that route does with a
+  // method it has no handler for (measured: Express's own OPTIONS
+  // auto-responder for one route, an auth check's 401 for another — it
+  // varies by route, see cors.test.ts). Either way is harmless: a browser
+  // blocks the response the moment the grant header is missing, regardless
+  // of status code.
   app.use(cors(corsOptions))
 
   app.use(requestId)

@@ -38,9 +38,18 @@ describe('CORS', () => {
       .set('Origin', 'https://evil.example')
       .set('Access-Control-Request-Method', 'POST')
 
-    // `cors` answers the preflight but withholds the grant header, which is
-    // what makes the browser block it. Asserting the HEADER is absent is the
-    // real check — asserting a status code here proves nothing.
+    // `cors` withholds the grant header for a disallowed origin, but unlike
+    // an allowed one it does NOT end the request here — it calls `next()`
+    // and the preflight falls through into the rest of the stack (see
+    // cors.config.ts and app.ts's mount-order comment). For this route that
+    // lands on Express's own built-in OPTIONS responder — `/login` only
+    // registers POST, so Express answers 200 with `Allow: POST` — measured
+    // directly against this app, not assumed. The absence of the grant
+    // header is what actually blocks the browser, so that assertion is the
+    // real check; the status is pinned too, specifically so this test fails
+    // loudly (instead of passing unchanged either way) if a future change
+    // adds a short-circuit here or `cors`'s fall-through behaviour changes.
+    expect(response.status).toBe(200)
     expect(response.headers['access-control-allow-origin']).toBeUndefined()
   })
 
