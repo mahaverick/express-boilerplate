@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 # Multi-stage. node:24-alpine, not 22 — see Global Constraints.
-FROM node:24-alpine AS base
+FROM node:25-alpine AS base
 ENV PNPM_HOME=/pnpm PATH=/pnpm:$PATH
 RUN corepack enable && corepack prepare pnpm@12.4.1 --activate
 RUN adduser -D -u 10001 appuser
