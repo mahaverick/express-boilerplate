@@ -34,6 +34,7 @@ import type { Notification } from '@/database/models/notification.model'
 import type { User } from '@/database/models/user.model'
 import { ACCESS_TOKEN_EXPIRED_CODE } from '@/middlewares/auth.middleware'
 import { NotificationRepository } from '@/repositories/notification.repository'
+import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { emitNotification, listenerCount } from '@/services/notification-emitter.service'
@@ -42,6 +43,7 @@ import { withMutatedMethod } from '../../helpers/mutate'
 
 const userRepository = new UserRepository()
 const notificationRepository = new NotificationRepository()
+const userTokenRepository = new UserTokenRepository()
 
 /**
  * One parsed SSE event — the fields `notification-stream.controller.ts`'s
@@ -124,6 +126,12 @@ class SseConnection {
   private buffer = ''
   private readonly ready: Promise<IncomingMessage>
   private readonly ended: Promise<void>
+  /**
+   * How many of `frames` `nextFrame` has already handed out — so repeated
+   * calls advance rather than all returning the first frame that ever
+   * arrived.
+   */
+  private nextFrameIndex = 0
   readonly request: http.ClientRequest
   response: IncomingMessage | undefined
   /**
@@ -205,6 +213,45 @@ class SseConnection {
    */
   destroy(): void {
     this.request.destroy()
+  }
+
+  /**
+   * Wait for the next frame this connection has not yet handed out —
+   * proof the stream is actually alive and delivering, not merely that
+   * headers arrived.
+   * @param timeoutMs - How long to wait before giving up. Defaults to 5000ms.
+   * @returns The next unread frame.
+   * @throws {Error} When no new frame arrives within `timeoutMs`.
+   */
+  async nextFrame(timeoutMs = 5000): Promise<SseFrame> {
+    await waitUntil(() => this.frames.length > this.nextFrameIndex, timeoutMs)
+    const frame = this.frames[this.nextFrameIndex]
+    this.nextFrameIndex += 1
+    if (!frame) {
+      throw new Error('unreachable: waitUntil already guaranteed a frame at this index')
+    }
+    return frame
+  }
+
+  /**
+   * Whether the server ended this response within `timeoutMs` — resolves
+   * `false` on a timeout rather than rejecting, so a test asserting a
+   * stream stays OPEN doesn't need to catch anything.
+   * @param timeoutMs - How long to wait for the response to end.
+   * @returns True once the response has ended; false if `timeoutMs` elapses first.
+   */
+  async closed(timeoutMs: number): Promise<boolean> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timeoutPromise = new Promise<boolean>((resolve) => {
+      timer = setTimeout(() => resolve(false), timeoutMs)
+    })
+    const endPromise = (async (): Promise<boolean> => {
+      await this.ended
+      return true
+    })()
+    const hasClosed = await Promise.race([endPromise, timeoutPromise])
+    if (timer) clearTimeout(timer)
+    return hasClosed
   }
 }
 
@@ -325,6 +372,29 @@ describe('GET /api/v1/notifications/stream', () => {
     const user = await userRepository.create({ email: uniqueEmail() })
     createdUserIds.push(user.id)
     return { user, token: signAccessToken(user, randomUUID()) }
+  }
+
+  /**
+   * Open an authenticated SSE stream for a brand-new user, capturing the
+   * session id its token was minted with — unlike `createAuthenticatedUser`,
+   * whose `signAccessToken(user, randomUUID())` throws its session id away,
+   * a caller here can revoke this exact session afterward.
+   * @returns The opened connection, its user id, and its session id.
+   */
+  async function openStreamForNewSession(): Promise<{
+    stream: SseConnection
+    userId: string
+    sessionId: string
+  }> {
+    const user = await userRepository.create({ email: uniqueEmail() })
+    createdUserIds.push(user.id)
+    const sessionId = randomUUID()
+    const token = signAccessToken(user, sessionId)
+
+    const stream = openStream(`/api/v1/notifications/stream?token=${encodeURIComponent(token)}`)
+    await stream.waitForResponse()
+
+    return { stream, userId: user.id, sessionId }
   }
 
   it('opens an SSE stream with the expected headers for a valid token', async () => {
@@ -609,4 +679,35 @@ describe('GET /api/v1/notifications/stream', () => {
     await sleep(100)
     expect(connection.frames.some((frame) => frame.event === 'notification')).toBe(false)
   })
+
+  // requireAuth (auth.middleware.ts) rejects a denied session, but only at
+  // connect — it never runs again on a connection already open. This
+  // endpoint doesn't sit behind requireAuth at all (see this controller's
+  // own header comment), and its own connect-time check
+  // (authenticateStreamRequest) has the same one-shot limitation. The
+  // heartbeat is the only thing that recurs on an open SSE connection, so
+  // it is the only place a revoked session can actually be caught here —
+  // this test proves that closes the stream, not merely that the session
+  // is rejected on a fresh connect (already covered by
+  // auth.middleware.test.ts's own denylist test).
+  it('closes an open stream once its session is revoked', async () => {
+    const { stream, userId, sessionId } = await openStreamForNewSession()
+
+    // Alive first, or the assertion below proves nothing. The first frame
+    // to arrive is always a heartbeat (no notification is emitted here) —
+    // this just proves the connection is live before revoking it.
+    await expect(stream.nextFrame()).resolves.toBeDefined()
+
+    await userTokenRepository.revokeAllForSession(sessionId)
+
+    // Within one heartbeat, not immediately: the check rides the existing
+    // interval rather than adding a second timer.
+    await expect(stream.closed(getEnv().SSE_HEARTBEAT_INTERVAL_MS * 2)).resolves.toBe(true)
+
+    // The heartbeat's own close path must clean up exactly like an
+    // ordinary client disconnect does — not merely end the HTTP response
+    // while leaving the emitter subscription (and the interval) behind.
+    await waitUntil(() => listenerCount(userId) === 0, 2000)
+    expect(listenerCount(userId)).toBe(0)
+  }, 10_000)
 })

@@ -23,6 +23,7 @@ import { NotificationRepository } from '@/repositories/notification.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { logger } from '@/services/logger.service'
 import { offNotification, onNotification } from '@/services/notification-emitter.service'
+import { isSessionDenied } from '@/services/session-denylist.service'
 import { verifyAccessToken } from '@/utilities/token.utilities'
 
 const userRepository = new UserRepository()
@@ -61,15 +62,18 @@ interface NotificationStreamPayload {
  * the only thing that opens this connection outside a test — cannot set
  * custom request headers at all, so a query parameter is the one place a
  * token can travel for this specific request. Everything else mirrors
- * `requireAuth` exactly: verify the signature via `verifyAccessToken`, then
- * load and confirm the claimed user is still active, so a disabled
- * account's outstanding SSE connections stop working the same way its
- * outstanding bearer tokens do.
+ * `requireAuth`'s steps: verify the signature via `verifyAccessToken`, then
+ * load and confirm the claimed user is still active. NOTE: this runs ONCE,
+ * at connect. An already-open connection is re-checked only by the
+ * heartbeat below, which is what actually closes a stream whose session was
+ * revoked or whose account was disabled.
  * @param request - The incoming request, carrying the access token as `?token=`.
- * @returns The authenticated user's id.
+ * @returns The authenticated user's id and the session id its access token carries, when it carries one.
  * @throws {HttpError} 401, when the token is missing, invalid, expired, or names no active user.
  */
-async function authenticateStreamRequest(request: Request): Promise<string> {
+async function authenticateStreamRequest(
+  request: Request
+): Promise<{ userId: string; sessionId: string | undefined }> {
   const token = request.query.token
   if (typeof token !== 'string' || token === '') {
     throw new HttpError('Missing access token', 401)
@@ -87,7 +91,7 @@ async function authenticateStreamRequest(request: Request): Promise<string> {
   if (!user || !user.active) {
     throw new HttpError('Account no longer exists or is inactive', 401)
   }
-  return user.id
+  return { userId: user.id, sessionId: verified.payload.sid }
 }
 
 /**
@@ -233,7 +237,7 @@ export async function streamNotifications(
   next: NextFunction
 ): Promise<void> {
   try {
-    const userId = await authenticateStreamRequest(request)
+    const { userId, sessionId } = await authenticateStreamRequest(request)
 
     response.writeHead(200, {
       'Content-Type': 'text/event-stream',
@@ -275,7 +279,25 @@ export async function streamNotifications(
 
     const heartbeat = setInterval(() => {
       if (response.writableEnded || response.destroyed) return
-      response.write(':ping\n\n')
+      void (async () => {
+        // The ONLY recurring check on a connection that may live 24 hours.
+        // requireAuth ran once, at connect; nothing else revisits this.
+        // Denial does not cover every revocation path — see
+        // authenticateStreamRequest's own comment and
+        // revokeAllForSession's (user-token.repository.ts) for which ones
+        // it does — but it is the one check that can close an ALREADY-OPEN
+        // stream at all.
+        if (sessionId && (await isSessionDenied(sessionId))) {
+          clearInterval(heartbeat)
+          offNotification(userId, handleNotification)
+          response.end()
+          return
+        }
+        // Re-checked after the `await` above: the client may have
+        // disconnected while that Redis round trip was in flight.
+        if (response.writableEnded || response.destroyed) return
+        response.write(':ping\n\n')
+      })()
     }, getEnv().SSE_HEARTBEAT_INTERVAL_MS)
     // Without this, a pending heartbeat timer keeps the Node event loop
     // alive for as long as the connection is open — fine in production,
