@@ -471,7 +471,7 @@ export async function login(
     await userRepository.update(user.id, { lastLoggedInAt: new Date() })
 
     const sessionId = randomUUID()
-    const accessToken = signAccessToken(user)
+    const accessToken = signAccessToken(user, sessionId)
     const refreshToken = await issueRefreshToken(user.id, sessionId)
     setRefreshTokenCookie(response, refreshToken.raw, refreshToken.expiresAt)
 
@@ -522,7 +522,11 @@ export async function refresh(
     }
 
     setRefreshTokenCookie(response, rotated.raw, rotated.expiresAt)
-    successResponse(response, { accessToken: signAccessToken(user) }, 'Token refreshed.')
+    successResponse(
+      response,
+      { accessToken: signAccessToken(user, rotated.sessionId) },
+      'Token refreshed.'
+    )
   } catch (error) {
     next(error)
   }

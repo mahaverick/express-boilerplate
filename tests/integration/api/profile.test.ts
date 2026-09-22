@@ -102,7 +102,7 @@ describe('/api/v1/profile', () => {
   ): Promise<{ user: User; token: string }> {
     const user = await userRepository.create({ email: uniqueEmail(), ...overrides })
     createdIds.push(user.id)
-    return { user, token: signAccessToken(user) }
+    return { user, token: signAccessToken(user, randomUUID()) }
   }
 
   describe('GET /api/v1/profile', () => {

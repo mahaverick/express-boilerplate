@@ -142,7 +142,7 @@ describe('requireAuth', () => {
 
   it('populates request.user with the expected shape for a valid token', async () => {
     const user = await createUser()
-    const token = signAccessToken(user)
+    const token = signAccessToken(user, randomUUID())
     const request = buildRequest(`Bearer ${token}`)
     const { next, lastCallArgument } = mockNext()
 
@@ -187,7 +187,7 @@ describe('requireAuth', () => {
 
   it('rejects a valid, unexpired token for a soft-deleted user', async () => {
     const user = await createUser()
-    const token = signAccessToken(user)
+    const token = signAccessToken(user, randomUUID())
     await userRepository.softDelete(user.id)
 
     const { next, lastCallArgument } = mockNext()
@@ -201,7 +201,7 @@ describe('requireAuth', () => {
 
   it('rejects a valid, unexpired token for a deactivated (active: false) user', async () => {
     const user = await createUser()
-    const token = signAccessToken(user)
+    const token = signAccessToken(user, randomUUID())
     await userRepository.update(user.id, { active: false })
 
     const { next, lastCallArgument } = mockNext()

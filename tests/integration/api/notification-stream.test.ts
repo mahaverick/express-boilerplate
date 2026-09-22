@@ -324,7 +324,7 @@ describe('GET /api/v1/notifications/stream', () => {
   async function createAuthenticatedUser(): Promise<{ user: User; token: string }> {
     const user = await userRepository.create({ email: uniqueEmail() })
     createdUserIds.push(user.id)
-    return { user, token: signAccessToken(user) }
+    return { user, token: signAccessToken(user, randomUUID()) }
   }
 
   it('opens an SSE stream with the expected headers for a valid token', async () => {

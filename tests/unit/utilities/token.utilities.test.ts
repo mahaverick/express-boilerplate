@@ -21,7 +21,8 @@
 import jwt from 'jsonwebtoken'
 import { describe, expect, it } from 'vitest'
 import { getEnv } from '@/configs/env.config'
-import { verifyAccessToken } from '@/utilities/token.utilities'
+import type { User } from '@/database/models/user.model'
+import { signAccessToken, verifyAccessToken } from '@/utilities/token.utilities'
 
 describe('verifyAccessToken', () => {
   it('rejects a token signed with the wrong secret', () => {
@@ -77,5 +78,38 @@ describe('verifyAccessToken', () => {
     })
 
     expect(verifyAccessToken(token)).toEqual({ ok: false, reason: 'invalid' })
+  })
+
+  it('carries the session id and a unique token id', () => {
+    const user = { id: 'user-1' } as User
+    const token = signAccessToken(user, 'session-abc')
+
+    const verified = verifyAccessToken(token)
+    expect(verified.ok).toBe(true)
+    if (!verified.ok) throw new Error('unreachable')
+    expect(verified.payload.sub).toBe('user-1')
+    expect(verified.payload.sid).toBe('session-abc')
+    expect(verified.payload.jti).toEqual(expect.any(String))
+  })
+
+  it('gives two tokens for one session different jtis', () => {
+    const user = { id: 'user-1' } as User
+    const first = verifyAccessToken(signAccessToken(user, 'session-abc'))
+    const second = verifyAccessToken(signAccessToken(user, 'session-abc'))
+    if (!first.ok || !second.ok) throw new Error('unreachable')
+    expect(first.payload.jti).not.toBe(second.payload.jti)
+  })
+
+  it('still verifies a token minted before sid existed, so a deploy does not sign everyone out', () => {
+    // One release of tolerance. `sid` is optional precisely so tokens issued
+    // by the previous version keep working until they expire.
+    const legacy = jwt.sign({ sub: 'user-1' }, getEnv().JWT_ACCESS_SECRET, {
+      algorithm: 'HS256',
+      expiresIn: 900,
+    })
+    const verified = verifyAccessToken(legacy)
+    expect(verified.ok).toBe(true)
+    if (!verified.ok) throw new Error('unreachable')
+    expect(verified.payload.sid).toBeUndefined()
   })
 })

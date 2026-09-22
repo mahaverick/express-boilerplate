@@ -1,7 +1,8 @@
 // src/utilities/token.utilities.ts
 //
 // Access tokens are signed JWTs (jsonwebtoken) — short-lived, stateless,
-// carrying only the user id (`sub`). Refresh tokens are the opposite on
+// carrying the user id (`sub`) plus the session and token ids (`sid`,
+// `jti`) nothing yet reads. Refresh tokens are the opposite on
 // every axis: OPAQUE random strings (crypto.randomBytes(32)), never JWTs.
 // A JWT refresh token cannot be revoked without a server-side store anyway
 // (the whole point of a refresh token is that it MUST be revocable), so
@@ -18,7 +19,7 @@
 // how the race that would otherwise defeat this is closed — and how that
 // same primitive now also guards email-verification and password-reset
 // tokens, scoped so one purpose's token can never be claimed as another's.
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import jwt from 'jsonwebtoken'
 import { getEnv } from '@/configs/env.config'
 import type { TokenPurpose, UserToken } from '@/database/models/user-token.model'
@@ -49,6 +50,17 @@ const userTokenRepository = new UserTokenRepository()
  */
 export interface AccessTokenPayload {
   sub: string
+  /**
+   * The session this token belongs to. Optional ONLY so that tokens minted
+   * before this claim existed keep verifying for one release; a token
+   * without it cannot be revoked and is accepted until it expires.
+   */
+  sid?: string
+  /**
+   * This token's own id. Not checked — it exists so a token accepted after
+   * a Redis flush can be identified in logs.
+   */
+  jti?: string
 }
 
 /**
@@ -155,11 +167,12 @@ async function createTokenRow(
 /**
  * Sign a short-lived access token carrying a user's id.
  * @param user - The authenticated user.
+ * @param sessionId - The session this token belongs to.
  * @returns A signed JWT, expiring after `ACCESS_TOKEN_TTL`.
  */
-export function signAccessToken(user: User): string {
+export function signAccessToken(user: User, sessionId: string): string {
   const env = getEnv()
-  const payload: AccessTokenPayload = { sub: user.id }
+  const payload: AccessTokenPayload = { sub: user.id, sid: sessionId, jti: randomUUID() }
   return jwt.sign(payload, env.JWT_ACCESS_SECRET, {
     algorithm: 'HS256',
     expiresIn: Math.floor(requireDurationMs(env.ACCESS_TOKEN_TTL) / MS_PER_SECOND),
@@ -207,7 +220,15 @@ export function verifyAccessToken(token: string): VerifyAccessTokenResult {
     if (typeof decoded === 'string' || typeof decoded.sub !== 'string') {
       return { ok: false, reason: 'invalid' }
     }
-    return { ok: true, payload: { sub: decoded.sub } }
+    // Built incrementally, not as an object literal with `sid: undefined` /
+    // `jti: undefined` inline: this repo's `exactOptionalPropertyTypes`
+    // treats an optional property explicitly set to `undefined` as a type
+    // error distinct from the property being absent, so a legacy token
+    // (no `sid`/`jti` claim) must OMIT the key, not assign it `undefined`.
+    const payload: AccessTokenPayload = { sub: decoded.sub }
+    if (typeof decoded.sid === 'string') payload.sid = decoded.sid
+    if (typeof decoded.jti === 'string') payload.jti = decoded.jti
+    return { ok: true, payload }
   } catch (error) {
     return { ok: false, reason: error instanceof jwt.TokenExpiredError ? 'expired' : 'invalid' }
   }

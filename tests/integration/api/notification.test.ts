@@ -121,7 +121,7 @@ describe('/api/v1/notifications', () => {
   async function createAuthenticatedUser(): Promise<{ user: User; token: string }> {
     const user = await userRepository.create({ email: uniqueEmail() })
     createdUserIds.push(user.id)
-    return { user, token: signAccessToken(user) }
+    return { user, token: signAccessToken(user, randomUUID()) }
   }
 
   describe('GET /api/v1/notifications', () => {
