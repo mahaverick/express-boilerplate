@@ -42,7 +42,7 @@
     "@opentelemetry/sdk-node": "^0.222.0",
     "@opentelemetry/semantic-conventions": "^1.43.0",
     "bcrypt": "^6.0.0",
-    "bullmq": "^6.3.6",
+    "bullmq": "^6.3.8",
     "connect-redis": "^10.0.0",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
