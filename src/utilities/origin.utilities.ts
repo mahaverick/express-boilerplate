@@ -18,26 +18,62 @@ export function isAllowedOrigin(origin: string | undefined): boolean {
 
   const env = getEnv()
 
-  // WEB_URL is always allowed and never needs listing. This is not a
-  // convenience: Vite's dev proxy FORWARDS the browser's Origin header on
-  // POST (measured — GET arrives with none), so an allowlist that defaulted
-  // to empty would fail every login in development while GETs kept working.
-  if (origin === env.WEB_URL) return true
+  // WEB_URL is always allowed and never needs listing. The load-bearing case
+  // is a PRODUCTION cross-origin deployment — `app.example.com` calling
+  // `api.example.com` — not the local dev proxy: under Vite, the page and
+  // the request are both `localhost:5173`, so the browser treats it as
+  // same-origin and applies no CORS check at all regardless of what this
+  // function returns (`callback(null, false)` only withholds the grant
+  // header; it does not reject the request server-side). Vite's proxy does
+  // measurably forward the browser's `Origin` header on POST (GET arrives
+  // with none), but that fact is irrelevant to dev login working — it works
+  // either way, because there is no cross-origin boundary for CORS to police
+  // there in the first place.
+  if (canonicalOrigin(env.WEB_URL) === origin) return true
 
   return parseOriginList(env.CORS_ALLOWED_ORIGINS).has(origin)
 }
 
 /**
- * Split a comma-separated origin list, trimming blanks.
+ * Reduce a configured URL down to the bare origin a browser's `Origin`
+ * header actually sends: scheme + host + port, lowercased, no trailing
+ * slash, no path. `WEB_URL` is validated as "an http(s) URL" (env.config.ts)
+ * but that accepts `https://app.example.com/`, `HTTPS://App.Example.com`, or
+ * `.../some/path` — none of which will ever equal-match the `Origin` header
+ * a real browser sends, so an uncanonicalized comparison here would silently
+ * reject the primary frontend in production. Canonicalizing what the
+ * allowlist HOLDS, never the incoming `Origin` header, keeps the comparison
+ * an exact match — no normalisation is ever applied to attacker-controlled
+ * input.
+ * @param value - A configured origin/URL, or undefined.
+ * @returns The canonical origin, or undefined when `value` is missing or not a parseable URL.
+ */
+function canonicalOrigin(value: string | undefined): string | undefined {
+  if (!value) return undefined
+  try {
+    return new URL(value).origin
+  } catch {
+    // A malformed allowlist entry must be skipped, not crash every request
+    // that carries an Origin header — see parseOriginList below.
+    return undefined
+  }
+}
+
+/**
+ * Split a comma-separated origin list, trimming blanks and canonicalizing
+ * each entry (see `canonicalOrigin`) so a trailing slash or mixed case in
+ * `CORS_ALLOWED_ORIGINS` doesn't silently defeat the match the same way an
+ * unnormalised `WEB_URL` would.
  * @param raw - The raw env value, or undefined.
  * @returns The set of origins it names.
  */
 function parseOriginList(raw: string | undefined): Set<string> {
   if (!raw) return new Set()
-  return new Set(
-    raw
-      .split(',')
-      .map((entry) => entry.trim())
-      .filter((entry) => entry.length > 0)
-  )
+  const origins = raw
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+    .map((entry) => canonicalOrigin(entry))
+    .filter((entry): entry is string => entry !== undefined)
+  return new Set(origins)
 }

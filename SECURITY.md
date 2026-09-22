@@ -494,7 +494,6 @@ Everything below genuinely ships nothing today, in either direction:
 | ----------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | CSRF tokens                   | **Not implemented**                  | See "No CSRF middleware" below — reasoning, not an oversight. The forced-login direction IS defended, by a content-type gate on the auth router; see the section after it.                                                                                                                                     |
 | Security headers / CSP        | **Not implemented — and unassigned** | `helmet` is not a dependency. Only `x-powered-by` is disabled (`src/app.ts`). Spec §13 mandates "helmet with an explicit Content-Security-Policy"; **no plan owns it** — unlike CORS/MFA/OAuth, which name one. Stated rather than left implied, since an unowned requirement is how one silently never ships. |
-| CORS                          | **Not implemented**                  | No `cors` middleware; `WEB_URL` is validated but nothing reads it.                                                                                                                                                                                                                                             |
 | MFA                           | **Not implemented**                  | No TOTP enrolment, no recovery codes. Owned by a later plan (B4).                                                                                                                                                                                                                                              |
 | Forgot / reset password       | **Not implemented**                  | No `/forgot-password` or `/reset-password` route exists — email _verification_ is implemented (see "Email verification" above); this is the recovery half. It is also the only recovery path for a squatted address. Owned by plan B3 Task 6 — see ARCHITECTURE.md's "B3 seam" section.                        |
 | OAuth / social login          | **Not implemented**                  | No provider integration. Owned by a later plan (B4).                                                                                                                                                                                                                                                           |
@@ -502,11 +501,41 @@ Everything below genuinely ships nothing today, in either direction:
 | General-purpose rate limiting | **Partial**                          | All six auth routes are covered (above, seven limiters total — `resend-verification` carries two). No limiter exists on the profile routes or any future non-auth route.                                                                                                                                       |
 
 `JWT_ACCESS_SECRET` is required by the environment schema and **is** read —
-by `signAccessToken`/`verifyAccessToken`. `APP_URL`, `WEB_URL` and
-`SESSION_SECRET` remain required by the schema and read by nothing — they
-are forward declarations for CORS/email/session plans, not evidence those
-exist. There is no `JWT_REFRESH_SECRET` at all (see "Authentication"
-above).
+by `signAccessToken`/`verifyAccessToken`. `WEB_URL` is also read now, twice
+over: `verification-link.utilities.ts` builds the mailed link from it, and
+`origin.utilities.ts` (see "CORS" below) decides from it whether a
+browser's `Origin` gets a grant. `APP_URL` and `SESSION_SECRET` remain
+required by the schema and read by nothing — they are forward declarations
+for the email/session plans, not evidence those exist. There is no
+`JWT_REFRESH_SECRET` at all (see "Authentication" above).
+
+## CORS
+
+`cors` middleware is mounted (`src/configs/cors.config.ts`, `src/app.ts`),
+answering with `credentials: true` and an origin callback
+(`isAllowedOrigin`, `src/utilities/origin.utilities.ts`) that grants exactly
+`WEB_URL` plus any origin listed in `CORS_ALLOWED_ORIGINS` — never a
+wildcard, which the CORS spec forbids alongside `credentials: true` anyway.
+A request with no `Origin` header (same-origin, or any non-browser client)
+is always allowed; CORS is a browser-only mechanism and there is nothing to
+enforce against a client that doesn't send one.
+
+**Accepted consequence, not a vulnerability.** The content-type CSRF gate
+below still holds exactly as designed — a disallowed origin still gets no
+grant header, and an HTML form still cannot send `application/json` — but
+its blast radius changed the moment an origin allowlist existed to grant
+against. Before this seam, no origin (other than same-origin) could ever
+pass a preflight, so the content-type gate was the only thing standing
+between a script and this API regardless of where it ran. Now, any origin
+listed in `CORS_ALLOWED_ORIGINS` (a second frontend on a sibling
+subdomain, by design) CAN drive a credentialed, `application/json`
+cross-origin request. That means an XSS or full takeover of that second
+frontend now reaches this API the same way the primary frontend does —
+somewhere it could not reach before. This is the deliberate trade this
+feature makes to let a second frontend call the API at all, not an
+oversight to fix; it is the reason `CORS_ALLOWED_ORIGINS` should list only
+origins this deployment actually trusts with the primary frontend's own
+level of access.
 
 ## No CSRF middleware — reasoning about the shipped design
 
@@ -552,16 +581,19 @@ body. An HTML form can only ever submit
 `application/x-www-form-urlencoded`, `multipart/form-data` or `text/plain`,
 so refusing those three removes the form vector by construction; and
 requiring `application/json` forces a CORS preflight on any cross-origin
-script, which nothing here answers.
+script. This API now DOES answer that preflight (see "CORS" above) — an
+allowed origin gets a grant and proceeds to this gate on its own merits, a
+disallowed one still gets no grant header and is blocked by the browser
+before this middleware ever runs. Either way, the HTML-form vector this gate
+exists for sends no preflight at all and is refused here regardless of CORS.
 
-A content-type gate was chosen over an `Origin`/`Sec-Fetch-Site` check
-because it needs no configuration: an Origin allow-list would have to know
-the frontend's origin, and `WEB_URL` is a placeholder nothing reads (see the
-table above), so that check would have shipped mis-configured — failing
-open, which is worse than not having it. A request declaring **no** content
-type is allowed, because an untyped body is inert: neither body parser
-parses one, so it never reaches a validator, and `/refresh` and `/logout`
-are legitimately called with no body at all.
+A content-type gate was chosen over relying on the Origin allow-list alone
+because it needs no configuration of its own and holds even for a
+same-origin deployment with `CORS_ALLOWED_ORIGINS` unset — the allowlist can
+be misconfigured or absent; this gate cannot be. A request declaring **no**
+content type is allowed, because an untyped body is inert: neither body
+parser parses one, so it never reaches a validator, and `/refresh` and
+`/logout` are legitimately called with no body at all.
 
 ## Design decisions that ARE implemented
 

@@ -67,27 +67,40 @@ strictly better than a split-domain deployment, but the Google hop is cross-site
 
 Modelled on `Consequential/core/src/configs/cors/cors.config.ts`.
 
-| Option                 | Value                                                                                 | Why                                                                                 |
-| ---------------------- | ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `origin`               | callback: allow when `!origin`, or `origin === WEB_URL`, or in `CORS_ALLOWED_ORIGINS` | Never `*` — it is incompatible with `credentials: true`                             |
-| `credentials`          | `true`                                                                                | The refresh cookie must survive cross-origin                                        |
-| `allowedHeaders`       | `Authorization`, `Content-Type`, `Last-Event-ID`                                      | `Last-Event-ID` is required by Piece 2; omitting it silently kills replay           |
-| `exposedHeaders`       | the token-state headers the client reads                                              | Unexposed headers are invisible to JS                                               |
-| `maxAge`               | `600`                                                                                 | Chrome caps preflight caching at 600s; Firefox at 86400. 600 is the one both honour |
-| `optionsSuccessStatus` | `204`                                                                                 | As Consequential                                                                    |
+| Option                 | Value                                                                                 | Why                                                                                                                           |
+| ---------------------- | ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `origin`               | callback: allow when `!origin`, or `origin === WEB_URL`, or in `CORS_ALLOWED_ORIGINS` | Never `*` — it is incompatible with `credentials: true`                                                                       |
+| `credentials`          | `true`                                                                                | The refresh cookie must survive cross-origin                                                                                  |
+| `allowedHeaders`       | `Authorization`, `Content-Type`, `Last-Event-ID`                                      | `Last-Event-ID` is required by Piece 2; omitting it silently kills replay                                                     |
+| `exposedHeaders`       | `X-Request-Id`                                                                        | Unexposed headers are invisible to JS; token state travels in the JSON error envelope's `code` field, which needs no exposure |
+| `maxAge`               | `600`                                                                                 | Chrome caps preflight caching at 600s; Firefox at 86400. 600 is the one both honour                                           |
+| `optionsSuccessStatus` | `204`                                                                                 | As Consequential                                                                                                              |
 
-**`WEB_URL` must always be allowed, and `!origin` must always pass.** This is not a
-convenience — it was measured. Vite's dev proxy **forwards the browser's `Origin` header**:
+`X-Request-Id` (request-id.middleware.ts) is not in `allowedHeaders` and is not one of the
+CORS-safelisted request headers, so a cross-origin client cannot send it today.
+react-boilerplate's client (`src/http/client.ts:33`) only ever sends `Content-Type` and never
+sends `X-Request-Id`, so nothing currently needs it — this is a trace-continuity gap for a
+later frontend to close, not a blocker for this seam.
+
+**`WEB_URL` must always be allowed, and `!origin` must always pass.** The reasoning is a
+**production** cross-origin deployment (`app.example.com` calling `api.example.com`), not the
+dev proxy. Under `pnpm dev`, the page and the request are both served from `localhost:5173`,
+so the browser treats the call to the API as same-origin and applies no CORS check at all,
+regardless of what the allowlist says — `callback(null, false)` only withholds the grant
+header, it never rejects the request server-side. Vite's dev proxy does measurably **forward
+the browser's `Origin` header** on POST:
 
 ```
 POST through localhost:5173  ->  { "origin": "http://localhost:5173", "host": "localhost:4040" }
 GET  through localhost:5173  ->  { "origin": null,                    "host": "localhost:4040" }
 ```
 
-So an allowlist that defaults to empty and rejects any present origin **breaks every login
-POST in development**, while GETs keep working — a failure that looks like a login bug, not a
-CORS bug. Allowing `WEB_URL` (already in `.env`) makes CORS a genuine no-op for both the
-current same-origin deployment and local development.
+but that fact does not make development the case this rule protects — dev login works
+identically with or without `WEB_URL` in the allowlist, because there is no cross-origin
+boundary there for CORS to police. The rule earns its place in production: `app.example.com`
+calling `api.example.com` on the sibling-subdomain deployment IS cross-origin, a browser DOES
+enforce CORS there, and `WEB_URL` must be allowed for the primary frontend's own login POST to
+succeed.
 
 ### Testing it where it is real
 

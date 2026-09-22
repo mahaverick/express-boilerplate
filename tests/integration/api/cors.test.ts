@@ -4,25 +4,28 @@ import { createApp } from '@/app'
 
 const app = createApp()
 
+const allowedOrigin = process.env.WEB_URL ?? 'http://localhost:5173'
+
 describe('CORS', () => {
   it('answers a preflight from an allowed origin with credentials enabled', async () => {
     const response = await request(app)
       .options('/api/v1/auth/login')
-      .set('Origin', process.env.WEB_URL ?? 'http://localhost:5173')
+      .set('Origin', allowedOrigin)
       .set('Access-Control-Request-Method', 'POST')
       .set('Access-Control-Request-Headers', 'authorization,content-type')
 
     expect(response.status).toBe(204)
     expect(response.headers['access-control-allow-credentials']).toBe('true')
-    // Echoed, never '*': the CORS spec forbids a wildcard with credentials,
-    // and browsers reject the response outright if both appear.
-    expect(response.headers['access-control-allow-origin']).not.toBe('*')
+    // Echoed, and specifically the origin THIS request sent — not merely
+    // "not '*'", which would also pass if the header were absent entirely
+    // and verify nothing about the echo.
+    expect(response.headers['access-control-allow-origin']).toBe(allowedOrigin)
   })
 
   it('allows Last-Event-ID, without which SSE replay silently never fires', async () => {
     const response = await request(app)
       .options('/api/v1/notifications/stream')
-      .set('Origin', process.env.WEB_URL ?? 'http://localhost:5173')
+      .set('Origin', allowedOrigin)
       .set('Access-Control-Request-Method', 'GET')
       .set('Access-Control-Request-Headers', 'authorization,last-event-id')
 
@@ -30,6 +33,23 @@ describe('CORS', () => {
     expect(response.headers['access-control-allow-headers']?.toLowerCase()).toContain(
       'last-event-id'
     )
+  })
+
+  it('grants PUT, not just the hand-picked verbs an earlier config listed', async () => {
+    // Regression for a real bug: an explicit `methods` list in
+    // cors.config.ts once omitted PUT, so this exact preflight came back
+    // without it and a browser blocked `PUT /api/v1/notifications/preferences`
+    // (notification.routes.ts) cross-origin — silently, since same-origin
+    // dev never preflights at all. cors.config.ts now relies on `cors`'s
+    // own default method list instead of a hand-maintained one.
+    const response = await request(app)
+      .options('/api/v1/notifications/preferences')
+      .set('Origin', allowedOrigin)
+      .set('Access-Control-Request-Method', 'PUT')
+      .set('Access-Control-Request-Headers', 'authorization,content-type')
+
+    expect(response.status).toBe(204)
+    expect(response.headers['access-control-allow-methods']).toContain('PUT')
   })
 
   it('does not grant access to an origin that is not allowed', async () => {

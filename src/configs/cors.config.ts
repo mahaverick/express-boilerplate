@@ -18,14 +18,25 @@ export const corsOptions: CorsOptions = {
     callback(null, isAllowedOrigin(origin))
   },
   credentials: true,
-  methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+  // No `methods` list here, deliberately. A hand-maintained list
+  // (['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS']) once shipped here and
+  // silently dropped PUT — `PUT /api/v1/notifications/preferences`
+  // (notification.routes.ts) preflighted, got back a grant that didn't
+  // include PUT, and a browser blocked every cross-origin call to it,
+  // invisibly, because same-origin dev never sends a preflight at all.
+  // `cors`'s own default (`GET,HEAD,PUT,PATCH,POST,DELETE`) already covers
+  // every verb this API registers, and — unlike a list here — cannot drift
+  // out of sync as routes are added.
   // `Last-Event-ID` is load-bearing. The SSE stream's replay-on-reconnect is
   // implemented server-side and tested, but a cross-origin browser cannot
   // send the header unless it is named here — and the failure is silent:
   // replay simply never happens.
   allowedHeaders: ['Authorization', 'Content-Type', 'Last-Event-ID'],
-  // Unexposed response headers are invisible to JavaScript. The client reads
-  // these to tell an expired token from an invalid one.
+  // Unexposed response headers are invisible to JavaScript. `X-Request-Id`
+  // is exposed so a cross-origin client can log or display the same
+  // correlation id this API's own logs use — token state travels in the
+  // error envelope's `code` field (error.middleware.ts), which needs no
+  // exposure since it is already in the JSON body the client reads anyway.
   exposedHeaders: ['X-Request-Id'],
   // Chrome caps preflight caching at 600s and Firefox at 86400; 600 is the
   // value both honour. Without it, every cross-origin call preflights,

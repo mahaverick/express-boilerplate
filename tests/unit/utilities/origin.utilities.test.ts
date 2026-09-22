@@ -19,10 +19,25 @@ describe('isAllowedOrigin', () => {
   })
 
   it('always allows WEB_URL, even when the allowlist is empty', async () => {
-    // Load-bearing: Vite's dev proxy forwards Origin on POST, so without this
-    // every login in development fails CORS while GETs keep working.
+    // Load-bearing for a PRODUCTION cross-origin deployment
+    // (app.example.com calling api.example.com), not the dev proxy: under
+    // Vite the page and the request are both localhost:5173, so the browser
+    // applies no CORS check at all regardless of this function's result.
     const isAllowedOrigin = await load('http://localhost:5173')
     expect(isAllowedOrigin('http://localhost:5173')).toBe(true)
+  })
+
+  it('matches a browser-style origin even when WEB_URL has a trailing slash', async () => {
+    // z.url() accepts "https://app.example.com/", but a browser's Origin
+    // header never carries a trailing slash — an uncanonicalized comparison
+    // here would reject every request from the primary frontend.
+    const isAllowedOrigin = await load('https://app.example.com/')
+    expect(isAllowedOrigin('https://app.example.com')).toBe(true)
+  })
+
+  it('matches a browser-style origin even when a CORS_ALLOWED_ORIGINS entry has a trailing slash', async () => {
+    const isAllowedOrigin = await load('https://app.example.com', 'https://admin.example.com/')
+    expect(isAllowedOrigin('https://admin.example.com')).toBe(true)
   })
 
   it('allows each entry in CORS_ALLOWED_ORIGINS', async () => {

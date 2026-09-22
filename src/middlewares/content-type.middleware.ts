@@ -31,13 +31,19 @@
 //      encodings the HTML spec permits — so refusing all of them removes
 //      the entire form vector by construction.
 //   2. Requiring `application/json` forces any cross-origin script to send
-//      a CORS preflight (a non-simple content type), and this API ships no
-//      CORS middleware at all, so nothing answers it. The browser blocks
-//      the request before it is ever made.
-//   3. It needs no configuration. An Origin allow-list would have to know
-//      the frontend's origin — `WEB_URL` exists but is a documented
-//      placeholder nothing reads (SECURITY.md), and a check that cannot be
-//      configured correctly fails open, which is worse than no check.
+//      a CORS preflight (a non-simple content type). This API now DOES ship
+//      CORS middleware (cors.config.ts) — an allowed origin gets a grant and
+//      may proceed past this gate on its own merits, but a DISALLOWED
+//      origin still gets no grant header at all, so its preflight fails and
+//      the browser blocks the request before this middleware, or the
+//      handler, ever runs. This gate's job was never "answer every
+//      preflight" — it is "an HTML form, which sends no preflight at all,
+//      cannot reach this route with a body this API will parse".
+//   3. It needs no configuration of its own. An Origin allow-list would
+//      have needed `WEB_URL` to be read and correct — true today, but this
+//      gate stays content-type-based regardless, because it is the layer
+//      that also has to hold for a same-origin deployment with no
+//      allowlist at all.
 //
 // A Sec-Fetch-Site check was deliberately NOT layered on top. It would add
 // a second mechanism with its own failure mode (absent on old browsers and

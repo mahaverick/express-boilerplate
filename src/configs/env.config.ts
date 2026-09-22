@@ -54,7 +54,9 @@ const EnvSchema = z.object({
   // below says what it actually does rather than carrying the placeholder
   // note. WEB_URL was the first of these to graduate —
   // verification-link.utilities.ts reads `getEnv().WEB_URL` to build the
-  // link mailed to a user. JWT_ACCESS_SECRET graduated earlier still —
+  // link mailed to a user, and it now has a second reader:
+  // origin.utilities.ts reads it to decide whether a browser's Origin
+  // header may receive a CORS grant. JWT_ACCESS_SECRET graduated earlier still —
   // token.utilities.ts (signAccessToken/verifyAccessToken) reads it to sign
   // and verify every access token.
   //
