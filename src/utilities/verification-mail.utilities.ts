@@ -9,7 +9,8 @@ import { getEnv } from '@/configs/env.config'
 import type { User } from '@/database/models/user.model'
 import { addNotificationJob } from '@/jobs/notification.job'
 import { EMAIL_VERIFICATION_TEMPLATE_KEY } from '@/templates/email/email-verification.template'
-import { issueToken, requireDurationMs } from '@/utilities/token.utilities'
+import { requireDurationMs } from '@/utilities/duration.utilities'
+import { issueToken } from '@/utilities/token.utilities'
 import { buildVerificationUrl } from '@/utilities/verification-link.utilities'
 
 /**

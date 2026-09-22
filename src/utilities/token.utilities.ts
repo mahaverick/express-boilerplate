@@ -27,7 +27,7 @@ import type { TokenPurpose, UserToken } from '@/database/models/user-token.model
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/middlewares/error.middleware'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
-import { parseDurationMs } from '@/utilities/duration.utilities'
+import { requireDurationMs } from '@/utilities/duration.utilities'
 
 // jsonwebtoken's `expiresIn` option is typed against `ms`'s own
 // `StringValue` literal union — the identical narrowness
@@ -90,25 +90,6 @@ export interface IssuedToken {
   userId: string
   purpose: Exclude<TokenPurpose, 'refresh'>
   expiresAt: Date
-}
-
-/**
- * Resolve a validated TTL string to milliseconds, trusting the invariant
- * `env.config.ts`'s refinement already enforced at boot.
- * @param value - An `ACCESS_TOKEN_TTL`/`REFRESH_TOKEN_TTL`-shaped value already known to be `ms()`-parseable.
- * @returns The duration in milliseconds.
- * @throws {Error} Only if that boot-time invariant was somehow violated.
- */
-export function requireDurationMs(value: string): number {
-  const parsed = parseDurationMs(value)
-  if (parsed === undefined) {
-    // Unreachable in practice: getEnv() already rejects an unparseable TTL
-    // at boot (env.config.ts). Guards the invariant explicitly rather than
-    // asserting it away, so a future change that weakens that refinement
-    // fails loudly here instead of silently signing a token with NaN.
-    throw new Error(`Invalid duration string: "${value}"`)
-  }
-  return parsed
 }
 
 /**

@@ -1,7 +1,7 @@
 import { getEnv } from '@/configs/env.config'
 import { logger } from '@/services/logger.service'
 import { getRedis } from '@/services/redis.service'
-import { requireDurationMs } from '@/utilities/token.utilities'
+import { requireDurationMs } from '@/utilities/duration.utilities'
 
 const MS_PER_SECOND = 1000
 const KEY_PREFIX = 'denylist:session:'

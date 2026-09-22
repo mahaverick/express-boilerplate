@@ -48,3 +48,31 @@ export function parseDurationMs(value: string): number | undefined {
     return undefined
   }
 }
+
+/**
+ * Resolve a validated TTL string to milliseconds, trusting the invariant
+ * `env.config.ts`'s refinement already enforced at boot.
+ *
+ * Lives here, not in token.utilities.ts (which originally defined it),
+ * because `session-denylist.service.ts` needs it too, and
+ * `user-token.repository.ts` (Task 3) imports `denySession` from that
+ * service — routing through token.utilities.ts, which itself imports
+ * `UserTokenRepository`, would close an import cycle:
+ * user-token.repository -> session-denylist.service -> token.utilities ->
+ * user-token.repository. This module has no such dependency, so it stays a
+ * leaf.
+ * @param value - An `ACCESS_TOKEN_TTL`/`REFRESH_TOKEN_TTL`-shaped value already known to be `ms()`-parseable.
+ * @returns The duration in milliseconds.
+ * @throws {Error} Only if that boot-time invariant was somehow violated.
+ */
+export function requireDurationMs(value: string): number {
+  const parsed = parseDurationMs(value)
+  if (parsed === undefined) {
+    // Unreachable in practice: getEnv() already rejects an unparseable TTL
+    // at boot (env.config.ts). Guards the invariant explicitly rather than
+    // asserting it away, so a future change that weakens that refinement
+    // fails loudly here instead of silently signing a token with NaN.
+    throw new Error(`Invalid duration string: "${value}"`)
+  }
+  return parsed
+}

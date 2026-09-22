@@ -35,6 +35,7 @@ import {
   type Touched,
 } from '@/repositories/base.repository'
 import { db } from '@/services/database.service'
+import { denySession } from '@/services/session-denylist.service'
 
 /**
  * Query access to the `user_tokens` table: token issuance, lookup by hash,
@@ -126,6 +127,10 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
           sql`${userTokenModel.sessionId} = ${sessionId} and ${userTokenModel.revokedAt} is null`
         )
       )
+    // The one write point. Logout, password change and refresh-token REUSE
+    // DETECTION all funnel through this method already, so denying here
+    // covers all three — and no call site can forget.
+    await denySession(sessionId)
   }
 
   /**

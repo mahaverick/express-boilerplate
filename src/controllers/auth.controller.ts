@@ -44,13 +44,13 @@ import { db } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
 import { PASSWORD_RESET_TEMPLATE_KEY } from '@/templates/email/password-reset.template'
 import { REGISTRATION_ATTEMPT_TEMPLATE_KEY } from '@/templates/email/registration-attempt.template'
+import { requireDurationMs } from '@/utilities/duration.utilities'
 import { getDummyHash, hashPassword, isPasswordValid } from '@/utilities/password.utilities'
 import { successResponse } from '@/utilities/response.utilities'
 import {
   claimToken,
   issueRefreshToken,
   issueToken,
-  requireDurationMs,
   revokeAllSessions,
   revokeRefreshToken,
   rotateRefreshToken,
