@@ -40,6 +40,7 @@ import { type NextFunction, type Request, type Response } from 'express'
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/middlewares/error.middleware'
 import { UserRepository } from '@/repositories/user.repository'
+import { isSessionDenied } from '@/services/session-denylist.service'
 import { verifyAccessToken } from '@/utilities/token.utilities'
 
 const userRepository = new UserRepository()
@@ -188,6 +189,11 @@ export async function requireAuth(
   try {
     const token = getBearerToken(request)
     const { payload } = verifyBearerToken(token)
+    // A token with no `sid` predates this claim; accept it until it
+    // expires. See the spec's "Honest limits" — one release of tolerance.
+    if (payload.sid && (await isSessionDenied(payload.sid))) {
+      throw new HttpError('Session ended', 401, ACCESS_TOKEN_EXPIRED_CODE)
+    }
     request.user = await loadAuthenticatedUser(payload.sub)
     next()
   } catch (error) {
