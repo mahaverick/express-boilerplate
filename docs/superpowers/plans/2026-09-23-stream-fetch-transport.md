@@ -343,7 +343,7 @@ Expected: FAIL initially — those tests mock `EventSource`. Rewrite each to moc
 - [ ] **Step 7: Verify everything**
 
 ```bash
-pnpm exec eslint . --max-warnings 0 && pnpm lint && pnpm test --run
+pnpm exec eslint . --max-warnings 0 && pnpm lint && pnpm typecheck && pnpm test --run
 ```
 
 Expected: green, with no fewer tests than before.
