@@ -1,10 +1,10 @@
 // src/middlewares/auth.middleware.ts
 //
-// requireAuth is the gate every protected route sits behind. It does two
+// requireAuth is the gate every protected route sits behind. It does three
 // things that are deliberately kept as separate steps inside one exported
-// middleware, not two exported middlewares — a later plan (MFA step-up,
+// middleware, not several exported middlewares — a later plan (MFA step-up,
 // tenant scoping) composes by reading `request.user` AFTER requireAuth has
-// run, not by re-running half of this one, so there is no seam worth
+// run, not by re-running part of this one, so there is no seam worth
 // exporting yet:
 //
 //   1. Verify the bearer token's signature — delegated entirely to
@@ -14,28 +14,46 @@
 //      module never re-implements that check, and never re-derives WHY a
 //      token failed from data it cannot itself trust — see
 //      `verifyAccessToken`'s own header comment.
-//   2. Load the user the token claims to be, and confirm the account can
+//   2. Reject the token if its session (`payload.sid`) has been explicitly
+//      denied — `isSessionDenied` (session-denylist.service.ts), a Redis
+//      lookup keyed by session id. This is what makes logout end an access
+//      token immediately instead of leaving it usable until it naturally
+//      expires. A token with no `sid` claim (minted before this claim
+//      existed) skips this check entirely and falls through to step 3 —
+//      see the guard's own comment for why that is deliberate tolerance,
+//      not an oversight.
+//   3. Load the user the token claims to be, and confirm the account can
 //      still authenticate at all.
 //
-// Step 2 is not optional, and it is the reason this file exists rather than
-// a two-line `jwt.verify` call inline at every route. A JWT is stateless by
-// design: once signed, its claims stay valid until `exp` regardless of
+// Step 3 is not optional, and step 2 does not make it so: they close
+// different gaps and neither substitutes for the other. A JWT is stateless
+// by design: once signed, its claims stay valid until `exp` regardless of
 // anything that happens to the account afterwards. Trusting the decoded
 // `sub` alone would mean disabling or soft-deleting a user does nothing —
 // every access token already issued to them keeps working, silently, until
-// it naturally expires. Loading the user turns that into an immediate
-// rejection instead.
+// it naturally expires. Loading the user turns THAT into an immediate
+// rejection. Step 2's denylist knows nothing about deactivation or
+// soft-delete — it only knows which session ids were explicitly denied —
+// so removing step 3 in favour of step 2 would silently bring back the
+// exact problem step 3 exists to close.
 //
-// The cost this trades for that guarantee: every authenticated request now
-// costs one extra database read (`findById`), on top of what the route
-// itself will usually do anyway. A purely stateless JWT would not need it.
-// The alternatives — a short-lived in-memory cache of "known-good" user
-// ids, or a revocation list checked only for tokens that were explicitly
-// revoked — would shrink that cost back down at the price of a window
-// (bounded by the cache TTL, or unbounded for anything short of explicit
-// revocation) in which a disabled account keeps working. Neither is built
-// here; this comment is what makes that a chosen trade-off rather than an
-// oversight for the next person to rediscover.
+// Step 3's cost: every authenticated request costs one extra database read
+// (`findById`), on top of what the route itself will usually do anyway. A
+// purely stateless JWT would not need it. The alternative sometimes
+// reached for instead — a short-lived in-memory cache of "known-good" user
+// ids — would shrink that cost back down at the price of a window (bounded
+// by the cache TTL) in which a disabled account keeps working. That is not
+// built here; this paragraph is what makes that a chosen trade-off rather
+// than an oversight for the next person to rediscover.
+//
+// What step 2 does NOT yet cover: revoking a session's refresh tokens does
+// not always deny that session's access tokens. `revokeAllForSession`
+// (logout) calls `denySession` and so is covered; `revokeAllForUser`
+// (`/auth/reset-password`, via `revokeAllSessions`) is keyed by user id and
+// calls `denySession` zero times, so a password reset today revokes refresh
+// tokens without denying the access tokens already issued for those
+// sessions. Do not read step 2 as "revocation implies denial" — it is not,
+// until a follow-up teaches `revokeAllForUser` which session ids it revoked.
 import { type NextFunction, type Request, type Response } from 'express'
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/middlewares/error.middleware'

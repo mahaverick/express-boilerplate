@@ -25,7 +25,9 @@ import { ACCESS_TOKEN_EXPIRED_CODE, requireAuth } from '@/middlewares/auth.middl
 import { HttpError } from '@/middlewares/error.middleware'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
+import { denySession } from '@/services/session-denylist.service'
 import { signAccessToken } from '@/utilities/token.utilities'
+import { withMutatedModule } from '../../helpers/mutate'
 
 const userRepository = new UserRepository()
 
@@ -158,6 +160,112 @@ describe('requireAuth', () => {
       firstName: user.firstName,
       lastName: user.lastName,
     })
+  })
+
+  it('accepts a token with no `sid` claim — one release of tolerance for tokens minted before this claim existed', async () => {
+    // Hand-signed, deliberately NOT via signAccessToken: Task 1 made
+    // signAccessToken always set `sid`, so it can no longer produce the
+    // shape this test needs — a token minted by the currently-deployed
+    // version, before the `sid` claim existed. Do not "modernise" this call
+    // to `signAccessToken`; that would silently delete the one case this
+    // test exists to pin down, and the guard it protects
+    // (`payload.sid && ...` in auth.middleware.ts) would go back to being
+    // an untested, deletable half of a compound condition.
+    const user = await createUser()
+    const token = jwt.sign({ sub: user.id }, getEnv().JWT_ACCESS_SECRET, {
+      algorithm: 'HS256',
+      expiresIn: '15m',
+    })
+    const request = buildRequest(`Bearer ${token}`)
+    const { next, lastCallArgument } = mockNext()
+
+    await requireAuth(request, noResponse, next)
+
+    expect(next).toHaveBeenCalledTimes(1)
+    expect(lastCallArgument()).toBeUndefined()
+    expect(request.user).toEqual({
+      id: user.id,
+      email: user.email,
+      firstName: user.firstName,
+      lastName: user.lastName,
+    })
+  })
+
+  it('rejects a token whose session has been denied', async () => {
+    const user = await createUser()
+    const sessionId = randomUUID()
+    const token = signAccessToken(user, sessionId)
+    await denySession(sessionId)
+
+    const { next, lastCallArgument } = mockNext()
+    await requireAuth(buildRequest(`Bearer ${token}`), noResponse, next)
+
+    expect(next).toHaveBeenCalledTimes(1)
+    const error = lastCallArgument()
+    expect(error).toBeInstanceOf(HttpError)
+    expect((error as HttpError).statusCode).toBe(401)
+    // Same code as an expired token, deliberately (see
+    // auth.middleware.ts): the client-facing contract is "try a refresh",
+    // and the refresh token was revoked in the same operation that denied
+    // this session.
+    expect((error as HttpError).code).toBe(ACCESS_TOKEN_EXPIRED_CODE)
+  })
+
+  it('keeps a sid-less token honoured even when the denylist would deny every session, proving `payload.sid &&` is a real short-circuit', async () => {
+    // WHY THIS IS A MUTATION TEST, NOT A HAND EDIT. CLAUDE.md ("Proving a
+    // security behaviour is real, without hand-editing src/") forbids
+    // temporarily breaking auth.middleware.ts on disk to see what happens
+    // if `payload.sid &&` were removed — that puts a live "sign everyone
+    // out on deploy" regression on disk in a shared worktree, even for a
+    // moment. withMutatedModule gets the same evidence without it:
+    // isSessionDenied is overridden to resolve `true` UNCONDITIONALLY,
+    // regardless of the argument it's called with (including `undefined`).
+    //
+    // Under that mutation: a token WITH a sid is denied (the wiring works),
+    // while a token WITHOUT one is still accepted — which is only possible
+    // because the guard short-circuits on `payload.sid` before ever calling
+    // isSessionDenied. If `payload.sid &&` were deleted, the sid-less
+    // token's call would become `isSessionDenied(undefined)` — and this
+    // mock returns `true` no matter what it's called with — so that
+    // regression would flip the first assertion below to a 401 and turn
+    // this test red — deterministically, since the mock's return value
+    // does not depend on its argument at all.
+    const user = await createUser()
+
+    await withMutatedModule<
+      typeof import('@/services/session-denylist.service'),
+      typeof import('@/middlewares/auth.middleware')
+    >(
+      '@/services/session-denylist.service',
+      { isSessionDenied: () => Promise.resolve(true) },
+      () => import('@/middlewares/auth.middleware'),
+      async (subject) => {
+        const sidLessToken = jwt.sign({ sub: user.id }, getEnv().JWT_ACCESS_SECRET, {
+          algorithm: 'HS256',
+          expiresIn: '15m',
+        })
+        const accepted = mockNext()
+        await subject.requireAuth(buildRequest(`Bearer ${sidLessToken}`), noResponse, accepted.next)
+        expect(accepted.next).toHaveBeenCalledTimes(1)
+        expect(accepted.lastCallArgument()).toBeUndefined()
+
+        // Same mutated environment, but this token HAS a sid: it must be
+        // denied, proving isSessionDenied is genuinely wired into the
+        // guard and not merely unreachable dead code.
+        const sidToken = signAccessToken(user, randomUUID())
+        const denied = mockNext()
+        await subject.requireAuth(buildRequest(`Bearer ${sidToken}`), noResponse, denied.next)
+        const error = denied.lastCallArgument() as { statusCode?: number; code?: string }
+        // Not `toBeInstanceOf(HttpError)`: withMutatedModule's
+        // vi.resetModules() re-evaluates error.middleware.ts too, so the
+        // thrown error is an instance of a DIFFERENT HttpError class
+        // object than the one imported at this file's top — a false
+        // negative, not a real failure. statusCode/code are plain
+        // properties and unaffected by that class-identity split.
+        expect(error.statusCode).toBe(401)
+        expect(error.code).toBe(ACCESS_TOKEN_EXPIRED_CODE)
+      }
+    )
   })
 
   it('rejects an expired access token with the distinguishable code', async () => {
