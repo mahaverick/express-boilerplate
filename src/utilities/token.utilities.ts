@@ -2,7 +2,8 @@
 //
 // Access tokens are signed JWTs (jsonwebtoken) — short-lived, stateless,
 // carrying the user id (`sub`) plus the session and token ids (`sid`,
-// `jti`) nothing yet reads. Refresh tokens are the opposite on
+// `jti` — see AccessTokenPayload for why each exists). Refresh tokens are
+// the opposite on
 // every axis: OPAQUE random strings (crypto.randomBytes(32)), never JWTs.
 // A JWT refresh token cannot be revoked without a server-side store anyway
 // (the whole point of a refresh token is that it MUST be revocable), so
