@@ -4,7 +4,9 @@
 // that is what makes supertest able to import it, and it is why this is a
 // separate file from server.ts. core's single 38k index.ts is the thing this
 // split exists to avoid.
+import cors from 'cors'
 import express, { type Express } from 'express'
+import { corsOptions } from '@/configs/cors.config'
 import { getEnv, trustProxySetting } from '@/configs/env.config'
 import { errorHandler, HttpError } from '@/middlewares/error.middleware'
 import { requestContext } from '@/middlewares/request-context.middleware'
@@ -44,6 +46,12 @@ export function createApp(): Express {
   // for what an operator must set. A malformed value throws here, at boot,
   // rather than being discovered later from a rate limiter that never fires.
   app.set('trust proxy', trustProxySetting(getEnv().TRUST_PROXY))
+
+  // BEFORE requestId and the body parsers: a preflight is an OPTIONS request
+  // that must be answered and ended here, not carried through the rest of
+  // the stack. Mounting it later means preflights allocate a request id and
+  // walk middleware that has nothing to say about them.
+  app.use(cors(corsOptions))
 
   app.use(requestId)
   app.use(requestContext)
