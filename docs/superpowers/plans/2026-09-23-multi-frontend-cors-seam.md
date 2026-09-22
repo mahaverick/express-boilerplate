@@ -18,7 +18,11 @@
 - **`!origin` must pass** (same-origin requests send no `Origin`).
 - **`WEB_URL` must always be allowed.** Measured: Vite's dev proxy forwards `Origin: http://localhost:5173` on POST but not on GET, so an empty allowlist breaks login in development while GETs keep working.
 - `maxAge: 600` — Chrome caps preflight caching at 600s.
-- Gate is 0 errors and 0 warnings: verify with `pnpm exec eslint . --max-warnings 0`, not a bare `pnpm lint`.
+- Gate is 0 errors and 0 warnings: `pnpm exec eslint . --max-warnings 0 && pnpm lint && pnpm test`.
+  **There is no `pnpm typecheck` in this repo** — `pnpm lint` is `eslint . && tsc -p tsconfig.typecheck.json --noEmit`,
+  so typecheck is already inside it. Prettier is the separate `pnpm format:check`, which is repo-wide and currently
+  fails only on pre-existing untracked `.claude/worktrees/` and `.vitest/`; formatting of committed files is handled
+  by lint-staged's `prettier --write` pre-commit hook, so do not gate on it.
 
 ---
 
@@ -194,7 +198,7 @@ CORS_ALLOWED_ORIGINS=
 - [ ] **Step 7: Verify and commit**
 
 ```bash
-pnpm exec eslint . --max-warnings 0 && pnpm lint && pnpm typecheck && pnpm test
+pnpm exec eslint . --max-warnings 0 && pnpm lint && pnpm test
 git add src/configs/env.config.ts src/utilities/origin.utilities.ts tests/unit/utilities/origin.utilities.test.ts .env.example
 git commit -m "feat: add the client origin allowlist"
 ```
@@ -359,7 +363,7 @@ Expected: PASS, 4 tests.
 - [ ] **Step 7: Verify nothing else moved**
 
 ```bash
-pnpm exec eslint . --max-warnings 0 && pnpm lint && pnpm typecheck && pnpm test
+pnpm exec eslint . --max-warnings 0 && pnpm lint && pnpm test
 ```
 
 Expected: all green. The existing suites are the real check that mounting CORS is a no-op for the current deployment.

@@ -19,7 +19,8 @@
 - **No new dependency.** `parseSseStream` is ~30 lines; the house did not take `fetch-event-source` and neither do we.
 - **The existing reconnect and backoff stay.** The hook already overrides the server's `retry:` directive deliberately; leaving `EventSource` costs nothing.
 - **React Native cannot use this parser** — RN's `fetch` is XHR-backed and `response.body` is not a `ReadableStream`. Out of scope; noted in the spec's Deferred section.
-- Express gate: `pnpm exec eslint . --max-warnings 0`. React gate: the same, plus `pnpm lint` (prettier) and `pnpm test`.
+- **Express gate:** `pnpm exec eslint . --max-warnings 0 && pnpm lint && pnpm test`. There is no `pnpm typecheck` there; `pnpm lint` already runs `tsc`.
+- **React gate:** `pnpm exec eslint . --max-warnings 0 && pnpm lint && pnpm typecheck && pnpm test --run`. react-boilerplate DOES have `typecheck`, and its `pnpm lint` DOES include prettier. The two repos differ — do not copy one gate to the other.
 
 ---
 
@@ -108,7 +109,7 @@ Expected: PASS — the three new tests plus the existing fourteen.
 - [ ] **Step 5: Verify and commit**
 
 ```bash
-pnpm exec eslint . --max-warnings 0 && pnpm typecheck && pnpm test
+pnpm exec eslint . --max-warnings 0 && pnpm lint && pnpm test
 git add src/controllers/notification-stream.controller.ts tests/integration/api/notification-stream.test.ts
 git commit -m "feat: let the notification stream authenticate from a Bearer header"
 ```
@@ -342,7 +343,7 @@ Expected: FAIL initially — those tests mock `EventSource`. Rewrite each to moc
 - [ ] **Step 7: Verify everything**
 
 ```bash
-pnpm exec eslint . --max-warnings 0 && pnpm lint && pnpm typecheck && pnpm test --run
+pnpm exec eslint . --max-warnings 0 && pnpm lint && pnpm test --run
 ```
 
 Expected: green, with no fewer tests than before.
@@ -394,7 +395,7 @@ In `~/Mahaverick/react-boilerplate/nginx.conf`, the SSE location's long comment 
 - [ ] **Step 5: Verify and commit**
 
 ```bash
-pnpm exec eslint . --max-warnings 0 && pnpm typecheck && pnpm test
+pnpm exec eslint . --max-warnings 0 && pnpm lint && pnpm test
 git add src/controllers/notification-stream.controller.ts src/routes/notification.routes.ts tests/integration/api/notification-stream.test.ts
 git commit -m "feat: authenticate the stream only by header"
 ```

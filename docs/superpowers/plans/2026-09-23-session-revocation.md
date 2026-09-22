@@ -17,7 +17,8 @@
 - **The denylist is best-effort.** The database stays the source of truth for the refresh side. If Redis is unavailable the request is **allowed**, with a logged warning — failing closed would take the whole API down on a Redis blip, which is worse than the 15-minute window this closes.
 - **A token with no `sid` is accepted until it expires**, for one release only. Tokens minted before deploy have no session claim and there is nothing to check them against.
 - `ACCESS_TOKEN_TTL=15m` is the denylist TTL. An entry only has to outlive the tokens it invalidates.
-- Gate is 0 errors and 0 warnings: `pnpm exec eslint . --max-warnings 0`.
+- Gate is 0 errors and 0 warnings: `pnpm exec eslint . --max-warnings 0 && pnpm lint && pnpm test`.
+  **No `pnpm typecheck` exists in this repo** — `pnpm lint` already runs `tsc -p tsconfig.typecheck.json --noEmit`.
 
 ---
 
@@ -461,7 +462,7 @@ Expected: PASS.
 - [ ] **Step 3: Verify the whole suite**
 
 ```bash
-pnpm exec eslint . --max-warnings 0 && pnpm typecheck && pnpm test
+pnpm exec eslint . --max-warnings 0 && pnpm lint && pnpm test
 ```
 
 Expected: green. Watch for tests that log out and then reuse a token — any that break were asserting the old, wrong behaviour.
@@ -578,7 +579,7 @@ Expected: PASS, including the existing 14 tests.
 - [ ] **Step 7: Verify and commit**
 
 ```bash
-pnpm exec eslint . --max-warnings 0 && pnpm lint && pnpm typecheck && pnpm test
+pnpm exec eslint . --max-warnings 0 && pnpm lint && pnpm test
 git add src/controllers/notification-stream.controller.ts tests/integration/api/notification-stream.test.ts
 git commit -m "fix: close an open stream when its session is revoked"
 ```
