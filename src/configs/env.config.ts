@@ -254,6 +254,19 @@ const EnvSchema = z.object({
       'How much of X-Forwarded-For to believe. "false" (default) trusts none: correct when clients reach this app directly, WRONG behind a proxy, where every IP-keyed rate limiter then shares one bucket for the whole deployment. Behind a proxy set the NUMBER of proxies in front of this app (e.g. "1"), or a comma-separated list of trusted proxy addresses/subnets or presets ("loopback", "linklocal", "uniquelocal"). Never "true" — it is refused, because it lets any client spoof its own IP and bypass the limiters.'
     ),
 
+  // Extra browser origins allowed to call this API, comma-separated, e.g.
+  // "https://admin.example.com,https://shop.example.com". WEB_URL is ALWAYS
+  // allowed and does not need listing. Same-origin requests send no Origin
+  // header at all and are always allowed. Never a wildcard: `cors` refuses
+  // `*` together with `credentials: true`, which this API needs for the
+  // refresh cookie.
+  CORS_ALLOWED_ORIGINS: z
+    .string()
+    .optional()
+    .describe(
+      'Extra browser origins allowed to call this API, comma-separated (e.g. "https://admin.example.com,https://shop.example.com"). WEB_URL is ALWAYS allowed and does not need listing here, and same-origin requests send no Origin header at all. Leave empty for a single-frontend deployment. Never a wildcard: this API sends credentials, and the CORS spec forbids "*" with credentials.'
+    ),
+
   OTEL_EXPORTER_OTLP_ENDPOINT: z
     .url({ protocol: /^https?$/ })
     .optional()
