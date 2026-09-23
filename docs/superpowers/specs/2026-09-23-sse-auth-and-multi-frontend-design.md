@@ -177,44 +177,78 @@ this codebase ahead of both, not level with them.
 **Add `sid` to `AccessTokenPayload`.** Today `{ sub }`; both `Ofluence/core` and
 `Consequential/core` carry `{ userId, email, sessionId }`. This is the house convention.
 
-**A Redis denylist keyed by session**, TTL = `ACCESS_TOKEN_TTL`, written from
-`revokeAllForSession` — the single choke point that `logout`, password change **and
-refresh-token reuse detection** all already pass through. Closing one place closes all three.
+**A Redis denylist keyed by session**, TTL = `ACCESS_TOKEN_TTL`, written from **two**
+revocation methods on `UserTokenRepository`:
 
-The TTL is the point: an entry only has to outlive the tokens it invalidates, so it expires
-exactly when it stops mattering. Memory is bounded by logouts-per-15-minutes and no sweeper is
-needed. Redis is already the store for rate limiting and passport sessions (`getRedis()`).
+- `revokeAllForSession`, the choke point `logout` and **refresh-token reuse detection** both
+  pass through.
+- `revokeAllForUser`, which **password reset** reaches instead (via `revokeAllSessions`). It is
+  keyed on user id and holds no session id, so it must learn which sessions it revoked — a
+  `RETURNING session_id` on the update — before it can deny them.
+
+> **Corrected after implementation.** This section originally called `revokeAllForSession` "the
+> single choke point that `logout`, password change **and** refresh-token reuse detection all
+> already pass through", and concluded "closing one place closes all three". That was false, and
+> the error was load-bearing: password reset does **not** pass through it. Left as written, the
+> feature would have shipped with its most important path open — a user who resets their
+> password because they believe they are compromised would have revoked their refresh tokens
+> while every already-issued access token stayed valid for the rest of `ACCESS_TOKEN_TTL`. Found
+> during execution and closed by an added Task 6.
+
+The TTL is the point: an entry only has to outlive the tokens it invalidates. It runs from the
+moment of denial and the token it denies was minted earlier, so the entry outlives that token
+rather than matching it — the safe direction. Memory is bounded by revocations-per-15-minutes
+and no sweeper is needed. Redis is already the store for rate limiting and passport sessions
+(`getRedis()`).
 
 The alternative — asking the DB "does a live refresh token exist for this `sid`?" — needs no
 new store but adds a second DB read per request and couples access-token validity to
 refresh-row state. Rejected on cost.
 
-### Two consumers, not one
+### Three consumers, not one
 
 This is the part most easily got wrong.
 
 1. **`requireAuth`** — checks the denylist after verifying the signature. Covers every
-   ordinary request, and the stream **at connect**.
-2. **`streamNotifications`' heartbeat callback** (`notification-stream.controller.ts:276`) —
-   today it only writes a comment frame. It must also check the denylist and close the
-   connection when the session is gone.
+   ordinary request.
+2. **`authenticateStreamRequest`** — the stream **at connect**. It needs its own check:
+   `/stream` is registered on `notification.routes.ts` _before_ `router.use(requireAuth)`,
+   so it never passes through that middleware at all.
+3. **`streamNotifications`' heartbeat callback** — today it only writes a comment frame. It
+   must also check the denylist and close the connection when the session is gone.
 
-**Without the second, an open stream survives logout indefinitely** and the audit's gaps stay
-open while this spec claims they are closed. `requireAuth` runs once, at connect; nginx allows
-a 24-hour read timeout. The heartbeat is the only thing that recurs.
+**Without the third, an open stream survives logout indefinitely** and the audit's gaps stay
+open while this spec claims they are closed. The connect check runs once; nginx allows a
+24-hour read timeout. The heartbeat is the only thing that recurs.
 
-Because that check reloads the user, it also closes the case where a **deactivated** account
-keeps an open stream — which `authenticateStreamRequest`'s current comment wrongly claims is
-already handled ("outstanding SSE connections stop working the same way its outstanding bearer
-tokens do" — true for new connections, false for open ones).
+> **Corrected after implementation.** This section originally listed two consumers and said
+> `requireAuth` covers "the stream **at connect**". It does not — `/stream` sits outside it.
+> Found during execution and closed by Task 6.
+>
+> It also claimed the heartbeat check "reloads the user" and therefore closes the case where a
+> **deactivated** account keeps an open stream. It does not reload the user; it consults the
+> denylist only, and nothing in this codebase denies a session on deactivation. A deactivated
+> account's _open_ stream keeps receiving frames until it closes for some other reason.
+> Deactivation is caught on the next ordinary request, by `requireAuth`'s `findById` read.
 
 ### Honest limits
 
 **The denylist is best-effort. The database remains the source of truth for the refresh side.**
 
-- **Tokens issued before deploy carry no `sid`.** Policy: treat a token without `sid` as
-  unrevocable and accept it until it expires, for one release only, then reject. Stated so
-  nobody discovers it as a mystery 401.
+- **Tokens issued before deploy carry no `sid`.** Policy as built is deliberately
+  **asymmetric**, which the original single-sentence policy did not anticipate:
+  - `requireAuth` accepts a sid-less bearer token, treating it as unrevocable until it
+    expires. That window is bounded by the token's own `exp`, so it is at most
+    `ACCESS_TOKEN_TTL` — **fifteen minutes after deploy**, not a release cycle. Every token
+    minted after deploy carries `sid`, including one minted by a refresh mid-session.
+  - `authenticateStreamRequest` **rejects** a sid-less token outright, 401. It has to: the
+    heartbeat's denial check can only act on a session id, so tolerating one here would grant
+    a stream bounded by _connection lifetime_ — up to nginx's 24-hour read timeout — rather
+    than by token expiry. The browser client answers a failed stream connect by refreshing and
+    reconnecting, so the cost is one refresh and the path self-heals.
+
+  Stated so nobody discovers either half as a mystery 401.
+
 - **A Redis restart or `FLUSHALL` drops every entry.** There is no DB fallback, because the
   database does not know a given access token exists. Add a `jti` alongside `sid` so an
   accepted-after-flush token can at least be identified in logs.

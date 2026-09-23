@@ -595,3 +595,38 @@ git commit -m "fix: close an open stream when its session is revoked"
 **Placeholder scan:** clean. Two steps tell the implementer to match an existing local convention (the auth fixtures in Task 3, the socket helper in Task 5) rather than invent one, and both name the file to copy from.
 
 **Type consistency:** `denySession(sessionId: string): Promise<void>` and `isSessionDenied(sessionId: string): Promise<boolean>` are defined in Task 2 and used unchanged in Tasks 3, 4 and 5. `AccessTokenPayload.sid` is `string | undefined` in Task 1 and every consumer guards on it before use.
+
+---
+
+## Task 6, added during execution
+
+This plan shipped with five tasks. A sixth was added mid-execution, by controller ruling, after
+Tasks 3 and 5 each turned up a gap the plan had assumed shut. It is recorded here so the plan
+matches what was built.
+
+**Brief:** `.superpowers/sdd/2026-09-23-session-revocation/task-6-brief.md`
+
+**What it closed:**
+
+1. **Password reset denied nothing.** The spec called `revokeAllForSession` the single choke
+   point for logout, password change and reuse detection. False for password change, which
+   reaches `revokeAllForUser` — keyed on user id, holding no session id, calling `denySession`
+   zero times. `revokeAllForUser` now takes `RETURNING session_id` off its own update, filters
+   the nulls (non-refresh rows carry no session), de-duplicates, and denies each.
+2. **The stream had no connect-time check.** `/stream` is registered on
+   `notification.routes.ts` _before_ `router.use(requireAuth)`, so it never passes through that
+   middleware. A denied session could open a fresh stream and receive frames until the first
+   heartbeat caught it.
+3. The comments both gaps had made false, in four files.
+
+**Also settled in the final fix wave, which the plan never anticipated:** the `sid`-less token
+tolerance is **asymmetric**. `requireAuth` keeps it (bounded by token expiry). The stream
+rejects a sid-less token outright, because the heartbeat's denial check can only act on a
+session id — tolerating one there would have granted a stream that nothing could ever close,
+bounded by connection lifetime rather than by `ACCESS_TOKEN_TTL`. See the spec's "Honest
+limits".
+
+**Type consistency note, superseding the line above:** Task 6 and the fix wave narrowed
+`authenticateStreamRequest`'s return to a non-optional `sessionId: string`.
+`AccessTokenPayload.sid` remains `string | undefined`, but the stream's consumers no longer
+guard on it — the connect check does, once.
