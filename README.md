@@ -323,6 +323,17 @@ deployment target has been chosen yet. A manual `workflow_dispatch` from
 another branch only pushes the sha-tagged image — the `:main` tag and the
 `deploy` job both run only from `main`.
 
+Two things need doing by hand, once, before any of this is live:
+
+- **Install the [Renovate GitHub App](https://github.com/apps/renovate)**
+  on this repository. `renovate.json` is inert without it — nothing
+  schedules or opens Renovate PRs until the app is installed.
+- **Add protection rules to the `production` GitHub Environment**
+  (Settings → Environments → `production`) — at minimum, required
+  reviewers — before replacing the placeholder `deploy` step with a real
+  deployment target. Until then, anything merged to `main` would deploy
+  unreviewed the moment that step does something real.
+
 ## License
 
 Proprietary — all rights reserved. See [`LICENSE`](LICENSE).
