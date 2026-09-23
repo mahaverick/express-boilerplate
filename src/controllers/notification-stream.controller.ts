@@ -64,9 +64,11 @@ interface NotificationStreamPayload {
  * token can travel for this specific request. Everything else mirrors
  * `requireAuth`'s steps: verify the signature via `verifyAccessToken`, then
  * load and confirm the claimed user is still active. NOTE: this runs ONCE,
- * at connect. An already-open connection is re-checked only by the
- * heartbeat below, which is what actually closes a stream whose session was
- * revoked or whose account was disabled.
+ * at connect. The only recurring check on an already-open connection is the
+ * heartbeat below, and it checks the session denylist only — it does not
+ * re-read `user.active` — so a user deactivated AFTER connecting keeps
+ * receiving frames on that already-open stream until it closes for some
+ * other reason.
  * @param request - The incoming request, carrying the access token as `?token=`.
  * @returns The authenticated user's id and the session id its access token carries, when it carries one.
  * @throws {HttpError} 401, when the token is missing, invalid, expired, or names no active user.
@@ -289,6 +291,11 @@ export async function streamNotifications(
         // stream at all.
         if (sessionId && (await isSessionDenied(sessionId))) {
           clearInterval(heartbeat)
+          // Belt-and-braces: `request.on('close')` below also unsubscribes
+          // this handler and would fire shortly after `response.end()`
+          // regardless, but calling it here too makes this branch's
+          // teardown self-contained rather than depending on a race with
+          // an event this same code path is the one triggering.
           offNotification(userId, handleNotification)
           response.end()
           return
