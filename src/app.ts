@@ -6,8 +6,10 @@
 // split exists to avoid.
 import cors from 'cors'
 import express, { type Express } from 'express'
+import helmet from 'helmet'
 import { corsOptions } from '@/configs/cors.config'
 import { getEnv, trustProxySetting } from '@/configs/env.config'
+import { helmetOptions } from '@/configs/helmet.config'
 import { errorHandler, HttpError } from '@/middlewares/error.middleware'
 import { requestContext } from '@/middlewares/request-context.middleware'
 import { requestId } from '@/middlewares/request-id.middleware'
@@ -46,6 +48,10 @@ export function createApp(): Express {
   // for what an operator must set. A malformed value throws here, at boot,
   // rather than being discovered later from a rate limiter that never fires.
   app.set('trust proxy', trustProxySetting(getEnv().TRUST_PROXY))
+
+  // First middleware: every response — preflights, 404s, errors — gets the
+  // security headers, not just the ones that reach a router.
+  app.use(helmet(helmetOptions))
 
   // BEFORE requestId and the body parsers: for an ALLOWED origin, a
   // preflight is an OPTIONS request that `cors` answers and ends right

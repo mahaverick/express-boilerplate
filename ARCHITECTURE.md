@@ -341,15 +341,14 @@ security-relevant detail on all of it. It does **not** build:
   recovery path yet. Owned by plan B3 Task 6.
 - **Sessions, MFA, or OAuth/social login.** `SESSION_SECRET` remains a
   required-but-unread placeholder. Owned by plan B4.
-- **Security headers/CSP, or a general-purpose rate limiter.** All four
-  auth routes are rate-limited, each with its own store prefix (see
-  SECURITY.md); no other route is. `x-powered-by` is disabled and nothing
-  else touches response headers. **Security headers/CSP is unassigned**:
-  spec §13 mandates `helmet` with an explicit Content-Security-Policy and no
-  plan owns it — see SECURITY.md's table. CORS itself is no longer in this
-  list — a later plan (the multi-frontend seam) added the `cors` middleware
-  and an origin allowlist keyed on `WEB_URL`/`CORS_ALLOWED_ORIGINS`; see
-  SECURITY.md's "CORS" section.
+- **A general-purpose rate limiter.** All four auth routes are
+  rate-limited, each with its own store prefix (see SECURITY.md); no other
+  route is. Security headers/CSP itself is no longer in this list — `helmet`
+  is now the first middleware in `src/app.ts` (`src/configs/helmet.config.ts`);
+  see SECURITY.md's "Security headers" section. CORS itself is also no
+  longer in this list — a later plan (the multi-frontend seam) added the
+  `cors` middleware and an origin allowlist keyed on
+  `WEB_URL`/`CORS_ALLOWED_ORIGINS`; see SECURITY.md's "CORS" section.
 - **Tenancy or RBAC.** Every authenticated user acts only on their own
   resources; there is no role or organization model. Owned by plan B5.
 - OpenAPI documentation, or a bootstrap/seed script (`pnpm bootstrap` does
@@ -366,8 +365,7 @@ security-relevant detail on all of it. It does **not** build:
   and `OTEL_EXPORTER_OTLP_ENDPOINT` is a recognised, optional variable, but
   nothing in `src/` currently starts an SDK or exports a span.
 
-Most of these are explicitly owned by a later plan (named inline above).
-Two are **not owned by anything**: security headers/CSP and the
-`user_tokens` retention job. That is recorded here deliberately — "a later
-plan will do it" reads the same as "nobody is doing it" right up until
-nobody does.
+Most of these are explicitly owned by a later plan (named inline above). One
+is **not owned by anything**: the `user_tokens` retention job. That is
+recorded here deliberately — "a later plan will do it" reads the same as
+"nobody is doing it" right up until nobody does.

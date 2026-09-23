@@ -10,8 +10,8 @@ error handling, the test harness, the lint gates) plus a working
 authentication slice on top of it: registration, login, JWT access tokens
 paired with rotating opaque refresh tokens, and an authenticated profile
 endpoint, plus a CORS origin allowlist for a second frontend on a sibling
-subdomain. It does not ship email verification delivery, sessions, MFA,
-OAuth, security headers/CSP, or tenancy — see
+subdomain and `helmet` security headers. It does not ship email
+verification delivery, sessions, MFA, OAuth, or tenancy — see
 [ARCHITECTURE.md](ARCHITECTURE.md) and [SECURITY.md](SECURITY.md) for
 exactly what is and is not here yet.
 

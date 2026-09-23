@@ -471,6 +471,9 @@ instruction in any dispatch written here.
 
 ## Code conventions
 
+- **helmet is the first middleware** (`src/configs/helmet.config.ts`).
+  Anything that must answer without security headers does not exist here;
+  don't mount routes above it.
 - **No module outside `src/configs/env.config.ts` may read
   `process.env`.** An eslint rule (`no-restricted-properties`) enforces
   this; `env.config.ts` is the one file explicitly exempted, because
