@@ -43,7 +43,7 @@ jobs:
           images: ghcr.io/${{ github.repository }}
           tags: |
             type=sha,format=long
-            type=raw,value=main
+            type=raw,value=main,enable={{is_default_branch}}
       - id: build
         uses: docker/build-push-action@v7
         with:
@@ -73,6 +73,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: production
+    # A manual dispatch from another branch builds and pushes an sha-tagged
+    # image but never deploys.
+    if: github.ref == 'refs/heads/main'
     steps:
       - name: Deploy (placeholder — no target chosen yet)
         run: echo "Would deploy ghcr.io/${{ github.repository }}@${{ needs.image.outputs.digest }}"

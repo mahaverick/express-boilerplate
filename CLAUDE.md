@@ -306,7 +306,10 @@ otel-collector`.** It is bind-mounted; `docker compose up -d` does not
   it via `workflow_call`, then builds and pushes `ghcr.io/<repo>:sha-<commit>`
   and `:main` with SBOM and provenance attestations, then runs a placeholder
   `deploy` job bound to the `production` environment. Keep CI's concurrency
-  group keyed on `github.event_name` — see the comment in `ci.yml`.
+  group keyed on `github.event_name` — see the comment in `ci.yml`. A manual
+  `workflow_dispatch` from a non-`main` branch still builds and pushes the
+  sha-tagged image, but never moves the `:main` tag and never runs `deploy`
+  — both are conditioned on running from `refs/heads/main`.
 
 ## Testing
 

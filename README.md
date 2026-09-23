@@ -319,7 +319,9 @@ A push to `main` runs [`deploy.yml`](.github/workflows/deploy.yml), which
 calls `ci.yml` as a gate and, once it passes, builds and pushes
 `ghcr.io/<repo>:sha-<commit>` and `:main` to GHCR with an SBOM and build
 provenance attestation. The `deploy` job itself is a placeholder — no
-deployment target has been chosen yet.
+deployment target has been chosen yet. A manual `workflow_dispatch` from
+another branch only pushes the sha-tagged image — the `:main` tag and the
+`deploy` job both run only from `main`.
 
 ## License
 
