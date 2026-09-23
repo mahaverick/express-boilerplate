@@ -717,8 +717,18 @@ export function createAddTenantMemberRateLimiter(
 // still live) access token could otherwise brute-force with unlimited
 // attempts. Keying on the user id, not IP, is what makes the budget follow
 // the account being attacked rather than the attacker's own address.
-const CHANGE_PASSWORD_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000
-const CHANGE_PASSWORD_RATE_LIMIT_MAX_ATTEMPTS = 10
+//
+// The BUDGET therefore matches LOGIN's five, not reset-password's ten, even
+// though reset-password is the closer sibling by shape. The two numbers
+// answer different threats: reset-password guards the redemption of a
+// 32-byte random token, which cannot be guessed at all, so its ten is about
+// abuse volume. This endpoint and login both take a caller-supplied
+// PASSWORD and say whether it is right — the same oracle, and it deserves
+// the same budget. Ten would double an attacker's guesses for no reason a
+// legitimate user needs: mistyping a password you are in the middle of
+// changing five times in fifteen minutes is already generous.
+const CHANGE_PASSWORD_RATE_LIMIT_WINDOW_MS = LOGIN_RATE_LIMIT_WINDOW_MS
+const CHANGE_PASSWORD_RATE_LIMIT_MAX_ATTEMPTS = LOGIN_RATE_LIMIT_MAX_ATTEMPTS
 
 /**
  * Build a change-password rate limiter: `limit` attempts per `windowMs`,

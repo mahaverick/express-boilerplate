@@ -276,13 +276,15 @@ describe('POST /api/v1/auth/change-password', () => {
   })
 
   it('rate limits repeated wrong-current-password attempts, keyed by the authenticated user', async () => {
-    // The production limiter allows 10 attempts per 15 minutes
+    // The production limiter allows five attempts per 15 minutes
     // (rate-limit.middleware.ts), keyed on `request.user.id` — a fresh user
     // per test means a fresh counter, with nothing else in this file able
-    // to have already spent it.
+    // to have already spent it. Five, not reset-password's ten: this
+    // endpoint is a password oracle like login, so it carries login's
+    // budget rather than the token-redemption flow's.
     const { token } = await createUserWithPassword()
 
-    for (let index = 0; index < 10; index += 1) {
+    for (let index = 0; index < 5; index += 1) {
       const response = await changePasswordRequest(token, 'still-the-wrong-password', NEW_PASSWORD)
       expect(response.status).toBe(400)
     }
