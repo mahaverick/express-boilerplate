@@ -33,7 +33,7 @@ Make both boilerplates safer to start from: explicit pnpm provisioning ready for
    - react gains `packageManager`, `engines: { "node": ">=24" }`, `.nvmrc` (`24`), and `.npmrc` with `engine-strict=true` — mirroring express.
    - Adding `packageManager` makes pnpm 12 write `packageManagerDependencies` into `pnpm-lock.yaml`; regenerate the lockfile **in the same commit**, then delete the react Dockerfile comment explaining why the field was avoided and the matching comment in react `ci.yml`.
    - CI keeps `pnpm/action-setup@v6` (reads `packageManager`; needs no Corepack). Remove any `version:` input so the field stays the single source.
-3. **Dated follow-up (not in this work), on or after 2026-10-28:** one PR per repo changing `.nvmrc` → `26`, `engines.node` → `>=26`, Docker bases → `node:26-alpine`, `@types/node` → 26.x, CI `node-version`. Nothing else should need to change.
+3. **Dated follow-up (not in this work), on or after 2026-10-28:** one PR per repo changing `.nvmrc` → `26`, `engines.node` → `>=26`, Docker bases → `node:26-alpine`, CI `node-version` (`@types/node` is already 26.x in both repos). Nothing else should need to change.
 
 **Acceptance:** `docker build` succeeds for both repos with the new lines; `pnpm install --frozen-lockfile` passes in react CI after the lockfile regen; `grep -rn "pnpm@12" --exclude=pnpm-lock.yaml` finds only `package.json`.
 
