@@ -354,12 +354,34 @@ describe('GET /api/v1/notifications/stream', () => {
   /**
    * Open a tracked SSE connection — tracked so `afterEach` destroys it even
    * if the test that opened it never does.
-   * @param path - The request path, including any query string.
-   * @param headers - Extra request headers, e.g. `Last-Event-ID`.
+   *
+   * Accepts either a raw `path` (+ optional `headers`), which is how every
+   * pre-existing call in this file builds its request, or `{ header?,
+   * query? }` to authenticate the fixed `/api/v1/notifications/stream` path
+   * via an `Authorization` header and/or a `?token=` query parameter — for
+   * the Bearer-header tests below, so they don't each hand-assemble a URL
+   * and header themselves.
+   * @param pathOrAuth - The request path (including any query string), or `{ header?, query? }` to build a request against the stream endpoint.
+   * @param headers - Extra request headers, e.g. `Last-Event-ID`. Only used when `pathOrAuth` is a path string.
    * @returns The opened connection.
    */
-  function openStream(path: string, headers: Record<string, string> = {}): SseConnection {
-    const connection = new SseConnection(baseUrl, path, headers)
+  function openStream(
+    pathOrAuth: string | { header?: string; query?: string },
+    headers: Record<string, string> = {}
+  ): SseConnection {
+    let path: string
+    let requestHeaders: Record<string, string>
+    if (typeof pathOrAuth === 'string') {
+      path = pathOrAuth
+      requestHeaders = headers
+    } else {
+      const { header, query } = pathOrAuth
+      path = query
+        ? `/api/v1/notifications/stream?token=${encodeURIComponent(query)}`
+        : '/api/v1/notifications/stream'
+      requestHeaders = header ? { Authorization: header } : {}
+    }
+    const connection = new SseConnection(baseUrl, path, requestHeaders)
     openConnections.push(connection)
     return connection
   }
@@ -456,6 +478,34 @@ describe('GET /api/v1/notifications/stream', () => {
     const response = await connection.waitForResponse()
 
     expect(response.statusCode).toBe(401)
+  })
+
+  it('opens a stream from an Authorization header, with nothing in the URL', async () => {
+    const { token } = await createAuthenticatedUser()
+
+    const connection = openStream({ header: `Bearer ${token}` })
+    const response = await connection.waitForResponse()
+
+    expect(response.statusCode).toBe(200)
+    expect(response.headers['content-type']).toBe('text/event-stream')
+  })
+
+  it('still opens a stream from ?token=, so an old bundle keeps working during the rollout', async () => {
+    const { token } = await createAuthenticatedUser()
+
+    const connection = openStream({ query: token })
+    const response = await connection.waitForResponse()
+
+    expect(response.statusCode).toBe(200)
+  })
+
+  it('prefers the header when both are present', async () => {
+    const { token } = await createAuthenticatedUser()
+
+    const connection = openStream({ header: `Bearer ${token}`, query: 'not-a-token' })
+    const response = await connection.waitForResponse()
+
+    expect(response.statusCode).toBe(200)
   })
 
   // Real time, not a fake timer: this proves the actual `setInterval` wired

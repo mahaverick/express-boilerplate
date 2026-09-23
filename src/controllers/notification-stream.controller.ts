@@ -55,33 +55,61 @@ interface NotificationStreamPayload {
 }
 
 /**
- * Authenticate an SSE connection from its `?token=` query parameter.
+ * Authenticate an SSE connection from an `Authorization: Bearer` header or,
+ * failing that, its `?token=` query parameter.
  *
- * Deliberately NOT `requireAuth`: that middleware only ever reads a
- * `Bearer` `Authorization` header, and the browser's own `EventSource` API —
- * the only thing that opens this connection outside a test — cannot set
- * custom request headers at all, so a query parameter is the one place a
- * token can travel for this specific request. Everything else mirrors
- * `requireAuth`'s steps: verify the signature via `verifyAccessToken`,
- * require a `sid` claim, reject a denied session via `isSessionDenied`,
- * then load and confirm the claimed user is still active — except that,
- * unlike `requireAuth`, there is no tolerance here for a token with no
- * `sid`; see the guard below for why a connect-time rejection is cheap
- * enough that this endpoint does not need one. NOTE: this whole function —
- * including the denylist check — runs ONCE, at connect. The only recurring
- * check on an already-open connection is the heartbeat below, and it
- * checks the session denylist only — it does not re-read `user.active` —
- * so a user deactivated AFTER connecting keeps receiving frames on that
- * already-open stream until it closes for some other reason.
- * @param request - The incoming request, carrying the access token as `?token=`.
+ * The header is read first and wins outright when present. `EventSource` —
+ * the only thing that used to open this connection outside a test — cannot
+ * set custom request headers at all, which is the whole reason this
+ * endpoint ever read a query parameter; the client now opens this
+ * connection via `fetch`, which can set one. The query parameter is kept
+ * for exactly one release so an old client bundle keeps working while both
+ * repos deploy in either order — a later task removes it. Deliberately NOT
+ * `requireAuth`: that middleware only ever reads the header, so it alone
+ * could never serve a client still reading the query parameter. Everything
+ * past "we have a token string" mirrors `requireAuth`'s own steps: verify
+ * the signature via `verifyAccessToken`, require a `sid` claim, reject a
+ * denied session via `isSessionDenied`, then load and confirm the claimed
+ * user is still active — except that, unlike `requireAuth`, there is no
+ * tolerance here for a token with no `sid`; see the guard below for why a
+ * connect-time rejection is cheap enough that this endpoint does not need
+ * one. NOTE: this whole function — including the denylist check — runs
+ * ONCE, at connect. The only recurring check on an already-open connection
+ * is the heartbeat below, and it checks the session denylist only — it
+ * does not re-read `user.active` — so a user deactivated AFTER connecting
+ * keeps receiving frames on that already-open stream until it closes for
+ * some other reason.
+ * @param request - The incoming request, carrying the access token as an `Authorization: Bearer` header or a `?token=` query parameter.
  * @returns The authenticated user's id and the session id its access token carries.
  * @throws {HttpError} 401, when the token is missing, invalid, expired, carries no `sid` claim, its session has been denied, or names no active user.
  */
 async function authenticateStreamRequest(
   request: Request
 ): Promise<{ userId: string; sessionId: string }> {
-  const token = request.query.token
-  if (typeof token !== 'string' || token === '') {
+  // Header FIRST. `EventSource` cannot set one, which is the whole reason
+  // this endpoint ever read a query parameter — but the client now uses
+  // `fetch`, which can. The query path is kept for exactly one release so an
+  // old bundle keeps working while both repos deploy; a later task deletes
+  // it.
+  const header = request.header('Authorization')
+  const fromHeader = header?.startsWith('Bearer ')
+    ? header.slice('Bearer '.length).trim()
+    : undefined
+  const fromQuery = typeof request.query.token === 'string' ? request.query.token : undefined
+  // `||`, deliberately not `??`. If `fromHeader` were ever `''` — an
+  // `Authorization: Bearer ` header with nothing after it — `??` would
+  // treat that present-but-empty string as the token and never fall
+  // through to `fromQuery`; `||` correctly would. Defensive rather than
+  // exercised: verified empirically (a throwaway `node:http` echo server)
+  // that Node's own HTTP parser strips trailing OWS from header values
+  // before Express ever sees them, so a literal trailing-space-then-nothing
+  // header is not reachable over a real socket in this stack, and no test
+  // here can discriminate the two operators for that reason. Kept per the
+  // task brief regardless, since a non-compliant client or proxy is not a
+  // guarantee this code should depend on.
+  const token = fromHeader || fromQuery
+
+  if (!token) {
     throw new HttpError('Missing access token', 401)
   }
 
@@ -262,7 +290,7 @@ async function fetchMissedNotifications(
  * queried burst is written, the pending queue is flushed, deduplicated
  * against ids the burst already covered (the two windows can legitimately
  * overlap by one notification).
- * @param request - The incoming request, carrying the access token as `?token=` and, on reconnect, a `Last-Event-ID` header.
+ * @param request - The incoming request, carrying the access token as an `Authorization: Bearer` header or a `?token=` query parameter and, on reconnect, a `Last-Event-ID` header.
  * @param response - The response, upgraded to an SSE stream once authenticated.
  * @param next - Forwards an authentication failure to the terminal error handler.
  */
