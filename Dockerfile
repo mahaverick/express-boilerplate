@@ -43,4 +43,6 @@ HEALTHCHECK NONE
 
 USER appuser
 EXPOSE 4040
-CMD ["node", "dist/index.js"]
+# Same as `pnpm start`: tracing.js must load via --import, before the app, or
+# OpenTelemetry (traces AND logs) never starts in the container.
+CMD ["node", "--import", "./dist/observability/tracing.js", "dist/index.js"]

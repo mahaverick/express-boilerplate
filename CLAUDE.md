@@ -67,8 +67,8 @@ until you check.
 
 - **`logger` from `@/services/logger.service`, not `console.*`.** An ESLint
   `no-restricted-properties` rule enforces this for `src/`. Two files are
-  exempt: `logger.service.ts` (talks to Winston's console transport and uses
-  `console.error` in the Slack transport's failure path to avoid re-entry) and
+  exempt: `logger.service.ts` (writes through pino and uses `console.error` in
+  the Slack destination's failure path to avoid re-entry) and
   `index.ts` (pre-boot error path where the logger is not available).
 - **Request-id correlation is automatic.** The `requestContext` middleware
   wraps each request in an `AsyncLocalStorage` context. The logger reads from
@@ -77,9 +77,13 @@ until you check.
 - **Caller file:line is automatic.** The logger parses `new Error().stack` on
   each call. The `[moduleName]` prefixes that some call sites used to include
   in their messages are redundant — the `source` field handles it.
-- **Slack transport deduplicates by `${source}:${message}`.** The first
+- **Slack destination deduplicates by `${source}:${message}`.** The first
   occurrence sends immediately; duplicates within a 60-second window are
   suppressed. A summary is sent after the window expires if any were suppressed.
+- **pino, JSON in production, pino-pretty in development.**
+  `createPinoLogger` keeps the winston-era shape (`level` label, ISO
+  `timestamp`, `message`). Direct pino calls are `(meta, message)`;
+  application code uses the `logger` facade, which keeps `(message, meta)`.
 
 ## Job queue
 
@@ -241,6 +245,18 @@ until you check.
   calls appear as gaps in traces.
 - **Grafana** at `http://localhost:3100` with Tempo as the default data
   source. Anonymous admin access enabled for local dev.
+- **Logs reach Loki.** `PinoInstrumentation` (log sending on, correlation
+  off — the mixin already writes `traceId`/`spanId`) exports records over
+  OTLP; the collector forwards to Loki; in Grafana a log line links to its
+  trace and a trace to its logs. Loki has no host port — query it through
+  Grafana.
+- **`tracing.ts` registers OTel's ESM loader hook** — without it the
+  CommonJS pino imported from ESM is never patched (proved 2026-09-24).
+- **The Docker image loads tracing via `--import`** (Dockerfile CMD mirrors
+  `pnpm start`).
+- **Editing `otel-collector.yaml` needs `docker compose restart
+otel-collector`.** It is bind-mounted; `docker compose up -d` does not
+  pick up content changes to an already-running container's bind mount.
 
 ## Git hooks and CI
 
@@ -409,8 +425,9 @@ Assertions that silently cannot fail, seen here more than once:
 
 B1's plan was ~1800 lines and needed almost no correction. B3's was 183 and
 produced **seven** briefs whose stated facts were wrong — a column width that fit
-the secret, a logging library that does not exist here (there is no pino; the
-convention is `console.error` plus `error.middleware.ts`'s `redactedForLog`), a
+the secret, a logging library that did not exist here at the time (there was
+no pino until 2026-09-24; the convention was `console.error` plus
+`error.middleware.ts`'s `redactedForLog`), a
 normalisation that had never been implemented, and an instruction to install
 `@types/nodemailer`, which nodemailer 10 makes dead because it ships its own
 types. Each cost a full fix round.

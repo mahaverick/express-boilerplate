@@ -51,6 +51,9 @@ services:
   otel-collector:
     image: otel/opentelemetry-collector-contrib:latest
     command: ['--config=/etc/otel/config.yaml']
+    # Bind-mounted: editing otel-collector.yaml needs
+    # `docker compose restart otel-collector` — `docker compose up -d` does
+    # not pick up bind-mount content changes on an already-running container.
     volumes: ['./otel-collector.yaml:/etc/otel/config.yaml:ro']
     # 13133 is the health_check extension's endpoint (see otel-collector.yaml)
     # — exposed for manual/host-side verification. No Docker HEALTHCHECK

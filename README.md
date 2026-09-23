@@ -21,7 +21,7 @@ exactly what is and is not here yet.
   [`.npmrc`](.npmrc) refuses anything older)
 - [pnpm](https://pnpm.io) 12.4.1 (pinned via `packageManager` in
   `package.json`; enable it with `corepack enable`)
-- Docker, for the local Postgres/Redis/OpenTelemetry/Mailpit stack
+- Docker, for the local Postgres/Redis/OpenTelemetry/Loki/Mailpit stack
 
 ## Quickstart
 
