@@ -23,8 +23,7 @@ const load = (file: string): void => {
     // catastrophic-backtracking exposure to guard against.
     // eslint-disable-next-line sonarjs/super-linear-regex
     const match = /^\s*([\w.-]+)\s*=\s*(.*?)\s*$/.exec(line)
-    if (!match?.[1]) continue
-    if (process.env[match[1]] !== undefined) continue
+    if (!match?.[1] || process.env[match[1]] !== undefined) continue
     process.env[match[1]] = (match[2] ?? '').replace(/^(['"])(.*)\1$/, '$2')
   }
 }

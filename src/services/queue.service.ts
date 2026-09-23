@@ -181,19 +181,19 @@ export async function closeQueue(): Promise<void> {
     // ioredis instance, so this does not touch state.connection either.
     await notificationQueue.close()
   }
-  if (state.connection) {
-    const connection = state.connection
-    state.connection = undefined
-    // Still guarded, not an unconditional quit(): even though Queue#close()
-    // above never touches this connection (see its own comment), ioredis's
-    // OWN retryStrategy can independently drive it to 'end' before this
-    // point — e.g. when Redis was unreachable and the bounded retryStrategy
-    // above gave up. ioredis rejects any command, quit() included, sent to a
-    // connection already in 'end' status, so calling quit() unconditionally
-    // here would turn that shutdown path into a thrown "Connection is
-    // closed." instead of a clean close.
-    if (connection.status !== 'end') {
-      await connection.quit()
-    }
+  if (!state.connection) return
+
+  const connection = state.connection
+  state.connection = undefined
+  // Still guarded, not an unconditional quit(): even though Queue#close()
+  // above never touches this connection (see its own comment), ioredis's
+  // OWN retryStrategy can independently drive it to 'end' before this
+  // point — e.g. when Redis was unreachable and the bounded retryStrategy
+  // above gave up. ioredis rejects any command, quit() included, sent to a
+  // connection already in 'end' status, so calling quit() unconditionally
+  // here would turn that shutdown path into a thrown "Connection is
+  // closed." instead of a clean close.
+  if (connection.status !== 'end') {
+    await connection.quit()
   }
 }

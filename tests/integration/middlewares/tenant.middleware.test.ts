@@ -158,10 +158,12 @@ describe('resolveTenant + requireRole (integration)', () => {
       await sql`delete from tenants where id = any(${createdTenantIds})`
       createdTenantIds.length = 0
     }
-    if (createdUserIds.length > 0) {
-      await sql`delete from users where id = any(${createdUserIds})`
-      createdUserIds.length = 0
+    if (createdUserIds.length === 0) {
+      return
     }
+
+    await sql`delete from users where id = any(${createdUserIds})`
+    createdUserIds.length = 0
   })
 
   /**

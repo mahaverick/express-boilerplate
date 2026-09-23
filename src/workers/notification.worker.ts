@@ -118,22 +118,22 @@ export async function processNotificationJob(job: Job<NotificationJobData>): Pro
     }
   }
 
-  if (email) {
-    const isEmailEnabled = await preferenceRepository.isChannelEnabled(userId, type, 'email')
-    if (isEmailEnabled) {
-      try {
-        // `email` is `MailMessage` — email.job.ts's own discriminated union
-        // — passed straight through with zero casts, per task-2-brief.md's
-        // own design decision.
-        await addEmailJob(email, userId)
-      } catch (error) {
-        logger.error('Failed to enqueue email from notification worker', {
-          error,
-          jobId: job.id,
-          type,
-        })
-      }
-    }
+  if (!email) return
+
+  const isEmailEnabled = await preferenceRepository.isChannelEnabled(userId, type, 'email')
+  if (!isEmailEnabled) return
+
+  try {
+    // `email` is `MailMessage` — email.job.ts's own discriminated union
+    // — passed straight through with zero casts, per task-2-brief.md's
+    // own design decision.
+    await addEmailJob(email, userId)
+  } catch (error) {
+    logger.error('Failed to enqueue email from notification worker', {
+      error,
+      jobId: job.id,
+      type,
+    })
   }
 }
 
