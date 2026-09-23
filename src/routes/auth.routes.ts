@@ -36,6 +36,7 @@ import {
 import {
   changePassword,
   forgotPassword,
+  getAuthProviders,
   handleGoogleCallback,
   login,
   logout,
@@ -103,12 +104,12 @@ export function createAuthRouter(): Router {
     forgotPassword
   )
   router.post('/reset-password', createResetPasswordRateLimiter(), resetPassword)
-  // The one route on this router that is NOT public: a sibling of
-  // forgot-password/reset-password (same "change what the account signs in
-  // with" family), not of /profile (name/avatar) — so it lives here, not on
+  // The two routes on this router that are NOT public: siblings of
+  // forgot-password/reset-password (same "what this account signs in with"
+  // family), not of /profile (name/avatar) — so they live here, not on
   // profile.routes.ts. This router has no router-wide `requireAuth` the way
-  // profile.routes.ts does, so it is attached PER-ROUTE, here, ahead of the
-  // rate limiter — deliberately in that order: `createChangePasswordRateLimiter`
+  // profile.routes.ts does, so it is attached PER-ROUTE, here. On
+  // change-password it goes ahead of the rate limiter — deliberately in that order: `createChangePasswordRateLimiter`
   // keys on `request.user.id` (rate-limit.middleware.ts's own comment on
   // that limiter), which does not exist until `requireAuth` has populated
   // it. Every other limiter on this router runs first, ahead of its
@@ -116,6 +117,12 @@ export function createAuthRouter(): Router {
   // exception, for the identical reason its limiter is keyed on the user
   // rather than IP.
   router.post('/change-password', requireAuth, createChangePasswordRateLimiter(), changePassword)
+
+  // No rate limiter: this one only reads, returns nothing an unauthenticated
+  // caller could obtain, and offers no oracle to probe — unlike
+  // change-password above, whose limiter exists because it says whether a
+  // supplied password is correct. `requireAuth` is the whole guard.
+  router.get('/providers', requireAuth, getAuthProviders)
 
   // Google OAuth — only mounted when GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET
   // are configured (isGoogleOAuthEnabled(), passport.config.ts); an
