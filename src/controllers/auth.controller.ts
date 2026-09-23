@@ -811,7 +811,6 @@ export async function changePassword(
     }
 
     const passwordHash = await hashPassword(input.newPassword)
-    await userRepository.update(user.id, { passwordHash })
 
     // `request.sessionId` (express.d.ts) is `string | undefined` — a token
     // minted before the `sid` claim existed carries none (requireAuth's own
@@ -822,13 +821,45 @@ export async function changePassword(
     // test). When there is none, there is nothing to distinguish this
     // caller's token from any other — a sid-less token cannot be told apart
     // from a stolen one presented from elsewhere — so it fails SAFE: revoke
-    // everything, the caller included, exactly as a password reset already
-    // does unconditionally.
+    // every session the user has, the caller's included, exactly as a
+    // password reset already does unconditionally.
+    //
+    // Precisely: every `user_tokens` row is revoked and every session id
+    // they carried is denied, so no session can refresh. The caller's OWN
+    // access token is the one thing not denied, because it names no session
+    // to deny — it keeps working until its own `exp`, at most
+    // `ACCESS_TOKEN_TTL`. That is requireAuth's documented one-release
+    // tolerance for pre-`sid` tokens playing out here, not a gap peculiar to
+    // this endpoint, and it is why the notice this sends says "every OTHER
+    // session" rather than naming the caller's device as the survivor.
     if (request.sessionId) {
       await revokeAllSessionsExceptCurrent(user.id, request.sessionId)
     } else {
       await revokeAllSessions(user.id)
     }
+
+    // Stored AFTER the revocation, deliberately, and this ordering is the
+    // whole of the failure design. Both writes go to the same database, so
+    // one failing while the other has landed is rare — but it is not
+    // symmetric, and the safe half is this one.
+    //
+    // Store-then-revoke fails DANGEROUSLY: the password is already changed,
+    // every other session survives, no notice is sent, and the caller's
+    // retry is refused because the "current" password they type is now the
+    // old one. They believe they locked an attacker out and have not.
+    //
+    // Revoke-then-store fails SAFELY: the other sessions are gone, the
+    // password is unchanged, the caller signs back in with the password
+    // they still know and tries again. The cost is being signed out of
+    // other devices for a change that did not happen, which is an
+    // inconvenience rather than an exposure.
+    //
+    // A transaction would remove the window rather than choose a side, and
+    // this codebase does use `db.transaction()` elsewhere — but only for
+    // writes that are all Postgres. `denySession` (session-denylist.service.ts)
+    // writes to REDIS, so the denial half could never join it, and the
+    // atomicity would be partial in a way that reads as stronger than it is.
+    await userRepository.update(user.id, { passwordHash })
 
     // Fire-and-forget: a mail failure must never 500 a password change that
     // has already succeeded (Ruling T; see sendPasswordResetMailIfRegistered

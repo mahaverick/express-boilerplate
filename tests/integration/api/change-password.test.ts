@@ -23,9 +23,11 @@
 // work before.
 import { randomUUID } from 'node:crypto'
 import type { Worker } from 'bullmq'
+import jwt from 'jsonwebtoken'
 import request from 'supertest'
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
+import { getEnv } from '@/configs/env.config'
 import type { User } from '@/database/models/user.model'
 import type { EmailJobData } from '@/jobs/email.job'
 import { UserRepository } from '@/repositories/user.repository'
@@ -234,6 +236,47 @@ describe('POST /api/v1/auth/change-password', () => {
     // `revokeAllSessions`.
     const afterA = await probe(tokenA as string)
     expect(afterA.status).toBe(200)
+  })
+
+  it('revokes every session when the caller’s own token carries no sid claim', async () => {
+    // The fallback branch. `requireAuth` still accepts an access token minted
+    // before the `sid` claim existed (its `payload.sid &&` tolerance), so
+    // `request.sessionId` is undefined and there is no session to spare —
+    // the controller revokes everything instead of sparing one.
+    //
+    // This is also the branch that made the emailed copy hedge: it once said
+    // "only the device you used is still logged in", which is false here.
+    const email = uniqueEmail()
+    const { user } = await createUserWithPassword(email)
+
+    const loginResponse = await login(email, CURRENT_PASSWORD)
+    expect(loginResponse.status).toBe(200)
+    const sessionToken = envelopeOf<{ accessToken: string }>(loginResponse).data?.accessToken
+    expect(await probe(sessionToken as string)).toHaveProperty('status', 200)
+
+    // Hand-signed with `sub` ONLY — the `sid` key is absent, not undefined.
+    // `signAccessToken` cannot produce this; it requires a session id.
+    const sidLessToken = jwt.sign({ sub: user.id }, getEnv().JWT_ACCESS_SECRET, {
+      algorithm: 'HS256',
+      expiresIn: '15m',
+    })
+
+    const changeResponse = await changePasswordRequest(sidLessToken, CURRENT_PASSWORD, NEW_PASSWORD)
+    expect(changeResponse.status).toBe(200)
+
+    // The real session dies, which is what "revoke everything" has to mean
+    // for this to be the safe fallback rather than a silent no-op.
+    const afterSession = await probe(sessionToken as string)
+    expect(afterSession.status).toBe(401)
+
+    // The caller's own sid-less token is NOT denied, and that is correct
+    // rather than a gap: it names no session, so there is no denylist key to
+    // write. It stops working when it expires, at most ACCESS_TOKEN_TTL
+    // later — requireAuth's documented pre-`sid` tolerance, unchanged by
+    // this endpoint. Pinned so that a future change which starts denying it
+    // is a deliberate decision rather than an accident.
+    const afterSidLess = await probe(sidLessToken)
+    expect(afterSidLess.status).toBe(200)
   })
 
   it('rejects a wrong current password with 400', async () => {

@@ -56,11 +56,18 @@ const REQUIRED_VARIABLE_NAMES: ReadonlyArray<keyof PasswordChangedVariables> = [
  * both carrying the same three things — what changed, that it just
  * happened, and what to do if it was not the recipient. Deliberately tells
  * the reader every OTHER session has already been signed out: that is true
- * (`changePassword`, auth.controller.ts, revokes every session but the one
- * that made the request before this mail is even enqueued) and is the
- * reassuring half of the message — a caller who did not make this change
- * needs to know their other sessions are already dead, not merely that
- * something happened.
+ * (`changePassword`, auth.controller.ts, revokes them before this mail is
+ * even enqueued) and is the reassuring half of the message — a caller who
+ * did not make this change needs to know their other sessions are already
+ * dead, not merely that something happened.
+ *
+ * It says "every OTHER session", and deliberately does NOT add "only the
+ * device you used is still signed in" — which read better and was false.
+ * When the caller's access token predates the `sid` claim there is no
+ * session to spare, so `changePassword` revokes EVERY session including
+ * theirs; that reader would have been told their device was still signed
+ * in moments before it stopped working. "Every other session" stays true
+ * in both branches — it is simply not exhaustive in that one.
  * @param variables - firstName/appName — see `PasswordChangedVariables`.
  * @returns The rendered subject, text, and HTML, plus this template's key.
  * @throws {Error} When any required variable is missing — see `requireEmailVariables`.
@@ -77,7 +84,7 @@ export function renderPasswordChangedTemplate(variables: PasswordChangedVariable
   const text = [
     `Hi ${firstName},`,
     '',
-    `Your ${appName} password was just changed. Every other session on your account has already been signed out — only the device you used to make this change is still logged in.`,
+    `Your ${appName} password was just changed. Every other session on your account has already been signed out.`,
     '',
     "If this was you, no action is needed. If you don't recognize this change, someone else may have access to your account — visit the forgot-password page to reset it and secure your account immediately.",
     '',
@@ -91,7 +98,7 @@ export function renderPasswordChangedTemplate(variables: PasswordChangedVariable
 <html>
   <body style="font-family: sans-serif; line-height: 1.5;">
     <p>Hi ${escapedFirstName},</p>
-    <p>Your ${escapedAppName} password was just changed. Every other session on your account has already been signed out — only the device you used to make this change is still logged in.</p>
+    <p>Your ${escapedAppName} password was just changed. Every other session on your account has already been signed out.</p>
     <p>If this was you, no action is needed. If you don't recognize this change, someone else may have access to your account — visit the forgot-password page to reset it and secure your account immediately.</p>
     <p>— The ${escapedAppName} team</p>
   </body>
