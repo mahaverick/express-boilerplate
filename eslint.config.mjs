@@ -120,6 +120,28 @@ export default tseslint.config(
       // Abbreviating only the identifiers and not the filenames (or vice
       // versa) would leave the class name and its file disagreeing with
       // each other.
+      // OFF, and this is the one disable here that is about the rule being
+      // WRONG for this codebase rather than about a naming clash.
+      //
+      // `prefer-ternary` wants a guard-clause ladder collapsed into a single
+      // ternary. Its autofix turned `canActorModifyTarget`
+      // (tenant.controller.ts) — the three-branch owner/admin/member
+      // authorization matrix — into one hundred-character nested ternary, and
+      // did the same to `canActorGrantRole`, leaving `... ? ... : false`.
+      // A permissions matrix is the last place to trade a readable ladder for
+      // density.
+      //
+      // It also contradicts a rule shipped in the SAME major: the ternaries
+      // its fixer produces immediately trip
+      // `unicorn/prefer-logical-operator-over-ternary`, so running `--fix`
+      // twice does not converge. Two rules from one plugin disagreeing about
+      // the same lines is the plugin's problem, not this repo's.
+      //
+      // Its siblings `prefer-early-return` and `prefer-combined-guards` are
+      // KEPT — those genuinely read better, and the sites they flagged were
+      // fixed rather than exempted.
+      'unicorn/prefer-ternary': 'off',
+
       'unicorn/name-replacements': [
         'error',
         { replacements: { env: false, db: false, repository: false } },

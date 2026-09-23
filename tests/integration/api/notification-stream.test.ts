@@ -345,10 +345,12 @@ describe('GET /api/v1/notifications/stream', () => {
     for (const connection of openConnections) connection.destroy()
     openConnections.length = 0
 
-    if (createdUserIds.length > 0) {
-      await sql`delete from users where id = any(${createdUserIds})`
-      createdUserIds.length = 0
+    if (createdUserIds.length === 0) {
+      return
     }
+
+    await sql`delete from users where id = any(${createdUserIds})`
+    createdUserIds.length = 0
   })
 
   /**
