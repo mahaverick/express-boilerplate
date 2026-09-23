@@ -63,21 +63,23 @@ interface NotificationStreamPayload {
  * custom request headers at all, so a query parameter is the one place a
  * token can travel for this specific request. Everything else mirrors
  * `requireAuth`'s steps: verify the signature via `verifyAccessToken`,
- * reject a denied session via `isSessionDenied` (same guard, same order),
- * then load and confirm the claimed user is still active. NOTE: this whole
- * function — including the denylist check — runs ONCE, at connect. The
- * only recurring check on an already-open connection is the heartbeat
- * below, and it checks the session denylist only — it does not re-read
- * `user.active` — so a user deactivated AFTER connecting keeps receiving
- * frames on that already-open stream until it closes for some other
- * reason.
+ * require a `sid` claim, reject a denied session via `isSessionDenied`,
+ * then load and confirm the claimed user is still active — except that,
+ * unlike `requireAuth`, there is no tolerance here for a token with no
+ * `sid`; see the guard below for why a connect-time rejection is cheap
+ * enough that this endpoint does not need one. NOTE: this whole function —
+ * including the denylist check — runs ONCE, at connect. The only recurring
+ * check on an already-open connection is the heartbeat below, and it
+ * checks the session denylist only — it does not re-read `user.active` —
+ * so a user deactivated AFTER connecting keeps receiving frames on that
+ * already-open stream until it closes for some other reason.
  * @param request - The incoming request, carrying the access token as `?token=`.
- * @returns The authenticated user's id and the session id its access token carries, when it carries one.
- * @throws {HttpError} 401, when the token is missing, invalid, expired, its session has been denied, or names no active user.
+ * @returns The authenticated user's id and the session id its access token carries.
+ * @throws {HttpError} 401, when the token is missing, invalid, expired, carries no `sid` claim, its session has been denied, or names no active user.
  */
 async function authenticateStreamRequest(
   request: Request
-): Promise<{ userId: string; sessionId: string | undefined }> {
+): Promise<{ userId: string; sessionId: string }> {
   const token = request.query.token
   if (typeof token !== 'string' || token === '') {
     throw new HttpError('Missing access token', 401)
@@ -91,10 +93,32 @@ async function authenticateStreamRequest(
     throw new HttpError('Invalid access token', 401)
   }
 
-  // Mirrors requireAuth's own guard (auth.middleware.ts) exactly: same
-  // message, same status, same code, and the same deliberate
-  // `payload.sid &&` tolerance for a token minted before `sid` existed.
-  if (verified.payload.sid && (await isSessionDenied(verified.payload.sid))) {
+  // Unlike requireAuth's tolerance for a token minted before `sid` existed
+  // (auth.middleware.ts), this endpoint has none: a sid-less token is
+  // refused outright, before isSessionDenied is even called, since there is
+  // nothing to deny. ACCESS_TOKEN_EXPIRED_CODE is carried here, the same
+  // code requireAuth uses for an expired or denied token, for what the
+  // credential MEANS ("stale, refresh and retry") rather than because the
+  // browser reads it — an EventSource that fails to connect exposes no
+  // response body or status code to the page at all, so nothing here
+  // parses `code` off this specific rejection. What actually recovers a
+  // sid-less token is the client's own error handling: `useNotificationStream`
+  // (react-boilerplate's use-notifications.ts) treats ANY failed connect
+  // as `onerror`, closes it, and reconnects through `ensureSession()`
+  // (session.ts) — the shared single-flight refresh — which the hook
+  // deliberately calls INSTEAD OF the SSE `retry:` directive's own
+  // built-in retry, because that built-in retry would re-request this same
+  // URL with this same dead token forever. So a sid-less token costs its
+  // holder exactly one failed connect and one automatic refresh, and the
+  // new token it comes back with carries `sid`.
+  if (!verified.payload.sid) {
+    throw new HttpError('Access token missing session', 401, ACCESS_TOKEN_EXPIRED_CODE)
+  }
+
+  // Mirrors requireAuth's own guard (auth.middleware.ts): same message,
+  // same status, same code. No `payload.sid &&` tolerance here — the guard
+  // above already guarantees a sid exists by this point.
+  if (await isSessionDenied(verified.payload.sid)) {
     throw new HttpError('Session ended', 401, ACCESS_TOKEN_EXPIRED_CODE)
   }
 
@@ -291,11 +315,12 @@ export async function streamNotifications(
     const heartbeat = setInterval(() => {
       if (response.writableEnded || response.destroyed) return
       void (async () => {
-        // The ONLY recurring check on a connection that may live 24 hours.
-        // authenticateStreamRequest (including its own denylist check) ran
-        // once, at connect; nothing else revisits it. This heartbeat is the
-        // one check that can close an ALREADY-OPEN stream at all.
-        if (sessionId && (await isSessionDenied(sessionId))) {
+        // The ONLY recurring check on an open connection.
+        // authenticateStreamRequest (including its own sid and denylist
+        // checks) ran once, at connect; nothing else revisits it — in
+        // particular, nothing here re-reads `user.active`. This heartbeat
+        // is the one check that can close an ALREADY-OPEN stream at all.
+        if (await isSessionDenied(sessionId)) {
           clearInterval(heartbeat)
           // Belt-and-braces: `request.on('close')` below also unsubscribes
           // this handler and would fire shortly after `response.end()`
