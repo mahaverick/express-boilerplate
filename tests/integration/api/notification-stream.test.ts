@@ -38,6 +38,7 @@ import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { emitNotification, listenerCount } from '@/services/notification-emitter.service'
+import { denySession } from '@/services/session-denylist.service'
 import { signAccessToken } from '@/utilities/token.utilities'
 import { withMutatedMethod } from '../../helpers/mutate'
 
@@ -710,4 +711,33 @@ describe('GET /api/v1/notifications/stream', () => {
     await waitUntil(() => listenerCount(userId) === 0, 2000)
     expect(listenerCount(userId)).toBe(0)
   }, 10_000)
+
+  // Pairs with the test above: that one proves a session denied AFTER
+  // connect closes an already-open stream (Task 5's heartbeat, the only
+  // thing that recurs on an open connection). This one proves a session
+  // denied BEFORE connect never gets to open a stream at all — a different
+  // code path (this task's check inside authenticateStreamRequest, at
+  // connect) that Task 5's heartbeat cannot reach, since it never runs
+  // until a stream is already open.
+  it('refuses to open a stream for an already-denied session', async () => {
+    const user = await userRepository.create({ email: uniqueEmail() })
+    createdUserIds.push(user.id)
+    const sessionId = randomUUID()
+    const token = signAccessToken(user, sessionId)
+
+    // denySession directly, not revokeAllForSession — this test is about
+    // authenticateStreamRequest's own denylist read, not about revocation
+    // writing that entry (already covered by user-token.repository.test.ts
+    // and the "closes an open stream" test above).
+    await denySession(sessionId)
+
+    const connection = openStream(`/api/v1/notifications/stream?token=${encodeURIComponent(token)}`)
+    const response = await connection.waitForResponse()
+
+    // A rejection thrown by authenticateStreamRequest happens before
+    // response.writeHead, so this is the ordinary JSON 401 envelope, not an
+    // event-stream that opens and then closes.
+    expect(response.statusCode).toBe(401)
+    expect(response.headers['content-type']).not.toContain('text/event-stream')
+  })
 })
