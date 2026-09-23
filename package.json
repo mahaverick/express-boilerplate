@@ -72,6 +72,7 @@
     "@commitlint/cz-commitlint": "^21.2.3",
     "@eslint/js": "^10.0.1",
     "@ianvs/prettier-plugin-sort-imports": "^4.7.1",
+    "@opentelemetry/context-async-hooks": "2.11.0",
     "@types/bcrypt": "^6.0.0",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",

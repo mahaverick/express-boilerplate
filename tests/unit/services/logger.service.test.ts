@@ -7,9 +7,17 @@
 // `process.stdout.write`, which is where both the production JSON stream and
 // the development pino-pretty stream write.
 import { Writable } from 'node:stream'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { context, trace, TraceFlags } from '@opentelemetry/api'
+import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { requestContextStore } from '@/middlewares/request-context.middleware'
-import { createPinoLogger, getCallerSource, logger } from '@/services/logger.service'
+import {
+  createPinoLogger,
+  getCallerSource,
+  logger,
+  pinoPrettyLoader,
+} from '@/services/logger.service'
+import { withMutatedMethod } from '../../helpers/mutate'
 
 /**
  * A real Writable that records each chunk as a trimmed string. A real stream
@@ -175,11 +183,56 @@ describe('createPinoLogger', () => {
         setImmediate(() => {
           const line = output.at(-1) ?? ''
           expect(line).toMatch(/info/i)
+          expect(line).toMatch(/\d{2}:\d{2}:\d{2}/)
           expect(line).toContain('[server.ts:23]')
           expect(line).toContain('boot complete')
           resolve()
         })
       }))
+  })
+
+  describe('pino-pretty unavailable (pruned production image, non-production NODE_ENV)', () => {
+    it('falls back to raw JSON output instead of throwing', async () => {
+      const { destination, output } = captureDestination()
+
+      await withMutatedMethod(
+        pinoPrettyLoader,
+        'load',
+        () => {
+          throw Object.assign(new Error("Cannot find module 'pino-pretty'"), {
+            code: 'MODULE_NOT_FOUND',
+          })
+        },
+        () =>
+          new Promise<void>((resolve) => {
+            const log = createPinoLogger({ level: 'info', isProduction: false, destination })
+
+            log.info({ source: 'test.ts:1' }, 'pruned image fallback')
+
+            setImmediate(() => {
+              const parsed = parseLastRecord(output)
+              expect(parsed.message).toBe('pruned image fallback')
+              expect(parsed.level).toBe('info')
+              resolve()
+            })
+          })
+      )
+    })
+
+    it('rethrows an error that is not MODULE_NOT_FOUND', async () => {
+      await expect(
+        withMutatedMethod(
+          pinoPrettyLoader,
+          'load',
+          () => {
+            throw new Error('some other failure')
+          },
+          () => {
+            createPinoLogger({ level: 'info', isProduction: false, destination: process.stdout })
+          }
+        )
+      ).rejects.toThrow('some other failure')
+    })
   })
 
   describe('level filtering', () => {
@@ -294,12 +347,26 @@ describe('logger singleton', () => {
 describe('trace-id correlation', () => {
   // OTEL is not active in this test run — .env.test (tests/helpers/setup-global.ts)
   // never sets OTEL_EXPORTER_OTLP_ENDPOINT, so src/observability/tracing.ts's
-  // SDK is never started and no global tracer provider is registered.
-  // trace.getActiveSpan() (requestContextFields, logger.service.ts) is then
-  // guaranteed to return undefined regardless of call site — there is no
-  // "active span" to be outside of. Exercising that with OTEL genuinely
-  // active would mean starting a real NodeSDK, which is the integration
-  // concern tracing.test.ts's own header comment defers.
+  // own NodeSDK is never started for this suite. But `trace.getActiveSpan()`
+  // (requestContextFields, logger.service.ts) reads OTel's GLOBAL context
+  // manager, not anything tracing.ts owns — so this describe block registers
+  // its own, real `AsyncLocalStorageContextManager` (the same context-manager
+  // package tracing.ts's NodeSDK would use) to exercise both branches of the
+  // mixin without starting a full SDK: `context.with(trace.setSpan(...))`
+  // makes a span active for the span-present test below, and simply not
+  // entering that context (as here) leaves none active, so
+  // `trace.getActiveSpan()` returns undefined for a reason specific to this
+  // call site, not because no context manager exists at all.
+  beforeAll(() => {
+    expect(context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable())).toBe(
+      true
+    )
+  })
+
+  afterAll(() => {
+    context.disable()
+  })
+
   it('omits traceId/spanId from log output when no span is active', () =>
     new Promise<void>((resolve) => {
       const { destination, output } = captureDestination()
@@ -311,6 +378,33 @@ describe('trace-id correlation', () => {
         const parsed = parseLastRecord(output)
         expect(parsed.traceId).toBeUndefined()
         expect(parsed.spanId).toBeUndefined()
+        resolve()
+      })
+    }))
+
+  it('includes traceId/spanId matching the active span when one is active', () =>
+    new Promise<void>((resolve) => {
+      const { destination, output } = captureDestination()
+      const log = createPinoLogger({ level: 'info', isProduction: true, destination })
+
+      // trace.wrapSpanContext gives a real, minimal Span backed by exactly
+      // the ids chosen here, so the assertion below is exact-string equality
+      // against a known value — not merely "matches the shape of an id".
+      const spanContext = {
+        traceId: '0af7651916cd43dd8448eb211c80319c',
+        spanId: 'b7ad6b7169203331',
+        traceFlags: TraceFlags.SAMPLED,
+      }
+      const span = trace.wrapSpanContext(spanContext)
+
+      context.with(trace.setSpan(context.active(), span), () => {
+        log.info({ source: 'test.ts:1' }, 'inside active span')
+      })
+
+      setImmediate(() => {
+        const parsed = parseLastRecord(output)
+        expect(parsed.traceId).toBe(spanContext.traceId)
+        expect(parsed.spanId).toBe(spanContext.spanId)
         resolve()
       })
     }))

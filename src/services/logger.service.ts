@@ -297,16 +297,37 @@ export function createSlackDestination(options: { webhookUrl: string }): Destina
 const requireCjs = createRequire(import.meta.url)
 
 /**
- * Human-readable development output. pino-pretty is a devDependency: this is
- * only reached when isProduction is false, and it is loaded with requireCjs()
- * here — not a top-level import — so the pruned production image never
- * resolves it.
+ * Loads pino-pretty via requireCjs(), indirected through this mutable
+ * object rather than called directly, so tests can swap `load` with
+ * `tests/helpers/mutate.ts`'s `withMutatedMethod` to force the
+ * MODULE_NOT_FOUND path in {@link createPrettyStream} below without
+ * touching the real module resolution machinery.
+ */
+export const pinoPrettyLoader = {
+  load: (): { build: (options: PrettyOptions) => DestinationStream } =>
+    requireCjs('pino-pretty') as { build: (options: PrettyOptions) => DestinationStream },
+}
+
+/**
+ * Human-readable development output. pino-pretty is a devDependency, only
+ * reached when isProduction is false — but the production image is built
+ * with NODE_ENV baked into its start command, not into the image itself, so
+ * a pruned image can still be launched with NODE_ENV=development/test (e.g.
+ * a one-off debug run). Dev deps are pruned from that image, so the require
+ * below throws MODULE_NOT_FOUND in that case; fall back to the raw JSON
+ * destination instead of crashing the first log call.
  * @param destination - Where the pretty text goes.
  * @returns A pino destination.
  */
 function createPrettyStream(destination: DestinationStream): DestinationStream {
-  const { build } = requireCjs('pino-pretty') as {
-    build: (options: PrettyOptions) => DestinationStream
+  let build: (options: PrettyOptions) => DestinationStream
+  try {
+    ;({ build } = pinoPrettyLoader.load())
+  } catch (error: unknown) {
+    if (error instanceof Error && 'code' in error && error.code === 'MODULE_NOT_FOUND') {
+      return destination
+    }
+    throw error
   }
   return build({
     destination,
