@@ -330,6 +330,130 @@ describe('UserTokenRepository', () => {
     expect(await isSessionDenied(otherUsersSessionId)).toBe(false)
   })
 
+  describe('revokeAllForUserExceptSession', () => {
+    it('revokes every other session but leaves the spared one untouched', async () => {
+      const userId = await createUser()
+      const sparedSessionId = randomUUID()
+      const otherSessionId = randomUUID()
+
+      const spared = await userTokenRepository.create({
+        userId,
+        purpose: 'refresh',
+        sessionId: sparedSessionId,
+        tokenHash: uniqueHash(),
+        expiresAt: new Date(Date.now() + 60_000),
+      })
+      const other = await userTokenRepository.create({
+        userId,
+        purpose: 'refresh',
+        sessionId: otherSessionId,
+        tokenHash: uniqueHash(),
+        expiresAt: new Date(Date.now() + 60_000),
+      })
+
+      await userTokenRepository.revokeAllForUserExceptSession(userId, sparedSessionId)
+
+      const sparedRow = await userTokenRepository.findByHash(spared.tokenHash)
+      const otherRow = await userTokenRepository.findByHash(other.tokenHash)
+      expect(sparedRow?.revokedAt).toBeNull()
+      expect(otherRow?.revokedAt).not.toBeNull()
+    })
+
+    // THE TRAP THIS METHOD EXISTS TO CLOSE: a row with no sessionId at all
+    // (password_reset/email_verification — sessionId is only ever set on a
+    // 'refresh' row, user-token.model.ts) must still be revoked, because it
+    // does not belong to the spared session either. A predicate written
+    // with `session_id != $2` would evaluate to NULL — not true — for this
+    // exact row, silently leaving it live. If this test ever goes green for
+    // the wrong reason, it is because someone "simplified" the repository's
+    // `IS DISTINCT FROM` back to `!=`.
+    it('revokes a row with no sessionId at all — the IS DISTINCT FROM case, not != ', async () => {
+      const userId = await createUser()
+      const sparedSessionId = randomUUID()
+
+      await userTokenRepository.create({
+        userId,
+        purpose: 'refresh',
+        sessionId: sparedSessionId,
+        tokenHash: uniqueHash(),
+        expiresAt: new Date(Date.now() + 60_000),
+      })
+      const noSessionToken = await userTokenRepository.create({
+        userId,
+        purpose: 'password_reset',
+        tokenHash: uniqueHash(),
+        expiresAt: new Date(Date.now() + 60_000),
+      })
+
+      await userTokenRepository.revokeAllForUserExceptSession(userId, sparedSessionId)
+
+      const row = await userTokenRepository.findByHash(noSessionToken.tokenHash)
+      expect(row?.revokedAt).not.toBeNull()
+    })
+
+    it('denies every revoked session except the spared one, and never another user’s', async () => {
+      const userId = await createUser()
+      const otherUserId = await createUser()
+      const sparedSessionId = randomUUID()
+      const revokedSessionId = randomUUID()
+      const otherUsersSessionId = randomUUID()
+
+      await userTokenRepository.create({
+        userId,
+        purpose: 'refresh',
+        sessionId: sparedSessionId,
+        tokenHash: uniqueHash(),
+        expiresAt: new Date(Date.now() + 60_000),
+      })
+      await userTokenRepository.create({
+        userId,
+        purpose: 'refresh',
+        sessionId: revokedSessionId,
+        tokenHash: uniqueHash(),
+        expiresAt: new Date(Date.now() + 60_000),
+      })
+      await userTokenRepository.create({
+        userId: otherUserId,
+        purpose: 'refresh',
+        sessionId: otherUsersSessionId,
+        tokenHash: uniqueHash(),
+        expiresAt: new Date(Date.now() + 60_000),
+      })
+
+      await userTokenRepository.revokeAllForUserExceptSession(userId, sparedSessionId)
+
+      expect(await isSessionDenied(sparedSessionId)).toBe(false)
+      expect(await isSessionDenied(revokedSessionId)).toBe(true)
+      expect(await isSessionDenied(otherUsersSessionId)).toBe(false)
+    })
+
+    it('does not touch another user’s rows, even one sharing no session with the spared id', async () => {
+      const userId = await createUser()
+      const otherUserId = await createUser()
+      const sparedSessionId = randomUUID()
+
+      await userTokenRepository.create({
+        userId,
+        purpose: 'refresh',
+        sessionId: sparedSessionId,
+        tokenHash: uniqueHash(),
+        expiresAt: new Date(Date.now() + 60_000),
+      })
+      const otherUsersToken = await userTokenRepository.create({
+        userId: otherUserId,
+        purpose: 'refresh',
+        sessionId: randomUUID(),
+        tokenHash: uniqueHash(),
+        expiresAt: new Date(Date.now() + 60_000),
+      })
+
+      await userTokenRepository.revokeAllForUserExceptSession(userId, sparedSessionId)
+
+      const otherUsersRow = await userTokenRepository.findByHash(otherUsersToken.tokenHash)
+      expect(otherUsersRow?.revokedAt).toBeNull()
+    })
+  })
+
   // `softDelete`/`markDeleted` (BaseRepository, base.repository.ts) — this
   // file's other tests never call it, since real token lifecycle uses
   // `claimOnce`/`revokeAllFor*` (a `revokedAt` column) rather than

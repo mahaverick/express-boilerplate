@@ -181,6 +181,59 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
   }
 
   /**
+   * Revoke every still-live token belonging to a user EXCEPT the ones
+   * sharing one given session id, and deny each revoked session's access
+   * tokens (best-effort — see `denySession`). Used by password change:
+   * every OTHER session must end at once, while the session presenting the
+   * request that triggered the change keeps working uninterrupted.
+   *
+   * Modelled directly on `revokeAllForUser` above, as it stands today: same
+   * `RETURNING session_id`, same null-filtering `!== null` type guard, same
+   * de-duplicating `Set`, same `Promise.all` denial. The one addition is the
+   * spared-session predicate, and it MUST read `session_id IS DISTINCT FROM
+   * $2`, not `session_id != $2`. SQL's `!=` evaluates to NULL — not true —
+   * for a row whose `session_id` IS NULL, and NULL is not true, so a plain
+   * `!=` would silently exclude every non-refresh row (`password_reset`,
+   * `email_verification` — `sessionId` is only ever set on a `'refresh'`
+   * row, user-token.model.ts) from being revoked at all: those rows would
+   * survive a password change, which is exactly the gap `revokeAllForUser`
+   * already closes today for a full revocation and this method must not
+   * reopen for a partial one. `IS DISTINCT FROM` treats NULL as an ordinary
+   * comparable value — a NULL `session_id` IS DISTINCT FROM the (never-null)
+   * spared id, so it evaluates true and that row IS revoked, matching
+   * `revokeAllForUser`'s own "every purpose, not just refresh" behaviour for
+   * everything except the one session this call is told to spare. DO NOT
+   * "simplify" this back to `!=`; that is precisely the silent regression
+   * this comment exists to prevent.
+   *
+   * Same known gap as `revokeAllForUser`, not fixed here either: a session
+   * mid-rotation when this runs — the old refresh row already claimed by
+   * `rotateRefreshToken`, the new one not yet written — survives on both the
+   * revocation and denial side.
+   * @param userId - The user whose tokens should all be revoked, except one session's.
+   * @param sessionId - The one session id to spare; every token sharing it is left untouched.
+   * @returns Resolves once every matching row is revoked and every revoked session's access tokens are denied, best-effort.
+   */
+  async revokeAllForUserExceptSession(userId: string, sessionId: string): Promise<void> {
+    const revoked = await db
+      .update(userTokenModel)
+      .set(this.touched({ revokedAt: sql`now()` }))
+      .where(
+        this.scope(
+          sql`${userTokenModel.userId} = ${userId} and ${userTokenModel.sessionId} is distinct from ${sessionId} and ${userTokenModel.revokedAt} is null`
+        )
+      )
+      .returning({ sessionId: userTokenModel.sessionId })
+
+    const sessionIds = new Set(
+      revoked
+        .map((row) => row.sessionId)
+        .filter((revokedSessionId): revokedSessionId is string => revokedSessionId !== null)
+    )
+    await Promise.all([...sessionIds].map((revokedSessionId) => denySession(revokedSessionId)))
+  }
+
+  /**
    * Revoke every still-live token a user holds FOR ONE PURPOSE. The
    * purpose predicate is the whole point: `revokeAllForUser` above matches
    * on `userId` alone, so using it to clear stale verification links would

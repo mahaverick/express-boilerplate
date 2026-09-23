@@ -52,6 +52,7 @@ import {
   issueRefreshToken,
   issueToken,
   revokeAllSessions,
+  revokeAllSessionsExceptCurrent,
   revokeRefreshToken,
   rotateRefreshToken,
   signAccessToken,
@@ -62,6 +63,7 @@ import {
   sendVerificationMail,
 } from '@/utilities/verification-mail.utilities'
 import {
+  changePasswordSchema,
   forgotPasswordSchema,
   loginSchema,
   parseBody,
@@ -711,6 +713,127 @@ export async function resetPassword(
 
     // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data", not undefined (which JSON.stringify omits entirely)
     successResponse(response, null, 'Password has been reset.')
+  } catch (error) {
+    next(error)
+  }
+}
+
+const FEDERATED_ONLY_MESSAGE =
+  'This account signs in with Google and has no password. Use forgot-password to set one.'
+
+/**
+ * The authenticated principal's id, guarding against a route reaching this
+ * handler without `requireAuth` ahead of it. Same pattern, and the same
+ * reasoning, as `authenticatedUserId` in profile.controller.ts and
+ * notification.controller.ts — a private copy per controller file rather
+ * than one shared export, since `Request.user` (express.d.ts) is typed
+ * `User | undefined` regardless of which router actually gates a given
+ * handler with `requireAuth`: today `changePassword` can only reach this
+ * with `request.user` unset if auth.routes.ts's own mount is wired wrong
+ * (it attaches `requireAuth` ahead of this handler), but a defensive 401
+ * costs nothing and turns a future routing mistake into an auth failure
+ * instead of `undefined` flowing into `userRepository.findById`.
+ * @param request - The incoming request.
+ * @returns The authenticated user's id.
+ * @throws {HttpError} 401, when `request.user` was never populated.
+ */
+function authenticatedUserId(request: Request): string {
+  if (!request.user) {
+    throw new HttpError('Authentication required', 401)
+  }
+  return request.user.id
+}
+
+/**
+ * Change the authenticated caller's own password.
+ *
+ * Sits on the auth router, per-route behind `requireAuth` (auth.routes.ts)
+ * — this router is otherwise public, unlike profile.routes.ts, which is
+ * gated router-wide. `request.user` is `AuthenticatedUser`
+ * (auth.middleware.ts), the narrow client-visible projection with no
+ * `passwordHash`; the real row is loaded again here because this handler
+ * needs the one field that projection deliberately excludes.
+ *
+ * Order, and why each step comes where it does:
+ *
+ *   1. Federated-only guard. A Google-only account's `passwordHash` is
+ *      `null` (user.model.ts) — CLAUDE.md's OAuth section already documents
+ *      that as "federated-only, use forgot-password to set one". Checked
+ *      BEFORE `isPasswordValid` even runs: that function never throws for a
+ *      missing hash (password.utilities.ts), it just reports no match —
+ *      which would tell this caller "wrong password" for an account that
+ *      has no password to be wrong about at all.
+ *   2. Verify the current password. Unlike `login`, a wrong answer here is
+ *      not an enumeration risk: the caller is already authenticated as
+ *      themselves (`requireAuth` loaded and validated the account), so a
+ *      distinguishable 400 leaks nothing they do not already know.
+ *   3. Reject a no-op. A second `isPasswordValid` call — against the NEW
+ *      password, not a plaintext `===` — so a caller "changing" their
+ *      password to its current value cannot silently spend everyone else's
+ *      session for nothing.
+ *   4. Hash and store.
+ *   5. Revoke every OTHER session — see the branch's own comment.
+ *   6. Respond, matching `resetPassword`'s envelope shape exactly.
+ *
+ * Does NOT yet enqueue a "your password was changed" notification — that is
+ * the separate, additive half of this feature (notification.constants.ts,
+ * password-changed.template.ts) and lands in its own commit.
+ * @param request - The incoming request, carrying `{ currentPassword, newPassword }`, authenticated by `requireAuth`.
+ * @param response - The response.
+ * @param next - Forwards a rejection to the terminal error handler.
+ */
+export async function changePassword(
+  request: Request,
+  response: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const input = parseBody(changePasswordSchema, request.body)
+
+    // request.user is narrowed to AuthenticatedUser (auth.middleware.ts) —
+    // no passwordHash. Re-load the real row for the one field that
+    // projection deliberately never carries.
+    const user = await userRepository.findById(authenticatedUserId(request))
+    if (!user) {
+      throw new HttpError('Account no longer exists or is inactive', 401)
+    }
+
+    if (!user.passwordHash) {
+      throw new HttpError(FEDERATED_ONLY_MESSAGE, 400)
+    }
+
+    const isCurrentPasswordCorrect = await isPasswordValid(input.currentPassword, user.passwordHash)
+    if (!isCurrentPasswordCorrect) {
+      throw new HttpError('Current password is incorrect.', 400)
+    }
+
+    const isSameAsCurrent = await isPasswordValid(input.newPassword, user.passwordHash)
+    if (isSameAsCurrent) {
+      throw new HttpError('New password must be different from the current password.', 400)
+    }
+
+    const passwordHash = await hashPassword(input.newPassword)
+    await userRepository.update(user.id, { passwordHash })
+
+    // `request.sessionId` (express.d.ts) is `string | undefined` — a token
+    // minted before the `sid` claim existed carries none (requireAuth's own
+    // `payload.sid &&` tolerance). When there IS a session to spare, spare
+    // exactly it — every other session ends, this request's own keeps
+    // working, which is the one property this endpoint exists to prove
+    // (see tests/integration/api/change-password.test.ts's two-real-sessions
+    // test). When there is none, there is nothing to distinguish this
+    // caller's token from any other — a sid-less token cannot be told apart
+    // from a stolen one presented from elsewhere — so it fails SAFE: revoke
+    // everything, the caller included, exactly as a password reset already
+    // does unconditionally.
+    if (request.sessionId) {
+      await revokeAllSessionsExceptCurrent(user.id, request.sessionId)
+    } else {
+      await revokeAllSessions(user.id)
+    }
+
+    // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data", not undefined (which JSON.stringify omits entirely)
+    successResponse(response, null, 'Password has been changed.')
   } catch (error) {
     next(error)
   }

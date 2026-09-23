@@ -1,11 +1,11 @@
 // src/middlewares/rate-limit.middleware.ts
 //
-// Fourteen limiters: `createRegisterRateLimiter`, `createLoginRateLimiter`,
+// Fifteen limiters: `createRegisterRateLimiter`, `createLoginRateLimiter`,
 // `createRefreshRateLimiter`, `createLogoutRateLimiter`,
 // `createVerifyEmailRateLimiter`, `createResetPasswordRateLimiter`,
 // `createGoogleOAuthRateLimiter`, `createGoogleOAuthCallbackRateLimiter`,
-// `createCreateTenantRateLimiter`, `createAddTenantMemberRateLimiter`, and
-// the two pairs for resend-verification
+// `createCreateTenantRateLimiter`, `createAddTenantMemberRateLimiter`,
+// `createChangePasswordRateLimiter`, and the two pairs for resend-verification
 // and forgot-password — `createResendVerificationIpRateLimiter` /
 // `createResendVerificationEmailRateLimiter`, and
 // `createForgotPasswordIpRateLimiter` / `createForgotPasswordEmailRateLimiter`.
@@ -601,10 +601,12 @@ export function createGoogleOAuthCallbackRateLimiter(
 }
 
 // CREATE-TENANT and ADD-TENANT-MEMBER are keyed on the CALLER'S id
-// (`request.user.id`), not IP — the one pair in this file keyed that way.
-// Both sit entirely behind `requireAuth` (tenant.routes.ts mounts it
-// router-wide), so a stable, unspoofable identity is already available by
-// the time either limiter runs, and IP would be the wrong choice for the
+// (`request.user.id`), not IP — two of the three limiters in this file
+// keyed that way; `createChangePasswordRateLimiter`, further down, is the
+// third (see its own comment for why ITS threat differs from these two's).
+// Both of these sit entirely behind `requireAuth` (tenant.routes.ts mounts
+// it router-wide), so a stable, unspoofable identity is already available
+// by the time either limiter runs, and IP would be the wrong choice for the
 // same reason it is the right one for register/refresh/logout: those are
 // UNAUTHENTICATED, so IP is the only identity a caller cannot simply swap
 // out; these two are authenticated, so keying on IP would let one
@@ -626,12 +628,14 @@ const ADD_TENANT_MEMBER_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000
 const ADD_TENANT_MEMBER_RATE_LIMIT_MAX_ATTEMPTS = 30
 
 /**
- * The key `createCreateTenantRateLimiter`/`createAddTenantMemberRateLimiter`
- * count attempts by: the authenticated caller's id.
+ * The key `createCreateTenantRateLimiter`/`createAddTenantMemberRateLimiter`/
+ * `createChangePasswordRateLimiter` count attempts by: the authenticated
+ * caller's id.
  *
  * `request.user?.id`, not `request.user!.id` — note what the `??
- * 'anonymous'` fallback is (and is not) for: both limiters are only ever
- * mounted after `requireAuth` (tenant.routes.ts), so `request.user` is
+ * 'anonymous'` fallback is (and is not) for: all three limiters are only
+ * ever mounted after `requireAuth` (tenant.routes.ts router-wide;
+ * auth.routes.ts per-route for change-password), so `request.user` is
  * always set on every real request this key generator ever sees. The
  * fallback exists purely so a future misordered mount fails SAFE — every
  * caller with no `request.user` collapses onto one shared `'anonymous'`
@@ -685,6 +689,56 @@ export function createAddTenantMemberRateLimiter(
     standardHeaders: true,
     legacyHeaders: false,
     store: new SharedRateLimitStore('rl:add-tenant-member:'),
+    keyGenerator: authenticatedUserRateLimitKey,
+    handler: sendRateLimitedResponse,
+    ...overrides,
+  })
+}
+
+// CHANGE-PASSWORD lives on the auth router (auth.routes.ts), but is grouped
+// down here with CREATE-TENANT/ADD-TENANT-MEMBER, and reuses their
+// `authenticatedUserRateLimitKey`, rather than sitting beside
+// `createResetPasswordRateLimiter` above — because it shares their axis,
+// not reset-password's. Every OTHER limiter on the auth router is keyed on
+// IP (or IP-and-email) because it protects an UNAUTHENTICATED endpoint,
+// where IP is the only identity a caller cannot simply swap out. This one
+// runs behind `requireAuth` (attached per-route, ahead of this limiter, in
+// auth.routes.ts — the caller's identity must already be known before the
+// key generator can read it), so IP would be the wrong axis for the
+// identical reason it is wrong for the tenant pair above: a shared NAT'd
+// office could throttle every other user behind it out of changing their
+// own password, and an attacker working through many source IPs but ONE
+// stolen access token would not be bounded at all.
+//
+// The threat this one actually bounds is also different from the tenant
+// pair's own "volume protection" framing: step 2 of `changePassword`
+// (auth.controller.ts) compares a caller-supplied `currentPassword` against
+// the stored hash — a password oracle an attacker holding a stolen (but
+// still live) access token could otherwise brute-force with unlimited
+// attempts. Keying on the user id, not IP, is what makes the budget follow
+// the account being attacked rather than the attacker's own address.
+const CHANGE_PASSWORD_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000
+const CHANGE_PASSWORD_RATE_LIMIT_MAX_ATTEMPTS = 10
+
+/**
+ * Build a change-password rate limiter: `limit` attempts per `windowMs`,
+ * keyed on the authenticated caller's id via `authenticatedUserRateLimitKey`
+ * — see the comment directly above this constant for why this endpoint is
+ * keyed the same way as the tenant pair rather than by IP the way every
+ * other limiter on the auth router is. A factory, not a module-scope
+ * constant — see this file's header comment.
+ * @param overrides - Options to override, e.g. a small `limit`/`windowMs` for a test.
+ * @returns Express middleware enforcing the limit.
+ */
+export function createChangePasswordRateLimiter(
+  overrides: Partial<Options> = {}
+): RateLimitRequestHandler {
+  return rateLimit({
+    windowMs: CHANGE_PASSWORD_RATE_LIMIT_WINDOW_MS,
+    limit: CHANGE_PASSWORD_RATE_LIMIT_MAX_ATTEMPTS,
+    standardHeaders: true,
+    legacyHeaders: false,
+    store: new SharedRateLimitStore('rl:change-password:'),
     keyGenerator: authenticatedUserRateLimitKey,
     handler: sendRateLimitedResponse,
     ...overrides,

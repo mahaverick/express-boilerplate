@@ -433,6 +433,7 @@ describe('store prefixes', () => {
       'rl:google-oauth-callback:',
       'rl:create-tenant:',
       'rl:add-tenant-member:',
+      'rl:change-password:',
     ])
   })
 

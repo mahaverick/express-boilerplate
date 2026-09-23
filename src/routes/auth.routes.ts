@@ -1,9 +1,9 @@
 // src/routes/auth.routes.ts
 //
 // Registration, login, refresh, logout, verify-email,
-// resend-verification, forgot-password, and reset-password — all eight
-// share the one `/api/v1/auth` mount point wired in index.routes.ts, so
-// they live in this one router.
+// resend-verification, forgot-password, reset-password, and
+// change-password — all nine share the one `/api/v1/auth` mount point
+// wired in index.routes.ts, so they live in this one router.
 //
 // Built and returned by a function, not registered as a top-level side
 // effect on an exported const: the latter is exactly what
@@ -14,9 +14,10 @@
 // same reason — see rate-limit.middleware.ts's header comment.
 //
 // EVERY route on this router carries a limiter, each with its own store
-// prefix. That is the standing rule for this file, not eight independent
+// prefix. That is the standing rule for this file, not nine independent
 // decisions: an unlimited auth route is either an enumeration oracle, a
-// bcrypt/email amplifier, or both. rate-limit.middleware.ts's header
+// bcrypt/email amplifier, a password oracle, or some combination.
+// rate-limit.middleware.ts's header
 // comment holds the per-endpoint reasoning. verify-email and reset-password
 // each carry their own single `rl:verify-email:` / `rl:reset-password:`
 // prefix; resend-verification and forgot-password each carry TWO limiters
@@ -33,6 +34,7 @@ import {
   isGoogleOAuthEnabled,
 } from '@/configs/passport.config'
 import {
+  changePassword,
   forgotPassword,
   handleGoogleCallback,
   login,
@@ -42,8 +44,10 @@ import {
   resetPassword,
 } from '@/controllers/auth.controller'
 import { resendVerification, verifyEmail } from '@/controllers/verification.controller'
+import { requireAuth } from '@/middlewares/auth.middleware'
 import { requireJsonContentType } from '@/middlewares/content-type.middleware'
 import {
+  createChangePasswordRateLimiter,
   createForgotPasswordEmailRateLimiter,
   createForgotPasswordIpRateLimiter,
   createGoogleOAuthCallbackRateLimiter,
@@ -99,6 +103,19 @@ export function createAuthRouter(): Router {
     forgotPassword
   )
   router.post('/reset-password', createResetPasswordRateLimiter(), resetPassword)
+  // The one route on this router that is NOT public: a sibling of
+  // forgot-password/reset-password (same "change what the account signs in
+  // with" family), not of /profile (name/avatar) — so it lives here, not on
+  // profile.routes.ts. This router has no router-wide `requireAuth` the way
+  // profile.routes.ts does, so it is attached PER-ROUTE, here, ahead of the
+  // rate limiter — deliberately in that order: `createChangePasswordRateLimiter`
+  // keys on `request.user.id` (rate-limit.middleware.ts's own comment on
+  // that limiter), which does not exist until `requireAuth` has populated
+  // it. Every other limiter on this router runs first, ahead of its
+  // handler, because every other route is unauthenticated; this is the one
+  // exception, for the identical reason its limiter is keyed on the user
+  // rather than IP.
+  router.post('/change-password', requireAuth, createChangePasswordRateLimiter(), changePassword)
 
   // Google OAuth — only mounted when GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET
   // are configured (isGoogleOAuthEnabled(), passport.config.ts); an

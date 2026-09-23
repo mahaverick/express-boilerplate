@@ -1,0 +1,283 @@
+// tests/integration/api/change-password.test.ts
+//
+// Integration tests for POST /api/v1/auth/change-password, against the real
+// per-worker Postgres database and the real compose Redis — same
+// conventions as tests/integration/api/forgot-password.test.ts (mail/worker
+// setup, added in this file once the paired `password_changed` notification
+// lands in its own commit) and tests/integration/api/auth.test.ts
+// (login/token mechanics).
+//
+// Most tests here sign a bearer token directly with `signAccessToken`
+// (tests/integration/api/profile.test.ts's own approach) rather than going
+// through POST /auth/login — they are about what happens AFTER
+// authentication, not about login/session mechanics. The ONE exception is
+// the "revokes every other session" test below, which MUST log in twice
+// through the real HTTP endpoint: `revokeAllForUserExceptSession`'s denial
+// only has an existing `user_tokens` row to act on for a session that a
+// real login actually created. A fabricated `randomUUID()` session id has
+// no such row, is never denied by anything, and would make that assertion
+// pass whether or not the endpoint under test does anything at all — the
+// exact vacuous-pass trap that has bitten this repo's session-revocation
+// work before.
+import { randomUUID } from 'node:crypto'
+import request from 'supertest'
+import { afterEach, describe, expect, it } from 'vitest'
+import { createApp } from '@/app'
+import type { User } from '@/database/models/user.model'
+import { UserRepository } from '@/repositories/user.repository'
+import { sql } from '@/services/database.service'
+import { hashPassword } from '@/utilities/password.utilities'
+import { signAccessToken } from '@/utilities/token.utilities'
+
+const app = createApp()
+const userRepository = new UserRepository()
+
+const CURRENT_PASSWORD = 'correct horse battery staple'
+const NEW_PASSWORD = 'a brand new secret passphrase'
+
+/**
+ * A disposable email, unique to one test run — avoids colliding with rows
+ * any other test in this worker's shared database, or the shared Redis
+ * rate-limit counters, may be holding onto.
+ * @returns An email guaranteed unique to this call.
+ */
+function uniqueEmail(): string {
+  return `change-password-${randomUUID()}@example.test`
+}
+
+/**
+ * The envelope every controller response is wrapped in
+ * (response.utilities.ts), narrowed to the fields these tests read.
+ */
+interface ApiEnvelope<TData> {
+  success: boolean
+  data?: TData
+  errors?: Record<string, string[]>
+}
+
+/**
+ * Cast a supertest response's body to a known envelope shape.
+ * @param response - The supertest response.
+ * @returns The response body, typed.
+ */
+function envelopeOf<TData>(response: request.Response): ApiEnvelope<TData> {
+  return response.body as ApiEnvelope<TData>
+}
+
+const createdIds: string[] = []
+
+afterEach(async () => {
+  if (createdIds.length === 0) return
+  await sql`delete from users where id = any(${createdIds})`
+  createdIds.length = 0
+})
+
+/**
+ * Create a disposable, already-verified user with a real, hashed password,
+ * and sign an access token for it directly — see this file's header
+ * comment for why most tests here do not need a real login to exercise
+ * `POST /auth/change-password` itself.
+ * @param email - The address to create the user with. Defaults to a fresh unique address.
+ * @returns The created (and re-read) user row and a valid bearer token for it.
+ */
+async function createUserWithPassword(
+  email: string = uniqueEmail()
+): Promise<{ user: User; token: string }> {
+  const created = await userRepository.create({
+    email,
+    passwordHash: await hashPassword(CURRENT_PASSWORD),
+  })
+  createdIds.push(created.id)
+  await sql`update users set email_verified_at = now() where id = ${created.id}`
+  const user = await userRepository.findById(created.id)
+  if (!user) throw new Error(`createUserWithPassword: user vanished for ${email}`)
+  return { user, token: signAccessToken(user, randomUUID()) }
+}
+
+/**
+ * Create a disposable, already-verified, FEDERATED-ONLY user — no
+ * `passwordHash` at all, the Google-only shape CLAUDE.md's OAuth section
+ * documents — and sign an access token for it directly.
+ * @returns The created (and re-read) user row and a valid bearer token for it.
+ */
+async function createFederatedUser(): Promise<{ user: User; token: string }> {
+  const email = uniqueEmail()
+  const created = await userRepository.create({ email })
+  createdIds.push(created.id)
+  await sql`update users set email_verified_at = now() where id = ${created.id}`
+  const user = await userRepository.findById(created.id)
+  if (!user) throw new Error(`createFederatedUser: user vanished for ${email}`)
+  return { user, token: signAccessToken(user, randomUUID()) }
+}
+
+/**
+ * POST to /api/v1/auth/change-password with a bearer token.
+ * @param token - The caller's access token.
+ * @param currentPassword - The submitted current password.
+ * @param newPassword - The submitted new password.
+ * @returns The supertest response.
+ */
+async function changePasswordRequest(
+  token: string,
+  currentPassword: string,
+  newPassword: string
+): Promise<request.Response> {
+  return request(app)
+    .post('/api/v1/auth/change-password')
+    .set('Authorization', `Bearer ${token}`)
+    .send({ currentPassword, newPassword })
+}
+
+/**
+ * Log in through the real HTTP endpoint.
+ * @param email - The email to log in with.
+ * @param password - The password to log in with.
+ * @returns The supertest response.
+ */
+async function login(email: string, password: string): Promise<request.Response> {
+  return request(app).post('/api/v1/auth/login').send({ email, password })
+}
+
+/**
+ * GET /api/v1/profile as a probe for whether a bearer token still works —
+ * the same technique tests/integration/api/auth.test.ts's own
+ * reset-password revocation test uses.
+ * @param token - The access token to probe with.
+ * @returns The supertest response.
+ */
+async function probe(token: string): Promise<request.Response> {
+  return request(app).get('/api/v1/profile').set('Authorization', `Bearer ${token}`)
+}
+
+describe('POST /api/v1/auth/change-password', () => {
+  it('changes the password and returns 200', async () => {
+    const { token } = await createUserWithPassword()
+
+    const response = await changePasswordRequest(token, CURRENT_PASSWORD, NEW_PASSWORD)
+
+    expect(response.status).toBe(200)
+    expect(response.body).toEqual({
+      success: true,
+      message: 'Password has been changed.',
+      statusCode: 200,
+      // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data", not undefined (which JSON.stringify omits entirely)
+      data: null,
+    })
+  })
+
+  it('the old password no longer logs in; the new one does', async () => {
+    const email = uniqueEmail()
+    const { token } = await createUserWithPassword(email)
+
+    const changeResponse = await changePasswordRequest(token, CURRENT_PASSWORD, NEW_PASSWORD)
+    expect(changeResponse.status).toBe(200)
+
+    const oldLogin = await login(email, CURRENT_PASSWORD)
+    expect(oldLogin.status).toBe(401)
+
+    const newLogin = await login(email, NEW_PASSWORD)
+    expect(newLogin.status).toBe(200)
+  })
+
+  // THE ASSERTION THAT PROVES THE DESIGN — see this file's header comment
+  // for why both tokens below must come from real logins, not a fabricated
+  // session id.
+  it('revokes every other session, but leaves the session that made the change working', async () => {
+    const email = uniqueEmail()
+    await createUserWithPassword(email)
+
+    const loginA = await login(email, CURRENT_PASSWORD)
+    const loginB = await login(email, CURRENT_PASSWORD)
+    const tokenA = envelopeOf<{ accessToken: string }>(loginA).data?.accessToken
+    const tokenB = envelopeOf<{ accessToken: string }>(loginB).data?.accessToken
+    expect(tokenA).toBeDefined()
+    expect(tokenB).toBeDefined()
+
+    // Both sessions genuinely work before the change.
+    const beforeA = await probe(tokenA as string)
+    const beforeB = await probe(tokenB as string)
+    expect(beforeA.status).toBe(200)
+    expect(beforeB.status).toBe(200)
+
+    const changeResponse = await changePasswordRequest(
+      tokenA as string,
+      CURRENT_PASSWORD,
+      NEW_PASSWORD
+    )
+    expect(changeResponse.status).toBe(200)
+
+    // Session B (a different device) is refused immediately — it has NOT
+    // expired, and nothing about it changed except that this endpoint ran.
+    const afterB = await probe(tokenB as string)
+    expect(afterB.status).toBe(401)
+    // Session A (the caller who made the change) still works — sparing it
+    // is the entire point of `revokeAllForUserExceptSession` over
+    // `revokeAllSessions`.
+    const afterA = await probe(tokenA as string)
+    expect(afterA.status).toBe(200)
+  })
+
+  it('rejects a wrong current password with 400', async () => {
+    const { token } = await createUserWithPassword()
+
+    const response = await changePasswordRequest(
+      token,
+      'definitely-the-wrong-password',
+      NEW_PASSWORD
+    )
+
+    expect(response.status).toBe(400)
+  })
+
+  it('rejects a federated-only account (no password to verify against) with 400', async () => {
+    const { token } = await createFederatedUser()
+
+    const response = await changePasswordRequest(token, 'any-password-at-all', NEW_PASSWORD)
+
+    expect(response.status).toBe(400)
+  })
+
+  it('rejects a new password identical to the current one with 400', async () => {
+    const { token } = await createUserWithPassword()
+
+    const response = await changePasswordRequest(token, CURRENT_PASSWORD, CURRENT_PASSWORD)
+
+    expect(response.status).toBe(400)
+  })
+
+  it('does not change the password when the new-password validation fails', async () => {
+    const email = uniqueEmail()
+    const { token } = await createUserWithPassword(email)
+
+    const response = await changePasswordRequest(token, CURRENT_PASSWORD, 'short1')
+
+    expect(response.status).toBe(400)
+    const stillWorks = await login(email, CURRENT_PASSWORD)
+    expect(stillWorks.status).toBe(200)
+  })
+
+  it('rate limits repeated wrong-current-password attempts, keyed by the authenticated user', async () => {
+    // The production limiter allows 10 attempts per 15 minutes
+    // (rate-limit.middleware.ts), keyed on `request.user.id` — a fresh user
+    // per test means a fresh counter, with nothing else in this file able
+    // to have already spent it.
+    const { token } = await createUserWithPassword()
+
+    for (let index = 0; index < 10; index += 1) {
+      const response = await changePasswordRequest(token, 'still-the-wrong-password', NEW_PASSWORD)
+      expect(response.status).toBe(400)
+    }
+    const limited = await changePasswordRequest(token, 'still-the-wrong-password', NEW_PASSWORD)
+
+    expect(limited.status).toBe(429)
+    expect(limited.headers).toHaveProperty('ratelimit-limit')
+  })
+
+  it('rejects a request with no token', async () => {
+    const response = await request(app)
+      .post('/api/v1/auth/change-password')
+      .send({ currentPassword: CURRENT_PASSWORD, newPassword: NEW_PASSWORD })
+
+    expect(response.status).toBe(401)
+  })
+})
