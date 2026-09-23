@@ -11,7 +11,7 @@ initial response within a few business days.
 
 This is a boilerplate, not a hosted service: only the `main` branch is
 supported. Downstream projects generated from it are responsible for their
-own patch cadence — `dependabot.yml` is wired up so that starts on day one.
+own patch cadence — `renovate.json` is wired up so that starts on day one.
 
 ## What this boilerplate implements
 

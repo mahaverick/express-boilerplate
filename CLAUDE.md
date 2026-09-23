@@ -298,6 +298,10 @@ otel-collector`.** It is bind-mounted; `docker compose up -d` does not
   `"prepare": "husky"` actually installs hooks by re-running `pnpm install`
   in a checkout that's already installed — it proves nothing either way.
   Test it from a fresh clone.
+- **Renovate, not dependabot.** Weekly, grouped, 3-day minimum release age,
+  actions pinned to SHAs. TypeScript is held `<6.1.0` and the `node` image
+  `<25` by `renovate.json` rules — lift them deliberately, not by merging a
+  Renovate PR. Requires the Renovate GitHub App on the repo.
 
 ## Testing
 

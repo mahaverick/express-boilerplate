@@ -1,0 +1,39 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":semanticCommits", "helpers:pinGitHubActionDigests"],
+  "schedule": ["before 6am on monday"],
+  "minimumReleaseAge": "3 days",
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 6am on the first day of the month"]
+  },
+  "packageRules": [
+    {
+      "description": "typescript-eslint peers typescript <6.1.0; TS 7 breaks type-aware lint (see CLAUDE.md)",
+      "matchPackageNames": ["typescript"],
+      "allowedVersions": "<6.1.0"
+    },
+    {
+      "description": "Stay on Node 24 LTS until the planned move to Node 26 after 2026-10-28",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["node"],
+      "allowedVersions": "<25"
+    },
+    {
+      "groupName": "dev tooling",
+      "matchPackageNames": [
+        "eslint",
+        "eslint-*",
+        "@eslint/*",
+        "typescript-eslint",
+        "prettier",
+        "prettier-*",
+        "@ianvs/prettier-plugin-sort-imports",
+        "vitest",
+        "@vitest/*"
+      ]
+    },
+    { "groupName": "opentelemetry", "matchPackageNames": ["@opentelemetry/*"] },
+    { "groupName": "types", "matchPackageNames": ["@types/*"] }
+  ]
+}
