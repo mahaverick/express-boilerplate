@@ -263,9 +263,10 @@ open while this spec claims they are closed. The connect check runs once; nginx 
     `ACCESS_TOKEN_TTL` — **fifteen minutes after deploy**, not a release cycle. Every token
     minted after deploy carries `sid`, including one minted by a refresh mid-session.
   - The stream's own connect-time check **rejects** a sid-less token outright, 401 — written here
-    as `authenticateStreamRequest`, since renamed to `requireSessionId` when the
-    stream-fetch-transport branch deleted `authenticateStreamRequest` (see the correction on
-    "Three consumers, not one" above). It has to: the heartbeat's denial check can only act on a
+    as `authenticateStreamRequest`, which the stream-fetch-transport branch **deleted**. The
+    rejection itself survives, in `requireSessionId`, but the rest of that function's job moved
+    to `requireAuth`; this was not a rename (see the correction on "Three consumers, not one"
+    above, which says the same). It has to: the heartbeat's denial check can only act on a
     session id, so tolerating one here would grant a stream bounded by _connection lifetime_ — up
     to nginx's 24-hour read timeout — rather than by token expiry. The browser client answers a
     failed stream connect by refreshing and reconnecting, so the cost is one refresh and the path
@@ -351,9 +352,12 @@ From the audit of 2026-09-22, deliberately out of scope here:
    > header is simply withheld, which is what actually stops the browser. The e2e asserts the
    > absence of `Access-Control-Allow-Origin`, which is the check that matters.
    >
-   > "An allowed origin succeeds **with credentials**" is not asserted through the image. The
-   > e2e sends `Origin: http://localhost:5173` because only `WEB_URL` is in the allowlist — the
-   > container's own origin is not — so the test proves the multi-frontend seam rather than
-   > this SPA's own traffic, which is same-origin and sends no preflight at all.
+   > "An allowed origin succeeds **with credentials**" is half asserted, and I overstated this
+   > in the first version of this note. The allowed-origin _preflight_ IS proven through the
+   > image — a 204 from `cors` means the origin callback returned truthy. What is not asserted
+   > anywhere is `Access-Control-Allow-Credentials`, which is the "with credentials" half.
+   > Separately, the e2e sends `Origin: http://localhost:5173` because only `WEB_URL` is in the
+   > allowlist — the container's own origin is not — so it proves the multi-frontend seam
+   > rather than this SPA's own traffic, which is same-origin and sends no preflight at all.
 
 7. Existing suites stay green in both repos.
