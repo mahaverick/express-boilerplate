@@ -3,9 +3,11 @@
 // Integration tests for POST /api/v1/auth/change-password, against the real
 // per-worker Postgres database and the real compose Redis — same
 // conventions as tests/integration/api/forgot-password.test.ts (mail/worker
-// setup, added in this file once the paired `password_changed` notification
-// lands in its own commit) and tests/integration/api/auth.test.ts
-// (login/token mechanics).
+// setup) and tests/integration/api/auth.test.ts (login/token mechanics).
+// Both the "email" and "notification" BullMQ workers run for the whole
+// file, so the controller's `addNotificationJob` call actually reaches
+// Mailpit (see those two files' own comments for why both workers, not just
+// one, are required).
 //
 // Most tests here sign a bearer token directly with `signAccessToken`
 // (tests/integration/api/profile.test.ts's own approach) rather than going
@@ -20,17 +22,34 @@
 // exact vacuous-pass trap that has bitten this repo's session-revocation
 // work before.
 import { randomUUID } from 'node:crypto'
+import type { Worker } from 'bullmq'
 import request from 'supertest'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
 import type { User } from '@/database/models/user.model'
+import type { EmailJobData } from '@/jobs/email.job'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
+import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
 import { hashPassword } from '@/utilities/password.utilities'
 import { signAccessToken } from '@/utilities/token.utilities'
+import { startEmailWorker } from '@/workers/email.worker'
+import { startNotificationWorker } from '@/workers/notification.worker'
+import { deleteMailpitMessage, findMailpitMessages, getMailpitMessage } from '../../helpers/mailpit'
 
 const app = createApp()
 const userRepository = new UserRepository()
+
+const worker: Worker<EmailJobData> = startEmailWorker()
+const notificationWorker = startNotificationWorker()
+
+afterAll(async () => {
+  await worker.close()
+  await notificationWorker.close()
+  await getEmailQueue().obliterate({ force: true })
+  await getNotificationQueue().obliterate({ force: true })
+  await closeQueue()
+})
 
 const CURRENT_PASSWORD = 'correct horse battery staple'
 const NEW_PASSWORD = 'a brand new secret passphrase'
@@ -271,6 +290,30 @@ describe('POST /api/v1/auth/change-password', () => {
 
     expect(limited.status).toBe(429)
     expect(limited.headers).toHaveProperty('ratelimit-limit')
+  })
+
+  it('mails a password-changed notice to the account owner', async () => {
+    const email = uniqueEmail()
+    const { user, token } = await createUserWithPassword(email)
+
+    const response = await changePasswordRequest(token, CURRENT_PASSWORD, NEW_PASSWORD)
+    expect(response.status).toBe(200)
+
+    const messages = await findMailpitMessages(email)
+    expect(messages).toHaveLength(1)
+    expect(messages[0]?.Subject).toContain('password was changed')
+    const detail = await getMailpitMessage(messages[0]?.ID ?? '')
+    expect(detail.Text).toContain('signed out')
+    await deleteMailpitMessage(messages[0]?.ID ?? '')
+
+    // Proves the send routed through addNotificationJob (which inserts the
+    // in-app row before enqueuing the paired email —
+    // notification.worker.ts's own header comment), not addEmailJob called
+    // directly.
+    const notifications = await sql`
+      select * from notifications where user_id = ${user.id} and type = 'password_changed'
+    `
+    expect(notifications).toHaveLength(1)
   })
 
   it('rejects a request with no token', async () => {

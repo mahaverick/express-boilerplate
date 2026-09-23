@@ -42,6 +42,7 @@ import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { db } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
+import { PASSWORD_CHANGED_TEMPLATE_KEY } from '@/templates/email/password-changed.template'
 import { PASSWORD_RESET_TEMPLATE_KEY } from '@/templates/email/password-reset.template'
 import { REGISTRATION_ATTEMPT_TEMPLATE_KEY } from '@/templates/email/registration-attempt.template'
 import { requireDurationMs } from '@/utilities/duration.utilities'
@@ -773,11 +774,8 @@ function authenticatedUserId(request: Request): string {
  *      session for nothing.
  *   4. Hash and store.
  *   5. Revoke every OTHER session — see the branch's own comment.
- *   6. Respond, matching `resetPassword`'s envelope shape exactly.
- *
- * Does NOT yet enqueue a "your password was changed" notification — that is
- * the separate, additive half of this feature (notification.constants.ts,
- * password-changed.template.ts) and lands in its own commit.
+ *   6. Enqueue the `password_changed` notification, fire-and-forget.
+ *   7. Respond, matching `resetPassword`'s envelope shape exactly.
  * @param request - The incoming request, carrying `{ currentPassword, newPassword }`, authenticated by `requireAuth`.
  * @param response - The response.
  * @param next - Forwards a rejection to the terminal error handler.
@@ -831,6 +829,32 @@ export async function changePassword(
     } else {
       await revokeAllSessions(user.id)
     }
+
+    // Fire-and-forget: a mail failure must never 500 a password change that
+    // has already succeeded (Ruling T; see sendPasswordResetMailIfRegistered
+    // above for the identical pattern). This template's variables carry no
+    // secret at all — see password-changed.template.ts's own comment — so,
+    // unlike the verification/reset mails, there is no raw token riding
+    // along on this job.
+    const notificationJob = addNotificationJob({
+      userId: user.id,
+      type: 'password_changed',
+      title: 'Password changed',
+      body: `Your ${getEnv().APP_NAME} password was changed.`,
+      metadata: { templateKey: PASSWORD_CHANGED_TEMPLATE_KEY },
+      email: {
+        to: user.email,
+        templateKey: PASSWORD_CHANGED_TEMPLATE_KEY,
+        variables: {
+          firstName: user.firstName ?? MISSING_FIRST_NAME_FALLBACK,
+          appName: getEnv().APP_NAME,
+        },
+      },
+    })
+    // eslint-disable-next-line unicorn/prefer-await -- fire-and-forget: the mail must not block the response, and the change has already been committed regardless of whether it sends
+    notificationJob.catch((error: unknown) => {
+      logger.error('Password-changed mail failed', { error })
+    })
 
     // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data", not undefined (which JSON.stringify omits entirely)
     successResponse(response, null, 'Password has been changed.')

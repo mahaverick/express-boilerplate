@@ -58,37 +58,42 @@ export const notificationIdSchema = z.object({
 export type NotificationIdParameters = z.infer<typeof notificationIdSchema>
 
 // Notification types a user is allowed to configure a preference for.
-// `'verify_email'` and `'password_reset_requested'` are deliberately
-// excluded — see notification-preference.repository.ts's
-// `NON_DISABLEABLE_EMAIL_TYPES` for the full reasoning on both (a user who
-// disabled either would lock themselves out of their own account, one way
-// or the other). That set is module-private to the repository and stays
-// that way: it governs what `isChannelEnabled` resolves at READ time
-// regardless of what any row says, which is a stronger, unconditional
-// guarantee than this list. This is the WRITE-side mirror of the same rule
-// — narrower in principle (today it happens to match exactly) but
-// independently necessary, because without it a client could still
-// successfully `PUT` a `{ notificationType: 'verify_email', emailEnabled:
-// false }` row; the repository would silently keep honouring email delivery
-// regardless, but the settings UI this endpoint serves would show the user
-// a toggle that lies about its own effect. KEPT IN SYNC BY HAND with that
-// repository set — see its own comment.
+// `'verify_email'`, `'password_reset_requested'`, and `'password_changed'`
+// are deliberately excluded — see notification-preference.repository.ts's
+// `NON_DISABLEABLE_EMAIL_TYPES` for the full reasoning, which is now TWO
+// distinct reasons rather than one: the first two would lock a user out of
+// their own account if disabled, and `'password_changed'` locks nobody out
+// but must not be silenceable by an attacker who has just taken the account
+// over (see that set's own comment for both, in full). That set is
+// module-private to the repository and stays that way: it governs what
+// `isChannelEnabled` resolves at READ time regardless of what any row says,
+// which is a stronger, unconditional guarantee than this list. This is the
+// WRITE-side mirror of the same rule — narrower in principle (today it
+// happens to match exactly) but independently necessary, because without it
+// a client could still successfully `PUT` a `{ notificationType:
+// 'verify_email', emailEnabled: false }` row; the repository would silently
+// keep honouring email delivery regardless, but the settings UI this
+// endpoint serves would show the user a toggle that lies about its own
+// effect. KEPT IN SYNC BY HAND with that repository set — see its own
+// comment.
 //
-// NOTIFICATION_TYPES has exactly two entries today and both are excluded
-// here, so this filter still produces an EMPTY array — there is nothing
-// left to configure until a notification type with a genuinely disableable
-// channel ships. That is not a bug to special-case away: `preferenceEntrySchema`
-// below rejects every `notificationType` with the same clear, per-field
-// message whether the configurable list has one entry, two, or none, so
-// `PUT /preferences` already answers 400 correctly — see the "PUT
-// /api/v1/notifications/preferences" describe block in
-// tests/integration/api/notification.test.ts, which exercises exactly this
-// (a `verify_email` update, an empty array, and an unknown type all landing
-// on the same clear-message 400) — without this module needing a separate
-// branch for "zero configurable types" versus "some, but not this one".
+// NOTIFICATION_TYPES has exactly three entries today and all three are
+// excluded here, so this filter still produces an EMPTY array — there is
+// nothing left to configure until a notification type with a genuinely
+// disableable channel ships. That is not a bug to special-case away:
+// `preferenceEntrySchema` below rejects every `notificationType` with the
+// same clear, per-field message whether the configurable list has one
+// entry, several, or none, so `PUT /preferences` already answers 400
+// correctly — see the "PUT /api/v1/notifications/preferences" describe
+// block in tests/integration/api/notification.test.ts, which exercises
+// exactly this (a `verify_email` update, an empty array, and an unknown
+// type all landing on the same clear-message 400) — without this module
+// needing a separate branch for "zero configurable types" versus "some,
+// but not this one".
 const NON_DISABLEABLE_NOTIFICATION_TYPES: ReadonlySet<string> = new Set([
   'verify_email',
   'password_reset_requested',
+  'password_changed',
 ])
 
 /**

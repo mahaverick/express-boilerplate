@@ -12,14 +12,26 @@
 
 /**
  * Every in-app notification type this codebase can currently produce.
- * `'verify_email'` (register/resend-verification) and
- * `'password_reset_requested'` (forgot-password) — a type is added here once
- * something in `src/` actually enqueues it, not speculatively. Deliberately
- * not `'email_verified'`/`'password_reset'`: each notification fires when its
- * link is SENT, before the user has clicked it, so a past-tense name would
- * misdescribe an event that has not happened yet.
+ * `'verify_email'` (register/resend-verification), `'password_reset_requested'`
+ * (forgot-password), and `'password_changed'` (change-password) — a type is
+ * added here once something in `src/` actually enqueues it, not
+ * speculatively. Deliberately not `'email_verified'`/`'password_reset'` for
+ * the first two: each of THOSE notifications fires when its link is SENT,
+ * before the user has clicked it, so a past-tense name would misdescribe an
+ * event that has not happened yet.
+ *
+ * `'password_changed'` is past tense, and that is correct here rather than
+ * a violation of the rule above: it does not fire when a link is sent for
+ * the user to act on — there is no link at all — it fires from
+ * `changePassword` (auth.controller.ts) AFTER the password has already been
+ * hashed, stored, and every other session already revoked. The event this
+ * name describes has, at the point it fires, actually happened.
  */
-export const NOTIFICATION_TYPES = ['verify_email', 'password_reset_requested'] as const
+export const NOTIFICATION_TYPES = [
+  'verify_email',
+  'password_reset_requested',
+  'password_changed',
+] as const
 
 /**
  * One of the fixed set of notification types a `notifications` or

@@ -99,6 +99,11 @@ import {
   type EmailVerificationVariables,
 } from '@/templates/email/email-verification.template'
 import {
+  PASSWORD_CHANGED_TEMPLATE_KEY,
+  renderPasswordChangedTemplate,
+  type PasswordChangedVariables,
+} from '@/templates/email/password-changed.template'
+import {
   PASSWORD_RESET_TEMPLATE_KEY,
   renderPasswordResetTemplate,
   type PasswordResetVariables,
@@ -142,6 +147,11 @@ export type MailMessage =
       templateKey: typeof REGISTRATION_ATTEMPT_TEMPLATE_KEY
       variables: RegistrationAttemptVariables
     }
+  | {
+      to: string
+      templateKey: typeof PASSWORD_CHANGED_TEMPLATE_KEY
+      variables: PasswordChangedVariables
+    }
 
 /**
  * Render `message` against its own declared template — the ONLY place in
@@ -155,7 +165,7 @@ export type MailMessage =
  * cannot express that narrowing, since indexing loses the connection
  * between the key just read and the value about to be passed.
  *
- * The `default` case below IS reachable, despite `MailMessage`'s three
+ * The `default` case below IS reachable, despite `MailMessage`'s four
  * named cases already covering every value the TYPE system allows: a
  * caller can still bypass that (`as unknown as MailMessage`), the same
  * boundary `email-log.repository.ts`'s `withTemplateKeyNormalized` and
@@ -184,6 +194,9 @@ function renderForMessage(message: MailMessage): RenderedEmail {
     }
     case REGISTRATION_ATTEMPT_TEMPLATE_KEY: {
       return renderRegistrationAttemptTemplate(message.variables)
+    }
+    case PASSWORD_CHANGED_TEMPLATE_KEY: {
+      return renderPasswordChangedTemplate(message.variables)
     }
     default: {
       // See this function's own JSDoc for why this branch is reachable at
