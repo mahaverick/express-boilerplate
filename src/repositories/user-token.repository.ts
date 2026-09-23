@@ -113,10 +113,11 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
 
   /**
    * Revoke every still-live token sharing a session id — the whole rotation
-   * chain for one login. Used both by an explicit single-session logout and
-   * by reuse detection to contain a compromised chain.
+   * chain for one login — and deny that session's access tokens. Used both
+   * by an explicit single-session logout and by reuse detection to contain
+   * a compromised chain.
    * @param sessionId - The session id shared by every token in the chain.
-   * @returns Resolves once every matching row is revoked.
+   * @returns Resolves once every matching row is revoked and the session is denied.
    */
   async revokeAllForSession(sessionId: string): Promise<void> {
     await db
@@ -148,6 +149,14 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    * contributes `sessionId: null` and is filtered out before denying — it
    * denies nothing on its own. An entire rotation chain shares one session
    * id, so the surviving ids are deduplicated before denying each one.
+   *
+   * KNOWN GAP, not fixed here: a session mid-rotation when this runs — the
+   * old refresh row already claimed by `rotateRefreshToken`, the new one
+   * not yet written — survives on both the revocation and denial side,
+   * because the row this method's `WHERE` clause would otherwise catch
+   * does not exist yet at the instant this query runs. Real, pre-existing,
+   * and needs the rotation and this revocation to share a transaction to
+   * close properly; not attempted here.
    * @param userId - The user whose tokens should all be revoked.
    * @returns Resolves once every matching row is revoked and every revoked session's access tokens are denied.
    */

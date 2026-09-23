@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { getEnv } from '@/configs/env.config'
+import { MS_PER_SECOND, requireDurationMs } from '@/utilities/duration.utilities'
 
 const redis = {
   set: vi.fn<(key: string, value: string, options: unknown) => Promise<string>>(),
@@ -17,17 +19,19 @@ describe('session denylist', () => {
     redis.exists.mockResolvedValue(0)
   })
 
-  it('denies a session with a TTL, so the entry dies when the tokens do', async () => {
+  it('denies a session with a TTL equal to ACCESS_TOKEN_TTL, so the entry dies when the tokens do', async () => {
     const { denySession } = await import('@/services/session-denylist.service')
     await denySession('session-abc')
 
-    expect(redis.set).toHaveBeenCalledWith(
-      'denylist:session:session-abc',
-      '1',
-      expect.objectContaining({ EX: expect.any(Number) as number })
-    )
-    const options = (redis.set.mock.calls[0] as [string, string, { EX: number }])[2]
-    expect(options.EX).toBeGreaterThan(0)
+    // Computed from the same source the service reads (getEnv().ACCESS_TOKEN_TTL),
+    // not a hard-coded number: this asserts the ACTUAL invariant the
+    // service's own comment calls "the whole design" — not merely
+    // `> 0`, which an `EX` of 1 would also satisfy while defeating that
+    // design entirely.
+    const expectedSeconds = Math.ceil(requireDurationMs(getEnv().ACCESS_TOKEN_TTL) / MS_PER_SECOND)
+    expect(redis.set).toHaveBeenCalledWith('denylist:session:session-abc', '1', {
+      expiration: { type: 'EX', value: expectedSeconds },
+    })
   })
 
   it('reports a denied session', async () => {

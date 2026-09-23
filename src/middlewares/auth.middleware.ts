@@ -18,10 +18,14 @@
 //      denied — `isSessionDenied` (session-denylist.service.ts), a Redis
 //      lookup keyed by session id. This is what makes logout end an access
 //      token immediately instead of leaving it usable until it naturally
-//      expires. A token with no `sid` claim (minted before this claim
-//      existed) skips this check entirely and falls through to step 3 —
-//      see the guard's own comment for why that is deliberate tolerance,
-//      not an oversight.
+//      expires — WHEN logout has a session to name. `logout`
+//      (auth.controller.ts) revokes by reading the refresh cookie, which is
+//      the one place the session id to deny comes from; a logout request
+//      with no refresh cookie returns 200 and revokes nothing, because
+//      there is nothing to name. A token with no `sid` claim (minted
+//      before this claim existed) skips this check entirely and falls
+//      through to step 3 — see the guard's own comment for why that is
+//      deliberate tolerance, not an oversight.
 //   3. Load the user the token claims to be, and confirm the account can
 //      still authenticate at all.
 //
@@ -72,15 +76,31 @@ const userRepository = new UserRepository()
 const BEARER_PATTERN = /^Bearer\s+(\S+)$/
 
 /**
- * Machine-readable code identifying an expired access token, carried in the
- * error envelope's `code` field (`error.middleware.ts` / `HttpError`).
+ * Machine-readable code identifying a STALE-BUT-OTHERWISE-VALID credential,
+ * carried in the error envelope's `code` field (`error.middleware.ts` /
+ * `HttpError`).
  *
- * This is the distinction a client needs to act correctly: "my access
- * token expired, try the refresh token" is a silent, automatic recovery;
- * every other 401 from this middleware means the credential itself is no
- * good and the user must sign in again. A client cannot tell those apart
- * safely by matching on `message` — that string is for a human reading
- * logs and is free to change wording.
+ * This is the distinction a client needs to act correctly: a 401 carrying
+ * this code means "refresh and retry" is a silent, automatic recovery;
+ * every other 401 means the credential itself is no good and the user must
+ * sign in again. A client cannot tell those apart safely by matching on
+ * `message` — that string is for a human reading logs and is free to
+ * change wording.
+ *
+ * THREE emitters share this code, not one, and all three mean the same
+ * thing — the credential is not forged or malformed, it is simply no
+ * longer honoured, and a refresh (which mints a token against the user's
+ * current, live session) is the correct and sufficient response:
+ *
+ *   1. An EXPIRED access token — `verifyAccessToken`'s `reason: 'expired'`,
+ *      thrown at :180 below.
+ *   2. A token whose session has been explicitly DENIED —
+ *      `isSessionDenied`, at :247 below.
+ *   3. In `notification-stream.controller.ts`'s `authenticateStreamRequest`
+ *      only: the same denial check as (2), plus a token that carries no
+ *      `sid` claim at all — that endpoint has no tolerance for one (unlike
+ *      this middleware's own, see :232 below), so a sid-less token is
+ *      rejected outright rather than admitted until it expires.
  */
 export const ACCESS_TOKEN_EXPIRED_CODE = 'ACCESS_TOKEN_EXPIRED'
 
@@ -210,7 +230,20 @@ export async function requireAuth(
     const token = getBearerToken(request)
     const { payload } = verifyBearerToken(token)
     // A token with no `sid` predates this claim; accept it until it
-    // expires. See the spec's "Honest limits" — one release of tolerance.
+    // expires. The real bound on how long this tolerance needs to exist is
+    // NOT a release cycle — it is `ACCESS_TOKEN_TTL` (fifteen minutes by
+    // default) from the moment this deploy first starts minting `sid` into
+    // every new token. No token signed before that moment can still carry
+    // a valid, unexpired signature once that long has passed, so this
+    // whole branch — the `payload.sid &&` guard, and the two words that
+    // make it a tolerance rather than a requirement — becomes unreachable
+    // dead code at that point, not merely low-risk to remove. Deleting it
+    // early, before that window closes, costs one legitimate user holding
+    // a genuinely pre-`sid` token a single 401 that their client answers
+    // with an ordinary refresh (see notification-stream.controller.ts's
+    // `authenticateStreamRequest`, which already has no equivalent
+    // tolerance, for why that cost is cheap). This wave does not remove it;
+    // whoever does only needs to confirm that window has passed.
     if (payload.sid && (await isSessionDenied(payload.sid))) {
       throw new HttpError('Session ended', 401, ACCESS_TOKEN_EXPIRED_CODE)
     }

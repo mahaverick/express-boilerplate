@@ -27,6 +27,19 @@ const parse: (value: string) => number | undefined = ms as unknown as (
 ) => number | undefined
 
 /**
+ * The one place this constant is defined. Both `token.utilities.ts` (to
+ * convert `expiresIn` to whole seconds for `jsonwebtoken`) and
+ * `session-denylist.service.ts` (to convert a Redis `EX` TTL to whole
+ * seconds) needed it, and it lives here — rather than in either of
+ * them — for the same reason `requireDurationMs` does: routing it through
+ * `token.utilities.ts` would close an import cycle
+ * (`user-token.repository` -> `session-denylist.service` ->
+ * `token.utilities` -> `user-token.repository`), and this module has no
+ * such dependency, so it stays a leaf.
+ */
+export const MS_PER_SECOND = 1000
+
+/**
  * Parse a duration string (e.g. "15m", "30d", "3600000") into milliseconds.
  *
  * Never throws. `ms()` itself throws only for a non-string or an empty

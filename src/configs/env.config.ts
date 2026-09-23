@@ -134,6 +134,20 @@ const EnvSchema = z.object({
   // rather than the missing variable. Here an unparseable value fails at
   // boot, inside safeParse, named alongside every other invalid variable —
   // never as a throw reaching out of this module.
+  //
+  // Since session-revocation, this value also sets the TTL of a denylist
+  // entry written by session-denylist.service.ts's denySession — read
+  // there by the DENYING pod at the moment of denial, not by the pod that
+  // originally minted the token. A rolling deploy that CHANGES this value
+  // therefore mixes minter's-env and denier's-env for tokens in flight
+  // during the rollout: raising 15m -> 60m lets an old-env pod, still
+  // running denySession with the old value, write a 15-minute denylist
+  // entry against a token a new-env pod already minted with a 60-minute
+  // life — the entry expires before the token does, and the token becomes
+  // usable again for the remainder of its life. Within one consistent env
+  // (the ordinary case between deploys) the scheme stays
+  // conservative-correct: see session-denylist.service.ts's own comment
+  // for why the entry then always outlives the token it targets.
   ACCESS_TOKEN_TTL: z
     .string()
     .default('15m')

@@ -27,14 +27,16 @@ import type { TokenPurpose, UserToken } from '@/database/models/user-token.model
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/middlewares/error.middleware'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
-import { requireDurationMs } from '@/utilities/duration.utilities'
+import { MS_PER_SECOND, requireDurationMs } from '@/utilities/duration.utilities'
 
 // jsonwebtoken's `expiresIn` option is typed against `ms`'s own
 // `StringValue` literal union — the identical narrowness
 // duration.utilities.ts exists to work around — so this module converts a
 // validated TTL to whole SECONDS (jsonwebtoken's numeric `expiresIn` unit)
-// once, here, rather than fighting that type a second time.
-const MS_PER_SECOND = 1000
+// once, here, rather than fighting that type a second time. `MS_PER_SECOND`
+// itself lives in duration.utilities.ts, not here — see that module's own
+// comment for why session-denylist.service.ts needing the same constant
+// made this its one definition.
 
 // A raw token's length in bytes before hex-encoding, for every purpose. 32
 // bytes (256 bits) hex-encodes to the 64 characters user-token.model.ts's
@@ -407,17 +409,19 @@ export async function rotateRefreshToken(raw: string): Promise<IssuedRefreshToke
 
 /**
  * Revoke every live refresh token in one session — every token descended
- * from one login, on one device. Used by a single-session logout, and by
- * `rotateRefreshToken`'s reuse detection to contain a compromised chain.
+ * from one login, on one device — and deny that session's access tokens.
+ * Used by a single-session logout, and by `rotateRefreshToken`'s reuse
+ * detection to contain a compromised chain.
  * @param sessionId - The session (rotation-chain) id to revoke.
- * @returns Resolves once every token in the session is revoked.
+ * @returns Resolves once every token in the session is revoked and denied.
  */
 export async function revokeSession(sessionId: string): Promise<void> {
   await userTokenRepository.revokeAllForSession(sessionId)
 }
 
 /**
- * Revoke the session a raw refresh token belongs to — logout's primitive.
+ * Revoke and deny the session a raw refresh token belongs to — logout's
+ * primitive.
  *
  * Resolves quietly for a token that is missing, forged, already revoked, or
  * issued for a different purpose entirely (a password-reset or
@@ -430,7 +434,7 @@ export async function revokeSession(sessionId: string): Promise<void> {
  * module) and the login endpoint (auth.controller.ts) already apply to
  * their own callers.
  * @param raw - The raw refresh token presented by the client.
- * @returns Resolves once the token's session (if any matched) is revoked.
+ * @returns Resolves once the token's session (if any matched) is revoked and denied.
  */
 export async function revokeRefreshToken(raw: string): Promise<void> {
   const existing = await userTokenRepository.findByHash(hashToken(raw))
@@ -441,10 +445,11 @@ export async function revokeRefreshToken(raw: string): Promise<void> {
 
 /**
  * Revoke every live refresh token belonging to a user, across every
- * session. Used where every session must end at once — e.g. a password
- * change, or a "log out everywhere" action.
+ * session, and deny each revoked session's access tokens. Used where every
+ * session must end at once — e.g. a password change, or a "log out
+ * everywhere" action.
  * @param userId - The user whose sessions should all end.
- * @returns Resolves once every one of the user's tokens is revoked.
+ * @returns Resolves once every one of the user's tokens is revoked and each revoked session is denied.
  */
 export async function revokeAllSessions(userId: string): Promise<void> {
   await userTokenRepository.revokeAllForUser(userId)

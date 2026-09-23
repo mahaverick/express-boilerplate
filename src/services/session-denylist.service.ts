@@ -1,18 +1,23 @@
 import { getEnv } from '@/configs/env.config'
 import { logger } from '@/services/logger.service'
 import { getRedis } from '@/services/redis.service'
-import { requireDurationMs } from '@/utilities/duration.utilities'
+import { MS_PER_SECOND, requireDurationMs } from '@/utilities/duration.utilities'
 
-const MS_PER_SECOND = 1000
 const KEY_PREFIX = 'denylist:session:'
 
 /**
  * Mark a session's access tokens as no longer honoured.
  *
  * The TTL is the whole design. An entry only has to outlive the tokens it
- * invalidates, so it is set to `ACCESS_TOKEN_TTL` and expires exactly when
- * it stops mattering — which is why this needs no sweeper and cannot grow
- * without bound.
+ * invalidates, so it is set to `ACCESS_TOKEN_TTL` and needs no sweeper and
+ * cannot grow without bound. It does NOT expire exactly when the token it
+ * targets does, though — the two clocks start at different moments. The
+ * TTL here starts NOW, at the moment of denial; the token being denied was
+ * minted up to `ACCESS_TOKEN_TTL` earlier and is already partway through
+ * its own life. So this entry always OUTLIVES the token it was written
+ * for, by however much of the token's life had already elapsed — the safe
+ * direction, since the entry disappearing before the token it targets does
+ * would silently let that token back in.
  *
  * BEST-EFFORT, and deliberately so. A Redis outage or a FLUSHALL drops every
  * entry, and there is no database fallback because the database does not
@@ -25,7 +30,11 @@ export async function denySession(sessionId: string): Promise<void> {
   try {
     const seconds = Math.ceil(requireDurationMs(getEnv().ACCESS_TOKEN_TTL) / MS_PER_SECOND)
     const redis = await getRedis()
-    await redis.set(`${KEY_PREFIX}${sessionId}`, '1', { EX: seconds })
+    // `{ EX: seconds }` is `@deprecated` on this pinned `@redis/client@6.2.1`
+    // in favour of this `expiration` form — same effect, current API.
+    await redis.set(`${KEY_PREFIX}${sessionId}`, '1', {
+      expiration: { type: 'EX', value: seconds },
+    })
   } catch (error) {
     // Never rethrow. This runs inside logout, refresh-token reuse detection
     // (both via revokeAllForSession), and password reset (via
