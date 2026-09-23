@@ -2,7 +2,11 @@
 # Multi-stage. node:24-alpine, not 22 — see Global Constraints.
 FROM node:24-alpine AS base
 ENV PNPM_HOME=/pnpm PATH=/pnpm:$PATH
-RUN corepack enable && corepack prepare pnpm@12.4.1 --activate
+# Corepack is installed explicitly: Node 25+ no longer bundles it, and doing it
+# now makes the Node 26 move a version bump only. The pnpm version itself comes
+# from package.json's packageManager field (see `corepack install` in deps).
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+RUN npm i -g corepack@0.36.0 && corepack enable
 RUN adduser -D -u 10001 appuser
 WORKDIR /app
 
@@ -12,6 +16,7 @@ FROM base AS deps
 # pnpm-lock.yaml, and --frozen-lockfile refuses to install if it can't
 # reconcile that recorded config against the workspace file on disk.
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+RUN corepack install
 # Cache mount keeps the store between builds without baking it into a layer.
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
     pnpm install --frozen-lockfile

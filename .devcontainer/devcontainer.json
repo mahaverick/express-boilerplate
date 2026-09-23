@@ -2,7 +2,7 @@
   "name": "express-boilerplate",
   "image": "mcr.microsoft.com/devcontainers/typescript-node:24",
   "features": { "ghcr.io/devcontainers/features/docker-in-docker:2": {} },
-  "postCreateCommand": "corepack enable && pnpm install",
+  "postCreateCommand": "npm i -g corepack@0.36.0 && corepack enable && pnpm install",
   // 5433/6380, 8025 — the compose stack's host-side Postgres/Redis/Mailpit
   // ports (docker-compose.yml), not the container-internal 5432/6379/8025.
   // Postgres and Redis are deliberately off their defaults so this stack

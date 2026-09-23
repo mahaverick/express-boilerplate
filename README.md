@@ -20,7 +20,7 @@ exactly what is and is not here yet.
 - Node.js >= 24 (pinned in [`.nvmrc`](.nvmrc); `engine-strict=true` in
   [`.npmrc`](.npmrc) refuses anything older)
 - [pnpm](https://pnpm.io) 12.4.1 (pinned via `packageManager` in
-  `package.json`; enable it with `corepack enable`)
+  `package.json`; install Corepack and enable it with `npm i -g corepack@0.36.0 && corepack enable` — Node 25+ no longer ships Corepack, so this works on Node 24 and 26 alike)
 - Docker, for the local Postgres/Redis/OpenTelemetry/Loki/Mailpit stack
 
 ## Quickstart
