@@ -304,7 +304,10 @@ otel-collector`.** It is bind-mounted; `docker compose up -d` does not
   `.nvmrc`, `actions/setup-node`'s `node-version:`, and the devcontainer's
   `mcr.microsoft.com/devcontainers/typescript-node` image tag — is held
   `<25` by `renovate.json` rules — lift them deliberately, not by merging a
-  Renovate PR. Requires the Renovate GitHub App on the repo.
+  Renovate PR. Requires the Renovate GitHub App on the repo. Renovate does
+  not touch `package.json`'s `engines.node` or `devEngines.runtime.version`
+  either way, since both are `>=` ranges, not pinned versions — when the
+  Node 26 move happens, bump those two by hand alongside the held pins.
 - **`ci.yml` is also the deploy gate.** `deploy.yml` (push to `main`) calls
   it via `workflow_call`, then builds and pushes `ghcr.io/<repo>:sha-<commit>`
   and `:main` with SBOM and provenance attestations, then runs a placeholder
