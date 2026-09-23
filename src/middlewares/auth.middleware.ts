@@ -1,10 +1,10 @@
 // src/middlewares/auth.middleware.ts
 //
-// requireAuth is the gate every protected route sits behind. It does two
+// requireAuth is the gate every protected route sits behind. It does three
 // things that are deliberately kept as separate steps inside one exported
-// middleware, not two exported middlewares — a later plan (MFA step-up,
+// middleware, not several exported middlewares — a later plan (MFA step-up,
 // tenant scoping) composes by reading `request.user` AFTER requireAuth has
-// run, not by re-running half of this one, so there is no seam worth
+// run, not by re-running part of this one, so there is no seam worth
 // exporting yet:
 //
 //   1. Verify the bearer token's signature — delegated entirely to
@@ -14,32 +14,57 @@
 //      module never re-implements that check, and never re-derives WHY a
 //      token failed from data it cannot itself trust — see
 //      `verifyAccessToken`'s own header comment.
-//   2. Load the user the token claims to be, and confirm the account can
+//   2. Reject the token if its session (`payload.sid`) has been explicitly
+//      denied — `isSessionDenied` (session-denylist.service.ts), a Redis
+//      lookup keyed by session id. This is what makes logout end an access
+//      token immediately instead of leaving it usable until it naturally
+//      expires — WHEN logout has a session to name. `logout`
+//      (auth.controller.ts) revokes by reading the refresh cookie, which is
+//      the one place the session id to deny comes from; a logout request
+//      with no refresh cookie returns 200 and revokes nothing, because
+//      there is nothing to name. A token with no `sid` claim (minted
+//      before this claim existed) skips this check entirely and falls
+//      through to step 3 — see the guard's own comment for why that is
+//      deliberate tolerance, not an oversight.
+//   3. Load the user the token claims to be, and confirm the account can
 //      still authenticate at all.
 //
-// Step 2 is not optional, and it is the reason this file exists rather than
-// a two-line `jwt.verify` call inline at every route. A JWT is stateless by
-// design: once signed, its claims stay valid until `exp` regardless of
+// Step 3 is not optional, and step 2 does not make it so: they close
+// different gaps and neither substitutes for the other. A JWT is stateless
+// by design: once signed, its claims stay valid until `exp` regardless of
 // anything that happens to the account afterwards. Trusting the decoded
 // `sub` alone would mean disabling or soft-deleting a user does nothing —
 // every access token already issued to them keeps working, silently, until
-// it naturally expires. Loading the user turns that into an immediate
-// rejection instead.
+// it naturally expires. Loading the user turns THAT into an immediate
+// rejection. Step 2's denylist knows nothing about deactivation or
+// soft-delete — it only knows which session ids were explicitly denied —
+// so removing step 3 in favour of step 2 would silently bring back the
+// exact problem step 3 exists to close.
 //
-// The cost this trades for that guarantee: every authenticated request now
-// costs one extra database read (`findById`), on top of what the route
-// itself will usually do anyway. A purely stateless JWT would not need it.
-// The alternatives — a short-lived in-memory cache of "known-good" user
-// ids, or a revocation list checked only for tokens that were explicitly
-// revoked — would shrink that cost back down at the price of a window
-// (bounded by the cache TTL, or unbounded for anything short of explicit
-// revocation) in which a disabled account keeps working. Neither is built
-// here; this comment is what makes that a chosen trade-off rather than an
-// oversight for the next person to rediscover.
+// Step 3's cost: every authenticated request costs one extra database read
+// (`findById`), on top of what the route itself will usually do anyway. A
+// purely stateless JWT would not need it. The alternative sometimes
+// reached for instead — a short-lived in-memory cache of "known-good" user
+// ids — would shrink that cost back down at the price of a window (bounded
+// by the cache TTL) in which a disabled account keeps working. That is not
+// built here; this paragraph is what makes that a chosen trade-off rather
+// than an oversight for the next person to rediscover.
+//
+// Every session-revocation path inside `UserTokenRepository` —
+// `revokeAllForSession` (logout, refresh-token reuse detection) and
+// `revokeAllForUser` (password reset) — denies every session it revokes, so
+// within this middleware revocation does imply denial. Two things stay
+// outside that on purpose:
+// `revokeAllForUserAndPurpose` denies nothing, correctly, since it is used
+// for purpose-scoped cleanups (stale verification links) that are not
+// session revocations at all; and deactivating a user (`user.active =
+// false`) denies nothing either — step 3's `findById` read below is what
+// catches that, on the next request.
 import { type NextFunction, type Request, type Response } from 'express'
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/middlewares/error.middleware'
 import { UserRepository } from '@/repositories/user.repository'
+import { isSessionDenied } from '@/services/session-denylist.service'
 import { verifyAccessToken } from '@/utilities/token.utilities'
 
 const userRepository = new UserRepository()
@@ -51,15 +76,34 @@ const userRepository = new UserRepository()
 const BEARER_PATTERN = /^Bearer\s+(\S+)$/
 
 /**
- * Machine-readable code identifying an expired access token, carried in the
- * error envelope's `code` field (`error.middleware.ts` / `HttpError`).
+ * Machine-readable code identifying a STALE-BUT-OTHERWISE-VALID credential,
+ * carried in the error envelope's `code` field (`error.middleware.ts` /
+ * `HttpError`).
  *
- * This is the distinction a client needs to act correctly: "my access
- * token expired, try the refresh token" is a silent, automatic recovery;
- * every other 401 from this middleware means the credential itself is no
- * good and the user must sign in again. A client cannot tell those apart
- * safely by matching on `message` — that string is for a human reading
- * logs and is free to change wording.
+ * This is the distinction a client needs to act correctly: a 401 carrying
+ * this code means "refresh and retry" is a silent, automatic recovery;
+ * every other 401 means the credential itself is no good and the user must
+ * sign in again. A client cannot tell those apart safely by matching on
+ * `message` — that string is for a human reading logs and is free to
+ * change wording.
+ *
+ * THREE emitters share this code, not one, and all three mean the same
+ * thing — the credential is not forged or malformed, it is simply no
+ * longer honoured, and a refresh (which mints a token against the user's
+ * current, live session) is the correct and sufficient response:
+ *
+ *   1. An EXPIRED access token — `verifyAccessToken`'s `reason: 'expired'`,
+ *      thrown both inside this file's own `verifyBearerToken` (:181 below)
+ *      and, for the SSE endpoint that does not sit behind this middleware,
+ *      inside `authenticateStreamRequest`.
+ *   2. A token whose session has been explicitly DENIED — the
+ *      `isSessionDenied` check inside `requireAuth` itself, at :262 below.
+ *   3. In `notification-stream.controller.ts`'s `authenticateStreamRequest`
+ *      only: the same denial check as (2), plus a token that carries no
+ *      `sid` claim at all — that endpoint has no tolerance for one (unlike
+ *      this middleware's own `payload.sid &&` guard in `requireAuth`, the
+ *      same statement item 2 cites), so a sid-less token is rejected
+ *      outright rather than admitted until it expires.
  */
 export const ACCESS_TOKEN_EXPIRED_CODE = 'ACCESS_TOKEN_EXPIRED'
 
@@ -188,6 +232,42 @@ export async function requireAuth(
   try {
     const token = getBearerToken(request)
     const { payload } = verifyBearerToken(token)
+    // A token with no `sid` predates this claim; accept it until it
+    // expires. The real bound on how long this tolerance needs to exist is
+    // NOT a release cycle — it is `ACCESS_TOKEN_TTL` (fifteen minutes by
+    // default) from the moment this deploy first starts minting `sid` into
+    // every new token. No token signed before that moment can still carry
+    // a valid, unexpired signature once that long has passed, so
+    // `payload.sid` is guaranteed truthy for every token that reaches this
+    // line, and this whole `if` becomes unreachable dead code at that
+    // point, not merely low-risk to remove.
+    //
+    // WHEN removing it, replace the branch with an explicit check ahead of
+    // it — `if (!payload.sid) throw new HttpError('Access token missing
+    // session', 401, ACCESS_TOKEN_EXPIRED_CODE)`, mirroring
+    // `notification-stream.controller.ts`'s `authenticateStreamRequest` —
+    // rather than merely deleting the `payload.sid &&` prefix. Deleting
+    // only the prefix does not compile (`isSessionDenied` takes `string`,
+    // `payload.sid` is `string | undefined`), and reaching for a
+    // type-level fix instead — making `sid` REQUIRED on
+    // `AccessTokenPayload` so `verifyAccessToken` itself rejects a sid-less
+    // token as `'invalid'` — silently changes the client-facing outcome:
+    // that path carries no `ACCESS_TOKEN_EXPIRED_CODE`, so the axios
+    // interceptor keyed on that code (react-boilerplate's
+    // interceptors.ts) does NOT retry after a refresh — `if (!isExpired)`
+    // rejects the error straight to the caller. It does not sign the user
+    // out either (`redirectToLogin` sits in the catch around the refresh,
+    // which never runs on this path), which is worse, not better: the
+    // user is left STUCK, every REST call failing, until the token
+    // expires on its own and the expired path finally triggers a refresh.
+    // The explicit check above is what keeps this cheap: it costs one
+    // legitimate user holding a genuinely pre-`sid` token a single 401
+    // carrying the code their client already knows means "refresh and
+    // retry". This wave does not remove the tolerance; whoever does only
+    // needs to confirm the window above has passed.
+    if (payload.sid && (await isSessionDenied(payload.sid))) {
+      throw new HttpError('Session ended', 401, ACCESS_TOKEN_EXPIRED_CODE)
+    }
     request.user = await loadAuthenticatedUser(payload.sub)
     next()
   } catch (error) {

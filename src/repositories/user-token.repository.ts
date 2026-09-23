@@ -35,6 +35,7 @@ import {
   type Touched,
 } from '@/repositories/base.repository'
 import { db } from '@/services/database.service'
+import { denySession } from '@/services/session-denylist.service'
 
 /**
  * Query access to the `user_tokens` table: token issuance, lookup by hash,
@@ -112,10 +113,12 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
 
   /**
    * Revoke every still-live token sharing a session id — the whole rotation
-   * chain for one login. Used both by an explicit single-session logout and
-   * by reuse detection to contain a compromised chain.
+   * chain for one login — and deny that session's access tokens
+   * (best-effort — see `denySession`). Used both by an explicit
+   * single-session logout and by reuse detection to contain a compromised
+   * chain.
    * @param sessionId - The session id shared by every token in the chain.
-   * @returns Resolves once every matching row is revoked.
+   * @returns Resolves once every matching row is revoked and the session's access tokens are denied, best-effort.
    */
   async revokeAllForSession(sessionId: string): Promise<void> {
     await db
@@ -126,17 +129,40 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
           sql`${userTokenModel.sessionId} = ${sessionId} and ${userTokenModel.revokedAt} is null`
         )
       )
+    // Logout and refresh-token REUSE DETECTION both funnel through this
+    // method already (token.utilities.ts's revokeRefreshToken and
+    // rotateRefreshToken), so denying here covers both without a call site
+    // having to remember to.
+    await denySession(sessionId)
   }
 
   /**
    * Revoke every still-live token belonging to a user, across every
-   * session. Used where every session must end at once — e.g. a password
-   * change.
+   * session, and deny each revoked session's access tokens. Used where
+   * every session must end at once — e.g. a password reset — and is what
+   * makes that reset end an already-issued access token immediately,
+   * rather than leaving it usable until it naturally expires.
+   *
+   * This method has no purpose predicate — it deliberately revokes
+   * `password_reset`, `email_verification`, and every other purpose too,
+   * not just `'refresh'` rows. `sessionId` is only ever set on a
+   * `'refresh'` row (user-token.model.ts), so a revoked non-refresh row
+   * contributes `sessionId: null` and is filtered out before denying — it
+   * denies nothing on its own. An entire rotation chain shares one session
+   * id, so the surviving ids are deduplicated before denying each one.
+   *
+   * KNOWN GAP, not fixed here: a session mid-rotation when this runs — the
+   * old refresh row already claimed by `rotateRefreshToken`, the new one
+   * not yet written — survives on both the revocation and denial side,
+   * because the row this method's `WHERE` clause would otherwise catch
+   * does not exist yet at the instant this query runs. Real, pre-existing,
+   * and needs the rotation and this revocation to share a transaction to
+   * close properly; not attempted here.
    * @param userId - The user whose tokens should all be revoked.
-   * @returns Resolves once every matching row is revoked.
+   * @returns Resolves once every matching row is revoked and every revoked session's access tokens are denied.
    */
   async revokeAllForUser(userId: string): Promise<void> {
-    await db
+    const revoked = await db
       .update(userTokenModel)
       .set(this.touched({ revokedAt: sql`now()` }))
       .where(
@@ -144,6 +170,14 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
           sql`${userTokenModel.userId} = ${userId} and ${userTokenModel.revokedAt} is null`
         )
       )
+      .returning({ sessionId: userTokenModel.sessionId })
+
+    const sessionIds = new Set(
+      revoked
+        .map((row) => row.sessionId)
+        .filter((sessionId): sessionId is string => sessionId !== null)
+    )
+    await Promise.all([...sessionIds].map((sessionId) => denySession(sessionId)))
   }
 
   /**

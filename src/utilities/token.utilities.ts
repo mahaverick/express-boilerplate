@@ -1,7 +1,9 @@
 // src/utilities/token.utilities.ts
 //
 // Access tokens are signed JWTs (jsonwebtoken) — short-lived, stateless,
-// carrying only the user id (`sub`). Refresh tokens are the opposite on
+// carrying the user id (`sub`) plus the session and token ids (`sid`,
+// `jti` — see AccessTokenPayload for why each exists). Refresh tokens are
+// the opposite on
 // every axis: OPAQUE random strings (crypto.randomBytes(32)), never JWTs.
 // A JWT refresh token cannot be revoked without a server-side store anyway
 // (the whole point of a refresh token is that it MUST be revocable), so
@@ -18,21 +20,23 @@
 // how the race that would otherwise defeat this is closed — and how that
 // same primitive now also guards email-verification and password-reset
 // tokens, scoped so one purpose's token can never be claimed as another's.
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import jwt from 'jsonwebtoken'
 import { getEnv } from '@/configs/env.config'
 import type { TokenPurpose, UserToken } from '@/database/models/user-token.model'
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/middlewares/error.middleware'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
-import { parseDurationMs } from '@/utilities/duration.utilities'
+import { MS_PER_SECOND, requireDurationMs } from '@/utilities/duration.utilities'
 
 // jsonwebtoken's `expiresIn` option is typed against `ms`'s own
 // `StringValue` literal union — the identical narrowness
 // duration.utilities.ts exists to work around — so this module converts a
 // validated TTL to whole SECONDS (jsonwebtoken's numeric `expiresIn` unit)
-// once, here, rather than fighting that type a second time.
-const MS_PER_SECOND = 1000
+// once, here, rather than fighting that type a second time. `MS_PER_SECOND`
+// itself lives in duration.utilities.ts, not here — see that module's own
+// comment for why session-denylist.service.ts needing the same constant
+// made this its one definition.
 
 // A raw token's length in bytes before hex-encoding, for every purpose. 32
 // bytes (256 bits) hex-encodes to the 64 characters user-token.model.ts's
@@ -49,6 +53,17 @@ const userTokenRepository = new UserTokenRepository()
  */
 export interface AccessTokenPayload {
   sub: string
+  /**
+   * The session this token belongs to. Optional ONLY so that tokens minted
+   * before this claim existed keep verifying for one release; a token
+   * without it cannot be revoked and is accepted until it expires.
+   */
+  sid?: string
+  /**
+   * This token's own id. Not checked — it exists so a token accepted after
+   * a Redis flush can be identified in logs.
+   */
+  jti?: string
 }
 
 /**
@@ -77,25 +92,6 @@ export interface IssuedToken {
   userId: string
   purpose: Exclude<TokenPurpose, 'refresh'>
   expiresAt: Date
-}
-
-/**
- * Resolve a validated TTL string to milliseconds, trusting the invariant
- * `env.config.ts`'s refinement already enforced at boot.
- * @param value - An `ACCESS_TOKEN_TTL`/`REFRESH_TOKEN_TTL`-shaped value already known to be `ms()`-parseable.
- * @returns The duration in milliseconds.
- * @throws {Error} Only if that boot-time invariant was somehow violated.
- */
-export function requireDurationMs(value: string): number {
-  const parsed = parseDurationMs(value)
-  if (parsed === undefined) {
-    // Unreachable in practice: getEnv() already rejects an unparseable TTL
-    // at boot (env.config.ts). Guards the invariant explicitly rather than
-    // asserting it away, so a future change that weakens that refinement
-    // fails loudly here instead of silently signing a token with NaN.
-    throw new Error(`Invalid duration string: "${value}"`)
-  }
-  return parsed
 }
 
 /**
@@ -155,11 +151,12 @@ async function createTokenRow(
 /**
  * Sign a short-lived access token carrying a user's id.
  * @param user - The authenticated user.
+ * @param sessionId - The session this token belongs to.
  * @returns A signed JWT, expiring after `ACCESS_TOKEN_TTL`.
  */
-export function signAccessToken(user: User): string {
+export function signAccessToken(user: User, sessionId: string): string {
   const env = getEnv()
-  const payload: AccessTokenPayload = { sub: user.id }
+  const payload: AccessTokenPayload = { sub: user.id, sid: sessionId, jti: randomUUID() }
   return jwt.sign(payload, env.JWT_ACCESS_SECRET, {
     algorithm: 'HS256',
     expiresIn: Math.floor(requireDurationMs(env.ACCESS_TOKEN_TTL) / MS_PER_SECOND),
@@ -207,7 +204,15 @@ export function verifyAccessToken(token: string): VerifyAccessTokenResult {
     if (typeof decoded === 'string' || typeof decoded.sub !== 'string') {
       return { ok: false, reason: 'invalid' }
     }
-    return { ok: true, payload: { sub: decoded.sub } }
+    // Built incrementally, not as an object literal with `sid: undefined` /
+    // `jti: undefined` inline: this repo's `exactOptionalPropertyTypes`
+    // treats an optional property explicitly set to `undefined` as a type
+    // error distinct from the property being absent, so a legacy token
+    // (no `sid`/`jti` claim) must OMIT the key, not assign it `undefined`.
+    const payload: AccessTokenPayload = { sub: decoded.sub }
+    if (typeof decoded.sid === 'string') payload.sid = decoded.sid
+    if (typeof decoded.jti === 'string') payload.jti = decoded.jti
+    return { ok: true, payload }
   } catch (error) {
     return { ok: false, reason: error instanceof jwt.TokenExpiredError ? 'expired' : 'invalid' }
   }
@@ -404,17 +409,19 @@ export async function rotateRefreshToken(raw: string): Promise<IssuedRefreshToke
 
 /**
  * Revoke every live refresh token in one session — every token descended
- * from one login, on one device. Used by a single-session logout, and by
- * `rotateRefreshToken`'s reuse detection to contain a compromised chain.
+ * from one login, on one device — and deny that session's access tokens
+ * (best-effort — see `denySession`). Used by a single-session logout, and
+ * by `rotateRefreshToken`'s reuse detection to contain a compromised chain.
  * @param sessionId - The session (rotation-chain) id to revoke.
- * @returns Resolves once every token in the session is revoked.
+ * @returns Resolves once every token in the session is revoked and its access tokens are denied, best-effort.
  */
 export async function revokeSession(sessionId: string): Promise<void> {
   await userTokenRepository.revokeAllForSession(sessionId)
 }
 
 /**
- * Revoke the session a raw refresh token belongs to — logout's primitive.
+ * Revoke the session a raw refresh token belongs to, and deny its access
+ * tokens (best-effort — see `denySession`) — logout's primitive.
  *
  * Resolves quietly for a token that is missing, forged, already revoked, or
  * issued for a different purpose entirely (a password-reset or
@@ -427,7 +434,7 @@ export async function revokeSession(sessionId: string): Promise<void> {
  * module) and the login endpoint (auth.controller.ts) already apply to
  * their own callers.
  * @param raw - The raw refresh token presented by the client.
- * @returns Resolves once the token's session (if any matched) is revoked.
+ * @returns Resolves once the token's session (if any matched) is revoked and its access tokens are denied, best-effort.
  */
 export async function revokeRefreshToken(raw: string): Promise<void> {
   const existing = await userTokenRepository.findByHash(hashToken(raw))
@@ -438,10 +445,11 @@ export async function revokeRefreshToken(raw: string): Promise<void> {
 
 /**
  * Revoke every live refresh token belonging to a user, across every
- * session. Used where every session must end at once — e.g. a password
- * change, or a "log out everywhere" action.
+ * session, and deny each revoked session's access tokens
+ * (best-effort — see `denySession`). Used where every session must end at
+ * once — e.g. a password change, or a "log out everywhere" action.
  * @param userId - The user whose sessions should all end.
- * @returns Resolves once every one of the user's tokens is revoked.
+ * @returns Resolves once every one of the user's tokens is revoked and each revoked session's access tokens are denied, best-effort.
  */
 export async function revokeAllSessions(userId: string): Promise<void> {
   await userTokenRepository.revokeAllForUser(userId)

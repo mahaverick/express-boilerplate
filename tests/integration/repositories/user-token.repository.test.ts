@@ -12,6 +12,7 @@ import { userTokenModel } from '@/database/models/user-token.model'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { db, sql } from '@/services/database.service'
+import { isSessionDenied } from '@/services/session-denylist.service'
 import { issueRefreshToken, issueToken, rotateRefreshToken } from '@/utilities/token.utilities'
 
 const userRepository = new UserRepository()
@@ -281,6 +282,52 @@ describe('UserTokenRepository', () => {
     expect(firstRow?.revokedAt).not.toBeNull()
     expect(secondRow?.revokedAt).not.toBeNull()
     expect(otherUsersRow?.revokedAt).toBeNull()
+  })
+
+  it('revokeAllForUser denies every session it revoked, and only those', async () => {
+    const userId = await createUser()
+    const otherUserId = await createUser()
+
+    const sessionIdOne = randomUUID()
+    const sessionIdTwo = randomUUID()
+    const otherUsersSessionId = randomUUID()
+
+    await userTokenRepository.create({
+      userId,
+      purpose: 'refresh',
+      sessionId: sessionIdOne,
+      tokenHash: uniqueHash(),
+      expiresAt: new Date(Date.now() + 60_000),
+    })
+    await userTokenRepository.create({
+      userId,
+      purpose: 'refresh',
+      sessionId: sessionIdTwo,
+      tokenHash: uniqueHash(),
+      expiresAt: new Date(Date.now() + 60_000),
+    })
+    // No sessionId: proves the null filter neither crashes nor denies a
+    // bogus key built from `null` — this row contributes nothing to either
+    // assertion below.
+    await userTokenRepository.create({
+      userId,
+      purpose: 'password_reset',
+      tokenHash: uniqueHash(),
+      expiresAt: new Date(Date.now() + 60_000),
+    })
+    await userTokenRepository.create({
+      userId: otherUserId,
+      purpose: 'refresh',
+      sessionId: otherUsersSessionId,
+      tokenHash: uniqueHash(),
+      expiresAt: new Date(Date.now() + 60_000),
+    })
+
+    await userTokenRepository.revokeAllForUser(userId)
+
+    expect(await isSessionDenied(sessionIdOne)).toBe(true)
+    expect(await isSessionDenied(sessionIdTwo)).toBe(true)
+    expect(await isSessionDenied(otherUsersSessionId)).toBe(false)
   })
 
   // `softDelete`/`markDeleted` (BaseRepository, base.repository.ts) — this

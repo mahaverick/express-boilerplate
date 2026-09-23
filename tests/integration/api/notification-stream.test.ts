@@ -34,14 +34,17 @@ import type { Notification } from '@/database/models/notification.model'
 import type { User } from '@/database/models/user.model'
 import { ACCESS_TOKEN_EXPIRED_CODE } from '@/middlewares/auth.middleware'
 import { NotificationRepository } from '@/repositories/notification.repository'
+import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { emitNotification, listenerCount } from '@/services/notification-emitter.service'
+import { denySession } from '@/services/session-denylist.service'
 import { signAccessToken } from '@/utilities/token.utilities'
 import { withMutatedMethod } from '../../helpers/mutate'
 
 const userRepository = new UserRepository()
 const notificationRepository = new NotificationRepository()
+const userTokenRepository = new UserTokenRepository()
 
 /**
  * One parsed SSE event — the fields `notification-stream.controller.ts`'s
@@ -124,6 +127,12 @@ class SseConnection {
   private buffer = ''
   private readonly ready: Promise<IncomingMessage>
   private readonly ended: Promise<void>
+  /**
+   * How many of `frames` `nextFrame` has already handed out — so repeated
+   * calls advance rather than all returning the first frame that ever
+   * arrived.
+   */
+  private nextFrameIndex = 0
   readonly request: http.ClientRequest
   response: IncomingMessage | undefined
   /**
@@ -205,6 +214,45 @@ class SseConnection {
    */
   destroy(): void {
     this.request.destroy()
+  }
+
+  /**
+   * Wait for the next frame this connection has not yet handed out —
+   * proof the stream is actually alive and delivering, not merely that
+   * headers arrived.
+   * @param timeoutMs - How long to wait before giving up. Defaults to 5000ms.
+   * @returns The next unread frame.
+   * @throws {Error} When no new frame arrives within `timeoutMs`.
+   */
+  async nextFrame(timeoutMs = 5000): Promise<SseFrame> {
+    await waitUntil(() => this.frames.length > this.nextFrameIndex, timeoutMs)
+    const frame = this.frames[this.nextFrameIndex]
+    this.nextFrameIndex += 1
+    if (!frame) {
+      throw new Error('unreachable: waitUntil already guaranteed a frame at this index')
+    }
+    return frame
+  }
+
+  /**
+   * Whether the server ended this response within `timeoutMs` — resolves
+   * `false` on a timeout rather than rejecting, so a test asserting a
+   * stream stays OPEN doesn't need to catch anything.
+   * @param timeoutMs - How long to wait for the response to end.
+   * @returns True once the response has ended; false if `timeoutMs` elapses first.
+   */
+  async closed(timeoutMs: number): Promise<boolean> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timeoutPromise = new Promise<boolean>((resolve) => {
+      timer = setTimeout(() => resolve(false), timeoutMs)
+    })
+    const endPromise = (async (): Promise<boolean> => {
+      await this.ended
+      return true
+    })()
+    const hasClosed = await Promise.race([endPromise, timeoutPromise])
+    if (timer) clearTimeout(timer)
+    return hasClosed
   }
 }
 
@@ -324,7 +372,30 @@ describe('GET /api/v1/notifications/stream', () => {
   async function createAuthenticatedUser(): Promise<{ user: User; token: string }> {
     const user = await userRepository.create({ email: uniqueEmail() })
     createdUserIds.push(user.id)
-    return { user, token: signAccessToken(user) }
+    return { user, token: signAccessToken(user, randomUUID()) }
+  }
+
+  /**
+   * Open an authenticated SSE stream for a brand-new user, capturing the
+   * session id its token was minted with — unlike `createAuthenticatedUser`,
+   * whose `signAccessToken(user, randomUUID())` throws its session id away,
+   * a caller here can revoke this exact session afterward.
+   * @returns The opened connection, its user id, and its session id.
+   */
+  async function openStreamForNewSession(): Promise<{
+    stream: SseConnection
+    userId: string
+    sessionId: string
+  }> {
+    const user = await userRepository.create({ email: uniqueEmail() })
+    createdUserIds.push(user.id)
+    const sessionId = randomUUID()
+    const token = signAccessToken(user, sessionId)
+
+    const stream = openStream(`/api/v1/notifications/stream?token=${encodeURIComponent(token)}`)
+    await stream.waitForResponse()
+
+    return { stream, userId: user.id, sessionId }
   }
 
   it('opens an SSE stream with the expected headers for a valid token', async () => {
@@ -608,5 +679,110 @@ describe('GET /api/v1/notifications/stream', () => {
     expect(() => emitNotification(user.id, notification)).not.toThrow()
     await sleep(100)
     expect(connection.frames.some((frame) => frame.event === 'notification')).toBe(false)
+  })
+
+  // requireAuth (auth.middleware.ts) rejects a denied session, but only at
+  // connect — it never runs again on a connection already open. This
+  // endpoint doesn't sit behind requireAuth at all (see this controller's
+  // own header comment), and its own connect-time check
+  // (authenticateStreamRequest) has the same one-shot limitation. The
+  // heartbeat is the only thing that recurs on an open SSE connection, so
+  // it is the only place a revoked session can actually be caught here —
+  // this test proves that closes the stream, not merely that the session
+  // is rejected on a fresh connect (already covered by
+  // auth.middleware.test.ts's own denylist test).
+  it('closes an open stream once its session is revoked', async () => {
+    const { stream, userId, sessionId } = await openStreamForNewSession()
+
+    // Alive first, or the assertion below proves nothing. The first frame
+    // to arrive is always a heartbeat (no notification is emitted here) —
+    // this just proves the connection is live before revoking it.
+    await expect(stream.nextFrame()).resolves.toBeDefined()
+
+    await userTokenRepository.revokeAllForSession(sessionId)
+
+    // Within one heartbeat, not immediately: the check rides the existing
+    // interval rather than adding a second timer.
+    await expect(stream.closed(getEnv().SSE_HEARTBEAT_INTERVAL_MS * 2)).resolves.toBe(true)
+
+    // The heartbeat's own close path must clean up exactly like an
+    // ordinary client disconnect does — not merely end the HTTP response
+    // while leaving the emitter subscription (and the interval) behind.
+    await waitUntil(() => listenerCount(userId) === 0, 2000)
+    expect(listenerCount(userId)).toBe(0)
+  }, 10_000)
+
+  // Pairs with the test above: that one proves a session denied AFTER
+  // connect closes an already-open stream (Task 5's heartbeat, the only
+  // thing that recurs on an open connection). This one proves a session
+  // denied BEFORE connect never gets to open a stream at all — a different
+  // code path (this task's check inside authenticateStreamRequest, at
+  // connect) that Task 5's heartbeat cannot reach, since it never runs
+  // until a stream is already open.
+  it('refuses to open a stream for an already-denied session', async () => {
+    const user = await userRepository.create({ email: uniqueEmail() })
+    createdUserIds.push(user.id)
+    const sessionId = randomUUID()
+    const token = signAccessToken(user, sessionId)
+
+    // denySession directly, not revokeAllForSession — this test is about
+    // authenticateStreamRequest's own denylist read, not about revocation
+    // writing that entry (already covered by user-token.repository.test.ts
+    // and the "closes an open stream" test above).
+    await denySession(sessionId)
+
+    const connection = openStream(`/api/v1/notifications/stream?token=${encodeURIComponent(token)}`)
+    const response = await connection.waitForResponse()
+
+    // A rejection thrown by authenticateStreamRequest happens before
+    // response.writeHead, so this is the ordinary JSON 401 envelope, not an
+    // event-stream that opens and then closes.
+    expect(response.statusCode).toBe(401)
+    expect(response.headers['content-type']).not.toContain('text/event-stream')
+  })
+
+  // The next two tests are a pair: a positive control proving the fixture
+  // is sound, and the actual assertion. Unlike requireAuth (which tolerates
+  // a sid-less token until it expires — auth.middleware.test.ts's own
+  // 'accepts a token with no `sid` claim' pair, ~163-260), this endpoint
+  // refuses one outright at connect — see authenticateStreamRequest's own
+  // comment (notification-stream.controller.ts) for why a connect-time 401
+  // is cheap enough here that no such tolerance is needed.
+  it('opens a stream for an ordinary signAccessToken token — the positive control for the next test', async () => {
+    const user = await userRepository.create({ email: uniqueEmail() })
+    createdUserIds.push(user.id)
+    const token = signAccessToken(user, randomUUID())
+
+    const connection = openStream(`/api/v1/notifications/stream?token=${encodeURIComponent(token)}`)
+    const response = await connection.waitForResponse()
+
+    expect(response.statusCode).toBe(200)
+    expect(response.headers['content-type']).toBe('text/event-stream')
+  })
+
+  it('refuses to open a stream for a hand-signed token with no `sid` claim at all', async () => {
+    const user = await userRepository.create({ email: uniqueEmail() })
+    createdUserIds.push(user.id)
+    // Hand-signed, deliberately NOT via signAccessToken: signAccessToken
+    // always sets `sid`, so it cannot produce the shape this test needs —
+    // a token whose payload never had a `sid` key at all (not
+    // `sid: undefined`; a JWT claim is either present in the signed
+    // payload or absent, there is no way to sign "explicitly undefined").
+    const token = jwt.sign({ sub: user.id }, getEnv().JWT_ACCESS_SECRET, {
+      algorithm: 'HS256',
+      expiresIn: '15m',
+    })
+
+    const connection = openStream(`/api/v1/notifications/stream?token=${encodeURIComponent(token)}`)
+    const response = await connection.waitForResponse()
+
+    // A rejection thrown by authenticateStreamRequest happens before
+    // response.writeHead, so this is the ordinary JSON 401 envelope, not an
+    // event-stream that opens and then closes. The positive control above,
+    // using the exact same request shape and helper minus the `sid` claim,
+    // is what attributes this 401 to the missing claim rather than to a
+    // broken fixture.
+    expect(response.statusCode).toBe(401)
+    expect(response.headers['content-type']).not.toContain('text/event-stream')
   })
 })

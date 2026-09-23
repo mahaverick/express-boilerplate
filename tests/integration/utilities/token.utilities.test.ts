@@ -46,6 +46,13 @@ function hashRawToken(raw: string): string {
 const userRepository = new UserRepository()
 const userTokenRepository = new UserTokenRepository()
 
+// vitest types `expect.any(...)` as `any` (it's an asymmetric matcher, not a
+// real string) — assigning it directly into an object literal's property
+// trips @typescript-eslint/no-unsafe-assignment. The `as unknown as string`
+// cast resolves that at the type level only (see tests/integration/api/
+// auth.test.ts's own `ANY_STRING`, which this mirrors for this file).
+const ANY_STRING = expect.any(String) as unknown as string
+
 /**
  * A disposable email, unique to one test run.
  * @returns An email guaranteed unique to this call.
@@ -84,7 +91,8 @@ describe('refresh token issuance, rotation, and revocation', () => {
 
   it('issues an access token carrying the user id and an expiry', async () => {
     const user = await createUserRow()
-    const token = signAccessToken(user)
+    const sessionId = randomUUID()
+    const token = signAccessToken(user, sessionId)
 
     const decoded = jwt.decode(token)
     if (decoded === null || typeof decoded === 'string') {
@@ -99,8 +107,13 @@ describe('refresh token issuance, rotation, and revocation', () => {
     // payload — see token.utilities.ts's own header comment on
     // VerifyAccessTokenResult. Asserting the full `{ ok: true, payload }`
     // shape (not just `payload`) proves acceptance, not merely that a
-    // payload-shaped object came back.
-    expect(verifyAccessToken(token)).toEqual({ ok: true, payload: { sub: user.id } })
+    // payload-shaped object came back. `sid`/`jti` are now part of that
+    // shape (token.utilities.ts's signAccessToken) — `jti` is asserted only
+    // as ANY_STRING since its value is random by design.
+    expect(verifyAccessToken(token)).toEqual({
+      ok: true,
+      payload: { sub: user.id, sid: sessionId, jti: ANY_STRING },
+    })
   })
 
   it('issues a refresh token whose hash — never the raw value — is stored', async () => {

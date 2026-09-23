@@ -877,4 +877,45 @@ describe('POST /api/v1/auth/register and /login', () => {
       }
     )
   })
+
+  describe('logout', () => {
+    it('stops honouring the access token as soon as the user logs out', async () => {
+      // registerVerifiedUser + login, not signAccessToken(user, randomUUID()):
+      // a fabricated session id has no user_tokens row behind it, so the
+      // denylist (which denies by PRESENCE) would never deny it and this
+      // test would pass vacuously once Task 4 lands. The access token must
+      // carry the `sid` this login actually created.
+      const { email } = await registerVerifiedUser()
+      const { response: loginResponse, body: loginBody } = await login(email, VALID_PASSWORD)
+      const accessToken = loginBody.data?.accessToken
+      expect(accessToken).toBeDefined()
+
+      const refreshCookie = findRefreshTokenCookie(loginResponse)
+      expect(refreshCookie).toBeDefined()
+
+      // Works before logout — the token is genuinely valid for a live
+      // session.
+      const beforeLogout = await request(app)
+        .get('/api/v1/profile')
+        .set('Authorization', `Bearer ${accessToken as string}`)
+      expect(beforeLogout.status).toBe(200)
+
+      // The refresh cookie (not the bearer token) is what tells logout
+      // which session to revoke — see auth.controller.ts's `logout`.
+      const logoutResponse = await request(app)
+        .post('/api/v1/auth/logout')
+        .set('Cookie', refreshCookie as string)
+      expect(logoutResponse.status).toBe(200)
+
+      // THE WHOLE POINT: the same access token, which has NOT expired, is
+      // now refused. As of this task, this assertion STILL FAILS —
+      // `revokeAllForSession` writes the denylist entry, but nothing reads
+      // it yet. Task 4 adds the read side (requireAuth checking
+      // isSessionDenied); see task-3-brief.md.
+      const afterLogout = await request(app)
+        .get('/api/v1/profile')
+        .set('Authorization', `Bearer ${accessToken as string}`)
+      expect(afterLogout.status).toBe(401)
+    })
+  })
 })

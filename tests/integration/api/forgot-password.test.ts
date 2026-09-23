@@ -316,6 +316,41 @@ describe('POST /api/v1/auth/reset-password', () => {
     })
   })
 
+  // The path a user takes the moment they believe they are compromised:
+  // reset the password to end every session. Before this task,
+  // resetPassword (via revokeAllSessions -> revokeAllForUser) revoked
+  // every refresh-token row — no new refresh was possible — but denied
+  // zero access tokens, so an attacker holding a stolen access token could
+  // keep using it for the rest of ACCESS_TOKEN_TTL (15 minutes) even after
+  // the legitimate user "fixed" things. This is the test that would have
+  // caught that gap.
+  it('refuses an access token issued before the reset, once the reset completes', async () => {
+    const { user, email } = await seedUser()
+
+    // The real login flow, not a fabricated session id: the denylist
+    // denies by PRESENCE, so a token carrying an unknown sid would never
+    // be denied and this assertion would pass vacuously.
+    const loginResponse = await login(email, VALID_PASSWORD)
+    const accessToken = envelopeOf<{ accessToken: string }>(loginResponse).data?.accessToken
+    expect(accessToken).toBeDefined()
+
+    const beforeReset = await request(app)
+      .get('/api/v1/profile')
+      .set('Authorization', `Bearer ${accessToken as string}`)
+    expect(beforeReset.status).toBe(200)
+
+    const resetToken = await seedResetToken(user.id)
+    const resetResponse = await resetPassword(resetToken, NEW_PASSWORD)
+    expect(resetResponse.status).toBe(200)
+
+    // THE WHOLE POINT: the same access token, which has NOT expired, is
+    // now refused.
+    const afterReset = await request(app)
+      .get('/api/v1/profile')
+      .set('Authorization', `Bearer ${accessToken as string}`)
+    expect(afterReset.status).toBe(401)
+  })
+
   it('rejects an expired token', async () => {
     const { user } = await seedUser()
     const token = await seedResetToken(user.id, -1000)
