@@ -316,10 +316,39 @@ From the audit of 2026-09-22, deliberately out of scope here:
    define or reference either.
 3. `Last-Event-ID` reaches the server from the browser, and the existing replay tests cover a
    real round trip rather than a synthetic one.
+
+   > **Partially met, recorded honestly rather than ticked.** The client sends the header and
+   > the server replays from it, and both halves are tested — the hook is asserted to send the
+   > id of the last delivered event on reconnect and no header at all on first connect, and the
+   > express integration suite covers replay, in-flight emission, deduplication, listener leaks
+   > and an unresolvable id. What does not exist is a single browser-driven test joining them:
+   > the two halves are proven separately, against each other's contract, not in one round
+   > trip. The reconnect-through-nginx e2e exercises a real disconnect but asserts on the
+   > reconnect, not on replayed content. Closing this means extending that e2e to seed a
+   > notification while the stream is down and assert it arrives on reconnect.
+
 4. Logging out invalidates outstanding access tokens immediately, proven by a test that
    logs out and asserts the next request 401s.
 5. Logging out **closes an open stream within one heartbeat interval**, proven by a test.
 6. CORS: an allowed origin succeeds with credentials, a disallowed origin's preflight fails,
    and `OPTIONS` on the SSE location returns 204 promptly — all asserted through the nginx
    image, not the dev proxy.
+
+   > **Met for the third clause, reworded for the other two.** `OPTIONS` on the SSE location
+   > does return 204 promptly through the image, off a location carrying
+   > `proxy_read_timeout 24h`, and `allowedHeaders` really does list `last-event-id` — that was
+   > the clause worth proving and it is proven.
+   >
+   > "A disallowed origin's preflight **fails**" was the wrong word. Measured: `cors@2.8.6`
+   > answers a disallowed origin by calling `next()` **without** handling the preflight at all,
+   > so the request falls through to whatever the route mounts — a 401 from `requireAuth` on
+   > `/notifications/stream`, a 200 with `Allow` on `/auth/login`. Nothing "fails"; the grant
+   > header is simply withheld, which is what actually stops the browser. The e2e asserts the
+   > absence of `Access-Control-Allow-Origin`, which is the check that matters.
+   >
+   > "An allowed origin succeeds **with credentials**" is not asserted through the image. The
+   > e2e sends `Origin: http://localhost:5173` because only `WEB_URL` is in the allowlist — the
+   > container's own origin is not — so the test proves the multi-frontend seam rather than
+   > this SPA's own traffic, which is same-origin and sends no preflight at all.
+
 7. Existing suites stay green in both repos.
