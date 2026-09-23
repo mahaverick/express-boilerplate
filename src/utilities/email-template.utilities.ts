@@ -1,17 +1,18 @@
 // src/utilities/email-template.utilities.ts
 //
-// Shared building blocks for the three plain-function email templates under
+// Shared building blocks for the four plain-function email templates under
 // src/templates/email/ — NOT a template engine. task-3-brief.md's
 // Controller addendum is explicit that this task must not build one (no
-// `{{placeholder}}` parser, no partials, no inheritance): three emails do
-// not justify that surface, so each template is a real TypeScript function
-// that builds its subject/text/html with ordinary template literals. What
+// `{{placeholder}}` parser, no partials, no inheritance): a handful of
+// emails do not justify that surface, so each template is a real
+// TypeScript function that builds its subject/text/html with ordinary
+// template literals. What
 // lives here is only the two small, genuinely-shared concerns every one of
 // those functions needs: escaping a value before it lands in the HTML part,
 // and refusing to render at all when a required value is missing.
 //
 /**
- * The three outbound email templates this app renders — the single source
+ * The four outbound email templates this app renders — the single source
  * of truth `EmailTemplateKey` is derived from, below. Closes the deferred
  * item from Task 2 (mailer.service.ts's `MailMessage.templateKey` shipped
  * as an unconstrained `string` because these keys did not exist yet — see
@@ -27,10 +28,11 @@ export const EMAIL_TEMPLATE_KEYS = [
   'email_verification',
   'password_reset',
   'registration_attempt',
+  'password_changed',
 ] as const
 
 /**
- * Which of this app's three outbound email templates rendered a given
+ * Which of this app's four outbound email templates rendered a given
  * message. Closes `MailMessage.templateKey` (mailer.service.ts) from an
  * unconstrained `string` into this union — the deferred item from Task 2's
  * addendum — and is also what `email_logs.template_key` (email-log.model.ts)

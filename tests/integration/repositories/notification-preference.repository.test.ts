@@ -160,6 +160,26 @@ describe('NotificationPreferenceRepository', () => {
         false
       )
     })
+
+    it('always returns true for password_changed’s email channel, even when a row disables it', async () => {
+      // Same non-disableable mechanism as verify_email above, but for a
+      // different reason (notification-preference.repository.ts's
+      // `NON_DISABLEABLE_EMAIL_TYPES` comment): this one locks nobody out —
+      // it exists so an attacker who has taken over the account cannot
+      // silence the one message that tells the real owner it happened.
+      const userId = await createUser()
+      await preferenceRepository.upsert(userId, 'password_changed', {
+        emailEnabled: false,
+        inAppEnabled: false,
+      })
+
+      expect(await preferenceRepository.isChannelEnabled(userId, 'password_changed', 'email')).toBe(
+        true
+      )
+      expect(
+        await preferenceRepository.isChannelEnabled(userId, 'password_changed', 'in_app')
+      ).toBe(false)
+    })
   })
 
   describe('getFullMatrix', () => {

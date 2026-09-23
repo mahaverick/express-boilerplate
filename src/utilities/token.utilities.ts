@@ -454,3 +454,21 @@ export async function revokeRefreshToken(raw: string): Promise<void> {
 export async function revokeAllSessions(userId: string): Promise<void> {
   await userTokenRepository.revokeAllForUser(userId)
 }
+
+/**
+ * Revoke every live session belonging to a user EXCEPT one, and deny each
+ * revoked session's access tokens (best-effort — see `denySession`). The
+ * password-change primitive: every OTHER session must end at once, while
+ * the session presenting the request that triggered the change is spared —
+ * ending it too would sign the caller out of the very request whose
+ * response they are about to receive.
+ * @param userId - The user whose sessions should all end, except one.
+ * @param sessionId - The one session id to spare.
+ * @returns Resolves once every other session's tokens are revoked and denied, best-effort.
+ */
+export async function revokeAllSessionsExceptCurrent(
+  userId: string,
+  sessionId: string
+): Promise<void> {
+  await userTokenRepository.revokeAllForUserExceptSession(userId, sessionId)
+}

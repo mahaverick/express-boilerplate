@@ -142,6 +142,36 @@ export const resetPasswordSchema = z.object({
 export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>
 
 /**
+ * Change-password request body: the caller's current password, and a new
+ * one.
+ *
+ * `currentPassword` carries NO policy — the identical reasoning this file's
+ * header comment gives for `loginSchema`'s password, applied to an
+ * authenticated caller instead of an anonymous one: a policy here would
+ * leak nothing useful (the caller already knows what they typed) and would
+ * answer a wrong-but-well-formed current password differently from a
+ * wrong-and-short one — a distinguishable 400 BEFORE the controller ever
+ * compares it against the stored hash, rather than the identical
+ * "incorrect" outcome both cases must produce. It would also incorrectly
+ * reject a caller's real, current password if that password predates
+ * today's policy (this schema's `newPassword` floor did not always exist),
+ * which `currentPassword` must never do — it is being verified, not set.
+ *
+ * `newPassword` goes through the SAME `registrationPasswordSchema`
+ * registration and reset-password use — not a fresh policy — for the exact
+ * reason this file's header comment gives for that schema existing at all.
+ */
+export const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1, 'Current password is required.'),
+  newPassword: registrationPasswordSchema,
+})
+
+/**
+ * The validated shape of a change-password request body.
+ */
+export type ChangePasswordInput = z.infer<typeof changePasswordSchema>
+
+/**
  * Parse a request body against a schema, translating a failure into the
  * envelope's field-level `errors` (error.middleware.ts / HttpError) rather
  * than a caller having to know to look for a zod-shaped error some other

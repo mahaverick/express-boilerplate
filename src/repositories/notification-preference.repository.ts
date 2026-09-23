@@ -61,22 +61,35 @@ export interface NotificationPreferenceMatrixEntry {
  */
 export type PreferenceMatrix = NotificationPreferenceMatrixEntry[]
 
-// Notification types whose email channel a user may never disable.
-// `'verify_email'`: a user who could turn off email for their OWN
-// verification message would lock themselves out of ever verifying their
-// account, with no other channel able to reach them (in-app notifications
-// are only visible to a user who is already logged in, which an unverified
-// account may not even be able to do, depending on how a later task gates
-// login). `'password_reset_requested'` is the identical lockout, one step
-// earlier: the whole point of forgot-password is that the user CANNOT log
-// in, so a disabled email channel would leave them with no channel at all —
-// worse than verify_email's case, since in-app is unreachable by
-// definition here, not merely by timing. `ReadonlySet<string>`, not
-// `ReadonlySet<NotificationType>`: `type` below is already narrowed to
-// `NotificationType` by `isChannelEnabled`'s own parameter, so the wider
-// element type costs nothing and avoids this set needing to be updated
-// every time `NOTIFICATION_TYPES` gains an entry that ISN'T meant to join
-// it.
+// Notification types whose email channel a user may never disable — for TWO
+// distinct reasons, not one stretched to cover both:
+//
+//   1. LOCKOUT. `'verify_email'`: a user who could turn off email for their
+//      OWN verification message would lock themselves out of ever verifying
+//      their account, with no other channel able to reach them (in-app
+//      notifications are only visible to a user who is already logged in,
+//      which an unverified account may not even be able to do, depending on
+//      how a later task gates login). `'password_reset_requested'` is the
+//      identical lockout, one step earlier: the whole point of
+//      forgot-password is that the user CANNOT log in, so a disabled email
+//      channel would leave them with no channel at all — worse than
+//      verify_email's case, since in-app is unreachable by definition here,
+//      not merely by timing.
+//   2. TAKEOVER SILENCING. `'password_changed'` locks nobody out — the
+//      caller who changed the password is, by definition, currently able to
+//      log in with it. The reason it belongs here anyway: if an attacker who
+//      has already taken over the account could disable this one email, they
+//      could change the password AND silence the one message that would
+//      tell the real owner it happened, buying themselves unlimited time
+//      before anyone notices. Non-disableable is what keeps that message
+//      reaching the owner regardless of what the attacker's own preference
+//      writes say.
+//
+// `ReadonlySet<string>`, not `ReadonlySet<NotificationType>`: `type` below
+// is already narrowed to `NotificationType` by `isChannelEnabled`'s own
+// parameter, so the wider element type costs nothing and avoids this set
+// needing to be updated every time `NOTIFICATION_TYPES` gains an entry that
+// ISN'T meant to join it.
 //
 // Kept in sync BY HAND with `NON_DISABLEABLE_NOTIFICATION_TYPES`
 // (notification.validators.ts) — that set is the WRITE-side mirror of this
@@ -86,6 +99,7 @@ export type PreferenceMatrix = NotificationPreferenceMatrixEntry[]
 const NON_DISABLEABLE_EMAIL_TYPES: ReadonlySet<string> = new Set<string>([
   'verify_email',
   'password_reset_requested',
+  'password_changed',
 ])
 
 /**
@@ -149,13 +163,15 @@ export class NotificationPreferenceRepository {
    * type — the single check a notification worker (a later task) makes
    * before delivering on that channel.
    *
-   * `'verify_email'`'s email channel is a fixed exception: it always
-   * answers true, regardless of any row a user may have — see
-   * `NON_DISABLEABLE_EMAIL_TYPES`'s own comment for why. Checked BEFORE
-   * the table is even queried, so this exception holds even if a row
-   * exists with `emailEnabled: false` for it (which nothing in this
-   * codebase's write path should produce, but this method does not trust
-   * that from the read side).
+   * A type's email channel is a fixed exception whenever it is in
+   * `NON_DISABLEABLE_EMAIL_TYPES` — today `'verify_email'`,
+   * `'password_reset_requested'`, and `'password_changed'`: it always
+   * answers true, regardless of any row a user may have — see that set's
+   * own comment for the two distinct reasons an entry can be there.
+   * Checked BEFORE the table is even queried, so this exception holds even
+   * if a row exists with `emailEnabled: false` for it (which nothing in
+   * this codebase's write path should produce, but this method does not
+   * trust that from the read side).
    *
    * Absent that exception, "no row" means "enabled" — the opt-out default
    * this file's header comment describes.

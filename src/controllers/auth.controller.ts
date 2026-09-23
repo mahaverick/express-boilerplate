@@ -42,6 +42,7 @@ import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { db } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
+import { PASSWORD_CHANGED_TEMPLATE_KEY } from '@/templates/email/password-changed.template'
 import { PASSWORD_RESET_TEMPLATE_KEY } from '@/templates/email/password-reset.template'
 import { REGISTRATION_ATTEMPT_TEMPLATE_KEY } from '@/templates/email/registration-attempt.template'
 import { requireDurationMs } from '@/utilities/duration.utilities'
@@ -52,6 +53,7 @@ import {
   issueRefreshToken,
   issueToken,
   revokeAllSessions,
+  revokeAllSessionsExceptCurrent,
   revokeRefreshToken,
   rotateRefreshToken,
   signAccessToken,
@@ -62,6 +64,7 @@ import {
   sendVerificationMail,
 } from '@/utilities/verification-mail.utilities'
 import {
+  changePasswordSchema,
   forgotPasswordSchema,
   loginSchema,
   parseBody,
@@ -711,6 +714,181 @@ export async function resetPassword(
 
     // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data", not undefined (which JSON.stringify omits entirely)
     successResponse(response, null, 'Password has been reset.')
+  } catch (error) {
+    next(error)
+  }
+}
+
+const FEDERATED_ONLY_MESSAGE =
+  'This account signs in with Google and has no password. Use forgot-password to set one.'
+
+/**
+ * The authenticated principal's id, guarding against a route reaching this
+ * handler without `requireAuth` ahead of it. Same pattern, and the same
+ * reasoning, as `authenticatedUserId` in profile.controller.ts and
+ * notification.controller.ts — a private copy per controller file rather
+ * than one shared export, since `Request.user` (express.d.ts) is typed
+ * `User | undefined` regardless of which router actually gates a given
+ * handler with `requireAuth`: today `changePassword` can only reach this
+ * with `request.user` unset if auth.routes.ts's own mount is wired wrong
+ * (it attaches `requireAuth` ahead of this handler), but a defensive 401
+ * costs nothing and turns a future routing mistake into an auth failure
+ * instead of `undefined` flowing into `userRepository.findById`.
+ * @param request - The incoming request.
+ * @returns The authenticated user's id.
+ * @throws {HttpError} 401, when `request.user` was never populated.
+ */
+function authenticatedUserId(request: Request): string {
+  if (!request.user) {
+    throw new HttpError('Authentication required', 401)
+  }
+  return request.user.id
+}
+
+/**
+ * Change the authenticated caller's own password.
+ *
+ * Sits on the auth router, per-route behind `requireAuth` (auth.routes.ts)
+ * — this router is otherwise public, unlike profile.routes.ts, which is
+ * gated router-wide. `request.user` is `AuthenticatedUser`
+ * (auth.middleware.ts), the narrow client-visible projection with no
+ * `passwordHash`; the real row is loaded again here because this handler
+ * needs the one field that projection deliberately excludes.
+ *
+ * Order, and why each step comes where it does:
+ *
+ *   1. Federated-only guard. A Google-only account's `passwordHash` is
+ *      `null` (user.model.ts) — CLAUDE.md's OAuth section already documents
+ *      that as "federated-only, use forgot-password to set one". Checked
+ *      BEFORE `isPasswordValid` even runs: that function never throws for a
+ *      missing hash (password.utilities.ts), it just reports no match —
+ *      which would tell this caller "wrong password" for an account that
+ *      has no password to be wrong about at all.
+ *   2. Verify the current password. Unlike `login`, a wrong answer here is
+ *      not an enumeration risk: the caller is already authenticated as
+ *      themselves (`requireAuth` loaded and validated the account), so a
+ *      distinguishable 400 leaks nothing they do not already know.
+ *   3. Reject a no-op. A second `isPasswordValid` call — against the NEW
+ *      password, not a plaintext `===` — so a caller "changing" their
+ *      password to its current value cannot silently spend everyone else's
+ *      session for nothing.
+ *   4. Hash and store.
+ *   5. Revoke every OTHER session — see the branch's own comment.
+ *   6. Enqueue the `password_changed` notification, fire-and-forget.
+ *   7. Respond, matching `resetPassword`'s envelope shape exactly.
+ * @param request - The incoming request, carrying `{ currentPassword, newPassword }`, authenticated by `requireAuth`.
+ * @param response - The response.
+ * @param next - Forwards a rejection to the terminal error handler.
+ */
+export async function changePassword(
+  request: Request,
+  response: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const input = parseBody(changePasswordSchema, request.body)
+
+    // request.user is narrowed to AuthenticatedUser (auth.middleware.ts) —
+    // no passwordHash. Re-load the real row for the one field that
+    // projection deliberately never carries.
+    const user = await userRepository.findById(authenticatedUserId(request))
+    if (!user) {
+      throw new HttpError('Account no longer exists or is inactive', 401)
+    }
+
+    if (!user.passwordHash) {
+      throw new HttpError(FEDERATED_ONLY_MESSAGE, 400)
+    }
+
+    const isCurrentPasswordCorrect = await isPasswordValid(input.currentPassword, user.passwordHash)
+    if (!isCurrentPasswordCorrect) {
+      throw new HttpError('Current password is incorrect.', 400)
+    }
+
+    const isSameAsCurrent = await isPasswordValid(input.newPassword, user.passwordHash)
+    if (isSameAsCurrent) {
+      throw new HttpError('New password must be different from the current password.', 400)
+    }
+
+    const passwordHash = await hashPassword(input.newPassword)
+
+    // `request.sessionId` (express.d.ts) is `string | undefined` — a token
+    // minted before the `sid` claim existed carries none (requireAuth's own
+    // `payload.sid &&` tolerance). When there IS a session to spare, spare
+    // exactly it — every other session ends, this request's own keeps
+    // working, which is the one property this endpoint exists to prove
+    // (see tests/integration/api/change-password.test.ts's two-real-sessions
+    // test). When there is none, there is nothing to distinguish this
+    // caller's token from any other — a sid-less token cannot be told apart
+    // from a stolen one presented from elsewhere — so it fails SAFE: revoke
+    // every session the user has, the caller's included, exactly as a
+    // password reset already does unconditionally.
+    //
+    // Precisely: every `user_tokens` row is revoked and every session id
+    // they carried is denied, so no session can refresh. The caller's OWN
+    // access token is the one thing not denied, because it names no session
+    // to deny — it keeps working until its own `exp`, at most
+    // `ACCESS_TOKEN_TTL`. That is requireAuth's documented one-release
+    // tolerance for pre-`sid` tokens playing out here, not a gap peculiar to
+    // this endpoint, and it is why the notice this sends says "every OTHER
+    // session" rather than naming the caller's device as the survivor.
+    if (request.sessionId) {
+      await revokeAllSessionsExceptCurrent(user.id, request.sessionId)
+    } else {
+      await revokeAllSessions(user.id)
+    }
+
+    // Stored AFTER the revocation, deliberately, and this ordering is the
+    // whole of the failure design. Both writes go to the same database, so
+    // one failing while the other has landed is rare — but it is not
+    // symmetric, and the safe half is this one.
+    //
+    // Store-then-revoke fails DANGEROUSLY: the password is already changed,
+    // every other session survives, no notice is sent, and the caller's
+    // retry is refused because the "current" password they type is now the
+    // old one. They believe they locked an attacker out and have not.
+    //
+    // Revoke-then-store fails SAFELY: the other sessions are gone, the
+    // password is unchanged, the caller signs back in with the password
+    // they still know and tries again. The cost is being signed out of
+    // other devices for a change that did not happen, which is an
+    // inconvenience rather than an exposure.
+    //
+    // A transaction would remove the window rather than choose a side, and
+    // this codebase does use `db.transaction()` elsewhere — but only for
+    // writes that are all Postgres. `denySession` (session-denylist.service.ts)
+    // writes to REDIS, so the denial half could never join it, and the
+    // atomicity would be partial in a way that reads as stronger than it is.
+    await userRepository.update(user.id, { passwordHash })
+
+    // Fire-and-forget: a mail failure must never 500 a password change that
+    // has already succeeded (Ruling T; see sendPasswordResetMailIfRegistered
+    // above for the identical pattern). This template's variables carry no
+    // secret at all — see password-changed.template.ts's own comment — so,
+    // unlike the verification/reset mails, there is no raw token riding
+    // along on this job.
+    const notificationJob = addNotificationJob({
+      userId: user.id,
+      type: 'password_changed',
+      title: 'Password changed',
+      body: `Your ${getEnv().APP_NAME} password was changed.`,
+      metadata: { templateKey: PASSWORD_CHANGED_TEMPLATE_KEY },
+      email: {
+        to: user.email,
+        templateKey: PASSWORD_CHANGED_TEMPLATE_KEY,
+        variables: {
+          firstName: user.firstName ?? MISSING_FIRST_NAME_FALLBACK,
+          appName: getEnv().APP_NAME,
+        },
+      },
+    })
+    // eslint-disable-next-line unicorn/prefer-await -- fire-and-forget: the mail must not block the response, and the change has already been committed regardless of whether it sends
+    notificationJob.catch((error: unknown) => {
+      logger.error('Password-changed mail failed', { error })
+    })
+
+    // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data", not undefined (which JSON.stringify omits entirely)
+    successResponse(response, null, 'Password has been changed.')
   } catch (error) {
     next(error)
   }
