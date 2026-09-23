@@ -134,3 +134,7 @@ dist
 # Local worktrees
 .worktrees/
 .superpowers/
+
+# Vitest reporter output (vitest.config.ts writes .vitest/json/output.json).
+# Generated on every run; was committed once by accident in #33.
+.vitest/
