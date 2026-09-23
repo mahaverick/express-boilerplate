@@ -113,11 +113,12 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
 
   /**
    * Revoke every still-live token sharing a session id — the whole rotation
-   * chain for one login — and deny that session's access tokens. Used both
-   * by an explicit single-session logout and by reuse detection to contain
-   * a compromised chain.
+   * chain for one login — and deny that session's access tokens
+   * (best-effort — see `denySession`). Used both by an explicit
+   * single-session logout and by reuse detection to contain a compromised
+   * chain.
    * @param sessionId - The session id shared by every token in the chain.
-   * @returns Resolves once every matching row is revoked and the session is denied.
+   * @returns Resolves once every matching row is revoked and the session's access tokens are denied, best-effort.
    */
   async revokeAllForSession(sessionId: string): Promise<void> {
     await db

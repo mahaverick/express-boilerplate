@@ -409,19 +409,19 @@ export async function rotateRefreshToken(raw: string): Promise<IssuedRefreshToke
 
 /**
  * Revoke every live refresh token in one session — every token descended
- * from one login, on one device — and deny that session's access tokens.
- * Used by a single-session logout, and by `rotateRefreshToken`'s reuse
- * detection to contain a compromised chain.
+ * from one login, on one device — and deny that session's access tokens
+ * (best-effort — see `denySession`). Used by a single-session logout, and
+ * by `rotateRefreshToken`'s reuse detection to contain a compromised chain.
  * @param sessionId - The session (rotation-chain) id to revoke.
- * @returns Resolves once every token in the session is revoked and denied.
+ * @returns Resolves once every token in the session is revoked and its access tokens are denied, best-effort.
  */
 export async function revokeSession(sessionId: string): Promise<void> {
   await userTokenRepository.revokeAllForSession(sessionId)
 }
 
 /**
- * Revoke and deny the session a raw refresh token belongs to — logout's
- * primitive.
+ * Revoke the session a raw refresh token belongs to, and deny its access
+ * tokens (best-effort — see `denySession`) — logout's primitive.
  *
  * Resolves quietly for a token that is missing, forged, already revoked, or
  * issued for a different purpose entirely (a password-reset or
@@ -434,7 +434,7 @@ export async function revokeSession(sessionId: string): Promise<void> {
  * module) and the login endpoint (auth.controller.ts) already apply to
  * their own callers.
  * @param raw - The raw refresh token presented by the client.
- * @returns Resolves once the token's session (if any matched) is revoked and denied.
+ * @returns Resolves once the token's session (if any matched) is revoked and its access tokens are denied, best-effort.
  */
 export async function revokeRefreshToken(raw: string): Promise<void> {
   const existing = await userTokenRepository.findByHash(hashToken(raw))
@@ -445,11 +445,11 @@ export async function revokeRefreshToken(raw: string): Promise<void> {
 
 /**
  * Revoke every live refresh token belonging to a user, across every
- * session, and deny each revoked session's access tokens. Used where every
- * session must end at once — e.g. a password change, or a "log out
- * everywhere" action.
+ * session, and deny each revoked session's access tokens
+ * (best-effort — see `denySession`). Used where every session must end at
+ * once — e.g. a password change, or a "log out everywhere" action.
  * @param userId - The user whose sessions should all end.
- * @returns Resolves once every one of the user's tokens is revoked and each revoked session is denied.
+ * @returns Resolves once every one of the user's tokens is revoked and each revoked session's access tokens are denied, best-effort.
  */
 export async function revokeAllSessions(userId: string): Promise<void> {
   await userTokenRepository.revokeAllForUser(userId)

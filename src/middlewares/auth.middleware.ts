@@ -93,14 +93,15 @@ const BEARER_PATTERN = /^Bearer\s+(\S+)$/
  * current, live session) is the correct and sufficient response:
  *
  *   1. An EXPIRED access token — `verifyAccessToken`'s `reason: 'expired'`,
- *      thrown at :180 below.
- *   2. A token whose session has been explicitly DENIED —
- *      `isSessionDenied`, at :247 below.
+ *      thrown inside this file's own `verifyBearerToken`, at :181 below.
+ *   2. A token whose session has been explicitly DENIED — the
+ *      `isSessionDenied` check inside `requireAuth` itself, at :262 below.
  *   3. In `notification-stream.controller.ts`'s `authenticateStreamRequest`
  *      only: the same denial check as (2), plus a token that carries no
  *      `sid` claim at all — that endpoint has no tolerance for one (unlike
- *      this middleware's own, see :232 below), so a sid-less token is
- *      rejected outright rather than admitted until it expires.
+ *      this middleware's own `payload.sid &&` guard in `requireAuth`, at
+ *      :233 below), so a sid-less token is rejected outright rather than
+ *      admitted until it expires.
  */
 export const ACCESS_TOKEN_EXPIRED_CODE = 'ACCESS_TOKEN_EXPIRED'
 
@@ -234,16 +235,30 @@ export async function requireAuth(
     // NOT a release cycle — it is `ACCESS_TOKEN_TTL` (fifteen minutes by
     // default) from the moment this deploy first starts minting `sid` into
     // every new token. No token signed before that moment can still carry
-    // a valid, unexpired signature once that long has passed, so this
-    // whole branch — the `payload.sid &&` guard, and the two words that
-    // make it a tolerance rather than a requirement — becomes unreachable
-    // dead code at that point, not merely low-risk to remove. Deleting it
-    // early, before that window closes, costs one legitimate user holding
-    // a genuinely pre-`sid` token a single 401 that their client answers
-    // with an ordinary refresh (see notification-stream.controller.ts's
-    // `authenticateStreamRequest`, which already has no equivalent
-    // tolerance, for why that cost is cheap). This wave does not remove it;
-    // whoever does only needs to confirm that window has passed.
+    // a valid, unexpired signature once that long has passed, so
+    // `payload.sid` is guaranteed truthy for every token that reaches this
+    // line, and this whole `if` becomes unreachable dead code at that
+    // point, not merely low-risk to remove.
+    //
+    // WHEN removing it, replace the branch with an explicit check ahead of
+    // it — `if (!payload.sid) throw new HttpError('Access token missing
+    // session', 401, ACCESS_TOKEN_EXPIRED_CODE)`, mirroring
+    // `notification-stream.controller.ts`'s `authenticateStreamRequest` —
+    // rather than merely deleting the `payload.sid &&` prefix. Deleting
+    // only the prefix does not compile (`isSessionDenied` takes `string`,
+    // `payload.sid` is `string | undefined`), and reaching for a
+    // type-level fix instead — making `sid` REQUIRED on
+    // `AccessTokenPayload` so `verifyAccessToken` itself rejects a sid-less
+    // token as `'invalid'` — silently changes the client-facing outcome:
+    // that path carries no `ACCESS_TOKEN_EXPIRED_CODE`, so the axios
+    // interceptor keyed on that code (react-boilerplate's
+    // interceptors.ts) does NOT retry after a refresh — it treats the 401
+    // as a real auth verdict and logs the user out. The explicit check
+    // above is what keeps this cheap: it costs one legitimate user holding
+    // a genuinely pre-`sid` token a single 401 carrying the code their
+    // client already knows means "refresh and retry" for ordinary REST
+    // calls, not a sign-out. This wave does not remove the tolerance;
+    // whoever does only needs to confirm the window above has passed.
     if (payload.sid && (await isSessionDenied(payload.sid))) {
       throw new HttpError('Session ended', 401, ACCESS_TOKEN_EXPIRED_CODE)
     }
