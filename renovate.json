@@ -14,9 +14,8 @@
       "allowedVersions": "<6.1.0"
     },
     {
-      "description": "Stay on Node 24 LTS until the planned move to Node 26 after 2026-10-28",
-      "matchDatasources": ["docker"],
-      "matchPackageNames": ["node"],
+      "description": "Stay on Node 24 LTS until the planned move to Node 26 after 2026-10-28. Covers every Node version pin in the repo: the docker `node` image (Dockerfile), `.nvmrc` and `actions/setup-node`'s `node-version:` (both the node-version datasource, depName `node`), and the devcontainer's `mcr.microsoft.com/devcontainers/typescript-node` image tag.",
+      "matchDepNames": ["node", "mcr.microsoft.com/devcontainers/typescript-node"],
       "allowedVersions": "<25"
     },
     {

@@ -298,8 +298,11 @@ otel-collector`.** It is bind-mounted; `docker compose up -d` does not
   `"prepare": "husky"` actually installs hooks by re-running `pnpm install`
   in a checkout that's already installed — it proves nothing either way.
   Test it from a fresh clone.
-- **Renovate, not dependabot.** Weekly, grouped, 3-day minimum release age,
-  actions pinned to SHAs. TypeScript is held `<6.1.0` and the `node` image
+- **Renovate, not dependabot.** Weekly, grouped, 3-day minimum release age.
+  Renovate pins actions to SHAs (its first PR converts the tags). TypeScript
+  is held `<6.1.0`, and every Node version pin — the docker `node` image,
+  `.nvmrc`, `actions/setup-node`'s `node-version:`, and the devcontainer's
+  `mcr.microsoft.com/devcontainers/typescript-node` image tag — is held
   `<25` by `renovate.json` rules — lift them deliberately, not by merging a
   Renovate PR. Requires the Renovate GitHub App on the repo.
 - **`ci.yml` is also the deploy gate.** `deploy.yml` (push to `main`) calls
