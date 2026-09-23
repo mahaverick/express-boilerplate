@@ -109,8 +109,13 @@ exercised**. That is the same trap that cost an afternoon on the SSE close propa
 proxy hid the real behaviour, and the first honest test was the production image.
 
 CORS is therefore tested in react-boilerplate's **`nginx` Playwright project**, which already
-serves the real image. Two cases: a disallowed origin whose preflight fails, and an allowed
-origin that succeeds with credentials.
+serves the real image. Two cases: a disallowed origin, and an allowed one.
+
+> **Reworded after implementation.** This said "a disallowed origin whose preflight **fails**".
+> It does not fail. `cors@2.8.6` answers a disallowed origin by calling `next()` without
+> handling the preflight, so the request falls through to whatever the route mounts. What stops
+> the browser is the withheld `Access-Control-Allow-Origin` header, and that is what the e2e
+> asserts. See §6 for the same correction against the acceptance criteria.
 
 **Also verify there**: `OPTIONS /api/v1/notifications/stream` returns 204 promptly. That
 location carries `proxy_buffering off` and `proxy_read_timeout 24h`; the `cors` middleware
