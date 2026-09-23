@@ -26,6 +26,7 @@
 import { randomUUID } from 'node:crypto'
 import http, { type IncomingMessage } from 'node:http'
 import type { AddressInfo } from 'node:net'
+import express from 'express'
 import jwt from 'jsonwebtoken'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
@@ -33,6 +34,7 @@ import { getEnv } from '@/configs/env.config'
 import type { Notification } from '@/database/models/notification.model'
 import type { User } from '@/database/models/user.model'
 import { ACCESS_TOKEN_EXPIRED_CODE } from '@/middlewares/auth.middleware'
+import { errorHandler } from '@/middlewares/error.middleware'
 import { NotificationRepository } from '@/repositories/notification.repository'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
@@ -40,7 +42,7 @@ import { sql } from '@/services/database.service'
 import { emitNotification, listenerCount } from '@/services/notification-emitter.service'
 import { denySession } from '@/services/session-denylist.service'
 import { signAccessToken } from '@/utilities/token.utilities'
-import { withMutatedMethod } from '../../helpers/mutate'
+import { withMutatedMethod, withMutatedModule } from '../../helpers/mutate'
 
 const userRepository = new UserRepository()
 const notificationRepository = new NotificationRepository()
@@ -739,5 +741,107 @@ describe('GET /api/v1/notifications/stream', () => {
     // event-stream that opens and then closes.
     expect(response.statusCode).toBe(401)
     expect(response.headers['content-type']).not.toContain('text/event-stream')
+  })
+
+  // The next two tests are a pair, mirroring auth.middleware.test.ts's own
+  // pair for the identical guard (`'accepts a token with no sid claim'` /
+  // `'keeps a sid-less token honoured...'`, ~163-260): one proves the
+  // tolerance is real end to end, the other proves it is a genuine
+  // short-circuit and not incidentally-passing dead code.
+  it('opens a stream for a hand-signed token with no `sid` claim — one release of tolerance for tokens minted before this claim existed', async () => {
+    const user = await userRepository.create({ email: uniqueEmail() })
+    createdUserIds.push(user.id)
+    // Hand-signed, deliberately NOT via signAccessToken: signAccessToken
+    // always sets `sid` now, so it can no longer produce the shape this
+    // test needs — a token minted by the currently-deployed version,
+    // before the `sid` claim existed. Mirrors
+    // auth.middleware.test.ts's own copy of this comment.
+    const token = jwt.sign({ sub: user.id }, getEnv().JWT_ACCESS_SECRET, {
+      algorithm: 'HS256',
+      expiresIn: '15m',
+    })
+
+    const connection = openStream(`/api/v1/notifications/stream?token=${encodeURIComponent(token)}`)
+    const response = await connection.waitForResponse()
+
+    expect(response.statusCode).toBe(200)
+    expect(response.headers['content-type']).toBe('text/event-stream')
+  })
+
+  it("keeps a sid-less token connectable even when the denylist would deny every session, proving authenticateStreamRequest's `payload.sid &&` is a real short-circuit", async () => {
+    // WHY THIS IS A MUTATION TEST, NOT A HAND EDIT. Same reasoning as
+    // auth.middleware.test.ts's own copy of this test (CLAUDE.md, "Proving
+    // a security behaviour is real, without hand-editing src/"):
+    // temporarily deleting `payload.sid &&` from
+    // notification-stream.controller.ts on disk to see what breaks would
+    // put a live "every pre-existing token gets disconnected" regression
+    // on disk in a shared worktree, even for a moment. withMutatedModule
+    // gets the same evidence without it: isSessionDenied is overridden to
+    // resolve `true` UNCONDITIONALLY, regardless of the argument it's
+    // called with (including `undefined`).
+    //
+    // Under that mutation: a token WITH a sid is denied (the wiring
+    // works), while a token WITHOUT one still connects — which is only
+    // possible because the guard short-circuits on `payload.sid` before
+    // ever calling isSessionDenied. If `payload.sid &&` were deleted, the
+    // sid-less token's call would become `isSessionDenied(undefined)` —
+    // and this mock returns `true` no matter what it's called with — so
+    // that regression would flip the first assertion below to a 401 and
+    // turn this test red, deterministically.
+    //
+    // This drives a FRESH one-off Express app built from the freshly
+    // re-imported controller module, not this file's own shared `server`:
+    // that server's route was bound to the real, unmutated controller back
+    // in `beforeAll`, long before this mutation exists, so a request
+    // against it could never observe the mutated isSessionDenied at all.
+    const user = await userRepository.create({ email: uniqueEmail() })
+    createdUserIds.push(user.id)
+
+    await withMutatedModule<
+      typeof import('@/services/session-denylist.service'),
+      typeof import('@/controllers/notification-stream.controller')
+    >(
+      '@/services/session-denylist.service',
+      { isSessionDenied: () => Promise.resolve(true) },
+      () => import('@/controllers/notification-stream.controller'),
+      async (subject) => {
+        const mutatedApp = express()
+        mutatedApp.disable('x-powered-by')
+        mutatedApp.get('/api/v1/notifications/stream', subject.streamNotifications)
+        mutatedApp.use(errorHandler)
+        const mutatedServer = mutatedApp.listen(0)
+        await new Promise<void>((resolve) => mutatedServer.once('listening', resolve))
+        const mutatedAddress = mutatedServer.address() as AddressInfo
+        const mutatedBaseUrl = `http://127.0.0.1:${mutatedAddress.port}`
+
+        try {
+          const sidLessToken = jwt.sign({ sub: user.id }, getEnv().JWT_ACCESS_SECRET, {
+            algorithm: 'HS256',
+            expiresIn: '15m',
+          })
+          const accepted = new SseConnection(
+            mutatedBaseUrl,
+            `/api/v1/notifications/stream?token=${encodeURIComponent(sidLessToken)}`
+          )
+          const acceptedResponse = await accepted.waitForResponse()
+          expect(acceptedResponse.statusCode).toBe(200)
+          accepted.destroy()
+
+          // Same mutated environment, but this token HAS a sid: it must be
+          // denied, proving isSessionDenied is genuinely wired into the
+          // guard and not merely unreachable dead code.
+          const sidToken = signAccessToken(user, randomUUID())
+          const denied = new SseConnection(
+            mutatedBaseUrl,
+            `/api/v1/notifications/stream?token=${encodeURIComponent(sidToken)}`
+          )
+          const deniedResponse = await denied.waitForResponse()
+          expect(deniedResponse.statusCode).toBe(401)
+          denied.destroy()
+        } finally {
+          await new Promise<void>((resolve) => mutatedServer.close(() => resolve()))
+        }
+      }
+    )
   })
 })
