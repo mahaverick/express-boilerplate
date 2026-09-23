@@ -25,6 +25,7 @@ import passport from 'passport'
 import type { Profile as GoogleProfile } from 'passport-google-oauth20'
 import postgres from 'postgres'
 import { getEnv } from '@/configs/env.config'
+import type { AuthProvider } from '@/constants/auth-provider.constants'
 import {
   GOOGLE_STRATEGY_NAME,
   REFRESH_TOKEN_COOKIE_NAME,
@@ -32,6 +33,7 @@ import {
 } from '@/constants/auth.constants'
 import { JobPriority } from '@/constants/queue.constants'
 import { authProviderModel } from '@/database/models/auth-provider.model'
+import type { AuthProviderRecord } from '@/database/models/auth-provider.model'
 import type { User } from '@/database/models/user.model'
 import { userModel } from '@/database/models/user.model'
 import { addEmailJob } from '@/jobs/email.job'
@@ -889,6 +891,92 @@ export async function changePassword(
 
     // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data", not undefined (which JSON.stringify omits entirely)
     successResponse(response, null, 'Password has been changed.')
+  } catch (error) {
+    next(error)
+  }
+}
+
+/**
+ * The public projection of one `auth_providers` row.
+ *
+ * `providerId` is deliberately absent, and its absence is the point of
+ * this type existing at all rather than the rows being returned as they
+ * come out of the repository. That column holds the caller's own email
+ * address for `'email'`, and GOOGLE'S STABLE `sub` for `'google'` — an
+ * external identifier with no reason to leave this server, useful to no
+ * settings UI, and the kind of value that is awkward to withdraw once a
+ * client has started reading it. `createdAt` is renamed `linkedAt`
+ * because that is what it means here: when this method was attached to
+ * this account.
+ */
+interface PublicAuthProvider {
+  provider: AuthProvider
+  linkedAt: Date
+}
+
+/**
+ * Narrow an `auth_providers` row to the fields this API exposes.
+ * @param row - The row to project.
+ * @returns The public projection — `provider` and `linkedAt`, nothing else.
+ */
+function toPublicAuthProvider(row: AuthProviderRecord): PublicAuthProvider {
+  return { provider: row.provider, linkedAt: row.createdAt }
+}
+
+/**
+ * GET /api/v1/auth/providers — which methods can sign this account in, and
+ * whether it has a password.
+ *
+ * `hasPassword` is NOT derivable from the provider list, which is the
+ * whole reason it is a separate field. A Google signup writes BOTH an
+ * `'email'` row and a `'google'` row in one transaction (`createGoogleUser`
+ * below), so an `'email'` provider is present for accounts that have never
+ * had a password and cannot log in with one. A client inferring "has a
+ * password" from that row would offer a federated-only user a
+ * change-password form that `changePassword` refuses with a 400.
+ *
+ * Read-only by design. Unlinking a provider is a separate feature with its
+ * own unanswered question — whether you may remove your last remaining way
+ * in — and `auth-provider.model.ts` already records that the table has no
+ * `deletedAt` for exactly that reason.
+ * @param request - The incoming request; `requireAuth` has already populated `request.user`.
+ * @param response - The response to write the provider list to.
+ * @param next - Passes any failure to `errorHandler`.
+ */
+export async function getAuthProviders(
+  request: Request,
+  response: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const userId = authenticatedUserId(request)
+    // Re-loaded rather than read off `request.user`: `AuthenticatedUser`
+    // (auth.middleware.ts) is a PublicUser subset and carries no
+    // `passwordHash`. `changePassword` above does the same for the same
+    // reason. Two endpoints needing this is not yet an argument for
+    // widening what the middleware attaches — a third would be.
+    const user = await userRepository.findById(userId)
+    if (!user) {
+      throw new HttpError('User not found', 404)
+    }
+
+    const rows = await authProviderRepository.findByUser(userId)
+
+    successResponse(
+      response,
+      {
+        // Sorted here rather than in the repository: `findByUser` has other
+        // callers that do not care, and Postgres guarantees no order
+        // without an ORDER BY — so an unsorted list would render in
+        // whatever sequence the planner produced, reshuffling between two
+        // identical requests.
+        providers: rows
+          .toSorted((left, right) => left.createdAt.getTime() - right.createdAt.getTime())
+          .map((row) => toPublicAuthProvider(row)),
+        hasPassword: user.passwordHash !== null,
+      },
+      'Auth providers retrieved.'
+    )
   } catch (error) {
     next(error)
   }
