@@ -86,10 +86,13 @@ function authenticatedUserId(request: Request): string {
  * not `ACCESS_TOKEN_TTL`. A connect-time 401 is cheap enough that this
  * endpoint does not need the tolerance `requireAuth` grants everywhere
  * else: `useNotificationStream` (react-boilerplate's use-notifications.ts)
- * treats ANY failed connect as `onerror`, closes it, and reconnects through
- * `ensureSession()` (session.ts) — the shared single-flight refresh — so a
- * sid-less token costs its holder exactly one failed connect and one
- * automatic refresh, and the new token it comes back with carries `sid`.
+ * opens the connection with `fetch`, not `EventSource`, so there is no
+ * `onerror` to lean on — it throws when the response is not `ok`, which its
+ * own `catch` turns into a call to `scheduleReconnect`, which in turn calls
+ * `ensureSession()` (session.ts) — the shared single-flight refresh — before
+ * retrying. So a sid-less token costs its holder exactly one failed connect
+ * and one automatic refresh, and the new token it comes back with carries
+ * `sid`.
  *
  * Message, status and code are unchanged from this codebase's previous
  * `authenticateStreamRequest`, which ran this same check before `/stream`
