@@ -1,15 +1,16 @@
 // src/services/logger.service.ts
 //
-// The one place anything in this codebase should write a log line. A
-// Winston logger, lazily constructed (same pattern as getEnv()/getRedis()) so
-// importing this module never has a side effect, plus two format steps that
-// exist because of two Winston/JS gotchas: a bare Error serializes to "{}"
-// through JSON.stringify (message/stack/name are non-enumerable), and Winston
-// has no built-in way to pull correlation data out of an AsyncLocalStorage
-// context — see serializeErrors and addRequestContext below.
+// The one place anything in this codebase should write a log line. A pino
+// logger, lazily constructed (same pattern as getEnv()/getRedis()) so
+// importing this module never has a side effect. It keeps the JSON shape the
+// winston version had — `level` as a label, `timestamp`, `message` — plus a
+// mixin that pulls correlation data out of AsyncLocalStorage and the active
+// span, and a formatter that turns any Error-valued field into
+// { name, message, stack } (JSON.stringify of a bare Error is "{}").
+import { createRequire } from 'node:module'
 import { trace } from '@opentelemetry/api'
-import { createLogger, format, transports, type Logger } from 'winston'
-import Transport from 'winston-transport'
+import pino, { type DestinationStream, type Logger, type StreamEntry } from 'pino'
+import type { PrettyOptions } from 'pino-pretty'
 import { getEnv } from '@/configs/env.config'
 import { requestContextStore } from '@/middlewares/request-context.middleware'
 
@@ -89,70 +90,55 @@ export function getCallerSource(): string {
   return 'unknown'
 }
 
-// `trace.getActiveSpan()` is an @opentelemetry/api call, not a dependency on
-// the SDK itself — the api package is always installed and always safe to
-// import, and returns `undefined` here with zero cost whenever no SDK is
-// registered (OTEL_EXPORTER_OTLP_ENDPOINT unset; see
-// src/observability/tracing.ts). No conditional/env check is needed in this
-// file for that reason: an inactive tracer is indistinguishable from "no
-// span in scope", which is exactly the case this already has to handle for
-// code running outside any request.
-const addRequestContext = format((info) => {
+/**
+ * Correlation fields for the current call: request/tenant from the request's
+ * AsyncLocalStorage context, trace/span from the active OTel span. Absent
+ * fields are omitted, never written as undefined.
+ * @returns The fields to merge into every record.
+ */
+function requestContextFields(): Record<string, string> {
+  const fields: Record<string, string> = {}
   const context = requestContextStore.getStore()
-  if (context?.requestId) {
-    info.requestId = context.requestId
-  }
-  // Present only once `resolveTenant` (tenant.middleware.ts) has extended
-  // the SAME store with `.tenant` — most requests (anything not under a
-  // tenant-scoped route) never populate it, so this stays absent exactly
-  // like `requestId` does outside a request. See
-  // request-context.middleware.ts's `TenantContext` for the field's shape.
-  if (context?.tenant?.tenantId) {
-    info.tenantId = context.tenant.tenantId
-  }
+  if (context?.requestId) fields.requestId = context.requestId
+  if (context?.tenant?.tenantId) fields.tenantId = context.tenant.tenantId
   const span = trace.getActiveSpan()
   if (span) {
     const spanContext = span.spanContext()
-    info.traceId = spanContext.traceId
-    info.spanId = spanContext.spanId
+    fields.traceId = spanContext.traceId
+    fields.spanId = spanContext.spanId
   }
-  return info
-})
+  return fields
+}
 
 /**
- * Walk meta and convert Error instances to serializable objects.
- * `JSON.stringify(new Error(...))` is `"{}"` because `message`, `stack`, and
- * `name` are non-enumerable. This format step ensures they survive in
- * production JSON output.
+ * Replace every Error-valued key with a plain { name, message, stack } object.
+ * @param object - The merged log object pino is about to serialise.
+ * @returns A shallow copy with Errors made serialisable.
  */
-const serializeErrors = format((info) => {
-  for (const [key, value] of Object.entries(info)) {
-    if (value instanceof Error) {
-      info[key] = { name: value.name, message: value.message, stack: value.stack }
-    }
+function serializeErrors(object: Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(object)) {
+    result[key] =
+      value instanceof Error
+        ? { name: value.name, message: value.message, stack: value.stack }
+        : value
   }
-  return info
-})
+  return result
+}
 
-// `...meta` deliberately keeps Winston's internal Symbol.for('level')/
-// Symbol.for('splat') entries rather than destructuring them away:
-// JSON.stringify (used below) ignores symbol-keyed properties by spec, so
-// they never reach the printed output regardless.
-const developmentFormat = format.printf((info) => {
-  const { level, message, source, requestId, timestamp, ...meta } = info
-  const time = typeof timestamp === 'string' ? timestamp : ''
-  const sourceLabel = typeof source === 'string' ? ` [${source}]` : ''
-  const requestIdLabel = typeof requestId === 'string' ? ` (${requestId.slice(0, 8)})` : ''
-  const messageText = typeof message === 'string' ? message : JSON.stringify(message)
-  const extra = Object.keys(meta).length > 0 ? `\n  ${JSON.stringify(meta)}` : ''
-  return `${time} ${level}${sourceLabel}${requestIdLabel} ${messageText}${extra}`
-})
-
-interface LoggerOptions {
+/**
+ * Configuration for {@link createPinoLogger}.
+ */
+export interface LoggerOptions {
   level: string
   isProduction: boolean
   slackWebhookUrl?: string
   slackLogLevel?: string
+  /**
+   * Where console output goes. Defaults to process.stdout; tests pass a
+   * capture stream.
+   */
+  destination?: DestinationStream
 }
 
 // How long duplicate (same source + message) log entries are suppressed
@@ -181,203 +167,234 @@ interface DedupEntry {
 }
 
 /**
- * A Winston transport that POSTs log entries to a Slack Incoming Webhook.
- *
- * Deduplicates by `source:message`: the first occurrence within a 60s
- * window is sent immediately, every repeat in that window is counted but
- * suppressed, and — only if there were repeats — a single summary message
- * reports the suppressed count once the window closes.
+ * POST a payload to the Slack webhook. Never throws: a failed alert must not
+ * become a second failure. console.error, not logger — re-entering the logger
+ * from its own destination would recurse.
+ * @param webhookUrl - The Slack incoming-webhook URL.
+ * @param payload - The message body.
  */
-class SlackTransport extends Transport {
-  private readonly webhookUrl: string
-  private readonly dedup = new Map<string, DedupEntry>()
-
-  constructor(options: { webhookUrl: string; level?: string }) {
-    super({ level: options.level ?? 'error' })
-    this.webhookUrl = options.webhookUrl
-  }
-
-  private async sendToSlack(payload: Record<string, unknown>): Promise<void> {
-    try {
-      const response = await fetch(this.webhookUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
-      if (!response.ok) {
-        // Same reasoning as the catch block below: direct console.error, not
-        // logger.error, to avoid re-entering this transport. A non-OK
-        // response (revoked webhook, bad payload, gone endpoint) does not
-        // throw — fetch() only rejects on network errors — so it needs its
-        // own check here.
-        console.error('Slack webhook failed', response.status)
-      }
-    } catch (error: unknown) {
-      // Direct console.error, NOT logger.error — using the logger here would
-      // re-enter this transport's own log() and create a feedback loop where
-      // a failed Slack send generates another Slack send that also fails,
-      // forever. No `eslint-disable` comment sits above this line: this
-      // file is exempted at the FILE level from no-restricted-properties
-      // (eslint.config.mjs), which already covers it, and this repo's own
-      // `eslint --fix` (run by lint-staged on every commit) deletes an
-      // inline disable the moment it becomes an unused directive — verified
-      // empirically when Task 3 added the rule and the exemption in the
-      // same commit as an inline disable here; the fix step of the very
-      // commit that added it removed it again.
-      console.error('Slack webhook failed', error)
+async function sendToSlack(webhookUrl: string, payload: Record<string, unknown>): Promise<void> {
+  try {
+    const response = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    if (!response.ok) {
+      console.error('Slack webhook failed', response.status)
     }
-  }
-
-  // `info`'s values are `unknown` (winston's own Info shape carries no
-  // guarantee about what a caller passed as meta), so every field below is
-  // narrowed with a `typeof` check rather than blindly `String(...)`-coerced
-  // — a plain object landing in `info.source` would otherwise stringify to
-  // the meaningless "[object Object]" (@typescript-eslint/no-base-to-string
-  // catches exactly this), the same reasoning `developmentFormat` above
-  // already applies to `source`/`requestId`.
-  private buildPayload(info: Record<string, unknown>): Record<string, unknown> {
-    const level = typeof info.level === 'string' ? info.level : 'error'
-    const message = typeof info.message === 'string' ? info.message : ''
-    const source = typeof info.source === 'string' ? info.source : 'unknown'
-    const requestId = typeof info.requestId === 'string' ? info.requestId : undefined
-    const timestamp = typeof info.timestamp === 'string' ? info.timestamp : new Date().toISOString()
-    const errorStack =
-      info.error && typeof info.error === 'object' && 'stack' in info.error
-        ? info.error.stack
-        : undefined
-    const stack = typeof errorStack === 'string' ? errorStack : undefined
-
-    const fields = [
-      { type: 'mrkdwn', text: `*Source:* \`${source}\`` },
-      { type: 'mrkdwn', text: `*Time:* ${timestamp}` },
-    ]
-    if (requestId) {
-      fields.push({ type: 'mrkdwn', text: `*Request:* \`${requestId}\`` })
-    }
-
-    const blocks: Record<string, unknown>[] = [
-      {
-        type: 'header',
-        text: {
-          type: 'plain_text',
-          text: `${LEVEL_EMOJI[level] ?? '⚪'} ${message}`.slice(0, 150),
-        },
-      },
-      { type: 'section', fields },
-    ]
-
-    if (stack) {
-      blocks.push({
-        type: 'section',
-        text: { type: 'mrkdwn', text: `\`\`\`${stack.slice(0, 2900)}\`\`\`` },
-      })
-    }
-
-    return {
-      attachments: [
-        {
-          color: LEVEL_COLORS[level] ?? '#808080',
-          blocks,
-        },
-      ],
-    }
-  }
-
-  private buildSummaryPayload(
-    source: string,
-    message: string,
-    suppressedCount: number
-  ): Record<string, unknown> {
-    return {
-      text: `⚠️ Suppressed ${suppressedCount} duplicate occurrence${suppressedCount === 1 ? '' : 's'} of "${message}" from \`${source}\` in the last 60s`,
-    }
-  }
-
-  override log(info: Record<string, unknown>, callback: () => void): void {
-    const source = typeof info.source === 'string' ? info.source : 'unknown'
-    const message = typeof info.message === 'string' ? info.message : ''
-    const key = `${source}:${message}`
-
-    const existing = this.dedup.get(key)
-    if (existing) {
-      existing.count++
-      callback()
-      return
-    }
-
-    const timer = setTimeout(() => {
-      const entry = this.dedup.get(key)
-      this.dedup.delete(key)
-      if (entry && entry.count > 1) {
-        // Fire-and-forget: sendToSlack handles its own failures internally
-        // (see its own comment), so there is nothing for a setTimeout
-        // callback to await or react to.
-        void this.sendToSlack(this.buildSummaryPayload(source, message, entry.count - 1))
-      }
-    }, DEDUP_WINDOW_MS)
-    // Without this, the pending timer keeps a module-scope singleton (and
-    // therefore the Node event loop) alive past its test, hanging vitest
-    // workers. unref() lets the process exit naturally once nothing else is
-    // pending.
-    timer.unref()
-
-    this.dedup.set(key, { count: 1, firstSeen: Date.now(), timer })
-    // Fire-and-forget for the same reason as above — Winston's `callback()`
-    // signals "this transport is done with this entry", which must happen
-    // synchronously so the logger doesn't block on network I/O.
-    void this.sendToSlack(this.buildPayload(info))
-    callback()
+  } catch (error: unknown) {
+    console.error('Slack webhook failed', error)
   }
 }
 
 /**
- * Create a Winston logger with explicit options.
- *
- * Exported so tests can construct both production and development variants
- * without depending on `getEnv()` memoisation — same precedent as
- * `startServer(port)` in `server.ts`.
- * @param options - Logger configuration.
- * @returns A configured Winston Logger.
+ * Build the Slack Block Kit payload for one log record.
+ * @param info - The parsed JSON log record.
+ * @returns The webhook body.
  */
-export function createWinstonLogger(options: LoggerOptions): Logger {
-  // addRequestContext/timestamp/serializeErrors used to live inside each
-  // transport's own format.combine(), which meant SlackTransport — added
-  // via log.add()-style transports array below, with no format of its own —
-  // never saw a requestId: info reached its log() raw. Hoisting these three
-  // to the logger-level format runs them once, upstream of every transport,
-  // so Slack alerts get the same requestId/timestamp/serialized-error
-  // fields the console output does.
-  const timestampFormat = options.isProduction
-    ? format.timestamp()
-    : format.timestamp({ format: 'HH:mm:ss' })
+function buildSlackPayload(info: Record<string, unknown>): Record<string, unknown> {
+  const level = typeof info.level === 'string' ? info.level : 'error'
+  const message = typeof info.message === 'string' ? info.message : ''
+  const source = typeof info.source === 'string' ? info.source : 'unknown'
+  const requestId = typeof info.requestId === 'string' ? info.requestId : undefined
+  const timestamp = typeof info.timestamp === 'string' ? info.timestamp : new Date().toISOString()
+  const errorStack =
+    info.error && typeof info.error === 'object' && 'stack' in info.error
+      ? info.error.stack
+      : undefined
+  const stack = typeof errorStack === 'string' ? errorStack : undefined
 
-  const consoleFormat = options.isProduction
-    ? format.json()
-    : format.combine(format.colorize(), developmentFormat)
-
-  const logTransports: Transport[] = [new transports.Console({ format: consoleFormat })]
-
-  if (options.slackWebhookUrl) {
-    logTransports.push(
-      new SlackTransport({
-        webhookUrl: options.slackWebhookUrl,
-        level: options.slackLogLevel ?? 'error',
-      })
-    )
+  const fields = [
+    { type: 'mrkdwn', text: `*Source:* \`${source}\`` },
+    { type: 'mrkdwn', text: `*Time:* ${timestamp}` },
+  ]
+  if (requestId) {
+    fields.push({ type: 'mrkdwn', text: `*Request:* \`${requestId}\`` })
   }
 
-  return createLogger({
-    level: options.level,
-    format: format.combine(addRequestContext(), timestampFormat, serializeErrors()),
-    transports: logTransports,
+  const blocks: Record<string, unknown>[] = [
+    {
+      type: 'header',
+      text: { type: 'plain_text', text: `${LEVEL_EMOJI[level] ?? '⚪'} ${message}`.slice(0, 150) },
+    },
+    { type: 'section', fields },
+  ]
+  if (stack) {
+    blocks.push({
+      type: 'section',
+      text: { type: 'mrkdwn', text: `\`\`\`${stack.slice(0, 2900)}\`\`\`` },
+    })
+  }
+
+  return { attachments: [{ color: LEVEL_COLORS[level] ?? '#808080', blocks }] }
+}
+
+/**
+ * Build the "suppressed N duplicates" summary sent when a dedup window closes.
+ * @param source - The record's source field.
+ * @param message - The record's message.
+ * @param suppressedCount - How many repeats were swallowed.
+ * @returns The webhook body.
+ */
+function buildSlackSummaryPayload(
+  source: string,
+  message: string,
+  suppressedCount: number
+): Record<string, unknown> {
+  return {
+    text: `⚠️ Suppressed ${suppressedCount} duplicate occurrence${suppressedCount === 1 ? '' : 's'} of "${message}" from \`${source}\` in the last 60s`,
+  }
+}
+
+/**
+ * A pino destination that forwards records to Slack, deduplicating by
+ * `${source}:${message}` within a 60 s window: the first occurrence sends at
+ * once, repeats are counted, and one summary is sent when the window closes
+ * if there were any. Level filtering is done by pino.multistream, not here.
+ * @param options - The webhook settings.
+ * @param options.webhookUrl - The Slack incoming-webhook URL.
+ * @returns A destination for pino.multistream.
+ */
+export function createSlackDestination(options: { webhookUrl: string }): DestinationStream {
+  const dedup = new Map<string, DedupEntry>()
+  return {
+    write(line: string): void {
+      let info: Record<string, unknown>
+      try {
+        info = JSON.parse(line) as Record<string, unknown>
+      } catch {
+        return
+      }
+      const source = typeof info.source === 'string' ? info.source : 'unknown'
+      const message = typeof info.message === 'string' ? info.message : ''
+      const key = `${source}:${message}`
+
+      const existing = dedup.get(key)
+      if (existing) {
+        existing.count++
+        return
+      }
+
+      const timer = setTimeout(() => {
+        const entry = dedup.get(key)
+        dedup.delete(key)
+        if (entry && entry.count > 1) {
+          void sendToSlack(
+            options.webhookUrl,
+            buildSlackSummaryPayload(source, message, entry.count - 1)
+          )
+        }
+      }, DEDUP_WINDOW_MS)
+      timer.unref()
+
+      dedup.set(key, { count: 1, firstSeen: Date.now(), timer })
+      void sendToSlack(options.webhookUrl, buildSlackPayload(info))
+    },
+  }
+}
+
+const requireCjs = createRequire(import.meta.url)
+
+/**
+ * Human-readable development output. pino-pretty is a devDependency: this is
+ * only reached when isProduction is false, and it is loaded with requireCjs()
+ * here — not a top-level import — so the pruned production image never
+ * resolves it.
+ * @param destination - Where the pretty text goes.
+ * @returns A pino destination.
+ */
+function createPrettyStream(destination: DestinationStream): DestinationStream {
+  const { build } = requireCjs('pino-pretty') as {
+    build: (options: PrettyOptions) => DestinationStream
+  }
+  return build({
+    destination,
+    colorize: destination === process.stdout && process.stdout.isTTY,
+    messageKey: 'message',
+    timestampKey: 'timestamp',
+    translateTime: 'SYS:HH:MM:ss',
+    ignore: 'source,requestId',
+    messageFormat: (log, messageKey) => {
+      const source = typeof log.source === 'string' ? ` [${log.source}]` : ''
+      const requestId = typeof log.requestId === 'string' ? ` (${log.requestId.slice(0, 8)})` : ''
+      const message =
+        typeof log[messageKey] === 'string' ? log[messageKey] : JSON.stringify(log[messageKey])
+      return `${source}${requestId} ${message}`.trim()
+    },
   })
+}
+
+// The env schema (env.config.ts) already restricts LOG_LEVEL and
+// SLACK_LOG_LEVEL to these four values — this set is belt-and-braces
+// validation for createPinoLogger's own direct callers (the tests), not new
+// runtime behaviour, and lets `options.level`/`options.slackLogLevel` reach
+// pino.multistream's StreamEntry without an `as pino.Level` cast.
+const LEVELS = new Set(['error', 'warn', 'info', 'debug'])
+
+/**
+ * Narrow an arbitrary level string to one pino.multistream accepts, falling
+ * back to 'info' for anything outside the closed set LOG_LEVEL/
+ * SLACK_LOG_LEVEL are validated against.
+ * @param level - The requested level.
+ * @returns A valid pino.Level.
+ */
+function toPinoLevel(level: string): pino.Level {
+  return LEVELS.has(level) ? (level as pino.Level) : 'info'
+}
+
+/**
+ * Build a pino logger. Production writes JSON; development writes
+ * pino-pretty text. With a Slack webhook, records at or above
+ * slackLogLevel are also sent to Slack via pino.multistream.
+ * @param options - Level, format, Slack settings, optional destination.
+ * @returns The pino logger.
+ */
+export function createPinoLogger(options: LoggerOptions): Logger {
+  const base = options.destination ?? process.stdout
+  const consoleStream = options.isProduction ? base : createPrettyStream(base)
+
+  const streams: StreamEntry[] = [
+    // level MUST be explicit: a multistream entry defaults to 'info', which
+    // would silently drop debug lines when LOG_LEVEL=debug.
+    { level: toPinoLevel(options.level), stream: consoleStream },
+  ]
+  if (options.slackWebhookUrl) {
+    streams.push({
+      level: toPinoLevel(options.slackLogLevel ?? 'error'),
+      stream: createSlackDestination({ webhookUrl: options.slackWebhookUrl }),
+    })
+  }
+
+  return pino(
+    {
+      level: options.level,
+      // null, not undefined: pino's own LoggerOptions types `base` as
+      // `{ ... } | null` (no `undefined` in the union), so under this
+      // tsconfig's exactOptionalPropertyTypes, `base: undefined` fails to
+      // typecheck even though it works identically at runtime. `null` is
+      // also pino's own documented way to drop the default pid/hostname
+      // bindings, so this is the idiomatic spelling, not just the one that
+      // compiles.
+      // eslint-disable-next-line unicorn/no-null -- pino's own LoggerOptions type requires `null`, not `undefined`, to suppress the default pid/hostname bindings
+      base: null,
+      messageKey: 'message',
+      timestamp: () => `,"timestamp":"${new Date().toISOString()}"`,
+      mixin: requestContextFields,
+      formatters: {
+        level: (label) => ({ level: label }),
+        log: serializeErrors,
+      },
+    },
+    pino.multistream(streams)
+  )
 }
 
 const getLogger: () => Logger = (() => {
   let cached: Logger | undefined
   return (): Logger => {
     const env = getEnv()
-    cached ??= createWinstonLogger({
+    cached ??= createPinoLogger({
       level: env.LOG_LEVEL,
       isProduction: env.NODE_ENV === 'production',
       // Spread rather than `slackWebhookUrl: env.SLACK_WEBHOOK_URL` directly:
@@ -393,11 +410,11 @@ const getLogger: () => Logger = (() => {
 })()
 
 /**
- * The process-wide logger. Lazily backed by a single Winston instance
+ * The process-wide logger. Lazily backed by a single pino instance
  * (`getLogger()`, memoised the same way `getEnv()` is) so importing this
- * module never constructs a transport as a side effect.
+ * module never constructs a destination as a side effect.
  *
- * Each level guards itself with Winston's own `isXEnabled()` check before
+ * Each level guards itself with pino's own `isLevelEnabled()` check before
  * doing any work — in particular before paying for `getCallerSource()`'s
  * `new Error().stack` capture, so `logger.debug()` on a hot path costs
  * nothing when `LOG_LEVEL=info`.
@@ -405,22 +422,22 @@ const getLogger: () => Logger = (() => {
 export const logger = {
   error(message: string, meta?: Record<string, unknown>): void {
     const l = getLogger()
-    if (!l.isErrorEnabled()) return
-    l.error(message, { ...meta, source: getCallerSource() })
+    if (!l.isLevelEnabled('error')) return
+    l.error({ ...meta, source: getCallerSource() }, message)
   },
   warn(message: string, meta?: Record<string, unknown>): void {
     const l = getLogger()
-    if (!l.isWarnEnabled()) return
-    l.warn(message, { ...meta, source: getCallerSource() })
+    if (!l.isLevelEnabled('warn')) return
+    l.warn({ ...meta, source: getCallerSource() }, message)
   },
   info(message: string, meta?: Record<string, unknown>): void {
     const l = getLogger()
-    if (!l.isInfoEnabled()) return
-    l.info(message, { ...meta, source: getCallerSource() })
+    if (!l.isLevelEnabled('info')) return
+    l.info({ ...meta, source: getCallerSource() }, message)
   },
   debug(message: string, meta?: Record<string, unknown>): void {
     const l = getLogger()
-    if (!l.isDebugEnabled()) return
-    l.debug(message, { ...meta, source: getCallerSource() })
+    if (!l.isLevelEnabled('debug')) return
+    l.debug({ ...meta, source: getCallerSource() }, message)
   },
 }
