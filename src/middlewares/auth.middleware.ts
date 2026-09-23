@@ -100,7 +100,7 @@ const BEARER_PATTERN = /^Bearer\s+(\S+)$/
  *      `isSessionDenied` check inside `requireAuth` itself, at :272 below.
  *   3. A token that verifies, is not denied, but carries no `sid` claim at
  *      all — rejected not here but in `notification-stream.controller.ts`'s
- *      `streamNotifications`, the one place in this codebase that refuses
+ *      `requireSessionId`, the one place in this codebase that refuses
  *      such a token outright rather than tolerating it. This middleware's
  *      own `payload.sid &&` guard just below (see item 2's line) is what
  *      tolerates it everywhere else; see that guard's comment for why, and

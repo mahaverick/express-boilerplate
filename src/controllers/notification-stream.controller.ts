@@ -10,8 +10,15 @@
 // This handler has no tolerance for a token that verifies but carries no
 // `sid` claim, unlike `requireAuth` itself — see `requireSessionId`'s own
 // comment below for why, and `ACCESS_TOKEN_EXPIRED_CODE`'s JSDoc
-// (auth.middleware.ts) for the full three-way split of who rejects what on
-// this route. A rejected request never opens a stream: both
+// (auth.middleware.ts) for the three-way split of who emits THAT CODE
+// specifically. It is not the full split of what can 401 on this route —
+// this route reaches six distinct 401s in total: a missing or malformed
+// Authorization header and an invalid token (both `requireAuth`, no `code`),
+// an inactive or deleted account (`requireAuth`, no `code`), an expired
+// token and a denied session (both `requireAuth`, `ACCESS_TOKEN_EXPIRED_CODE`),
+// and a sid-less token (`requireSessionId` below, also
+// `ACCESS_TOKEN_EXPIRED_CODE`) — see `tests/integration/api/notification-stream.test.ts`
+// for one test per case. A rejected request never opens a stream: both
 // `authenticatedUserId` and `requireSessionId` throw before
 // `response.writeHead` ever runs, so the `catch` below hands the rejection
 // to `next(error)` and `errorHandler` (error.middleware.ts) answers with
@@ -30,9 +37,13 @@ import { isSessionDenied } from '@/services/session-denylist.service'
 
 const notificationRepository = new NotificationRepository()
 
-// Sent once, in the `retry:` field of the initial response — how long the
-// browser's own `EventSource` should wait before reconnecting after this
-// connection drops.
+// Sent once, in the `retry:` field of the initial response — SSE's own
+// reconnect-delay hint, honoured natively by `EventSource`. No current
+// client reads it: react-boilerplate's `useNotificationStream`
+// (use-notifications.ts) ignores `retry:` entirely and reconnects on its own
+// backoff instead — `fetch`, unlike `EventSource`, has no built-in reconnect
+// to feed this to. Kept anyway: it costs nothing, it is correct SSE, and a
+// future `EventSource`-based consumer would honour it.
 const SSE_RETRY_MS = 3000
 
 /**
@@ -41,8 +52,8 @@ const SSE_RETRY_MS = 3000
  * /api/v1/notifications` already exposes via `successResponse`. `readAt` is
  * carried as `string | null`, not omitted when unread, for the same reason
  * `deleteNotification` (notification.controller.ts) returns a JSON `null`
- * rather than nothing: an `EventSource` client parses `data:` as JSON text,
- * where "absent" and "explicitly null" are different, and only the second
+ * rather than nothing: a client parses `data:` as JSON text, where "absent"
+ * and "explicitly null" are different, and only the second
  * one unambiguously means "this notification is unread" rather than "this
  * server version doesn't send readAt".
  */

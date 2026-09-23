@@ -124,7 +124,11 @@ answers the preflight in Express, but nginx has to route it there rather than ho
 
 `GET /api/v1/notifications/stream` moves **behind `requireAuth`** and stops being the
 exception `notification.routes.ts` documents at length. `authenticateStreamRequest` and its
-entire `?token=` path are **deleted**, not adapted.
+entire `?token=` path are **deleted**, not adapted — including the sid-less-token check it used
+to run at connect. That check itself is not going away: it moves into a new, smaller function of
+this controller's own, `requireSessionId`, now that `requireAuth` running ahead of this route
+covers everything else `authenticateStreamRequest` used to. See Piece 2's "Three consumers, not
+one" section below, whose plan predates this deletion and names the old function.
 
 The route stays `GET` — unlike Consequential's chat stream it carries no body — so
 **`nginx.conf` needs no change**. Its SSE location comment must be rewritten: the
@@ -231,6 +235,18 @@ open while this spec claims they are closed. The connect check runs once; nginx 
 > account's _open_ stream keeps receiving frames until it closes for some other reason.
 > Deactivation is caught on the next ordinary request, by `requireAuth`'s `findById` read.
 
+> **Corrected again, later, by the stream-fetch-transport branch.** `authenticateStreamRequest`
+> (item 2 above) no longer exists — that branch deleted it along with the `?token=` path. Its
+> connect-time denylist check is not gone, it moved: `/stream` now sits **behind** `requireAuth`
+> (`notification.routes.ts`), so `requireAuth`'s own denylist check (item 1) covers the stream's
+> connect too, and item 2 as written here is obsolete rather than merely renamed. The one piece of
+> `authenticateStreamRequest` that `requireAuth` does NOT cover — rejecting a sid-less token, which
+> `requireAuth` deliberately tolerates everywhere else — lives on in a new function of its own,
+> `requireSessionId` (`notification-stream.controller.ts`), called from `streamNotifications`
+> immediately after `requireAuth` runs. So the stream's denylist coverage is now two consumers,
+> not three: `requireAuth` (connect, and every other request) and the heartbeat below (the open
+> connection). `requireSessionId` checks the `sid` claim's mere presence, not the denylist itself.
+
 ### Honest limits
 
 **The denylist is best-effort. The database remains the source of truth for the refresh side.**
@@ -241,11 +257,14 @@ open while this spec claims they are closed. The connect check runs once; nginx 
     expires. That window is bounded by the token's own `exp`, so it is at most
     `ACCESS_TOKEN_TTL` — **fifteen minutes after deploy**, not a release cycle. Every token
     minted after deploy carries `sid`, including one minted by a refresh mid-session.
-  - `authenticateStreamRequest` **rejects** a sid-less token outright, 401. It has to: the
-    heartbeat's denial check can only act on a session id, so tolerating one here would grant
-    a stream bounded by _connection lifetime_ — up to nginx's 24-hour read timeout — rather
-    than by token expiry. The browser client answers a failed stream connect by refreshing and
-    reconnecting, so the cost is one refresh and the path self-heals.
+  - The stream's own connect-time check **rejects** a sid-less token outright, 401 — written here
+    as `authenticateStreamRequest`, since renamed to `requireSessionId` when the
+    stream-fetch-transport branch deleted `authenticateStreamRequest` (see the correction on
+    "Three consumers, not one" above). It has to: the heartbeat's denial check can only act on a
+    session id, so tolerating one here would grant a stream bounded by _connection lifetime_ — up
+    to nginx's 24-hour read timeout — rather than by token expiry. The browser client answers a
+    failed stream connect by refreshing and reconnecting, so the cost is one refresh and the path
+    self-heals.
 
   Stated so nobody discovers either half as a mystery 401.
 
@@ -261,13 +280,19 @@ open while this spec claims they are closed. The connect check runs once; nginx 
 
 Each step deploys alone and is backward compatible.
 
+> **Corrected after implementation.** All three steps below have since shipped, in this order —
+> `sid`/`jti`, the denylist, and CORS from the session-revocation work; the `fetch` transport and
+> the `?token=` deletion from stream-fetch-transport. Left in the original future tense below
+> because the ordering constraint (step 1 before step 2, step 3 last) is still the fact worth
+> keeping, not because the steps are still pending.
+
 1. **Express** — CORS (`WEB_URL` allowed, so a no-op), `sid` + `jti` in the token, denylist in
    `requireAuth` and the heartbeat, stream accepts **either** a Bearer header **or** the
    legacy `?token=`.
 2. **React** — stream switches to `fetch` + Bearer.
 3. **Express** — delete the `?token=` path and `authenticateStreamRequest`.
 
-Skipping the dual-accept in step 1 breaks whichever repo ships second.
+Skipping the dual-accept in step 1 would have broken whichever repo shipped second.
 
 ## 5. Deferred — recorded so it is not rediscovered
 
@@ -286,7 +311,9 @@ From the audit of 2026-09-22, deliberately out of scope here:
 ## 6. Acceptance
 
 1. Stream authenticates by `Authorization` header; no credential appears in any URL.
-2. `authenticateStreamRequest` and the `?token=` branch are deleted.
+2. `authenticateStreamRequest` and the `?token=` branch have been deleted — confirmed directly
+   against `notification-stream.controller.ts` and `notification.routes.ts`, which no longer
+   define or reference either.
 3. `Last-Event-ID` reaches the server from the browser, and the existing replay tests cover a
    real round trip rather than a synthetic one.
 4. Logging out invalidates outstanding access tokens immediately, proven by a test that
