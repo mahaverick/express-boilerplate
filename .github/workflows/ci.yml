@@ -1,11 +1,22 @@
 name: CI
 on:
   pull_request:
-    branches: [main, develop]
+    branches: [main]
+  # Called by deploy.yml as the gate before an image is built.
+  workflow_call:
   workflow_dispatch:
+
+# Keyed on the event, NOT github.workflow: when deploy.yml calls this file,
+# github.workflow is the CALLER's name, and concurrency group names are
+# case-insensitive — "Deploy-refs/heads/main" would collide with deploy.yml's
+# own "deploy-refs/heads/main" group. Only PR runs are cancelled by a newer
+# push; a gate run on main is never killed half-way.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
 
 # Two parallel jobs, not one: `lint` needs nothing but the checked-out repo
 # and node_modules — no Docker services, no database, no build — so it was
@@ -200,3 +211,11 @@ jobs:
           pnpm env:example
           git diff --exit-code .env.example \
             || { echo "::error::.env.example is stale — run 'pnpm env:example' and commit"; exit 1; }
+
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build the production image (no push)
+        run: docker build -t express-boilerplate:ci .

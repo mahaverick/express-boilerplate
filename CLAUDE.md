@@ -302,6 +302,11 @@ otel-collector`.** It is bind-mounted; `docker compose up -d` does not
   actions pinned to SHAs. TypeScript is held `<6.1.0` and the `node` image
   `<25` by `renovate.json` rules — lift them deliberately, not by merging a
   Renovate PR. Requires the Renovate GitHub App on the repo.
+- **`ci.yml` is also the deploy gate.** `deploy.yml` (push to `main`) calls
+  it via `workflow_call`, then builds and pushes `ghcr.io/<repo>:sha-<commit>`
+  and `:main` with SBOM and provenance attestations, then runs a placeholder
+  `deploy` job bound to the `production` environment. Keep CI's concurrency
+  group keyed on `github.event_name` — see the comment in `ci.yml`.
 
 ## Testing
 

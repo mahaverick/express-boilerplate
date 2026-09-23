@@ -313,6 +313,14 @@ from the pnpm virtual store — verified: no `typescript` under
 `/app/node_modules` in the built image). See the comments in
 [`Dockerfile`](Dockerfile) for why each stage exists.
 
+## Deploying
+
+A push to `main` runs [`deploy.yml`](.github/workflows/deploy.yml), which
+calls `ci.yml` as a gate and, once it passes, builds and pushes
+`ghcr.io/<repo>:sha-<commit>` and `:main` to GHCR with an SBOM and build
+provenance attestation. The `deploy` job itself is a placeholder — no
+deployment target has been chosen yet.
+
 ## License
 
 Proprietary — all rights reserved. See [`LICENSE`](LICENSE).
