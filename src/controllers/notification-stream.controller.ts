@@ -62,16 +62,18 @@ interface NotificationStreamPayload {
  * the only thing that opens this connection outside a test — cannot set
  * custom request headers at all, so a query parameter is the one place a
  * token can travel for this specific request. Everything else mirrors
- * `requireAuth`'s steps: verify the signature via `verifyAccessToken`, then
- * load and confirm the claimed user is still active. NOTE: this runs ONCE,
- * at connect. The only recurring check on an already-open connection is the
- * heartbeat below, and it checks the session denylist only — it does not
- * re-read `user.active` — so a user deactivated AFTER connecting keeps
- * receiving frames on that already-open stream until it closes for some
- * other reason.
+ * `requireAuth`'s steps: verify the signature via `verifyAccessToken`,
+ * reject a denied session via `isSessionDenied` (same guard, same order),
+ * then load and confirm the claimed user is still active. NOTE: this whole
+ * function — including the denylist check — runs ONCE, at connect. The
+ * only recurring check on an already-open connection is the heartbeat
+ * below, and it checks the session denylist only — it does not re-read
+ * `user.active` — so a user deactivated AFTER connecting keeps receiving
+ * frames on that already-open stream until it closes for some other
+ * reason.
  * @param request - The incoming request, carrying the access token as `?token=`.
  * @returns The authenticated user's id and the session id its access token carries, when it carries one.
- * @throws {HttpError} 401, when the token is missing, invalid, expired, or names no active user.
+ * @throws {HttpError} 401, when the token is missing, invalid, expired, its session has been denied, or names no active user.
  */
 async function authenticateStreamRequest(
   request: Request
@@ -87,6 +89,13 @@ async function authenticateStreamRequest(
       throw new HttpError('Access token expired', 401, ACCESS_TOKEN_EXPIRED_CODE)
     }
     throw new HttpError('Invalid access token', 401)
+  }
+
+  // Mirrors requireAuth's own guard (auth.middleware.ts) exactly: same
+  // message, same status, same code, and the same deliberate
+  // `payload.sid &&` tolerance for a token minted before `sid` existed.
+  if (verified.payload.sid && (await isSessionDenied(verified.payload.sid))) {
+    throw new HttpError('Session ended', 401, ACCESS_TOKEN_EXPIRED_CODE)
   }
 
   const user = await userRepository.findById(verified.payload.sub)
@@ -283,12 +292,9 @@ export async function streamNotifications(
       if (response.writableEnded || response.destroyed) return
       void (async () => {
         // The ONLY recurring check on a connection that may live 24 hours.
-        // requireAuth ran once, at connect; nothing else revisits this.
-        // Denial does not cover every revocation path — see
-        // authenticateStreamRequest's own comment and
-        // revokeAllForSession's (user-token.repository.ts) for which ones
-        // it does — but it is the one check that can close an ALREADY-OPEN
-        // stream at all.
+        // authenticateStreamRequest (including its own denylist check) ran
+        // once, at connect; nothing else revisits it. This heartbeat is the
+        // one check that can close an ALREADY-OPEN stream at all.
         if (sessionId && (await isSessionDenied(sessionId))) {
           clearInterval(heartbeat)
           // Belt-and-braces: `request.on('close')` below also unsubscribes
