@@ -93,15 +93,17 @@ const BEARER_PATTERN = /^Bearer\s+(\S+)$/
  * current, live session) is the correct and sufficient response:
  *
  *   1. An EXPIRED access token — `verifyAccessToken`'s `reason: 'expired'`,
- *      thrown inside this file's own `verifyBearerToken`, at :181 below.
+ *      thrown both inside this file's own `verifyBearerToken` (:181 below)
+ *      and, for the SSE endpoint that does not sit behind this middleware,
+ *      inside `authenticateStreamRequest`.
  *   2. A token whose session has been explicitly DENIED — the
  *      `isSessionDenied` check inside `requireAuth` itself, at :262 below.
  *   3. In `notification-stream.controller.ts`'s `authenticateStreamRequest`
  *      only: the same denial check as (2), plus a token that carries no
  *      `sid` claim at all — that endpoint has no tolerance for one (unlike
- *      this middleware's own `payload.sid &&` guard in `requireAuth`, at
- *      :233 below), so a sid-less token is rejected outright rather than
- *      admitted until it expires.
+ *      this middleware's own `payload.sid &&` guard in `requireAuth`, the
+ *      same statement item 2 cites), so a sid-less token is rejected
+ *      outright rather than admitted until it expires.
  */
 export const ACCESS_TOKEN_EXPIRED_CODE = 'ACCESS_TOKEN_EXPIRED'
 
@@ -252,13 +254,17 @@ export async function requireAuth(
     // token as `'invalid'` — silently changes the client-facing outcome:
     // that path carries no `ACCESS_TOKEN_EXPIRED_CODE`, so the axios
     // interceptor keyed on that code (react-boilerplate's
-    // interceptors.ts) does NOT retry after a refresh — it treats the 401
-    // as a real auth verdict and logs the user out. The explicit check
-    // above is what keeps this cheap: it costs one legitimate user holding
-    // a genuinely pre-`sid` token a single 401 carrying the code their
-    // client already knows means "refresh and retry" for ordinary REST
-    // calls, not a sign-out. This wave does not remove the tolerance;
-    // whoever does only needs to confirm the window above has passed.
+    // interceptors.ts) does NOT retry after a refresh — `if (!isExpired)`
+    // rejects the error straight to the caller. It does not sign the user
+    // out either (`redirectToLogin` sits in the catch around the refresh,
+    // which never runs on this path), which is worse, not better: the
+    // user is left STUCK, every REST call failing, until the token
+    // expires on its own and the expired path finally triggers a refresh.
+    // The explicit check above is what keeps this cheap: it costs one
+    // legitimate user holding a genuinely pre-`sid` token a single 401
+    // carrying the code their client already knows means "refresh and
+    // retry". This wave does not remove the tolerance; whoever does only
+    // needs to confirm the window above has passed.
     if (payload.sid && (await isSessionDenied(payload.sid))) {
       throw new HttpError('Session ended', 401, ACCESS_TOKEN_EXPIRED_CODE)
     }
