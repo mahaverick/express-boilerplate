@@ -15,6 +15,15 @@ datasources:
     jsonData:
       tracesToLogsV2:
         datasourceUid: loki
-        filterByTraceId: true
         spanStartTimeShift: '-5m'
         spanEndTimeShift: '5m'
+        # service.name (OTel resource attr) is indexed by Loki as the
+        # service_name label; trace_id arrives as structured metadata, so it
+        # must be a label-filter expression after the stream selector — the
+        # default body line-filter would never match. `$$` escapes Grafana's
+        # provisioning env-var expansion.
+        tags:
+          - key: service.name
+            value: service_name
+        customQuery: true
+        query: '{$${__tags}} | trace_id="$${__trace.traceId}"'
