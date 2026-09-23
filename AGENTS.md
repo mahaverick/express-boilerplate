@@ -32,8 +32,11 @@ with conventions that don't belong in any of them.
 
 ## Conventions
 
-- Use `pnpm` only. `packageManager` is pinned in `package.json`, and
-  `engine-strict=true` in `.npmrc` rejects a mismatched Node/pnpm.
+- Use `pnpm` only. `packageManager` is pinned in `package.json`.
+  `devEngines.runtime` (also in `package.json`, `onFail: "error"`) rejects a
+  mismatched Node at `pnpm install` — `.npmrc`'s `engine-strict=true` does
+  not do this under pnpm 12 despite its name (see README.md's
+  "Requirements" section).
 - Node >= 24 (`.nvmrc`).
 - No barrel files. Import a module directly (`@/services/foo.service`), not
   through a re-exporting `index.ts`. See STRUCTURE.md.

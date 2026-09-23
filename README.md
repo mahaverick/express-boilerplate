@@ -17,8 +17,17 @@ exactly what is and is not here yet.
 
 ## Requirements
 
-- Node.js >= 24 (pinned in [`.nvmrc`](.nvmrc); `engine-strict=true` in
-  [`.npmrc`](.npmrc) refuses anything older)
+- Node.js >= 24 (pinned in [`.nvmrc`](.nvmrc); `devEngines.runtime` in
+  `package.json` refuses anything older at `pnpm install` — verified
+  empirically: under pnpm 12.4.1, `.npmrc`'s `engine-strict=true` does
+  **not** enforce this, despite its name — `pnpm install` exits 0 against a
+  Node version well outside `engines.node`. `engine-strict` only governs
+  whether an installed dependency's own `engines` mismatch fails the
+  install (pnpm docs: <https://pnpm.io/settings/cli#enginestrict>);
+  `devEngines.runtime` with `onFail: "error"` is pnpm's own mechanism for
+  enforcing the project's own runtime floor
+  (<https://pnpm.io/package_json#devenginesruntime>). CI pins Node 24 in
+  every workflow regardless.)
 - [pnpm](https://pnpm.io) 12.4.1 (pinned via `packageManager` in
   `package.json`; install Corepack and enable it with `npm i -g corepack@0.36.0 && corepack enable` — Node 25+ no longer ships Corepack, so this works on Node 24 and 26 alike)
 - Docker, for the local Postgres/Redis/OpenTelemetry/Loki/Mailpit stack
