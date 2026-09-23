@@ -96,17 +96,23 @@ async function authenticateStreamRequest(
     ? header.slice('Bearer '.length).trim()
     : undefined
   const fromQuery = typeof request.query.token === 'string' ? request.query.token : undefined
-  // `||`, deliberately not `??`. If `fromHeader` were ever `''` — an
-  // `Authorization: Bearer ` header with nothing after it — `??` would
-  // treat that present-but-empty string as the token and never fall
-  // through to `fromQuery`; `||` correctly would. Defensive rather than
-  // exercised: verified empirically (a throwaway `node:http` echo server)
-  // that Node's own HTTP parser strips trailing OWS from header values
-  // before Express ever sees them, so a literal trailing-space-then-nothing
-  // header is not reachable over a real socket in this stack, and no test
-  // here can discriminate the two operators for that reason. Kept per the
-  // task brief regardless, since a non-compliant client or proxy is not a
-  // guarantee this code should depend on.
+  // `||`, deliberately not `??`, and this IS reachable — measured, not
+  // assumed. `??` would treat a present-but-empty `fromHeader` as the token
+  // and never fall through to `fromQuery`; `||` falls through correctly.
+  //
+  // Node's HTTP parser strips ASCII spaces and tabs from a header value
+  // before Express sees it, so `Authorization: Bearer ` really does arrive
+  // as `'Bearer'` and never reaches the `startsWith('Bearer ')` branch. It
+  // does NOT strip a non-ASCII space. A raw `0xA0` byte (U+00A0) arrives
+  // intact, so the value is `'Bearer '` followed by U+00A0 — length 8, and
+  // `startsWith('Bearer ')` is true. `.trim()` then removes the U+00A0,
+  // because ECMAScript counts it as whitespace where the HTTP grammar does
+  // not, leaving `fromHeader` as `''`. Both facts were checked against a
+  // throwaway `node:http` server rather than assumed.
+  //
+  // Failing closed, so the stakes are a spurious 401 for a malformed
+  // client rather than a bypass — but the operator is load-bearing, not
+  // decoration. Do not "simplify" it to `??`.
   const token = fromHeader || fromQuery
 
   if (!token) {
