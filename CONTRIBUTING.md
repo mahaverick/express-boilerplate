@@ -182,6 +182,10 @@ bump and changelog that will be created when merged:
 - `fix` commits become a patch version bump
 - `feat!` or `BREAKING CHANGE:` commits become a major version bump
 
+A multi-commit PR merges via squash, so its PR title becomes the commit
+`release-please` reads (a single-commit PR keeps that commit's own title
+instead) — either way, PR titles must be conventional commits.
+
 ## Docs to update alongside a change
 
 - Changing where a kind of file lives, or its naming rule -> update
