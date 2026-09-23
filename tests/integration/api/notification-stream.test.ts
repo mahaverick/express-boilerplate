@@ -354,12 +354,34 @@ describe('GET /api/v1/notifications/stream', () => {
   /**
    * Open a tracked SSE connection — tracked so `afterEach` destroys it even
    * if the test that opened it never does.
-   * @param path - The request path, including any query string.
-   * @param headers - Extra request headers, e.g. `Last-Event-ID`.
+   *
+   * Accepts either a raw `path` (+ optional `headers`), which is how every
+   * pre-existing call in this file builds its request, or `{ header?,
+   * query? }` to authenticate the fixed `/api/v1/notifications/stream` path
+   * via an `Authorization` header and/or a `?token=` query parameter — for
+   * the Bearer-header tests below, so they don't each hand-assemble a URL
+   * and header themselves.
+   * @param pathOrAuth - The request path (including any query string), or `{ header?, query? }` to build a request against the stream endpoint.
+   * @param headers - Extra request headers, e.g. `Last-Event-ID`. Only used when `pathOrAuth` is a path string.
    * @returns The opened connection.
    */
-  function openStream(path: string, headers: Record<string, string> = {}): SseConnection {
-    const connection = new SseConnection(baseUrl, path, headers)
+  function openStream(
+    pathOrAuth: string | { header?: string; query?: string },
+    headers: Record<string, string> = {}
+  ): SseConnection {
+    let path: string
+    let requestHeaders: Record<string, string>
+    if (typeof pathOrAuth === 'string') {
+      path = pathOrAuth
+      requestHeaders = headers
+    } else {
+      const { header, query } = pathOrAuth
+      path = query
+        ? `/api/v1/notifications/stream?token=${encodeURIComponent(query)}`
+        : '/api/v1/notifications/stream'
+      requestHeaders = header ? { Authorization: header } : {}
+    }
+    const connection = new SseConnection(baseUrl, path, requestHeaders)
     openConnections.push(connection)
     return connection
   }
@@ -392,16 +414,16 @@ describe('GET /api/v1/notifications/stream', () => {
     const sessionId = randomUUID()
     const token = signAccessToken(user, sessionId)
 
-    const stream = openStream(`/api/v1/notifications/stream?token=${encodeURIComponent(token)}`)
+    const stream = openStream({ header: `Bearer ${token}` })
     await stream.waitForResponse()
 
     return { stream, userId: user.id, sessionId }
   }
 
-  it('opens an SSE stream with the expected headers for a valid token', async () => {
+  it('opens an SSE stream with the expected headers for a valid Bearer token', async () => {
     const { token } = await createAuthenticatedUser()
 
-    const connection = openStream(`/api/v1/notifications/stream?token=${encodeURIComponent(token)}`)
+    const connection = openStream({ header: `Bearer ${token}` })
     const response = await connection.waitForResponse()
 
     expect(response.statusCode).toBe(200)
@@ -411,7 +433,13 @@ describe('GET /api/v1/notifications/stream', () => {
     expect(response.headers['x-accel-buffering']).toBe('no')
   })
 
-  it('rejects a connection with no token, as an ordinary 401 JSON response, not a stream', async () => {
+  // `/stream` sits behind `requireAuth` (notification.routes.ts) like every
+  // other route now, so "no credential at all" is `requireAuth`'s own
+  // `getBearerToken` rejection (auth.middleware.ts) — not anything this
+  // controller throws. The message it carries (and the absence of a `code`)
+  // is what distinguishes it from the sid-less and denied-session 401s
+  // below, both of which carry `ACCESS_TOKEN_EXPIRED_CODE`.
+  it("rejects a connection with no credential at all, as requireAuth's ordinary 401 JSON response, not a stream", async () => {
     const connection = openStream('/api/v1/notifications/stream')
     const response = await connection.waitForResponse()
 
@@ -419,14 +447,41 @@ describe('GET /api/v1/notifications/stream', () => {
     expect(response.headers['content-type']).not.toContain('text/event-stream')
 
     const body = await connection.collectBody()
-    expect((JSON.parse(body) as { success: boolean }).success).toBe(false)
+    const parsed = JSON.parse(body) as { success: boolean; message: string; code?: string }
+    expect(parsed.success).toBe(false)
+    expect(parsed.message).toBe('Missing or malformed Authorization header')
+    expect(parsed.code).toBeUndefined()
   })
 
-  it('rejects a connection with an invalid token', async () => {
-    const connection = openStream('/api/v1/notifications/stream?token=not-a-real-jwt')
+  // The regression test for this task: a well-formed, valid token in the
+  // query string — the exact shape that used to open a stream before this
+  // task deleted `authenticateStreamRequest` — must now be rejected exactly
+  // like no credential at all, because `requireAuth` never reads
+  // `request.query` and nothing else on this route does either. If the
+  // query-parameter path were still reachable anywhere, this would return
+  // 200, not 401.
+  it('no longer authenticates from a ?token= query parameter, even a valid one, now that the query path is deleted', async () => {
+    const { token } = await createAuthenticatedUser()
+
+    const connection = openStream({ query: token })
     const response = await connection.waitForResponse()
 
     expect(response.statusCode).toBe(401)
+    expect(response.headers['content-type']).not.toContain('text/event-stream')
+
+    const body = await connection.collectBody()
+    const parsed = JSON.parse(body) as { message: string; code?: string }
+    expect(parsed.message).toBe('Missing or malformed Authorization header')
+    expect(parsed.code).toBeUndefined()
+  })
+
+  it('rejects a connection with an invalid token', async () => {
+    const connection = openStream({ header: 'Bearer not-a-real-jwt' })
+    const response = await connection.waitForResponse()
+
+    expect(response.statusCode).toBe(401)
+    const body = await connection.collectBody()
+    expect((JSON.parse(body) as { message: string }).message).toBe('Invalid access token')
   })
 
   it('rejects a connection with an expired token, carrying the distinguishable code', async () => {
@@ -439,12 +494,14 @@ describe('GET /api/v1/notifications/stream', () => {
       expiresIn: -10,
     })
 
-    const connection = openStream(`/api/v1/notifications/stream?token=${encodeURIComponent(token)}`)
+    const connection = openStream({ header: `Bearer ${token}` })
     const response = await connection.waitForResponse()
 
     expect(response.statusCode).toBe(401)
     const body = await connection.collectBody()
-    expect((JSON.parse(body) as { code?: string }).code).toBe(ACCESS_TOKEN_EXPIRED_CODE)
+    const parsed = JSON.parse(body) as { message: string; code?: string }
+    expect(parsed.code).toBe(ACCESS_TOKEN_EXPIRED_CODE)
+    expect(parsed.message).toBe('Access token expired')
   })
 
   it('rejects a connection whose token belongs to no active user', async () => {
@@ -452,10 +509,14 @@ describe('GET /api/v1/notifications/stream', () => {
     await sql`delete from users where id = ${user.id}`
     createdUserIds.length = 0 // already deleted directly above
 
-    const connection = openStream(`/api/v1/notifications/stream?token=${encodeURIComponent(token)}`)
+    const connection = openStream({ header: `Bearer ${token}` })
     const response = await connection.waitForResponse()
 
     expect(response.statusCode).toBe(401)
+    const body = await connection.collectBody()
+    expect((JSON.parse(body) as { message: string }).message).toBe(
+      'Account no longer exists or is inactive'
+    )
   })
 
   // Real time, not a fake timer: this proves the actual `setInterval` wired
@@ -468,7 +529,7 @@ describe('GET /api/v1/notifications/stream', () => {
   // controller constant.
   it('sends a heartbeat comment within a few seconds', async () => {
     const { token } = await createAuthenticatedUser()
-    const connection = openStream(`/api/v1/notifications/stream?token=${encodeURIComponent(token)}`)
+    const connection = openStream({ header: `Bearer ${token}` })
     await connection.waitForResponse()
 
     await waitUntil(() => connection.rawText.includes(':ping'), 5000, 100)
@@ -477,10 +538,11 @@ describe('GET /api/v1/notifications/stream', () => {
 
   it('delivers a notification published via the emitter, in the documented SSE frame format', async () => {
     const { user, token } = await createAuthenticatedUser()
-    const connection = openStream(`/api/v1/notifications/stream?token=${encodeURIComponent(token)}`)
+    const connection = openStream({ header: `Bearer ${token}` })
     await connection.waitForResponse()
-    // The handler registers synchronously once `authenticateStreamRequest`
-    // resolves (streamNotifications, notification-stream.controller.ts) —
+    // The handler registers synchronously once `requireAuth` and this
+    // controller's own `authenticatedUserId`/`requireSessionId` checks
+    // resolve (streamNotifications, notification-stream.controller.ts) —
     // by the time this client has received any bytes at all, the server has
     // already run past `onNotification`. This sleep is slack against
     // scheduling jitter, not a requirement of that ordering.
@@ -510,10 +572,10 @@ describe('GET /api/v1/notifications/stream', () => {
     const second = await seedNotification(user.id, 'Second')
     const third = await seedNotification(user.id, 'Third')
 
-    const connection = openStream(
-      `/api/v1/notifications/stream?token=${encodeURIComponent(token)}`,
-      { 'Last-Event-ID': first.id }
-    )
+    const connection = openStream('/api/v1/notifications/stream', {
+      Authorization: `Bearer ${token}`,
+      'Last-Event-ID': first.id,
+    })
     await connection.waitForResponse()
 
     await waitUntil(
@@ -541,10 +603,10 @@ describe('GET /api/v1/notifications/stream', () => {
     const { user, token } = await createAuthenticatedUser()
     const first = await seedNotification(user.id, 'First')
 
-    const connection = openStream(
-      `/api/v1/notifications/stream?token=${encodeURIComponent(token)}`,
-      { 'Last-Event-ID': first.id }
-    )
+    const connection = openStream('/api/v1/notifications/stream', {
+      Authorization: `Bearer ${token}`,
+      'Last-Event-ID': first.id,
+    })
     await connection.waitForResponse()
 
     const live = await seedNotification(user.id, 'Live during replay')
@@ -594,10 +656,10 @@ describe('GET /api/v1/notifications/stream', () => {
       'findByIdAndUser',
       delayedFindByIdAndUser,
       async () => {
-        const connection = openStream(
-          `/api/v1/notifications/stream?token=${encodeURIComponent(token)}`,
-          { 'Last-Event-ID': first.id }
-        )
+        const connection = openStream('/api/v1/notifications/stream', {
+          Authorization: `Bearer ${token}`,
+          'Last-Event-ID': first.id,
+        })
         await connection.waitForResponse()
 
         const persistedLive = await seedNotification(user.id, 'Persisted, in the missed burst')
@@ -640,10 +702,10 @@ describe('GET /api/v1/notifications/stream', () => {
     const { user, token } = await createAuthenticatedUser()
     const first = await seedNotification(user.id, 'First')
 
-    const connection = openStream(
-      `/api/v1/notifications/stream?token=${encodeURIComponent(token)}`,
-      { 'Last-Event-ID': first.id }
-    )
+    const connection = openStream('/api/v1/notifications/stream', {
+      Authorization: `Bearer ${token}`,
+      'Last-Event-ID': first.id,
+    })
     await connection.waitForResponse()
     connection.destroy()
 
@@ -655,10 +717,10 @@ describe('GET /api/v1/notifications/stream', () => {
     const { user, token } = await createAuthenticatedUser()
     await seedNotification(user.id, 'Only notification')
 
-    const connection = openStream(
-      `/api/v1/notifications/stream?token=${encodeURIComponent(token)}`,
-      { 'Last-Event-ID': randomUUID() }
-    )
+    const connection = openStream('/api/v1/notifications/stream', {
+      Authorization: `Bearer ${token}`,
+      'Last-Event-ID': randomUUID(),
+    })
     const response = await connection.waitForResponse()
     await sleep(200) // give a wrongly-replayed burst a chance to arrive before asserting it didn't
 
@@ -668,7 +730,7 @@ describe('GET /api/v1/notifications/stream', () => {
 
   it('stops delivering events and removes its listener once the client disconnects', async () => {
     const { user, token } = await createAuthenticatedUser()
-    const connection = openStream(`/api/v1/notifications/stream?token=${encodeURIComponent(token)}`)
+    const connection = openStream({ header: `Bearer ${token}` })
     await connection.waitForResponse()
     await waitUntil(() => listenerCount(user.id) === 1, 2000)
 
@@ -682,15 +744,15 @@ describe('GET /api/v1/notifications/stream', () => {
   })
 
   // requireAuth (auth.middleware.ts) rejects a denied session, but only at
-  // connect — it never runs again on a connection already open. This
-  // endpoint doesn't sit behind requireAuth at all (see this controller's
-  // own header comment), and its own connect-time check
-  // (authenticateStreamRequest) has the same one-shot limitation. The
-  // heartbeat is the only thing that recurs on an open SSE connection, so
-  // it is the only place a revoked session can actually be caught here —
-  // this test proves that closes the stream, not merely that the session
-  // is rejected on a fresh connect (already covered by
-  // auth.middleware.test.ts's own denylist test).
+  // connect — it never runs again on a connection already open, and
+  // `/stream` sits behind it exactly like every other route now (this
+  // controller has no connect-time check of its own for a denied session;
+  // see the "refuses to open a stream for an already-denied session" test
+  // below for that path). The heartbeat is the only thing that recurs on an
+  // open SSE connection, so it is the only place a revoked session can
+  // actually be caught here — this test proves that closes the stream, not
+  // merely that the session is rejected on a fresh connect (already covered
+  // by auth.middleware.test.ts's own denylist test).
   it('closes an open stream once its session is revoked', async () => {
     const { stream, userId, sessionId } = await openStreamForNewSession()
 
@@ -713,54 +775,62 @@ describe('GET /api/v1/notifications/stream', () => {
   }, 10_000)
 
   // Pairs with the test above: that one proves a session denied AFTER
-  // connect closes an already-open stream (Task 5's heartbeat, the only
-  // thing that recurs on an open connection). This one proves a session
-  // denied BEFORE connect never gets to open a stream at all — a different
-  // code path (this task's check inside authenticateStreamRequest, at
-  // connect) that Task 5's heartbeat cannot reach, since it never runs
-  // until a stream is already open.
-  it('refuses to open a stream for an already-denied session', async () => {
+  // connect closes an already-open stream (the heartbeat, the only thing
+  // that recurs on an open connection). This one proves a session denied
+  // BEFORE connect never gets to open a stream at all — now `requireAuth`'s
+  // own denylist check (auth.middleware.ts), the same one every other route
+  // on this router already relies on, not a check this controller runs
+  // itself. Distinguished from the sid-less rejection below by message: both
+  // carry `ACCESS_TOKEN_EXPIRED_CODE`, but only `requireAuth`'s denylist
+  // rejection says "Session ended".
+  it("refuses to open a stream for an already-denied session, via requireAuth's denylist check", async () => {
     const user = await userRepository.create({ email: uniqueEmail() })
     createdUserIds.push(user.id)
     const sessionId = randomUUID()
     const token = signAccessToken(user, sessionId)
 
     // denySession directly, not revokeAllForSession — this test is about
-    // authenticateStreamRequest's own denylist read, not about revocation
-    // writing that entry (already covered by user-token.repository.test.ts
-    // and the "closes an open stream" test above).
+    // requireAuth's own denylist read, not about revocation writing that
+    // entry (already covered by user-token.repository.test.ts and the
+    // "closes an open stream" test above).
     await denySession(sessionId)
 
-    const connection = openStream(`/api/v1/notifications/stream?token=${encodeURIComponent(token)}`)
+    const connection = openStream({ header: `Bearer ${token}` })
     const response = await connection.waitForResponse()
 
-    // A rejection thrown by authenticateStreamRequest happens before
-    // response.writeHead, so this is the ordinary JSON 401 envelope, not an
-    // event-stream that opens and then closes.
+    // requireAuth's rejection happens before response.writeHead, so this is
+    // the ordinary JSON 401 envelope, not an event-stream that opens and
+    // then closes.
     expect(response.statusCode).toBe(401)
     expect(response.headers['content-type']).not.toContain('text/event-stream')
+
+    const body = await connection.collectBody()
+    const parsed = JSON.parse(body) as { message: string; code?: string }
+    expect(parsed.message).toBe('Session ended')
+    expect(parsed.code).toBe(ACCESS_TOKEN_EXPIRED_CODE)
   })
 
   // The next two tests are a pair: a positive control proving the fixture
-  // is sound, and the actual assertion. Unlike requireAuth (which tolerates
-  // a sid-less token until it expires — auth.middleware.test.ts's own
-  // 'accepts a token with no `sid` claim' pair, ~163-260), this endpoint
-  // refuses one outright at connect — see authenticateStreamRequest's own
-  // comment (notification-stream.controller.ts) for why a connect-time 401
-  // is cheap enough here that no such tolerance is needed.
+  // is sound, and the actual assertion. `requireAuth` tolerates a sid-less
+  // token until it expires (auth.middleware.test.ts's own 'accepts a token
+  // with no `sid` claim' pair) — this route's own handler does not, once
+  // `requireAuth` has let the request through: see `requireSessionId`'s own
+  // comment (notification-stream.controller.ts) for why. That means this
+  // exact token — genuinely accepted by `requireAuth` — must still fail to
+  // open a stream, purely on this controller's own check.
   it('opens a stream for an ordinary signAccessToken token — the positive control for the next test', async () => {
     const user = await userRepository.create({ email: uniqueEmail() })
     createdUserIds.push(user.id)
     const token = signAccessToken(user, randomUUID())
 
-    const connection = openStream(`/api/v1/notifications/stream?token=${encodeURIComponent(token)}`)
+    const connection = openStream({ header: `Bearer ${token}` })
     const response = await connection.waitForResponse()
 
     expect(response.statusCode).toBe(200)
     expect(response.headers['content-type']).toBe('text/event-stream')
   })
 
-  it('refuses to open a stream for a hand-signed token with no `sid` claim at all', async () => {
+  it("refuses to open a stream for a hand-signed token with no `sid` claim at all, via this route's own check after requireAuth", async () => {
     const user = await userRepository.create({ email: uniqueEmail() })
     createdUserIds.push(user.id)
     // Hand-signed, deliberately NOT via signAccessToken: signAccessToken
@@ -773,16 +843,23 @@ describe('GET /api/v1/notifications/stream', () => {
       expiresIn: '15m',
     })
 
-    const connection = openStream(`/api/v1/notifications/stream?token=${encodeURIComponent(token)}`)
+    const connection = openStream({ header: `Bearer ${token}` })
     const response = await connection.waitForResponse()
 
-    // A rejection thrown by authenticateStreamRequest happens before
-    // response.writeHead, so this is the ordinary JSON 401 envelope, not an
-    // event-stream that opens and then closes. The positive control above,
-    // using the exact same request shape and helper minus the `sid` claim,
-    // is what attributes this 401 to the missing claim rather than to a
-    // broken fixture.
+    // `requireAuth` ADMITS this token (see the positive control above) —
+    // this 401 comes from `requireSessionId`
+    // (notification-stream.controller.ts) reading `request.sessionId` and
+    // finding it unset, not from requireAuth. Both this test and the
+    // "already-denied session" test above carry ACCESS_TOKEN_EXPIRED_CODE,
+    // so the message is what actually attributes the rejection to the
+    // correct layer — "Session ended" is requireAuth's denylist; this one
+    // is requireSessionId's own check.
     expect(response.statusCode).toBe(401)
     expect(response.headers['content-type']).not.toContain('text/event-stream')
+
+    const body = await connection.collectBody()
+    const parsed = JSON.parse(body) as { message: string; code?: string }
+    expect(parsed.message).toBe('Access token missing session')
+    expect(parsed.code).toBe(ACCESS_TOKEN_EXPIRED_CODE)
   })
 })

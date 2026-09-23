@@ -109,8 +109,13 @@ exercised**. That is the same trap that cost an afternoon on the SSE close propa
 proxy hid the real behaviour, and the first honest test was the production image.
 
 CORS is therefore tested in react-boilerplate's **`nginx` Playwright project**, which already
-serves the real image. Two cases: a disallowed origin whose preflight fails, and an allowed
-origin that succeeds with credentials.
+serves the real image. Two cases: a disallowed origin, and an allowed one.
+
+> **Reworded after implementation.** This said "a disallowed origin whose preflight **fails**".
+> It does not fail. `cors@2.8.6` answers a disallowed origin by calling `next()` without
+> handling the preflight, so the request falls through to whatever the route mounts. What stops
+> the browser is the withheld `Access-Control-Allow-Origin` header, and that is what the e2e
+> asserts. See §6 for the same correction against the acceptance criteria.
 
 **Also verify there**: `OPTIONS /api/v1/notifications/stream` returns 204 promptly. That
 location carries `proxy_buffering off` and `proxy_read_timeout 24h`; the `cors` middleware
@@ -124,7 +129,11 @@ answers the preflight in Express, but nginx has to route it there rather than ho
 
 `GET /api/v1/notifications/stream` moves **behind `requireAuth`** and stops being the
 exception `notification.routes.ts` documents at length. `authenticateStreamRequest` and its
-entire `?token=` path are **deleted**, not adapted.
+entire `?token=` path are **deleted**, not adapted — including the sid-less-token check it used
+to run at connect. That check itself is not going away: it moves into a new, smaller function of
+this controller's own, `requireSessionId`, now that `requireAuth` running ahead of this route
+covers everything else `authenticateStreamRequest` used to. See Piece 2's "Three consumers, not
+one" section below, whose plan predates this deletion and names the old function.
 
 The route stays `GET` — unlike Consequential's chat stream it carries no body — so
 **`nginx.conf` needs no change**. Its SSE location comment must be rewritten: the
@@ -231,6 +240,18 @@ open while this spec claims they are closed. The connect check runs once; nginx 
 > account's _open_ stream keeps receiving frames until it closes for some other reason.
 > Deactivation is caught on the next ordinary request, by `requireAuth`'s `findById` read.
 
+> **Corrected again, later, by the stream-fetch-transport branch.** `authenticateStreamRequest`
+> (item 2 above) no longer exists — that branch deleted it along with the `?token=` path. Its
+> connect-time denylist check is not gone, it moved: `/stream` now sits **behind** `requireAuth`
+> (`notification.routes.ts`), so `requireAuth`'s own denylist check (item 1) covers the stream's
+> connect too, and item 2 as written here is obsolete rather than merely renamed. The one piece of
+> `authenticateStreamRequest` that `requireAuth` does NOT cover — rejecting a sid-less token, which
+> `requireAuth` deliberately tolerates everywhere else — lives on in a new function of its own,
+> `requireSessionId` (`notification-stream.controller.ts`), called from `streamNotifications`
+> immediately after `requireAuth` runs. So the stream's denylist coverage is now two consumers,
+> not three: `requireAuth` (connect, and every other request) and the heartbeat below (the open
+> connection). `requireSessionId` checks the `sid` claim's mere presence, not the denylist itself.
+
 ### Honest limits
 
 **The denylist is best-effort. The database remains the source of truth for the refresh side.**
@@ -241,11 +262,15 @@ open while this spec claims they are closed. The connect check runs once; nginx 
     expires. That window is bounded by the token's own `exp`, so it is at most
     `ACCESS_TOKEN_TTL` — **fifteen minutes after deploy**, not a release cycle. Every token
     minted after deploy carries `sid`, including one minted by a refresh mid-session.
-  - `authenticateStreamRequest` **rejects** a sid-less token outright, 401. It has to: the
-    heartbeat's denial check can only act on a session id, so tolerating one here would grant
-    a stream bounded by _connection lifetime_ — up to nginx's 24-hour read timeout — rather
-    than by token expiry. The browser client answers a failed stream connect by refreshing and
-    reconnecting, so the cost is one refresh and the path self-heals.
+  - The stream's own connect-time check **rejects** a sid-less token outright, 401 — written here
+    as `authenticateStreamRequest`, which the stream-fetch-transport branch **deleted**. The
+    rejection itself survives, in `requireSessionId`, but the rest of that function's job moved
+    to `requireAuth`; this was not a rename (see the correction on "Three consumers, not one"
+    above, which says the same). It has to: the heartbeat's denial check can only act on a
+    session id, so tolerating one here would grant a stream bounded by _connection lifetime_ — up
+    to nginx's 24-hour read timeout — rather than by token expiry. The browser client answers a
+    failed stream connect by refreshing and reconnecting, so the cost is one refresh and the path
+    self-heals.
 
   Stated so nobody discovers either half as a mystery 401.
 
@@ -261,13 +286,19 @@ open while this spec claims they are closed. The connect check runs once; nginx 
 
 Each step deploys alone and is backward compatible.
 
+> **Corrected after implementation.** All three steps below have since shipped, in this order —
+> `sid`/`jti`, the denylist, and CORS from the session-revocation work; the `fetch` transport and
+> the `?token=` deletion from stream-fetch-transport. Left in the original future tense below
+> because the ordering constraint (step 1 before step 2, step 3 last) is still the fact worth
+> keeping, not because the steps are still pending.
+
 1. **Express** — CORS (`WEB_URL` allowed, so a no-op), `sid` + `jti` in the token, denylist in
    `requireAuth` and the heartbeat, stream accepts **either** a Bearer header **or** the
    legacy `?token=`.
 2. **React** — stream switches to `fetch` + Bearer.
 3. **Express** — delete the `?token=` path and `authenticateStreamRequest`.
 
-Skipping the dual-accept in step 1 breaks whichever repo ships second.
+Skipping the dual-accept in step 1 would have broken whichever repo shipped second.
 
 ## 5. Deferred — recorded so it is not rediscovered
 
@@ -286,13 +317,47 @@ From the audit of 2026-09-22, deliberately out of scope here:
 ## 6. Acceptance
 
 1. Stream authenticates by `Authorization` header; no credential appears in any URL.
-2. `authenticateStreamRequest` and the `?token=` branch are deleted.
+2. `authenticateStreamRequest` and the `?token=` branch have been deleted — confirmed directly
+   against `notification-stream.controller.ts` and `notification.routes.ts`, which no longer
+   define or reference either.
 3. `Last-Event-ID` reaches the server from the browser, and the existing replay tests cover a
    real round trip rather than a synthetic one.
+
+   > **Partially met, recorded honestly rather than ticked.** The client sends the header and
+   > the server replays from it, and both halves are tested — the hook is asserted to send the
+   > id of the last delivered event on reconnect and no header at all on first connect, and the
+   > express integration suite covers replay, in-flight emission, deduplication, listener leaks
+   > and an unresolvable id. What does not exist is a single browser-driven test joining them:
+   > the two halves are proven separately, against each other's contract, not in one round
+   > trip. The reconnect-through-nginx e2e exercises a real disconnect but asserts on the
+   > reconnect, not on replayed content. Closing this means extending that e2e to seed a
+   > notification while the stream is down and assert it arrives on reconnect.
+
 4. Logging out invalidates outstanding access tokens immediately, proven by a test that
    logs out and asserts the next request 401s.
 5. Logging out **closes an open stream within one heartbeat interval**, proven by a test.
 6. CORS: an allowed origin succeeds with credentials, a disallowed origin's preflight fails,
    and `OPTIONS` on the SSE location returns 204 promptly — all asserted through the nginx
    image, not the dev proxy.
+
+   > **Met for the third clause, reworded for the other two.** `OPTIONS` on the SSE location
+   > does return 204 promptly through the image, off a location carrying
+   > `proxy_read_timeout 24h`, and `allowedHeaders` really does list `last-event-id` — that was
+   > the clause worth proving and it is proven.
+   >
+   > "A disallowed origin's preflight **fails**" was the wrong word. Measured: `cors@2.8.6`
+   > answers a disallowed origin by calling `next()` **without** handling the preflight at all,
+   > so the request falls through to whatever the route mounts — a 401 from `requireAuth` on
+   > `/notifications/stream`, a 200 with `Allow` on `/auth/login`. Nothing "fails"; the grant
+   > header is simply withheld, which is what actually stops the browser. The e2e asserts the
+   > absence of `Access-Control-Allow-Origin`, which is the check that matters.
+   >
+   > "An allowed origin succeeds **with credentials**" is half asserted, and I overstated this
+   > in the first version of this note. The allowed-origin _preflight_ IS proven through the
+   > image — a 204 from `cors` means the origin callback returned truthy. What is not asserted
+   > anywhere is `Access-Control-Allow-Credentials`, which is the "with credentials" half.
+   > Separately, the e2e sends `Origin: http://localhost:5173` because only `WEB_URL` is in the
+   > allowlist — the container's own origin is not — so it proves the multi-frontend seam
+   > rather than this SPA's own traffic, which is same-origin and sends no preflight at all.
+
 7. Existing suites stay green in both repos.

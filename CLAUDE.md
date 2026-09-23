@@ -131,14 +131,23 @@ until you check.
   Verification tokens live in `variables`. The worker strips them before
   the database insert — the email fan-out reads them from the job payload,
   not from the stored row.
-- **SSE stream at `GET /api/v1/notifications/stream`** authenticates via
-  `?token=<jwt>` query param because `EventSource` cannot set custom
-  headers. This means the access token appears in server/proxy access logs
-  and browser history. **Hardening follow-up:** replace with a short-lived
-  single-use SSE ticket obtained from a POST endpoint, or use cookie-based
-  auth with `{ withCredentials: true }`. The in-process `EventEmitter`
-  pub/sub works for single-pod deployments; upgrade to Redis Pub/Sub for
-  multi-pod with separate worker processes.
+- **SSE stream at `GET /api/v1/notifications/stream`** authenticates the
+  same way every other route does — `Authorization: Bearer <jwt>`, behind
+  `requireAuth` — with no credential riding in the URL. It used to read a
+  `?token=<jwt>` query parameter instead, because `EventSource` cannot set
+  custom headers; the client now opens the connection with `fetch`, which
+  can. See `docs/superpowers/specs/2026-09-23-sse-auth-and-multi-frontend-design.md`
+  §0 for why a short-lived single-use ticket and cookie-based auth were both
+  designed and then rejected in favour of this. One asymmetry is
+  deliberate, not drift: `requireAuth` tolerates a bearer token that
+  verifies but carries no `sid` claim (bounded by the token's own expiry),
+  while this stream's handler (`requireSessionId`,
+  notification-stream.controller.ts) rejects one outright — the revocation
+  heartbeat can only close an already-open connection by session id, so a
+  sid-less stream would otherwise be revocable only by connection lifetime,
+  up to nginx's 24-hour read timeout, rather than by token expiry. The
+  in-process `EventEmitter` pub/sub works for single-pod deployments;
+  upgrade to Redis Pub/Sub for multi-pod with separate worker processes.
 
 ## OAuth
 
