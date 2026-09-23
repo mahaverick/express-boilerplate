@@ -93,17 +93,19 @@ const BEARER_PATTERN = /^Bearer\s+(\S+)$/
  * current, live session) is the correct and sufficient response:
  *
  *   1. An EXPIRED access token — `verifyAccessToken`'s `reason: 'expired'`,
- *      thrown both inside this file's own `verifyBearerToken` (:181 below)
- *      and, for the SSE endpoint that does not sit behind this middleware,
- *      inside `authenticateStreamRequest`.
+ *      thrown inside this file's own `verifyBearerToken` (:181 below). Every
+ *      route, including `/stream`, sits behind `requireAuth` now, so this is
+ *      the only place an expired token is ever rejected.
  *   2. A token whose session has been explicitly DENIED — the
- *      `isSessionDenied` check inside `requireAuth` itself, at :262 below.
- *   3. In `notification-stream.controller.ts`'s `authenticateStreamRequest`
- *      only: the same denial check as (2), plus a token that carries no
- *      `sid` claim at all — that endpoint has no tolerance for one (unlike
- *      this middleware's own `payload.sid &&` guard in `requireAuth`, the
- *      same statement item 2 cites), so a sid-less token is rejected
- *      outright rather than admitted until it expires.
+ *      `isSessionDenied` check inside `requireAuth` itself, at :272 below.
+ *   3. A token that verifies, is not denied, but carries no `sid` claim at
+ *      all — rejected not here but in `notification-stream.controller.ts`'s
+ *      `streamNotifications`, the one place in this codebase that refuses
+ *      such a token outright rather than tolerating it. This middleware's
+ *      own `payload.sid &&` guard just below (see item 2's line) is what
+ *      tolerates it everywhere else; see that guard's comment for why, and
+ *      `request.sessionId`'s own comment (express.d.ts) for how the stream
+ *      handler reads the fact without re-verifying the token a second time.
  */
 export const ACCESS_TOKEN_EXPIRED_CODE = 'ACCESS_TOKEN_EXPIRED'
 
@@ -245,8 +247,10 @@ export async function requireAuth(
     // WHEN removing it, replace the branch with an explicit check ahead of
     // it — `if (!payload.sid) throw new HttpError('Access token missing
     // session', 401, ACCESS_TOKEN_EXPIRED_CODE)`, mirroring
-    // `notification-stream.controller.ts`'s `authenticateStreamRequest` —
-    // rather than merely deleting the `payload.sid &&` prefix. Deleting
+    // `notification-stream.controller.ts`'s `requireSessionId`, which
+    // already runs exactly that check today (see its own comment for why
+    // that endpoint has no tolerance for a sid-less token) — rather than
+    // merely deleting the `payload.sid &&` prefix. Deleting
     // only the prefix does not compile (`isSessionDenied` takes `string`,
     // `payload.sid` is `string | undefined`), and reaching for a
     // type-level fix instead — making `sid` REQUIRED on
@@ -267,6 +271,12 @@ export async function requireAuth(
     // needs to confirm the window above has passed.
     if (payload.sid && (await isSessionDenied(payload.sid))) {
       throw new HttpError('Session ended', 401, ACCESS_TOKEN_EXPIRED_CODE)
+    }
+    // `exactOptionalPropertyTypes: true` (tsconfig.json): a sid-less token
+    // must leave `request.sessionId` UNSET, not assigned `undefined` — see
+    // `sessionId`'s own comment (express.d.ts) for who reads this and why.
+    if (payload.sid) {
+      request.sessionId = payload.sid
     }
     request.user = await loadAuthenticatedUser(payload.sub)
     next()

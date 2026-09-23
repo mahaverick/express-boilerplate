@@ -64,6 +64,35 @@ declare global {
        * `id` above already has.
        */
       principal?: RequestPrincipal
+
+      /**
+       * The access token's `sid` claim, set by `requireAuth`
+       * (auth.middleware.ts) from the payload it has already verified.
+       * Absent on a request that did not pass through `requireAuth`, and
+       * also absent — never set to `undefined`; `exactOptionalPropertyTypes`
+       * (tsconfig.json) forbids that — when the token itself verified but
+       * carries no `sid` claim at all (a token minted before that claim
+       * existed; see `requireAuth`'s own `payload.sid &&` guard for the
+       * tolerance this supports).
+       *
+       * NOT the same property as `sessionID` (capital ID) —
+       * `@types/express-session`'s own global `Request` augmentation
+       * declares that one, and it is express-session's cookie-store session
+       * id, used only for the OAuth callback's short-lived session (see
+       * CLAUDE.md's OAuth section). The two coexist on the same merged
+       * `Request` without colliding only because they are spelled
+       * differently, not because either file is "the" declaration the way
+       * `principal` above is for its own name.
+       *
+       * Exists so a handler downstream of `requireAuth` — today only
+       * `notification-stream.controller.ts`'s `streamNotifications` — can
+       * read the verified session id without re-verifying the token a
+       * second time, which is how two copies of the same check would drift.
+       * See `ACCESS_TOKEN_EXPIRED_CODE`'s own JSDoc (auth.middleware.ts) for
+       * why that one handler has no tolerance for this being absent, unlike
+       * `requireAuth` itself.
+       */
+      sessionId?: string
     }
   }
 }

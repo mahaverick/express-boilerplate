@@ -2,17 +2,21 @@
 //
 // GET /api/v1/notifications/stream — a Server-Sent Events connection that
 // pushes the authenticated user's notifications in real time, via
-// notification-emitter.service.ts's in-process pub/sub. This is the one
-// handler on notification.routes.ts that does NOT sit behind the router-wide
-// `requireAuth` (auth.middleware.ts) — see `authenticateStreamRequest`'s own
-// comment for why, and notification.routes.ts's header comment for how the
-// router is ordered to keep that safe.
+// notification-emitter.service.ts's in-process pub/sub. Sits behind
+// `requireAuth` (auth.middleware.ts) like every other route on
+// notification.routes.ts — see that file's header comment for the routing
+// reason `/stream` still has to precede the `:id`-shaped routes below it.
 //
-// A rejected token never opens a stream. `authenticateStreamRequest` throws
-// before `response.writeHead` ever runs, so the `catch` below hands the
-// rejection to `next(error)` and `errorHandler` (error.middleware.ts)
-// answers with this codebase's ordinary JSON 401 envelope — not an
-// event-stream response that immediately closes.
+// This handler has no tolerance for a token that verifies but carries no
+// `sid` claim, unlike `requireAuth` itself — see `requireSessionId`'s own
+// comment below for why, and `ACCESS_TOKEN_EXPIRED_CODE`'s JSDoc
+// (auth.middleware.ts) for the full three-way split of who rejects what on
+// this route. A rejected request never opens a stream: both
+// `authenticatedUserId` and `requireSessionId` throw before
+// `response.writeHead` ever runs, so the `catch` below hands the rejection
+// to `next(error)` and `errorHandler` (error.middleware.ts) answers with
+// this codebase's ordinary JSON 401 envelope — not an event-stream response
+// that immediately closes.
 import { type NextFunction, type Request, type Response } from 'express'
 import { getEnv } from '@/configs/env.config'
 import { MAX_NOTIFICATION_PAGE_SIZE } from '@/constants/notification.constants'
@@ -20,13 +24,10 @@ import type { Notification } from '@/database/models/notification.model'
 import { ACCESS_TOKEN_EXPIRED_CODE } from '@/middlewares/auth.middleware'
 import { HttpError } from '@/middlewares/error.middleware'
 import { NotificationRepository } from '@/repositories/notification.repository'
-import { UserRepository } from '@/repositories/user.repository'
 import { logger } from '@/services/logger.service'
 import { offNotification, onNotification } from '@/services/notification-emitter.service'
 import { isSessionDenied } from '@/services/session-denylist.service'
-import { verifyAccessToken } from '@/utilities/token.utilities'
 
-const userRepository = new UserRepository()
 const notificationRepository = new NotificationRepository()
 
 // Sent once, in the `retry:` field of the initial response — how long the
@@ -55,112 +56,55 @@ interface NotificationStreamPayload {
 }
 
 /**
- * Authenticate an SSE connection from an `Authorization: Bearer` header or,
- * failing that, its `?token=` query parameter.
- *
- * The header is read first and wins outright when present. `EventSource` —
- * the only thing that used to open this connection outside a test — cannot
- * set custom request headers at all, which is the whole reason this
- * endpoint ever read a query parameter; the client now opens this
- * connection via `fetch`, which can set one. The query parameter is kept
- * for exactly one release so an old client bundle keeps working while both
- * repos deploy in either order — a later task removes it. Deliberately NOT
- * `requireAuth`: that middleware only ever reads the header, so it alone
- * could never serve a client still reading the query parameter. Everything
- * past "we have a token string" mirrors `requireAuth`'s own steps: verify
- * the signature via `verifyAccessToken`, require a `sid` claim, reject a
- * denied session via `isSessionDenied`, then load and confirm the claimed
- * user is still active — except that, unlike `requireAuth`, there is no
- * tolerance here for a token with no `sid`; see the guard below for why a
- * connect-time rejection is cheap enough that this endpoint does not need
- * one. NOTE: this whole function — including the denylist check — runs
- * ONCE, at connect. The only recurring check on an already-open connection
- * is the heartbeat below, and it checks the session denylist only — it
- * does not re-read `user.active` — so a user deactivated AFTER connecting
- * keeps receiving frames on that already-open stream until it closes for
- * some other reason.
- * @param request - The incoming request, carrying the access token as an `Authorization: Bearer` header or a `?token=` query parameter.
- * @returns The authenticated user's id and the session id its access token carries.
- * @throws {HttpError} 401, when the token is missing, invalid, expired, carries no `sid` claim, its session has been denied, or names no active user.
+ * The authenticated principal's id, guarding against a routing mistake that
+ * reaches this controller without `requireAuth` ahead of it. Copied from
+ * `notification.controller.ts` (which copies it from `profile.controller.ts`
+ * in turn) rather than imported — see that file's header comment for why a
+ * three-line defensive check is repeated per controller instead of shared.
+ * @param request - The incoming request.
+ * @returns The authenticated user's id.
+ * @throws {HttpError} 401, when `request.user` was never populated.
  */
-async function authenticateStreamRequest(
-  request: Request
-): Promise<{ userId: string; sessionId: string }> {
-  // Header FIRST. `EventSource` cannot set one, which is the whole reason
-  // this endpoint ever read a query parameter — but the client now uses
-  // `fetch`, which can. The query path is kept for exactly one release so an
-  // old bundle keeps working while both repos deploy; a later task deletes
-  // it.
-  const header = request.header('Authorization')
-  const fromHeader = header?.startsWith('Bearer ')
-    ? header.slice('Bearer '.length).trim()
-    : undefined
-  const fromQuery = typeof request.query.token === 'string' ? request.query.token : undefined
-  // `||`, deliberately not `??`, and this IS reachable — measured, not
-  // assumed. `??` would treat a present-but-empty `fromHeader` as the token
-  // and never fall through to `fromQuery`; `||` falls through correctly.
-  //
-  // Node's HTTP parser strips ASCII spaces and tabs from a header value
-  // before Express sees it, so `Authorization: Bearer ` really does arrive
-  // as `'Bearer'` and never reaches the `startsWith('Bearer ')` branch. It
-  // does NOT strip a non-ASCII space. A raw `0xA0` byte (U+00A0) arrives
-  // intact, so the value is `'Bearer '` followed by U+00A0 — length 8, and
-  // `startsWith('Bearer ')` is true. `.trim()` then removes the U+00A0,
-  // because ECMAScript counts it as whitespace where the HTTP grammar does
-  // not, leaving `fromHeader` as `''`. Both facts were checked against a
-  // throwaway `node:http` server rather than assumed.
-  //
-  // Failing closed, so the stakes are a spurious 401 for a malformed
-  // client rather than a bypass — but the operator is load-bearing, not
-  // decoration. Do not "simplify" it to `??`.
-  const token = fromHeader || fromQuery
-
-  if (!token) {
-    throw new HttpError('Missing access token', 401)
+function authenticatedUserId(request: Request): string {
+  if (!request.user) {
+    throw new HttpError('Authentication required', 401)
   }
+  return request.user.id
+}
 
-  const verified = verifyAccessToken(token)
-  if (!verified.ok) {
-    if (verified.reason === 'expired') {
-      throw new HttpError('Access token expired', 401, ACCESS_TOKEN_EXPIRED_CODE)
-    }
-    throw new HttpError('Invalid access token', 401)
-  }
-
-  // Unlike requireAuth's tolerance for a token minted before `sid` existed
-  // (auth.middleware.ts), this endpoint has none: a sid-less token is
-  // refused outright, before isSessionDenied is even called, since there is
-  // nothing to deny. ACCESS_TOKEN_EXPIRED_CODE is carried here, the same
-  // code requireAuth uses for an expired or denied token, for what the
-  // credential MEANS ("stale, refresh and retry") rather than because the
-  // browser reads it — an EventSource that fails to connect exposes no
-  // response body or status code to the page at all, so nothing here
-  // parses `code` off this specific rejection. What actually recovers a
-  // sid-less token is the client's own error handling: `useNotificationStream`
-  // (react-boilerplate's use-notifications.ts) treats ANY failed connect
-  // as `onerror`, closes it, and reconnects through `ensureSession()`
-  // (session.ts) — the shared single-flight refresh — which the hook
-  // deliberately calls INSTEAD OF the SSE `retry:` directive's own
-  // built-in retry, because that built-in retry would re-request this same
-  // URL with this same dead token forever. So a sid-less token costs its
-  // holder exactly one failed connect and one automatic refresh, and the
-  // new token it comes back with carries `sid`.
-  if (!verified.payload.sid) {
+/**
+ * The connected session id `requireAuth` verified this token carries, or a
+ * 401 when it verified a token with none.
+ *
+ * Unlike `requireAuth` itself, which tolerates a token minted before `sid`
+ * existed and admits it until it naturally expires (`auth.middleware.ts`'s
+ * `payload.sid &&` guard), this stream has no such tolerance. The
+ * revocation heartbeat below can only close an ALREADY-OPEN connection by
+ * checking a session id against the denylist — it has nothing to check for
+ * a sid-less connection — so tolerating one here would mean its only
+ * exit is the client disconnecting or nginx's own 24-hour read timeout,
+ * not `ACCESS_TOKEN_TTL`. A connect-time 401 is cheap enough that this
+ * endpoint does not need the tolerance `requireAuth` grants everywhere
+ * else: `useNotificationStream` (react-boilerplate's use-notifications.ts)
+ * treats ANY failed connect as `onerror`, closes it, and reconnects through
+ * `ensureSession()` (session.ts) — the shared single-flight refresh — so a
+ * sid-less token costs its holder exactly one failed connect and one
+ * automatic refresh, and the new token it comes back with carries `sid`.
+ *
+ * Message, status and code are unchanged from this codebase's previous
+ * `authenticateStreamRequest`, which ran this same check before `/stream`
+ * moved behind `requireAuth` — a client that has already learned to treat
+ * this rejection as "refresh and retry" keeps working without a client-side
+ * change.
+ * @param request - The incoming request, already authenticated by `requireAuth`.
+ * @returns The session id.
+ * @throws {HttpError} 401, when the verified token carries no `sid` claim.
+ */
+function requireSessionId(request: Request): string {
+  if (!request.sessionId) {
     throw new HttpError('Access token missing session', 401, ACCESS_TOKEN_EXPIRED_CODE)
   }
-
-  // Mirrors requireAuth's own guard (auth.middleware.ts): same message,
-  // same status, same code. No `payload.sid &&` tolerance here — the guard
-  // above already guarantees a sid exists by this point.
-  if (await isSessionDenied(verified.payload.sid)) {
-    throw new HttpError('Session ended', 401, ACCESS_TOKEN_EXPIRED_CODE)
-  }
-
-  const user = await userRepository.findById(verified.payload.sub)
-  if (!user || !user.active) {
-    throw new HttpError('Account no longer exists or is inactive', 401)
-  }
-  return { userId: user.id, sessionId: verified.payload.sid }
+  return request.sessionId
 }
 
 /**
@@ -296,7 +240,7 @@ async function fetchMissedNotifications(
  * queried burst is written, the pending queue is flushed, deduplicated
  * against ids the burst already covered (the two windows can legitimately
  * overlap by one notification).
- * @param request - The incoming request, carrying the access token as an `Authorization: Bearer` header or a `?token=` query parameter and, on reconnect, a `Last-Event-ID` header.
+ * @param request - The incoming request, already authenticated by `requireAuth`, and, on reconnect, carrying a `Last-Event-ID` header.
  * @param response - The response, upgraded to an SSE stream once authenticated.
  * @param next - Forwards an authentication failure to the terminal error handler.
  */
@@ -306,7 +250,8 @@ export async function streamNotifications(
   next: NextFunction
 ): Promise<void> {
   try {
-    const { userId, sessionId } = await authenticateStreamRequest(request)
+    const userId = authenticatedUserId(request)
+    const sessionId = requireSessionId(request)
 
     response.writeHead(200, {
       'Content-Type': 'text/event-stream',
@@ -350,8 +295,8 @@ export async function streamNotifications(
       if (response.writableEnded || response.destroyed) return
       void (async () => {
         // The ONLY recurring check on an open connection.
-        // authenticateStreamRequest (including its own sid and denylist
-        // checks) ran once, at connect; nothing else revisits it — in
+        // `requireAuth` (denylist and sid tolerance) and `requireSessionId`
+        // above ran once, at connect; nothing else revisits them — in
         // particular, nothing here re-reads `user.active`. This heartbeat
         // is the one check that can close an ALREADY-OPEN stream at all.
         if (await isSessionDenied(sessionId)) {
