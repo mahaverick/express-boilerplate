@@ -1,0 +1,24 @@
+name: Release
+
+# Opens/updates a release PR from conventional commits on main; merging that
+# PR tags vX.Y.Z and creates the GitHub Release. The PR is opened with
+# GITHUB_TOKEN, so it gets NO CI runs (GitHub never triggers workflows from
+# GITHUB_TOKEN events) — acceptable while main is unprotected; switch to a
+# GitHub App token once required checks exist.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: googleapis/release-please-action@v5
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json

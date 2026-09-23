@@ -170,6 +170,18 @@ kept "in sync" by hand. Two files with identical content and no mechanism
 keeping them equal is a drift source, not a safety net; `.env.test` is
 committed and readable, so it is its own example.)
 
+## Releases
+
+`release-please` reads conventional commits on `main` to generate a release
+pull request. Merging that PR tags the release and creates the GitHub Release.
+The PR is opened with `GITHUB_TOKEN`, so it gets no CI runs — GitHub does not
+trigger workflows from `GITHUB_TOKEN` events. Release PRs show the version
+bump and changelog that will be created when merged:
+
+- `feat` commits become a minor version bump
+- `fix` commits become a patch version bump
+- `feat!` or `BREAKING CHANGE:` commits become a major version bump
+
 ## Docs to update alongside a change
 
 - Changing where a kind of file lives, or its naming rule -> update
