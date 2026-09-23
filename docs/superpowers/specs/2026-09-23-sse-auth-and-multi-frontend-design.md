@@ -330,8 +330,35 @@ From the audit of 2026-09-22, deliberately out of scope here:
    > and an unresolvable id. What does not exist is a single browser-driven test joining them:
    > the two halves are proven separately, against each other's contract, not in one round
    > trip. The reconnect-through-nginx e2e exercises a real disconnect but asserts on the
-   > reconnect, not on replayed content. Closing this means extending that e2e to seed a
-   > notification while the stream is down and assert it arrives on reconnect.
+   > reconnect, not on replayed content.
+   >
+   > **Attempted on 2026-09-23 and abandoned deliberately, with three measured findings that a
+   > second attempt should start from rather than rediscover.**
+   >
+   > 1. **No UI assertion can distinguish replay from refetch.** The hook treats an SSE event as
+   >    a SIGNAL, not as data: it calls `invalidateQueries`, so React Query refetches
+   >    `/notifications`. Content always arrives over that list request whether or not a frame
+   >    was replayed. A test asserting "the notification appears after reconnect" proves nothing
+   >    about replay. The provable client-side claim is narrower — that the reconnect REQUEST
+   >    carries `Last-Event-ID` — and that is worth having, because the header only survives the
+   >    proxy at all thanks to `allowedHeaders` (cors.config.ts) and the SSE `location`.
+   > 2. **`page.context().setOffline(true)` does not drop an established SSE stream.** It gates
+   >    new requests; a response already streaming survives, so the hook never errors and never
+   >    reconnects. A test built on it waits for a request that is never made. Use
+   >    `restartApi()`, as `e2e/nginx/sse.test.ts`'s existing test does. The seeded notification
+   >    survives a restart — it is a Postgres row, and that container is not restarted.
+   > 3. **The blocker, and the thing to investigate first.** After a real restart the browser
+   >    made three stream requests and NONE carried `Last-Event-ID`, while the bell still showed
+   >    the notification. Both facts together mean the client never parsed an id-bearing event —
+   >    the bell was updated by `refetchList()` on connect. The server does send `id:` on every
+   >    notification frame (`formatNotificationFrame`), and the dev API does run the notification
+   >    worker (`WORKER_ENABLED` defaults true, and `index.ts` starts it), so the open question
+   >    is whether a LIVE frame reaches the browser through nginx at all, or whether the
+   >    `forgot-password` job simply lands too late. A later run failed one step earlier, at the
+   >    bell assertion itself, which points at timing rather than a hard failure.
+   >
+   > No test was committed. A green test here would have had to assert something weaker than the
+   > criterion claims, which is worse than the criterion staying visibly unmet.
 
 4. Logging out invalidates outstanding access tokens immediately, proven by a test that
    logs out and asserts the next request 401s.
