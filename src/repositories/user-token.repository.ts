@@ -131,28 +131,28 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
     // method already (token.utilities.ts's revokeRefreshToken and
     // rotateRefreshToken), so denying here covers both without a call site
     // having to remember to.
-    //
-    // Password change/reset does NOT go through here — revokeAllSessions
-    // (token.utilities.ts) calls revokeAllForUser below instead, a
-    // separate query keyed on userId with no sessionId to deny by. That
-    // means a password reset today revokes the DB rows (no new refresh is
-    // possible) but does NOT deny any access token already issued — it
-    // stays valid until it naturally expires. Closing that gap needs
-    // revokeAllForUser to learn which session ids it just revoked (e.g. a
-    // RETURNING clause) before it can deny each one; that is a real change
-    // to a different method, not something this call site can paper over.
     await denySession(sessionId)
   }
 
   /**
    * Revoke every still-live token belonging to a user, across every
-   * session. Used where every session must end at once — e.g. a password
-   * change.
+   * session, and deny each revoked session's access tokens. Used where
+   * every session must end at once — e.g. a password reset — and is what
+   * makes that reset end an already-issued access token immediately,
+   * rather than leaving it usable until it naturally expires.
+   *
+   * This method has no purpose predicate — it deliberately revokes
+   * `password_reset`, `email_verification`, and every other purpose too,
+   * not just `'refresh'` rows. `sessionId` is only ever set on a
+   * `'refresh'` row (user-token.model.ts), so a revoked non-refresh row
+   * contributes `sessionId: null` and is filtered out before denying — it
+   * denies nothing on its own. An entire rotation chain shares one session
+   * id, so the surviving ids are deduplicated before denying each one.
    * @param userId - The user whose tokens should all be revoked.
-   * @returns Resolves once every matching row is revoked.
+   * @returns Resolves once every matching row is revoked and every revoked session's access tokens are denied.
    */
   async revokeAllForUser(userId: string): Promise<void> {
-    await db
+    const revoked = await db
       .update(userTokenModel)
       .set(this.touched({ revokedAt: sql`now()` }))
       .where(
@@ -160,6 +160,14 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
           sql`${userTokenModel.userId} = ${userId} and ${userTokenModel.revokedAt} is null`
         )
       )
+      .returning({ sessionId: userTokenModel.sessionId })
+
+    const sessionIds = new Set(
+      revoked
+        .map((row) => row.sessionId)
+        .filter((sessionId): sessionId is string => sessionId !== null)
+    )
+    await Promise.all([...sessionIds].map((sessionId) => denySession(sessionId)))
   }
 
   /**

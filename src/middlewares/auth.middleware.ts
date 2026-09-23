@@ -46,14 +46,16 @@
 // built here; this paragraph is what makes that a chosen trade-off rather
 // than an oversight for the next person to rediscover.
 //
-// What step 2 does NOT yet cover: revoking a session's refresh tokens does
-// not always deny that session's access tokens. `revokeAllForSession`
-// (logout) calls `denySession` and so is covered; `revokeAllForUser`
-// (`/auth/reset-password`, via `revokeAllSessions`) is keyed by user id and
-// calls `denySession` zero times, so a password reset today revokes refresh
-// tokens without denying the access tokens already issued for those
-// sessions. Do not read step 2 as "revocation implies denial" — it is not,
-// until a follow-up teaches `revokeAllForUser` which session ids it revoked.
+// Every session-revocation path inside `UserTokenRepository` —
+// `revokeAllForSession` (logout, refresh-token reuse detection) and
+// `revokeAllForUser` (password reset) — denies every session it revokes, so
+// within this middleware revocation does imply denial. Two things stay
+// outside that on purpose:
+// `revokeAllForUserAndPurpose` denies nothing, correctly, since it is used
+// for purpose-scoped cleanups (stale verification links) that are not
+// session revocations at all; and deactivating a user (`user.active =
+// false`) denies nothing either — step 3's `findById` read below is what
+// catches that, on the next request.
 import { type NextFunction, type Request, type Response } from 'express'
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/middlewares/error.middleware'
