@@ -42,6 +42,7 @@ export function getQueueConnection(): IORedis {
     throw new Error('Queue connection is closed; the process is shutting down')
   }
   if (!state.connection) {
+    const readiness = { hasBeenReady: false }
     state.connection = new IORedis(getEnv().REDIS_URL, {
       // BullMQ requires this to be exactly `null`, not merely absent —
       // verified empirically against the installed ioredis: its own option
@@ -52,15 +53,17 @@ export function getQueueConnection(): IORedis {
       // merge untouched.
       // eslint-disable-next-line unicorn/no-null -- see comment above; undefined does not have the same effect here
       maxRetriesPerRequest: null,
-      // Bounded retries — same reasoning as redis.service.ts's own
-      // reconnectStrategy — so isQueueReachable() reports unreachable within
-      // a few seconds instead of ioredis's default of retrying forever.
-      // `undefined`, unlike maxRetriesPerRequest above, is fine to return
-      // here: ioredis only checks `typeof retryDelay !== 'number'` to decide
-      // "stop reconnecting", so null and undefined behave identically as a
-      // callback return value (there is no default-merging involved).
-      retryStrategy: (times) => (times > 3 ? undefined : Math.min(times * 200, 2000)),
+      // Before the first 'ready', stop after three retries so isQueueReachable()
+      // fails fast; after it, retry forever so BullMQ survives a Redis outage.
+      // `undefined` stops reconnecting: ioredis only checks `typeof retryDelay !== 'number'`.
+      retryStrategy: (times) => {
+        if (readiness.hasBeenReady) return Math.min(times * 200, 5000)
+        return times > 3 ? undefined : Math.min(times * 200, 2000)
+      },
       connectTimeout: 5000,
+    })
+    state.connection.on('ready', () => {
+      readiness.hasBeenReady = true
     })
     // Mandatory: an unlistened 'error' event on an EventEmitter crashes the
     // Node.js process. ioredis emits 'error' for every failed connection
@@ -144,6 +147,8 @@ export async function isQueueReachable(): Promise<boolean> {
   if (state.closed) return false
   try {
     const connection = getQueueConnection()
+    // BullMQ needs the offline queue, so a ping while reconnecting would wait out the whole outage.
+    if (['reconnecting', 'close', 'end'].includes(connection.status)) return false
     const reply = await connection.ping()
     return reply === 'PONG'
   } catch {

@@ -34,46 +34,41 @@
 // `reconnectStrategy`: a 5s connect timeout, up to a few hundred ms of
 // backoff between retries, giving up after 3). That is the trade for never
 // blocking the module-import path on a network call.
+//
+// After the switch, a Redis command that fails (an outage, or a closed client
+// during shutdown) falls back to this store's own MemoryStore for that call,
+// logged once per outage, and goes back to Redis as soon as a command
+// succeeds. A Redis outage must neither 500 every limited route nor switch
+// limiting off (`passOnStoreError`). The cost is per-process counting while
+// Redis is down.
 import { MemoryStore, type IncrementResponse, type Options, type Store } from 'express-rate-limit'
 import { RedisStore } from 'rate-limit-redis'
 import { logger } from '@/services/logger.service'
 import { getRedis } from '@/services/redis.service'
 
 /**
- * A rate-limit `Store` that starts in memory and switches, at most once, to
- * a Redis-backed store the first time a request finds Redis reachable. See
- * this file's header comment for why resolving the backend any earlier, or
- * re-resolving it after a shutdown, would defeat the point.
+ * A rate-limit `Store` that starts in memory, switches once to Redis, and falls back to memory per command while Redis fails.
  */
 export class SharedRateLimitStore implements Store {
-  private active: Store = new MemoryStore()
+  private readonly memory = new MemoryStore()
+  private redis: RedisStore | undefined
   private latching: Promise<void> | undefined
   private loggedFallback = false
+  private isInOutage = false
   private options: Options | undefined
 
   /**
    * @param prefix - Text prepended to every key once this store is backed by
    *   Redis, so two limiters never collide in one shared keyspace. Passed
-   *   straight through to `RedisStore`; `MemoryStore` keeps its own,
-   *   per-instance map regardless, so the prefix has no effect until the
-   *   latch succeeds. Also exposed as `this.prefix` (the `Store` interface's
-   *   own optional field), which express-rate-limit's built-in validations
-   *   read to tell two limiters' keys apart.
+   *   straight through to `RedisStore`; `MemoryStore` keeps its own
+   *   per-instance map regardless. Also exposed as `this.prefix` (the `Store`
+   *   interface's own optional field), which express-rate-limit's built-in
+   *   validations read to tell two limiters' keys apart.
    */
   constructor(public readonly prefix: string) {}
 
   /**
-   * Attempt the one-time switch from `MemoryStore` to a Redis-backed store.
-   *
-   * The in-flight attempt is cached on `this.latching` rather than guarded
-   * by a plain boolean checked-then-set: several requests can call this
-   * concurrently before the first one resolves, and without sharing the same
-   * promise each would independently call `getRedis()` — reintroducing, from
-   * here, the exact duplicate-connection race `redis.service.ts`'s own
-   * lazy-connect already has to account for on its first caller. Once
-   * `this.latching` resolves it is never cleared, so a later rejection
-   * (Redis reachable once, then not) is left to `sendCommand` to surface as
-   * an ordinary store error — this method itself never re-attempts.
+   * Attempt the one-time switch to a Redis-backed store, sharing one in-flight attempt between concurrent callers.
    */
   private async latchOntoRedisIfReady(): Promise<void> {
     this.latching ??= this.tryLatch()
@@ -81,9 +76,7 @@ export class SharedRateLimitStore implements Store {
   }
 
   /**
-   * The actual latch attempt: resolve once Redis is confirmed reachable and
-   * swap `active` to a Redis-backed store, or fall back to logging (once)
-   * and leaving `active` on `MemoryStore`.
+   * The actual latch attempt: switch to Redis once it is reachable, or stay on memory and log once.
    */
   private async tryLatch(): Promise<void> {
     try {
@@ -93,8 +86,7 @@ export class SharedRateLimitStore implements Store {
         logger.warn('Redis is not reachable yet; falling back to an in-memory rate-limit store')
         this.loggedFallback = true
       }
-      // Allow a LATER call to retry: this attempt failed before ever
-      // reaching Redis, so nothing here has latched onto anything yet.
+      // Allow a later call to retry: nothing has latched yet.
       this.latching = undefined
       return
     }
@@ -107,49 +99,83 @@ export class SharedRateLimitStore implements Store {
       },
     })
     if (this.options) await redisStore.init(this.options)
-    void this.active.shutdown?.()
-    this.active = redisStore
+    this.redis = redisStore
   }
 
   /**
-   * Initialise the currently active backend. Called once by
-   * `express-rate-limit` itself, synchronously, when the limiter is built —
-   * before any request has arrived, so `active` is still `MemoryStore` here.
-   * The options are also kept so a later switch to Redis can initialise
-   * THAT backend identically.
+   * Run one operation on Redis once switched, falling back to memory when the Redis command fails.
+   * @param onRedis - The operation against the Redis-backed store.
+   * @param onMemory - The same operation against the in-memory store.
+   * @returns The Redis result, or the memory result during an outage.
+   */
+  private async withFallback<T>(
+    onRedis: (store: RedisStore) => Promise<T>,
+    onMemory: () => Promise<T> | T
+  ): Promise<T> {
+    if (!this.redis) return onMemory()
+    try {
+      const result = await onRedis(this.redis)
+      if (this.isInOutage) {
+        this.isInOutage = false
+        logger.info('Redis rate-limit store recovered; counting is shared again', {
+          prefix: this.prefix,
+        })
+      }
+      return result
+    } catch (error) {
+      if (!this.isInOutage) {
+        this.isInOutage = true
+        logger.warn('Redis rate-limit command failed; counting per process until Redis recovers', {
+          prefix: this.prefix,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      }
+      return onMemory()
+    }
+  }
+
+  /**
+   * Initialise the in-memory backend and keep the options for the Redis backend's own init.
    * @param options - The limiter's resolved options.
    */
   init(options: Options): void {
     this.options = options
-    void this.active.init?.(options)
+    this.memory.init(options)
   }
 
   /**
-   * Increment a client's hit counter, first attempting the one-time switch
-   * to Redis.
+   * Increment a client's hit counter, first attempting the one-time switch to Redis.
    * @param key - The identifier for a client, as produced by the limiter's `keyGenerator`.
    * @returns The client's updated hit count and reset time.
    */
   async increment(key: string): Promise<IncrementResponse> {
     await this.latchOntoRedisIfReady()
-    return this.active.increment(key)
+    return this.withFallback(
+      (store) => store.increment(key),
+      () => this.memory.increment(key)
+    )
   }
 
   /**
-   * Decrement a client's hit counter. The `Store` interface requires this
-   * regardless of whether any limiter built from this store actually enables
-   * `skipSuccessfulRequests`/`skipFailedRequests`.
+   * Decrement a client's hit counter.
    * @param key - The identifier for a client.
    */
   async decrement(key: string): Promise<void> {
-    await this.active.decrement(key)
+    await this.withFallback(
+      (store) => store.decrement(key),
+      () => this.memory.decrement(key)
+    )
   }
 
   /**
-   * Reset a single client's hit counter.
+   * Reset a client's hit counter in both backends, so a count taken during an outage is cleared too.
    * @param key - The identifier for a client.
    */
   async resetKey(key: string): Promise<void> {
-    await this.active.resetKey(key)
+    await this.memory.resetKey(key)
+    await this.withFallback(
+      (store) => store.resetKey(key),
+      () => {}
+    )
   }
 }

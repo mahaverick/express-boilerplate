@@ -22,39 +22,85 @@ import { logger } from '@/services/logger.service'
 // dead" state of its own, so the module tracks it. Once true it never
 // resets: this mirrors a real process, where "closed" means shutting down,
 // not "reconnect on demand".
-const state: { client: RedisClientType | undefined; closed: boolean } = {
+const state: {
+  client: RedisClientType | undefined
+  connecting: Promise<RedisClientType> | undefined
+  closed: boolean
+} = {
   client: undefined,
+  connecting: undefined,
   closed: false,
 }
 
+const CLOSED_MESSAGE = 'Redis client is closed; the process is shutting down'
+
 /**
- * Get the shared Redis client, connecting on first use.
+ * The pre-ready reconnect policy: a few quick retries, then an `Error` so `connect()` rejects.
+ * @param retries - How many reconnect attempts have failed so far.
+ * @returns The delay before the next attempt, or the error that stops reconnecting.
+ */
+function failFastDelay(retries: number): number | Error {
+  return retries > 3 ? new Error('Redis unreachable') : Math.min(retries * 100, 1000)
+}
+
+/**
+ * Create and connect one client whose reconnect policy depends on whether it has ever been ready.
+ * @returns The connected client.
+ */
+async function connectRedis(): Promise<RedisClientType> {
+  const readiness = { hasBeenReady: false }
+  const client: RedisClientType = createClient({
+    url: getEnv().REDIS_URL,
+    // Commands fail fast while reconnecting; otherwise every caller (health, auth, rate limits) hangs for the outage.
+    disableOfflineQueue: true,
+    socket: {
+      connectTimeout: 5000,
+      // Before the first 'ready', give up fast so boot and /health/ready report
+      // unreachable (the default retries forever). After it, retry forever.
+      reconnectStrategy: (retries) =>
+        readiness.hasBeenReady ? Math.min(retries * 200, 5000) : failFastDelay(retries),
+    },
+  })
+  client.on('error', (error: unknown) => logger.error('Redis error', { error }))
+  client.on('ready', () => {
+    readiness.hasBeenReady = true
+  })
+  await client.connect()
+  return client
+}
+
+/**
+ * Connect the shared client once, publishing it unless the module closed meanwhile.
+ * @returns The connected, shared client.
+ * @throws {Error} If `closeRedis()` ran while connecting.
+ */
+async function connectShared(): Promise<RedisClientType> {
+  try {
+    const client = await connectRedis()
+    if (state.closed) {
+      await client.close()
+      throw new Error(CLOSED_MESSAGE)
+    }
+    state.client = client
+    return client
+  } finally {
+    // Cleared on failure too, so the next call retries.
+    state.connecting = undefined
+  }
+}
+
+/**
+ * Get the shared Redis client, connecting on first use; concurrent first callers share one connect.
  * @returns A connected client.
  * @throws {Error} If the client has already been closed.
  */
 export async function getRedis(): Promise<RedisClientType> {
   if (state.closed) {
-    throw new Error('Redis client is closed; the process is shutting down')
+    throw new Error(CLOSED_MESSAGE)
   }
-  if (!state.client) {
-    const client = createClient({
-      url: getEnv().REDIS_URL,
-      // node-redis's default reconnectStrategy retries forever and never
-      // rejects `connect()` — so with Redis unreachable, `isRedisReachable()`
-      // (and therefore `/health/ready`) would hang indefinitely instead of
-      // reporting unhealthy. Returning an Error from the strategy after a
-      // few attempts is what makes `connect()` actually reject.
-      socket: {
-        connectTimeout: 5000,
-        reconnectStrategy: (retries) =>
-          retries > 3 ? new Error('Redis unreachable') : Math.min(retries * 100, 1000),
-      },
-    })
-    client.on('error', (error: unknown) => logger.error('Redis error', { error }))
-    await client.connect()
-    state.client = client
-  }
-  return state.client
+  if (state.client) return state.client
+  state.connecting ??= connectShared()
+  return state.connecting
 }
 
 /**

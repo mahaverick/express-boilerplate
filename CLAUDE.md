@@ -48,16 +48,17 @@ until you check.
   CI necessarily runs against 5432/6379, and a runtime assertion was
   guaranteed red on the first pull request. The invariant worth guarding
   belongs to the committed files.
-- **The Redis client's `reconnectStrategy` is load-bearing, not
-  decoration.** node-redis's default strategy retries a failed connection
-  forever and never rejects `connect()` — so without an explicit strategy,
-  `isRedisReachable()` (and therefore `GET /health/ready`) would hang
-  indefinitely instead of reporting unreachable, the moment Redis goes
-  down. `redis.service.ts` gives it a bounded strategy — a 5-second
-  connect timeout, giving up after a few retries with an `Error` —
-  specifically so that path fails fast. A dedicated test file
-  (`redis-unreachable.service.test.ts`) pins this down by timing out, not
-  by a mismatched assertion, if the strategy is ever removed.
+- **The Redis clients' retry strategies are load-bearing, not
+  decoration.** Before a client's first `ready`, both give up after a few
+  retries, so `isRedisReachable()`/`isQueueReachable()` (and
+  `GET /health/ready`) report unreachable instead of hanging at boot
+  (`redis-unreachable.service.test.ts` pins this by timing out if removed).
+  After `ready`, both retry forever with backoff, so an outage never leaves a
+  dead client behind (`redis-outage.service.test.ts`, via a local TCP proxy,
+  never by stopping the shared Redis). node-redis runs with
+  `disableOfflineQueue`, and `isQueueReachable` short-circuits while
+  reconnecting: without them, every command during an outage would wait until
+  Redis came back.
 - **`drizzle.config.ts` uses `getDatabaseUrl()`, not `getEnv()`.** Routing
   it through `getEnv()` would make every `drizzle-kit` invocation require
   JWT/session secrets that have nothing to do with writing a migration. See

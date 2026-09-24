@@ -24,18 +24,23 @@ const testOptions = { windowMs: 60_000 } as unknown as Parameters<SharedRateLimi
 /**
  * A minimal fake Redis client: enough to answer the two `SCRIPT LOAD`s
  * `RedisStore.init()` issues and the `EVALSHA` each `increment()` issues,
- * without a real connection. Tracks a real per-key count (rate-limit-redis's
- * own Lua script's `EVALSHA sha 1 <key> <windowMs>` shape — `command[3]` is
- * the key) so a test can assert on the returned `totalHits`, not just on
- * which commands were sent.
- * @returns The fake client and the raw commands it was sent, in order.
+ * without a real connection. Tracks a real per-key count (`command[3]` is
+ * the key) so a test can assert on `totalHits`. `outage.isDown` makes every
+ * command reject, the way node-redis does with `disableOfflineQueue` while reconnecting.
+ * @returns The fake client, the raw commands it was sent, and its outage switch.
  */
-function fakeRedisClient(): { client: { sendCommand: Mock }; commands: string[][] } {
+function fakeRedisClient(): {
+  client: { sendCommand: Mock }
+  commands: string[][]
+  outage: { isDown: boolean }
+} {
   const commands: string[][] = []
   const hits = new Map<string, number>()
+  const outage = { isDown: false }
   const client = {
     sendCommand: vi.fn((command: string[]) => {
       commands.push(command)
+      if (outage.isDown) return Promise.reject(new Error('The client is offline'))
       if (command[0] === 'SCRIPT' && command[1] === 'LOAD') return Promise.resolve('fake-sha')
       if (command[0] === 'EVALSHA') {
         const key = command[3] ?? ''
@@ -46,7 +51,18 @@ function fakeRedisClient(): { client: { sendCommand: Mock }; commands: string[][
       return Promise.reject(new Error(`fakeRedisClient: unexpected command ${command.join(' ')}`))
     }),
   }
-  return { client, commands }
+  return { client, commands, outage }
+}
+
+/**
+ * Increment a key and read its count straight away: MemoryStore mutates one record in place.
+ * @param store - The store under test.
+ * @param key - The client key to increment.
+ * @returns The key's hit count right after this increment.
+ */
+async function hitsAfterIncrement(store: SharedRateLimitStore, key: string): Promise<number> {
+  const response = await store.increment(key)
+  return response.totalHits
 }
 
 describe('SharedRateLimitStore', () => {
@@ -124,7 +140,43 @@ describe('SharedRateLimitStore', () => {
     expect(commands.some((command) => command[0] === 'EVALSHA')).toBe(true)
   })
 
-  it('does not fall back to memory once latched: a later getRedis rejection surfaces as a store error, not a second fallback', async () => {
+  it('falls back to memory when a Redis command fails after the switch, warns once per outage, and returns to Redis on recovery', async () => {
+    const { client, outage } = fakeRedisClient()
+    vi.mocked(getRedis).mockResolvedValue(client as never)
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    const info = vi.spyOn(logger, 'info').mockImplementation(() => {})
+    const store = new SharedRateLimitStore('rl:test:')
+    store.init(testOptions)
+
+    const redisHits = [
+      await hitsAfterIncrement(store, 'client-a'),
+      await hitsAfterIncrement(store, 'client-a'),
+    ]
+    expect(redisHits).toEqual([1, 2])
+
+    outage.isDown = true
+    const outageHits = [
+      await hitsAfterIncrement(store, 'client-a'),
+      await hitsAfterIncrement(store, 'client-a'),
+    ]
+    // Counted per process during the outage, never thrown.
+    expect(outageHits).toEqual([1, 2])
+    await expect(store.decrement('client-a')).resolves.toBeUndefined()
+    await expect(store.resetKey('client-a')).resolves.toBeUndefined()
+    expect(warn).toHaveBeenCalledTimes(1)
+
+    outage.isDown = false
+    // Back on Redis: its own count resumes.
+    expect(await hitsAfterIncrement(store, 'client-a')).toBe(3)
+    expect(info).toHaveBeenCalledTimes(1)
+
+    outage.isDown = true
+    await store.increment('client-a')
+    // A second outage warns again: once per outage, not once per process.
+    expect(warn).toHaveBeenCalledTimes(2)
+  })
+
+  it('falls back to memory, instead of failing the request, when the client is closed after the switch', async () => {
     const { client } = fakeRedisClient()
     let isRedisUp = true
     vi.mocked(getRedis).mockImplementation(() =>
@@ -132,17 +184,14 @@ describe('SharedRateLimitStore', () => {
         ? Promise.resolve(client as never)
         : Promise.reject(new Error('Redis client is closed; the process is shutting down'))
     )
-    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    vi.spyOn(logger, 'warn').mockImplementation(() => {})
     const store = new SharedRateLimitStore('rl:test:')
     store.init(testOptions)
 
     await store.increment('client-a')
     isRedisUp = false
 
-    await expect(store.increment('client-a')).rejects.toThrow(/closed/)
-    // No fallback warning: the store never re-attempts the latch, and
-    // getRedis() rejecting post-shutdown must not be treated as "back to
-    // memory" — it is surfaced as the request failure it is.
-    expect(warn).not.toHaveBeenCalled()
+    const afterClose = await store.increment('client-a')
+    expect(afterClose.totalHits).toBe(1)
   })
 })

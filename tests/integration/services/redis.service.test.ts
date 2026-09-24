@@ -11,6 +11,11 @@ describe('redis.service', () => {
     await closeRedis()
   })
 
+  it('hands concurrent first callers one shared client', async () => {
+    const [first, second] = await Promise.all([getRedis(), getRedis()])
+    expect(first).toBe(second)
+  })
+
   it('answers a ping', async () => {
     expect(await isRedisReachable()).toBe(true)
   })
