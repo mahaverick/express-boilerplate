@@ -10,7 +10,9 @@
 //
 // Best effort, not durable: the row is already in the database. When the
 // subscriber reconnects after an outage, every open stream is closed, and its
-// client replays the gap from the database via `Last-Event-ID`.
+// client replays the gap from the database via `Last-Event-ID`. A subscriber
+// that fails to start while streams are open is retried on a backoff for as
+// long as any stay open, and its eventual start closes them the same way.
 import { EventEmitter } from 'node:events'
 import type { RedisClientType } from 'redis'
 import { z } from 'zod'
@@ -57,6 +59,10 @@ const messageSchema = z.object({
   }),
 })
 
+// A failed start is retried after this delay, doubling up to the cap, while listeners wait.
+const RETRY_BASE_MS = 1000
+const RETRY_MAX_MS = 30_000
+
 interface Subscriber {
   client: RedisClientType
   // No socket yet: from creation, and from each 'reconnecting', until 'connect' or 'error'.
@@ -71,12 +77,19 @@ const state: {
   starting: Promise<void> | undefined
   closed: boolean
   isPublishFailing: boolean
+  retryTimer: ReturnType<typeof setTimeout> | undefined
+  retryCount: number
+  // A start failed while streams were open, so they may have missed messages.
+  hasMissedMessages: boolean
 } = {
   emitter: undefined,
   subscriber: undefined,
   starting: undefined,
   closed: false,
   isPublishFailing: false,
+  retryTimer: undefined,
+  retryCount: 0,
+  hasMissedMessages: false,
 }
 
 /**
@@ -145,7 +158,7 @@ function destroyIfClosed(client: RedisClientType): void {
 }
 
 /**
- * Connect and subscribe; on failure, forget the client so the next `onNotification` retries.
+ * Connect and subscribe; on failure, forget the client and, while streams are open, schedule a retry.
  * @param client - The client to start.
  * @returns Resolves once subscribed, given up or closed; never rejects.
  */
@@ -156,11 +169,54 @@ async function startSubscriber(client: RedisClientType): Promise<void> {
     // and subscribe() on that client never settles.
     if (state.closed || !client.isReady) throw new Error('Closed while connecting')
     await client.subscribe(channelName(), handleMessage)
+    state.retryCount = 0
+    if (state.hasMissedMessages) {
+      state.hasMissedMessages = false
+      logger.warn('Notification subscriber started late; closing open streams so clients replay')
+      closeAllStreams()
+    }
   } catch (error) {
     if (state.subscriber?.client === client) state.subscriber = undefined
     if (client.isOpen) client.destroy()
-    if (!state.closed) logger.error('Notification subscriber failed to start', { error })
+    if (state.closed) return
+    logger.error('Notification subscriber failed to start', { error })
+    if (hasLocalListeners()) {
+      state.hasMissedMessages = true
+      scheduleRetry()
+    }
   }
+}
+
+/**
+ * Whether any SSE connection in this process is listening.
+ * @returns True while at least one listener is registered.
+ */
+function hasLocalListeners(): boolean {
+  return getEmitter().eventNames().length > 0
+}
+
+/**
+ * Retry a failed start after a backoff, unless a retry is already pending.
+ */
+function scheduleRetry(): void {
+  if (state.retryTimer) return
+  const delay = Math.min(RETRY_BASE_MS * 2 ** state.retryCount, RETRY_MAX_MS)
+  state.retryCount += 1
+  state.retryTimer = setTimeout(() => {
+    state.retryTimer = undefined
+    if (hasLocalListeners()) ensureSubscriber()
+  }, delay)
+  // Never keeps the process alive by itself.
+  state.retryTimer.unref()
+}
+
+/**
+ * Drop a pending retry and its backoff.
+ */
+function cancelRetry(): void {
+  clearTimeout(state.retryTimer)
+  state.retryTimer = undefined
+  state.retryCount = 0
 }
 
 /**
@@ -267,6 +323,10 @@ export function offNotification(
   handler: (notification: Notification) => void
 ): void {
   getEmitter().off(eventNameFor(userId), handler)
+  if (hasLocalListeners()) return
+  // No stream left to have missed anything, or to wait for a retry.
+  cancelRetry()
+  state.hasMissedMessages = false
 }
 
 /**
@@ -282,7 +342,7 @@ export function listenerCount(userId: string): number {
 }
 
 /**
- * Close this process's subscriber for shutdown; a later `onNotification` never reopens it. Safe to call twice.
+ * Close this process's subscriber and cancel any retry, for shutdown; a later `onNotification` never reopens it. Safe to call twice.
  *
  * Resolves once a first connect in progress has ended; a reconnect after
  * `ready` ends in the background, as soon as its current attempt has a socket or fails.
@@ -290,6 +350,7 @@ export function listenerCount(userId: string): number {
  */
 export async function closeNotificationSubscriber(): Promise<void> {
   state.closed = true
+  cancelRetry()
   const subscriber = state.subscriber
   state.subscriber = undefined
   // Without a socket, destroy() would not stop the one being opened: its 'connect' or 'error' listener destroys it.

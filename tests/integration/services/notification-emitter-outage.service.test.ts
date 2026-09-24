@@ -8,6 +8,7 @@ import { createClient, type RedisClientType } from 'redis'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { Notification } from '@/database/models/notification.model'
 import { countStreams, registerStream, resetLifecycleForTests } from '@/services/lifecycle.service'
+import * as loggerModule from '@/services/logger.service'
 import { logger } from '@/services/logger.service'
 import {
   closeNotificationSubscriber,
@@ -26,6 +27,8 @@ import { isEventuallyTrue, RedisProxy, sleep } from '../../helpers/redis-proxy'
 
 // Longer than the pre-ready fail-fast budget (~600ms), so only retry-forever survives it.
 const OUTAGE_MS = 1500
+// Longer than the subscriber's first retry delay (1s).
+const RETRY_SETTLE_MS = 2000
 const FAILED_TO_START = 'Notification subscriber failed to start'
 const PUBLISH_FAILED =
   'Notification publish failed; delivering to this process only until Redis recovers'
@@ -66,11 +69,29 @@ async function withFreshEmitter(
     clients.push(client)
     return client
   }
-  await withMutatedModule(
-    '@/services/redis.service',
-    { createRedisClient: createCapturedClient },
-    () => import('@/services/notification-emitter.service'),
-    (fresh) => run(fresh, clients)
+  // Share this file's logger: each fresh one adds a 'close' listener to stdout.
+  vi.doMock('@/services/logger.service', () => loggerModule)
+  try {
+    await withMutatedModule(
+      '@/services/redis.service',
+      { createRedisClient: createCapturedClient },
+      () => import('@/services/notification-emitter.service'),
+      (fresh) => run(fresh, clients)
+    )
+  } finally {
+    vi.doUnmock('@/services/logger.service')
+  }
+}
+
+/**
+ * Wait until a fresh emitter's first subscriber has given up.
+ * @param clients - The clients the fresh emitter created.
+ * @returns Whether it gave up within the budget.
+ */
+async function hasFirstAttemptFailed(clients: RedisClientType[]): Promise<boolean> {
+  return isEventuallyTrue(
+    () => Promise.resolve(clients[0] !== undefined && !clients[0].isOpen),
+    5000
   )
 }
 
@@ -248,4 +269,71 @@ describe('notification pub/sub survives a Redis outage', () => {
       await counter.close()
     }
   }, 15_000)
+
+  describe('a first connect that fails while a listener waits', () => {
+    it('is retried once Redis is back, and closes the open streams so they replay', async () => {
+      await withFreshEmitter(async (fresh, clients) => {
+        const lifecycle = await import('@/services/lifecycle.service')
+        const closer = vi.fn()
+        lifecycle.registerStream(`stream-owner-${randomUUID()}`, closer)
+        const userId = `retried-${randomUUID()}`
+
+        proxy.goDown()
+        fresh.onNotification(userId, noopHandler)
+        try {
+          expect(await hasFirstAttemptFailed(clients)).toBe(true)
+          // No storm: a failed attempt closes nothing.
+          expect(closer).not.toHaveBeenCalled()
+          proxy.comeBack()
+
+          const hasClosed = await isEventuallyTrue(
+            () => Promise.resolve(closer.mock.calls.length > 0),
+            10_000
+          )
+          expect(hasClosed).toBe(true)
+          expect(closer).toHaveBeenCalledTimes(1)
+          await waitForNotificationSubscriber(fresh, getRedis)
+          expect(clients).toHaveLength(2)
+        } finally {
+          fresh.offNotification(userId, noopHandler)
+          await fresh.closeNotificationSubscriber()
+        }
+      })
+    }, 20_000)
+
+    it('is not retried after closeNotificationSubscriber', async () => {
+      await withFreshEmitter(async (fresh, clients) => {
+        const userId = `closed-before-retry-${randomUUID()}`
+        proxy.goDown()
+        fresh.onNotification(userId, noopHandler)
+        try {
+          expect(await hasFirstAttemptFailed(clients)).toBe(true)
+          await fresh.closeNotificationSubscriber()
+          proxy.comeBack()
+          // Past the first retry's delay; an upper bound has no event to wait for.
+          await sleep(RETRY_SETTLE_MS)
+          expect(clients).toHaveLength(1)
+        } finally {
+          fresh.offNotification(userId, noopHandler)
+        }
+      })
+    }, 15_000)
+
+    it('is not retried once its last listener is gone', async () => {
+      await withFreshEmitter(async (fresh, clients) => {
+        const userId = `left-before-retry-${randomUUID()}`
+        proxy.goDown()
+        fresh.onNotification(userId, noopHandler)
+        try {
+          expect(await hasFirstAttemptFailed(clients)).toBe(true)
+        } finally {
+          fresh.offNotification(userId, noopHandler)
+        }
+        proxy.comeBack()
+        await sleep(RETRY_SETTLE_MS)
+        expect(clients).toHaveLength(1)
+        await fresh.closeNotificationSubscriber()
+      })
+    }, 15_000)
+  })
 })

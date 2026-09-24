@@ -182,7 +182,11 @@ until you check.
   delivers locally only when the publish fails. The subscriber is opened on
   the first `onNotification`, not at boot, and when it reconnects after an
   outage every open stream is closed so clients replay the gap via
-  `Last-Event-ID`. Delivery is asynchronous: a test asserting live delivery
+  `Last-Event-ID`. A subscriber that fails to start while streams are open is
+  retried on a backoff (1s, doubling to 30s) until it starts or the last
+  stream closes, and that late start closes every open stream the same way.
+  A failed attempt closes nothing, so an outage causes no reconnect storm.
+  Delivery is asynchronous: a test asserting live delivery
   must first call `waitForNotificationSubscriber`
   (`tests/helpers/notification-subscriber.ts`).
 
@@ -239,7 +243,10 @@ until you check.
   `invitation_email_mismatch` or `invitation_email_unverified`), so a
   forwarded link is useless to anyone else. The raw token lives only in the mailed link. The
   table stores its SHA-256 (`hashToken`), and the `tenant_invitation` in-app
-  notification's metadata is `{ tenantSlug, invitationId }` only.
+  notification's metadata is `{ tenantSlug, invitationId }` only. Resend
+  and revoke answer 404 `invitation_not_found` for a UUID that is not a
+  pending invitation, but 400 validation for a `:id` that is not a UUID at
+  all.
 - **An expired invitation still holds its pending slot.**
   `tenant_invitations_pending_unique` can't filter on `now()`, so
   `TenantInvitationRepository.createPending` revokes the old pending row
