@@ -154,24 +154,27 @@ pnpm writes these bypasses into a generated file that nobody opens by
 default — recorded here so a silent supply-chain decision doesn't stay
 invisible for a year. **Rule: every future addition to
 `pnpm-workspace.yaml` gets a line here too, in the same change that adds
-it.**
+it.** Renovate adds `# Renovate security update:` entries to
+`minimumReleaseAgeExclude` itself; they need no line here and can be deleted
+once the version is 3 days old.
 
 Current contents, verbatim:
 
 ```yaml
 allowBuilds:
-  # bcrypt's "install" script runs node-gyp-build: fetches a prebuilt native
-  # binding for the host platform, or compiles one from source via node-gyp
-  # if no prebuild matches. Required for bcrypt to work at all — it is a
+  # bcrypt's "install" script runs node-gyp-build: it tests the prebuilt
+  # native binding bundled in the package's prebuilds/ for the host
+  # platform, or compiles one from source via node-gyp if that fails. Required for bcrypt to work at all — it is a
   # native addon, not a pure-JS package — and it is the password-hashing
   # library this plan's Task 2 adds. See MIGRATIONS.md.
   bcrypt: true
   esbuild: true
   # msgpackr-extract: transitive dependency of bullmq (via msgpackr, which
-  # BullMQ uses to encode job data for Redis). Same profile as bcrypt/
-  # unrs-resolver above — its install script only fetches a prebuilt native
-  # binding for the host platform, or falls back to msgpackr's pure-JS
-  # encoder when none matches; no arbitrary script.
+  # BullMQ uses to encode job data for Redis). Its install script
+  # (node-gyp-build-optional-packages) tests the prebuilt binding from an
+  # optional per-platform package, or compiles one from source via node-gyp
+  # if that fails. If no binding loads, msgpackr falls back to its pure-JS
+  # encoder at runtime.
   msgpackr-extract: true
   # protobufjs: transitive dependency of @opentelemetry/exporter-trace-otlp-http
   # (via @opentelemetry/otlp-transformer). Its postinstall only reads
@@ -194,8 +197,9 @@ minimumReleaseAgeExclude:
 Line-by-line:
 
 - **`allowBuilds.bcrypt: true`** — `bcrypt`'s `install` script runs
-  `node-gyp-build`: fetches a prebuilt native binding for the host platform,
-  or compiles one from source via `node-gyp` if no prebuild matches. Native
+  `node-gyp-build`: it tests the prebuilt native binding bundled in the
+  package's `prebuilds/` for the host platform, or compiles one from source
+  via `node-gyp` if that fails. Native
   addon, not pure JS — the build step is required for the package to work
   at all, not optional tooling. Added centrally, ahead of Tasks 2/3/4/7, to
   keep every later task's `pnpm add` from racing another task's over
@@ -214,9 +218,11 @@ Line-by-line:
   the host platform, not arbitrary script execution. Dev-only; never
   reaches the runtime image.
 - **`allowBuilds.msgpackr-extract: true`** — transitive dependency of
-  `bullmq` (via `msgpackr`). Its install script only fetches a prebuilt
-  native binding for the host platform, and `msgpackr` falls back to its
-  pure-JS encoder when none matches.
+  `bullmq` (via `msgpackr`). Its install script
+  (`node-gyp-build-optional-packages`) tests the prebuilt binding from an
+  optional per-platform package, or compiles one from source via `node-gyp`
+  if that fails. If no binding loads, `msgpackr` falls back to its pure-JS
+  encoder at runtime.
 - **`allowBuilds.protobufjs: true`** — transitive dependency of
   `@opentelemetry/exporter-trace-otlp-http`. Its postinstall only reads
   `package.json` files to print a version-scheme warning; no network
