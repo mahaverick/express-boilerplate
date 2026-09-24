@@ -19,7 +19,7 @@
 //    own header comment there for how it stays in step with BCRYPT_COST and
 //    why it's memoised.
 import { randomUUID } from 'node:crypto'
-import { DrizzleQueryError } from 'drizzle-orm'
+import { DrizzleQueryError, eq } from 'drizzle-orm'
 import { type NextFunction, type Request, type RequestHandler, type Response } from 'express'
 import passport from 'passport'
 import type { Profile as GoogleProfile } from 'passport-google-oauth20'
@@ -649,6 +649,21 @@ export function forgotPassword(request: Request, response: Response, next: NextF
   }
 }
 
+/**
+ * Re-create the `'email'` provider row a reset keeps, after its Google links are dropped.
+ * @param userId - The user who just proved the mailbox.
+ * @param email - The account's email, the row's provider id.
+ * @returns Resolves once the row exists.
+ */
+async function restoreEmailProvider(userId: string, email: string): Promise<void> {
+  try {
+    await authProviderRepository.create({ userId, provider: 'email', providerId: email })
+  } catch (error) {
+    if (error instanceof HttpError && error.statusCode === 409) return
+    throw error
+  }
+}
+
 const INVALID_RESET_TOKEN_MESSAGE = 'Invalid or expired reset link.'
 
 /**
@@ -696,6 +711,12 @@ export async function resetPassword(
     // Revoke before writing, as `changePassword` does: a failed write then
     // leaves no session alive. Revokes every purpose, so older reset links die too.
     await revokeAllSessions(user.id)
+
+    if (!user.emailVerifiedAt) {
+      // A Google link on a never-verified account may be a squatter's; the reset proves the mailbox.
+      await authProviderRepository.deleteAllForUser(user.id)
+      await restoreEmailProvider(user.id, user.email)
+    }
 
     await userRepository.update(user.id, {
       passwordHash,
@@ -1032,6 +1053,38 @@ async function linkGoogleProvider(userId: string, googleId: string): Promise<voi
 }
 
 /**
+ * A verified Google identity takes over a never-verified account: the squatter's password is cleared and sessions revoked.
+ * @param userId - The unverified account's id.
+ * @param googleId - Google's stable profile id (`profile.id`).
+ * @returns The account, now verified, federated-only and linked.
+ */
+async function claimUnverifiedAccount(userId: string, googleId: string): Promise<User> {
+  // Revoke first: a failed write then leaves no squatter session alive.
+  await revokeAllSessions(userId)
+
+  return db.transaction(async (tx) => {
+    await tx
+      .insert(authProviderModel)
+      .values({ userId, provider: 'google', providerId: googleId })
+      .onConflictDoNothing()
+
+    const [claimed] = await tx
+      .update(userModel)
+      .set({
+        // eslint-disable-next-line unicorn/no-null -- a null hash is the federated-only state (user.model.ts)
+        passwordHash: null,
+        emailVerifiedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(userModel.id, userId))
+      .returning()
+
+    if (!claimed) throw new HttpError('Update returned no row', 500)
+    return claimed
+  })
+}
+
+/**
  * Resolve the user a Google Sign-In should resolve to — creating or linking
  * one when necessary. Entirely this task's own policy; see this section's
  * header comment for why none of it lives in the Passport strategy.
@@ -1051,19 +1104,10 @@ async function linkGoogleProvider(userId: string, googleId: string): Promise<voi
  *    `victim@example.com` at Google sign in as whichever local user already
  *    owns that address — the account-takeover this file's `handleGoogleCallback`
  *    header comment warns about.
- * 3. Linking does NOT set `emailVerifiedAt` on the existing account, even
- *    though Google just proved control of the mailbox. That proof is not
- *    equivalent to `resetPassword`'s (this file): a reset OVERWRITES the
- *    password, which is what evicts a squatter who registered the address
- *    first and never verified it. Linking touches no password at all, so
- *    setting `emailVerifiedAt` here would flip `login`'s guard
- *    (`!user.emailVerifiedAt`) to true for the SQUATTER's password too —
- *    the exact account-takeover `verifyEmail`'s own two-factor design
- *    (mailbox token AND password) exists to prevent. It also buys the
- *    Google user nothing: neither `refresh` nor `requireAuth`
- *    (auth.middleware.ts) gate on `emailVerifiedAt`, only `login` does, and
- *    a Google user never calls `login`.
- * 4. A brand-new account (no provider link, no email match) is created with
+ * 3. Linking to a never-verified account takes it over (`claimUnverifiedAccount`):
+ *    Google proved the mailbox, so a squatter's password is cleared and every
+ *    session revoked. A verified account is linked untouched.
+ * 4. A brand-new account (no provider link, no email match, and Google verified the email) is created with
  *    its `'email'` and `'google'` provider rows in ONE transaction — see
  *    `auth-provider.model.ts`'s own header comment for why an `'email'` row
  *    exists for federated users too (it is what lets `findByUser` answer
@@ -1075,7 +1119,7 @@ async function linkGoogleProvider(userId: string, googleId: string): Promise<voi
  *    against the Drizzle tables instead.
  * @param profile - The raw Google profile handed to `passport.authenticate`'s custom callback.
  * @returns The user this Google identity resolves to — existing, newly linked, or newly created.
- * @throws {HttpError} 400 `google_email_missing` (no email in the profile), 403 `email_not_verified` (an existing account's email, claimed by a Google identity Google has not verified), or a translated/raw database error from the write itself.
+ * @throws {HttpError} 400 `google_email_missing` (no email in the profile), 403 `email_not_verified` (Google has not verified the email, whether it matches an existing account or not), or a translated/raw database error from the write itself.
  */
 export async function findOrCreateByGoogle(profile: GoogleProfile): Promise<User> {
   const existingLink = await authProviderRepository.findByProviderAndId('google', profile.id)
@@ -1111,8 +1155,17 @@ export async function findOrCreateByGoogle(profile: GoogleProfile): Promise<User
       )
     }
 
+    if (existingUser.emailVerifiedAt === null) {
+      return claimUnverifiedAccount(existingUser.id, profile.id)
+    }
+
     await linkGoogleProvider(existingUser.id, profile.id)
     return existingUser
+  }
+
+  // An unverified Google email must not create an account: anyone can add any address to a Google account.
+  if (!isVerified) {
+    throw new HttpError('Google has not verified this email address', 403, 'email_not_verified')
   }
 
   return db.transaction(async (tx) => {
@@ -1122,7 +1175,7 @@ export async function findOrCreateByGoogle(profile: GoogleProfile): Promise<User
         email,
         // eslint-disable-next-line unicorn/no-null -- passwordHash is nullable specifically for a federated-only user (user.model.ts's own comment) — this account IS that case, not merely "no value given yet"
         passwordHash: null,
-        ...(isVerified && { emailVerifiedAt: new Date() }),
+        emailVerifiedAt: new Date(),
       })
       .returning()
 

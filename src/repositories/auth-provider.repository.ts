@@ -114,4 +114,13 @@ export class AuthProviderRepository {
       throw error
     }
   }
+
+  /**
+   * Delete every provider row linked to a user.
+   * @param userId - The user whose provider rows are deleted.
+   * @returns Resolves once the rows are gone.
+   */
+  async deleteAllForUser(userId: string): Promise<void> {
+    await db.delete(authProviderModel).where(eq(authProviderModel.userId, userId))
+  }
 }

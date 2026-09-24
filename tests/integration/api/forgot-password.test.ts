@@ -12,12 +12,15 @@
 // required).
 import { randomUUID } from 'node:crypto'
 import type { Worker } from 'bullmq'
+import type { Profile as GoogleProfile } from 'passport-google-oauth20'
 import request from 'supertest'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
 import { REFRESH_TOKEN_COOKIE_NAME } from '@/constants/auth.constants'
+import { findOrCreateByGoogle } from '@/controllers/auth.controller'
 import type { User } from '@/database/models/user.model'
 import type { EmailJobData } from '@/jobs/email.job'
+import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
@@ -36,6 +39,34 @@ import { withMutatedMethod } from '../../helpers/mutate'
 
 const app = createApp()
 const userRepository = new UserRepository()
+const authProviderRepository = new AuthProviderRepository()
+
+/**
+ * A Google profile claiming an address Google has not verified: the squatter's identity.
+ * @param id - Google's stable profile id.
+ * @param email - The address the squatter claims.
+ * @returns A fixture shaped like what `passthroughGoogleProfile` hands `findOrCreateByGoogle`.
+ */
+function unverifiedGoogleProfile(id: string, email: string): GoogleProfile {
+  const nowSeconds = Math.floor(Date.now() / 1000)
+  return {
+    provider: 'google',
+    id,
+    displayName: 'Squatter',
+    profileUrl: `https://plus.google.com/${id}`,
+    emails: [{ value: email, verified: false }],
+    _raw: '{}',
+    _json: {
+      iss: 'https://accounts.google.com',
+      aud: 'test-google-client-id',
+      sub: id,
+      iat: nowSeconds,
+      exp: nowSeconds + 3600,
+      email,
+      email_verified: false,
+    },
+  }
+}
 
 const worker: Worker<EmailJobData> = startEmailWorker()
 const notificationWorker = startNotificationWorker()
@@ -532,5 +563,46 @@ describe('POST /api/v1/auth/reset-password', () => {
 
     const loginResponse = await login(email, NEW_PASSWORD)
     expect(loginResponse.status).toBe(200)
+  })
+
+  it('drops Google links from a never-verified account on reset, so a squatter’s Google identity no longer resolves to it', async () => {
+    // Legacy state, seeded directly: after E1, an unverified Google identity can no longer create it.
+    const { user, email } = await seedUser(false)
+    const squatterGoogleId = randomUUID()
+    await authProviderRepository.create({
+      userId: user.id,
+      provider: 'google',
+      providerId: squatterGoogleId,
+    })
+    const token = await seedResetToken(user.id)
+
+    const response = await resetPassword(token, NEW_PASSWORD)
+    expect(response.status).toBe(200)
+
+    expect(
+      await authProviderRepository.findByProviderAndId('google', squatterGoogleId)
+    ).toBeUndefined()
+    const providers = await authProviderRepository.findByUser(user.id)
+    expect(providers.map((row) => row.provider)).toEqual(['email'])
+    await expect(
+      findOrCreateByGoogle(unverifiedGoogleProfile(squatterGoogleId, email))
+    ).rejects.toMatchObject({ statusCode: 403, code: 'email_not_verified' })
+  })
+
+  it('keeps the Google link of an already-verified account through a reset', async () => {
+    const { user } = await seedUser(true)
+    const googleId = randomUUID()
+    await authProviderRepository.create({
+      userId: user.id,
+      provider: 'google',
+      providerId: googleId,
+    })
+    const token = await seedResetToken(user.id)
+
+    const response = await resetPassword(token, NEW_PASSWORD)
+    expect(response.status).toBe(200)
+
+    const link = await authProviderRepository.findByProviderAndId('google', googleId)
+    expect(link?.userId).toBe(user.id)
   })
 })
