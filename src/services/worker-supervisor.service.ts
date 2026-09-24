@@ -53,6 +53,7 @@ async function closeLostWorkers(workers: Worker[]): Promise<void> {
 /**
  * Start the email and notification Workers, replacing them whenever their connection gives up before its first ready.
  * @returns A handle whose `close()` closes whichever Workers are current.
+ * @throws {Error} Whatever starting a Worker throws at first start, after closing any already started.
  */
 export function startWorkers(): SupervisedWorkers {
   const supervisor: { generation: WorkerGeneration; isClosed: boolean } = {
@@ -67,9 +68,9 @@ export function startWorkers(): SupervisedWorkers {
     void closing.finally(() => retiring.delete(closing))
   }
 
-  // A start that throws part-way leaves no Worker behind, and readiness red
-  // until a later start succeeds.
-  const didStartGeneration = (): boolean => {
+  // Starts both Workers on the shared connection. A throw part-way closes
+  // the ones already started, then propagates.
+  const startGeneration = (): void => {
     const generation: WorkerGeneration = { connection: undefined, workers: [] }
     supervisor.generation = generation
     try {
@@ -78,25 +79,31 @@ export function startWorkers(): SupervisedWorkers {
       for (const start of [startEmailWorker, startNotificationWorker]) {
         generation.workers.push(start())
       }
-      setWorkersFailed(false)
-      return true
     } catch (error) {
       retire(generation.workers)
       generation.workers = []
-      setWorkersFailed(true)
-      logger.error('Starting Workers failed', { error })
-      return false
+      throw error
     }
   }
 
-  didStartGeneration()
+  // At boot a failure throws, so boot() rejects and the process exits 1.
+  startGeneration()
   const unsubscribe = onWorkerConnectionLost((dead) => {
     if (supervisor.generation.connection !== dead) return
     // Called in the same tick as 'end', so close() marks them closing before they can spin.
     retire(supervisor.generation.workers)
     supervisor.generation.workers = []
     if (supervisor.isClosed || isShuttingDown()) return
-    if (didStartGeneration()) logger.info('Workers restarted on a new Redis connection')
+    // A failed restart can't throw from inside 'end': readiness stays red
+    // instead, until the next pre-ready loss restarts them or the process restarts.
+    try {
+      startGeneration()
+      setWorkersFailed(false)
+      logger.info('Workers restarted on a new Redis connection')
+    } catch (error) {
+      setWorkersFailed(true)
+      logger.error('Restarting Workers failed', { error })
+    }
   })
 
   return {

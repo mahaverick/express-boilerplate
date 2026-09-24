@@ -150,7 +150,7 @@ describe('startWorkers', () => {
   it('closes a half-started generation and keeps readiness red, then retries on its next lost connection', () => {
     const mocks = wireMocks()
     startWorkers()
-    expect(setWorkersFailed).toHaveBeenLastCalledWith(false)
+    expect(setWorkersFailed).not.toHaveBeenCalled()
 
     vi.mocked(startNotificationWorker).mockImplementationOnce(() => {
       throw new Error('Worker constructor failed')
@@ -166,5 +166,17 @@ describe('startWorkers', () => {
     mocks.lose(mocks.connections[1] as IORedis)
     expect(mocks.workers).toHaveLength(5)
     expect(setWorkersFailed).toHaveBeenLastCalledWith(false)
+  })
+
+  it('throws when the first start fails, after closing any Worker it started, so boot fails fast', () => {
+    const mocks = wireMocks()
+    vi.mocked(startNotificationWorker).mockImplementationOnce(() => {
+      throw new Error('Worker constructor failed')
+    })
+    expect(() => startWorkers()).toThrow('Worker constructor failed')
+    expect(mocks.workers).toHaveLength(1)
+    expect(mocks.workers[0]?.worker.close).toHaveBeenCalledWith(true)
+    expect(mocks.unsubscribe).not.toHaveBeenCalled()
+    expect(onWorkerConnectionLost).not.toHaveBeenCalled()
   })
 })

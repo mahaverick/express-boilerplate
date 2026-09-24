@@ -71,9 +71,11 @@ until you check.
   So `startWorkers()` (`worker-supervisor.service.ts`) closes them inside
   that connection's `'end'` event, before they can spin, and starts new ones
   on a fresh connection (`worker-outage.test.ts`). If starting them throws,
-  it closes any it started and `isQueueReachable()` reports false until a
-  later start succeeds. Start Workers through it, not one by one, in
-  anything that runs through an outage.
+  it closes any it started. At boot it rethrows, so the process exits 1. On
+  a restart it can't throw from inside `'end'`, so `isQueueReachable()`
+  reports false until the next pre-ready reconnect restarts them or the
+  process restarts. Start Workers through it, not one by one, in anything
+  that runs through an outage.
 - **`drizzle.config.ts` uses `getDatabaseUrl()`, not `getEnv()`.** Routing
   it through `getEnv()` would make every `drizzle-kit` invocation require
   JWT/session secrets that have nothing to do with writing a migration. See

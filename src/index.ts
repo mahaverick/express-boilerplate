@@ -82,6 +82,7 @@ async function boot(): Promise<void> {
   const { startWorkers } = await import('@/services/worker-supervisor.service')
   // Shutdown may have begun during the import above; workers started now would never be closed.
   if (isShuttingDown()) return
+  // Throws if a Worker fails to start: boot() rejects, and the unhandledRejection handler exits 1.
   workers.supervised = startWorkers()
   logger.info('Workers started (email + notification)')
 }
