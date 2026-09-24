@@ -381,7 +381,8 @@ otel-collector`.** It is bind-mounted; `docker compose up -d` does not
   fixes open immediately, outside the schedule and release-age wait,
   labelled `security`; Renovate adds the fixed version to
   `minimumReleaseAgeExclude` in the same PR, so CI's frozen install accepts
-  it. Delete that entry once the version is 3 days old. Actions are pinned
+  it. Delete the Renovate-added version once it is 3 days old (Renovate
+  appends `|| <ver>` to an existing entry). Actions are pinned
   to commit SHAs, and Renovate keeps those pins current. TypeScript
   is held `<6.1.0`, and every Node version pin — the docker `node` image,
   `.nvmrc`, `actions/setup-node`'s `node-version:`, and the devcontainer's

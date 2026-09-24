@@ -8,12 +8,12 @@
 // row, and this file creates and cleans up rows against this worker's own
 // database (tests/helpers/worker-database.ts) to get one, the same way
 // tests/integration/repositories/user.repository.test.ts does. A
-// database-touching test under tests/unit/ would run inside
-// `.husky/pre-commit`'s `vitest run --changed HEAD --exclude
-// 'tests/integration/**'`, which is exactly the failure mode CLAUDE.md
+// database-touching test under tests/unit/ would run inside the git hooks,
+// which use `vitest.unit.config.ts` — it excludes tests/integration/** and
+// sets up no database. That is exactly the failure mode CLAUDE.md
 // documents pre-commit as designed to avoid: a hook that fails whenever
 // Docker happens to be down gets `--no-verify`'d permanently and never
-// comes back. `pnpm test` (no --exclude) still runs this file; every
+// comes back. `pnpm test` (the default config) still runs this file; every
 // vitest worker owns its own database, so it is safe to run in parallel
 // with every other file.
 import { randomUUID } from 'node:crypto'

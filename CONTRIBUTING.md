@@ -4,7 +4,9 @@
 
 Follow the README Quickstart first. You need the compose stack up and a
 working `.env` to run tests locally (`tests/integration/**` needs Postgres
-and Redis; `tests/unit/**` does not).
+and Redis). `tests/unit/**` needs neither, but only under `pnpm test:unit`:
+`pnpm test`'s default config provisions the test databases in its
+globalSetup before any test runs, so it needs the stack even for unit tests.
 
 ## Before you open a PR
 
@@ -107,7 +109,8 @@ missed:
   locally rather than let CI catch it. This used to be scoped to
   `src/**/*.{ts,json,md}` while being described here as repo-wide, so nothing
   formatted `tests/**` at all.
-- `pnpm audit --prod` — production dependencies only.
+- `pnpm audit --prod --audit-level high` — fails on high or critical
+  advisories in production dependencies.
 - `.env.example` matches what `pnpm env:example` generates from the current
   schema (see step 2 above).
 - The CI `env:` block mirrors `.env.test` key-for-key (see step 4 above).

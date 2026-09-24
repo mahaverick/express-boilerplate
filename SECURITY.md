@@ -734,6 +734,15 @@ hook alone is not a gate — it is one `git commit --no-verify` away from
 being skipped — so the pull request check is the actual enforcement layer;
 the pre-commit hook exists to catch a leak before it is even pushed.
 
+### Dependency audit: a gate with one documented escape hatch
+
+The `test` job runs `pnpm audit --prod --audit-level high`, and `test` is a
+required check, so a high or critical advisory with no fixed version blocks
+every PR. To unblock, ignore that one advisory by its GHSA ID under
+`auditConfig.ignoreGhsas` in `pnpm-workspace.yaml` (`pnpm audit --ignore
+<GHSA>` writes the entry), with a comment giving the reason and a date to
+revisit, and record it in MIGRATIONS.md like any other change to that file.
+
 ### Domain-leak gate
 
 This boilerplate is derived from a production codebase by stripping

@@ -11,10 +11,11 @@ RUN adduser -D -u 10001 appuser
 WORKDIR /app
 
 FROM base AS deps
-# pnpm-workspace.yaml and .npmrc travel with the lockfile: pnpm 10+ records
-# workspace settings (allowBuilds, minimumReleaseAgeExclude) into
-# pnpm-lock.yaml, and --frozen-lockfile refuses to install if it can't
-# reconcile that recorded config against the workspace file on disk.
+# pnpm-workspace.yaml and .npmrc travel with the lockfile: pnpm reads
+# allowBuilds, minimumReleaseAge and minimumReleaseAgeExclude from
+# pnpm-workspace.yaml at install time (the lockfile doesn't record them), and
+# --frozen-lockfile enforces the release-age gate, so the install needs the
+# file on disk to allow bcrypt's build and apply the excludes.
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 RUN corepack install
 # Cache mount keeps the store between builds without baking it into a layer.

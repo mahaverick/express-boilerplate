@@ -164,9 +164,10 @@ Current contents, verbatim:
 allowBuilds:
   # bcrypt's "install" script runs node-gyp-build: it tests the prebuilt
   # native binding bundled in the package's prebuilds/ for the host
-  # platform, or compiles one from source via node-gyp if that fails. Required for bcrypt to work at all — it is a
-  # native addon, not a pure-JS package — and it is the password-hashing
-  # library this plan's Task 2 adds. See MIGRATIONS.md.
+  # platform, or compiles one from source via node-gyp if that fails.
+  # Required for bcrypt to work at all — it is a native addon, not a
+  # pure-JS package — and it is the password-hashing library this plan's
+  # Task 2 adds. See MIGRATIONS.md.
   bcrypt: true
   esbuild: true
   # msgpackr-extract: transitive dependency of bullmq (via msgpackr, which
