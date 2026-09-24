@@ -271,6 +271,28 @@ describe('processNotificationJob', () => {
     expect(options?.jobId).not.toContain(':')
   })
 
+  it('passes the email jobId when the in_app channel is disabled', async () => {
+    channelEnabledSpy.mockResolvedValueOnce(false).mockResolvedValueOnce(true)
+    vi.mocked(emailJob.addEmailJob).mockResolvedValue({ id: 'email-job-1' } as never)
+    const email = emailVerificationMessage('user@example.com')
+
+    await processNotificationJob(mockJob({ email }))
+
+    expect(insertSpy).not.toHaveBeenCalled()
+    expect(emailJob.addEmailJob).toHaveBeenCalledWith(email, 'user-123', {
+      jobId: EXPECTED_EMAIL_JOB_ID,
+    })
+  })
+
+  it('rejects a job with no id before enqueueing an email', async () => {
+    channelEnabledSpy.mockResolvedValueOnce(false).mockResolvedValueOnce(true)
+    const email = emailVerificationMessage('user@example.com')
+    const job = { ...mockJob({ email }), id: undefined } as unknown as Job<NotificationJobData>
+
+    await expect(processNotificationJob(job)).rejects.toThrow('Notification job has no id')
+    expect(emailJob.addEmailJob).not.toHaveBeenCalled()
+  })
+
   it('does not throw when emitNotification itself throws — the insert already committed', async () => {
     channelEnabledSpy.mockResolvedValue(true)
     insertSpy.mockResolvedValue(mockNotificationRow)

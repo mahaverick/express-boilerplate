@@ -126,6 +126,10 @@ add a real row:
 - **jsdom 29 -> 30** (frontend) — this repository has no frontend package.
 - **`@tanstack/react-table` 8 -> 9** (frontend) — same.
 
+## Schema migrations on a live database
+
+- **A generated `CREATE UNIQUE INDEX` (no `CONCURRENTLY`) blocks writes to its table while it builds** (e.g. `0013`'s `notifications_dedupe_key_unique`). On a large existing table, build the index `CONCURRENTLY` by hand first; the generated statement has no `IF NOT EXISTS`, so add it to that migration's statement before `pnpm db:migrate`, or the migration fails on the existing index.
+
 ## Supply-chain bypasses in `pnpm-workspace.yaml`
 
 pnpm writes these bypasses into a generated file that nobody opens by

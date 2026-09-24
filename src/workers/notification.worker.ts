@@ -55,15 +55,24 @@ function metadataWithoutVariables(metadata: Record<string, unknown>): Record<str
 }
 
 /**
+ * The job's id, which both idempotency keys are built from.
+ * @param job - The notification job.
+ * @returns `job.id`.
+ * @throws {Error} When the job has no id, which BullMQ never does for a processed job.
+ */
+function idOf(job: Job<NotificationJobData>): string {
+  if (job.id === undefined) throw new Error('Notification job has no id')
+  return job.id
+}
+
+/**
  * The idempotency key for this job's in-app row. Stable across retries of
  * one job; the timestamp keeps it unique if job ids restart.
  * @param job - The notification job.
  * @returns The `notifications.dedupe_key` value.
- * @throws {Error} When the job has no id, which BullMQ never does for a processed job.
  */
 function dedupeKeyFor(job: Job<NotificationJobData>): string {
-  if (job.id === undefined) throw new Error('Notification job has no id')
-  return `notification-job-${job.id}-${job.timestamp}`
+  return `notification-job-${idOf(job)}-${job.timestamp}`
 }
 
 /**
@@ -73,7 +82,7 @@ function dedupeKeyFor(job: Job<NotificationJobData>): string {
  * @returns The email job id.
  */
 function emailJobIdFor(job: Job<NotificationJobData>): string {
-  return `notification-email-${job.id ?? 'unknown'}-${job.timestamp}`
+  return `notification-email-${idOf(job)}-${job.timestamp}`
 }
 
 /**
@@ -125,7 +134,9 @@ export async function processNotificationJob(job: Job<NotificationJobData>): Pro
     // whatever the first one throws; an uncaught throw here would reject
     // this job and BullMQ would retry the whole thing for a failure that
     // has nothing to do with the insert that already succeeded.
-    // undefined: a retry, and this row was already inserted and emitted.
+    //
+    // undefined: a retry, and this row was already inserted; its emit was
+    // already attempted.
     if (created) {
       try {
         emitNotification(userId, created)
@@ -174,9 +185,8 @@ export function startNotificationWorker(): Worker<NotificationJobData> {
     // applied for the identical reason in mailer.service.ts's
     // `recordDelivery`). Nothing here is a raw token — `metadataWithoutVariables`
     // already stripped `variables` before the insert — but the bound params
-    // still include title/body/userId. An `addEmailJob` rejection also lands
-    // here; the logger keeps only name/message/stack of an Error, so an
-    // ioredis reply error's `command.args` (the job, with its token) is dropped.
+    // still include title/body/userId. An `addEmailJob` rejection's ioredis
+    // `command.args` hold the token; the logger keeps only name/message/stack.
     logger.error('Notification job failed', {
       jobId: job?.id,
       type: job?.data.type,

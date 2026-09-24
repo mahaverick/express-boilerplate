@@ -16,6 +16,7 @@
 // controller adds no ownership check of its own; it relies entirely on the
 // repository already having one, per method, on every call.
 import { type NextFunction, type Request, type Response } from 'express'
+import type { Notification } from '@/database/models/notification.model'
 import { HttpError } from '@/middlewares/error.middleware'
 import { NotificationPreferenceRepository } from '@/repositories/notification-preference.repository'
 import {
@@ -32,6 +33,30 @@ import {
 
 const notificationRepository = new NotificationRepository()
 const notificationPreferenceRepository = new NotificationPreferenceRepository()
+
+/**
+ * A notification as the REST API returns it.
+ */
+type NotificationResponse = Omit<Notification, 'dedupeKey'>
+
+/**
+ * The fields of a notification row the REST API returns. A whitelist, so an
+ * internal column (`dedupeKey`, which embeds a queue job id) never leaks.
+ * @param notification - The row as read from the database.
+ * @returns The row without internal columns.
+ */
+function toNotificationResponse(notification: Notification): NotificationResponse {
+  return {
+    id: notification.id,
+    userId: notification.userId,
+    type: notification.type,
+    title: notification.title,
+    body: notification.body,
+    metadata: notification.metadata,
+    readAt: notification.readAt,
+    createdAt: notification.createdAt,
+  }
+}
 
 /**
  * The authenticated principal's id, guarding against a route reaching this
@@ -77,7 +102,11 @@ export async function listNotifications(
       userId,
       decodedCursor === undefined ? { limit } : { limit, cursor: decodedCursor }
     )
-    successResponse(response, page, 'Notifications retrieved.')
+    successResponse(
+      response,
+      { ...page, notifications: page.notifications.map((row) => toNotificationResponse(row)) },
+      'Notifications retrieved.'
+    )
   } catch (error) {
     next(error)
   }
@@ -109,7 +138,7 @@ export async function markRead(
 
     const updated = await notificationRepository.markRead(id, userId)
     if (updated) {
-      successResponse(response, updated, 'Notification marked as read.')
+      successResponse(response, toNotificationResponse(updated), 'Notification marked as read.')
       return
     }
 
@@ -117,7 +146,7 @@ export async function markRead(
     if (!existing) {
       throw new HttpError('Notification not found', 404)
     }
-    successResponse(response, existing, 'Notification marked as read.')
+    successResponse(response, toNotificationResponse(existing), 'Notification marked as read.')
   } catch (error) {
     next(error)
   }
