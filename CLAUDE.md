@@ -304,7 +304,11 @@ otel-collector`.** It is bind-mounted; `docker compose up -d` does not
   `.nvmrc`, `actions/setup-node`'s `node-version:`, and the devcontainer's
   `mcr.microsoft.com/devcontainers/typescript-node` image tag — is held
   `<25` by `renovate.json` rules — lift them deliberately, not by merging a
-  Renovate PR. Requires the Renovate GitHub App on the repo. Renovate does
+  Renovate PR. The explicit `corepack@0.36.0` pin in `Dockerfile`,
+  `.devcontainer/devcontainer.json`, and `README.md` is tracked by a
+  `customManagers` regex entry in `renovate.json` — none of Renovate's
+  built-in managers see a version embedded in a shell command or prose.
+  Requires the Renovate GitHub App on the repo. Renovate does
   not touch `package.json`'s `engines.node` or `devEngines.runtime.version`
   either way, since both are `>=` ranges, not pinned versions — when the
   Node 26 move happens, bump those two by hand alongside the held pins.
