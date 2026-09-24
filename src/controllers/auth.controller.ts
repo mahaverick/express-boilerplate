@@ -258,9 +258,9 @@ async function sendRegistrationAttemptMail(email: string): Promise<void> {
         appName: getEnv().APP_NAME,
       },
     },
-    // No visible row (see above) means no id to correlate the job to. '' rather than
-    // a lookup fallback — this is logging/correlation only (email.job.ts),
-    // never a DB key.
+    // No visible row (see above) means no id to correlate the job to. ''
+    // rather than a lookup fallback — this is logging/correlation only
+    // (email.job.ts), never a DB key.
     existing?.id ?? '',
     { priority: JobPriority.normal }
   )
@@ -375,17 +375,13 @@ export async function register(
         return user
       })
     } catch (error) {
-      // A 23505 here almost always comes from the USER insert (the
-      // `auth_providers` row can only collide on an address already
-      // claimed as someone's login identity, which the user insert's own
-      // `users_email_unique` would already have rejected first; a
-      // soft-deleted account's leftover 'email' provider row is released
-      // first (`releaseEmailOfDeletedUsers`), so it cannot cause this) — but
-      // either way, the transaction has rolled back the whole write, so
-      // treating any unique violation from this block as "the address is
-      // taken" is correct, not merely a fallback. Anything else is a real
-      // failure and must still surface — swallowing every error here would
-      // turn a database outage into a cheerful 202.
+      // A 23505 here means the address is taken by a live account. It
+      // comes from the user insert (`users_email_unique`). The
+      // `auth_providers` insert cannot collide first: a live holder fails
+      // the user insert, and a deleted holder's 'email' row was released
+      // above. The transaction has rolled back the whole write either way.
+      // Anything else is a real failure and must surface — swallowing it
+      // would turn a database outage into a cheerful 202.
       if (!isUniqueViolation(error)) throw error
     }
 

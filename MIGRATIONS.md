@@ -134,7 +134,18 @@ add a real row:
   CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS notifications_dedupe_key_unique ON notifications (dedupe_key);
   ```
   Then add `IF NOT EXISTS` to both statements in the not-yet-applied `0013` file, or the migration fails on the existing column or index. A failed `CONCURRENTLY` build leaves an INVALID index that `IF NOT EXISTS` would skip: check `pg_index.indisvalid` for it, or drop it and build again.
-- **`0014` drops and recreates `users_email_unique` with `WHERE deleted_at IS NULL`,** so it blocks writes to `users` while the new index builds. On a large table, build the replacement by hand first under a temporary name (`CREATE UNIQUE INDEX CONCURRENTLY users_email_unique_live ON users (lower(email)) WHERE deleted_at IS NULL`), then `DROP INDEX users_email_unique; ALTER INDEX users_email_unique_live RENAME TO users_email_unique;` in one transaction. Then, in the not-yet-applied `0014` file, delete the `DROP INDEX` statement and add `IF NOT EXISTS` to the `CREATE`, or `pnpm db:migrate` drops the index you just built and rebuilds it with the lock.
+- **`0014` blocks every read and write on `users` until the new index is built.** It runs `DROP INDEX "users_email_unique"` first, and drizzle's migrator applies all pending migrations in one transaction, so the `ACCESS EXCLUSIVE` lock from that drop is held while the replacement builds; every login waits. On a large table, first build the replacement by hand before `pnpm db:migrate`, as a statement on its own and outside any transaction (`CONCURRENTLY` cannot run inside one):
+  ```sql
+  CREATE UNIQUE INDEX CONCURRENTLY users_email_unique_live ON users USING btree (lower(email)) WHERE deleted_at IS NULL;
+  ```
+  A failed `CONCURRENTLY` build leaves an INVALID index: check `pg_index.indisvalid` for `users_email_unique_live`, and if it is false, `DROP INDEX CONCURRENTLY users_email_unique_live` and build again. Once it is valid, swap the names in one short transaction (the drop takes the same lock, but only for a moment):
+  ```sql
+  BEGIN;
+  DROP INDEX users_email_unique;
+  ALTER INDEX users_email_unique_live RENAME TO users_email_unique;
+  COMMIT;
+  ```
+  Then edit the not-yet-applied `0014` file: delete its `DROP INDEX "users_email_unique";--> statement-breakpoint` line, and change the remaining statement to `CREATE UNIQUE INDEX IF NOT EXISTS "users_email_unique" ...`. Without that edit, `pnpm db:migrate` drops the index you just built and rebuilds it under the lock. With it, the migration only records `0014` as applied.
 
 ## Supply-chain bypasses in `pnpm-workspace.yaml`
 

@@ -429,8 +429,8 @@ describe('POST /api/v1/auth/register and /login', () => {
 
     it('answers identically for a soft-deleted address', async () => {
       // A soft-deleted address is free again (partial users_email_unique),
-      // so this now takes the fresh-account branch; either way the answer
-      // is the same 202, which is what this test pins.
+      // so this takes the fresh-account branch; either way the answer is
+      // the same 202, which is what this test pins.
       const email = uniqueEmail()
       const { email: registered } = await registerUser({ email })
       const user = await userRepository.findByEmail(registered)

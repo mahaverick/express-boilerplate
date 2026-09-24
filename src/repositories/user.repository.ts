@@ -39,7 +39,9 @@ export class UserRepository extends BaseRepository<(typeof userModel)['_']['conf
   }
 
   /**
-   * Find a user by email, case-insensitively.
+   * Find a user by email, case-insensitively. With `includeDeleted`, a
+   * deleted and a live row can share an address; which one is returned is
+   * then unspecified.
    * @param email - The email to search for, in any case.
    * @param options - Soft-delete visibility options.
    * @returns The matching user, or undefined when none exists — including when it exists but is soft-deleted and `includeDeleted` was not set.

@@ -634,6 +634,30 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
       ).toEqual(['email', 'google'])
     })
 
+    it("keeps a deleted user's Google identity off the account that re-registers the address", async () => {
+      const email = uniqueEmail()
+      const profile = googleProfile({ email, emailVerified: true })
+      const deleted = await findOrCreateByGoogle(profile)
+      createdIds.push(deleted.id)
+      await userRepository.softDelete(deleted.id)
+
+      const registration = await request(app)
+        .post('/api/v1/auth/register')
+        .send({ email, password: 'correct horse battery staple' })
+      const fresh = await userRepository.findByEmail(email)
+      if (fresh) createdIds.push(fresh.id)
+
+      expect(registration.status).toBe(202)
+      expect(fresh?.id).toBeDefined()
+      expect(fresh?.id).not.toBe(deleted.id)
+      await expect(findOrCreateByGoogle(profile)).rejects.toMatchObject({
+        statusCode: 401,
+        code: 'google_auth_failed',
+      })
+      const freshProviders = await authProviderRepository.findByUser(fresh?.id ?? '')
+      expect(freshProviders.map((provider) => provider.provider)).toEqual(['email'])
+    })
+
     it('rejects a Google profile that carries no email at all', async () => {
       const profile = googleProfile({ includeEmails: false })
 
