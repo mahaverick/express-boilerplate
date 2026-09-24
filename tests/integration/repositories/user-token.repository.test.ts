@@ -143,6 +143,28 @@ describe('UserTokenRepository', () => {
   // without treating it as reuse of a live session",
   // token.utilities.test.ts). This is why every caller of claimOnce must
   // check `expiresAt` on the row it gets back, itself, after claiming.
+  it('wasConsumedWithin is true right after claimOnce, false once consumed_at is moved into the past', async () => {
+    const userId = await createUser()
+    const tokenHash = uniqueHash()
+    await userTokenRepository.create({
+      userId,
+      purpose: 'refresh',
+      sessionId: randomUUID(),
+      tokenHash,
+      expiresAt: new Date(Date.now() + 60_000),
+    })
+    await userTokenRepository.claimOnce(tokenHash, 'refresh')
+
+    expect(await userTokenRepository.wasConsumedWithin(tokenHash, 10_000)).toBe(true)
+
+    await sql`
+      update user_tokens set consumed_at = consumed_at - interval '11 seconds'
+      where token_hash = ${tokenHash}
+    `
+
+    expect(await userTokenRepository.wasConsumedWithin(tokenHash, 10_000)).toBe(false)
+  })
+
   it("claimOnce claims an expired-but-unrevoked row — expiry is the caller's job, not the predicate's", async () => {
     const userId = await createUser()
     const tokenHash = uniqueHash()
@@ -524,6 +546,54 @@ describe('UserTokenRepository', () => {
       // nothing about revocation.
       expect(remaining).toBeDefined()
       expect(remaining?.revokedAt).not.toBeNull()
+    })
+  })
+
+  describe('isSessionKilled', () => {
+    it('is false for a session holding only a live token', async () => {
+      const userId = await createUser()
+      const sessionId = randomUUID()
+      await issueRefreshToken(userId, sessionId)
+
+      expect(await userTokenRepository.isSessionKilled(sessionId)).toBe(false)
+    })
+
+    it('is false after an ordinary rotation: a consumed row is not a kill', async () => {
+      const userId = await createUser()
+      const sessionId = randomUUID()
+      const issued = await issueRefreshToken(userId, sessionId)
+      await rotateRefreshToken(issued.raw)
+
+      expect(await userTokenRepository.isSessionKilled(sessionId)).toBe(false)
+    })
+
+    it('is true once the session is revoked (logout, reuse detection)', async () => {
+      const userId = await createUser()
+      const sessionId = randomUUID()
+      await issueRefreshToken(userId, sessionId)
+      await userTokenRepository.revokeAllForSession(sessionId)
+
+      expect(await userTokenRepository.isSessionKilled(sessionId)).toBe(true)
+    })
+
+    it('is true once every session of the user is revoked (password reset)', async () => {
+      const userId = await createUser()
+      const sessionId = randomUUID()
+      await issueRefreshToken(userId, sessionId)
+      await userTokenRepository.revokeAllForUser(userId)
+
+      expect(await userTokenRepository.isSessionKilled(sessionId)).toBe(true)
+    })
+
+    it('ignores another session’s kill marker', async () => {
+      const userId = await createUser()
+      const killed = randomUUID()
+      const untouched = randomUUID()
+      await issueRefreshToken(userId, killed)
+      await issueRefreshToken(userId, untouched)
+      await userTokenRepository.revokeAllForSession(killed)
+
+      expect(await userTokenRepository.isSessionKilled(untouched)).toBe(false)
     })
   })
 })

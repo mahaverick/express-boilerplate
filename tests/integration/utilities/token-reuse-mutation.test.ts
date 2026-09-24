@@ -52,6 +52,17 @@ function uniqueEmail(): string {
   return `mutation-proof-${randomUUID()}@example.test`
 }
 
+/**
+ * Age a user's consumed tokens past REFRESH_REUSE_GRACE_MS so a replay counts as reuse.
+ * @param userId - The user whose consumed tokens are aged.
+ */
+async function ageConsumedTokensPastGrace(userId: string): Promise<void> {
+  await sql`
+    update user_tokens set consumed_at = consumed_at - interval '11 seconds'
+    where user_id = ${userId} and consumed_at is not null
+  `
+}
+
 describe('mutation-test harness, proven on reuse detection', () => {
   // Same pattern as token.utilities.test.ts: track every created user id and
   // delete them in afterEach. Deleting the user cascades (ON DELETE CASCADE
@@ -86,6 +97,7 @@ describe('mutation-test harness, proven on reuse detection', () => {
     const mutatedSessionId = randomUUID()
     const issued = await issueRefreshToken(userId, mutatedSessionId)
     const rotated = await rotateRefreshToken(issued.raw)
+    await ageConsumedTokensPastGrace(userId)
 
     await withMutatedMethod(
       UserTokenRepository.prototype,
@@ -107,6 +119,7 @@ describe('mutation-test harness, proven on reuse detection', () => {
     const restoredSessionId = randomUUID()
     const issuedAfterRestore = await issueRefreshToken(userId, restoredSessionId)
     const rotatedAfterRestore = await rotateRefreshToken(issuedAfterRestore.raw)
+    await ageConsumedTokensPastGrace(userId)
 
     await expect(rotateRefreshToken(issuedAfterRestore.raw)).rejects.toMatchObject({
       statusCode: 401,
@@ -133,6 +146,7 @@ describe('mutation-test harness, proven on reuse detection', () => {
         async () => {
           const issued = await issueRefreshToken(userId, sessionId)
           const rotated = await rotateRefreshToken(issued.raw)
+          await ageConsumedTokensPastGrace(userId)
 
           // Someone else — an attacker who stole the old token — presents
           // the OLD token again.

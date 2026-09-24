@@ -17,7 +17,7 @@ import { randomUUID } from 'node:crypto'
 import request from 'supertest'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
-import { REFRESH_TOKEN_COOKIE_NAME } from '@/constants/auth.constants'
+import { REFRESH_REUSE_GRACE_MS, REFRESH_TOKEN_COOKIE_NAME } from '@/constants/auth.constants'
 import type { User } from '@/database/models/user.model'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
@@ -131,6 +131,18 @@ async function seedLoginableUser(createdIds: string[]): Promise<{ user: User; em
   return { user: verified, email }
 }
 
+/**
+ * Push every consumed token of a user 11s into the past, beyond REFRESH_REUSE_GRACE_MS, without sleeping.
+ * @param userId - The user whose consumed tokens are aged.
+ */
+async function ageConsumedTokensPastGrace(userId: string): Promise<void> {
+  expect(REFRESH_REUSE_GRACE_MS).toBeLessThan(11_000)
+  await sql`
+    update user_tokens set consumed_at = consumed_at - interval '11 seconds'
+    where user_id = ${userId} and consumed_at is not null
+  `
+}
+
 describe('POST /api/v1/auth/refresh and /logout', () => {
   const createdIds: string[] = []
 
@@ -175,17 +187,85 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
       expect(secondRefresh.status).toBe(200)
     })
 
-    it('invalidates the old refresh token: presenting it again after rotation fails', async () => {
-      const { response: loginResponse } = await registerAndLogin(createdIds)
+    it('invalidates the old refresh token: presenting it again after the grace window fails', async () => {
+      const { response: loginResponse, user } = await registerAndLogin(createdIds)
       const originalCookie = refreshCookiePair(loginResponse) as string
 
-      // Consume it once — a legitimate rotation.
       const rotated = await request(app).post('/api/v1/auth/refresh').set('Cookie', originalCookie)
       expect(rotated.status).toBe(200)
+      await ageConsumedTokensPastGrace(user.id)
 
-      // Presenting the SAME (now-rotated-out) raw token again must fail —
-      // never be accepted a second time.
       const replayed = await request(app).post('/api/v1/auth/refresh').set('Cookie', originalCookie)
+      expect(replayed.status).toBe(401)
+    })
+
+    it('answers two concurrent refreshes with the same cookie with 200 each, and both new tokens refresh once', async () => {
+      const { response: loginResponse } = await registerAndLogin(createdIds)
+      const cookie = refreshCookiePair(loginResponse) as string
+
+      const [first, second] = await Promise.all([
+        request(app).post('/api/v1/auth/refresh').set('Cookie', cookie),
+        request(app).post('/api/v1/auth/refresh').set('Cookie', cookie),
+      ])
+      expect(first.status).toBe(200)
+      expect(second.status).toBe(200)
+
+      const firstNext = await request(app)
+        .post('/api/v1/auth/refresh')
+        .set('Cookie', refreshCookiePair(first) as string)
+      const secondNext = await request(app)
+        .post('/api/v1/auth/refresh')
+        .set('Cookie', refreshCookiePair(second) as string)
+      expect(firstNext.status).toBe(200)
+      expect(secondNext.status).toBe(200)
+    })
+
+    it('answers a rotated cookie replayed within the grace window with a working sibling token', async () => {
+      const { response: loginResponse } = await registerAndLogin(createdIds)
+      const original = refreshCookiePair(loginResponse) as string
+
+      const rotated = await request(app).post('/api/v1/auth/refresh').set('Cookie', original)
+      expect(rotated.status).toBe(200)
+      const replayed = await request(app).post('/api/v1/auth/refresh').set('Cookie', original)
+      expect(replayed.status).toBe(200)
+
+      const sibling = refreshCookiePair(replayed) as string
+      expect(sibling).not.toBe(refreshCookiePair(rotated))
+      const siblingNext = await request(app).post('/api/v1/auth/refresh').set('Cookie', sibling)
+      const rotatedNext = await request(app)
+        .post('/api/v1/auth/refresh')
+        .set('Cookie', refreshCookiePair(rotated) as string)
+      expect(siblingNext.status).toBe(200)
+      expect(rotatedNext.status).toBe(200)
+    })
+
+    it('revokes every token in the session when a rotated cookie is replayed after the grace window', async () => {
+      const { response: loginResponse, user } = await registerAndLogin(createdIds)
+      const original = refreshCookiePair(loginResponse) as string
+      const rotated = await request(app).post('/api/v1/auth/refresh').set('Cookie', original)
+      expect(rotated.status).toBe(200)
+      await ageConsumedTokensPastGrace(user.id)
+
+      const replayed = await request(app).post('/api/v1/auth/refresh').set('Cookie', original)
+      expect(replayed.status).toBe(401)
+      const legitimate = await request(app)
+        .post('/api/v1/auth/refresh')
+        .set('Cookie', refreshCookiePair(rotated) as string)
+      expect(legitimate.status).toBe(401)
+    })
+
+    it('refuses a rotated cookie replayed within the grace window once the session is logged out', async () => {
+      // The only case where isSessionKilled decides: consumed seconds ago, but the session was logged out.
+      const { response: loginResponse } = await registerAndLogin(createdIds)
+      const original = refreshCookiePair(loginResponse) as string
+      const rotated = await request(app).post('/api/v1/auth/refresh').set('Cookie', original)
+      expect(rotated.status).toBe(200)
+      const loggedOut = await request(app)
+        .post('/api/v1/auth/logout')
+        .set('Cookie', refreshCookiePair(rotated) as string)
+      expect(loggedOut.status).toBe(200)
+
+      const replayed = await request(app).post('/api/v1/auth/refresh').set('Cookie', original)
       expect(replayed.status).toBe(401)
     })
 

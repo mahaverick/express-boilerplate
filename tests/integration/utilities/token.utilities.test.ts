@@ -11,7 +11,7 @@
 // old token again — doing that would itself trigger reuse detection and
 // revoke the new token as a side effect, so test 4 would then only be
 // passing for test 5's reason. Test 5 is the only test that presents an
-// already-rotated token.
+// already-rotated token, and it ages the row past the reuse grace window first.
 import { createHash, randomUUID } from 'node:crypto'
 import jwt from 'jsonwebtoken'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -176,6 +176,11 @@ describe('refresh token issuance, rotation, and revocation', () => {
     const issued = await issueRefreshToken(userId, sessionId)
 
     const rotated = await rotateRefreshToken(issued.raw)
+    // Past REFRESH_REUSE_GRACE_MS, so this replay is reuse rather than a concurrent refresh.
+    await sql`
+      update user_tokens set consumed_at = consumed_at - interval '11 seconds'
+      where user_id = ${userId} and consumed_at is not null
+    `
 
     // The legitimate client already moved on to `rotated.raw`. Someone else
     // — an attacker who stole the old token — presents the OLD token again.
