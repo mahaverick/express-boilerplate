@@ -367,13 +367,14 @@ export async function streamNotifications(
     const unregisterStream = registerStream(userId, closeStream)
 
     // Run after every write. A client over SSE_MAX_BUFFERED_BYTES has stopped
-    // reading. Destroy, not just end: end() queues behind the stalled buffer
-    // and keeps the socket open. Destroy still fires request 'close', which
-    // unregisters.
+    // reading. Destroy, never end: end() queues behind the stalled buffer and
+    // keeps the socket open, and its closing chunk can still reach the client.
+    // Destroyed first, so closeStream() skips end(). Destroy still fires
+    // request 'close', which unregisters.
     const dropIfStalled = (): void => {
       if (response.writableLength <= SSE_MAX_BUFFERED_BYTES) return
-      closeStream()
       response.destroy()
+      closeStream()
     }
 
     // End at token expiry: the client reconnects with a fresh token, and

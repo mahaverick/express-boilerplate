@@ -1017,14 +1017,19 @@ describe('GET /api/v1/notifications/stream', () => {
       })
     }
 
-    // Destroyed server-side, while the client is still paused: an end()
-    // alone would queue behind the stalled buffer and leave the stream open.
-    // Asserted on the server, because what reaches the client once it reads
-    // again depends on how much the kernel had already taken.
+    // Destroyed server-side, while the client is still paused, and never
+    // ended: an end() first would queue the closing chunk, which reaches the
+    // client whenever the kernel had already taken the rest.
     expect(streamResponse.destroyed).toBe(true)
+    expect(streamResponse.writableEnded).toBe(false)
     // The request 'close' cleanup ran. That fires a tick after the stall
     // path's own offNotification, so wait on the registry.
     await waitUntil(() => countStreams(user.id) === 0, 5000)
     expect(listenerCount(user.id)).toBe(0)
+
+    // Once it reads again, the client sees a truncated body.
+    client.resume()
+    await waitUntil(() => client.destroyed, 5000)
+    expect(client.complete).toBe(false)
   })
 })

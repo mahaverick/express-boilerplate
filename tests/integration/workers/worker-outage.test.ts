@@ -108,12 +108,15 @@ describe('Queue Workers through a Redis outage', () => {
     await closeQueue()
     proxy.close()
     resetLifecycleForTests()
-    const cleanup = new Queue('email', {
-      connection: { url: target.realUrl },
-      prefix: target.prefix,
-    })
-    await cleanup.obliterate({ force: true })
-    await cleanup.close()
+    // Both queues' keys under this file's own prefix, so none are left in the shared Redis.
+    for (const name of ['email', 'notification']) {
+      const cleanup = new Queue(name, {
+        connection: { url: target.realUrl },
+        prefix: target.prefix,
+      })
+      await cleanup.obliterate({ force: true })
+      await cleanup.close()
+    }
   })
 
   // First: its Worker connection must never have been ready.

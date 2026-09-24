@@ -6,7 +6,11 @@ import type { Worker } from 'bullmq'
 import type IORedis from 'ioredis'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { markShuttingDown, resetLifecycleForTests } from '@/services/lifecycle.service'
-import { getQueueConnection, onWorkerConnectionLost } from '@/services/queue.service'
+import {
+  getQueueConnection,
+  onWorkerConnectionLost,
+  setWorkersFailed,
+} from '@/services/queue.service'
 import { startWorkers } from '@/services/worker-supervisor.service'
 import { startEmailWorker } from '@/workers/email.worker'
 import { startNotificationWorker } from '@/workers/notification.worker'
@@ -14,6 +18,7 @@ import { startNotificationWorker } from '@/workers/notification.worker'
 vi.mock('@/services/queue.service', () => ({
   getQueueConnection: vi.fn(),
   onWorkerConnectionLost: vi.fn(),
+  setWorkersFailed: vi.fn(),
 }))
 vi.mock('@/workers/email.worker', () => ({ startEmailWorker: vi.fn() }))
 vi.mock('@/workers/notification.worker', () => ({ startNotificationWorker: vi.fn() }))
@@ -140,5 +145,26 @@ describe('startWorkers', () => {
 
     mocks.lose(mocks.connections[1] as IORedis)
     expect(mocks.workers).toHaveLength(4)
+  })
+
+  it('closes a half-started generation and keeps readiness red, then retries on its next lost connection', () => {
+    const mocks = wireMocks()
+    startWorkers()
+    expect(setWorkersFailed).toHaveBeenLastCalledWith(false)
+
+    vi.mocked(startNotificationWorker).mockImplementationOnce(() => {
+      throw new Error('Worker constructor failed')
+    })
+    mocks.lose(mocks.connections[0] as IORedis)
+    // The email Worker of the failed generation started, and is closed again.
+    const halfStarted = mocks.workers[2]
+    expect(mocks.workers).toHaveLength(3)
+    expect(halfStarted?.worker.close).toHaveBeenCalledWith(true)
+    expect(setWorkersFailed).toHaveBeenLastCalledWith(true)
+
+    // Its connection is still the one watched: losing it starts a full generation.
+    mocks.lose(mocks.connections[1] as IORedis)
+    expect(mocks.workers).toHaveLength(5)
+    expect(setWorkersFailed).toHaveBeenLastCalledWith(false)
   })
 })

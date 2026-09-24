@@ -36,6 +36,7 @@ const state: {
   notificationQueue: Queue | undefined
   closed: boolean
   workerConnectionLost: Set<(dead: IORedis) => void>
+  haveWorkersFailed: boolean
 } = {
   worker: undefined,
   producer: undefined,
@@ -43,6 +44,7 @@ const state: {
   notificationQueue: undefined,
   closed: false,
   workerConnectionLost: new Set(),
+  haveWorkersFailed: false,
 }
 
 /**
@@ -145,6 +147,14 @@ export function onWorkerConnectionLost(listener: (dead: IORedis) => void): () =>
   return () => {
     state.workerConnectionLost.delete(listener)
   }
+}
+
+/**
+ * Record whether this process's Workers failed to start, so readiness can't pass without them.
+ * @param haveFailed - True when the last start failed; false once Workers are running again.
+ */
+export function setWorkersFailed(haveFailed: boolean): void {
+  state.haveWorkersFailed = haveFailed
 }
 
 /**
@@ -276,13 +286,14 @@ async function hasBecomeReady(connection: IORedis): Promise<boolean> {
 
 /**
  * Check that both queue connections, the Workers' and the producers', answer.
- * @returns True when both are ready and answer PING; false once closed or
+ * @returns True when both are ready and answer PING; false once closed, while
+ *   the Workers have failed to start (`setWorkersFailed`), or
  *   unreachable, without hanging: before the first 'ready' a connection gives
  *   up after a few retries, and after it any status other than 'ready' is
  *   reported at once.
  */
 export async function isQueueReachable(): Promise<boolean> {
-  if (state.closed) return false
+  if (state.closed || state.haveWorkersFailed) return false
   try {
     getQueueConnection()
     getProducerConnection()

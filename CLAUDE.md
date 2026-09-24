@@ -65,12 +65,14 @@ until you check.
   which they need. A queue connection that gives up before its first `ready`
   is replaced on next use (the producer's Queues with it). Workers on it
   never recover by themselves: BullMQ does not re-initialise a connection
-  whose init failed, and when that failure is anything but ECONNREFUSED
-  (ECONNRESET, say) its fetch loop retries with no delay, starving the
-  event loop. So `startWorkers()`
-  (`worker-supervisor.service.ts`) closes them inside that connection's `'end'`
-  event, before they can spin, and starts new ones on a fresh connection
-  (`worker-outage.test.ts`). Start Workers through it, not one by one, in
+  whose init failed, and when that failure is not one BullMQ counts as a
+  connection error (ECONNREFUSED, or "Connection is closed."), such as
+  ECONNRESET, its fetch loop retries with no delay, starving the event loop.
+  So `startWorkers()` (`worker-supervisor.service.ts`) closes them inside
+  that connection's `'end'` event, before they can spin, and starts new ones
+  on a fresh connection (`worker-outage.test.ts`). If starting them throws,
+  it closes any it started and `isQueueReachable()` reports false until a
+  later start succeeds. Start Workers through it, not one by one, in
   anything that runs through an outage.
 - **`drizzle.config.ts` uses `getDatabaseUrl()`, not `getEnv()`.** Routing
   it through `getEnv()` would make every `drizzle-kit` invocation require
