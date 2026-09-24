@@ -172,11 +172,16 @@ committed and readable, so it is its own example.)
 
 ## Releases
 
-`release-please` reads conventional commits on `main` to generate a release
-pull request. Merging that PR tags the release and creates the GitHub Release.
-The PR is opened with `GITHUB_TOKEN`, so it gets no CI runs — GitHub does not
-trigger workflows from `GITHUB_TOKEN` events. Release PRs show the version
-bump and changelog that will be created when merged:
+Releases are automatic. On every push to `main`, `release-please` opens a
+release pull request from the conventional commits since the last release, and
+`release.yml` merges it straight away; that merge tags `vX.Y.Z`, publishes the
+GitHub Release, and the tag push makes `deploy.yml` publish the image as
+`:X.Y.Z`, `:X.Y` and `:X`. Only `feat`/`fix`/breaking commits cut a release —
+`chore`, `docs`, `ci` and the like do not. This needs the
+`RELEASE_PLEASE_TOKEN` repo secret (a fine-grained PAT with Contents and Pull
+requests read/write): GitHub never starts workflows from events `GITHUB_TOKEN`
+creates, so without it the merge would never be tagged or deployed. The
+version bump follows the commit types:
 
 - `feat` commits become a minor version bump
 - `fix` commits become a patch version bump
