@@ -42,5 +42,14 @@ jobs:
         if: steps.release.outputs.prs_created == 'true'
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
-          PR_NUMBER: ${{ fromJSON(steps.release.outputs.pr).number }}
-        run: gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --squash --delete-branch
+          # Raw string, parsed below — NOT fromJSON() here: step env is
+          # evaluated even when there is no PR, and fromJSON('') is a template
+          # error that fails the whole job.
+          PR_JSON: ${{ steps.release.outputs.pr }}
+        run: |
+          pr_number=$(jq -r '.number // empty' <<<"${PR_JSON:-null}")
+          if [ -z "$pr_number" ]; then
+            echo "No release PR to merge."
+            exit 0
+          fi
+          gh pr merge "$pr_number" --repo "$GITHUB_REPOSITORY" --squash --delete-branch
