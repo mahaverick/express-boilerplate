@@ -4,6 +4,7 @@
 // the shared Redis. Its own file because it mocks getEnv()'s REDIS_URL, as
 // redis-outage.service.test.ts does.
 import { randomUUID } from 'node:crypto'
+import { createClient, type RedisClientType } from 'redis'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { Notification } from '@/database/models/notification.model'
 import { countStreams, registerStream, resetLifecycleForTests } from '@/services/lifecycle.service'
@@ -14,9 +15,10 @@ import {
   offNotification,
   onNotification,
 } from '@/services/notification-emitter.service'
-import { closeRedis, getRedis, isRedisReachable } from '@/services/redis.service'
-import { withMutatedMethod } from '../../helpers/mutate'
+import { closeRedis, createRedisClient, getRedis, isRedisReachable } from '@/services/redis.service'
+import { withMutatedMethod, withMutatedModule } from '../../helpers/mutate'
 import {
+  countSubscribers,
   fakeNotification,
   waitForNotificationSubscriber,
 } from '../../helpers/notification-subscriber'
@@ -44,8 +46,32 @@ const emitter = { onNotification, offNotification }
 
 type LogMethod = (message: string, meta?: Record<string, unknown>) => void
 
+type EmitterModule = typeof import('@/services/notification-emitter.service')
+
 function noopHandler(): void {
   // Intentionally empty.
+}
+
+/**
+ * Run against a fresh emitter module, whose subscriber has never been opened.
+ * @param run - Gets the fresh module and every Redis client it created.
+ * @returns Resolves once `run` settles.
+ */
+async function withFreshEmitter(
+  run: (fresh: EmitterModule, clients: RedisClientType[]) => Promise<void>
+): Promise<void> {
+  const clients: RedisClientType[] = []
+  const createCapturedClient = (): RedisClientType => {
+    const client = createRedisClient()
+    clients.push(client)
+    return client
+  }
+  await withMutatedModule(
+    '@/services/redis.service',
+    { createRedisClient: createCapturedClient },
+    () => import('@/services/notification-emitter.service'),
+    (fresh) => run(fresh, clients)
+  )
 }
 
 describe('notification pub/sub survives a Redis outage', () => {
@@ -159,4 +185,67 @@ describe('notification pub/sub survives a Redis outage', () => {
     expect(countStreams(owner)).toBe(0)
     await waitForNotificationSubscriber(emitter, getRedis)
   }, 20_000)
+
+  it('closes promptly when shutdown lands in a first connect’s retry backoff', async () => {
+    await withFreshEmitter(async (fresh, clients) => {
+      const userId = `backoff-close-${randomUUID()}`
+      proxy.goDown()
+      fresh.onNotification(userId, noopHandler)
+      // Inside the fail-fast retries: the first attempt was reset, the next is still waiting.
+      await sleep(150)
+      try {
+        const close = async (): Promise<'closed'> => {
+          await fresh.closeNotificationSubscriber()
+          return 'closed'
+        }
+        const giveUp = async (): Promise<'timed out'> => {
+          await sleep(3000)
+          return 'timed out'
+        }
+        const winner = await Promise.race([close(), giveUp()])
+        expect(winner).toBe('closed')
+        expect(clients[0]?.isOpen).toBe(false)
+      } finally {
+        fresh.offNotification(userId, noopHandler)
+      }
+    })
+  }, 10_000)
+
+  it('leaves no subscriber behind when closed as a reconnect starts opening its socket', async () => {
+    const counter: RedisClientType = createClient({ url: target.realUrl })
+    await counter.connect()
+    try {
+      await withFreshEmitter(async (fresh, clients) => {
+        const userId = `reconnect-close-${randomUUID()}`
+        // This file's own subscriber counts too, so it must be live at both counts.
+        await waitForNotificationSubscriber(emitter, getRedis)
+        const before = await countSubscribers(counter)
+        fresh.onNotification(userId, noopHandler)
+        try {
+          await waitForNotificationSubscriber(fresh, getRedis)
+          const [subscriber] = clients
+          if (!subscriber) throw new Error('the fresh emitter created no subscriber')
+
+          const closing = new Promise<void>((resolve) => {
+            subscriber.once('reconnecting', () => {
+              // Redis is back before this reconnect opens its socket.
+              proxy.comeBack()
+              void fresh.closeNotificationSubscriber().then(resolve)
+            })
+          })
+          proxy.goDown()
+          await closing
+          // An upper bound has no event to wait for; settle, then count.
+          await sleep(500)
+          await waitForNotificationSubscriber(emitter, getRedis)
+          expect(await countSubscribers(counter)).toBe(before)
+          expect(subscriber.isOpen).toBe(false)
+        } finally {
+          fresh.offNotification(userId, noopHandler)
+        }
+      })
+    } finally {
+      await counter.close()
+    }
+  }, 15_000)
 })

@@ -127,8 +127,9 @@ export async function processNotificationJob(job: Job<NotificationJobData>): Pro
     // header): a connection with nothing subscribed just misses it, the same
     // as any other client that was not listening at the time.
     //
-    // Caught, not left to propagate: the row is already committed, so a
-    // failure to publish it live is not a reason to retry the job.
+    // emitNotification publishes in the background and never rejects; only
+    // serialising the row can throw here. Caught: the row is committed, so
+    // that is not a reason to retry the job.
     //
     // undefined: a retry, and this row was already inserted; its emit was
     // already attempted.
@@ -136,7 +137,7 @@ export async function processNotificationJob(job: Job<NotificationJobData>): Pro
       try {
         emitNotification(userId, created)
       } catch (error) {
-        logger.error('Failed to publish notification to the SSE emitter', {
+        logger.error('Failed to serialise notification for live delivery', {
           error: redactedForLog(error),
           notificationId: created.id,
           type,

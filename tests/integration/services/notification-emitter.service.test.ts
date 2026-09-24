@@ -43,6 +43,14 @@ function collector(): {
   }
 }
 
+/**
+ * How many TCP sockets this process holds open.
+ * @returns The count of open TCP socket handles.
+ */
+function openSocketCount(): number {
+  return process.getActiveResourcesInfo().filter((resource) => resource === 'TCPSocketWrap').length
+}
+
 function noopHandler(): void {
   // Intentionally empty.
 }
@@ -254,6 +262,47 @@ describe('notification-emitter.service', () => {
     } finally {
       replicaA.offNotification(throwingUser, throwingHandler)
       replicaA.offNotification(healthyUser, handler)
+    }
+  })
+
+  it('still delivers to a user’s other listeners when one of them throws', async () => {
+    await waitForNotificationSubscriber(replicaA, redisA.getRedis)
+    const userId = `throws-first-${randomUUID()}`
+    const { received, handler } = collector()
+
+    replicaA.onNotification(userId, throwingHandler)
+    replicaA.onNotification(userId, handler)
+    try {
+      replicaA.emitNotification(userId, fakeNotification({ userId }))
+      expect(await hasReceived(received, 1)).toBe(true)
+    } finally {
+      replicaA.offNotification(userId, throwingHandler)
+      replicaA.offNotification(userId, handler)
+    }
+  })
+
+  it('leaves no subscriber behind when closed in the same tick as its first onNotification', async () => {
+    // A third replica: this one's subscriber is still opening its socket when closed.
+    vi.resetModules()
+    const c = {
+      emitter: await import('@/services/notification-emitter.service'),
+      redis: await import('@/services/redis.service'),
+    }
+    const client = await redisA.getRedis()
+    const before = await countSubscribers(client)
+    const socketsBefore = openSocketCount()
+    const userId = `same-tick-close-${randomUUID()}`
+
+    c.emitter.onNotification(userId, noopHandler)
+    try {
+      await c.emitter.closeNotificationSubscriber()
+      // An upper bound has no event to wait for; settle, then count.
+      await sleep(300)
+      expect(await countSubscribers(client)).toBe(before)
+      expect(openSocketCount()).toBe(socketsBefore)
+    } finally {
+      c.emitter.offNotification(userId, noopHandler)
+      await c.redis.closeRedis()
     }
   })
 

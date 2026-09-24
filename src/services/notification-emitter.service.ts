@@ -4,7 +4,9 @@
 // publishes to one Redis channel, `${QUEUE_PREFIX}:notifications`. Each
 // process with an SSE listener runs one subscriber connection and hands every
 // message to its local EventEmitter, keyed per user, so the publishing process
-// receives its own copy exactly once, like every other replica.
+// receives its own copy exactly once, like every other replica. The one
+// accepted exception: a publish whose reply is lost is also delivered locally,
+// so that process's listeners can get it twice.
 //
 // Best effort, not durable: the row is already in the database. When the
 // subscriber reconnects after an outage, every open stream is closed, and its
@@ -55,11 +57,17 @@ const messageSchema = z.object({
   }),
 })
 
+interface Subscriber {
+  client: RedisClientType
+  // No socket yet: from creation, and from each 'reconnecting', until 'connect' or 'error'.
+  isAwaitingSocket: boolean
+}
+
 // Mutable properties on a top-level const, so these functions share state
 // without reassigning a top-level binding (unicorn/no-top-level-assignment-in-function).
 const state: {
   emitter: EventEmitter | undefined
-  subscriber: RedisClientType | undefined
+  subscriber: Subscriber | undefined
   starting: Promise<void> | undefined
   closed: boolean
   isPublishFailing: boolean
@@ -87,16 +95,21 @@ function getEmitter(): EventEmitter {
 }
 
 /**
- * Hand one notification to this process's listeners for its owner.
+ * Hand one notification to each of this process's listeners for its owner.
  * @param userId - The notification's owner.
  * @param notification - The notification to deliver.
  */
 function deliverLocally(userId: string, notification: Notification): void {
-  try {
-    getEmitter().emit(eventNameFor(userId), notification)
-  } catch (error) {
-    // A throwing listener must not break the subscriber or the caller.
-    logger.error('A notification listener threw', { error, notificationId: notification.id })
+  // One at a time: EventEmitter#emit stops at the first listener that throws.
+  const listeners = getEmitter().listeners(eventNameFor(userId)) as ((
+    notification: Notification
+  ) => void)[]
+  for (const listener of listeners) {
+    try {
+      listener(notification)
+    } catch (error) {
+      logger.error('A notification listener threw', { error, notificationId: notification.id })
+    }
   }
 }
 
@@ -124,17 +137,28 @@ function handleMessage(message: string): void {
 }
 
 /**
- * Connect and subscribe; on failure, forget the client so the next `onNotification` retries.
- * @param subscriber - The client to start.
- * @returns Resolves once subscribed or given up; never rejects.
+ * Destroy a subscriber client once shutdown has asked for it, if it is still open.
+ * @param client - The subscriber client.
  */
-async function startSubscriber(subscriber: RedisClientType): Promise<void> {
+function destroyIfClosed(client: RedisClientType): void {
+  if (state.closed && client.isOpen) client.destroy()
+}
+
+/**
+ * Connect and subscribe; on failure, forget the client so the next `onNotification` retries.
+ * @param client - The client to start.
+ * @returns Resolves once subscribed, given up or closed; never rejects.
+ */
+async function startSubscriber(client: RedisClientType): Promise<void> {
   try {
-    await subscriber.connect()
-    await subscriber.subscribe(channelName(), handleMessage)
+    await client.connect()
+    // A close during connect's retries makes connect() resolve unconnected,
+    // and subscribe() on that client never settles.
+    if (state.closed || !client.isReady) throw new Error('Closed while connecting')
+    await client.subscribe(channelName(), handleMessage)
   } catch (error) {
-    if (state.subscriber === subscriber) state.subscriber = undefined
-    if (subscriber.isOpen) subscriber.destroy()
+    if (state.subscriber?.client === client) state.subscriber = undefined
+    if (client.isOpen) client.destroy()
     if (!state.closed) logger.error('Notification subscriber failed to start', { error })
   }
 }
@@ -144,9 +168,10 @@ async function startSubscriber(subscriber: RedisClientType): Promise<void> {
  */
 function ensureSubscriber(): void {
   if (state.closed || state.subscriber) return
-  const subscriber = createRedisClient()
+  const client = createRedisClient()
+  const subscriber: Subscriber = { client, isAwaitingSocket: true }
   const readiness = { hasBeenReady: false }
-  subscriber.on('ready', () => {
+  client.on('ready', () => {
     // node-redis resubscribes before 'ready'. Messages published during the
     // outage are gone, so end every stream and let its client replay them.
     if (readiness.hasBeenReady) {
@@ -155,8 +180,20 @@ function ensureSubscriber(): void {
     }
     readiness.hasBeenReady = true
   })
+  // A close while no socket exists is carried out here, once one attempt has one or has failed.
+  client.on('reconnecting', () => {
+    subscriber.isAwaitingSocket = true
+  })
+  client.on('connect', () => {
+    subscriber.isAwaitingSocket = false
+    destroyIfClosed(client)
+  })
+  client.on('error', () => {
+    subscriber.isAwaitingSocket = false
+    destroyIfClosed(client)
+  })
   state.subscriber = subscriber
-  state.starting = startSubscriber(subscriber)
+  state.starting = startSubscriber(client)
 }
 
 /**
@@ -246,13 +283,19 @@ export function listenerCount(userId: string): number {
 
 /**
  * Close this process's subscriber for shutdown; a later `onNotification` never reopens it. Safe to call twice.
- * @returns Resolves once the subscriber is closed and its start attempt has settled.
+ *
+ * Resolves once a first connect in progress has ended; a reconnect after
+ * `ready` ends in the background, as soon as its current attempt has a socket or fails.
+ * @returns Resolves once the subscriber's start attempt has settled.
  */
 export async function closeNotificationSubscriber(): Promise<void> {
   state.closed = true
   const subscriber = state.subscriber
   state.subscriber = undefined
+  // Without a socket, destroy() would not stop the one being opened: its 'connect' or 'error' listener destroys it.
   // destroy, not close: close() waits for queued commands, which a silent Redis never answers.
-  if (subscriber?.isOpen) subscriber.destroy()
+  if (subscriber && !subscriber.isAwaitingSocket && subscriber.client.isOpen) {
+    subscriber.client.destroy()
+  }
   if (state.starting) await state.starting
 }
