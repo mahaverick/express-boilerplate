@@ -7,17 +7,18 @@
 // Authenticated requests sign a token directly with `signAccessToken`
 // rather than going through `POST /api/v1/auth/login`, and most fixtures
 // (tenants, memberships) are built directly via the repositories rather
-// than through this file's own `POST /tenants`/`POST /tenants/:slug/members`
-// endpoints — `tenant.middleware.test.ts`'s own header comment gives the
-// identical reasoning: these tests are about what happens once a caller is
-// already a member with a given role, not about tenant/member creation
-// itself (which get their own dedicated `describe` blocks below, each
-// exercised through the real endpoint).
+// than through this file's own `POST /tenants` endpoint —
+// `tenant.middleware.test.ts`'s own header comment gives the identical
+// reasoning: these tests are about what happens once a caller is already a
+// member with a given role, not about tenant creation itself (which gets
+// its own `describe` block below, exercised through the real endpoint).
+// Members join only by invitation; tests/integration/api/invitation.test.ts
+// covers those endpoints.
 //
 // RATE LIMITING here is "wiring, not thresholds" — `auth-refresh.test.ts`'s
 // own header comment states the reasoning this file borrows verbatim:
-// exhausting `createCreateTenantRateLimiter`'s real 20-per-hour budget (or
-// `createAddTenantMemberRateLimiter`'s 30) would spend a budget every other
+// exhausting `createCreateTenantRateLimiter`'s real 20-per-hour budget
+// would spend a budget every other
 // integration file running in parallel shares. The 429 behaviour itself,
 // including the user-keyed discriminator, is proven with small overrides in
 // tests/unit/middlewares/rate-limit.middleware.test.ts.
@@ -495,8 +496,8 @@ describe('/api/v1/tenants', () => {
     })
   })
 
-  describe('POST /api/v1/tenants/:slug/members', () => {
-    it('lets an owner add an existing user by email with a role', async () => {
+  describe('POST /api/v1/tenants/:slug/members (removed)', () => {
+    it('is gone: an owner gets 404 and nobody is added', async () => {
       const { user: ownerUser, token: ownerToken } = await createAuthenticatedUser()
       const { user: targetUser } = await createAuthenticatedUser()
       const tenant = await createTenant(ownerUser.id)
@@ -506,122 +507,12 @@ describe('/api/v1/tenants', () => {
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ email: targetUser.email, role: 'editor' })
 
-      expect(response.status).toBe(201)
+      expect(response.status).toBe(404)
       const membership = await userMembershipRepository.findByUserAndTenant(
         targetUser.id,
         tenant.id
       )
-      expect(membership?.role).toBe('editor')
-    })
-
-    it('lets an owner grant the admin role', async () => {
-      const { user: ownerUser, token: ownerToken } = await createAuthenticatedUser()
-      const { user: targetUser } = await createAuthenticatedUser()
-      const tenant = await createTenant(ownerUser.id)
-
-      const response = await request(app)
-        .post(`/api/v1/tenants/${tenant.slug}/members`)
-        .set('Authorization', `Bearer ${ownerToken}`)
-        .send({ email: targetUser.email, role: 'admin' })
-
-      expect(response.status).toBe(201)
-    })
-
-    it('lets an admin add a member with a non-elevated role', async () => {
-      const { user: ownerUser } = await createAuthenticatedUser()
-      const { user: adminUser, token: adminToken } = await createAuthenticatedUser()
-      const { user: targetUser } = await createAuthenticatedUser()
-      const tenant = await createTenant(ownerUser.id)
-      await addMembership(adminUser.id, tenant.id, 'admin')
-
-      const response = await request(app)
-        .post(`/api/v1/tenants/${tenant.slug}/members`)
-        .set('Authorization', `Bearer ${adminToken}`)
-        .send({ email: targetUser.email, role: 'manager' })
-
-      expect(response.status).toBe(201)
-    })
-
-    // This task's own addition beyond the plan's literal text — see
-    // tenant.controller.ts's `canActorGrantRole` for the full reasoning.
-    it.each<MembershipRole>(['admin', 'owner'])(
-      'blocks an admin from granting the %s role',
-      async (role) => {
-        const { user: ownerUser } = await createAuthenticatedUser()
-        const { user: adminUser, token: adminToken } = await createAuthenticatedUser()
-        const { user: targetUser } = await createAuthenticatedUser()
-        const tenant = await createTenant(ownerUser.id)
-        await addMembership(adminUser.id, tenant.id, 'admin')
-
-        const response = await request(app)
-          .post(`/api/v1/tenants/${tenant.slug}/members`)
-          .set('Authorization', `Bearer ${adminToken}`)
-          .send({ email: targetUser.email, role })
-
-        expect(response.status).toBe(403)
-        const membership = await userMembershipRepository.findByUserAndTenant(
-          targetUser.id,
-          tenant.id
-        )
-        expect(membership).toBeUndefined()
-      }
-    )
-
-    it('404s when no user is registered with the given email', async () => {
-      const { user: ownerUser, token: ownerToken } = await createAuthenticatedUser()
-      const tenant = await createTenant(ownerUser.id)
-
-      const response = await request(app)
-        .post(`/api/v1/tenants/${tenant.slug}/members`)
-        .set('Authorization', `Bearer ${ownerToken}`)
-        .send({ email: uniqueEmail(), role: 'viewer' })
-
-      expect(response.status).toBe(404)
-    })
-
-    it('409s when the user is already a member', async () => {
-      const { user: ownerUser, token: ownerToken } = await createAuthenticatedUser()
-      const { user: targetUser } = await createAuthenticatedUser()
-      const tenant = await createTenant(ownerUser.id)
-      await addMembership(targetUser.id, tenant.id, 'viewer')
-
-      const response = await request(app)
-        .post(`/api/v1/tenants/${tenant.slug}/members`)
-        .set('Authorization', `Bearer ${ownerToken}`)
-        .send({ email: targetUser.email, role: 'editor' })
-
-      expect(response.status).toBe(409)
-    })
-
-    it.each<MembershipRole>(['manager', 'editor', 'viewer'])(
-      'rejects a %s with 403',
-      async (role) => {
-        const { user: ownerUser } = await createAuthenticatedUser()
-        const { user: memberUser, token: memberToken } = await createAuthenticatedUser()
-        const { user: targetUser } = await createAuthenticatedUser()
-        const tenant = await createTenant(ownerUser.id)
-        await addMembership(memberUser.id, tenant.id, role)
-
-        const response = await request(app)
-          .post(`/api/v1/tenants/${tenant.slug}/members`)
-          .set('Authorization', `Bearer ${memberToken}`)
-          .send({ email: targetUser.email, role: 'viewer' })
-
-        expect(response.status).toBe(403)
-      }
-    )
-
-    it('runs a limiter — proven by the RateLimit-* headers on an ordinary response', async () => {
-      const { user: ownerUser, token: ownerToken } = await createAuthenticatedUser()
-      const tenant = await createTenant(ownerUser.id)
-
-      const response = await request(app)
-        .post(`/api/v1/tenants/${tenant.slug}/members`)
-        .set('Authorization', `Bearer ${ownerToken}`)
-        .send({ email: uniqueEmail(), role: 'viewer' }) // 404s (no such user), but the limiter runs first
-
-      expect(response.status).toBe(404)
-      expect(response.headers).toHaveProperty('ratelimit-limit')
+      expect(membership).toBeUndefined()
     })
   })
 

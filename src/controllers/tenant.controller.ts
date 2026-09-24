@@ -1,8 +1,9 @@
 // src/controllers/tenant.controller.ts
 //
-// Ten handlers, in the same order tenant.routes.ts mounts them: create/list/
-// get/update tenant, list/add/change-role/remove member, get/update
-// settings. Every handler assumes `requireAuth` has already run (populating
+// Thirteen handlers, in the same order tenant.routes.ts mounts them:
+// create/list/get/update tenant, list/change-role/remove member,
+// list/invite/resend/revoke invitation, get/update settings. Every handler
+// assumes `requireAuth` has already run (populating
 // `request.user`) — `tenant.routes.ts` mounts it router-wide, the same
 // convention `profile.routes.ts` established. Every handler on a
 // `/tenants/:slug/...` route additionally assumes `resolveTenant` has
@@ -15,8 +16,8 @@
 // THE ACTOR->TARGET ROLE MATRIX (plan's spec correction #4) is enforced
 // here, in `canActorModifyTarget` below, and used by both
 // `updateMemberRole` and `removeMember` — the two endpoints that act on an
-// EXISTING member, as opposed to `addMember`, which grants an INITIAL role
-// to someone not yet a member (see `canActorGrantRole`'s own comment for
+// EXISTING member, as opposed to `inviteMember`, which offers an INITIAL
+// role to someone not yet a member (see `canActorGrantRole`'s own comment for
 // why that is a deliberately separate function, not a second call to this
 // one). Router-level `requireRole(...)` (tenant.routes.ts) already narrows
 // which ACTOR roles can reach each handler at all (only `'owner'` reaches
@@ -31,7 +32,7 @@ import type { RequestPrincipal } from '@/middlewares/tenant.middleware'
 import { TenantSettingsRepository } from '@/repositories/tenant-settings.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
-import { UserRepository } from '@/repositories/user.repository'
+import { invite, listPending, resend, revoke } from '@/services/tenant-invitation.service'
 import {
   changeRole,
   removeMember as removeTenantMember,
@@ -39,7 +40,8 @@ import {
 import { successResponse } from '@/utilities/response.utilities'
 import { parseBody } from '@/validators/auth.validators'
 import {
-  newMemberSchema,
+  invitationIdSchema,
+  inviteMemberSchema,
   newTenantSchema,
   updateMemberRoleSchema,
   updateTenantSchema,
@@ -51,7 +53,6 @@ import {
 const tenantRepository = new TenantRepository()
 const tenantSettingsRepository = new TenantSettingsRepository()
 const userMembershipRepository = new UserMembershipRepository()
-const userRepository = new UserRepository()
 
 /**
  * The authenticated caller's id, guarding against a route reaching this
@@ -149,7 +150,7 @@ export function canActorModifyTarget(
 
 /**
  * Whether `actorRole` may GRANT `role` to a brand-new member via
- * `addMember`. Deliberately a SEPARATE function from
+ * `inviteMember`. Deliberately a SEPARATE function from
  * `canActorModifyTarget`, not a second call to it with some synthetic
  * `isSelf: false` — the plan's matrix describes acting on an EXISTING
  * member's CURRENT role, and adding someone has no "current role" to
@@ -160,14 +161,14 @@ export function canActorModifyTarget(
  * Beyond the plan's own text — the plan's per-endpoint bullets list the
  * matrix as a `PATCH`/`DELETE`-only rule, and router-level
  * `requireRole('owner', 'admin')` (tenant.routes.ts) already lets an admin
- * reach `POST /tenants/:slug/members` at all. Without this check, an admin
- * could add a brand-new member with `role: 'admin'` (or `'owner'`) directly
+ * reach `POST /tenants/:slug/invitations` at all. Without this check, an admin
+ * could invite a brand-new member with `role: 'admin'` (or `'owner'`) directly
  * — a strictly larger grant than the matrix lets that same admin apply to
  * an EXISTING admin/owner member, and the exact privilege-escalation seam
  * the matrix exists to close one call site over. Owners are unrestricted,
  * matching the matrix's own "owner: yes" for every non-self target role.
  * @param actorRole - The caller's role in this tenant.
- * @param role - The role `addMember`'s caller is trying to grant.
+ * @param role - The role `inviteMember`'s caller is trying to offer.
  * @returns True when `actorRole` may grant `role` to a new member.
  */
 export function canActorGrantRole(actorRole: MembershipRole, role: MembershipRole): boolean {
@@ -326,69 +327,6 @@ export async function listMembers(
 }
 
 /**
- * Add an existing user to a tenant by email. Owner/admin only
- * (`requireRole('owner', 'admin')`, tenant.routes.ts) — `canActorGrantRole`
- * above then further restricts WHICH role an admin (never an owner) may
- * grant; see that function's own comment for why this check exists beyond
- * the plan's literal text.
- *
- * A caller supplying an email with no matching user gets a 404 — unlike
- * `register`/`forgot-password` (auth.controller.ts, Ruling G), this is
- * NOT answered identically for "no such user" and "already a member": both
- * this endpoint's own gate (owner/admin of an EXISTING tenant) and its rate
- * limiter (`createAddTenantMemberRateLimiter`, user-keyed) already require
- * a privileged, authenticated, budget-limited caller, which is a
- * fundamentally different threat model from the unauthenticated
- * registration/login/password-reset surface Ruling G was written for —
- * see this task's own report for where that line was drawn.
- * @param request - The incoming request, resolved to a tenant by `resolveTenant`, carrying `{ email, role }`.
- * @param response - The response.
- * @param next - Forwards a rejection to the terminal error handler.
- */
-export async function addMember(
-  request: Request,
-  response: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const principal = tenantPrincipal(request)
-    const input = parseBody(newMemberSchema, request.body)
-
-    if (!canActorGrantRole(principal.role, input.role)) {
-      throw new HttpError('Insufficient permissions to grant this role', 403)
-    }
-
-    const targetUser = await userRepository.findByEmail(input.email)
-    if (!targetUser) {
-      throw new HttpError('No user found with this email', 404)
-    }
-
-    const membership = await userMembershipRepository.create({
-      userId: targetUser.id,
-      tenantId: principal.tenantId,
-      role: input.role,
-    })
-
-    successResponse(
-      response,
-      {
-        membership,
-        user: {
-          id: targetUser.id,
-          email: targetUser.email,
-          firstName: targetUser.firstName,
-          lastName: targetUser.lastName,
-        },
-      },
-      'Member added.',
-      201
-    )
-  } catch (error) {
-    next(error)
-  }
-}
-
-/**
  * Change an existing member's role. Owner only
  * (`requireRole('owner')`, tenant.routes.ts) — so `principal.role` is
  * always `'owner'` by the time this handler runs, and `canActorModifyTarget`
@@ -454,6 +392,132 @@ export async function removeMember(
       }
     })
     successResponse(response, undefined, 'Member removed.')
+  } catch (error) {
+    next(error)
+  }
+}
+
+const INVITATION_SENT_MESSAGE = 'If that address can be invited, an invitation has been sent.'
+
+/**
+ * Send the invite/resend response: 202, no data, one fixed message,
+ * whether or not the address has an account.
+ * @param response - The response.
+ */
+function respondInvitationSent(response: Response): void {
+  // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data", not undefined (which JSON.stringify omits entirely)
+  successResponse(response, null, INVITATION_SENT_MESSAGE, 202)
+}
+
+/**
+ * The `:id` route param on an invitation route, validated as a UUID.
+ * @param request - The incoming request.
+ * @returns The invitation id.
+ * @throws {HttpError} 400, when `:id` is not a UUID.
+ */
+function invitationIdParameter(request: Request): string {
+  return parseBody(invitationIdSchema, request.params).id
+}
+
+/**
+ * List a tenant's pending invitations. Owner/admin only
+ * (`requireRole('owner', 'admin')`, tenant.routes.ts). Never returns a
+ * token or its hash.
+ * @param request - The incoming request, resolved to a tenant by `resolveTenant`.
+ * @param response - The response.
+ * @param next - Forwards a rejection to the terminal error handler.
+ */
+export async function listInvitations(
+  request: Request,
+  response: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const principal = tenantPrincipal(request)
+    const invitations = await listPending(principal.tenantId)
+    successResponse(response, invitations, 'Invitations retrieved.')
+  } catch (error) {
+    next(error)
+  }
+}
+
+/**
+ * Invite an address to the tenant. Owner/admin only, and
+ * `canActorGrantRole` limits which role an admin may offer. Answers 202
+ * with one fixed body whether or not the address has an account; only a
+ * current member gets 409 `already_member`.
+ * @param request - The incoming request, resolved to a tenant by `resolveTenant`, carrying `{ email, role }`.
+ * @param response - The response.
+ * @param next - Forwards a rejection to the terminal error handler.
+ */
+export async function inviteMember(
+  request: Request,
+  response: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const principal = tenantPrincipal(request)
+    const actorUserId = authenticatedUserId(request)
+    const input = parseBody(inviteMemberSchema, request.body)
+    if (!canActorGrantRole(principal.role, input.role)) {
+      throw new HttpError('Insufficient permissions to grant this role', 403)
+    }
+    await invite(principal.tenantId, actorUserId, input.email, input.role)
+    respondInvitationSent(response)
+  } catch (error) {
+    next(error)
+  }
+}
+
+/**
+ * Mail a pending invitation again with a new link; the old link stops
+ * working. Owner/admin only, it shares the invite endpoint's limiter, and
+ * `canActorGrantRole` is re-checked against the invitation's role. Takes
+ * no body. A `:id` that is not a UUID answers 400 validation, not 404
+ * `invitation_not_found`.
+ * @param request - The incoming request, resolved to a tenant by `resolveTenant`, carrying `:id`.
+ * @param response - The response.
+ * @param next - Forwards a rejection to the terminal error handler.
+ */
+export async function resendInvitation(
+  request: Request,
+  response: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const principal = tenantPrincipal(request)
+    const actorUserId = authenticatedUserId(request)
+    const invitationId = invitationIdParameter(request)
+    // Resending re-issues the invitation's role, so the grant matrix applies again.
+    await resend(principal.tenantId, invitationId, actorUserId, (invitation) => {
+      if (!canActorGrantRole(principal.role, invitation.role)) {
+        throw new HttpError('Insufficient permissions to grant this role', 403)
+      }
+    })
+    respondInvitationSent(response)
+  } catch (error) {
+    next(error)
+  }
+}
+
+/**
+ * Revoke a pending invitation. Owner/admin only. A `:id` that is not a UUID
+ * answers 400 validation, not 404 `invitation_not_found`.
+ * @param request - The incoming request, resolved to a tenant by `resolveTenant`, carrying `:id`.
+ * @param response - The response.
+ * @param next - Forwards a rejection to the terminal error handler.
+ */
+export async function revokeInvitation(
+  request: Request,
+  response: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const principal = tenantPrincipal(request)
+    const invitationId = invitationIdParameter(request)
+    await revoke(principal.tenantId, invitationId)
+    // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data", not undefined (which JSON.stringify omits entirely)
+    successResponse(response, null, 'Invitation revoked.')
   } catch (error) {
     next(error)
   }

@@ -2,7 +2,7 @@
 //
 // GET /api/v1/notifications/stream — a Server-Sent Events connection that
 // pushes the authenticated user's notifications in real time, via
-// notification-emitter.service.ts's in-process pub/sub. Sits behind
+// notification-emitter.service.ts's Redis pub/sub. Sits behind
 // `requireAuth` (auth.middleware.ts) like every other route on
 // notification.routes.ts — see that file's header comment for the routing
 // reason `/stream` still has to precede the `:id`-shaped routes below it.
@@ -312,12 +312,15 @@ export async function streamNotifications(
     // `fetchMissedNotifications` to resolve first.
     let isReplaying = Boolean(lastEventId)
     const pendingDuringReplay: Notification[] = []
+    // Ids the replay burst wrote: a live copy can still arrive after it.
+    const missedIds = new Set<string>()
 
     const handleNotification = (notification: Notification): void => {
       if (isReplaying) {
         pendingDuringReplay.push(notification)
         return
       }
+      if (missedIds.has(notification.id)) return
       writeNotificationEvent(response, notification)
       dropIfStalled()
     }
@@ -403,8 +406,8 @@ export async function streamNotifications(
       // heartbeat; there is nothing left to write.
       if (isClosed) return
 
-      const missedIds = new Set(missed.map((notification) => notification.id))
       for (const notification of missed) {
+        missedIds.add(notification.id)
         writeNotificationEvent(response, notification)
         dropIfStalled()
       }

@@ -376,4 +376,40 @@ describe('UserMembershipRepository', () => {
     const [remaining] = await sql`select * from user_memberships where id = ${membership.id}`
     expect(remaining).toBeUndefined()
   })
+
+  describe('createIfAbsent', () => {
+    it('inserts a membership when none exists', async () => {
+      const owner = await createUser()
+      const tenant = await createTenant(owner.id)
+      const user = await createUser()
+
+      const membership = await userMembershipRepository.createIfAbsent({
+        userId: user.id,
+        tenantId: tenant.id,
+        role: 'editor',
+      })
+
+      expect(membership).toMatchObject({ userId: user.id, tenantId: tenant.id, role: 'editor' })
+    })
+
+    it('keeps an existing membership and its role', async () => {
+      const owner = await createUser()
+      const tenant = await createTenant(owner.id)
+      const user = await createUser()
+      const existing = await userMembershipRepository.create({
+        userId: user.id,
+        tenantId: tenant.id,
+        role: 'manager',
+      })
+
+      const membership = await userMembershipRepository.createIfAbsent({
+        userId: user.id,
+        tenantId: tenant.id,
+        role: 'viewer',
+      })
+
+      expect(membership.id).toBe(existing.id)
+      expect(membership.role).toBe('manager')
+    })
+  })
 })

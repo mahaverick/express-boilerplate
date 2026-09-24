@@ -6,8 +6,8 @@
 // by its own `notification_preferences` check:
 //
 //   - in-app: insert a row into `notifications` via `NotificationRepository`,
-//     then publish it to `notification-emitter.service.ts`'s in-process
-//     emitter so a live `GET /api/v1/notifications/stream` connection
+//     then publish it through `notification-emitter.service.ts` so a live
+//     `GET /api/v1/notifications/stream` connection on any replica
 //     (notification-stream.controller.ts) sees it immediately, without
 //     polling.
 //   - email: enqueue onto the "email" queue via `addEmailJob` — this worker
@@ -123,17 +123,13 @@ export async function processNotificationJob(job: Job<NotificationJobData>): Pro
     // never for a channel that is disabled — so an SSE connection can never
     // observe a notification via the live stream before `GET
     // /api/v1/notifications` (or a reconnect's replay burst) can also see
-    // it. See notification-emitter.service.ts's own header comment for why
-    // this is a same-process, in-memory emit rather than something durable:
-    // a connection with nothing subscribed just misses it, the same as any
-    // other client that was not listening at the time.
+    // it. Live delivery is best effort (notification-emitter.service.ts's
+    // header): a connection with nothing subscribed just misses it, the same
+    // as any other client that was not listening at the time.
     //
-    // Caught, not left to propagate: the row is already committed, and a
-    // listener's throw is not a reason to retry. `EventEmitter#emit` runs every
-    // subscribed SSE connection's listener synchronously and re-throws
-    // whatever the first one throws; an uncaught throw here would reject
-    // this job and BullMQ would retry the whole thing for a failure that
-    // has nothing to do with the insert that already succeeded.
+    // emitNotification publishes in the background and never rejects; only
+    // serialising the row can throw here. Caught: the row is committed, so
+    // that is not a reason to retry the job.
     //
     // undefined: a retry, and this row was already inserted; its emit was
     // already attempted.
@@ -141,7 +137,7 @@ export async function processNotificationJob(job: Job<NotificationJobData>): Pro
       try {
         emitNotification(userId, created)
       } catch (error) {
-        logger.error('Failed to publish notification to the SSE emitter', {
+        logger.error('Failed to serialise notification for live delivery', {
           error: redactedForLog(error),
           notificationId: created.id,
           type,

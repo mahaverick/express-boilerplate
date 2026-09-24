@@ -146,6 +146,7 @@ add a real row:
   COMMIT;
   ```
   Then edit the not-yet-applied `0014` file: delete its `DROP INDEX "users_email_unique";--> statement-breakpoint` line, and change the remaining statement to `CREATE UNIQUE INDEX IF NOT EXISTS "users_email_unique" ...`. Without that edit, `pnpm db:migrate` drops the index you just built and rebuilds it under the lock. With it, the migration only records `0014` as applied.
+- **`0015` creates the new `tenant_invitations` table and needs no manual step.** Its three `FOREIGN KEY` constraints take a `SHARE ROW EXCLUSIVE` lock on `users` and `tenants`, which blocks writes to them (not reads) until the migration batch commits. That is brief, but the lock waits for any open transaction that has written to either table, and new writes queue behind it meanwhile, so apply it when no long write transaction is running.
 
 ## Supply-chain bypasses in `pnpm-workspace.yaml`
 

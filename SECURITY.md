@@ -503,6 +503,51 @@ against this repo: `PATCH` with `{"firstName":"Alicia","active":false,
 a real session updated only `firstName`; every other field was silently
 dropped.
 
+### Tenant invitations: consent, and no address enumeration
+
+A user becomes a member of a tenant only by accepting an invitation.
+`POST /api/v1/tenants/:slug/members` has been removed. It added any registered
+address directly and answered 404 for an unregistered one.
+
+- **No enumeration.** `POST /api/v1/tenants/:slug/invitations` answers `202`
+  with the same body whether or not the address has an account. The one
+  distinguishable answer is `409 already_member`, and it only tells an owner or
+  admin who is already in their own tenant. A registered and an unregistered
+  address also take the same query path: the membership lookup runs either
+  way (against a nil id when there is no account), and the in-app
+  notification for a verified account is enqueued off the response path.
+- **Consent.** Accepting (`POST /api/v1/invitations/accept`) needs a signed-in
+  user whose verified email equals the invited address. A different address
+  gets `403 invitation_email_mismatch`; the invited address, unverified, gets
+  `403 invitation_email_unverified`. Either way nothing is claimed. A forwarded or leaked link is useless to anyone else.
+- **Single use.** A token is 32 random bytes, base64url-encoded. Only its
+  SHA-256 is stored. The claim is one atomic
+  `UPDATE … WHERE accepted_at IS NULL AND revoked_at IS NULL AND expires_at > now()`,
+  so of two concurrent accepts exactly one claims. The other succeeds only if
+  it comes from the same user (idempotent). Resend replaces the token, so the
+  old link dies, and revoke kills it outright. Links last `INVITATION_TTL`
+  (default 7 days).
+- **Where the token travels.** The only URL that ever carries it is the
+  frontend page the email links to. The API takes it only in JSON bodies:
+  `POST /api/v1/invitations/preview` and `POST /api/v1/invitations/accept`.
+  So HTTP tracing, which records request URLs, and proxy access logs never
+  see it on the API side. The frontend serves the accept page with
+  `Referrer-Policy: no-referrer` (react-boilerplate's `nginx.conf`), so the
+  page's URL doesn't leak onward as a `Referer`. The API sends the same header
+  (helmet), but that covers only the API's own responses. The Vite dev server
+  sets no such header. The token never appears in the
+  database, the in-app notification, the list response or the application
+  log.
+- **Resend re-checks the grant matrix.** Resending re-issues the invitation's
+  role, so an admin cannot resend an owner or admin invitation, just as they
+  cannot create one.
+- **Rate limits:**
+  - Invite and resend share one budget of 30 per hour per user
+    (`rl:invite-tenant-member:`).
+  - Preview allows 60 per 15 minutes per IP (`rl:invitation-preview:`).
+  - Accept allows 20 per 15 minutes per IP (`rl:invitation-accept:`), and its
+    limiter runs ahead of `requireAuth`.
+
 ## What this boilerplate does NOT implement
 
 Everything below genuinely ships nothing today, in either direction:

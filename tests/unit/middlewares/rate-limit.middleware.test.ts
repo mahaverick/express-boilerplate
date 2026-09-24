@@ -19,10 +19,12 @@ import type { Test } from 'supertest'
 import { describe, expect, it, vi } from 'vitest'
 import { errorHandler } from '@/middlewares/error.middleware'
 import {
-  createAddTenantMemberRateLimiter,
   createCreateTenantRateLimiter,
   createForgotPasswordEmailRateLimiter,
   createForgotPasswordIpRateLimiter,
+  createInvitationAcceptRateLimiter,
+  createInvitationPreviewRateLimiter,
+  createInviteTenantMemberRateLimiter,
   createLoginAccountRateLimiter,
   createLoginIpRateLimiter,
   createLoginRateLimiter,
@@ -430,10 +432,10 @@ describe('createCreateTenantRateLimiter', () => {
   })
 })
 
-describe('createAddTenantMemberRateLimiter', () => {
+describe('createInviteTenantMemberRateLimiter', () => {
   it('returns 429 with standardized RateLimit-* headers once the limit is exceeded', async () => {
     const app = buildAppBehindAsUser(
-      createAddTenantMemberRateLimiter({ limit: 2, windowMs: 60_000 })
+      createInviteTenantMemberRateLimiter({ limit: 2, windowMs: 60_000 })
     )
     const userId = randomUUID()
 
@@ -453,7 +455,7 @@ describe('createAddTenantMemberRateLimiter', () => {
   // so each is proven independently rather than one standing in for both.
   it('keys on the authenticated user id, not IP: a different user is unaffected by another user’s counter', async () => {
     const app = buildAppBehindAsUser(
-      createAddTenantMemberRateLimiter({ limit: 1, windowMs: 60_000 })
+      createInviteTenantMemberRateLimiter({ limit: 1, windowMs: 60_000 })
     )
     const victim = randomUUID()
     const other = randomUUID()
@@ -465,6 +467,36 @@ describe('createAddTenantMemberRateLimiter', () => {
 
     const bystander = await request(app).post('/endpoint').set('x-test-user-id', other)
     expect(bystander.status).toBe(201)
+  })
+})
+
+describe('createInvitationPreviewRateLimiter', () => {
+  it('returns 429 once the limit is exceeded, keyed on IP alone', async () => {
+    const app = buildAppBehind(createInvitationPreviewRateLimiter({ limit: 1, windowMs: 60_000 }))
+
+    const allowed = await request(app).post('/endpoint')
+    const limited = await request(app).post('/endpoint')
+
+    expect(allowed.status).toBe(201)
+    expect(limited.status).toBe(429)
+    expect(limited.body).toMatchObject({ success: false, code: RATE_LIMITED_CODE })
+  })
+})
+
+describe('createInvitationAcceptRateLimiter', () => {
+  // Keyed on IP, not the user: two different signed-in callers behind one
+  // IP share the bucket, because the limiter runs before requireAuth.
+  it('returns 429 once the limit is exceeded, whoever the caller claims to be', async () => {
+    const app = buildAppBehindAsUser(
+      createInvitationAcceptRateLimiter({ limit: 1, windowMs: 60_000 })
+    )
+
+    const allowed = await request(app).post('/endpoint').set('x-test-user-id', randomUUID())
+    const limited = await request(app).post('/endpoint').set('x-test-user-id', randomUUID())
+
+    expect(allowed.status).toBe(201)
+    expect(limited.status).toBe(429)
+    expect(limited.body).toMatchObject({ success: false, code: RATE_LIMITED_CODE })
   })
 })
 
@@ -508,8 +540,10 @@ describe('store prefixes', () => {
       'rl:google-oauth:',
       'rl:google-oauth-callback:',
       'rl:create-tenant:',
-      'rl:add-tenant-member:',
+      'rl:invite-tenant-member:',
       'rl:change-password:',
+      'rl:invitation-preview:',
+      'rl:invitation-accept:',
     ])
   })
 

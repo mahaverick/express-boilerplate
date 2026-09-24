@@ -185,24 +185,27 @@ export const updateTenantSchema = z.object({
 export type UpdateTenantInput = z.infer<typeof updateTenantSchema>
 
 /**
- * `POST /api/v1/tenants/:slug/members` request body: the email of an
- * existing user to add, and the role to grant them. `role` is REQUIRED,
- * deliberately not defaulted the way `user_memberships.role` defaults to
- * `'viewer'` at the column level (user-membership.model.ts) — this is an
- * owner/admin consciously granting access, and a silent default would let
- * a caller omit the one field that actually matters for this request
- * without the response making that omission obvious.
+ * `POST /api/v1/tenants/:slug/invitations` request body: the address to
+ * invite and the role the invitee gets on accepting. `role` is required, not
+ * defaulted: an owner or admin is consciously granting access, and a silent
+ * default would hide the one field that matters.
  */
-export const newMemberSchema = z.object({
+export const inviteMemberSchema = z.object({
   email: emailSchema,
   role: z.enum(MEMBERSHIP_ROLES),
 })
 
 /**
- * The validated shape of a `POST /api/v1/tenants/:slug/members` request
- * body.
+ * The validated shape of a `POST /api/v1/tenants/:slug/invitations` body.
  */
-export type AddMemberInput = z.infer<typeof newMemberSchema>
+export type InviteMemberInput = z.infer<typeof inviteMemberSchema>
+
+/**
+ * The `:id` path parameter of `/tenants/:slug/invitations/:id` routes.
+ */
+export const invitationIdSchema = z.object({
+  id: z.uuid('id must be a valid UUID.'),
+})
 
 /**
  * `PATCH /api/v1/tenants/:slug/members/:userId` request body: the member's

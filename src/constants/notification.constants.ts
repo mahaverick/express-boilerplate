@@ -13,7 +13,9 @@
 /**
  * Every in-app notification type this codebase can currently produce.
  * `'verify_email'` (register/resend-verification), `'password_reset_requested'`
- * (forgot-password), and `'password_changed'` (change-password) — a type is
+ * (forgot-password), `'password_changed'` (change-password), and
+ * `'tenant_invitation'` (an invitation to an existing, verified user; in-app
+ * only, because the mailed link is the only way to accept) — a type is
  * added here once something in `src/` actually enqueues it, not
  * speculatively. Deliberately not `'email_verified'`/`'password_reset'` for
  * the first two: each of THOSE notifications fires when its link is SENT,
@@ -31,6 +33,7 @@ export const NOTIFICATION_TYPES = [
   'verify_email',
   'password_reset_requested',
   'password_changed',
+  'tenant_invitation',
 ] as const
 
 /**

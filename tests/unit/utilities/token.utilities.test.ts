@@ -22,7 +22,7 @@ import jwt from 'jsonwebtoken'
 import { describe, expect, it } from 'vitest'
 import { getEnv } from '@/configs/env.config'
 import type { User } from '@/database/models/user.model'
-import { signAccessToken, verifyAccessToken } from '@/utilities/token.utilities'
+import { hashToken, signAccessToken, verifyAccessToken } from '@/utilities/token.utilities'
 
 describe('verifyAccessToken', () => {
   it('rejects a token signed with the wrong secret', () => {
@@ -120,5 +120,15 @@ describe('verifyAccessToken', () => {
     if (!verified.ok) throw new Error('unreachable')
     expect(verified.payload.exp).toEqual(expect.any(Number))
     expect(verified.payload.exp).toBeGreaterThan(before)
+  })
+})
+
+describe('hashToken', () => {
+  // The FIPS 180-2 test vector for "abc": an independent expected value,
+  // not a second call to the same code.
+  it('is the hex-encoded SHA-256 digest of the raw token', () => {
+    expect(hashToken('abc')).toBe(
+      'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'
+    )
   })
 })

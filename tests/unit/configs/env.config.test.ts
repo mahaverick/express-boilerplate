@@ -130,6 +130,14 @@ describe('parseEnv', () => {
     expect(() => parseEnv({ ...valid, PASSWORD_RESET_TTL: 'soon' })).toThrow(/PASSWORD_RESET_TTL/)
   })
 
+  it('defaults INVITATION_TTL to 7d', () => {
+    expect(parseEnv(valid).INVITATION_TTL).toBe('7d')
+  })
+
+  it('rejects an INVITATION_TTL that ms() cannot parse', () => {
+    expect(() => parseEnv({ ...valid, INVITATION_TTL: 'soon' })).toThrow(/INVITATION_TTL/)
+  })
+
   it('rejects an unparseable env var by name alongside every other problem, not alone', () => {
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { DATABASE_URL, ...rest } = valid

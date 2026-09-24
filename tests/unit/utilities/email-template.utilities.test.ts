@@ -93,7 +93,7 @@ describe('EmailTemplateKey', () => {
     // is exactly the "test that cannot fail" shape this project's own
     // history warns against.
     const wrapper: { templateKey: EmailTemplateKey } = {
-      // @ts-expect-error — EmailTemplateKey is closed to the three literals
+      // @ts-expect-error — EmailTemplateKey is closed to the five literals
       // in EMAIL_TEMPLATE_KEYS; a typo (hyphen instead of underscore) must
       // fail to compile, not silently produce a key nothing ever renders
       // under. If this stops erroring, the union has widened back to

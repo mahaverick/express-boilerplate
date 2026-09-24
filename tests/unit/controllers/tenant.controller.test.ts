@@ -20,7 +20,7 @@
 //     itself would never build.
 //   - `canActorGrantRole`'s final `return false`: router-level
 //     `requireRole('owner', 'admin')` (tenant.routes.ts) never lets a
-//     manager/editor/viewer actor reach `addMember` at all, so no real
+//     manager/editor/viewer actor reach `inviteMember` at all, so no real
 //     request can ever supply the `actorRole` this branch handles.
 //
 // Every case below calls the exported handler/function directly, the same
@@ -60,7 +60,7 @@ const authenticatedPrincipal: RequestPrincipal = {
 
 describe('canActorGrantRole', () => {
   it.each(['manager', 'editor', 'viewer'] as const)(
-    'refuses a %s actor — router-level requireRole never lets one reach addMember, but this must fail closed anyway',
+    'refuses a %s actor — router-level requireRole never lets one reach inviteMember, but this must fail closed anyway',
     (actorRole) => {
       expect(canActorGrantRole(actorRole, 'viewer')).toBe(false)
     }

@@ -1,6 +1,6 @@
 // src/routes/tenant.routes.ts
 //
-// Ten routes, mounted at `/api/v1/tenants` by index.routes.ts. Same
+// Thirteen routes, mounted at `/api/v1/tenants` by index.routes.ts. Same
 // "build inside a function" convention every other router in this codebase
 // follows — see auth.routes.ts's own header comment for why (
 // unicorn/no-top-level-side-effects, plus `rateLimit(...)`'s per-instance
@@ -22,25 +22,24 @@
 // rather than router-wide because half this router's routes are GETs that
 // must not reject an unset/absent content type.
 //
-// THE TWO RATE LIMITERS (`createCreateTenantRateLimiter`,
-// `createAddTenantMemberRateLimiter`) are placed BEFORE `resolveTenant()`
-// on `POST /:slug/members`, not after `requireRole` — the same ordering
-// reasoning `createGoogleOAuthCallbackRateLimiter`'s own comment in
-// auth.routes.ts gives for running a limiter ahead of the work it protects:
-// `resolveTenant()` costs two database reads (`findActiveBySlug` +
-// `findByUserAndTenant`), and an over-budget caller must be rejected with a
-// 429 BEFORE either of those runs, not after. `POST /` has no `resolveTenant`
-// to run ahead of at all, so its limiter's position (right after
-// `requireJsonContentType`) is simply "as early as the chain allows".
+// THE RATE LIMITERS (`createCreateTenantRateLimiter`,
+// `createInviteTenantMemberRateLimiter`) run BEFORE `resolveTenant()`, so
+// an over-budget caller gets its 429 before `resolveTenant()`'s two
+// database reads. Invite and resend share the `rl:invite-tenant-member:`
+// budget: Redis merges them by prefix, and building the limiter ONCE keeps
+// them merged on the in-memory fallback too, where each instance counts alone.
 import { Router } from 'express'
 import {
-  addMember,
   createTenant,
   getSettings,
   getTenant,
+  inviteMember,
+  listInvitations,
   listMembers,
   listTenants,
   removeMember,
+  resendInvitation,
+  revokeInvitation,
   updateMemberRole,
   updateSettings,
   updateTenant,
@@ -48,8 +47,8 @@ import {
 import { requireAuth } from '@/middlewares/auth.middleware'
 import { requireJsonContentType } from '@/middlewares/content-type.middleware'
 import {
-  createAddTenantMemberRateLimiter,
   createCreateTenantRateLimiter,
+  createInviteTenantMemberRateLimiter,
 } from '@/middlewares/rate-limit.middleware'
 import { requireRole, resolveTenant } from '@/middlewares/tenant.middleware'
 
@@ -73,16 +72,8 @@ export function createTenantRouter(): Router {
     updateTenant
   )
 
-  // -- Member management --
+  // -- Member management -- (members join only by invitation, below)
   router.get('/:slug/members', resolveTenant(), listMembers)
-  router.post(
-    '/:slug/members',
-    requireJsonContentType,
-    createAddTenantMemberRateLimiter(),
-    resolveTenant(),
-    requireRole('owner', 'admin'),
-    addMember
-  )
   // Owner only — see tenant.controller.ts's `canActorModifyTarget` for why
   // a role CHANGE is gated tighter than a removal.
   router.patch(
@@ -98,6 +89,35 @@ export function createTenantRouter(): Router {
     resolveTenant(),
     requireRole('owner', 'admin'),
     removeMember
+  )
+
+  // -- Invitations --
+  const inviteRateLimiter = createInviteTenantMemberRateLimiter()
+  router.get('/:slug/invitations', resolveTenant(), requireRole('owner', 'admin'), listInvitations)
+  router.post(
+    '/:slug/invitations',
+    requireJsonContentType,
+    inviteRateLimiter,
+    resolveTenant(),
+    requireRole('owner', 'admin'),
+    inviteMember
+  )
+  // Takes no body; an absent Content-Type passes requireJsonContentType.
+  // Resend and revoke answer a non-UUID :id with 400 validation, not 404.
+  router.post(
+    '/:slug/invitations/:id/resend',
+    requireJsonContentType,
+    inviteRateLimiter,
+    resolveTenant(),
+    requireRole('owner', 'admin'),
+    resendInvitation
+  )
+  router.delete(
+    '/:slug/invitations/:id',
+    requireJsonContentType,
+    resolveTenant(),
+    requireRole('owner', 'admin'),
+    revokeInvitation
   )
 
   // -- Settings --

@@ -180,6 +180,18 @@ describe('NotificationPreferenceRepository', () => {
         await preferenceRepository.isChannelEnabled(userId, 'password_changed', 'in_app')
       ).toBe(false)
     })
+
+    it('always returns true for tenant_invitation’s email channel, even when a row disables it', async () => {
+      const userId = await createUser()
+      await preferenceRepository.upsert(userId, 'tenant_invitation', {
+        emailEnabled: false,
+        inAppEnabled: true,
+      })
+
+      expect(
+        await preferenceRepository.isChannelEnabled(userId, 'tenant_invitation', 'email')
+      ).toBe(true)
+    })
   })
 
   describe('getFullMatrix', () => {

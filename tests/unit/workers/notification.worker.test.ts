@@ -297,7 +297,7 @@ describe('processNotificationJob', () => {
     channelEnabledSpy.mockResolvedValue(true)
     insertSpy.mockResolvedValue(mockNotificationRow)
     vi.mocked(notificationEmitter.emitNotification).mockImplementation(() => {
-      throw new Error('a listener blew up')
+      throw new TypeError('Do not know how to serialize a BigInt')
     })
     const loggerErrorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {
       // No-op: only that the failure was logged, not printed, is asserted.
@@ -306,7 +306,7 @@ describe('processNotificationJob', () => {
     try {
       await expect(processNotificationJob(mockJob())).resolves.toBeUndefined()
       expect(loggerErrorSpy).toHaveBeenCalledWith(
-        'Failed to publish notification to the SSE emitter',
+        'Failed to serialise notification for live delivery',
         expect.objectContaining({ notificationId: mockNotificationRow.id })
       )
     } finally {

@@ -149,6 +149,11 @@ until you check.
   notification worker checks preferences and fans out. `registration_attempt`
   is the exception — email-only, never routed through the notification worker
   (an in-app row would be an enumeration oracle — see Ruling G).
+- **`tenant_invitation` goes the other way round.** The invitation email is
+  enqueued with `addEmailJob()` directly, because the invitee may have no
+  account. The notification job, sent only to a live, verified invitee,
+  carries no `email`. The type isn't configurable, and the mailed link is
+  the only way to accept.
 - **`verify_email` email channel is not user-disableable.** A user who
   disables email for verification locks themselves out. The preference
   repository returns `true` for it regardless.
@@ -170,9 +175,20 @@ until you check.
   notification-stream.controller.ts) rejects one outright — the revocation
   heartbeat can only close an already-open connection by session id, so a
   sid-less stream would survive a logout or revocation until its token
-  expired, rather than closing at the next heartbeat. The
-  in-process `EventEmitter` pub/sub works for single-pod deployments;
-  upgrade to Redis Pub/Sub for multi-pod with separate worker processes.
+  expired, rather than closing at the next heartbeat.
+- **Live notifications cross replicas via Redis pub/sub** on
+  `${QUEUE_PREFIX}:notifications` (notification-emitter.service.ts). The
+  publishing process gets its own copy back through its subscriber, and
+  delivers locally only when the publish fails. The subscriber is opened on
+  the first `onNotification`, not at boot, and when it reconnects after an
+  outage every open stream is closed so clients replay the gap via
+  `Last-Event-ID`. A subscriber that fails to start while streams are open is
+  retried on a backoff (1s, doubling to 30s) until it starts or the last
+  stream closes, and that late start closes every open stream the same way.
+  A failed attempt closes nothing, so an outage causes no reconnect storm.
+  Delivery is asynchronous: a test asserting live delivery
+  must first call `waitForNotificationSubscriber`
+  (`tests/helpers/notification-subscriber.ts`).
 
 ## OAuth
 
@@ -217,6 +233,42 @@ until you check.
 - **Tenant context in logs.** `tenantId` appears in every log line for
   tenant-scoped requests, read from the same `RequestContext`
   AsyncLocalStorage store the request-id uses.
+- **Members join by invitation only; there is no direct add.** `POST
+/tenants/:slug/invitations` answers 202 with one fixed body whether or not
+  the address has an account. The one exception is 409 `already_member`,
+  which only an owner or admin can see. Don't bring back a "no such user"
+  404: that enumeration oracle is why `POST /tenants/:slug/members` was
+  removed. Accepting (`POST /invitations/accept`) needs a signed-in user
+  whose **verified** address equals the invited one (403
+  `invitation_email_mismatch` or `invitation_email_unverified`), so a
+  forwarded link is useless to anyone else. The raw token lives only in the mailed link. The
+  table stores its SHA-256 (`hashToken`), and the `tenant_invitation` in-app
+  notification's metadata is `{ tenantSlug, invitationId }` only. Resend
+  and revoke answer 404 `invitation_not_found` for a UUID that is not a
+  pending invitation, but 400 validation for a `:id` that is not a UUID at
+  all.
+- **An expired invitation still holds its pending slot.**
+  `tenant_invitations_pending_unique` can't filter on `now()`, so
+  `TenantInvitationRepository.createPending` revokes the old pending row
+  before it inserts. Remove that UPDATE and every re-invite after an expiry
+  fails with a 409.
+- **Invite and resend share one 30-per-hour budget.** Under Redis they
+  merge by the `rl:invite-tenant-member:` prefix and the user-id key. On the
+  in-memory fallback each limiter instance counts alone, so
+  `createTenantRouter` builds `createInviteTenantMemberRateLimiter()` once
+  and mounts it on both (`tests/unit/routes/tenant.routes.test.ts` pins
+  this). Calling the factory per route would split the budget only while
+  Redis is down.
+- **The raw token is never in an API URL.** Preview and accept both take
+  `{ token }` in a JSON body (`POST /invitations/preview`,
+  `POST /invitations/accept`). The only URL that carries the token is the
+  frontend page the email links to, and both sides send
+  `Referrer-Policy: no-referrer` (helmet.config.ts here). Don't add a
+  `GET ?token=` form: HTTP tracing (`url.query`) and proxy access logs
+  record URLs, and OTel's default redaction list doesn't include `token`.
+- **Resend re-checks `canActorGrantRole`** against the invitation's role,
+  through the `authorize` callback, because resending re-issues that role.
+  Revoke doesn't re-check it.
 
 ### How to scope your own model by tenant
 

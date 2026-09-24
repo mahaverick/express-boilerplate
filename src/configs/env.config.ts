@@ -235,6 +235,18 @@ const EnvSchema = z.object({
       'How long a password-reset link stays valid. Defaulted to 1h — shorter than EMAIL_VERIFICATION_TTL, because redeeming it grants immediate account takeover rather than merely proving mailbox ownership.'
     ),
 
+  // How long a tenant invitation link stays valid. Same parseDurationMs
+  // validation as the other TTLs.
+  INVITATION_TTL: z
+    .string()
+    .default('7d')
+    .refine((value) => parseDurationMs(value) !== undefined, {
+      message: 'INVITATION_TTL must be a duration string ms() can parse, e.g. "7d" or "604800000".',
+    })
+    .describe(
+      'How long a tenant invitation link stays valid, as an ms()-parseable duration string (e.g. "7d"). Resending an invitation issues a new link with a fresh lifetime. Defaults to 7d.'
+    ),
+
   // How much of `X-Forwarded-For` Express is allowed to believe. There is
   // no safe default in either direction, which is why this is a required
   // decision expressed as configuration rather than a literal in app.ts:

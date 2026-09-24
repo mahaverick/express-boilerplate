@@ -7,6 +7,7 @@ import { shutdownOtel } from '@/observability/tracing'
 import { closeDatabase } from '@/services/database.service'
 import { closeAllStreams, markShuttingDown } from '@/services/lifecycle.service'
 import { logger } from '@/services/logger.service'
+import { closeNotificationSubscriber } from '@/services/notification-emitter.service'
 import { closeQueue } from '@/services/queue.service'
 import { closeRedis } from '@/services/redis.service'
 import type { SupervisedWorkers } from '@/services/worker-supervisor.service'
@@ -79,7 +80,12 @@ export async function gracefulShutdown(server: Server, workers?: SupervisedWorke
   closeAllStreams()
   await closeServer(server)
   await Promise.allSettled(workers ? [workers.close()] : [])
-  await Promise.allSettled([closeDatabase(), closeRedis(), closeQueue()])
+  await Promise.allSettled([
+    closeDatabase(),
+    closeRedis(),
+    closeQueue(),
+    closeNotificationSubscriber(),
+  ])
   await shutdownOtel()
 }
 

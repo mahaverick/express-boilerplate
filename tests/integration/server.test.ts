@@ -20,6 +20,7 @@ import {
 } from '@/services/lifecycle.service'
 import { logger } from '@/services/logger.service'
 import { signAccessToken } from '@/utilities/token.utilities'
+import { withMutatedModule } from '../helpers/mutate'
 import { request } from '../helpers/request'
 
 const userRepository = new UserRepository()
@@ -247,5 +248,21 @@ describe('trust proxy', () => {
 
     expect(response.status).toBe(200)
     expect((response.body as { ip: string }).ip).not.toBe('203.0.113.7')
+  })
+})
+
+describe('gracefulShutdown and the notification subscriber', () => {
+  it('closes the notification subscriber alongside the other dependencies', async () => {
+    const closeNotificationSubscriber = vi.fn(() => Promise.resolve())
+    // A fresh module graph: its gracefulShutdown closes only its own pool and clients.
+    await withMutatedModule(
+      '@/services/notification-emitter.service',
+      { closeNotificationSubscriber },
+      () => import('@/server'),
+      async (fresh) => {
+        await fresh.gracefulShutdown(http.createServer())
+      }
+    )
+    expect(closeNotificationSubscriber).toHaveBeenCalledTimes(1)
   })
 })
