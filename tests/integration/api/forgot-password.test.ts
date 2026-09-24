@@ -32,6 +32,7 @@ import {
   findMailpitMessages,
   getMailpitMessage,
 } from '../../helpers/mailpit'
+import { withMutatedMethod } from '../../helpers/mutate'
 
 const app = createApp()
 const userRepository = new UserRepository()
@@ -430,6 +431,32 @@ describe('POST /api/v1/auth/reset-password', () => {
       .post('/api/v1/auth/refresh')
       .set('Cookie', cookie as string)
     expect(refreshAfterReset.status).toBe(401)
+  })
+
+  it('revokes every session before storing the new password, so a failed write leaves none alive', async () => {
+    const { user, email } = await seedUser()
+    const loginResponse = await login(email, VALID_PASSWORD)
+    const cookie = refreshCookiePair(loginResponse)
+    expect(cookie).toBeDefined()
+    const token = await seedResetToken(user.id)
+
+    // Mutate the subclass prototype, not BaseRepository's: that would hit every repository.
+    await withMutatedMethod(
+      UserRepository.prototype,
+      'update',
+      () => {
+        throw new Error('simulated password write failure')
+      },
+      async () => {
+        const response = await resetPassword(token, NEW_PASSWORD)
+        expect(response.status).toBe(500)
+      }
+    )
+
+    const refreshAfterFailedReset = await request(app)
+      .post('/api/v1/auth/refresh')
+      .set('Cookie', cookie as string)
+    expect(refreshAfterFailedReset.status).toBe(401)
   })
 
   it('lets the new password log in', async () => {

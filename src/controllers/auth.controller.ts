@@ -693,26 +693,15 @@ export async function resetPassword(
 
     const passwordHash = await hashPassword(input.password)
 
+    // Revoke before writing, as `changePassword` does: a failed write then
+    // leaves no session alive. Revokes every purpose, so older reset links die too.
+    await revokeAllSessions(user.id)
+
     await userRepository.update(user.id, {
       passwordHash,
-      // Set ONLY when the user had never verified — a successful reset
-      // proves the caller controls the mailbox, which is sufficient first
-      // proof for an unverified account, but must not overwrite an
-      // EARLIER, real timestamp for one that already had it. Mirrors
-      // `markEmailVerified`'s own "never move a timestamp that already
-      // records the first proof" idempotence.
+      // Set only when never verified: a reset proves the mailbox, but must not move an earlier timestamp.
       ...(!user.emailVerifiedAt && { emailVerifiedAt: new Date() }),
     })
-
-    // Revokes every live token this user holds, of EVERY purpose —
-    // `revokeAllSessions`/`revokeAllForUser` has no purpose predicate. That
-    // is intended, not merely tolerated: it takes every refresh token
-    // (every session, on every device) with it, which is the point of a
-    // password reset, and it also kills any OTHER outstanding
-    // `password_reset` link the same user requested earlier, so a stale
-    // link from an older request cannot be redeemed after this one already
-    // succeeded.
-    await revokeAllSessions(user.id)
 
     // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data", not undefined (which JSON.stringify omits entirely)
     successResponse(response, null, 'Password has been reset.')
