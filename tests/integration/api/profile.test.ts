@@ -15,7 +15,7 @@
 // since these tests are about what happens AFTER authentication, not about
 // login itself.
 import { randomUUID } from 'node:crypto'
-import request from 'supertest'
+import type { Response } from 'supertest'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
 import type { User } from '@/database/models/user.model'
@@ -24,6 +24,7 @@ import { sql } from '@/services/database.service'
 import { hashPassword } from '@/utilities/password.utilities'
 import { signAccessToken } from '@/utilities/token.utilities'
 import { withMutatedMethod } from '../../helpers/mutate'
+import { request } from '../../helpers/request'
 
 const app = createApp()
 const userRepository = new UserRepository()
@@ -69,7 +70,7 @@ interface PublicUserBody {
  * @param response - The supertest response.
  * @returns The response body, typed.
  */
-function envelopeOf<TData>(response: request.Response): ApiEnvelope<TData> {
+function envelopeOf<TData>(response: Response): ApiEnvelope<TData> {
   return response.body as ApiEnvelope<TData>
 }
 

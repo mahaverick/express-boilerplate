@@ -19,7 +19,7 @@
 //    own header comment there for how it stays in step with BCRYPT_COST and
 //    why it's memoised.
 import { randomUUID } from 'node:crypto'
-import { DrizzleQueryError } from 'drizzle-orm'
+import { and, DrizzleQueryError, eq, ne } from 'drizzle-orm'
 import { type NextFunction, type Request, type RequestHandler, type Response } from 'express'
 import passport from 'passport'
 import type { Profile as GoogleProfile } from 'passport-google-oauth20'
@@ -252,16 +252,15 @@ async function sendRegistrationAttemptMail(email: string): Promise<void> {
       variables: {
         // The STORED name, never the submitted one: the submitted value is
         // attacker-chosen text being delivered into the victim's inbox.
-        // `??` covers the soft-deleted case, where the address is taken but
-        // no visible row exists to read a name from.
+        // `??` is defensive: the holder may have been deleted since the
+        // insert failed, leaving no visible row to read a name from.
         firstName: existing?.firstName ?? MISSING_FIRST_NAME_FALLBACK,
         appName: getEnv().APP_NAME,
       },
     },
-    // Soft-deleted case: the address is taken but findByEmail returns no
-    // visible row, so there is no id to correlate the job to. '' rather than
-    // a lookup fallback — this is logging/correlation only (email.job.ts),
-    // never a DB key.
+    // No visible row (see above) means no id to correlate the job to. ''
+    // rather than a lookup fallback — this is logging/correlation only
+    // (email.job.ts), never a DB key.
     existing?.id ?? '',
     { priority: JobPriority.normal }
   )
@@ -363,6 +362,10 @@ export async function register(
         // returns exactly one row.
         if (!user) throw new HttpError('Insert returned no row', 500)
 
+        // A soft-deleted account may still hold this address's 'email'
+        // provider row; release it so the new account can take it.
+        await authProviderRepository.releaseEmailOfDeletedUsers(input.email.toLowerCase(), tx)
+
         await tx.insert(authProviderModel).values({
           userId: user.id,
           provider: 'email',
@@ -372,15 +375,13 @@ export async function register(
         return user
       })
     } catch (error) {
-      // A 23505 here almost always comes from the USER insert (the
-      // `auth_providers` row can only collide on an address already
-      // claimed as someone's login identity, which the user insert's own
-      // `users_email_unique` would already have rejected first) — but
-      // either way, the transaction has rolled back the whole write, so
-      // treating any unique violation from this block as "the address is
-      // taken" is correct, not merely a fallback. Anything else is a real
-      // failure and must still surface — swallowing every error here would
-      // turn a database outage into a cheerful 202.
+      // A 23505 here means the address is taken by a live account. It
+      // comes from the user insert (`users_email_unique`). The
+      // `auth_providers` insert cannot collide first: a live holder fails
+      // the user insert, and a deleted holder's 'email' row was released
+      // above. The transaction has rolled back the whole write either way.
+      // Anything else is a real failure and must surface — swallowing it
+      // would turn a database outage into a cheerful 202.
       if (!isUniqueViolation(error)) throw error
     }
 
@@ -397,9 +398,8 @@ export async function register(
       return
     }
 
-    // The address is taken. It may STILL have no visible row — the unique
-    // index ignores deleted_at while findByEmail does not — so the name
-    // falls back rather than being dereferenced.
+    // The address is taken. The index and findByEmail both ignore
+    // soft-deleted rows; the name still falls back defensively.
     // eslint-disable-next-line unicorn/prefer-await -- fire-and-forget: same reasoning as the verification branch above
     sendRegistrationAttemptMail(input.email).catch((error: unknown) => {
       logger.error('Registration-attempt mail failed', { error })
@@ -693,26 +693,20 @@ export async function resetPassword(
 
     const passwordHash = await hashPassword(input.password)
 
+    // Revoke before writing, as `changePassword` does: a failed write then
+    // leaves no session alive. Revokes every purpose, so older reset links die too.
+    await revokeAllSessions(user.id)
+
+    if (!user.emailVerifiedAt) {
+      // A federated link on a never-verified account may be a squatter's; the reset proves the mailbox.
+      await authProviderRepository.deleteFederatedForUser(user.id)
+    }
+
     await userRepository.update(user.id, {
       passwordHash,
-      // Set ONLY when the user had never verified — a successful reset
-      // proves the caller controls the mailbox, which is sufficient first
-      // proof for an unverified account, but must not overwrite an
-      // EARLIER, real timestamp for one that already had it. Mirrors
-      // `markEmailVerified`'s own "never move a timestamp that already
-      // records the first proof" idempotence.
+      // Set only when never verified: a reset proves the mailbox, but must not move an earlier timestamp.
       ...(!user.emailVerifiedAt && { emailVerifiedAt: new Date() }),
     })
-
-    // Revokes every live token this user holds, of EVERY purpose —
-    // `revokeAllSessions`/`revokeAllForUser` has no purpose predicate. That
-    // is intended, not merely tolerated: it takes every refresh token
-    // (every session, on every device) with it, which is the point of a
-    // password reset, and it also kills any OTHER outstanding
-    // `password_reset` link the same user requested earlier, so a stale
-    // link from an older request cannot be redeemed after this one already
-    // succeeded.
-    await revokeAllSessions(user.id)
 
     // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data", not undefined (which JSON.stringify omits entirely)
     successResponse(response, null, 'Password has been reset.')
@@ -1043,6 +1037,54 @@ async function linkGoogleProvider(userId: string, googleId: string): Promise<voi
 }
 
 /**
+ * A verified Google identity takes over a never-verified account: a
+ * squatter's password and any OTHER Google link are removed, and every
+ * session revoked.
+ * @param userId - The unverified account's id.
+ * @param googleId - Google's stable profile id (`profile.id`) of the claiming identity.
+ * @returns The account, now verified, federated-only and linked.
+ */
+async function claimUnverifiedAccount(userId: string, googleId: string): Promise<User> {
+  // Revoke first: a failed write then leaves no squatter session alive.
+  await revokeAllSessions(userId)
+
+  return db.transaction(async (tx) => {
+    // A never-verified account may carry someone else's Google link, which
+    // current code doesn't create; cleared defensively before linking the
+    // claimer's, since `findOrCreateByGoogle`'s first lookup would still
+    // resolve that Google id to this account.
+    await tx
+      .delete(authProviderModel)
+      .where(
+        and(
+          eq(authProviderModel.userId, userId),
+          eq(authProviderModel.provider, 'google'),
+          ne(authProviderModel.providerId, googleId)
+        )
+      )
+
+    await tx
+      .insert(authProviderModel)
+      .values({ userId, provider: 'google', providerId: googleId })
+      .onConflictDoNothing()
+
+    const [claimed] = await tx
+      .update(userModel)
+      .set({
+        // eslint-disable-next-line unicorn/no-null -- a null hash is the federated-only state (user.model.ts)
+        passwordHash: null,
+        emailVerifiedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(userModel.id, userId))
+      .returning()
+
+    if (!claimed) throw new HttpError('Update returned no row', 500)
+    return claimed
+  })
+}
+
+/**
  * Resolve the user a Google Sign-In should resolve to — creating or linking
  * one when necessary. Entirely this task's own policy; see this section's
  * header comment for why none of it lives in the Passport strategy.
@@ -1062,31 +1104,22 @@ async function linkGoogleProvider(userId: string, googleId: string): Promise<voi
  *    `victim@example.com` at Google sign in as whichever local user already
  *    owns that address — the account-takeover this file's `handleGoogleCallback`
  *    header comment warns about.
- * 3. Linking does NOT set `emailVerifiedAt` on the existing account, even
- *    though Google just proved control of the mailbox. That proof is not
- *    equivalent to `resetPassword`'s (this file): a reset OVERWRITES the
- *    password, which is what evicts a squatter who registered the address
- *    first and never verified it. Linking touches no password at all, so
- *    setting `emailVerifiedAt` here would flip `login`'s guard
- *    (`!user.emailVerifiedAt`) to true for the SQUATTER's password too —
- *    the exact account-takeover `verifyEmail`'s own two-factor design
- *    (mailbox token AND password) exists to prevent. It also buys the
- *    Google user nothing: neither `refresh` nor `requireAuth`
- *    (auth.middleware.ts) gate on `emailVerifiedAt`, only `login` does, and
- *    a Google user never calls `login`.
- * 4. A brand-new account (no provider link, no email match) is created with
+ * 3. Linking to a never-verified account takes it over (`claimUnverifiedAccount`):
+ *    a squatter's password and other Google links are removed and every
+ *    session revoked. A verified account is linked untouched.
+ * 4. A brand-new account (no provider link, no email match, and Google verified the email) is created with
  *    its `'email'` and `'google'` provider rows in ONE transaction — see
  *    `auth-provider.model.ts`'s own header comment for why an `'email'` row
  *    exists for federated users too (it is what lets `findByUser` answer
  *    "does this user have a password login" without a second query against
  *    `users.password_hash`), and this SDD plan's Task 1 carry-forward for
  *    why repositories are bypassed in favour of `db.transaction` here:
- *    `UserRepository`/`AuthProviderRepository` accept no transaction handle,
- *    so an atomic multi-row write goes directly through `tx.insert(...)`
- *    against the Drizzle tables instead.
+ *    their `create` methods accept no transaction handle, so an atomic
+ *    multi-row write goes directly through `tx.insert(...)` against the
+ *    Drizzle tables instead.
  * @param profile - The raw Google profile handed to `passport.authenticate`'s custom callback.
  * @returns The user this Google identity resolves to — existing, newly linked, or newly created.
- * @throws {HttpError} 400 `google_email_missing` (no email in the profile), 403 `email_not_verified` (an existing account's email, claimed by a Google identity Google has not verified), or a translated/raw database error from the write itself.
+ * @throws {HttpError} 400 `google_email_missing` (no email in the profile), 403 `email_not_verified` (Google has not verified the email, whether it matches an existing account or not), or a translated/raw database error from the write itself.
  */
 export async function findOrCreateByGoogle(profile: GoogleProfile): Promise<User> {
   const existingLink = await authProviderRepository.findByProviderAndId('google', profile.id)
@@ -1122,8 +1155,17 @@ export async function findOrCreateByGoogle(profile: GoogleProfile): Promise<User
       )
     }
 
+    if (existingUser.emailVerifiedAt === null) {
+      return claimUnverifiedAccount(existingUser.id, profile.id)
+    }
+
     await linkGoogleProvider(existingUser.id, profile.id)
     return existingUser
+  }
+
+  // An unverified Google email must not create an account: anyone can add any address to a Google account.
+  if (!isVerified) {
+    throw new HttpError('Google has not verified this email address', 403, 'email_not_verified')
   }
 
   return db.transaction(async (tx) => {
@@ -1133,7 +1175,7 @@ export async function findOrCreateByGoogle(profile: GoogleProfile): Promise<User
         email,
         // eslint-disable-next-line unicorn/no-null -- passwordHash is nullable specifically for a federated-only user (user.model.ts's own comment) — this account IS that case, not merely "no value given yet"
         passwordHash: null,
-        ...(isVerified && { emailVerifiedAt: new Date() }),
+        emailVerifiedAt: new Date(),
       })
       .returning()
 
@@ -1141,6 +1183,8 @@ export async function findOrCreateByGoogle(profile: GoogleProfile): Promise<User
     // own insertOne (user.repository.ts): a single-row insert.returning()
     // that does not throw always returns exactly one row.
     if (!createdUser) throw new HttpError('Insert returned no row', 500)
+
+    await authProviderRepository.releaseEmailOfDeletedUsers(email, tx)
 
     await tx.insert(authProviderModel).values([
       { userId: createdUser.id, provider: 'email', providerId: email },

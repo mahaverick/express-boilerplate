@@ -13,10 +13,17 @@
 // instead of reporting unreachable. This test pins that regression down:
 // it fails by TIMING OUT, not by a mismatched assertion, if the strategy
 // is ever removed.
-import request from 'supertest'
+import { createClient } from 'redis'
 import { afterAll, describe, expect, it, vi } from 'vitest'
 import { createApp } from '@/app'
-import { closeRedis, isRedisReachable } from '@/services/redis.service'
+import { closeRedis, getRedis, isRedisReachable } from '@/services/redis.service'
+import { request } from '../../helpers/request'
+
+// Wrapped, not replaced: counts how many clients getRedis() creates.
+vi.mock('redis', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('redis')>()
+  return { ...actual, createClient: vi.fn(actual.createClient) }
+})
 
 // vi.mock calls are hoisted above these imports by Vitest's transform, so
 // both @/services/redis.service and @/app (which imports it transitively)
@@ -42,6 +49,13 @@ describe('redis unreachable', () => {
     const startedAt = Date.now()
     await expect(isRedisReachable()).resolves.toBe(false)
     expect(Date.now() - startedAt).toBeLessThan(8000)
+  }, 10_000)
+
+  it('starts a fresh connect after a failed one, instead of handing back the cached failure', async () => {
+    vi.mocked(createClient).mockClear()
+    await expect(getRedis()).rejects.toThrow()
+    await expect(getRedis()).rejects.toThrow()
+    expect(createClient).toHaveBeenCalledTimes(2)
   }, 10_000)
 
   it('GET /health/ready returns 503 with checks.redis false', async () => {

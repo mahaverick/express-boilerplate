@@ -17,6 +17,7 @@ import {
   getEmailQueue,
   getQueueConnection,
   isQueueReachable,
+  setWorkersFailed,
 } from '@/services/queue.service'
 
 describe('queue.service', () => {
@@ -43,6 +44,13 @@ describe('queue.service', () => {
     // than asserted with `!`.
     if (!job.id) throw new Error('expected addJob() to assign a job id')
     expect(await getEmailQueue().getJob(job.id)).toMatchObject({ name: 'welcome' })
+  })
+
+  it('reports unreachable while the Workers have failed to start, and reachable once they run', async () => {
+    setWorkersFailed(true)
+    expect(await isQueueReachable()).toBe(false)
+    setWorkersFailed(false)
+    expect(await isQueueReachable()).toBe(true)
   })
 
   // getQueueConnection()/getEmailQueue() reconnect lazily, so without an

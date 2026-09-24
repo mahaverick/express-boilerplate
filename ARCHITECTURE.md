@@ -32,13 +32,14 @@ static import would have reintroduced, one layer up, the exact failure mode
 (an uncaught stack trace from inside a dependency instead of a clean
 message) this repo exists to remove.
 
-**`server.ts`** exports `startServer(port?)` and `gracefulShutdown(server)`.
+**`server.ts`** exports `startServer(port?)` and `gracefulShutdown(server, workers?)`.
 `startServer` takes the port as a parameter rather than reading it from
 `getEnv()` internally, specifically so tests can bind an ephemeral port
 (`startServer(0)`) without the environment's memoised, already-parsed
 `APP_PORT` getting in the way. `gracefulShutdown` closes the socket first
-(so no new request can arrive), waits for it to drain, then closes the
-database and Redis clients — deliberately in that order.
+(so no new request can arrive), waits for it to drain, closes the Workers
+`startWorkers()` is currently running, then closes the database, Redis and
+queue clients — deliberately in that order.
 
 **`app.ts`** wires, in order: `requestId` middleware, JSON/urlencoded body
 parsing, `GET /health`, `GET /health/ready`, the versioned API router

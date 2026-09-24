@@ -139,6 +139,7 @@ describe('getMailTransporter — half-set credential warning', () => {
     WORKER_ENABLED: true,
     QUEUE_PREFIX: 'bull',
     SSE_HEARTBEAT_INTERVAL_MS: 30_000,
+    SSE_MAX_STREAMS_PER_USER: 5,
     SMTP_HOST: 'localhost',
     SMTP_PORT: 1025,
     SMTP_USER: 'only-the-username-is-set',

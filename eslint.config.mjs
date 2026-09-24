@@ -353,7 +353,25 @@ export default tseslint.config(
       'sonarjs/no-hardcoded-passwords': 'off',
       'sonarjs/hardcoded-secret-signatures': 'off',
       'no-restricted-properties': 'off',
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: 'supertest',
+              importNames: ['default', 'agent'],
+              message:
+                'Use `request` from tests/helpers/request: it binds 127.0.0.1 (see that file).',
+            },
+          ],
+        },
+      ],
     },
+  },
+  {
+    // The one place that wraps supertest's default export.
+    files: ['tests/helpers/request.ts'],
+    rules: { 'no-restricted-imports': 'off' },
   },
   prettier
 )

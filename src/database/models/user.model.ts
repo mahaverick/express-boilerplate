@@ -2,7 +2,7 @@
 //
 // The shape a new project starts from. Deliberately small: a field nobody
 // reads is a field every derived project inherits and has to decide about.
-import { sql, type InferInsertModel, type InferSelectModel } from 'drizzle-orm'
+import { isNull, sql, type InferInsertModel, type InferSelectModel } from 'drizzle-orm'
 import { boolean, pgTable, timestamp, uniqueIndex, varchar } from 'drizzle-orm/pg-core'
 import { MAX_EMAIL_LENGTH, MAX_NAME_LENGTH } from '@/constants/auth.constants'
 
@@ -39,10 +39,15 @@ export const userModel = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
-    // Case-insensitive uniqueness. Storing email lowercased at the boundary is
-    // not enough on its own — two requests racing can both pass a SELECT check
-    // and then both INSERT. The database is the only thing that can decide.
-    uniqueIndex('users_email_unique').on(sql`lower(${table.email})`),
+    // Case-insensitive uniqueness among live accounts only: a soft-deleted
+    // user's address can be registered again, and findByEmail's soft-delete
+    // scope matches this predicate. Storing email lowercased at the boundary
+    // is not enough on its own — two requests racing can both pass a SELECT
+    // check and then both INSERT. The database is the only thing that can
+    // decide.
+    uniqueIndex('users_email_unique')
+      .on(sql`lower(${table.email})`)
+      .where(isNull(table.deletedAt)),
   ]
 )
 

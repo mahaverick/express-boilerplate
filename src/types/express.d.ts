@@ -93,6 +93,15 @@ declare global {
        * `requireAuth` itself.
        */
       sessionId?: string
+
+      /**
+       * When the verified access token expires, set by `requireAuth` from
+       * its `exp` claim. Absent when the token carried none. The
+       * notification stream ends itself at this moment, so a reconnect
+       * re-runs `requireAuth` (deactivation, denylist) at least once per
+       * access-token lifetime.
+       */
+      accessTokenExpiresAt?: Date
     }
   }
 }

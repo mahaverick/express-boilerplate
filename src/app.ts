@@ -15,6 +15,7 @@ import { requestContext } from '@/middlewares/request-context.middleware'
 import { requestId } from '@/middlewares/request-id.middleware'
 import { createApiRouter } from '@/routes/index.routes'
 import { isDatabaseReachable } from '@/services/database.service'
+import { isShuttingDown } from '@/services/lifecycle.service'
 import { isQueueReachable } from '@/services/queue.service'
 import { isRedisReachable } from '@/services/redis.service'
 
@@ -80,6 +81,11 @@ export function createApp(): Express {
 
   // Readiness: deep. Safe to fail — it only removes the pod from rotation.
   app.get('/health/ready', async (_request, response) => {
+    // A draining pod leaves rotation before its dependencies close.
+    if (isShuttingDown()) {
+      response.status(503).json({ status: 'shutting-down' })
+      return
+    }
     const [database, redis, queue] = await Promise.all([
       isDatabaseReachable(),
       isRedisReachable(),

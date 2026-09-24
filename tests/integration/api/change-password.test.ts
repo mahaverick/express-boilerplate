@@ -24,7 +24,7 @@
 import { randomUUID } from 'node:crypto'
 import type { Worker } from 'bullmq'
 import jwt from 'jsonwebtoken'
-import request from 'supertest'
+import type { Response } from 'supertest'
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
 import { getEnv } from '@/configs/env.config'
@@ -38,6 +38,7 @@ import { signAccessToken } from '@/utilities/token.utilities'
 import { startEmailWorker } from '@/workers/email.worker'
 import { startNotificationWorker } from '@/workers/notification.worker'
 import { deleteMailpitMessage, findMailpitMessages, getMailpitMessage } from '../../helpers/mailpit'
+import { request } from '../../helpers/request'
 
 const app = createApp()
 const userRepository = new UserRepository()
@@ -81,7 +82,7 @@ interface ApiEnvelope<TData> {
  * @param response - The supertest response.
  * @returns The response body, typed.
  */
-function envelopeOf<TData>(response: request.Response): ApiEnvelope<TData> {
+function envelopeOf<TData>(response: Response): ApiEnvelope<TData> {
   return response.body as ApiEnvelope<TData>
 }
 
@@ -142,7 +143,7 @@ async function changePasswordRequest(
   token: string,
   currentPassword: string,
   newPassword: string
-): Promise<request.Response> {
+): Promise<Response> {
   return request(app)
     .post('/api/v1/auth/change-password')
     .set('Authorization', `Bearer ${token}`)
@@ -155,7 +156,7 @@ async function changePasswordRequest(
  * @param password - The password to log in with.
  * @returns The supertest response.
  */
-async function login(email: string, password: string): Promise<request.Response> {
+async function login(email: string, password: string): Promise<Response> {
   return request(app).post('/api/v1/auth/login').send({ email, password })
 }
 
@@ -166,7 +167,7 @@ async function login(email: string, password: string): Promise<request.Response>
  * @param token - The access token to probe with.
  * @returns The supertest response.
  */
-async function probe(token: string): Promise<request.Response> {
+async function probe(token: string): Promise<Response> {
   return request(app).get('/api/v1/profile').set('Authorization', `Bearer ${token}`)
 }
 

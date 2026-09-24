@@ -11,7 +11,7 @@
 // old token again — doing that would itself trigger reuse detection and
 // revoke the new token as a side effect, so test 4 would then only be
 // passing for test 5's reason. Test 5 is the only test that presents an
-// already-rotated token.
+// already-rotated token, and it ages the row past the reuse grace window first.
 import { createHash, randomUUID } from 'node:crypto'
 import jwt from 'jsonwebtoken'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -109,10 +109,11 @@ describe('refresh token issuance, rotation, and revocation', () => {
     // shape (not just `payload`) proves acceptance, not merely that a
     // payload-shaped object came back. `sid`/`jti` are now part of that
     // shape (token.utilities.ts's signAccessToken) — `jti` is asserted only
-    // as ANY_STRING since its value is random by design.
+    // as ANY_STRING since its value is random by design. `exp` must be the
+    // token's own signed expiry, which the notification stream ends at.
     expect(verifyAccessToken(token)).toEqual({
       ok: true,
-      payload: { sub: user.id, sid: sessionId, jti: ANY_STRING },
+      payload: { sub: user.id, sid: sessionId, jti: ANY_STRING, exp: decoded.exp },
     })
   })
 
@@ -176,6 +177,11 @@ describe('refresh token issuance, rotation, and revocation', () => {
     const issued = await issueRefreshToken(userId, sessionId)
 
     const rotated = await rotateRefreshToken(issued.raw)
+    // Past REFRESH_REUSE_GRACE_MS, so this replay is reuse rather than a concurrent refresh.
+    await sql`
+      update user_tokens set consumed_at = consumed_at - interval '11 seconds'
+      where user_id = ${userId} and consumed_at is not null
+    `
 
     // The legitimate client already moved on to `rotated.raw`. Someone else
     // — an attacker who stole the old token — presents the OLD token again.
@@ -236,6 +242,30 @@ describe('refresh token issuance, rotation, and revocation', () => {
     // expiry is not treated as reuse, so it does not kill the whole family.
     const stillRotatable = await rotateRefreshToken(otherInSameSession.raw)
     expect(stillRotatable.sessionId).toBe(sessionId)
+  })
+
+  it('never mints a grace sibling for an expired token, even replayed inside the grace window', async () => {
+    // findGraceSession's own expiry guard is what this test pins: claimOnce
+    // consumes an expired row same as a live one, so without that guard the
+    // immediate replay below reads as "consumed just now" and gets a
+    // sibling minted from a token that was already dead.
+    const userId = await createUser()
+    const sessionId = randomUUID()
+    const issued = await issueRefreshToken(userId, sessionId)
+    await sql`
+      update user_tokens set expires_at = now() - interval '1 second'
+      where user_id = ${userId} and session_id = ${sessionId}
+    `
+
+    await expect(rotateRefreshToken(issued.raw)).rejects.toMatchObject({ statusCode: 401 })
+    // Replayed immediately — well inside REFRESH_REUSE_GRACE_MS of the claim above.
+    await expect(rotateRefreshToken(issued.raw)).rejects.toMatchObject({ statusCode: 401 })
+
+    const liveRows = await sql`
+      select 1 from user_tokens
+      where user_id = ${userId} and session_id = ${sessionId} and revoked_at is null
+    `
+    expect(liveRows).toHaveLength(0)
   })
 
   it('refuses to rotate once the session passes its absolute lifetime, however fresh the token is', async () => {

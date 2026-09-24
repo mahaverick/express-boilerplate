@@ -17,7 +17,7 @@
 // read from `users.password_hash`, and why the assertions below pin the
 // two apart.
 import { randomUUID } from 'node:crypto'
-import request from 'supertest'
+import type { Response } from 'supertest'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
 import type { AuthProvider } from '@/constants/auth-provider.constants'
@@ -26,6 +26,7 @@ import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { hashPassword } from '@/utilities/password.utilities'
 import { signAccessToken } from '@/utilities/token.utilities'
+import { request } from '../../helpers/request'
 
 const app = createApp()
 const userRepository = new UserRepository()
@@ -64,7 +65,7 @@ interface ProvidersBody {
  * @param response - The supertest response.
  * @returns The response body, typed.
  */
-function envelopeOf<TData>(response: request.Response): ApiEnvelope<TData> {
+function envelopeOf<TData>(response: Response): ApiEnvelope<TData> {
   return response.body as ApiEnvelope<TData>
 }
 
@@ -119,7 +120,7 @@ async function seedUser(options: {
  * @param token - The access token, or undefined to send no Authorization header.
  * @returns The supertest response.
  */
-async function getProviders(token?: string): Promise<request.Response> {
+async function getProviders(token?: string): Promise<Response> {
   const pending = request(app).get('/api/v1/auth/providers')
   return token ? pending.set('Authorization', `Bearer ${token}`) : pending
 }
@@ -129,7 +130,7 @@ async function getProviders(token?: string): Promise<request.Response> {
  * @param response - The supertest response.
  * @returns The provider names, or an empty array when the body carried none.
  */
-function providerOrder(response: request.Response): string[] {
+function providerOrder(response: Response): string[] {
   return envelopeOf<ProvidersBody>(response).data?.providers.map((entry) => entry.provider) ?? []
 }
 

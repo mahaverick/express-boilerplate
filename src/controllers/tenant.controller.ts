@@ -32,6 +32,10 @@ import { TenantSettingsRepository } from '@/repositories/tenant-settings.reposit
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
+import {
+  changeRole,
+  removeMember as removeTenantMember,
+} from '@/services/tenant-membership.service'
 import { successResponse } from '@/utilities/response.utilities'
 import { parseBody } from '@/validators/auth.validators'
 import {
@@ -125,15 +129,11 @@ function targetUserIdParameter(request: Request): string {
  * so a future route that forgets its `requireRole` fails closed rather
  * than falling through to `undefined`.
  *
- * The "last owner" guard is NOT part of this function — `isSelf` only
- * answers "is the actor targeting their own membership", not "would this
- * leave the tenant ownerless". `updateMemberRole`/`removeMember` each run
- * `UserMembershipRepository.countOwners` themselves, after this check
- * passes, only for the one case where it could matter (an owner target,
- * self-targeted) — counting owners on every call, including the 4-in-5
- * paths that can never remove the last owner, would be a wasted query.
+ * The "last owner" guard is NOT part of this function. It runs in
+ * tenant-membership.service.ts, inside a transaction that locks the
+ * tenant's owners, so two owners leaving at once cannot both pass it.
  * @param actorRole - The caller's role in this tenant.
- * @param targetRole - The target member's CURRENT role.
+ * @param targetRole - The target member's CURRENT role, as read under the owner lock.
  * @param isSelf - Whether the actor and the target are the same user.
  * @returns True when `actorRole` may act on a member currently holding `targetRole`.
  */
@@ -393,7 +393,7 @@ export async function addMember(
  * (`requireRole('owner')`, tenant.routes.ts) — so `principal.role` is
  * always `'owner'` by the time this handler runs, and `canActorModifyTarget`
  * below therefore only ever evaluates its owner row. Kept as a real call
- * (not inlined as `targetMembership.role !== 'owner' ||
+ * (not inlined as `target.role !== 'owner' ||
  * targetUserId === actorUserId`) so this handler and `removeMember` share
  * one definition of the matrix rather than two copies that could drift.
  * @param request - The incoming request, resolved to a tenant by `resolveTenant`, carrying `{ role }`.
@@ -410,38 +410,15 @@ export async function updateMemberRole(
     const actorUserId = authenticatedUserId(request)
     const targetUserId = targetUserIdParameter(request)
     const input = parseBody(updateMemberRoleSchema, request.body)
-
-    const targetMembership = await userMembershipRepository.findByUserAndTenant(
-      targetUserId,
-      principal.tenantId
-    )
-    if (!targetMembership) {
-      throw new HttpError('Member not found', 404)
-    }
-
     const isSelf = targetUserId === actorUserId
-    if (!canActorModifyTarget(principal.role, targetMembership.role, isSelf)) {
-      throw new HttpError("Insufficient permissions to change this member's role", 403)
-    }
 
-    // The last-owner guard only ever applies to THIS one case —
-    // `canActorModifyTarget` already proved `isSelf` whenever
-    // `targetMembership.role === 'owner'` reaches here (the matrix's
-    // "owner target: self-only"), so a non-self target can never trip
-    // this branch. `input.role !== 'owner'` is what makes this a REAL
-    // demotion — an owner re-submitting `{ role: 'owner' }` on their own
-    // membership is a no-op the last-owner rule has no reason to block.
-    if (isSelf && targetMembership.role === 'owner' && input.role !== 'owner') {
-      const ownerCount = await userMembershipRepository.countOwners(principal.tenantId)
-      if (ownerCount <= 1) {
-        throw new HttpError('Cannot change role: you are the last owner', 409)
+    // The matrix and the last-owner guard both run inside the service's
+    // transaction, on the target as read under the owner lock.
+    const updated = await changeRole(principal.tenantId, targetUserId, input.role, (target) => {
+      if (!canActorModifyTarget(principal.role, target.role, isSelf)) {
+        throw new HttpError("Insufficient permissions to change this member's role", 403)
       }
-    }
-
-    const updated = await userMembershipRepository.updateRole(targetMembership.id, input.role)
-    if (!updated) {
-      throw new HttpError('Member not found', 404)
-    }
+    })
     successResponse(response, updated, 'Member role updated.')
   } catch (error) {
     next(error)
@@ -468,36 +445,14 @@ export async function removeMember(
     const principal = tenantPrincipal(request)
     const actorUserId = authenticatedUserId(request)
     const targetUserId = targetUserIdParameter(request)
-
-    const targetMembership = await userMembershipRepository.findByUserAndTenant(
-      targetUserId,
-      principal.tenantId
-    )
-    if (!targetMembership) {
-      throw new HttpError('Member not found', 404)
-    }
-
     const isSelf = targetUserId === actorUserId
-    if (!canActorModifyTarget(principal.role, targetMembership.role, isSelf)) {
-      throw new HttpError('Insufficient permissions to remove this member', 403)
-    }
 
-    // Same reasoning as `updateMemberRole`'s own last-owner guard: only
-    // reachable when `isSelf` (the matrix already proved that for an owner
-    // target), and unconditional here — unlike a role change, removal is
-    // ALWAYS a real loss of ownership, so there is no "no-op" case to
-    // exempt.
-    if (isSelf && targetMembership.role === 'owner') {
-      const ownerCount = await userMembershipRepository.countOwners(principal.tenantId)
-      if (ownerCount <= 1) {
-        throw new HttpError('Cannot remove the last owner', 409)
+    // Matrix, last-owner guard and delete run atomically in the service.
+    await removeTenantMember(principal.tenantId, targetUserId, (target) => {
+      if (!canActorModifyTarget(principal.role, target.role, isSelf)) {
+        throw new HttpError('Insufficient permissions to remove this member', 403)
       }
-    }
-
-    const wasDeleted = await userMembershipRepository.delete(targetMembership.id)
-    if (!wasDeleted) {
-      throw new HttpError('Member not found', 404)
-    }
+    })
     successResponse(response, undefined, 'Member removed.')
   } catch (error) {
     next(error)

@@ -47,13 +47,11 @@ describe('queue unreachable', () => {
     expect(Date.now() - startedAt).toBeLessThan(8000)
   }, 10_000)
 
-  // ioredis's enableOfflineQueue (default true) buffers this add() rather
-  // than rejecting it immediately — see queue.service.ts's own comment on
-  // why that default is kept. It only settles once the bounded
-  // retryStrategy gives up and ioredis flushes the offline queue with a
-  // "Connection is closed" error, which is exactly the behaviour this test
-  // pins down: a lost Redis connection eventually surfaces as a rejected
-  // enqueue, not a job silently swallowed forever.
+  // BullMQ waits for the producer connection's first 'ready' before sending
+  // this add(), so it only settles once the bounded pre-ready retryStrategy
+  // gives up. That is the behaviour this test pins down: a Redis that is
+  // unreachable at boot surfaces as a rejected enqueue, not a job silently
+  // swallowed forever.
   it('getEmailQueue().add(...) eventually rejects once retries are exhausted', async () => {
     await expect(
       queueService.getEmailQueue().add('probe', { to: 'unreachable@example.com' })

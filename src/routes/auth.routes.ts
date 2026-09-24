@@ -53,6 +53,8 @@ import {
   createForgotPasswordIpRateLimiter,
   createGoogleOAuthCallbackRateLimiter,
   createGoogleOAuthRateLimiter,
+  createLoginAccountRateLimiter,
+  createLoginIpRateLimiter,
   createLoginRateLimiter,
   createLogoutRateLimiter,
   createRefreshRateLimiter,
@@ -79,7 +81,16 @@ export function createAuthRouter(): Router {
   // instead of having to remember. See content-type.middleware.ts.
   router.use(requireJsonContentType)
   router.post('/register', createRegisterRateLimiter(), register)
-  router.post('/login', createLoginRateLimiter(), login)
+  // Three limiters in series, tightest first, so an attempt it rejects
+  // never spends the per-IP or per-account budget. See
+  // rate-limit.middleware.ts's header comment.
+  router.post(
+    '/login',
+    createLoginRateLimiter(),
+    createLoginIpRateLimiter(),
+    createLoginAccountRateLimiter(),
+    login
+  )
   router.post('/refresh', createRefreshRateLimiter(), refresh)
   router.post('/logout', createLogoutRateLimiter(), logout)
   router.post('/verify-email', createVerifyEmailRateLimiter(), verifyEmail)

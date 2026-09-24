@@ -25,7 +25,7 @@
 // does not go through this validator and so is unaffected by the empty
 // configurable list.
 import { randomUUID } from 'node:crypto'
-import request from 'supertest'
+import type { Response } from 'supertest'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
 import { NOTIFICATION_TYPES } from '@/constants/notification.constants'
@@ -35,6 +35,7 @@ import { NotificationRepository } from '@/repositories/notification.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { signAccessToken } from '@/utilities/token.utilities'
+import { request } from '../../helpers/request'
 
 const app = createApp()
 const userRepository = new UserRepository()
@@ -72,7 +73,7 @@ interface PreferencesBody {
  * @param response - The supertest response.
  * @returns The response body, typed.
  */
-function envelopeOf<TData>(response: request.Response): ApiEnvelope<TData> {
+function envelopeOf<TData>(response: Response): ApiEnvelope<TData> {
   return response.body as ApiEnvelope<TData>
 }
 
@@ -102,6 +103,24 @@ async function seedNotification(
     title,
     body: 'Click the link to verify your email address.',
   })
+}
+
+/**
+ * Seed one notification the way the notification worker writes it, with a
+ * non-null `dedupeKey`, so a response that leaks the column shows a value.
+ * @param userId - The owning user's id.
+ * @returns The inserted row.
+ */
+async function seedDedupedNotification(userId: string): Promise<Notification> {
+  const row = await notificationRepository.createOnce({
+    userId,
+    type: 'verify_email',
+    title: 'Verify your email',
+    body: 'Click the link to verify your email address.',
+    dedupeKey: `notification-job-${randomUUID()}-1`,
+  })
+  if (row === undefined) throw new Error('seed collided on a random dedupe key')
+  return row
 }
 
 describe('/api/v1/notifications', () => {
@@ -191,6 +210,20 @@ describe('/api/v1/notifications', () => {
       expect(envelopeOf<NotificationListBody>(response).data).toEqual({ notifications: [] })
     })
 
+    it('does not expose the internal dedupeKey', async () => {
+      const { user, token } = await createAuthenticatedUser()
+      await seedDedupedNotification(user.id)
+
+      const response = await request(app)
+        .get('/api/v1/notifications')
+        .set('Authorization', `Bearer ${token}`)
+
+      expect(response.status).toBe(200)
+      const [listed] = envelopeOf<NotificationListBody>(response).data?.notifications ?? []
+      expect(listed).toBeDefined()
+      expect(listed).not.toHaveProperty('dedupeKey')
+    })
+
     it('rejects a request with no token', async () => {
       const response = await request(app).get('/api/v1/notifications')
 
@@ -230,6 +263,20 @@ describe('/api/v1/notifications', () => {
 
       expect(response.status).toBe(200)
       expect(envelopeOf<Notification>(response).data?.readAt).not.toBeNull()
+    })
+
+    it('does not expose the internal dedupeKey, first call or repeat', async () => {
+      const { user, token } = await createAuthenticatedUser()
+      const notification = await seedDedupedNotification(user.id)
+      const path = `/api/v1/notifications/${notification.id}/read`
+
+      const first = await request(app).patch(path).set('Authorization', `Bearer ${token}`)
+      const repeat = await request(app).patch(path).set('Authorization', `Bearer ${token}`)
+
+      expect(first.status).toBe(200)
+      expect(envelopeOf<Notification>(first).data).not.toHaveProperty('dedupeKey')
+      expect(repeat.status).toBe(200)
+      expect(envelopeOf<Notification>(repeat).data).not.toHaveProperty('dedupeKey')
     })
 
     it('returns 404 for another user’s notification', async () => {

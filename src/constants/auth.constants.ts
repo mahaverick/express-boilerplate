@@ -141,3 +141,10 @@ export const REFRESH_TOKEN_COOKIE_PATH = '/api/v1/auth'
  * comment) and what resolves this specific case.
  */
 export const GOOGLE_STRATEGY_NAME = 'google'
+
+/**
+ * How long after a refresh token's rotation a replay of it gets a sibling token instead of revoking the session.
+ *
+ * Accepted trade-off: concurrent tabs stop logging each other out; a token stolen and replayed within the window also gets a sibling.
+ */
+export const REFRESH_REUSE_GRACE_MS = 10_000

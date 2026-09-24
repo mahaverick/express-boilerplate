@@ -112,4 +112,13 @@ describe('verifyAccessToken', () => {
     if (!verified.ok) throw new Error('unreachable')
     expect(verified.payload.sid).toBeUndefined()
   })
+
+  it('carries the verified exp claim, so a caller can schedule work for the moment the token expires', () => {
+    const user = { id: 'user-1' } as User
+    const before = Math.floor(Date.now() / 1000)
+    const verified = verifyAccessToken(signAccessToken(user, 'session-abc'))
+    if (!verified.ok) throw new Error('unreachable')
+    expect(verified.payload.exp).toEqual(expect.any(Number))
+    expect(verified.payload.exp).toBeGreaterThan(before)
+  })
 })

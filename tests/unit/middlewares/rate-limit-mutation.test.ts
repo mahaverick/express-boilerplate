@@ -33,11 +33,12 @@
 // @/services/redis.service is mocked to always reject, so this stays
 // Docker-independent and belongs under tests/unit/.
 import express, { type Express } from 'express'
-import request from 'supertest'
+import type { Test } from 'supertest'
 import { describe, expect, it, vi } from 'vitest'
 import { errorHandler } from '@/middlewares/error.middleware'
 import type { createLoginRateLimiter as CreateLoginRateLimiter } from '@/middlewares/rate-limit.middleware'
 import { withMutatedModule } from '../../helpers/mutate'
+import { request } from '../../helpers/request'
 
 vi.mock('@/services/redis.service', () => ({
   getRedis: vi.fn(() => Promise.reject(new Error('no redis in unit tests'))),
@@ -69,7 +70,7 @@ function buildApp(createLoginRateLimiter: typeof CreateLoginRateLimiter): Expres
  * @param email - The email to submit.
  * @returns The supertest response.
  */
-function attempt(app: Express, email: string): request.Test {
+function attempt(app: Express, email: string): Test {
   return request(app).post('/login').send({ email, password: 'wrong-password' })
 }
 

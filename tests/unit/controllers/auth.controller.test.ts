@@ -46,6 +46,7 @@ const baseEnv: Env = {
   WORKER_ENABLED: true,
   QUEUE_PREFIX: 'bull',
   SSE_HEARTBEAT_INTERVAL_MS: 30_000,
+  SSE_MAX_STREAMS_PER_USER: 5,
   SMTP_HOST: 'localhost',
   SMTP_PORT: 1025,
   MAIL_FROM: 'no-reply@example.com',

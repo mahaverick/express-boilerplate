@@ -117,6 +117,24 @@ export class NotificationRepository {
   }
 
   /**
+   * Insert one notification unless a row with the same `dedupeKey` exists
+   * (`ON CONFLICT (dedupe_key) DO NOTHING`). A retried producer calls this
+   * safely.
+   * @param data - The row's column values, including the idempotency key.
+   * @returns The inserted row, or undefined when the key was already used.
+   */
+  async createOnce(
+    data: NewNotification & { dedupeKey: string }
+  ): Promise<Notification | undefined> {
+    const [row] = await db
+      .insert(notificationModel)
+      .values(data)
+      .onConflictDoNothing({ target: notificationModel.dedupeKey })
+      .returning()
+    return row
+  }
+
+  /**
    * A page of one user's notifications, newest first, via keyset (not
    * offset) pagination — see `NotificationCursor`'s own comment for why
    * `(createdAt, id)` together, and notification.model.ts's header comment

@@ -6,13 +6,13 @@
 // end-to-end proof that the real auth router rejects a cross-site form POST
 // lives in tests/integration/api/auth.test.ts.
 import express, { type Express } from 'express'
-import request from 'supertest'
 import { describe, expect, it } from 'vitest'
 import {
   requireJsonContentType,
   UNSUPPORTED_MEDIA_TYPE_CODE,
 } from '@/middlewares/content-type.middleware'
 import { errorHandler } from '@/middlewares/error.middleware'
+import { request } from '../../helpers/request'
 
 /**
  * Build a bare app with the gate in front of a stub handler that answers

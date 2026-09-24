@@ -13,7 +13,7 @@
 // comment: "the driver-level detail this file exists to keep out of every
 // caller"), so a table that cannot extend the class it belongs to
 // re-implements the three-line check rather than exporting an internal.
-import { and, DrizzleQueryError, eq } from 'drizzle-orm'
+import { and, DrizzleQueryError, eq, inArray, isNotNull, ne } from 'drizzle-orm'
 import postgres from 'postgres'
 import type { AuthProvider } from '@/constants/auth-provider.constants'
 import {
@@ -21,8 +21,9 @@ import {
   type AuthProviderRecord,
   type NewAuthProvider,
 } from '@/database/models/auth-provider.model'
+import { userModel } from '@/database/models/user.model'
 import { HttpError } from '@/middlewares/error.middleware'
-import { db } from '@/services/database.service'
+import { db, type DbExecutor } from '@/services/database.service'
 
 // Postgres error code for a unique-constraint violation. Same source and
 // same value as base.repository.ts's own — see that file's comment for the
@@ -113,5 +114,45 @@ export class AuthProviderRepository {
       }
       throw error
     }
+  }
+
+  /**
+   * Free an email address for a new account by deleting the `'email'`
+   * provider row that still names it, only when that row's user is
+   * soft-deleted. The `(provider, provider_id)` unique index would
+   * otherwise block the new account's own `'email'` row. A live user's row
+   * is never touched, and a deleted user's `'google'` row is kept.
+   * @param email - The lowercased address being claimed.
+   * @param executor - The claiming transaction.
+   * @returns How many rows were deleted (0 or 1).
+   */
+  async releaseEmailOfDeletedUsers(email: string, executor: DbExecutor = db): Promise<number> {
+    const deletedUserIds = executor
+      .select({ id: userModel.id })
+      .from(userModel)
+      .where(isNotNull(userModel.deletedAt))
+    const result = await executor
+      .delete(authProviderModel)
+      .where(
+        and(
+          eq(authProviderModel.provider, 'email'),
+          eq(authProviderModel.providerId, email),
+          inArray(authProviderModel.userId, deletedUserIds)
+        )
+      )
+    return result.count
+  }
+
+  /**
+   * Delete every federated (non-`'email'`) provider row linked to a user,
+   * keeping the `'email'` row — the invariant every live user has one relies on
+   * (auth-provider.model.ts's own header comment).
+   * @param userId - The user whose federated provider rows are deleted.
+   * @returns Resolves once the rows are gone.
+   */
+  async deleteFederatedForUser(userId: string): Promise<void> {
+    await db
+      .delete(authProviderModel)
+      .where(and(eq(authProviderModel.userId, userId), ne(authProviderModel.provider, 'email')))
   }
 }

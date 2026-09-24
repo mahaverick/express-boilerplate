@@ -361,6 +361,17 @@ const EnvSchema = z.object({
     .describe(
       'Milliseconds between `:ping` heartbeat comments on an open notification SSE stream (notification-stream.controller.ts). Defaults to 30000 (30s).'
     ),
+  // Caps open notification streams per user in THIS process (the registry is
+  // in-memory, lifecycle.service.ts). Bounds file descriptors and emitter
+  // listeners one account can hold open.
+  SSE_MAX_STREAMS_PER_USER: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(5)
+    .describe(
+      'Most notification SSE streams one user may hold open at once, per process. A request over the cap gets 429 too_many_streams. Defaults to 5 (several tabs and devices).'
+    ),
 
   // SMTP configuration for mailer.service.ts (src/services/mailer.service.ts)
   // / mailer.config.ts. Defaulted to docker-compose.yml's Mailpit service

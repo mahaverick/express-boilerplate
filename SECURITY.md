@@ -73,19 +73,25 @@ atomic statement, not a separate check: a token minted for one purpose
 including as a refresh token — the claim and the purpose check cannot be
 split by a race, because they are the same UPDATE. The atomic claim means
 Postgres itself decides
-which single caller (if any) wins; a losing concurrent caller — including a
-genuine reuse attempt racing the legitimate client — falls straight into
-the reuse path below.
+which single caller (if any) wins; a losing concurrent caller falls into
+the reuse path below, which — within `REFRESH_REUSE_GRACE_MS` of the
+winning rotation — mints it a sibling token rather than treating it as an
+attack.
 
 Presenting a token that is **already revoked** (because it was already
-rotated, or already logged out) is treated as reuse: every token sharing
-its `session_id` — the entire rotation chain from one login, on one device
-— is revoked immediately (`revokeAllForSession`), not just the token
-presented. A legitimate client only ever presents a refresh token once; a
-second presentation of an already-used one means someone else has it, and
-the whole chain is assumed compromised. An expired-but-not-yet-rotated
-token is simply revoked, not treated as reuse — nothing else in that
-session is implicated by an expiry.
+rotated, or already logged out) is reuse. Within `REFRESH_REUSE_GRACE_MS`
+(10s) of that rotation, and only if the session hasn't since been
+explicitly killed (logout, an earlier reuse, a password reset), reuse
+mints a sibling refresh token in the same session instead of revoking
+it — the accepted trade-off that lets two legitimate concurrent requests
+(e.g. two tabs refreshing at once) both succeed. Past that window, or once
+the session is killed, reuse instead revokes every token sharing its
+`session_id` — the entire rotation chain from one login, on one device
+(`revokeAllForSession`) — not just the token presented; a legitimate
+client only ever presents a refresh token once, so a second presentation
+outside the grace window means someone else has it. An
+expired-but-not-yet-rotated token is simply revoked, not treated as reuse
+— nothing else in that session is implicated by an expiry.
 
 ### Session lifetime: a sliding window AND an absolute ceiling
 
@@ -339,12 +345,12 @@ prefix on the same pattern; `tests/unit/middlewares/rate-limit.middleware.test.t
 fails if two ever collide. `/verify-email` and `/resend-verification`'s
 own per-limiter reasoning — including why `/resend-verification`'s IP layer
 is the tight one and its email layer the generous one — lives in
-`rate-limit.middleware.ts`'s own header comment. The store starts on an in-memory store and latches,
-once, to a Redis-backed one the first time Redis is confirmed reachable —
-never back — so the limit ends up shared across replicas rather than
-per-process as soon as Redis is up. Until that first successful latch (or
-whenever Redis stays unreachable), the store stays in-memory and the limit
-is per-process only.
+`rate-limit.middleware.ts`'s own header comment. The store starts in
+memory and switches to Redis once Redis answers, so the limit is shared
+across replicas. Whenever a Redis command fails, that request is counted in
+the store's own memory instead, and the next successful command returns it
+to Redis. During an outage, then, counting is per process: with N replicas,
+a client can make up to N× the limit.
 
 - **Register** (`POST /api/v1/auth/register`): 100 attempts per hour, keyed
   on the client's **IP alone** — deliberately not the composite login uses.
@@ -370,25 +376,36 @@ is per-process only.
   a victim's address lock that victim out of their own account: submit
   wrong passwords against someone else's email from anywhere, and the real
   owner starts seeing 429s too — a free denial-of-service needing no
-  credentials of the attacker's own. IP alone is bypassed by a distributed
-  attacker (many source IPs, one target account), since every IP would
-  carry its own independent counter. The key is built from the raw request
-  body before validation, and never checks whether the submitted email
+  credentials of the attacker's own. IP alone, at a limit this tight,
+  would have everyone behind one NAT'd address share five attempts. The
+  composite does **not** stop a distributed attacker (many source IPs, one
+  target account): each (IP, email) pair gets its own counter. Two more
+  limiters sit behind it, in this order: **per-IP** (`rl:login-ip:`, 100
+  attempts per 15 minutes across every email — one IP spraying many
+  accounts) and **per-account** (`rl:login-account:`, 100 attempts per hour
+  against one normalised email from every IP — the distributed case). The
+  per-account limit is high on purpose: an attacker who knows an address
+  can still lock its owner out, but it costs 100 attempts an hour. Attempts
+  the ip+email limiter already rejected never reach the other two, so they
+  spend neither budget. The email in each key is read from the raw request
+  body before validation, and no limiter checks whether the submitted email
   belongs to a real account, so the number of attempts before a 429 cannot
   be used to probe which addresses are registered — that would reopen the
   exact enumeration channel closed above.
 - **Refresh** (`POST /api/v1/auth/refresh`): 300 requests per 5-minute
-  window, keyed on IP alone. This is explicitly **volume/abuse protection,
-  not a security control**: a raw refresh token is 256 bits of randomness,
-  so guessing one is infeasible regardless of any rate limit, and replaying
-  an already-rotated token gains an attacker nothing beyond the first
-  attempt — reuse detection (above) revokes the whole session on that first
-  replay, so a burst of further attempts fails identically to the first.
-  What this limiter actually bounds is the request/database load one client
-  can generate against an endpoint that does two writes per call; its limit
-  is generous precisely because tightening it would only cost real users
-  retrying a flaky connection, for a property reuse detection already
-  provides.
+  window, keyed on IP alone. Mostly **volume/abuse protection**: a raw
+  refresh token is 256 bits of randomness, so guessing one is infeasible
+  regardless of any rate limit, and replaying an already-rotated token past
+  `REFRESH_REUSE_GRACE_MS` revokes the whole session on that replay (reuse
+  detection, above), so a burst of further attempts fails identically to
+  the first. It does carry one real security role, though: within the
+  grace window, each replay of a stolen, already-rotated token mints a
+  fresh sibling instead of being rejected, and this limiter is what caps
+  how many siblings an attacker can mint before the window closes. Beyond
+  that, what it bounds is the request/database load one client can
+  generate against an endpoint that does two writes per call; its limit is
+  generous precisely because tightening it would only cost real users
+  retrying a flaky connection.
 - **Logout** (`POST /api/v1/auth/logout`): 300 requests per 5-minute window,
   keyed on IP alone — volume protection on the same reasoning as refresh.
   Logout is unauthenticated by design (a user whose access token has just

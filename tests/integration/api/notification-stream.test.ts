@@ -27,9 +27,10 @@ import { randomUUID } from 'node:crypto'
 import http, { type IncomingMessage } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import jwt from 'jsonwebtoken'
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createApp } from '@/app'
 import { getEnv } from '@/configs/env.config'
+import { SSE_MAX_BUFFERED_BYTES } from '@/constants/notification.constants'
 import type { Notification } from '@/database/models/notification.model'
 import type { User } from '@/database/models/user.model'
 import { ACCESS_TOKEN_EXPIRED_CODE } from '@/middlewares/auth.middleware'
@@ -37,6 +38,11 @@ import { NotificationRepository } from '@/repositories/notification.repository'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
+import {
+  countStreams,
+  markShuttingDown,
+  resetLifecycleForTests,
+} from '@/services/lifecycle.service'
 import { emitNotification, listenerCount } from '@/services/notification-emitter.service'
 import { denySession } from '@/services/session-denylist.service'
 import { signAccessToken } from '@/utilities/token.utilities'
@@ -331,7 +337,7 @@ describe('GET /api/v1/notifications/stream', () => {
     // file, not something to route through a shared helper that also tears
     // down the database/Redis/queue connections every other test file in
     // this worker still needs.
-    server = createApp().listen(0)
+    server = createApp().listen(0, '127.0.0.1')
     await new Promise<void>((resolve) => server.once('listening', resolve))
     const address = server.address() as AddressInfo
     baseUrl = `http://127.0.0.1:${address.port}`
@@ -342,6 +348,7 @@ describe('GET /api/v1/notifications/stream', () => {
   })
 
   afterEach(async () => {
+    resetLifecycleForTests()
     for (const connection of openConnections) connection.destroy()
     openConnections.length = 0
 
@@ -433,6 +440,20 @@ describe('GET /api/v1/notifications/stream', () => {
     expect(response.headers['cache-control']).toBe('no-cache')
     expect(response.headers.connection).toBe('keep-alive')
     expect(response.headers['x-accel-buffering']).toBe('no')
+  })
+
+  // Same request as the test above; only the shutdown flag differs.
+  it('refuses to open a stream once shutdown has begun, as a 503 JSON response', async () => {
+    const { token } = await createAuthenticatedUser()
+    markShuttingDown()
+
+    const connection = openStream({ header: `Bearer ${token}` })
+    const response = await connection.waitForResponse()
+
+    expect(response.statusCode).toBe(503)
+    expect(response.headers['content-type']).not.toContain('text/event-stream')
+    const body = await connection.collectBody()
+    expect((JSON.parse(body) as { success: boolean }).success).toBe(false)
   })
 
   // `/stream` sits behind `requireAuth` (notification.routes.ts) like every
@@ -745,6 +766,16 @@ describe('GET /api/v1/notifications/stream', () => {
     expect(connection.frames.some((frame) => frame.event === 'notification')).toBe(false)
   })
 
+  it('removes a stream from the shutdown registry once its client disconnects', async () => {
+    const { user, token } = await createAuthenticatedUser()
+    const connection = openStream({ header: `Bearer ${token}` })
+    await connection.waitForResponse()
+    expect(countStreams(user.id)).toBe(1)
+
+    connection.destroy()
+    await vi.waitFor(() => expect(countStreams(user.id)).toBe(0))
+  })
+
   // requireAuth (auth.middleware.ts) rejects a denied session, but only at
   // connect — it never runs again on a connection already open, and
   // `/stream` sits behind it exactly like every other route now (this
@@ -863,5 +894,142 @@ describe('GET /api/v1/notifications/stream', () => {
     const parsed = JSON.parse(body) as { message: string; code?: string }
     expect(parsed.message).toBe('Access token missing session')
     expect(parsed.code).toBe(ACCESS_TOKEN_EXPIRED_CODE)
+  })
+
+  it('answers 429 too_many_streams, before any stream opens, past the per-user cap', async () => {
+    const { user, token } = await createAuthenticatedUser()
+    const cap = getEnv().SSE_MAX_STREAMS_PER_USER
+
+    for (let index = 0; index < cap; index += 1) {
+      const stream = openStream({ header: `Bearer ${token}` })
+      const opened = await stream.waitForResponse()
+      expect(opened.statusCode).toBe(200)
+    }
+    expect(countStreams(user.id)).toBe(cap)
+
+    const rejected = openStream({ header: `Bearer ${token}` })
+    const response = await rejected.waitForResponse()
+    expect(response.statusCode).toBe(429)
+    expect(response.headers['content-type']).not.toContain('text/event-stream')
+    const parsed = JSON.parse(await rejected.collectBody()) as { code?: string }
+    expect(parsed.code).toBe('too_many_streams')
+
+    // A closed stream frees its slot.
+    openConnections[0]?.destroy()
+    await waitUntil(() => countStreams(user.id) < cap, 2000)
+    const again = openStream({ header: `Bearer ${token}` })
+    const reopened = await again.waitForResponse()
+    expect(reopened.statusCode).toBe(200)
+  })
+
+  it('ends the stream when the access token that opened it expires', async () => {
+    const user = await userRepository.create({ email: uniqueEmail() })
+    createdUserIds.push(user.id)
+    // Hand-signed, like the expired-token test above: ACCESS_TOKEN_TTL is
+    // memoised by getEnv() and cannot be shortened per test. 2s, not 1s: exp
+    // is whole seconds, so a 1s token can already be expired at requireAuth.
+    const token = jwt.sign({ sub: user.id, sid: randomUUID() }, getEnv().JWT_ACCESS_SECRET, {
+      algorithm: 'HS256',
+      expiresIn: 2,
+    })
+
+    const stream = openStream({ header: `Bearer ${token}` })
+    const response = await stream.waitForResponse()
+    expect(response.statusCode).toBe(200)
+
+    // exp is whole seconds, so the end lands 1-2s after the 2s TTL starts.
+    await expect(stream.closed(4000)).resolves.toBe(true)
+    // The registry slot is freed too (request 'close' ran), not just the listener.
+    await waitUntil(() => countStreams(user.id) === 0, 2000)
+    expect(listenerCount(user.id)).toBe(0)
+  })
+
+  it("clamps a long-lived token's expiry timer to setTimeout's 2^31-1 ms ceiling", async () => {
+    const user = await userRepository.create({ email: uniqueEmail() })
+    createdUserIds.push(user.id)
+    // 30 days is ~2.59e9 ms, past the ceiling: unclamped, Node fires it at once.
+    const token = jwt.sign({ sub: user.id, sid: randomUUID() }, getEnv().JWT_ACCESS_SECRET, {
+      algorithm: 'HS256',
+      expiresIn: '30d',
+    })
+
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout')
+    try {
+      const stream = openStream({ header: `Bearer ${token}` })
+      const response = await stream.waitForResponse()
+      expect(response.statusCode).toBe(200)
+
+      const delays = setTimeoutSpy.mock.calls.map(([, delay]) => delay ?? 0)
+      expect(Math.max(...delays)).toBe(2_147_483_647)
+      expect(await stream.closed(200)).toBe(false)
+    } finally {
+      setTimeoutSpy.mockRestore()
+    }
+  })
+
+  it('drops a client that stops reading once more than 1 MiB is buffered for it', async () => {
+    const { user, token } = await createAuthenticatedUser()
+    // The stream's own ServerResponse: its controller calls flushHeaders() once, after writeHead.
+    const streamResponses: http.ServerResponse[] = []
+    await withMutatedMethod(
+      http.ServerResponse.prototype,
+      'flushHeaders',
+      function (this: http.ServerResponse) {
+        streamResponses.push(this)
+        // Inherited, so the real one is still reachable while this override shadows it.
+        http.OutgoingMessage.prototype.flushHeaders.call(this)
+      },
+      async () => {
+        const stream = openStream({ header: `Bearer ${token}` })
+        const response = await stream.waitForResponse()
+        expect(response.statusCode).toBe(200)
+        await waitUntil(() => listenerCount(user.id) === 1, 2000)
+      }
+    )
+    expect(streamResponses).toHaveLength(1)
+    const [streamResponse] = streamResponses as [http.ServerResponse]
+    const client = openConnections.at(-1)?.response
+    if (!client) throw new Error('expected the stream to have opened')
+
+    // Stop reading: the client parser stops draining its socket, and the
+    // kernel buffers on both sides fill.
+    client.pause()
+
+    // 32 MiB of frames. That is far past any loopback kernel buffering, so
+    // the server-side writable buffer must pass SSE_MAX_BUFFERED_BYTES.
+    const body = 'x'.repeat(512 * 1024)
+    const frameCount = Math.ceil((32 * 1024 * 1024) / body.length)
+    expect(frameCount * body.length).toBeGreaterThan(SSE_MAX_BUFFERED_BYTES * 16)
+    for (let index = 0; index < frameCount; index += 1) {
+      emitNotification(user.id, {
+        id: randomUUID(),
+        userId: user.id,
+        type: 'verify_email',
+        title: 'Large',
+        body,
+        // eslint-disable-next-line unicorn/no-null -- Notification.metadata/readAt are `T | null` columns
+        metadata: null,
+        // eslint-disable-next-line unicorn/no-null -- see above
+        readAt: null,
+        // eslint-disable-next-line unicorn/no-null -- see above
+        dedupeKey: null,
+        createdAt: new Date(),
+      })
+    }
+
+    // Destroyed server-side, while the client is still paused, and never
+    // ended: an end() first would queue the closing chunk, which reaches the
+    // client whenever the kernel had already taken the rest.
+    expect(streamResponse.destroyed).toBe(true)
+    expect(streamResponse.writableEnded).toBe(false)
+    // The request 'close' cleanup ran. That fires a tick after the stall
+    // path's own offNotification, so wait on the registry.
+    await waitUntil(() => countStreams(user.id) === 0, 5000)
+    expect(listenerCount(user.id)).toBe(0)
+
+    // Once it reads again, the client sees a truncated body.
+    client.resume()
+    await waitUntil(() => client.destroyed, 5000)
+    expect(client.complete).toBe(false)
   })
 })

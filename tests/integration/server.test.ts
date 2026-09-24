@@ -3,12 +3,159 @@
 // Lives under tests/integration/ because `@/app` (and `@/server` through it)
 // reaches `database.service.ts` at module scope — see CLAUDE.md on why that
 // makes a file integration regardless of what it asserts.
+import { randomUUID } from 'node:crypto'
+import http, { type IncomingMessage } from 'node:http'
+import net, { type AddressInfo } from 'node:net'
 import express from 'express'
-import request from 'supertest'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createApp } from '@/app'
 import { getEnv, trustProxySetting } from '@/configs/env.config'
+import { UserRepository } from '@/repositories/user.repository'
 import { gracefulShutdown, startServer } from '@/server'
+import { sql } from '@/services/database.service'
+import {
+  isShuttingDown,
+  markShuttingDown,
+  resetLifecycleForTests,
+} from '@/services/lifecycle.service'
+import { logger } from '@/services/logger.service'
+import { signAccessToken } from '@/utilities/token.utilities'
+import { request } from '../helpers/request'
+
+const userRepository = new UserRepository()
+
+async function resolveAfter<T>(ms: number, value: T): Promise<T> {
+  await new Promise((resolve) => setTimeout(resolve, ms))
+  return value
+}
+
+/**
+ * Open a notification stream and wait for its 200.
+ * @param port - The test server's port on 127.0.0.1.
+ * @param token - A valid access token.
+ * @param headers - Extra request headers.
+ * @param agent - The agent to send through; the default has keep-alive off.
+ * @returns The request, and a promise that resolves when the server ends the stream.
+ */
+async function openStream(
+  port: number,
+  token: string,
+  headers: Record<string, string>,
+  agent?: http.Agent
+): Promise<{ request: http.ClientRequest; ended: Promise<void> }> {
+  const streamRequest = http.get(`http://127.0.0.1:${port}/api/v1/notifications/stream`, {
+    agent,
+    headers: { Authorization: `Bearer ${token}`, ...headers },
+  })
+  streamRequest.on('error', () => {
+    // Expected when the test's cleanup destroys it.
+  })
+  const response = await new Promise<IncomingMessage>((resolve) => {
+    streamRequest.once('response', resolve)
+  })
+  expect(response.statusCode).toBe(200)
+  const ended = new Promise<void>((resolve) => {
+    response.on('end', () => resolve())
+    response.resume()
+  })
+  return { request: streamRequest, ended }
+}
+
+/**
+ * GET a URL through an agent and drain the body.
+ * @param url - The URL to fetch.
+ * @param agent - The agent to send through.
+ * @returns The response status code.
+ */
+async function getOnce(url: string, agent: http.Agent): Promise<number | undefined> {
+  const response = await new Promise<IncomingMessage>((resolve, reject) => {
+    http.get(url, { agent }, resolve).on('error', reject)
+  })
+  await new Promise<void>((resolve) => {
+    response.on('end', () => resolve())
+    response.resume()
+  })
+  return response.statusCode
+}
+
+describe('graceful shutdown with open notification streams', () => {
+  afterEach(() => {
+    resetLifecycleForTests()
+  })
+
+  it('answers /health/ready with 503 once shutdown has begun', async () => {
+    markShuttingDown()
+    const response = await request(createApp()).get('/health/ready')
+    expect(response.status).toBe(503)
+    expect(response.body).toMatchObject({ status: 'shutting-down' })
+  })
+
+  it('flips readiness at once, ends open streams (keep-alive included) and resolves within 1.5s', async () => {
+    // Bound to 127.0.0.1, matching the URL below; startServer's default bind is `::`.
+    const server = createApp().listen(0, '127.0.0.1')
+    await new Promise((resolve) => server.once('listening', resolve))
+    const { port } = server.address() as AddressInfo
+    const user = await userRepository.create({ email: `server-${randomUUID()}@example.test` })
+    const token = signAccessToken(user, randomUUID())
+    const keepAliveAgent = new http.Agent({ keepAlive: true })
+
+    // One stream per connection mode; `close` ends the socket with the response.
+    const closeStream = await openStream(port, token, { Connection: 'close' })
+    const keepAliveStream = await openStream(port, token, {}, keepAliveAgent)
+    // A completed request leaves one more idle keep-alive socket behind.
+    const health = await getOnce(`http://127.0.0.1:${port}/health`, keepAliveAgent)
+    expect(health).toBe(200)
+
+    // Deleted now: gracefulShutdown closes the database pool.
+    await sql`delete from users where id = ${user.id}`
+
+    try {
+      const shutdown = gracefulShutdown(server)
+      // Before the first await: readiness must fail before anything closes.
+      expect(isShuttingDown()).toBe(true)
+      const outcome = await Promise.race([
+        (async () => {
+          await shutdown
+          return 'shut down' as const
+        })(),
+        resolveAfter(1500, 'timed out' as const),
+      ])
+      expect(outcome).toBe('shut down')
+      await Promise.all([closeStream.ended, keepAliveStream.ended])
+    } finally {
+      closeStream.request.destroy()
+      keepAliveStream.request.destroy()
+      keepAliveAgent.destroy()
+      server.closeAllConnections()
+    }
+  })
+
+  // Runs after the test above has closed the database: this app has no dependencies.
+  it('closes a keep-alive socket whose request was still in flight, well before the drain timeout', async () => {
+    const app = express()
+    app.disable('x-powered-by')
+    app.get('/slow', (_request, response) => {
+      setTimeout(() => response.json({ ok: true }), 300)
+    })
+    const server = app.listen(0, '127.0.0.1')
+    await new Promise((resolve) => server.once('listening', resolve))
+    const { port } = server.address() as AddressInfo
+    const keepAliveAgent = new http.Agent({ keepAlive: true })
+    const slow = getOnce(`http://127.0.0.1:${port}/slow`, keepAliveAgent)
+    await resolveAfter(50, undefined)
+
+    try {
+      const startedAt = Date.now()
+      await gracefulShutdown(server)
+      // Without the idle sweep, the socket stays open until SERVER_DRAIN_TIMEOUT_MS.
+      expect(Date.now() - startedAt).toBeLessThan(1500)
+      expect(await slow).toBe(200)
+    } finally {
+      keepAliveAgent.destroy()
+      server.closeAllConnections()
+    }
+  })
+})
 
 describe('server lifecycle', () => {
   it('listens, then shuts down without leaving the socket open', async () => {
@@ -32,6 +179,39 @@ describe('server lifecycle', () => {
 
     await gracefulShutdown(server)
     await expect(gracefulShutdown(server)).resolves.toBeUndefined()
+  })
+})
+
+describe('startServer on a port already in use', () => {
+  it("logs one readable line and sets exit code 1, instead of a false 'Listening' line", async () => {
+    // Bind a port the same way startServer does (no host), so the second
+    // bind conflicts on every platform.
+    const blocker = net.createServer()
+    await new Promise<void>((resolve) => blocker.listen(0, resolve))
+    const { port } = blocker.address() as AddressInfo
+
+    const loggerError = vi.spyOn(logger, 'error').mockImplementation(() => {})
+    const loggerInfo = vi.spyOn(logger, 'info').mockImplementation(() => {})
+    const previousExitCode = process.exitCode
+    try {
+      const server = startServer(port)
+      // Registered after startServer's own listener, so it runs second.
+      await new Promise<void>((resolve) => server.once('error', () => resolve()))
+
+      expect(loggerError).toHaveBeenCalledTimes(1)
+      // Read back, not a nested expect.objectContaining: that matcher is typed
+      // `any`, which trips @typescript-eslint/no-unsafe-assignment.
+      const [message, meta] = loggerError.mock.calls[0] ?? []
+      expect(message).toBe('Server failed to start')
+      expect(meta?.error).toMatchObject({ code: 'EADDRINUSE' })
+      expect(loggerInfo).not.toHaveBeenCalledWith(`Listening on :${port}`)
+      expect(process.exitCode).toBe(1)
+    } finally {
+      process.exitCode = previousExitCode
+      loggerError.mockRestore()
+      loggerInfo.mockRestore()
+      await new Promise<void>((resolve) => blocker.close(() => resolve()))
+    }
   })
 })
 

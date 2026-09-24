@@ -48,16 +48,34 @@ until you check.
   CI necessarily runs against 5432/6379, and a runtime assertion was
   guaranteed red on the first pull request. The invariant worth guarding
   belongs to the committed files.
-- **The Redis client's `reconnectStrategy` is load-bearing, not
-  decoration.** node-redis's default strategy retries a failed connection
-  forever and never rejects `connect()` — so without an explicit strategy,
-  `isRedisReachable()` (and therefore `GET /health/ready`) would hang
-  indefinitely instead of reporting unreachable, the moment Redis goes
-  down. `redis.service.ts` gives it a bounded strategy — a 5-second
-  connect timeout, giving up after a few retries with an `Error` —
-  specifically so that path fails fast. A dedicated test file
-  (`redis-unreachable.service.test.ts`) pins this down by timing out, not
-  by a mismatched assertion, if the strategy is ever removed.
+- **The Redis clients' retry strategies are load-bearing, not
+  decoration.** Before a client's first `ready`, every client gives up after
+  a few retries, so `isRedisReachable()`/`isQueueReachable()` (and
+  `GET /health/ready`) report unreachable instead of hanging at boot
+  (`redis-unreachable.service.test.ts` and `queue-unreachable.service.test.ts`
+  pin this by timing out if removed). After `ready`, every client retries
+  forever with backoff, so an outage never leaves a dead client behind
+  (`redis-outage.service.test.ts`, via a local TCP proxy, never by stopping
+  the shared Redis). While a client reconnects, nothing waits for Redis to
+  come back: node-redis runs with `disableOfflineQueue`; BullMQ producers
+  get their own ioredis connection with the offline queue off, so an enqueue
+  rejects; `isQueueReachable` checks both queue connections and reports false
+  for one in any post-ready status but `ready`; and `closeQueue` disconnects
+  instead of queueing a `QUIT`. Only BullMQ Workers keep the offline queue,
+  which they need. A queue connection that gives up before its first `ready`
+  is replaced on next use (the producer's Queues with it). Workers on it
+  never recover by themselves: BullMQ does not re-initialise a connection
+  whose init failed, and when that failure is not one BullMQ counts as a
+  connection error (ECONNREFUSED, or "Connection is closed."), such as
+  ECONNRESET, its fetch loop retries with no delay, starving the event loop.
+  So `startWorkers()` (`worker-supervisor.service.ts`) closes them inside
+  that connection's `'end'` event, before they can spin, and starts new ones
+  on a fresh connection (`worker-outage.test.ts`). If starting them throws,
+  it closes any it started. At boot it rethrows, so the process exits 1. On
+  a restart it can't throw from inside `'end'`, so `isQueueReachable()`
+  reports false until the next pre-ready reconnect restarts them or the
+  process restarts. Start Workers through it, not one by one, in anything
+  that runs through an outage.
 - **`drizzle.config.ts` uses `getDatabaseUrl()`, not `getEnv()`.** Routing
   it through `getEnv()` would make every `drizzle-kit` invocation require
   JWT/session secrets that have nothing to do with writing a migration. See
@@ -151,8 +169,8 @@ until you check.
   while this stream's handler (`requireSessionId`,
   notification-stream.controller.ts) rejects one outright — the revocation
   heartbeat can only close an already-open connection by session id, so a
-  sid-less stream would otherwise be revocable only by connection lifetime,
-  up to nginx's 24-hour read timeout, rather than by token expiry. The
+  sid-less stream would survive a logout or revocation until its token
+  expired, rather than closing at the next heartbeat. The
   in-process `EventEmitter` pub/sub works for single-pod deployments;
   upgrade to Redis Pub/Sub for multi-pod with separate worker processes.
 
@@ -342,6 +360,10 @@ otel-collector`.** It is bind-mounted; `docker compose up -d` does not
   `check-file/filename-blocklist` rejects any `*.test.*`, `*.spec.*`,
   `__tests__/` or `src/tests/` file under `src/`, and vitest only collects
   `tests/**/*.test.ts`.
+- **HTTP tests use `request` from `tests/helpers/request`, never supertest
+  directly, and a hand-rolled test server calls `listen(0, '127.0.0.1')`:** a
+  `::` bind can share a port another process holds on `127.0.0.1`, and the
+  request then reaches that process. Lint enforces the supertest import.
 - **The suite runs with `LOG_LEVEL=silent`** (`.env.test` and the CI env
   block). Many tests drive deliberate failure paths — Redis down, SMTP
   failing, OAuth errors — and at `info` the logger buried the results under

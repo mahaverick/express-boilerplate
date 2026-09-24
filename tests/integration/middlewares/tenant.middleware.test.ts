@@ -17,7 +17,6 @@
 // once, end-to-end, by Task 3's `tests/integration/api/tenant.test.ts`.
 import { randomUUID } from 'node:crypto'
 import express, { type Express, type NextFunction, type Request, type Response } from 'express'
-import request from 'supertest'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import { errorHandler } from '@/middlewares/error.middleware'
@@ -32,6 +31,7 @@ import { TenantRepository, type CreateTenantInput } from '@/repositories/tenant.
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
+import { request } from '../../helpers/request'
 
 /**
  * The body the probe handler (`buildApp` below) responds with — what

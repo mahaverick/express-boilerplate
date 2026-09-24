@@ -189,6 +189,21 @@ describe('errorHandler', () => {
     expect(body()).toMatchObject({ requestId: 'req-id-1' })
   })
 
+  it('destroys the socket instead of writing a second response once headers are already sent', () => {
+    const { response, status } = mockResponse()
+    Object.assign(response, { headersSent: true })
+    const destroy = vi.fn()
+    const next = vi.fn()
+
+    errorHandler(new Error('stream write failed'), { socket: { destroy } } as never, response, next)
+
+    // Not next(error): Express's final handler console.errors the raw error,
+    // unredacted, for every NODE_ENV but 'test'.
+    expect(status).not.toHaveBeenCalled()
+    expect(destroy).toHaveBeenCalledTimes(1)
+    expect(next).not.toHaveBeenCalled()
+  })
+
   // A failed database write is the one 5xx that arrives carrying the data it
   // was trying to write. drizzle-orm builds DrizzleQueryError's message as
   // `Failed query: ${query}\nparams: ${params}` (verified against

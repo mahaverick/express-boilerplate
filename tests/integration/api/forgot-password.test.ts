@@ -12,12 +12,15 @@
 // required).
 import { randomUUID } from 'node:crypto'
 import type { Worker } from 'bullmq'
-import request from 'supertest'
+import type { Profile as GoogleProfile } from 'passport-google-oauth20'
+import type { Response } from 'supertest'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
 import { REFRESH_TOKEN_COOKIE_NAME } from '@/constants/auth.constants'
+import { findOrCreateByGoogle } from '@/controllers/auth.controller'
 import type { User } from '@/database/models/user.model'
 import type { EmailJobData } from '@/jobs/email.job'
+import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
@@ -32,9 +35,39 @@ import {
   findMailpitMessages,
   getMailpitMessage,
 } from '../../helpers/mailpit'
+import { withMutatedMethod } from '../../helpers/mutate'
+import { request } from '../../helpers/request'
 
 const app = createApp()
 const userRepository = new UserRepository()
+const authProviderRepository = new AuthProviderRepository()
+
+/**
+ * A Google profile claiming an address Google has not verified: the squatter's identity.
+ * @param id - Google's stable profile id.
+ * @param email - The address the squatter claims.
+ * @returns A fixture shaped like what `passthroughGoogleProfile` hands `findOrCreateByGoogle`.
+ */
+function unverifiedGoogleProfile(id: string, email: string): GoogleProfile {
+  const nowSeconds = Math.floor(Date.now() / 1000)
+  return {
+    provider: 'google',
+    id,
+    displayName: 'Squatter',
+    profileUrl: `https://plus.google.com/${id}`,
+    emails: [{ value: email, verified: false }],
+    _raw: '{}',
+    _json: {
+      iss: 'https://accounts.google.com',
+      aud: 'test-google-client-id',
+      sub: id,
+      iat: nowSeconds,
+      exp: nowSeconds + 3600,
+      email,
+      email_verified: false,
+    },
+  }
+}
 
 const worker: Worker<EmailJobData> = startEmailWorker()
 const notificationWorker = startNotificationWorker()
@@ -74,7 +107,7 @@ interface ApiEnvelope<TData> {
  * @param response - The supertest response.
  * @returns The response body, typed.
  */
-function envelopeOf<TData>(response: request.Response): ApiEnvelope<TData> {
+function envelopeOf<TData>(response: Response): ApiEnvelope<TData> {
   return response.body as ApiEnvelope<TData>
 }
 
@@ -83,7 +116,7 @@ function envelopeOf<TData>(response: request.Response): ApiEnvelope<TData> {
  * @param email - The address to submit.
  * @returns The supertest response.
  */
-async function forgotPassword(email: string): Promise<request.Response> {
+async function forgotPassword(email: string): Promise<Response> {
   return request(app).post('/api/v1/auth/forgot-password').send({ email })
 }
 
@@ -93,7 +126,7 @@ async function forgotPassword(email: string): Promise<request.Response> {
  * @param password - The new password to set.
  * @returns The supertest response.
  */
-async function resetPassword(token: string, password: string): Promise<request.Response> {
+async function resetPassword(token: string, password: string): Promise<Response> {
   return request(app).post('/api/v1/auth/reset-password').send({ token, password })
 }
 
@@ -103,7 +136,7 @@ async function resetPassword(token: string, password: string): Promise<request.R
  * @param password - The password to log in with.
  * @returns The supertest response.
  */
-async function login(email: string, password: string): Promise<request.Response> {
+async function login(email: string, password: string): Promise<Response> {
   return request(app).post('/api/v1/auth/login').send({ email, password })
 }
 
@@ -115,7 +148,7 @@ async function login(email: string, password: string): Promise<request.Response>
  * @param response - The supertest response.
  * @returns The `refreshToken=...` pair, or undefined if the cookie was not set.
  */
-function refreshCookiePair(response: request.Response): string | undefined {
+function refreshCookiePair(response: Response): string | undefined {
   const cookieLines = response.headers['set-cookie'] as string[] | undefined
   const line = cookieLines?.find((cookie) => cookie.startsWith(`${REFRESH_TOKEN_COOKIE_NAME}=`))
   return line?.split(';', 1)[0]
@@ -432,6 +465,32 @@ describe('POST /api/v1/auth/reset-password', () => {
     expect(refreshAfterReset.status).toBe(401)
   })
 
+  it('revokes every session before storing the new password, so a failed write leaves none alive', async () => {
+    const { user, email } = await seedUser()
+    const loginResponse = await login(email, VALID_PASSWORD)
+    const cookie = refreshCookiePair(loginResponse)
+    expect(cookie).toBeDefined()
+    const token = await seedResetToken(user.id)
+
+    // Mutate the subclass prototype, not BaseRepository's: that would hit every repository.
+    await withMutatedMethod(
+      UserRepository.prototype,
+      'update',
+      () => {
+        throw new Error('simulated password write failure')
+      },
+      async () => {
+        const response = await resetPassword(token, NEW_PASSWORD)
+        expect(response.status).toBe(500)
+      }
+    )
+
+    const refreshAfterFailedReset = await request(app)
+      .post('/api/v1/auth/refresh')
+      .set('Cookie', cookie as string)
+    expect(refreshAfterFailedReset.status).toBe(401)
+  })
+
   it('lets the new password log in', async () => {
     const { user, email } = await seedUser()
     const token = await seedResetToken(user.id)
@@ -505,5 +564,56 @@ describe('POST /api/v1/auth/reset-password', () => {
 
     const loginResponse = await login(email, NEW_PASSWORD)
     expect(loginResponse.status).toBe(200)
+  })
+
+  it('drops Google links from a never-verified account on reset, so a squatter’s Google identity no longer resolves to it', async () => {
+    // Legacy state, seeded directly: after E1, an unverified Google identity can no longer create it.
+    const { user, email } = await seedUser(false)
+    // A real account always carries this row (register()'s own invariant,
+    // see auth-provider.model.ts) — seeded directly here since `seedUser`
+    // bypasses `register()`. `deleteFederatedForUser` only ever removes
+    // non-'email' rows, so this one must exist up front for the assertion
+    // below to mean anything.
+    await authProviderRepository.create({
+      userId: user.id,
+      provider: 'email',
+      providerId: email,
+    })
+    const squatterGoogleId = randomUUID()
+    await authProviderRepository.create({
+      userId: user.id,
+      provider: 'google',
+      providerId: squatterGoogleId,
+    })
+    const token = await seedResetToken(user.id)
+
+    const response = await resetPassword(token, NEW_PASSWORD)
+    expect(response.status).toBe(200)
+
+    expect(
+      await authProviderRepository.findByProviderAndId('google', squatterGoogleId)
+    ).toBeUndefined()
+    const providers = await authProviderRepository.findByUser(user.id)
+    expect(providers.map((row) => row.provider)).toEqual(['email'])
+    await expect(
+      findOrCreateByGoogle(unverifiedGoogleProfile(squatterGoogleId, email))
+    ).rejects.toMatchObject({ statusCode: 403, code: 'email_not_verified' })
+  })
+
+  it('keeps the Google link of an already-verified account through a reset', async () => {
+    const { user } = await seedUser(true)
+    const googleId = randomUUID()
+    await authProviderRepository.create({
+      userId: user.id,
+      provider: 'google',
+      providerId: googleId,
+    })
+    const token = await seedResetToken(user.id)
+
+    const response = await resetPassword(token, NEW_PASSWORD)
+    expect(response.status).toBe(200)
+
+    const link = await authProviderRepository.findByProviderAndId('google', googleId)
+    expect(link?.userId).toBe(user.id)
   })
 })

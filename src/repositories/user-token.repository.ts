@@ -112,6 +112,45 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
   }
 
   /**
+   * Whether a token row was consumed within the last `ms` milliseconds, judged by Postgres's own clock — never the app's — so the window can't drift with clock skew between the two.
+   * @param tokenHash - The SHA-256 hash of the raw token, hex-encoded.
+   * @param ms - The window's length, in milliseconds.
+   * @returns True when the row exists and its `consumedAt` is within the window; false when it doesn't exist, or was never consumed, or the window has passed.
+   */
+  async wasConsumedWithin(tokenHash: string, ms: number): Promise<boolean> {
+    const [row] = await db
+      .select({
+        withinWindow: sql<
+          boolean | null
+        >`${userTokenModel.consumedAt} > now() - make_interval(secs => ${ms}::double precision / 1000.0)`,
+      })
+      .from(userTokenModel)
+      .where(this.scope(eq(userTokenModel.tokenHash, tokenHash)))
+      .limit(1)
+    // withinWindow is boolean | null (SQL NULL for a never-consumed row); narrowed to a plain boolean here.
+    return row?.withinWindow === true
+  }
+
+  /**
+   * Whether a session was explicitly revoked: a row revoked without being consumed (logout, reuse, reset).
+   * @param sessionId - The session (rotation-chain) id.
+   * @returns True when any row in the session carries that kill marker.
+   */
+  async isSessionKilled(sessionId: string): Promise<boolean> {
+    // claimOnce sets revokedAt AND consumedAt; only explicit revocation sets revokedAt alone.
+    const [row] = await db
+      .select({ id: userTokenModel.id })
+      .from(userTokenModel)
+      .where(
+        this.scope(
+          sql`${userTokenModel.sessionId} = ${sessionId} and ${userTokenModel.revokedAt} is not null and ${userTokenModel.consumedAt} is null`
+        )
+      )
+      .limit(1)
+    return row !== undefined
+  }
+
+  /**
    * Revoke every still-live token sharing a session id — the whole rotation
    * chain for one login — and deny that session's access tokens
    * (best-effort — see `denySession`). Used both by an explicit

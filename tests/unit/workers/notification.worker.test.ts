@@ -6,7 +6,7 @@
 // tests/integration/workers/notification.worker.test.ts, per this repo's
 // own unit/integration split (CLAUDE.md).
 //
-// `vi.spyOn(NotificationRepository.prototype, 'create')` etc., not
+// `vi.spyOn(NotificationRepository.prototype, 'createOnce')` etc., not
 // `vi.mock('@/repositories/...')`: notification.worker.ts builds its own
 // module-private `notificationRepository`/`preferenceRepository` instances
 // at import time (CLAUDE.md's own "module-private instance of an exported
@@ -43,14 +43,16 @@ vi.mock('@/services/notification-emitter.service', () => ({
 
 /**
  * A minimal stand-in for a BullMQ `Job<NotificationJobData>` — only the
- * properties `processNotificationJob` actually reads (`id`, `data`). Same
- * shape and reasoning as email.worker.test.ts's own `mockJob` helper.
+ * properties `processNotificationJob` actually reads (`id`, `timestamp`,
+ * `data`). Same shape and reasoning as email.worker.test.ts's own `mockJob`
+ * helper.
  * @param overrides - Fields to override on the default job data.
  * @returns A fake job for processNotificationJob to process.
  */
 function mockJob(overrides: Partial<NotificationJobData> = {}): Job<NotificationJobData> {
   return {
     id: 'test-notification-job-1',
+    timestamp: 1_767_225_600_000,
     data: {
       userId: 'user-123',
       type: 'verify_email',
@@ -60,6 +62,9 @@ function mockJob(overrides: Partial<NotificationJobData> = {}): Job<Notification
     },
   } as unknown as Job<NotificationJobData>
 }
+
+const EXPECTED_DEDUPE_KEY = 'notification-job-test-notification-job-1-1767225600000'
+const EXPECTED_EMAIL_JOB_ID = 'notification-email-test-notification-job-1-1767225600000'
 
 /**
  * The row `NotificationRepository.create` resolves with once
@@ -82,6 +87,8 @@ const mockNotificationRow: Notification = {
   metadata: null,
   // eslint-disable-next-line unicorn/no-null -- see comment above.
   readAt: null,
+  // eslint-disable-next-line unicorn/no-null -- see comment above.
+  dedupeKey: null,
   createdAt: new Date('2026-01-01T00:00:00.000Z'),
 }
 
@@ -105,13 +112,13 @@ function emailVerificationMessage(to: string): MailMessage {
 }
 
 describe('processNotificationJob', () => {
-  let insertSpy: MockInstance<typeof NotificationRepository.prototype.create>
+  let insertSpy: MockInstance<typeof NotificationRepository.prototype.createOnce>
   let channelEnabledSpy: MockInstance<
     typeof NotificationPreferenceRepository.prototype.isChannelEnabled
   >
 
   beforeEach(() => {
-    insertSpy = vi.spyOn(NotificationRepository.prototype, 'create')
+    insertSpy = vi.spyOn(NotificationRepository.prototype, 'createOnce')
     channelEnabledSpy = vi.spyOn(NotificationPreferenceRepository.prototype, 'isChannelEnabled')
     vi.mocked(emailJob.addEmailJob).mockReset()
     vi.mocked(notificationEmitter.emitNotification).mockReset()
@@ -133,6 +140,7 @@ describe('processNotificationJob', () => {
       type: 'verify_email',
       title: 'Verify your email',
       body: 'Click the link to verify your email address.',
+      dedupeKey: EXPECTED_DEDUPE_KEY,
     })
   })
 
@@ -196,7 +204,9 @@ describe('processNotificationJob', () => {
 
     await processNotificationJob(mockJob({ email }))
 
-    expect(emailJob.addEmailJob).toHaveBeenCalledWith(email, 'user-123')
+    expect(emailJob.addEmailJob).toHaveBeenCalledWith(email, 'user-123', {
+      jobId: EXPECTED_EMAIL_JOB_ID,
+    })
   })
 
   it('does not enqueue an email when the email channel is disabled', async () => {
@@ -229,25 +239,58 @@ describe('processNotificationJob', () => {
     await expect(processNotificationJob(mockJob())).rejects.toThrow('insert failed')
   })
 
-  it('does not throw when the email enqueue fails — the email queue has its own retry', async () => {
+  it('rejects when the email enqueue fails, so BullMQ retries the job', async () => {
     channelEnabledSpy.mockResolvedValue(true)
     insertSpy.mockResolvedValue(mockNotificationRow)
     vi.mocked(emailJob.addEmailJob).mockRejectedValue(new Error('redis unavailable'))
-    const loggerErrorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {
-      // No-op: only that the failure was logged, not printed, is asserted.
-    })
-
     const email = emailVerificationMessage('user@example.com')
 
-    try {
-      await expect(processNotificationJob(mockJob({ email }))).resolves.toBeUndefined()
-      expect(loggerErrorSpy).toHaveBeenCalledWith(
-        'Failed to enqueue email from notification worker',
-        expect.objectContaining({ jobId: 'test-notification-job-1' })
-      )
-    } finally {
-      loggerErrorSpy.mockRestore()
-    }
+    await expect(processNotificationJob(mockJob({ email }))).rejects.toThrow('redis unavailable')
+  })
+
+  it('does not emit again when a retry finds the row already inserted', async () => {
+    channelEnabledSpy.mockResolvedValue(true)
+    insertSpy.mockResolvedValueOnce(mockNotificationRow).mockResolvedValueOnce(undefined)
+
+    await processNotificationJob(mockJob())
+    await processNotificationJob(mockJob())
+
+    expect(insertSpy).toHaveBeenCalledTimes(2)
+    expect(insertSpy.mock.calls[1]?.[0]).toMatchObject({ dedupeKey: EXPECTED_DEDUPE_KEY })
+    expect(notificationEmitter.emitNotification).toHaveBeenCalledTimes(1)
+  })
+
+  it('never builds a BullMQ job id containing a colon, which BullMQ rejects', async () => {
+    channelEnabledSpy.mockResolvedValue(true)
+    insertSpy.mockResolvedValue(mockNotificationRow)
+    vi.mocked(emailJob.addEmailJob).mockResolvedValue({ id: 'email-job-1' } as never)
+
+    await processNotificationJob(mockJob({ email: emailVerificationMessage('user@example.com') }))
+
+    const options = vi.mocked(emailJob.addEmailJob).mock.calls[0]?.[2]
+    expect(options?.jobId).not.toContain(':')
+  })
+
+  it('passes the email jobId when the in_app channel is disabled', async () => {
+    channelEnabledSpy.mockResolvedValueOnce(false).mockResolvedValueOnce(true)
+    vi.mocked(emailJob.addEmailJob).mockResolvedValue({ id: 'email-job-1' } as never)
+    const email = emailVerificationMessage('user@example.com')
+
+    await processNotificationJob(mockJob({ email }))
+
+    expect(insertSpy).not.toHaveBeenCalled()
+    expect(emailJob.addEmailJob).toHaveBeenCalledWith(email, 'user-123', {
+      jobId: EXPECTED_EMAIL_JOB_ID,
+    })
+  })
+
+  it('rejects a job with no id before enqueueing an email', async () => {
+    channelEnabledSpy.mockResolvedValueOnce(false).mockResolvedValueOnce(true)
+    const email = emailVerificationMessage('user@example.com')
+    const job = { ...mockJob({ email }), id: undefined } as unknown as Job<NotificationJobData>
+
+    await expect(processNotificationJob(job)).rejects.toThrow('Notification job has no id')
+    expect(emailJob.addEmailJob).not.toHaveBeenCalled()
   })
 
   it('does not throw when emitNotification itself throws — the insert already committed', async () => {

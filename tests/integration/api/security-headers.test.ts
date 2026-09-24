@@ -19,12 +19,12 @@
 import { randomUUID } from 'node:crypto'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
-import request from 'supertest'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { signAccessToken } from '@/utilities/token.utilities'
+import { request } from '../../helpers/request'
 
 const app = createApp()
 
@@ -98,7 +98,7 @@ describe('security headers on a live SSE stream', () => {
   const createdUserIds: string[] = []
 
   beforeAll(async () => {
-    server = createApp().listen(0)
+    server = createApp().listen(0, '127.0.0.1')
     await new Promise<void>((resolve) => server.once('listening', resolve))
     const address = server.address() as AddressInfo
     baseUrl = `http://127.0.0.1:${address.port}`

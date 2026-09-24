@@ -33,6 +33,8 @@ function fakeNotification(overrides: Partial<Notification> = {}): Notification {
     metadata: null,
     // eslint-disable-next-line unicorn/no-null -- see comment above.
     readAt: null,
+    // eslint-disable-next-line unicorn/no-null -- see comment above.
+    dedupeKey: null,
     createdAt: new Date('2026-01-01T00:00:00.000Z'),
     ...overrides,
   }

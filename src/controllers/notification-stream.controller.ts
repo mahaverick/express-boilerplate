@@ -18,19 +18,24 @@
 // token and a denied session (both `requireAuth`, `ACCESS_TOKEN_EXPIRED_CODE`),
 // and a sid-less token (`requireSessionId` below, also
 // `ACCESS_TOKEN_EXPIRED_CODE`) — see `tests/integration/api/notification-stream.test.ts`
-// for one test per case. A rejected request never opens a stream: both
-// `authenticatedUserId` and `requireSessionId` throw before
-// `response.writeHead` ever runs, so the `catch` below hands the rejection
-// to `next(error)` and `errorHandler` (error.middleware.ts) answers with
-// this codebase's ordinary JSON 401 envelope — not an event-stream response
-// that immediately closes.
+// for one test per case. A rejected request never opens a stream: the
+// shutdown check (503), `authenticatedUserId`, a user already at
+// SSE_MAX_STREAMS_PER_USER open streams (429 `too_many_streams`) and
+// `requireSessionId` all throw before `response.writeHead` ever runs, so
+// the `catch` below hands the rejection to `next(error)` and `errorHandler`
+// (error.middleware.ts) answers with this codebase's ordinary JSON error
+// envelope — not an event-stream response that immediately closes.
 import { type NextFunction, type Request, type Response } from 'express'
 import { getEnv } from '@/configs/env.config'
-import { MAX_NOTIFICATION_PAGE_SIZE } from '@/constants/notification.constants'
+import {
+  MAX_NOTIFICATION_PAGE_SIZE,
+  SSE_MAX_BUFFERED_BYTES,
+} from '@/constants/notification.constants'
 import type { Notification } from '@/database/models/notification.model'
 import { ACCESS_TOKEN_EXPIRED_CODE } from '@/middlewares/auth.middleware'
 import { HttpError } from '@/middlewares/error.middleware'
 import { NotificationRepository } from '@/repositories/notification.repository'
+import { countStreams, isShuttingDown, registerStream } from '@/services/lifecycle.service'
 import { logger } from '@/services/logger.service'
 import { offNotification, onNotification } from '@/services/notification-emitter.service'
 import { isSessionDenied } from '@/services/session-denylist.service'
@@ -46,10 +51,13 @@ const notificationRepository = new NotificationRepository()
 // future `EventSource`-based consumer would honour it.
 const SSE_RETRY_MS = 3000
 
+// setTimeout's ceiling (2^31-1 ms). A longer delay fires immediately.
+const MAX_TIMER_DELAY_MS = 2_147_483_647
+
 /**
  * The wire shape one notification is serialized to for an SSE `data:` line
- * — a subset of the `notifications` row, matching what `GET
- * /api/v1/notifications` already exposes via `successResponse`. `readAt` is
+ * — a subset of the `notifications` row, and of what `GET
+ * /api/v1/notifications` returns (which also has `userId` and `metadata`). `readAt` is
  * carried as `string | null`, not omitted when unread, for the same reason
  * `deleteNotification` (notification.controller.ts) returns a JSON `null`
  * rather than nothing: a client parses `data:` as JSON text, where "absent"
@@ -92,9 +100,9 @@ function authenticatedUserId(request: Request): string {
  * `payload.sid &&` guard), this stream has no such tolerance. The
  * revocation heartbeat below can only close an ALREADY-OPEN connection by
  * checking a session id against the denylist — it has nothing to check for
- * a sid-less connection — so tolerating one here would mean its only
- * exit is the client disconnecting or nginx's own 24-hour read timeout,
- * not `ACCESS_TOKEN_TTL`. A connect-time 401 is cheap enough that this
+ * a sid-less connection — so tolerating one here would let a logged-out or
+ * revoked session keep its stream until token expiry, instead of until the
+ * next heartbeat. A connect-time 401 is cheap enough that this
  * endpoint does not need the tolerance `requireAuth` grants everywhere
  * else: `useNotificationStream` (react-boilerplate's use-notifications.ts)
  * opens the connection with `fetch`, not `EventSource`, so there is no
@@ -264,7 +272,16 @@ export async function streamNotifications(
   next: NextFunction
 ): Promise<void> {
   try {
+    if (isShuttingDown()) {
+      throw new HttpError('Server is shutting down', 503)
+    }
     const userId = authenticatedUserId(request)
+    // Before writeHead, so the rejection is an ordinary JSON 429. There is no
+    // await between this and registerStream below, so the count is exact
+    // within this process.
+    if (countStreams(userId) >= getEnv().SSE_MAX_STREAMS_PER_USER) {
+      throw new HttpError('Too many open notification streams', 429, 'too_many_streams')
+    }
     const sessionId = requireSessionId(request)
 
     response.writeHead(200, {
@@ -302,6 +319,7 @@ export async function streamNotifications(
         return
       }
       writeNotificationEvent(response, notification)
+      dropIfStalled()
     }
     onNotification(userId, handleNotification)
 
@@ -311,8 +329,9 @@ export async function streamNotifications(
         // The ONLY recurring check on an open connection.
         // `requireAuth` (denylist and sid tolerance) and `requireSessionId`
         // above ran once, at connect; nothing else revisits them — in
-        // particular, nothing here re-reads `user.active`. This heartbeat
-        // is the one check that can close an ALREADY-OPEN stream at all.
+        // particular, nothing here re-reads `user.active`. The stream also
+        // ends at token expiry (below), which bounds that gap to one
+        // access-token lifetime.
         if (await isSessionDenied(sessionId)) {
           clearInterval(heartbeat)
           // Belt-and-braces: `request.on('close')` below also unsubscribes
@@ -328,6 +347,7 @@ export async function streamNotifications(
         // disconnected while that Redis round trip was in flight.
         if (response.writableEnded || response.destroyed) return
         response.write(':ping\n\n')
+        dropIfStalled()
       })()
     }, getEnv().SSE_HEARTBEAT_INTERVAL_MS)
     // Without this, a pending heartbeat timer keeps the Node event loop
@@ -336,11 +356,44 @@ export async function streamNotifications(
     // test (or a graceful shutdown) waiting on a timer nothing else needs.
     heartbeat.unref()
 
+    // One teardown for every server-initiated close: shutdown (registry),
+    // token expiry and a stalled client. The destroyed check makes it safe to
+    // call after the stall path has destroyed the response.
+    const closeStream = (): void => {
+      clearInterval(heartbeat)
+      offNotification(userId, handleNotification)
+      if (!response.writableEnded && !response.destroyed) response.end()
+    }
+    const unregisterStream = registerStream(userId, closeStream)
+
+    // Run after every write. A client over SSE_MAX_BUFFERED_BYTES has stopped
+    // reading. Destroy, never end: end() queues behind the stalled buffer and
+    // keeps the socket open, and its closing chunk can still reach the client.
+    // Destroyed first, so closeStream() skips end(). Destroy still fires
+    // request 'close', which unregisters.
+    const dropIfStalled = (): void => {
+      if (response.writableLength <= SSE_MAX_BUFFERED_BYTES) return
+      response.destroy()
+      closeStream()
+    }
+
+    // End at token expiry: the client reconnects with a fresh token, and
+    // requireAuth re-checks active/denylist. Unref'd so it never holds the
+    // process open.
+    const expiresAt = request.accessTokenExpiresAt
+    const msUntilExpiry = expiresAt ? expiresAt.getTime() - Date.now() : 0
+    const expiryTimer = expiresAt
+      ? setTimeout(closeStream, Math.min(Math.max(0, msUntilExpiry), MAX_TIMER_DELAY_MS))
+      : undefined
+    expiryTimer?.unref()
+
     let isClosed = false
     request.on('close', () => {
       isClosed = true
+      unregisterStream()
       offNotification(userId, handleNotification)
       clearInterval(heartbeat)
+      clearTimeout(expiryTimer)
     })
 
     if (lastEventId) {
@@ -353,13 +406,14 @@ export async function streamNotifications(
       const missedIds = new Set(missed.map((notification) => notification.id))
       for (const notification of missed) {
         writeNotificationEvent(response, notification)
+        dropIfStalled()
       }
 
       isReplaying = false
       for (const notification of pendingDuringReplay) {
-        if (!missedIds.has(notification.id)) {
-          writeNotificationEvent(response, notification)
-        }
+        if (missedIds.has(notification.id)) continue
+        writeNotificationEvent(response, notification)
+        dropIfStalled()
       }
     }
   } catch (error) {

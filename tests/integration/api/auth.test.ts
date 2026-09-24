@@ -13,7 +13,7 @@ import { randomUUID } from 'node:crypto'
 import type { Worker } from 'bullmq'
 import { DrizzleQueryError } from 'drizzle-orm'
 import postgres from 'postgres'
-import request from 'supertest'
+import type { Response } from 'supertest'
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { createApp } from '@/app'
 import {
@@ -39,6 +39,7 @@ import {
   getMailpitMessage,
 } from '../../helpers/mailpit'
 import { withMutatedMethod } from '../../helpers/mutate'
+import { request } from '../../helpers/request'
 
 const app = createApp()
 const userRepository = new UserRepository()
@@ -128,7 +129,7 @@ interface LoginBody {
  * @param response - The supertest response.
  * @returns The response body, typed.
  */
-function envelopeOf<TData>(response: request.Response): ApiEnvelope<TData> {
+function envelopeOf<TData>(response: Response): ApiEnvelope<TData> {
   return response.body as ApiEnvelope<TData>
 }
 
@@ -147,7 +148,7 @@ function uniqueEmail(): string {
  * @param response - The supertest response.
  * @returns The raw `Set-Cookie` header value, or undefined if the cookie was not set.
  */
-function findRefreshTokenCookie(response: request.Response): string | undefined {
+function findRefreshTokenCookie(response: Response): string | undefined {
   const cookieLines = response.headers['set-cookie'] as string[] | undefined
   return cookieLines?.find((cookie) => cookie.startsWith(`${REFRESH_TOKEN_COOKIE_NAME}=`))
 }
@@ -161,7 +162,7 @@ function findRefreshTokenCookie(response: request.Response): string | undefined 
 async function login(
   email: string,
   password: string
-): Promise<{ response: request.Response; body: ApiEnvelope<LoginBody> }> {
+): Promise<{ response: Response; body: ApiEnvelope<LoginBody> }> {
   const response = await request(app).post('/api/v1/auth/login').send({ email, password })
   return { response, body: envelopeOf<LoginBody>(response) }
 }
@@ -195,7 +196,7 @@ describe('POST /api/v1/auth/register and /login', () => {
       firstName: string
       lastName: string
     }> = {}
-  ): Promise<{ response: request.Response; body: ApiEnvelope<PublicUserBody>; email: string }> {
+  ): Promise<{ response: Response; body: ApiEnvelope<PublicUserBody>; email: string }> {
     const email = overrides.email ?? uniqueEmail()
     const response = await request(app)
       .post('/api/v1/auth/register')
@@ -427,12 +428,9 @@ describe('POST /api/v1/auth/register and /login', () => {
     })
 
     it('answers identically for a soft-deleted address', async () => {
-      // The unique index is on lower(email) with no deleted_at predicate
-      // (user.model.ts:46), so create() still raises its 409 — but
-      // findByEmail excludes soft-deleted rows and returns undefined, so the
-      // taken branch has a 409 and NO row to read a name from. Reading
-      // `existing.firstName` there is a null dereference on a path no
-      // happy-path test covers.
+      // A soft-deleted address is free again (partial users_email_unique),
+      // so this takes the fresh-account branch; either way the answer is
+      // the same 202, which is what this test pins.
       const email = uniqueEmail()
       const { email: registered } = await registerUser({ email })
       const user = await userRepository.findByEmail(registered)
@@ -441,9 +439,26 @@ describe('POST /api/v1/auth/register and /login', () => {
       const response = await request(app)
         .post('/api/v1/auth/register')
         .send({ email, password: VALID_PASSWORD })
+      const fresh = await userRepository.findByEmail(email)
+      if (fresh) createdIds.push(fresh.id)
 
       expect(response.status).toBe(202)
       expect(envelopeOf<unknown>(response).data).toBeNull()
+    })
+
+    it('lets a soft-deleted address be registered again, as a new account', async () => {
+      const email = uniqueEmail()
+      await registerUser({ email })
+      const original = await userRepository.findByEmail(email)
+      if (!original) throw new Error('first registration created no row')
+      await userRepository.softDelete(original.id)
+
+      const { response } = await registerUser({ email })
+
+      expect(response.status).toBe(202)
+      const fresh = await userRepository.findByEmail(email)
+      expect(fresh).toBeDefined()
+      expect(fresh?.id).not.toBe(original.id)
     })
 
     it('normalises email case on registration, and the stored row agrees', async () => {

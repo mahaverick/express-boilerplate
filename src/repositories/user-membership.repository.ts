@@ -22,7 +22,7 @@ import {
 } from '@/database/models/user-membership.model'
 import { userModel, type User } from '@/database/models/user.model'
 import { HttpError } from '@/middlewares/error.middleware'
-import { db } from '@/services/database.service'
+import { db, type DbExecutor } from '@/services/database.service'
 
 // Postgres error code for a unique-constraint violation. Same source and
 // same value as base.repository.ts's own — see that file's comment for the
@@ -82,7 +82,7 @@ export interface MembershipWithTenant {
  * membership, list a tenant's members (with safe user info) or a user's
  * memberships (with tenant info), create/update/delete a membership, and
  * count a tenant's owners for the "can't remove the last owner" safety
- * check (a later task's controller).
+ * check (`tenant-membership.service.ts`).
  */
 export class UserMembershipRepository {
   /**
@@ -91,10 +91,15 @@ export class UserMembershipRepository {
    * whether a user may access a tenant-scoped route at all.
    * @param userId - The user to look up.
    * @param tenantId - The tenant to look up.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns The matching row, or undefined when this user has no membership in this tenant.
    */
-  async findByUserAndTenant(userId: string, tenantId: string): Promise<UserMembership | undefined> {
-    const [row] = await db
+  async findByUserAndTenant(
+    userId: string,
+    tenantId: string,
+    executor: DbExecutor = db
+  ): Promise<UserMembership | undefined> {
+    const [row] = await executor
       .select()
       .from(userMembershipModel)
       .where(
@@ -182,10 +187,15 @@ export class UserMembershipRepository {
    * Change one membership's role.
    * @param id - The membership row's id.
    * @param role - The new role.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns The updated row, or undefined when no membership with this id exists.
    */
-  async updateRole(id: string, role: MembershipRole): Promise<UserMembership | undefined> {
-    const [row] = await db
+  async updateRole(
+    id: string,
+    role: MembershipRole,
+    executor: DbExecutor = db
+  ): Promise<UserMembership | undefined> {
+    const [row] = await executor
       .update(userMembershipModel)
       .set({ role, updatedAt: sql`now()` })
       .where(eq(userMembershipModel.id, id))
@@ -197,10 +207,11 @@ export class UserMembershipRepository {
    * Remove a member from a tenant — a hard delete, not a soft one (see
    * this file's header comment).
    * @param id - The membership row's id.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns True when a row was deleted; false when no membership with this id existed.
    */
-  async delete(id: string): Promise<boolean> {
-    const result = await db.delete(userMembershipModel).where(eq(userMembershipModel.id, id))
+  async delete(id: string, executor: DbExecutor = db): Promise<boolean> {
+    const result = await executor.delete(userMembershipModel).where(eq(userMembershipModel.id, id))
     // The postgres-js driver's own result for a write with no
     // `.returning()` exposes the affected-row count as `.count` — see
     // NotificationRepository.markAllRead's own comment (notification
@@ -209,23 +220,44 @@ export class UserMembershipRepository {
   }
 
   /**
-   * How many `'owner'` members one tenant currently has — the check a
-   * later task's "remove member"/"change role" controller runs before
-   * demoting or removing an owner, so the last owner can never leave a
-   * tenant ownerless. Uses drizzle-orm's `count()` helper, which
-   * `.mapWith(Number)`s the result itself (verified against
-   * `drizzle-orm/sql/functions/aggregate.js`) — so this already returns a
-   * real JS `number`, not Postgres' raw `int8` wire value, with no
-   * numeric-parsing configuration needed on `database.service.ts`'s own
-   * postgres-js client.
+   * How many live owners a tenant has. An owner whose user is soft-deleted
+   * cannot act and is not counted, so a tenant is never left with only a
+   * deleted owner. `count()` maps to a JS number itself.
    * @param tenantId - The tenant to count owners for.
-   * @returns The number of `'owner'` memberships this tenant currently has.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns The number of owner memberships whose user is not soft-deleted.
    */
-  async countOwners(tenantId: string): Promise<number> {
-    const [row] = await db
+  async countOwners(tenantId: string, executor: DbExecutor = db): Promise<number> {
+    const [row] = await executor
       .select({ count: count() })
       .from(userMembershipModel)
-      .where(and(eq(userMembershipModel.tenantId, tenantId), eq(userMembershipModel.role, 'owner')))
+      .innerJoin(userModel, eq(userMembershipModel.userId, userModel.id))
+      .where(
+        and(
+          eq(userMembershipModel.tenantId, tenantId),
+          eq(userMembershipModel.role, 'owner'),
+          isNull(userModel.deletedAt)
+        )
+      )
     return row?.count ?? 0
+  }
+
+  /**
+   * Lock a tenant's owner memberships until the transaction ends
+   * (`SELECT … FOR UPDATE`, in id order so two lockers never deadlock). A
+   * concurrent demotion or removal of an owner waits here, which is what
+   * makes the last-owner check atomic. Only meaningful inside a
+   * transaction.
+   * @param tenantId - The tenant whose owners to lock.
+   * @param executor - The transaction to hold the lock in.
+   * @returns The locked owner memberships.
+   */
+  async lockOwners(tenantId: string, executor: DbExecutor = db): Promise<UserMembership[]> {
+    return executor
+      .select()
+      .from(userMembershipModel)
+      .where(and(eq(userMembershipModel.tenantId, tenantId), eq(userMembershipModel.role, 'owner')))
+      .orderBy(userMembershipModel.id)
+      .for('update')
   }
 }

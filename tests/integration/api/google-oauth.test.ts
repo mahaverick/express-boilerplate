@@ -60,14 +60,15 @@
 import { randomUUID } from 'node:crypto'
 import passport from 'passport'
 import type { Profile as GoogleProfile } from 'passport-google-oauth20'
-import request from 'supertest'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { createApp as CreateApp } from '@/app'
-import { GOOGLE_STRATEGY_NAME } from '@/constants/auth.constants'
+import { GOOGLE_STRATEGY_NAME, REFRESH_TOKEN_COOKIE_NAME } from '@/constants/auth.constants'
 import type { findOrCreateByGoogle as FindOrCreateByGoogleType } from '@/controllers/auth.controller'
 import type { AuthProviderRepository as AuthProviderRepositoryClass } from '@/repositories/auth-provider.repository'
 import type { UserRepository as UserRepositoryClass } from '@/repositories/user.repository'
 import type { sql as SqlType } from '@/services/database.service'
+import type { issueRefreshToken as IssueRefreshTokenType } from '@/utilities/token.utilities'
+import { request } from '../../helpers/request'
 
 /**
  * The `state` query parameter off a Google OAuth redirect URL, if present.
@@ -199,6 +200,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
   let userRepository: InstanceType<typeof UserRepositoryClass>
   let authProviderRepository: InstanceType<typeof AuthProviderRepositoryClass>
   let sql: typeof SqlType
+  let issueRefreshToken: typeof IssueRefreshTokenType
 
   // Every runtime value this describe block needs is imported DYNAMICALLY,
   // inside `beforeAll`, AFTER the `vi.stubEnv` calls — not just `@/app`.
@@ -231,6 +233,9 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
 
     const database = await import('@/services/database.service')
     sql = database.sql
+
+    const tokenUtilities = await import('@/utilities/token.utilities')
+    issueRefreshToken = tokenUtilities.issueRefreshToken
   })
 
   afterAll(() => {
@@ -403,6 +408,24 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
         const untouched = await userRepository.findById(existing.id)
         expect(untouched?.lastLoggedInAt).toBeNull()
       })
+
+      it('redirects with email_not_verified and creates no user when Google has not verified a new email', async () => {
+        const profile = googleProfile({ emailVerified: false })
+        const email = profile.emails?.[0]?.value
+        if (!email) throw new Error('test fixture has no email')
+        passport.use(GOOGLE_STRATEGY_NAME, new FakeGoogleSuccessStrategy(profile))
+
+        const response = await request(app).get('/api/v1/auth/google/callback')
+
+        expect(response.status).toBe(302)
+        expect(response.headers.location).toBe(
+          'http://localhost:5173/login?error=email_not_verified'
+        )
+        const user = await userRepository.findByEmail(email)
+        // Tracked before asserting, so the red run's stray row is still cleaned up.
+        if (user) createdIds.push(user.id)
+        expect(user).toBeUndefined()
+      })
     })
   })
 
@@ -428,19 +451,22 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
       expect(emailRow?.providerId).toBe(user.email)
     })
 
-    it('creates a new user with emailVerifiedAt left null when Google has not verified the email', async () => {
+    it('refuses to create an account for an email Google has not verified, writing no row', async () => {
       const profile = googleProfile({ emailVerified: false })
+      const email = profile.emails?.[0]?.value
+      if (!email) throw new Error('test fixture has no email')
 
-      const user = await findOrCreateByGoogle(profile)
-      createdIds.push(user.id)
+      let outcome: unknown
+      try {
+        const user = await findOrCreateByGoogle(profile)
+        createdIds.push(user.id)
+        outcome = user
+      } catch (error) {
+        outcome = error
+      }
 
-      expect(user.passwordHash).toBeNull()
-      expect(user.emailVerifiedAt).toBeNull()
-
-      const providers = await authProviderRepository.findByUser(user.id)
-      expect(
-        providers.map((provider) => provider.provider).toSorted((a, b) => a.localeCompare(b))
-      ).toEqual(['email', 'google'])
+      expect(outcome).toMatchObject({ statusCode: 403, code: 'email_not_verified' })
+      expect(await userRepository.findByEmail(email)).toBeUndefined()
     })
 
     it('treats the email as verified when only _json.email_verified says so (the two fields disagreeing)', async () => {
@@ -472,26 +498,56 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
       expect(providers.map((provider) => provider.provider)).toEqual(['google'])
     })
 
-    it("never sets an existing user's emailVerifiedAt on linking, even though Google verified the email (password-squatting guard)", async () => {
-      // Linking must NOT be treated as proof strong enough to flip
-      // `login`'s `!user.emailVerifiedAt` guard: unlike `resetPassword`
-      // (auth.controller.ts), which overwrites the password and so evicts
-      // whoever set it, linking touches no password at all. If it also set
-      // `emailVerifiedAt`, an attacker who registered this address first
-      // (and never verified it) would have their OWN password start
-      // working the moment the real owner links Google — see
-      // findOrCreateByGoogle's own header comment, point 3.
+    it('takes over an unverified account on a verified link: clears the password, verifies the email, revokes its sessions', async () => {
       const email = uniqueEmail()
       const existing = await userRepository.create({ email, passwordHash: 'not-a-real-hash' })
       createdIds.push(existing.id)
       expect(existing.emailVerifiedAt).toBeNull()
+      const squatterSession = await issueRefreshToken(existing.id, randomUUID())
 
       const profile = googleProfile({ email, emailVerified: true })
       const user = await findOrCreateByGoogle(profile)
 
-      expect(user.emailVerifiedAt).toBeNull()
+      expect(user.id).toBe(existing.id)
+      expect(user.passwordHash).toBeNull()
+      expect(user.emailVerifiedAt).toBeInstanceOf(Date)
       const reread = await userRepository.findById(existing.id)
-      expect(reread?.emailVerifiedAt).toBeNull()
+      expect(reread?.passwordHash).toBeNull()
+      expect(reread?.emailVerifiedAt).toBeInstanceOf(Date)
+      const link = await authProviderRepository.findByProviderAndId('google', profile.id)
+      expect(link?.userId).toBe(existing.id)
+
+      const refreshResponse = await request(app)
+        .post('/api/v1/auth/refresh')
+        .set('Cookie', `${REFRESH_TOKEN_COOKIE_NAME}=${squatterSession.raw}`)
+      expect(refreshResponse.status).toBe(401)
+    })
+
+    it("drops a squatter's own pre-existing Google link when a different, verified identity claims the account", async () => {
+      // Seeded directly, because no API path creates it: a squatter's Google
+      // row on a never-verified account the real owner now claims. Pins that
+      // the claim removes it, so findOrCreateByGoogle's step 1 cannot honour it.
+      const email = uniqueEmail()
+      const existing = await userRepository.create({ email, passwordHash: 'not-a-real-hash' })
+      createdIds.push(existing.id)
+      const squatterGoogleId = randomUUID()
+      await authProviderRepository.create({
+        userId: existing.id,
+        provider: 'google',
+        providerId: squatterGoogleId,
+      })
+
+      const profile = googleProfile({ email, emailVerified: true })
+      const user = await findOrCreateByGoogle(profile)
+
+      expect(user.id).toBe(existing.id)
+      // The squatter's identity no longer resolves to this account at all.
+      expect(
+        await authProviderRepository.findByProviderAndId('google', squatterGoogleId)
+      ).toBeUndefined()
+      // The claimer's identity does.
+      const claimerLink = await authProviderRepository.findByProviderAndId('google', profile.id)
+      expect(claimerLink?.userId).toBe(existing.id)
     })
 
     it('never moves an existing, earlier emailVerifiedAt timestamp when linking', async () => {
@@ -560,6 +616,46 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
         statusCode: 401,
         code: 'google_auth_failed',
       })
+    })
+
+    it("creates a fresh account for a soft-deleted user's email under a different Google identity", async () => {
+      const email = uniqueEmail()
+      const deleted = await findOrCreateByGoogle(googleProfile({ email, emailVerified: true }))
+      createdIds.push(deleted.id)
+      await userRepository.softDelete(deleted.id)
+
+      const fresh = await findOrCreateByGoogle(googleProfile({ email, emailVerified: true }))
+      createdIds.push(fresh.id)
+
+      expect(fresh.id).not.toBe(deleted.id)
+      const providers = await authProviderRepository.findByUser(fresh.id)
+      expect(
+        providers.map((provider) => provider.provider).toSorted((a, b) => a.localeCompare(b))
+      ).toEqual(['email', 'google'])
+    })
+
+    it("keeps a deleted user's Google identity off the account that re-registers the address", async () => {
+      const email = uniqueEmail()
+      const profile = googleProfile({ email, emailVerified: true })
+      const deleted = await findOrCreateByGoogle(profile)
+      createdIds.push(deleted.id)
+      await userRepository.softDelete(deleted.id)
+
+      const registration = await request(app)
+        .post('/api/v1/auth/register')
+        .send({ email, password: 'correct horse battery staple' })
+      const fresh = await userRepository.findByEmail(email)
+      if (fresh) createdIds.push(fresh.id)
+
+      expect(registration.status).toBe(202)
+      expect(fresh?.id).toBeDefined()
+      expect(fresh?.id).not.toBe(deleted.id)
+      await expect(findOrCreateByGoogle(profile)).rejects.toMatchObject({
+        statusCode: 401,
+        code: 'google_auth_failed',
+      })
+      const freshProviders = await authProviderRepository.findByUser(fresh?.id ?? '')
+      expect(freshProviders.map((provider) => provider.provider)).toEqual(['email'])
     })
 
     it('rejects a Google profile that carries no email at all', async () => {

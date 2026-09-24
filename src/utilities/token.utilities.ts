@@ -14,15 +14,20 @@
 // stored hash is SHA-256, not bcrypt.
 //
 // Rotation and reuse detection (rotateRefreshToken) are the security core
-// of this module: a stolen refresh token is only containable if presenting
-// it AFTER the legitimate client has already rotated it kills the entire
-// session, not just that one token. See UserTokenRepository.claimOnce for
-// how the race that would otherwise defeat this is closed — and how that
-// same primitive now also guards email-verification and password-reset
-// tokens, scoped so one purpose's token can never be claimed as another's.
+// of this module: presenting a token AFTER the legitimate client has
+// already rotated it is reuse. Within REFRESH_REUSE_GRACE_MS of that
+// rotation, and only while the session hasn't been killed, reuse gets a
+// sibling token instead (findGraceSession) — a concurrent-refresh
+// allowance. Past the window, or once the session is killed, reuse kills
+// the entire session, not just that one token. See UserTokenRepository.
+// claimOnce for how the race that would otherwise defeat this is closed —
+// and how that same primitive now also guards email-verification and
+// password-reset tokens, scoped so one purpose's token can never be
+// claimed as another's.
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import jwt from 'jsonwebtoken'
 import { getEnv } from '@/configs/env.config'
+import { REFRESH_REUSE_GRACE_MS } from '@/constants/auth.constants'
 import type { TokenPurpose, UserToken } from '@/database/models/user-token.model'
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/middlewares/error.middleware'
@@ -64,6 +69,12 @@ export interface AccessTokenPayload {
    * a Redis flush can be identified in logs.
    */
   jti?: string
+  /**
+   * Expiry, in seconds since the epoch, as verified by jsonwebtoken. Set on
+   * every verified token that carries one; the notification stream ends
+   * itself at this moment.
+   */
+  exp?: number
 }
 
 /**
@@ -212,6 +223,7 @@ export function verifyAccessToken(token: string): VerifyAccessTokenResult {
     const payload: AccessTokenPayload = { sub: decoded.sub }
     if (typeof decoded.sid === 'string') payload.sid = decoded.sid
     if (typeof decoded.jti === 'string') payload.jti = decoded.jti
+    if (typeof decoded.exp === 'number') payload.exp = decoded.exp
     return { ok: true, payload }
   } catch (error) {
     return { ok: false, reason: error instanceof jwt.TokenExpiredError ? 'expired' : 'invalid' }
@@ -306,105 +318,114 @@ export async function claimToken(
 }
 
 /**
+ * Concurrent-refresh grace: a token replayed within REFRESH_REUSE_GRACE_MS of its rotation gets a sibling (accepted trade-off); later reuse revokes the session.
+ *
+ * Known gap, same class as revokeAllForUser's: a logout that commits between the isSessionKilled check here and the sibling's INSERT still leaves that sibling live.
+ * @param existing - The already-claimed row the presented token hashes to.
+ * @returns The session to continue when every grace condition holds and the session was not killed, otherwise undefined.
+ */
+async function findGraceSession(
+  existing: UserToken
+): Promise<{ sessionId: string; sessionStartedAt: Date } | undefined> {
+  const { purpose, sessionId, sessionStartedAt, consumedAt, expiresAt, tokenHash } = existing
+  if (purpose !== 'refresh' || sessionId === null || sessionStartedAt === null) return undefined
+  // consumedAt is null for a row killed by logout/reuse revocation, never a rotation.
+  if (consumedAt === null) return undefined
+  // Judged by Postgres's own clock, not Date.now() — see wasConsumedWithin.
+  if (!(await userTokenRepository.wasConsumedWithin(tokenHash, REFRESH_REUSE_GRACE_MS))) {
+    return undefined
+  }
+  // claimOnce also consumes expired rows; an expired token must never mint a sibling.
+  if (expiresAt.getTime() <= Date.now()) return undefined
+  // Committed kill markers only, so a sibling rotation still in flight can't look like a logout.
+  if (await userTokenRepository.isSessionKilled(sessionId)) return undefined
+  return { sessionId, sessionStartedAt }
+}
+
+/**
+ * Issue the next refresh token in a session, enforcing the session's absolute lifetime.
+ * @param userId - The session's user.
+ * @param sessionId - The session (rotation-chain) id.
+ * @param sessionStartedAt - When the session began; copied forward so the absolute TTL never resets.
+ * @returns The new row's id, and the raw token with its metadata.
+ * @throws {HttpError} 401, when the session is past `SESSION_ABSOLUTE_TTL` (the whole session is revoked).
+ */
+async function continueSession(
+  userId: string,
+  sessionId: string,
+  sessionStartedAt: Date
+): Promise<{ id: string; issued: IssuedRefreshToken }> {
+  const env = getEnv()
+  const sessionAgeMs = Date.now() - sessionStartedAt.getTime()
+  if (sessionAgeMs >= requireDurationMs(env.SESSION_ABSOLUTE_TTL)) {
+    // Every token in the session shares this start time, so all of them are past the ceiling.
+    await userTokenRepository.revokeAllForSession(sessionId)
+    // Same message as the expiry branch, so a caller can't tell which clock ran out.
+    throw new HttpError('Refresh token expired', 401)
+  }
+
+  const { id, raw, expiresAt } = await createTokenRow(
+    userId,
+    'refresh',
+    requireDurationMs(env.REFRESH_TOKEN_TTL),
+    sessionId,
+    sessionStartedAt
+  )
+  return { id, issued: { raw, userId, sessionId, expiresAt } }
+}
+
+/**
  * Redeem a refresh token for a new one, invalidating the old one.
  *
- * Reuse detection: if the presented token was already revoked — because it
- * was already rotated, or already logged out — presenting it again revokes
- * every token in its session, not just this one. A legitimate client only
- * ever presents a token once; a second presentation of an already-used
- * token means someone else has it.
+ * Reuse detection: presenting an already-used token revokes every token in
+ * its session, except within REFRESH_REUSE_GRACE_MS of its rotation, when it
+ * gets a sibling in the same session instead (`findGraceSession`).
  *
- * Two clocks stop a rotation, and they are not the same clock. The token's
- * own `expiresAt` is a SLIDING window reset by every rotation — it bounds
- * how long a client may go idle. The session's `sessionStartedAt` is an
- * ABSOLUTE ceiling (`SESSION_ABSOLUTE_TTL`) copied forward unchanged — it
- * bounds how long one login may live at all, however diligently it
- * refreshes. Without the second, a client refreshing every 15 minutes (as
- * `ACCESS_TOKEN_TTL` implies) holds a session forever, and so does anyone
- * who exfiltrated its cookie.
+ * Two clocks stop a rotation. The token's own `expiresAt` is a sliding
+ * window reset by every rotation. The session's `sessionStartedAt` is an
+ * absolute ceiling (`SESSION_ABSOLUTE_TTL`), copied forward unchanged, so a
+ * diligently refreshing client (or a stolen cookie) cannot hold a login forever.
  * @param raw - The raw refresh token presented by the client.
  * @returns The new raw token to hand to the client, and its metadata.
- * @throws {HttpError} 401, when the token is unknown, already used, expired, or belongs to a session past its absolute lifetime.
+ * @throws {HttpError} 401, when the token is unknown, already used outside the grace window, expired, or belongs to a session past its absolute lifetime.
  */
 export async function rotateRefreshToken(raw: string): Promise<IssuedRefreshToken> {
   const tokenHash = hashToken(raw)
   const claimed = await userTokenRepository.claimOnce(tokenHash, 'refresh')
 
   if (!claimed) {
-    // Either this hash was never issued, it was issued for a DIFFERENT
-    // purpose (e.g. a password-reset token presented here by mistake — see
-    // claimOnce's purpose predicate), or it is a refresh token that is
-    // already revoked, which is the reuse signal. Only the last case has a
-    // session worth containing; `findByHash` is purpose-agnostic, so
-    // `existing` may be a row of another purpose, and only a 'refresh' row
-    // ever has a non-null `sessionId` to revoke.
+    // Never issued, issued for another purpose, or already revoked (the reuse
+    // signal). `findByHash` is purpose-agnostic; only a 'refresh' row has a session.
     const existing = await userTokenRepository.findByHash(tokenHash)
+    const graceSession = existing ? await findGraceSession(existing) : undefined
+    if (existing && graceSession) {
+      const sibling = await continueSession(
+        existing.userId,
+        graceSession.sessionId,
+        graceSession.sessionStartedAt
+      )
+      return sibling.issued
+    }
     if (existing && existing.sessionId !== null) {
       await userTokenRepository.revokeAllForSession(existing.sessionId)
     }
     throw new HttpError('Invalid refresh token', 401)
   }
 
-  // sessionId/sessionStartedAt are nullable at the column level (they mean
-  // nothing outside 'refresh', see user-token.model.ts), but `claimed` was
-  // just claimed under the 'refresh' predicate above, and issueRefreshToken
-  // — the only writer of a 'refresh' row — always fills both together.
-  // Narrowing here, rather than asserting the type away, so a future bug
-  // that broke that invariant fails loudly as a 401 instead of a runtime
-  // crash further down.
+  // issueRefreshToken always fills both for 'refresh'; narrowed so a broken invariant is a 401, not a crash.
   const { sessionId, sessionStartedAt } = claimed
   if (sessionId === null || sessionStartedAt === null) {
     throw new HttpError('Invalid refresh token', 401)
   }
 
   if (claimed.expiresAt.getTime() < Date.now()) {
-    // Already claimed (revoked) above by the same statement that read it —
-    // an expired token is simply revoked, not rotated further. This is not
-    // a reuse signal: nothing else in the session is implicated.
+    // Already revoked by the claim; expiry is not a reuse signal, so the session is untouched.
     throw new HttpError('Refresh token expired', 401)
   }
 
-  const env = getEnv()
-  const sessionAgeMs = Date.now() - sessionStartedAt.getTime()
-  if (sessionAgeMs >= requireDurationMs(env.SESSION_ABSOLUTE_TTL)) {
-    // The absolute ceiling, which `expiresAt` above cannot enforce: that is
-    // a sliding window every rotation resets, so a client that refreshes
-    // before each expiry keeps a session alive indefinitely — and so does
-    // anyone who stole its cookie. `sessionStartedAt` is copied forward
-    // unchanged by rotation (below), so this measures the age of the LOGIN,
-    // not of the token just presented.
-    //
-    // The whole family is revoked, unlike the expiry case above: every
-    // other token in this session shares the same `sessionStartedAt` and is
-    // therefore equally past the ceiling. Leaving them nominally live would
-    // make the table disagree with the rule this function enforces, for no
-    // gain — they could not be rotated either.
-    await userTokenRepository.revokeAllForSession(sessionId)
-    // Deliberately the SAME message the expiry branch uses. A third
-    // distinguishable rejection would tell a caller holding a valid refresh
-    // token which of the two clocks ran out, and "expired" is a true
-    // description of both.
-    throw new HttpError('Refresh token expired', 401)
-  }
-
-  // Copies sessionId/sessionStartedAt forward rather than recomputing them:
-  // this is what makes the ceiling above an ABSOLUTE limit rather than
-  // another sliding one.
-  const {
-    id,
-    raw: newRaw,
-    expiresAt,
-  } = await createTokenRow(
-    claimed.userId,
-    'refresh',
-    requireDurationMs(env.REFRESH_TOKEN_TTL),
-    sessionId,
-    sessionStartedAt
-  )
-
-  await userTokenRepository.update(claimed.id, { replacedById: id })
-
-  return { raw: newRaw, userId: claimed.userId, sessionId, expiresAt }
+  const next = await continueSession(claimed.userId, sessionId, sessionStartedAt)
+  await userTokenRepository.update(claimed.id, { replacedById: next.id })
+  return next.issued
 }
 
 /**

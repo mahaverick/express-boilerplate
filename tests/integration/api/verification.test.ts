@@ -12,7 +12,7 @@
 // tell whoever holds a link that the address is squatted.
 import { randomUUID } from 'node:crypto'
 import type { Worker } from 'bullmq'
-import request from 'supertest'
+import type { Response } from 'supertest'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
 import { REFRESH_TOKEN_COOKIE_NAME } from '@/constants/auth.constants'
@@ -32,6 +32,7 @@ import {
   findMailpitMessages,
   getMailpitMessage,
 } from '../../helpers/mailpit'
+import { request } from '../../helpers/request'
 
 const app = createApp()
 const userRepository = new UserRepository()
@@ -63,7 +64,7 @@ const VALID_PASSWORD = 'correct horse battery staple'
  * @param password - The account password to present.
  * @returns The supertest response.
  */
-async function verify(token: string, password: string): Promise<request.Response> {
+async function verify(token: string, password: string): Promise<Response> {
   return request(app).post('/api/v1/auth/verify-email').send({ token, password })
 }
 
@@ -233,7 +234,7 @@ function uniqueEmail(): string {
  * @param email - The address to submit.
  * @returns The supertest response.
  */
-async function resend(email: string): Promise<request.Response> {
+async function resend(email: string): Promise<Response> {
   return request(app).post('/api/v1/auth/resend-verification').send({ email })
 }
 
@@ -289,7 +290,7 @@ async function registerVerifiedUser(
  */
 async function registerAndLogin(
   createdIds: string[]
-): Promise<{ response: request.Response; email: string; user: User }> {
+): Promise<{ response: Response; email: string; user: User }> {
   const email = uniqueEmail()
   await request(app).post('/api/v1/auth/register').send({ email, password: VALID_PASSWORD })
   const user = await userRepository.findByEmail(email)
@@ -311,7 +312,7 @@ async function registerAndLogin(
  * @param response - The supertest response.
  * @returns The `refreshToken=...` pair, or undefined if the cookie was not set.
  */
-function refreshCookiePair(response: request.Response): string | undefined {
+function refreshCookiePair(response: Response): string | undefined {
   const cookieLines = response.headers['set-cookie'] as string[] | undefined
   const line = cookieLines?.find((cookie) => cookie.startsWith(`${REFRESH_TOKEN_COOKIE_NAME}=`))
   return line?.split(';', 1)[0]

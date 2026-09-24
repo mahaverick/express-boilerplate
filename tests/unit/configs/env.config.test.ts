@@ -142,6 +142,17 @@ describe('parseEnv', () => {
     expect(message).toContain('ACCESS_TOKEN_TTL')
     expect(message).toContain('DATABASE_URL')
   })
+
+  it('defaults SSE_MAX_STREAMS_PER_USER to 5 and coerces a string override', () => {
+    expect(parseEnv(valid).SSE_MAX_STREAMS_PER_USER).toBe(5)
+    expect(parseEnv({ ...valid, SSE_MAX_STREAMS_PER_USER: '2' }).SSE_MAX_STREAMS_PER_USER).toBe(2)
+  })
+
+  it('rejects a SSE_MAX_STREAMS_PER_USER of zero', () => {
+    expect(() => parseEnv({ ...valid, SSE_MAX_STREAMS_PER_USER: '0' })).toThrow(
+      /SSE_MAX_STREAMS_PER_USER/
+    )
+  })
 })
 
 describe('getEnv', () => {
