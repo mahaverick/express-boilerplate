@@ -1,32 +1,26 @@
 // src/services/notification-emitter.service.ts
 //
-// The in-process publish/subscribe bridge between the notification worker
-// (notification.worker.ts, a BullMQ Worker that by default runs inside this
-// same process — WORKER_ENABLED defaults true, see CLAUDE.md's "Job queue"
-// section) and notification-stream.controller.ts's SSE endpoint. One
-// `EventEmitter` singleton, keyed per-user via `notification:${userId}`
-// event names, so one worker insert reaches every tab a user currently has
-// open on `GET /api/v1/notifications/stream` — and only that user's tabs,
-// since each SSE connection subscribes to its own user id's event name
-// alone.
+// Live notification fanout across every replica. `emitNotification`
+// publishes to one Redis channel, `${QUEUE_PREFIX}:notifications`. Each
+// process with an SSE listener runs one subscriber connection and hands every
+// message to its local EventEmitter, keyed per user, so the publishing process
+// receives its own copy exactly once, like every other replica.
 //
-// SINGLE PROCESS ONLY. This does not fan out across pods: a multi-pod
-// deployment with `WORKER_ENABLED=false` API pods and a separate worker pod
-// (the split CLAUDE.md already documents) inserts the notification row from
-// one process and emits the event in that SAME process — an SSE connection
-// held open on a DIFFERENT API pod never sees it, and only learns of the
-// new notification on its next `GET /api/v1/notifications` poll or
-// reconnect. Upgrading this to Redis Pub/Sub (over the ioredis connection
-// queue.service.ts already owns — PUBLISH/SUBSCRIBE, not BullMQ) is the
-// documented path for that deployment shape. It is not built here: this
-// boilerplate's default topology runs the worker in the same process as the
-// API, which is exactly the case this singleton already covers correctly.
+// Best effort, not durable: the row is already in the database. When the
+// subscriber reconnects after an outage, every open stream is closed, and its
+// client replays the gap from the database via `Last-Event-ID`.
 import { EventEmitter } from 'node:events'
+import type { RedisClientType } from 'redis'
+import { z } from 'zod'
+import { getEnv } from '@/configs/env.config'
+import { NOTIFICATION_TYPES } from '@/constants/notification.constants'
 import type { Notification } from '@/database/models/notification.model'
+import { closeAllStreams } from '@/services/lifecycle.service'
+import { logger } from '@/services/logger.service'
+import { createRedisClient, getRedis } from '@/services/redis.service'
 
 /**
- * The event name one user's notifications are published and subscribed
- * under.
+ * The event name one user's notifications are delivered under locally.
  * @param userId - The notification owner's id.
  * @returns The per-user event name.
  */
@@ -34,65 +28,191 @@ function eventNameFor(userId: string): string {
   return `notification:${userId}`
 }
 
-// Lazy singleton — same shape/reasoning as queue.service.ts's own `state`: a
-// mutable property on a top-level `const` rather than a top-level `let`, so
-// `getEmitter()` shares state without reassigning a top-level binding
-// (which unicorn/no-top-level-assignment-in-function forbids) — and
-// constructed on first use, not at module-import time, matching
-// getEnv()/getLogger()/getQueueConnection()'s own lazy-singleton convention
-// (unicorn/no-top-level-side-effects would otherwise flag both `new
-// EventEmitter()` and the `setMaxListeners(0)` call that must follow it,
-// run as a bare statement at module scope).
-const state: { emitter: EventEmitter | undefined } = { emitter: undefined }
+/**
+ * The Redis channel every replica publishes and subscribes on.
+ * @returns The channel name, namespaced by `QUEUE_PREFIX`.
+ */
+function channelName(): string {
+  return `${getEnv().QUEUE_PREFIX}:notifications`
+}
+
+// Dates cross the wire as ISO strings (`Date#toJSON`) and are revived here.
+const isoDate = z.iso.datetime().transform((value) => new Date(value))
+const metadataSchema = z.record(z.string(), z.unknown())
+
+const messageSchema = z.object({
+  userId: z.string().min(1),
+  notification: z.object({
+    id: z.string(),
+    userId: z.string(),
+    type: z.enum(NOTIFICATION_TYPES),
+    title: z.string(),
+    body: z.string(),
+    metadata: metadataSchema.nullable(),
+    readAt: isoDate.nullable(),
+    createdAt: isoDate,
+    dedupeKey: z.string().nullable(),
+  }),
+})
+
+// Mutable properties on a top-level const, so these functions share state
+// without reassigning a top-level binding (unicorn/no-top-level-assignment-in-function).
+const state: {
+  emitter: EventEmitter | undefined
+  subscriber: RedisClientType | undefined
+  starting: Promise<void> | undefined
+  closed: boolean
+  isPublishFailing: boolean
+} = {
+  emitter: undefined,
+  subscriber: undefined,
+  starting: undefined,
+  closed: false,
+  isPublishFailing: false,
+}
 
 /**
- * Get the shared emitter, constructing it on first use.
+ * Get the local emitter, constructing it on first use.
  * @returns The process-wide notification emitter.
  */
 function getEmitter(): EventEmitter {
   if (!state.emitter) {
-    // eslint-disable-next-line unicorn/prefer-event-target -- needs `setMaxListeners(0)` (no per-event-name listener cap) and `listenerCount()` (this module's own export, used by notification-stream.test.ts to prove cleanup) — plain `EventEmitter` features `EventTarget` has no equivalent for. This module's own design (per-user dynamic event names over `node:events`) is specified by the task it implements, not merely a stylistic default.
+    // eslint-disable-next-line unicorn/prefer-event-target -- needs `setMaxListeners(0)` (no per-event-name listener cap) and `listenerCount()` (this module's own export, used by notification-stream.test.ts to prove cleanup) — plain `EventEmitter` features `EventTarget` has no equivalent for.
     state.emitter = new EventEmitter()
-    // `setMaxListeners(0)` removes Node's default 10-listener warning
-    // threshold: a real deployment can have far more than 10 concurrent SSE
-    // connections across all users combined. Unlike a genuine leak — many
-    // listeners piling up on the SAME event name — every listener here sits
-    // on its own per-user event name, one per open SSE connection
-    // (`onNotification`, below), so there is no fixed "this many is always
-    // too many" figure the default warning could usefully flag.
+    // Every listener sits on its own per-user event name, one per open SSE
+    // connection, so Node's default 10-listener warning has nothing to flag.
     state.emitter.setMaxListeners(0)
   }
   return state.emitter
 }
 
 /**
- * Publish one notification to every SSE connection currently subscribed to
- * its owner.
+ * Hand one notification to this process's listeners for its owner.
+ * @param userId - The notification's owner.
+ * @param notification - The notification to deliver.
+ */
+function deliverLocally(userId: string, notification: Notification): void {
+  try {
+    getEmitter().emit(eventNameFor(userId), notification)
+  } catch (error) {
+    // A throwing listener must not break the subscriber or the caller.
+    logger.error('A notification listener threw', { error, notificationId: notification.id })
+  }
+}
+
+/**
+ * Validate one channel message and deliver it locally; a malformed one is logged and dropped.
+ * @param message - The raw message from the channel.
+ */
+function handleMessage(message: string): void {
+  let payload: unknown
+  try {
+    payload = JSON.parse(message)
+  } catch {
+    logger.warn('Dropped a notification message that is not JSON')
+    return
+  }
+  const parsed = messageSchema.safeParse(payload)
+  if (!parsed.success) {
+    logger.warn('Dropped an invalid notification message', {
+      paths: parsed.error.issues.map((issue) => issue.path.map(String).join('.')),
+    })
+    return
+  }
+  const notification: Notification = parsed.data.notification
+  deliverLocally(parsed.data.userId, notification)
+}
+
+/**
+ * Connect and subscribe; on failure, forget the client so the next `onNotification` retries.
+ * @param subscriber - The client to start.
+ * @returns Resolves once subscribed or given up; never rejects.
+ */
+async function startSubscriber(subscriber: RedisClientType): Promise<void> {
+  try {
+    await subscriber.connect()
+    await subscriber.subscribe(channelName(), handleMessage)
+  } catch (error) {
+    if (state.subscriber === subscriber) state.subscriber = undefined
+    if (subscriber.isOpen) subscriber.destroy()
+    if (!state.closed) logger.error('Notification subscriber failed to start', { error })
+  }
+}
+
+/**
+ * Open this process's subscriber unless it exists or shutdown has closed it.
+ */
+function ensureSubscriber(): void {
+  if (state.closed || state.subscriber) return
+  const subscriber = createRedisClient()
+  const readiness = { hasBeenReady: false }
+  subscriber.on('ready', () => {
+    // node-redis resubscribes before 'ready'. Messages published during the
+    // outage are gone, so end every stream and let its client replay them.
+    if (readiness.hasBeenReady) {
+      logger.warn('Notification subscriber reconnected; closing open streams so clients replay')
+      closeAllStreams()
+    }
+    readiness.hasBeenReady = true
+  })
+  state.subscriber = subscriber
+  state.starting = startSubscriber(subscriber)
+}
+
+/**
+ * Publish one message; when that fails, deliver it to this process's listeners only.
+ * @param userId - The notification's owner.
+ * @param notification - The notification, for the local fallback.
+ * @param message - The serialised channel message.
+ * @returns Resolves once published or delivered locally; never rejects.
+ */
+async function publishOrDeliverLocally(
+  userId: string,
+  notification: Notification,
+  message: string
+): Promise<void> {
+  try {
+    const client = await getRedis()
+    await client.publish(channelName(), message)
+    state.isPublishFailing = false
+  } catch (error) {
+    if (!state.isPublishFailing) {
+      state.isPublishFailing = true
+      logger.warn(
+        'Notification publish failed; delivering to this process only until Redis recovers',
+        { error }
+      )
+    }
+    deliverLocally(userId, notification)
+  }
+}
+
+/**
+ * Publish one notification to every replica's SSE connections for its owner.
  *
- * A no-op when the user has no open connection — `EventEmitter#emit`
- * returns `false` and does nothing else. That is never data loss: the
- * notification already exists in the database by the time a caller reaches
- * this function (notification.worker.ts calls it only after
- * `NotificationRepository.create` has resolved), so it still reaches the
- * user the next time they load their inbox or open a stream. Live delivery
- * here is additive, not the row's only durable record.
+ * Returns before delivery: the publish runs in the background. The row is
+ * already in the database (notification.worker.ts calls this only after the
+ * insert), so a missed live delivery reaches the user on their next load or
+ * reconnect.
  * @param userId - The notification's owner. Only listeners subscribed to this exact id are notified.
  * @param notification - The notification row, exactly as `NotificationRepository.create` returned it.
  */
 export function emitNotification(userId: string, notification: Notification): void {
-  getEmitter().emit(eventNameFor(userId), notification)
+  const message = JSON.stringify({ userId, notification })
+  void publishOrDeliverLocally(userId, notification, message)
 }
 
 /**
- * Subscribe to one user's live notification stream.
+ * Subscribe to one user's live notification stream, opening this process's subscriber on first use.
  * @param userId - The user to subscribe to.
- * @param handler - Called once per notification, with the row exactly as `emitNotification` published it.
+ * @param handler - Called once per notification, with its dates revived.
  */
 export function onNotification(
   userId: string,
   handler: (notification: Notification) => void
 ): void {
   getEmitter().on(eventNameFor(userId), handler)
+  ensureSubscriber()
 }
 
 /**
@@ -101,8 +221,7 @@ export function onNotification(
  * Must be called with the SAME function reference `onNotification` was
  * given — `EventEmitter#off` removes a listener by reference equality, not
  * by user id alone — which is why notification-stream.controller.ts keeps
- * its listener in a named `const` rather than passing a fresh inline arrow
- * function to each call.
+ * its listener in a named `const`.
  * @param userId - The user this handler was subscribed to.
  * @param handler - The exact function reference passed to the matching `onNotification` call.
  */
@@ -114,18 +233,26 @@ export function offNotification(
 }
 
 /**
- * How many SSE connections are currently subscribed to one user's live
- * notification stream.
+ * How many local listeners one user's live notification stream has.
  *
- * Exists for tests: `tests/integration/api/notification-stream.test.ts`
- * uses it to prove `offNotification` actually ran when a client
- * disconnected, rather than only trusting that no error was thrown and no
- * further frame happened to arrive within a test's own timeout. Costs
- * nothing in production — `EventEmitter#listenerCount` is O(1) and nothing
- * else in this codebase calls it.
+ * Exists for tests: notification-stream.test.ts uses it to prove
+ * `offNotification` ran when a client disconnected.
  * @param userId - The user to check.
- * @returns The number of currently-registered listeners for this user.
+ * @returns The number of currently-registered listeners for this user in this process.
  */
 export function listenerCount(userId: string): number {
   return getEmitter().listenerCount(eventNameFor(userId))
+}
+
+/**
+ * Close this process's subscriber for shutdown; a later `onNotification` never reopens it. Safe to call twice.
+ * @returns Resolves once the subscriber is closed and its start attempt has settled.
+ */
+export async function closeNotificationSubscriber(): Promise<void> {
+  state.closed = true
+  const subscriber = state.subscriber
+  state.subscriber = undefined
+  // destroy, not close: close() waits for queued commands, which a silent Redis never answers.
+  if (subscriber?.isOpen) subscriber.destroy()
+  if (state.starting) await state.starting
 }

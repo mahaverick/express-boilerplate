@@ -23,6 +23,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
+import { closeNotificationSubscriber } from '@/services/notification-emitter.service'
 import { signAccessToken } from '@/utilities/token.utilities'
 import { request } from '../../helpers/request'
 
@@ -106,6 +107,8 @@ describe('security headers on a live SSE stream', () => {
 
   afterAll(async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()))
+    // The stream it opened started this process's subscriber.
+    await closeNotificationSubscriber()
     if (createdUserIds.length > 0) {
       await sql`delete from users where id = any(${createdUserIds})`
     }

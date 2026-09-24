@@ -1,8 +1,9 @@
 // src/services/redis.service.ts
 //
-// One connection for the process, created lazily. Eager connection at import
-// time would make every unit test that transitively imports a repository open
-// a socket — and fail on a machine with no Redis running.
+// One shared connection for the process, created lazily. Eager connection at
+// import time would make every unit test that transitively imports a
+// repository open a socket — and fail on a machine with no Redis running.
+// `createRedisClient` builds any extra connection with the same reconnect policy.
 import { createClient, type RedisClientType } from 'redis'
 import { getEnv } from '@/configs/env.config'
 import { logger } from '@/services/logger.service'
@@ -44,10 +45,10 @@ function failFastDelay(retries: number): number | Error {
 }
 
 /**
- * Create and connect one client whose reconnect policy depends on whether it has ever been ready.
- * @returns The connected client.
+ * Create an unconnected client that fails fast before its first 'ready' and retries forever after it.
+ * @returns The client; the caller connects it.
  */
-async function connectRedis(): Promise<RedisClientType> {
+export function createRedisClient(): RedisClientType {
   const readiness = { hasBeenReady: false }
   const client: RedisClientType = createClient({
     url: getEnv().REDIS_URL,
@@ -65,6 +66,15 @@ async function connectRedis(): Promise<RedisClientType> {
   client.on('ready', () => {
     readiness.hasBeenReady = true
   })
+  return client
+}
+
+/**
+ * Create and connect one client.
+ * @returns The connected client.
+ */
+async function connectRedis(): Promise<RedisClientType> {
+  const client = createRedisClient()
   await client.connect()
   return client
 }

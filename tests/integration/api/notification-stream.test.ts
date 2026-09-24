@@ -43,10 +43,18 @@ import {
   markShuttingDown,
   resetLifecycleForTests,
 } from '@/services/lifecycle.service'
-import { emitNotification, listenerCount } from '@/services/notification-emitter.service'
+import {
+  closeNotificationSubscriber,
+  emitNotification,
+  listenerCount,
+  offNotification,
+  onNotification,
+} from '@/services/notification-emitter.service'
+import { getRedis } from '@/services/redis.service'
 import { denySession } from '@/services/session-denylist.service'
 import { signAccessToken } from '@/utilities/token.utilities'
 import { withMutatedMethod } from '../../helpers/mutate'
+import { waitForNotificationSubscriber } from '../../helpers/notification-subscriber'
 
 const userRepository = new UserRepository()
 const notificationRepository = new NotificationRepository()
@@ -341,10 +349,13 @@ describe('GET /api/v1/notifications/stream', () => {
     await new Promise<void>((resolve) => server.once('listening', resolve))
     const address = server.address() as AddressInfo
     baseUrl = `http://127.0.0.1:${address.port}`
+    // Live delivery crosses Redis: wait until this process's subscriber is listening.
+    await waitForNotificationSubscriber({ onNotification, offNotification }, getRedis)
   })
 
   afterAll(async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()))
+    await closeNotificationSubscriber()
   })
 
   afterEach(async () => {
@@ -712,6 +723,26 @@ describe('GET /api/v1/notifications/stream', () => {
     )
   })
 
+  it('does not write a live copy of a notification its replay burst already wrote', async () => {
+    const { user, token } = await createAuthenticatedUser()
+    const first = await seedNotification(user.id, 'First')
+    const replayed = await seedNotification(user.id, 'In the replay burst')
+
+    const connection = openStream('/api/v1/notifications/stream', {
+      Authorization: `Bearer ${token}`,
+      'Last-Event-ID': first.id,
+    })
+    await connection.waitForResponse()
+    await waitUntil(() => connection.frames.some((frame) => frame.id === replayed.id), 5000)
+
+    // Its live copy arrives after the replay finished, as a Redis round trip can.
+    emitNotification(user.id, replayed)
+    await sleep(200)
+
+    const delivered = connection.frames.filter((frame) => frame.event === 'notification')
+    expect(delivered.map((frame) => frame.id)).toEqual([replayed.id])
+  })
+
   it('does not leak its listener when the client disconnects while a reconnect’s replay query is still in flight', async () => {
     // Regression test for the other half of the same bug: the old ordering
     // also registered `request.on('close')` only after the replay query
@@ -1000,7 +1031,10 @@ describe('GET /api/v1/notifications/stream', () => {
     const body = 'x'.repeat(512 * 1024)
     const frameCount = Math.ceil((32 * 1024 * 1024) / body.length)
     expect(frameCount * body.length).toBeGreaterThan(SSE_MAX_BUFFERED_BYTES * 16)
-    for (let index = 0; index < frameCount; index += 1) {
+    // Paced, and stopped once the server drops the client: delivery crosses
+    // Redis, and an unpaced 32 MiB burst could pass Redis's default 32mb
+    // pub/sub output-buffer limit and disconnect the subscriber.
+    for (let index = 0; index < frameCount && !streamResponse.destroyed; index += 1) {
       emitNotification(user.id, {
         id: randomUUID(),
         userId: user.id,
@@ -1015,11 +1049,13 @@ describe('GET /api/v1/notifications/stream', () => {
         dedupeKey: null,
         createdAt: new Date(),
       })
+      await sleep(20)
     }
 
     // Destroyed server-side, while the client is still paused, and never
     // ended: an end() first would queue the closing chunk, which reaches the
     // client whenever the kernel had already taken the rest.
+    await waitUntil(() => streamResponse.destroyed, 5000)
     expect(streamResponse.destroyed).toBe(true)
     expect(streamResponse.writableEnded).toBe(false)
     // The request 'close' cleanup ran. That fires a tick after the stall

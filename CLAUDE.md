@@ -170,9 +170,16 @@ until you check.
   notification-stream.controller.ts) rejects one outright — the revocation
   heartbeat can only close an already-open connection by session id, so a
   sid-less stream would survive a logout or revocation until its token
-  expired, rather than closing at the next heartbeat. The
-  in-process `EventEmitter` pub/sub works for single-pod deployments;
-  upgrade to Redis Pub/Sub for multi-pod with separate worker processes.
+  expired, rather than closing at the next heartbeat.
+- **Live notifications cross replicas via Redis pub/sub** on
+  `${QUEUE_PREFIX}:notifications` (notification-emitter.service.ts). The
+  publishing process gets its own copy back through its subscriber, and
+  delivers locally only when the publish fails. The subscriber is opened on
+  the first `onNotification`, not at boot, and when it reconnects after an
+  outage every open stream is closed so clients replay the gap via
+  `Last-Event-ID`. Delivery is asynchronous: a test asserting live delivery
+  must first call `waitForNotificationSubscriber`
+  (`tests/helpers/notification-subscriber.ts`).
 
 ## OAuth
 
