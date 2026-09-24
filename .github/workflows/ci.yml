@@ -6,13 +6,11 @@ on:
   workflow_call:
   workflow_dispatch:
 
-# Keyed on the event, NOT github.workflow: when deploy.yml calls this file,
-# github.workflow is the CALLER's name, and concurrency group names are
-# case-insensitive — "Deploy-refs/heads/main" would collide with deploy.yml's
-# own "deploy-refs/heads/main" group. Only PR runs are cancelled by a newer
-# push; a gate run on main is never killed half-way.
+# PR runs are grouped per PR, so a newer push cancels the older run. Push and
+# dispatch runs, including deploy.yml's call, are grouped per commit, so no
+# commit's gate is dropped or cancelled.
 concurrency:
-  group: ci-${{ github.event_name }}-${{ github.ref }}
+  group: ci-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:

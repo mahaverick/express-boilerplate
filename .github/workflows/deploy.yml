@@ -10,10 +10,6 @@ on:
     tags: ['v*']
   workflow_dispatch:
 
-concurrency:
-  group: deploy-${{ github.ref }}
-  cancel-in-progress: false
-
 permissions:
   contents: read
 
@@ -27,6 +23,9 @@ jobs:
     if: github.ref_type != 'tag'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    concurrency:
+      group: image-${{ github.sha }}
+      cancel-in-progress: false
     permissions:
       contents: read
       packages: write
@@ -85,6 +84,9 @@ jobs:
     needs: image
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
     environment: production
     # A manual dispatch from another branch builds and pushes an sha-tagged
     # image but never deploys.
@@ -100,6 +102,9 @@ jobs:
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    concurrency:
+      group: promote-${{ github.ref }}
+      cancel-in-progress: false
     permissions:
       contents: read
       packages: write
@@ -116,20 +121,21 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Wait for the image main built for this commit
         # The tag is pushed while main's run for the same commit may still be
-        # building; 84 tries × 20s stays inside the 30-minute job timeout.
+        # building; 80 tries × 20s leaves room for setup inside the 30-minute timeout.
         run: |
-          for _ in $(seq 1 84); do
+          for _ in $(seq 1 80); do
             if docker buildx imagetools inspect "$SOURCE" >/dev/null 2>&1; then
               echo "Found $SOURCE"
               exit 0
             fi
             sleep 20
           done
-          echo "::error::$SOURCE did not appear within 28 minutes"
+          echo "::error::$SOURCE did not appear after 80 tries (about 27 minutes)"
           exit 1
       - name: Add the semver tags to that digest
         run: |
           v="${VERSION#v}"
+          [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::$VERSION is not a vX.Y.Z release tag"; exit 1; }
           want=$(docker buildx imagetools inspect "$SOURCE" --format '{{json .Manifest}}' | jq -r .digest)
           docker buildx imagetools create \
             --tag "$IMAGE:$v" --tag "$IMAGE:${v%.*}" --tag "$IMAGE:${v%%.*}" \
