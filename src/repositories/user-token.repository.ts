@@ -127,8 +127,7 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
       .from(userTokenModel)
       .where(this.scope(eq(userTokenModel.tokenHash, tokenHash)))
       .limit(1)
-    // consumed_at > ... is SQL NULL, not false, for a row that was never
-    // consumed — compared explicitly so that case reads as false, not truthy.
+    // withinWindow is boolean | null (SQL NULL for a never-consumed row); narrowed to a plain boolean here.
     return row?.withinWindow === true
   }
 

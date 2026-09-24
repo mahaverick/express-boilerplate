@@ -73,19 +73,25 @@ atomic statement, not a separate check: a token minted for one purpose
 including as a refresh token — the claim and the purpose check cannot be
 split by a race, because they are the same UPDATE. The atomic claim means
 Postgres itself decides
-which single caller (if any) wins; a losing concurrent caller — including a
-genuine reuse attempt racing the legitimate client — falls straight into
-the reuse path below.
+which single caller (if any) wins; a losing concurrent caller falls into
+the reuse path below, which — within `REFRESH_REUSE_GRACE_MS` of the
+winning rotation — mints it a sibling token rather than treating it as an
+attack.
 
 Presenting a token that is **already revoked** (because it was already
-rotated, or already logged out) is treated as reuse: every token sharing
-its `session_id` — the entire rotation chain from one login, on one device
-— is revoked immediately (`revokeAllForSession`), not just the token
-presented. A legitimate client only ever presents a refresh token once; a
-second presentation of an already-used one means someone else has it, and
-the whole chain is assumed compromised. An expired-but-not-yet-rotated
-token is simply revoked, not treated as reuse — nothing else in that
-session is implicated by an expiry.
+rotated, or already logged out) is reuse. Within `REFRESH_REUSE_GRACE_MS`
+(10s) of that rotation, and only if the session hasn't since been
+explicitly killed (logout, an earlier reuse, a password reset), reuse
+mints a sibling refresh token in the same session instead of revoking
+it — the accepted trade-off that lets two legitimate concurrent requests
+(e.g. two tabs refreshing at once) both succeed. Past that window, or once
+the session is killed, reuse instead revokes every token sharing its
+`session_id` — the entire rotation chain from one login, on one device
+(`revokeAllForSession`) — not just the token presented; a legitimate
+client only ever presents a refresh token once, so a second presentation
+outside the grace window means someone else has it. An
+expired-but-not-yet-rotated token is simply revoked, not treated as reuse
+— nothing else in that session is implicated by an expiry.
 
 ### Session lifetime: a sliding window AND an absolute ceiling
 
@@ -378,17 +384,19 @@ is per-process only.
   be used to probe which addresses are registered — that would reopen the
   exact enumeration channel closed above.
 - **Refresh** (`POST /api/v1/auth/refresh`): 300 requests per 5-minute
-  window, keyed on IP alone. This is explicitly **volume/abuse protection,
-  not a security control**: a raw refresh token is 256 bits of randomness,
-  so guessing one is infeasible regardless of any rate limit, and replaying
-  an already-rotated token gains an attacker nothing beyond the first
-  attempt — reuse detection (above) revokes the whole session on that first
-  replay, so a burst of further attempts fails identically to the first.
-  What this limiter actually bounds is the request/database load one client
-  can generate against an endpoint that does two writes per call; its limit
-  is generous precisely because tightening it would only cost real users
-  retrying a flaky connection, for a property reuse detection already
-  provides.
+  window, keyed on IP alone. Mostly **volume/abuse protection**: a raw
+  refresh token is 256 bits of randomness, so guessing one is infeasible
+  regardless of any rate limit, and replaying an already-rotated token past
+  `REFRESH_REUSE_GRACE_MS` revokes the whole session on that replay (reuse
+  detection, above), so a burst of further attempts fails identically to
+  the first. It does carry one real security role, though: within the
+  grace window, each replay of a stolen, already-rotated token mints a
+  fresh sibling instead of being rejected, and this limiter is what caps
+  how many siblings an attacker can mint before the window closes. Beyond
+  that, what it bounds is the request/database load one client can
+  generate against an endpoint that does two writes per call; its limit is
+  generous precisely because tightening it would only cost real users
+  retrying a flaky connection.
 - **Logout** (`POST /api/v1/auth/logout`): 300 requests per 5-minute window,
   keyed on IP alone — volume protection on the same reasoning as refresh.
   Logout is unauthenticated by design (a user whose access token has just

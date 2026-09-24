@@ -243,6 +243,30 @@ describe('refresh token issuance, rotation, and revocation', () => {
     expect(stillRotatable.sessionId).toBe(sessionId)
   })
 
+  it('never mints a grace sibling for an expired token, even replayed inside the grace window', async () => {
+    // findGraceSession's own expiry guard is what this test pins: claimOnce
+    // consumes an expired row same as a live one, so without that guard the
+    // immediate replay below reads as "consumed just now" and gets a
+    // sibling minted from a token that was already dead.
+    const userId = await createUser()
+    const sessionId = randomUUID()
+    const issued = await issueRefreshToken(userId, sessionId)
+    await sql`
+      update user_tokens set expires_at = now() - interval '1 second'
+      where user_id = ${userId} and session_id = ${sessionId}
+    `
+
+    await expect(rotateRefreshToken(issued.raw)).rejects.toMatchObject({ statusCode: 401 })
+    // Replayed immediately — well inside REFRESH_REUSE_GRACE_MS of the claim above.
+    await expect(rotateRefreshToken(issued.raw)).rejects.toMatchObject({ statusCode: 401 })
+
+    const liveRows = await sql`
+      select 1 from user_tokens
+      where user_id = ${userId} and session_id = ${sessionId} and revoked_at is null
+    `
+    expect(liveRows).toHaveLength(0)
+  })
+
   it('refuses to rotate once the session passes its absolute lifetime, however fresh the token is', async () => {
     // The gap this closes: expiresAt is a SLIDING window that every rotation
     // resets, so a client refreshing every 15 minutes (what a 15-minute

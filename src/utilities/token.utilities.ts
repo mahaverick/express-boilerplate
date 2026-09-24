@@ -14,12 +14,16 @@
 // stored hash is SHA-256, not bcrypt.
 //
 // Rotation and reuse detection (rotateRefreshToken) are the security core
-// of this module: a stolen refresh token is only containable if presenting
-// it AFTER the legitimate client has already rotated it kills the entire
-// session, not just that one token. See UserTokenRepository.claimOnce for
-// how the race that would otherwise defeat this is closed — and how that
-// same primitive now also guards email-verification and password-reset
-// tokens, scoped so one purpose's token can never be claimed as another's.
+// of this module: presenting a token AFTER the legitimate client has
+// already rotated it is reuse. Within REFRESH_REUSE_GRACE_MS of that
+// rotation, and only while the session hasn't been killed, reuse gets a
+// sibling token instead (findGraceSession) — a concurrent-refresh
+// allowance. Past the window, or once the session is killed, reuse kills
+// the entire session, not just that one token. See UserTokenRepository.
+// claimOnce for how the race that would otherwise defeat this is closed —
+// and how that same primitive now also guards email-verification and
+// password-reset tokens, scoped so one purpose's token can never be
+// claimed as another's.
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import jwt from 'jsonwebtoken'
 import { getEnv } from '@/configs/env.config'
@@ -308,6 +312,8 @@ export async function claimToken(
 
 /**
  * Concurrent-refresh grace: a token replayed within REFRESH_REUSE_GRACE_MS of its rotation gets a sibling (accepted trade-off); later reuse revokes the session.
+ *
+ * Known gap, same class as revokeAllForUser's: a logout that commits between the isSessionKilled check here and the sibling's INSERT still leaves that sibling live.
  * @param existing - The already-claimed row the presented token hashes to.
  * @returns The session to continue when every grace condition holds and the session was not killed, otherwise undefined.
  */

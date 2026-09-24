@@ -134,15 +134,6 @@ describe('UserTokenRepository', () => {
     expect(secondRevokedAt?.getTime()).toBe(firstRevokedAt?.getTime())
   })
 
-  // Pins the contract documented on claimOnce's own JSDoc: expiry is
-  // deliberately NOT part of this method's predicate. Folding it in would
-  // make an expired-but-unrevoked row indistinguishable, to
-  // rotateRefreshToken's `!claimed` branch, from a genuinely reused one —
-  // which would revoke an entire session family for a legitimate user
-  // whose token simply aged out (see "rejects an expired refresh token
-  // without treating it as reuse of a live session",
-  // token.utilities.test.ts). This is why every caller of claimOnce must
-  // check `expiresAt` on the row it gets back, itself, after claiming.
   it('wasConsumedWithin is true right after claimOnce, false once consumed_at is moved into the past', async () => {
     const userId = await createUser()
     const tokenHash = uniqueHash()
@@ -165,6 +156,15 @@ describe('UserTokenRepository', () => {
     expect(await userTokenRepository.wasConsumedWithin(tokenHash, 10_000)).toBe(false)
   })
 
+  // Pins the contract documented on claimOnce's own JSDoc: expiry is
+  // deliberately NOT part of this method's predicate. Folding it in would
+  // make an expired-but-unrevoked row indistinguishable, to
+  // rotateRefreshToken's `!claimed` branch, from a genuinely reused one —
+  // which would revoke an entire session family for a legitimate user
+  // whose token simply aged out (see "rejects an expired refresh token
+  // without treating it as reuse of a live session",
+  // token.utilities.test.ts). This is why every caller of claimOnce must
+  // check `expiresAt` on the row it gets back, itself, after claiming.
   it("claimOnce claims an expired-but-unrevoked row — expiry is the caller's job, not the predicate's", async () => {
     const userId = await createUser()
     const tokenHash = uniqueHash()
