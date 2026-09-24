@@ -32,6 +32,7 @@ import { TenantSettingsRepository } from '@/repositories/tenant-settings.reposit
 import { TenantRepository, type CreateTenantInput } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
+import type { DbExecutor } from '@/services/database.service'
 import { sql } from '@/services/database.service'
 import { signAccessToken } from '@/utilities/token.utilities'
 import { withMutatedMethod } from '../../helpers/mutate'
@@ -976,6 +977,106 @@ describe('/api/v1/tenants', () => {
           expect(response.status).toBe(404)
         }
       )
+    })
+  })
+
+  describe('last-owner guard: atomic and blind to soft-deleted owners', () => {
+    // Two owners demote themselves at once. Deterministic both ways:
+    // countOwners is wrapped so the first caller waits (up to 1s) for the
+    // second to have counted too.
+    // - Unfixed code: both count 2 before either writes, both succeed, and
+    //   the tenant is left with no owner.
+    // - Fixed code: the second transaction is blocked at lockOwners, so the
+    //   first times out of the wait, commits, and the second then counts 1
+    //   and gets 409.
+    // Pool note: test mode has max 2 connections. The two transactions hold
+    // both, which works only because B waits inside its own connection and A
+    // needs no third. A repository call inside the service that forgot the
+    // executor would hang here until the test timeout.
+    it('lets exactly one of two concurrent self-demotions through, leaving one owner', async () => {
+      const { user: ownerA, token: tokenA } = await createAuthenticatedUser()
+      const { user: ownerB, token: tokenB } = await createAuthenticatedUser()
+      const tenant = await createTenant(ownerA.id)
+      await addMembership(ownerB.id, tenant.id, 'owner')
+
+      // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
+      const realCountOwners = UserMembershipRepository.prototype.countOwners
+      let arrivals = 0
+      let releaseBarrier: () => void
+      // eslint-disable-next-line unicorn/prefer-promise-with-resolvers -- tsconfig.json pins `lib: ["ES2023"]`; `Promise.withResolvers` is ES2024 and untyped under it.
+      const barrier = new Promise<void>((resolve) => {
+        releaseBarrier = resolve
+      })
+      const waitingCountOwners: typeof realCountOwners = async function (
+        this: UserMembershipRepository,
+        tenantId: string,
+        executor?: DbExecutor
+      ) {
+        // Forward the executor, or post-fix this would count outside the transaction.
+        const count = await realCountOwners.call(this, tenantId, executor)
+        arrivals += 1
+        if (arrivals >= 2) releaseBarrier()
+        await Promise.race([barrier, new Promise((resolve) => setTimeout(resolve, 1000))])
+        return count
+      }
+
+      await withMutatedMethod(
+        UserMembershipRepository.prototype,
+        'countOwners',
+        waitingCountOwners,
+        async () => {
+          const responses = await Promise.all([
+            request(app)
+              .patch(`/api/v1/tenants/${tenant.slug}/members/${ownerA.id}`)
+              .set('Authorization', `Bearer ${tokenA}`)
+              .send({ role: 'admin' }),
+            request(app)
+              .patch(`/api/v1/tenants/${tenant.slug}/members/${ownerB.id}`)
+              .set('Authorization', `Bearer ${tokenB}`)
+              .send({ role: 'admin' }),
+          ])
+
+          expect(responses.map((response) => response.status).toSorted((a, b) => a - b)).toEqual([
+            200, 409,
+          ])
+        }
+      )
+
+      expect(await userMembershipRepository.countOwners(tenant.id)).toBe(1)
+    })
+
+    it('does not count a soft-deleted owner, so the only live owner cannot demote themselves', async () => {
+      const { user: liveOwner, token } = await createAuthenticatedUser()
+      const { user: deletedOwner } = await createAuthenticatedUser()
+      const tenant = await createTenant(liveOwner.id)
+      await addMembership(deletedOwner.id, tenant.id, 'owner')
+      await userRepository.softDelete(deletedOwner.id)
+
+      const response = await request(app)
+        .patch(`/api/v1/tenants/${tenant.slug}/members/${liveOwner.id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ role: 'admin' })
+
+      expect(response.status).toBe(409)
+      const membership = await userMembershipRepository.findByUserAndTenant(liveOwner.id, tenant.id)
+      expect(membership?.role).toBe('owner')
+    })
+
+    it('does not count a soft-deleted owner, so the only live owner cannot remove themselves', async () => {
+      const { user: liveOwner, token } = await createAuthenticatedUser()
+      const { user: deletedOwner } = await createAuthenticatedUser()
+      const tenant = await createTenant(liveOwner.id)
+      await addMembership(deletedOwner.id, tenant.id, 'owner')
+      await userRepository.softDelete(deletedOwner.id)
+
+      const response = await request(app)
+        .delete(`/api/v1/tenants/${tenant.slug}/members/${liveOwner.id}`)
+        .set('Authorization', `Bearer ${token}`)
+
+      expect(response.status).toBe(409)
+      expect(
+        await userMembershipRepository.findByUserAndTenant(liveOwner.id, tenant.id)
+      ).toBeDefined()
     })
   })
 

@@ -45,3 +45,16 @@ export async function isDatabaseReachable(): Promise<boolean> {
 export async function closeDatabase(): Promise<void> {
   await sql.end({ timeout: 5 })
 }
+
+/**
+ * A transaction handle from `db.transaction`, derived from the installed
+ * driver so it can never drift from what drizzle actually passes.
+ */
+export type DbTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0]
+
+/**
+ * Anything a repository method can run a query on: the pool, or a
+ * transaction. Repository methods take it as an optional last parameter
+ * defaulting to `db`, so a service can compose several calls atomically.
+ */
+export type DbExecutor = typeof db | DbTransaction
