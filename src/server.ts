@@ -92,8 +92,8 @@ async function closeServer(server: Server): Promise<void> {
   // Resolves on ERR_SERVER_NOT_RUNNING too, so a second shutdown still completes.
   const closed = new Promise<void>((resolve) => server.close(() => resolve()))
   server.closeIdleConnections()
-  // A just-ended keep-alive socket turns idle only after 'finish'; keep sweeping
-  // so the drain doesn't wait out keepAliveTimeout (5s).
+  // A keep-alive request still in flight here leaves an idle socket once it
+  // ends; keep sweeping so the drain doesn't wait out keepAliveTimeout (5s).
   const sweep = setInterval(() => server.closeIdleConnections(), 250)
   const forceClose = setTimeout(() => server.closeAllConnections(), SERVER_DRAIN_TIMEOUT_MS)
   sweep.unref()

@@ -13,7 +13,11 @@ import { getEnv, trustProxySetting } from '@/configs/env.config'
 import { UserRepository } from '@/repositories/user.repository'
 import { gracefulShutdown, startServer } from '@/server'
 import { sql } from '@/services/database.service'
-import { markShuttingDown, resetLifecycleForTests } from '@/services/lifecycle.service'
+import {
+  isShuttingDown,
+  markShuttingDown,
+  resetLifecycleForTests,
+} from '@/services/lifecycle.service'
 import { signAccessToken } from '@/utilities/token.utilities'
 import { request } from '../helpers/request'
 
@@ -22,6 +26,55 @@ const userRepository = new UserRepository()
 async function resolveAfter<T>(ms: number, value: T): Promise<T> {
   await new Promise((resolve) => setTimeout(resolve, ms))
   return value
+}
+
+/**
+ * Open a notification stream and wait for its 200.
+ * @param port - The test server's port on 127.0.0.1.
+ * @param token - A valid access token.
+ * @param headers - Extra request headers.
+ * @param agent - The agent to send through; the default has keep-alive off.
+ * @returns The request, and a promise that resolves when the server ends the stream.
+ */
+async function openStream(
+  port: number,
+  token: string,
+  headers: Record<string, string>,
+  agent?: http.Agent
+): Promise<{ request: http.ClientRequest; ended: Promise<void> }> {
+  const streamRequest = http.get(`http://127.0.0.1:${port}/api/v1/notifications/stream`, {
+    agent,
+    headers: { Authorization: `Bearer ${token}`, ...headers },
+  })
+  streamRequest.on('error', () => {
+    // Expected when the test's cleanup destroys it.
+  })
+  const response = await new Promise<IncomingMessage>((resolve) => {
+    streamRequest.once('response', resolve)
+  })
+  expect(response.statusCode).toBe(200)
+  const ended = new Promise<void>((resolve) => {
+    response.on('end', () => resolve())
+    response.resume()
+  })
+  return { request: streamRequest, ended }
+}
+
+/**
+ * GET a URL through an agent and drain the body.
+ * @param url - The URL to fetch.
+ * @param agent - The agent to send through.
+ * @returns The response status code.
+ */
+async function getOnce(url: string, agent: http.Agent): Promise<number | undefined> {
+  const response = await new Promise<IncomingMessage>((resolve, reject) => {
+    http.get(url, { agent }, resolve).on('error', reject)
+  })
+  await new Promise<void>((resolve) => {
+    response.on('end', () => resolve())
+    response.resume()
+  })
+  return response.statusCode
 }
 
 describe('graceful shutdown with open notification streams', () => {
@@ -36,45 +89,68 @@ describe('graceful shutdown with open notification streams', () => {
     expect(response.body).toMatchObject({ status: 'shutting-down' })
   })
 
-  it('ends an open notification stream and resolves within 2s', async () => {
+  it('flips readiness at once, ends open streams (keep-alive included) and resolves within 1.5s', async () => {
     // Bound to 127.0.0.1, matching the URL below; startServer's default bind is `::`.
     const server = createApp().listen(0, '127.0.0.1')
     await new Promise((resolve) => server.once('listening', resolve))
     const { port } = server.address() as AddressInfo
     const user = await userRepository.create({ email: `server-${randomUUID()}@example.test` })
     const token = signAccessToken(user, randomUUID())
+    const keepAliveAgent = new http.Agent({ keepAlive: true })
 
-    const streamRequest = http.get(`http://127.0.0.1:${port}/api/v1/notifications/stream`, {
-      // `close`, not the default keep-alive, so the socket ends with the response.
-      headers: { Authorization: `Bearer ${token}`, Connection: 'close' },
-    })
-    streamRequest.on('error', () => {
-      // Expected when the finally block destroys it.
-    })
-    const response = await new Promise<IncomingMessage>((resolve) => {
-      streamRequest.once('response', resolve)
-    })
-    expect(response.statusCode).toBe(200)
-    const streamEnded = new Promise<void>((resolve) => {
-      response.on('end', () => resolve())
-      response.resume()
-    })
+    // One stream per connection mode; `close` ends the socket with the response.
+    const closeStream = await openStream(port, token, { Connection: 'close' })
+    const keepAliveStream = await openStream(port, token, {}, keepAliveAgent)
+    // A completed request leaves one more idle keep-alive socket behind.
+    const health = await getOnce(`http://127.0.0.1:${port}/health`, keepAliveAgent)
+    expect(health).toBe(200)
 
     // Deleted now: gracefulShutdown closes the database pool.
     await sql`delete from users where id = ${user.id}`
 
     try {
+      const shutdown = gracefulShutdown(server)
+      // Before the first await: readiness must fail before anything closes.
+      expect(isShuttingDown()).toBe(true)
       const outcome = await Promise.race([
         (async () => {
-          await gracefulShutdown(server)
+          await shutdown
           return 'shut down' as const
         })(),
-        resolveAfter(2000, 'timed out' as const),
+        resolveAfter(1500, 'timed out' as const),
       ])
       expect(outcome).toBe('shut down')
-      await streamEnded
+      await Promise.all([closeStream.ended, keepAliveStream.ended])
     } finally {
-      streamRequest.destroy()
+      closeStream.request.destroy()
+      keepAliveStream.request.destroy()
+      keepAliveAgent.destroy()
+      server.closeAllConnections()
+    }
+  })
+
+  // Runs after the test above has closed the database: this app has no dependencies.
+  it('closes a keep-alive socket whose request was still in flight, well before the drain timeout', async () => {
+    const app = express()
+    app.disable('x-powered-by')
+    app.get('/slow', (_request, response) => {
+      setTimeout(() => response.json({ ok: true }), 300)
+    })
+    const server = app.listen(0, '127.0.0.1')
+    await new Promise((resolve) => server.once('listening', resolve))
+    const { port } = server.address() as AddressInfo
+    const keepAliveAgent = new http.Agent({ keepAlive: true })
+    const slow = getOnce(`http://127.0.0.1:${port}/slow`, keepAliveAgent)
+    await resolveAfter(50, undefined)
+
+    try {
+      const startedAt = Date.now()
+      await gracefulShutdown(server)
+      // Without the idle sweep, the socket stays open until SERVER_DRAIN_TIMEOUT_MS.
+      expect(Date.now() - startedAt).toBeLessThan(1500)
+      expect(await slow).toBe(200)
+    } finally {
+      keepAliveAgent.destroy()
       server.closeAllConnections()
     }
   })

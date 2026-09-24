@@ -40,7 +40,7 @@ describe('lifecycle.service', () => {
     const first = vi.fn()
     const second = vi.fn()
     const unregisterFirst = registerStream('user-a', first)
-    // A real closer unregisters itself mid-loop (the stream's 'close' handler).
+    // A closer that unregisters another stream mid-loop must not skip or repeat it.
     registerStream('user-b', () => {
       second()
       unregisterFirst()

@@ -27,7 +27,7 @@ import { randomUUID } from 'node:crypto'
 import http, { type IncomingMessage } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import jwt from 'jsonwebtoken'
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createApp } from '@/app'
 import { getEnv } from '@/configs/env.config'
 import type { Notification } from '@/database/models/notification.model'
@@ -37,7 +37,11 @@ import { NotificationRepository } from '@/repositories/notification.repository'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
-import { markShuttingDown, resetLifecycleForTests } from '@/services/lifecycle.service'
+import {
+  countStreams,
+  markShuttingDown,
+  resetLifecycleForTests,
+} from '@/services/lifecycle.service'
 import { emitNotification, listenerCount } from '@/services/notification-emitter.service'
 import { denySession } from '@/services/session-denylist.service'
 import { signAccessToken } from '@/utilities/token.utilities'
@@ -759,6 +763,16 @@ describe('GET /api/v1/notifications/stream', () => {
     expect(() => emitNotification(user.id, notification)).not.toThrow()
     await sleep(100)
     expect(connection.frames.some((frame) => frame.event === 'notification')).toBe(false)
+  })
+
+  it('removes a stream from the shutdown registry once its client disconnects', async () => {
+    const { user, token } = await createAuthenticatedUser()
+    const connection = openStream({ header: `Bearer ${token}` })
+    await connection.waitForResponse()
+    expect(countStreams(user.id)).toBe(1)
+
+    connection.destroy()
+    await vi.waitFor(() => expect(countStreams(user.id)).toBe(0))
   })
 
   // requireAuth (auth.middleware.ts) rejects a denied session, but only at

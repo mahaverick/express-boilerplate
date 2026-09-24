@@ -55,7 +55,7 @@ export function countStreams(userId: string): number {
  * End every registered stream and empty the registry.
  */
 export function closeAllStreams(): void {
-  // Snapshot first: a closer's own 'close' handler unregisters mid-loop.
+  // Snapshot and clear first, so a late 'close' handler's unregister is a no-op.
   const closers = Array.from(state.streams.values(), (set) => [...set]).flat()
   state.streams.clear()
   for (const close of closers) {
