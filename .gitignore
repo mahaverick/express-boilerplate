@@ -135,6 +135,12 @@ dist
 .worktrees/
 .superpowers/
 
+# Claude Code: per-machine files that must never be committed
+.claude/worktrees/
+.claude/settings.local.json
+# May hold database credentials — commit an .mcp.json.example instead
+.mcp.json
+
 # Vitest reporter output (vitest.config.ts writes .vitest/json/output.json).
 # Generated on every run; was committed once by accident in #33.
 .vitest/

@@ -11,7 +11,7 @@ initial response within a few business days.
 
 This is a boilerplate, not a hosted service: only the `main` branch is
 supported. Downstream projects generated from it are responsible for their
-own patch cadence — `dependabot.yml` is wired up so that starts on day one.
+own patch cadence — `renovate.json` is wired up so that starts on day one.
 
 ## What this boilerplate implements
 
@@ -490,15 +490,14 @@ dropped.
 
 Everything below genuinely ships nothing today, in either direction:
 
-| Control                       | Status                               | What that means for you                                                                                                                                                                                                                                                                                        |
-| ----------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| CSRF tokens                   | **Not implemented**                  | See "No CSRF middleware" below — reasoning, not an oversight. The forced-login direction IS defended, by a content-type gate on the auth router; see the section after it.                                                                                                                                     |
-| Security headers / CSP        | **Not implemented — and unassigned** | `helmet` is not a dependency. Only `x-powered-by` is disabled (`src/app.ts`). Spec §13 mandates "helmet with an explicit Content-Security-Policy"; **no plan owns it** — unlike CORS/MFA/OAuth, which name one. Stated rather than left implied, since an unowned requirement is how one silently never ships. |
-| MFA                           | **Not implemented**                  | No TOTP enrolment, no recovery codes. Owned by a later plan (B4).                                                                                                                                                                                                                                              |
-| Forgot / reset password       | **Not implemented**                  | No `/forgot-password` or `/reset-password` route exists — email _verification_ is implemented (see "Email verification" above); this is the recovery half. It is also the only recovery path for a squatted address. Owned by plan B3 Task 6 — see ARCHITECTURE.md's "B3 seam" section.                        |
-| OAuth / social login          | **Not implemented**                  | No provider integration. Owned by a later plan (B4).                                                                                                                                                                                                                                                           |
-| Tenancy / RBAC                | **Not implemented**                  | Every authenticated user has the same access to their own resources; there is no role or organization model.                                                                                                                                                                                                   |
-| General-purpose rate limiting | **Partial**                          | All six auth routes are covered (above, seven limiters total — `resend-verification` carries two). No limiter exists on the profile routes or any future non-auth route.                                                                                                                                       |
+| Control                       | Status              | What that means for you                                                                                                                                                                                                                                                                 |
+| ----------------------------- | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CSRF tokens                   | **Not implemented** | See "No CSRF middleware" below — reasoning, not an oversight. The forced-login direction IS defended, by a content-type gate on the auth router; see the section after it.                                                                                                              |
+| MFA                           | **Not implemented** | No TOTP enrolment, no recovery codes. Owned by a later plan (B4).                                                                                                                                                                                                                       |
+| Forgot / reset password       | **Not implemented** | No `/forgot-password` or `/reset-password` route exists — email _verification_ is implemented (see "Email verification" above); this is the recovery half. It is also the only recovery path for a squatted address. Owned by plan B3 Task 6 — see ARCHITECTURE.md's "B3 seam" section. |
+| OAuth / social login          | **Not implemented** | No provider integration. Owned by a later plan (B4).                                                                                                                                                                                                                                    |
+| Tenancy / RBAC                | **Not implemented** | Every authenticated user has the same access to their own resources; there is no role or organization model.                                                                                                                                                                            |
+| General-purpose rate limiting | **Partial**         | All six auth routes are covered (above, seven limiters total — `resend-verification` carries two). No limiter exists on the profile routes or any future non-auth route.                                                                                                                |
 
 `JWT_ACCESS_SECRET` is required by the environment schema and **is** read —
 by `signAccessToken`/`verifyAccessToken`. `WEB_URL` is also read now, twice
@@ -536,6 +535,39 @@ feature makes to let a second frontend call the API at all, not an
 oversight to fix; it is the reason `CORS_ALLOWED_ORIGINS` should list only
 origins this deployment actually trusts with the primary frontend's own
 level of access.
+
+## Security headers
+
+`helmet` (`src/configs/helmet.config.ts`) is the first middleware mounted in
+`src/app.ts` — before `cors`, before the body parsers, before any route —
+so every response carries these headers, including a 404, a 415 rejection,
+an error response, and a CORS preflight:
+
+- `Content-Security-Policy: default-src 'none';frame-ancestors 'none'` —
+  this API serves no HTML, so the policy forbids loading any resource type
+  and blocks framing entirely, rather than allow-listing script/style
+  sources that don't apply to a JSON API.
+- `Cross-Origin-Resource-Policy: same-site`, not helmet's default
+  `same-origin`. CORP is a separate check from CORS: it is only consulted
+  for a `no-cors` request (an `<img>`/`<script>`-style embed, or anything
+  under `Cross-Origin-Embedder-Policy`), never for the credentialed
+  `fetch`/XHR calls the frontends actually make — those are gated by CORS
+  alone, and `same-origin` would not have broken them. The reason to set it
+  anyway is the no-cors case itself: the second frontend on a sibling
+  subdomain (`CORS_ALLOWED_ORIGINS`, see "CORS" above) is a different
+  origin but the same registrable site, so `same-origin` would refuse even
+  a harmless no-cors embed from it. `same-site` allows that while still
+  refusing one from any origin outside the registrable domain.
+- `Referrer-Policy: no-referrer` — no `Referer` header leaks to anywhere,
+  including this API's own other origins.
+- `X-Content-Type-Options: nosniff` — stops a browser from MIME-sniffing a
+  JSON response body into something it will execute.
+- `Strict-Transport-Security: max-age=31536000; includeSubDomains` —
+  helmet's default; a browser only honours this over HTTPS, so it is inert
+  in local HTTP development.
+
+`app.disable('x-powered-by')` (`src/app.ts`) stays in place alongside
+helmet's own `X-Powered-By` removal — harmless, and explicit about intent.
 
 ## No CSRF middleware — reasoning about the shipped design
 

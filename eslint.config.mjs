@@ -269,8 +269,8 @@ export default tseslint.config(
     rules: { 'no-restricted-properties': 'off' },
   },
   {
-    // logger.service.ts is the one module that talks to Winston's console
-    // transport, and its SlackTransport.sendToSlack uses console.error for
+    // logger.service.ts is the one module that writes through pino, and its
+    // createSlackDestination's sendToSlack uses console.error for
     // failure logging to avoid re-entering the logger.
     // index.ts is the pre-boot error path where the logger is not yet
     // available (env validation failed before any service could initialize).
@@ -285,7 +285,7 @@ export default tseslint.config(
     // `getEnv()` has ever run (before `src/index.ts` itself, in fact), so it
     // cannot go through `getEnv()` the way every other module must — it reads
     // `process.env.OTEL_EXPORTER_OTLP_ENDPOINT`/`NODE_ENV`/`OTEL_SERVICE_NAME`
-    // directly. For the same load-order reason it cannot use the Winston
+    // directly. For the same load-order reason it cannot use the pino
     // logger (not loaded yet, and must not depend on the library it
     // instruments) — it uses `console.info`/`console.error` for its own
     // diagnostics instead. Both rules lifted, same shape as the exemption

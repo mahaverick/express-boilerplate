@@ -264,14 +264,16 @@ response.
 ## Local infrastructure
 
 `docker-compose.yml` provides Postgres, Redis, an OpenTelemetry Collector,
-Tempo (trace storage), Grafana (`:3100`, Tempo pre-provisioned as its data
-source), and Mailpit (a local SMTP sink with a web UI at `:8025`) —
+Tempo (trace storage), Loki (log storage, no host port — query it through
+Grafana), Grafana (`:3100`, Tempo and Loki both pre-provisioned as data
+sources), and Mailpit (a local SMTP sink with a web UI at `:8025`) —
 everything the app needs to boot locally, none of it currently required to
 be exercised by the app itself outside the database/Redis clients. The
-collector forwards traces to Tempo; the app can also be pointed at the
+collector forwards traces to Tempo and pino log records (via
+`PinoInstrumentation`) to Loki; the app can also be pointed at the
 collector directly via `OTEL_EXPORTER_OTLP_ENDPOINT` — see CLAUDE.md's
 "Observability" section for what `src/observability/tracing.ts` does and
-does not instrument.
+does not instrument, and how a Loki log line links back to its trace.
 
 **Postgres is pinned to major version 18** because generated migrations may
 use `uuidv7()` as a column default, which is built into Postgres from 18
@@ -333,39 +335,28 @@ router that closes forced-login CSRF, and `TRUST_PROXY` as an explicit
 deployment decision — see [SECURITY.md](SECURITY.md) for the
 security-relevant detail on all of it. It does **not** build:
 
-- **Forgot/reset password.** Email verification itself now ships — see
-  "The B3 seam" above. Reset does not: no `/forgot-password` or
-  `/reset-password` route exists, so a squatted, unverified address has no
-  recovery path yet. Owned by plan B3 Task 6.
-- **Sessions, MFA, or OAuth/social login.** `SESSION_SECRET` remains a
-  required-but-unread placeholder. Owned by plan B4.
-- **Security headers/CSP, or a general-purpose rate limiter.** All four
-  auth routes are rate-limited, each with its own store prefix (see
-  SECURITY.md); no other route is. `x-powered-by` is disabled and nothing
-  else touches response headers. **Security headers/CSP is unassigned**:
-  spec §13 mandates `helmet` with an explicit Content-Security-Policy and no
-  plan owns it — see SECURITY.md's table. CORS itself is no longer in this
-  list — a later plan (the multi-frontend seam) added the `cors` middleware
-  and an origin allowlist keyed on `WEB_URL`/`CORS_ALLOWED_ORIGINS`; see
-  SECURITY.md's "CORS" section.
-- **Tenancy or RBAC.** Every authenticated user acts only on their own
-  resources; there is no role or organization model. Owned by plan B5.
+- **MFA.** `auth.middleware.ts` and `auth.controller.ts` both note it as a
+  later step-up plan; no such flow exists yet.
 - OpenAPI documentation, or a bootstrap/seed script (`pnpm bootstrap` does
   not exist — do not run it).
-- Queues, or anything else that would consume BullMQ (listed, not yet
-  adopted, in [MIGRATIONS.md](MIGRATIONS.md)). `nodemailer` is the one
-  already-listed dependency that plan B3 is expected to actually adopt,
-  once email delivery lands.
 - **A retention job for `user_tokens`,** which grows by roughly 2,900 rows
-  per active user per month and is never pruned. Also **unassigned** — a
+  per active user per month and is never pruned. **Unassigned** — a
   scheduled job needs a scheduler, and there is none yet; see
   [DATABASE.md](DATABASE.md#user_tokens-grows-without-bound-and-nothing-prunes-it).
-- OpenTelemetry SDK wiring in the app itself — the collector container runs
-  and `OTEL_EXPORTER_OTLP_ENDPOINT` is a recognised, optional variable, but
-  nothing in `src/` currently starts an SDK or exports a span.
+  This is recorded here deliberately — "a later plan will do it" reads the
+  same as "nobody is doing it" right up until nobody does.
 
-Most of these are explicitly owned by a later plan (named inline above).
-Two are **not owned by anything**: security headers/CSP and the
-`user_tokens` retention job. That is recorded here deliberately — "a later
-plan will do it" reads the same as "nobody is doing it" right up until
-nobody does.
+Everything else this list used to name as not-yet-built has since shipped,
+by later plans not otherwise documented in this file: forgot/reset password
+(`auth.routes.ts`'s `/forgot-password`/`/reset-password`), sessions and
+Google OAuth (`passport.config.ts`'s `express-session` usage — see
+CLAUDE.md's "OAuth" section), tenancy/RBAC (`tenant.controller.ts`,
+`tenant.routes.ts` — see CLAUDE.md's "Multi-tenancy and RBAC" section), the
+BullMQ job queue (`src/jobs/`, `src/workers/` — see CLAUDE.md's "Job queue"
+and "Notifications" sections), and OpenTelemetry SDK wiring in the app
+itself (`src/observability/tracing.ts` starts a `NodeSDK` and exports
+traces and logs — see CLAUDE.md's "Observability" section). The rate
+limiters this list used to describe as
+covering only the four auth routes now also cover two tenant routes
+(`createCreateTenantRateLimiter`, `createAddTenantMemberRateLimiter` on
+`tenant.routes.ts`).

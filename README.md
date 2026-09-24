@@ -10,18 +10,27 @@ error handling, the test harness, the lint gates) plus a working
 authentication slice on top of it: registration, login, JWT access tokens
 paired with rotating opaque refresh tokens, and an authenticated profile
 endpoint, plus a CORS origin allowlist for a second frontend on a sibling
-subdomain. It does not ship email verification delivery, sessions, MFA,
-OAuth, security headers/CSP, or tenancy — see
+subdomain and `helmet` security headers. It does not ship email
+verification delivery, sessions, MFA, OAuth, or tenancy — see
 [ARCHITECTURE.md](ARCHITECTURE.md) and [SECURITY.md](SECURITY.md) for
 exactly what is and is not here yet.
 
 ## Requirements
 
-- Node.js >= 24 (pinned in [`.nvmrc`](.nvmrc); `engine-strict=true` in
-  [`.npmrc`](.npmrc) refuses anything older)
+- Node.js >= 24 (pinned in [`.nvmrc`](.nvmrc); `devEngines.runtime` in
+  `package.json` refuses anything older at `pnpm install` — verified
+  empirically: under pnpm 12.4.1, `.npmrc`'s `engine-strict=true` does
+  **not** enforce this, despite its name — `pnpm install` exits 0 against a
+  Node version well outside `engines.node`. `engine-strict` only governs
+  whether an installed dependency's own `engines` mismatch fails the
+  install (pnpm docs: <https://pnpm.io/settings/cli#enginestrict>);
+  `devEngines.runtime` with `onFail: "error"` is pnpm's own mechanism for
+  enforcing the project's own runtime floor
+  (<https://pnpm.io/package_json#devenginesruntime>). CI pins Node 24 in
+  every workflow regardless.)
 - [pnpm](https://pnpm.io) 12.4.1 (pinned via `packageManager` in
-  `package.json`; enable it with `corepack enable`)
-- Docker, for the local Postgres/Redis/OpenTelemetry/Mailpit stack
+  `package.json`; install Corepack and enable it with `npm i -g corepack@0.36.0 && corepack enable` — Node 25+ no longer ships Corepack, so this works on Node 24 and 26 alike)
+- Docker, for the local Postgres/Redis/OpenTelemetry/Loki/Mailpit stack
 
 ## Quickstart
 
@@ -312,6 +321,27 @@ shell, `curl`, or TypeScript compiler in it (`pnpm prune --prod
 from the pnpm virtual store — verified: no `typescript` under
 `/app/node_modules` in the built image). See the comments in
 [`Dockerfile`](Dockerfile) for why each stage exists.
+
+## Deploying
+
+A push to `main` runs [`deploy.yml`](.github/workflows/deploy.yml), which
+calls `ci.yml` as a gate and, once it passes, builds and pushes
+`ghcr.io/<repo>:sha-<commit>` and `:main` to GHCR with an SBOM and build
+provenance attestation. The `deploy` job itself is a placeholder — no
+deployment target has been chosen yet. A manual `workflow_dispatch` from
+another branch only pushes the sha-tagged image — the `:main` tag and the
+`deploy` job both run only from `main`.
+
+Two things need doing by hand, once, before any of this is live:
+
+- **Install the [Renovate GitHub App](https://github.com/apps/renovate)**
+  on this repository. `renovate.json` is inert without it — nothing
+  schedules or opens Renovate PRs until the app is installed.
+- **Add protection rules to the `production` GitHub Environment**
+  (Settings → Environments → `production`) — at minimum, required
+  reviewers — before replacing the placeholder `deploy` step with a real
+  deployment target. Until then, anything merged to `main` would deploy
+  unreviewed the moment that step does something real.
 
 ## License
 

@@ -51,6 +51,9 @@ services:
   otel-collector:
     image: otel/opentelemetry-collector-contrib:latest
     command: ['--config=/etc/otel/config.yaml']
+    # Bind-mounted: editing otel-collector.yaml needs
+    # `docker compose restart otel-collector` — `docker compose up -d` does
+    # not pick up bind-mount content changes on an already-running container.
     volumes: ['./otel-collector.yaml:/etc/otel/config.yaml:ro']
     # 13133 is the health_check extension's endpoint (see otel-collector.yaml)
     # — exposed for manual/host-side verification. No Docker HEALTHCHECK
@@ -68,6 +71,14 @@ services:
       - tempo-data:/var/tempo
     ports: ['3200:3200'] # Tempo API + query frontend
 
+  loki:
+    # Single-binary Loki with the image's bundled local config (tsdb, schema
+    # v13 — required for OTLP ingest and structured metadata). No host port:
+    # Grafana already owns host 3100, and nothing outside the compose network
+    # needs Loki directly — query it through Grafana.
+    image: grafana/loki:3.7.8
+    command: ['-config.file=/etc/loki/local-config.yaml']
+
   grafana:
     image: grafana/grafana:11.4.0
     environment:
@@ -81,7 +92,7 @@ services:
     ports: ['3100:3000'] # 3100, not the image's default 3000 — avoids colliding with a locally-run frontend dev server.
     volumes:
       - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
-    depends_on: [tempo]
+    depends_on: [tempo, loki]
 
   mailpit:
     # Pinned, like every other service on this file — an unpinned :latest
