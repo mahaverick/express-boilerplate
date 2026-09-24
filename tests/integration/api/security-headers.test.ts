@@ -6,9 +6,25 @@
 // cors.test.ts and notification-stream.test.ts, which must pass unchanged:
 // that is the proof `Cross-Origin-Resource-Policy: same-site` doesn't break
 // the second frontend.
+//
+// The it.each block below only ever reaches the SSE route's 401 rejection,
+// which never calls `response.writeHead` at all (see
+// notification-stream.controller.ts's own header comment) — so it cannot
+// prove helmet's headers, set via `setHeader` on the same response object
+// before this controller runs, actually survive the controller's own
+// `response.writeHead(200, {...})` call on a real 200. `writeHead` can
+// overwrite headers already set on the response if the handler passes them
+// again, so this needs its own case against a live, successfully-opened
+// stream.
+import { randomUUID } from 'node:crypto'
+import http from 'node:http'
+import type { AddressInfo } from 'node:net'
 import request from 'supertest'
-import { describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
+import { UserRepository } from '@/repositories/user.repository'
+import { sql } from '@/services/database.service'
+import { signAccessToken } from '@/utilities/token.utilities'
 
 const app = createApp()
 
@@ -68,5 +84,62 @@ describe('security headers', () => {
     const response = await makeRequest()
     expect(response.status).toBe(expectedStatus)
     expectSecurityHeaders(response.headers)
+  })
+})
+
+describe('security headers on a live SSE stream', () => {
+  // supertest only resolves a request once its response has fully ENDED,
+  // and an SSE response never ends on its own — same reason
+  // notification-stream.test.ts drives its own real, ephemeral
+  // `http.Server` with a plain `node:http` client instead of `request(app)`.
+  let server: http.Server
+  let baseUrl: string
+  const userRepository = new UserRepository()
+  const createdUserIds: string[] = []
+
+  beforeAll(async () => {
+    server = createApp().listen(0)
+    await new Promise<void>((resolve) => server.once('listening', resolve))
+    const address = server.address() as AddressInfo
+    baseUrl = `http://127.0.0.1:${address.port}`
+  })
+
+  afterAll(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+    if (createdUserIds.length > 0) {
+      await sql`delete from users where id = any(${createdUserIds})`
+    }
+  })
+
+  it('survive response.writeHead(200, ...) on a real, successfully-opened stream', async () => {
+    const user = await userRepository.create({
+      email: `security-headers-sse-${randomUUID()}@example.test`,
+    })
+    createdUserIds.push(user.id)
+    const token = signAccessToken(user, randomUUID())
+
+    await new Promise<void>((resolve, reject) => {
+      const streamRequest = http.get(
+        `${baseUrl}/api/v1/notifications/stream`,
+        { headers: { Authorization: `Bearer ${token}` } },
+        (response) => {
+          try {
+            expect(response.statusCode).toBe(200)
+            expect(response.headers['content-type']).toMatch(/^text\/event-stream/)
+            expectSecurityHeaders(response.headers as Record<string, string | undefined>)
+            resolve()
+          } catch (error: unknown) {
+            reject(error instanceof Error ? error : new Error(String(error)))
+          } finally {
+            // Close the still-open connection cleanly rather than letting
+            // it hang for the life of the test process.
+            streamRequest.destroy()
+          }
+        }
+      )
+      streamRequest.on('error', () => {
+        // Expected once destroy() above fires on an open connection.
+      })
+    })
   })
 })

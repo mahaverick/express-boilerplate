@@ -119,6 +119,27 @@ describe('createPinoLogger', () => {
         })
       }))
 
+    // Winston-era behaviour: request-context correlation fields must win
+    // over a caller-supplied field of the same name, not merge in whatever
+    // order pino happens to combine the mixin and the log call's own
+    // object. Without mixinMergeStrategy, pino's default merge lets the
+    // logged object's own `requestId` overwrite the mixin's.
+    it('the real request context requestId wins over a caller-supplied requestId in meta', () =>
+      new Promise<void>((resolve) => {
+        const { destination, output } = captureDestination()
+        const log = createPinoLogger({ level: 'info', isProduction: true, destination })
+
+        requestContextStore.run({ requestId: 'real-id' }, () => {
+          log.info({ requestId: 'spoofed', source: 'test.ts:1' }, 'x')
+        })
+
+        setImmediate(() => {
+          const parsed = parseLastRecord(output)
+          expect(parsed.requestId).toBe('real-id')
+          resolve()
+        })
+      }))
+
     it('omits requestId when called outside an ALS context', () =>
       new Promise<void>((resolve) => {
         const { destination, output } = captureDestination()
@@ -167,6 +188,33 @@ describe('createPinoLogger', () => {
         setImmediate(() => {
           const parsed = parseLastRecord(output)
           expect(parsed.tenantId).toBeUndefined()
+          resolve()
+        })
+      }))
+  })
+
+  describe('the err key', () => {
+    // pino's own default `err` serializer re-processes whatever is already
+    // under `err` into `{ type, message, stack }` — so serializeErrors's
+    // { name, message, stack } (from an Error instance) gets run through it
+    // a second time, landing as `{ type: 'Object', message, stack, name }`.
+    // The `err` key must instead pass through serializeErrors's output
+    // untouched.
+    it('does not re-serialize err through pino default serializer, and carries no type key', () =>
+      new Promise<void>((resolve) => {
+        const { destination, output } = captureDestination()
+        const log = createPinoLogger({ level: 'error', isProduction: true, destination })
+
+        log.error({ err: new Error('boom'), source: 'test.ts:1' }, 'x')
+
+        setImmediate(() => {
+          const parsed = parseLastRecord(output)
+          const parsedError = parsed.err as { name: string; message: string; stack: string }
+          expect(Object.keys(parsedError)).toHaveLength(3)
+          expect(parsedError.name).toBe('Error')
+          expect(parsedError.message).toBe('boom')
+          expect(parsedError.stack).toMatch(/at /)
+          expect(parsedError).not.toHaveProperty('type')
           resolve()
         })
       }))

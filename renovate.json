@@ -7,6 +7,20 @@
     "enabled": true,
     "schedule": ["before 6am on the first day of the month"]
   },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Track the explicit Corepack pin in the Dockerfile, devcontainer, and README install instructions — none of Renovate's built-in managers see a version embedded in a shell command or prose.",
+      "managerFilePatterns": [
+        "/^Dockerfile$/",
+        "/^\\.devcontainer/devcontainer\\.json$/",
+        "/^README\\.md$/"
+      ],
+      "matchStrings": ["corepack@(?<currentValue>\\d+\\.\\d+\\.\\d+)"],
+      "depNameTemplate": "corepack",
+      "datasourceTemplate": "npm"
+    }
+  ],
   "packageRules": [
     {
       "description": "typescript-eslint peers typescript <6.1.0; TS 7 breaks type-aware lint (see CLAUDE.md)",

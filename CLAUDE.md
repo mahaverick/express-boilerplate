@@ -73,7 +73,10 @@ until you check.
 - **Request-id correlation is automatic.** The `requestContext` middleware
   wraps each request in an `AsyncLocalStorage` context. The logger reads from
   it on every call — callers never pass the id. Code outside a request (startup,
-  Redis error handler) simply omits the field.
+  Redis error handler) simply omits the field. `mixinMergeStrategy`
+  (logger.service.ts) makes the mixin's correlation fields win over a
+  caller-supplied field of the same name — a caller passing `requestId` in
+  meta cannot override the real ALS value.
 - **Caller file:line is automatic.** The logger parses `new Error().stack` on
   each call. The `[moduleName]` prefixes that some call sites used to include
   in their messages are redundant — the `source` field handles it.
@@ -304,7 +307,11 @@ otel-collector`.** It is bind-mounted; `docker compose up -d` does not
   `.nvmrc`, `actions/setup-node`'s `node-version:`, and the devcontainer's
   `mcr.microsoft.com/devcontainers/typescript-node` image tag — is held
   `<25` by `renovate.json` rules — lift them deliberately, not by merging a
-  Renovate PR. Requires the Renovate GitHub App on the repo. Renovate does
+  Renovate PR. The explicit Corepack pin in `Dockerfile`,
+  `.devcontainer/devcontainer.json`, and `README.md` is tracked by a
+  `customManagers` regex entry in `renovate.json`, since none of Renovate's
+  built-in managers see a version embedded in a shell command or prose.
+  Requires the Renovate GitHub App on the repo. Renovate does
   not touch `package.json`'s `engines.node` or `devEngines.runtime.version`
   either way, since both are `>=` ranges, not pinned versions — when the
   Node 26 move happens, bump those two by hand alongside the held pins.
