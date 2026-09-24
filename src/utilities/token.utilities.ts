@@ -111,7 +111,7 @@ export interface IssuedToken {
  * @param raw - The raw token, of any purpose.
  * @returns The hex-encoded digest, as stored in `tokenHash`.
  */
-function hashToken(raw: string): string {
+export function hashToken(raw: string): string {
   return createHash('sha256').update(raw).digest('hex')
 }
 

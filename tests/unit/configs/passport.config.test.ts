@@ -64,6 +64,7 @@ const baseEnv: Env = {
   SESSION_ABSOLUTE_TTL: '30d',
   EMAIL_VERIFICATION_TTL: '24h',
   PASSWORD_RESET_TTL: '1h',
+  INVITATION_TTL: '7d',
   TRUST_PROXY: 'false',
   OTEL_SERVICE_NAME: 'express-boilerplate',
   LOG_LEVEL: 'silent',

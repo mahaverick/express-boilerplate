@@ -126,3 +126,14 @@ export const RESERVED_SLUGS = [
   'dev',
   'localhost',
 ] as const
+
+/**
+ * Random bytes in a raw invitation token.
+ */
+export const INVITATION_TOKEN_BYTES = 32
+
+/**
+ * Length of a raw invitation token: `INVITATION_TOKEN_BYTES` as unpadded
+ * base64url.
+ */
+export const INVITATION_TOKEN_LENGTH = 43
