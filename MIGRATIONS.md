@@ -128,7 +128,7 @@ add a real row:
 
 ## Schema migrations on a live database
 
-- **A generated `CREATE UNIQUE INDEX` (no `CONCURRENTLY`) blocks writes to its table while it builds.** For `0013` on a large existing `notifications` table, run this by hand before `pnpm db:migrate`:
+- **`0013` blocks every read and write on `notifications` until the migration batch commits.** Its `ADD COLUMN` takes an `ACCESS EXCLUSIVE` lock, and drizzle's migrator applies all pending migrations in one transaction, so that lock is held while the generated `CREATE UNIQUE INDEX` (no `CONCURRENTLY`) builds and until the whole batch commits. On a large existing table, run this by hand before `pnpm db:migrate`:
   ```sql
   ALTER TABLE notifications ADD COLUMN IF NOT EXISTS dedupe_key varchar(128);
   CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS notifications_dedupe_key_unique ON notifications (dedupe_key);

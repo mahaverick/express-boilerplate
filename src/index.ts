@@ -13,8 +13,8 @@ import { GRACEFUL_SHUTDOWN_TIMEOUT_MS } from '@/constants/global.constants'
  * The forced-exit backstop and the once-only guard live in
  * `createShutdownHandler` (lifecycle.service.ts). `process.exit` is passed in
  * from inside the `process.on` callback, which `unicorn/no-process-exit` requires.
- * Fatal errors (unhandled rejection, uncaught exception, a failed bind) go
- * through the same handler with exit code 1.
+ * Fatal errors (unhandled rejection, uncaught exception, a server 'error'
+ * at bind or after listening) go through the same handler with exit code 1.
  * @returns Resolves once exit handlers are wired and any workers have started.
  */
 async function boot(): Promise<void> {
@@ -38,18 +38,18 @@ async function boot(): Promise<void> {
   // Filled in once the workers start; shutdown reads it only when it runs.
   const workers: { email?: Worker; notification?: Worker } = {}
 
-  // One handler for every exit path: signals, fatal errors and a failed
-  // bind. A second call while shutdown runs is ignored.
+  // One handler for every exit path: signals, fatal errors and a server
+  // 'error'. A second call while shutdown runs is ignored.
   const handleShutdown = createShutdownHandler(
     () => gracefulShutdown(server, workers.email, workers.notification),
     GRACEFUL_SHUTDOWN_TIMEOUT_MS
   )
 
   const server = startServer()
-  // Same tick as listen(): a bind failure is emitted on nextTick.
-  // startServer has already logged it and set exitCode = 1.
+  // Same tick as listen(): a bind failure is emitted on nextTick. This also
+  // catches a server error after listening; startServer has logged either.
   server.once('error', () => {
-    // eslint-disable-next-line unicorn/no-process-exit -- a failed bind is fatal at boot; the exit still goes through the shared once-guard
+    // eslint-disable-next-line unicorn/no-process-exit -- a server error is fatal; the exit still goes through the shared once-guard
     handleShutdown((code) => process.exit(code), 1)
   })
 

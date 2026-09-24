@@ -524,9 +524,9 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
     })
 
     it("drops a squatter's own pre-existing Google link when a different, verified identity claims the account", async () => {
-      // Legacy state findOrCreateByGoogle's step 1 would otherwise honour
-      // forever: a squatter's Google row from before this fix existed,
-      // sitting on the same never-verified account the real owner now claims.
+      // Seeded directly, since the API no longer creates it: a squatter's
+      // Google row on a never-verified account the real owner now claims,
+      // which findOrCreateByGoogle's step 1 would otherwise honour forever.
       const email = uniqueEmail()
       const existing = await userRepository.create({ email, passwordHash: 'not-a-real-hash' })
       createdIds.push(existing.id)

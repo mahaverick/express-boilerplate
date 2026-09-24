@@ -168,6 +168,20 @@ describe('Redis clients survive an outage', () => {
     proxy.close()
   })
 
+  // First: it needs queue connections that have never been ready.
+  it('replaces queue connections whose first connect failed in an outage, so enqueues work once Redis returns', async () => {
+    proxy.goDown()
+    expect(await isQueueReachable()).toBe(false)
+    const duringOutage = addJob(getEmailQueue(), 'outage-probe', { to: 'outage@example.test' })
+    expect(await settleWithin(duringOutage, 5000)).toBe('rejected')
+
+    proxy.comeBack()
+    expect(await isEventuallyTrue(isQueueReachable, 5000)).toBe(true)
+    const job = await addJob(getEmailQueue(), 'recovery-probe', { to: 'recovery@example.test' })
+    expect(job.id).toBeDefined()
+    await job.remove()
+  }, 15_000)
+
   it('node-redis reports unreachable promptly during an outage, then reconnects after it', async () => {
     expect(await isRedisReachable()).toBe(true)
 

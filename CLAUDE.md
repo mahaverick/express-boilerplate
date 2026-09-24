@@ -59,9 +59,13 @@ until you check.
   the shared Redis). While a client reconnects, nothing waits for Redis to
   come back: node-redis runs with `disableOfflineQueue`; BullMQ producers
   get their own ioredis connection with the offline queue off, so an enqueue
-  rejects; `isQueueReachable` reports false for the Worker connection in any
-  status but `ready`; and `closeQueue` disconnects instead of queueing a
-  `QUIT`. Only BullMQ Workers keep the offline queue, which they need.
+  rejects; `isQueueReachable` checks both queue connections and reports false
+  for one in any post-ready status but `ready`; and `closeQueue` disconnects
+  instead of queueing a `QUIT`. Only BullMQ Workers keep the offline queue,
+  which they need. A queue connection that gives up before its first `ready`
+  is replaced on next use (the producer's Queues with it), but a Worker
+  already started on it is not: a process whose Workers booted during an
+  outage needs a restart.
 - **`drizzle.config.ts` uses `getDatabaseUrl()`, not `getEnv()`.** Routing
   it through `getEnv()` would make every `drizzle-kit` invocation require
   JWT/session secrets that have nothing to do with writing a migration. See
@@ -155,8 +159,8 @@ until you check.
   while this stream's handler (`requireSessionId`,
   notification-stream.controller.ts) rejects one outright — the revocation
   heartbeat can only close an already-open connection by session id, so a
-  sid-less stream would otherwise be revocable only by connection lifetime,
-  up to nginx's 24-hour read timeout, rather than by token expiry. The
+  sid-less stream would survive a logout or revocation until its token
+  expired, rather than closing at the next heartbeat. The
   in-process `EventEmitter` pub/sub works for single-pod deployments;
   upgrade to Redis Pub/Sub for multi-pod with separate worker processes.
 

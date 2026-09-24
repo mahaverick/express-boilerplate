@@ -1049,10 +1049,10 @@ async function claimUnverifiedAccount(userId: string, googleId: string): Promise
   await revokeAllSessions(userId)
 
   return db.transaction(async (tx) => {
-    // A squatter may have linked their OWN Google identity to this account
-    // before this fix existed. Drop it before linking the claimer's — left
-    // in place, `findOrCreateByGoogle`'s own first lookup would still
-    // resolve the squatter's Google id to this account.
+    // An unverified account may carry a squatter's OWN Google link, from a
+    // sign-in that linked without requiring a verified address. Drop it before
+    // linking the claimer's — left in place, `findOrCreateByGoogle`'s own
+    // first lookup would still resolve the squatter's Google id to this account.
     await tx
       .delete(authProviderModel)
       .where(

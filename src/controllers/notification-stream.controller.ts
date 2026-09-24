@@ -100,9 +100,9 @@ function authenticatedUserId(request: Request): string {
  * `payload.sid &&` guard), this stream has no such tolerance. The
  * revocation heartbeat below can only close an ALREADY-OPEN connection by
  * checking a session id against the denylist — it has nothing to check for
- * a sid-less connection — so tolerating one here would mean its only
- * exit is the client disconnecting or nginx's own 24-hour read timeout,
- * not `ACCESS_TOKEN_TTL`. A connect-time 401 is cheap enough that this
+ * a sid-less connection — so tolerating one here would let a logged-out or
+ * revoked session keep its stream until token expiry, instead of until the
+ * next heartbeat. A connect-time 401 is cheap enough that this
  * endpoint does not need the tolerance `requireAuth` grants everywhere
  * else: `useNotificationStream` (react-boilerplate's use-notifications.ts)
  * opens the connection with `fetch`, not `EventSource`, so there is no

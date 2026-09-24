@@ -23,17 +23,21 @@ import { logger } from '@/services/logger.service'
 // `closed` mirrors redis.service.ts's own flag: once `closeQueue()` runs,
 // later calls must report unreachable/refuse to enqueue rather than silently
 // opening a brand-new connection during shutdown.
+// One ioredis connection and whether it has ever reached 'ready'.
+interface QueueRedis {
+  connection: IORedis
+  readiness: { hasBeenReady: boolean }
+}
+
 const state: {
-  connection: IORedis | undefined
-  hasBeenReady: boolean
-  producerConnection: IORedis | undefined
+  worker: QueueRedis | undefined
+  producer: QueueRedis | undefined
   emailQueue: Queue | undefined
   notificationQueue: Queue | undefined
   closed: boolean
 } = {
-  connection: undefined,
-  hasBeenReady: false,
-  producerConnection: undefined,
+  worker: undefined,
+  producer: undefined,
   emailQueue: undefined,
   notificationQueue: undefined,
   closed: false,
@@ -41,16 +45,16 @@ const state: {
 
 /**
  * Create one ioredis connection that fails fast before its first 'ready' and retries forever after it.
- * @param label - Names the connection in its error log.
+ * @param label - Names the connection in its logs.
  * @param options - Options on top of the shared URL, timeout and retry strategy.
- * @param onReady - Called on every 'ready'.
- * @returns The connection, already connecting.
+ * @param onDeadBeforeReady - Called when the connection gives up without ever being ready, unless the module is closed.
+ * @returns The connection, already connecting, and its readiness.
  */
 function createQueueRedis(
   label: string,
   options: Pick<RedisOptions, 'maxRetriesPerRequest' | 'enableOfflineQueue'>,
-  onReady: () => void
-): IORedis {
+  onDeadBeforeReady: (dead: IORedis) => void
+): QueueRedis {
   const readiness = { hasBeenReady: false }
   const connection = new IORedis(getEnv().REDIS_URL, {
     ...options,
@@ -65,7 +69,12 @@ function createQueueRedis(
   })
   connection.on('ready', () => {
     readiness.hasBeenReady = true
-    onReady()
+  })
+  // 'end' is final in ioredis: without this, the module would hand out a dead connection forever.
+  connection.on('end', () => {
+    if (readiness.hasBeenReady || state.closed) return
+    logger.warn(`${label} gave up before its first ready; the next use reconnects`)
+    onDeadBeforeReady(connection)
   })
   // Mandatory: an unlistened 'error' event on an EventEmitter crashes the
   // Node.js process. ioredis emits 'error' for every failed connection
@@ -73,7 +82,19 @@ function createQueueRedis(
   connection.on('error', (error: unknown) => {
     logger.error(`${label} error`, { error })
   })
-  return connection
+  return { connection, readiness }
+}
+
+/**
+ * Close a Queue built on a dead producer connection, ignoring its errors.
+ * @param queue - The orphaned queue, if one was built.
+ */
+async function discardQueue(queue: Queue | undefined): Promise<void> {
+  try {
+    await queue?.close()
+  } catch (error) {
+    logger.warn('Closing a queue on a dead connection failed', { error })
+  }
 }
 
 /**
@@ -90,7 +111,7 @@ export function getQueueConnection(): IORedis {
   if (state.closed) {
     throw new Error('Queue connection is closed; the process is shutting down')
   }
-  state.connection ??= createQueueRedis(
+  state.worker ??= createQueueRedis(
     'BullMQ Redis connection',
     {
       // BullMQ requires this to be exactly `null`, not merely absent —
@@ -103,11 +124,12 @@ export function getQueueConnection(): IORedis {
       // eslint-disable-next-line unicorn/no-null -- see comment above; undefined does not have the same effect here
       maxRetriesPerRequest: null,
     },
-    () => {
-      state.hasBeenReady = true
+    (dead) => {
+      // A Worker already built on the dead connection does not follow; see CLAUDE.md.
+      if (state.worker?.connection === dead) state.worker = undefined
     }
   )
-  return state.connection
+  return state.worker.connection
 }
 
 /**
@@ -120,12 +142,20 @@ function getProducerConnection(): IORedis {
     throw new Error('Queue connection is closed; the process is shutting down')
   }
   // No offline queue: while disconnected, an enqueue rejects instead of waiting for Redis.
-  state.producerConnection ??= createQueueRedis(
+  state.producer ??= createQueueRedis(
     'BullMQ producer Redis connection',
     { enableOfflineQueue: false },
-    () => {}
+    (dead) => {
+      if (state.producer?.connection !== dead) return
+      state.producer = undefined
+      // Both queues hold the dead instance, so they are rebuilt on next use.
+      const orphans = [state.emailQueue, state.notificationQueue]
+      state.emailQueue = undefined
+      state.notificationQueue = undefined
+      for (const orphan of orphans) void discardQueue(orphan)
+    }
   )
-  return state.producerConnection
+  return state.producer.connection
 }
 
 /**
@@ -192,19 +222,61 @@ export async function addJob<T extends object>(
 }
 
 /**
- * Check that the Worker connection answers.
- * @returns True when PING succeeds; false once closed or unreachable, without
- *   hanging: before the first 'ready' the connect gives up after a few retries,
- *   and after it any status other than 'ready' is reported at once.
+ * Check that one connection answers, without waiting out an outage.
+ * @param queueRedis - The connection and its readiness.
+ * @returns True when it is ready and PING succeeds.
+ */
+async function isConnectionReachable(queueRedis: QueueRedis): Promise<boolean> {
+  const { connection, readiness } = queueRedis
+  if (readiness.hasBeenReady) {
+    // A ping while not ready would wait in the offline queue, or reject with it off.
+    if (connection.status !== 'ready') return false
+  } else if (!(await hasBecomeReady(connection))) {
+    return false
+  }
+  const reply = await connection.ping()
+  return reply === 'PONG'
+}
+
+/**
+ * Wait for a connection's first 'ready', or for it to give up (bounded by the pre-ready retries).
+ * @param connection - A connection that has never been ready.
+ * @returns True once ready; false once it has ended.
+ */
+async function hasBecomeReady(connection: IORedis): Promise<boolean> {
+  if (connection.status === 'ready') return true
+  if (connection.status === 'end') return false
+  return new Promise((resolve) => {
+    const onReady = (): void => {
+      connection.off('end', onEnd)
+      resolve(true)
+    }
+    const onEnd = (): void => {
+      connection.off('ready', onReady)
+      resolve(false)
+    }
+    connection.once('ready', onReady).once('end', onEnd)
+  })
+}
+
+/**
+ * Check that both queue connections, the Workers' and the producers', answer.
+ * @returns True when both are ready and answer PING; false once closed or
+ *   unreachable, without hanging: before the first 'ready' a connection gives
+ *   up after a few retries, and after it any status other than 'ready' is
+ *   reported at once.
  */
 export async function isQueueReachable(): Promise<boolean> {
   if (state.closed) return false
   try {
-    const connection = getQueueConnection()
-    // BullMQ needs the offline queue, so a ping while not ready would wait out the whole outage.
-    if (state.hasBeenReady && connection.status !== 'ready') return false
-    const reply = await connection.ping()
-    return reply === 'PONG'
+    getQueueConnection()
+    getProducerConnection()
+    if (!state.worker || !state.producer) return false
+    const results = await Promise.all([
+      isConnectionReachable(state.worker),
+      isConnectionReachable(state.producer),
+    ])
+    return results.every(Boolean)
   } catch {
     return false
   }
@@ -240,9 +312,9 @@ export async function closeQueue(): Promise<void> {
     // ioredis instance, so this does not touch the producer connection either.
     await notificationQueue.close()
   }
-  const connections = [state.connection, state.producerConnection]
-  state.connection = undefined
-  state.producerConnection = undefined
+  const connections = [state.worker?.connection, state.producer?.connection]
+  state.worker = undefined
+  state.producer = undefined
   await Promise.all(connections.map((connection) => endConnection(connection)))
 }
 

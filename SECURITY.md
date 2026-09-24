@@ -345,12 +345,12 @@ prefix on the same pattern; `tests/unit/middlewares/rate-limit.middleware.test.t
 fails if two ever collide. `/verify-email` and `/resend-verification`'s
 own per-limiter reasoning — including why `/resend-verification`'s IP layer
 is the tight one and its email layer the generous one — lives in
-`rate-limit.middleware.ts`'s own header comment. The store starts on an in-memory store and latches,
-once, to a Redis-backed one the first time Redis is confirmed reachable —
-never back — so the limit ends up shared across replicas rather than
-per-process as soon as Redis is up. Until that first successful latch (or
-whenever Redis stays unreachable), the store stays in-memory and the limit
-is per-process only.
+`rate-limit.middleware.ts`'s own header comment. The store starts in
+memory and switches to Redis once Redis answers, so the limit is shared
+across replicas. Whenever a Redis command fails, that request is counted in
+the store's own memory instead, and the next successful command returns it
+to Redis. During an outage, then, counting is per process: with N replicas,
+a client can make up to N× the limit.
 
 - **Register** (`POST /api/v1/auth/register`): 100 attempts per hour, keyed
   on the client's **IP alone** — deliberately not the composite login uses.
