@@ -7,7 +7,7 @@
 // pick up its jobs.
 import { randomUUID } from 'node:crypto'
 import { Queue, Worker } from 'bullmq'
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { gracefulShutdown, startServer } from '@/server'
 import { resetLifecycleForTests } from '@/services/lifecycle.service'
 import { addJob, closeQueue, getEmailQueue, isQueueReachable } from '@/services/queue.service'
@@ -96,6 +96,11 @@ describe('Queue Workers through a Redis outage', () => {
   beforeAll(async () => {
     await proxy.start(new URL(target.realUrl))
     target.proxyUrl = proxy.urlFor(new URL(target.realUrl))
+  })
+
+  // A failed test must not leave the next one talking to a dead proxy.
+  afterEach(() => {
+    proxy.comeBack()
   })
 
   afterAll(async () => {

@@ -969,14 +969,31 @@ describe('GET /api/v1/notifications/stream', () => {
 
   it('drops a client that stops reading once more than 1 MiB is buffered for it', async () => {
     const { user, token } = await createAuthenticatedUser()
-    const stream = openStream({ header: `Bearer ${token}` })
-    const response = await stream.waitForResponse()
-    expect(response.statusCode).toBe(200)
-    await waitUntil(() => listenerCount(user.id) === 1, 2000)
+    // The stream's own ServerResponse: its controller calls flushHeaders() once, after writeHead.
+    const streamResponses: http.ServerResponse[] = []
+    await withMutatedMethod(
+      http.ServerResponse.prototype,
+      'flushHeaders',
+      function (this: http.ServerResponse) {
+        streamResponses.push(this)
+        // Inherited, so the real one is still reachable while this override shadows it.
+        http.OutgoingMessage.prototype.flushHeaders.call(this)
+      },
+      async () => {
+        const stream = openStream({ header: `Bearer ${token}` })
+        const response = await stream.waitForResponse()
+        expect(response.statusCode).toBe(200)
+        await waitUntil(() => listenerCount(user.id) === 1, 2000)
+      }
+    )
+    expect(streamResponses).toHaveLength(1)
+    const [streamResponse] = streamResponses as [http.ServerResponse]
+    const client = openConnections.at(-1)?.response
+    if (!client) throw new Error('expected the stream to have opened')
 
     // Stop reading: the client parser stops draining its socket, and the
     // kernel buffers on both sides fill.
-    response.pause()
+    client.pause()
 
     // 32 MiB of frames. That is far past any loopback kernel buffering, so
     // the server-side writable buffer must pass SSE_MAX_BUFFERED_BYTES.
@@ -1000,15 +1017,14 @@ describe('GET /api/v1/notifications/stream', () => {
       })
     }
 
-    // Destroyed server-side: the request 'close' cleanup ran. That fires a
-    // tick after the stall path's own offNotification, so wait on the registry.
+    // Destroyed server-side, while the client is still paused: an end()
+    // alone would queue behind the stalled buffer and leave the stream open.
+    // Asserted on the server, because what reaches the client once it reads
+    // again depends on how much the kernel had already taken.
+    expect(streamResponse.destroyed).toBe(true)
+    // The request 'close' cleanup ran. That fires a tick after the stall
+    // path's own offNotification, so wait on the registry.
     await waitUntil(() => countStreams(user.id) === 0, 5000)
     expect(listenerCount(user.id)).toBe(0)
-
-    // Destroyed, not ended: the kernel buffers can drain a queued end(), so
-    // only a truncated body tells the two apart once the client reads again.
-    response.resume()
-    await waitUntil(() => response.destroyed, 5000)
-    expect(response.complete).toBe(false)
   })
 })
