@@ -5,9 +5,9 @@
 // makes a file integration regardless of what it asserts.
 import { randomUUID } from 'node:crypto'
 import http, { type IncomingMessage } from 'node:http'
-import type { AddressInfo } from 'node:net'
+import net, { type AddressInfo } from 'node:net'
 import express from 'express'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createApp } from '@/app'
 import { getEnv, trustProxySetting } from '@/configs/env.config'
 import { UserRepository } from '@/repositories/user.repository'
@@ -18,6 +18,7 @@ import {
   markShuttingDown,
   resetLifecycleForTests,
 } from '@/services/lifecycle.service'
+import { logger } from '@/services/logger.service'
 import { signAccessToken } from '@/utilities/token.utilities'
 import { request } from '../helpers/request'
 
@@ -178,6 +179,38 @@ describe('server lifecycle', () => {
 
     await gracefulShutdown(server)
     await expect(gracefulShutdown(server)).resolves.toBeUndefined()
+  })
+})
+
+describe('startServer on a port already in use', () => {
+  it('logs one readable line and sets exit code 1, instead of an uncaught EADDRINUSE', async () => {
+    // Bind a port the same way startServer does (no host), so the second
+    // bind conflicts on every platform.
+    const blocker = net.createServer()
+    await new Promise<void>((resolve) => blocker.listen(0, resolve))
+    const { port } = blocker.address() as AddressInfo
+
+    const loggerError = vi.spyOn(logger, 'error').mockImplementation(() => {})
+    const previousExitCode = process.exitCode
+    try {
+      const server = startServer(port)
+      // Registered after startServer's own listener, so it runs second. On
+      // today's code it is the only listener, which keeps the red run an
+      // assertion failure rather than a crashed worker.
+      await new Promise<void>((resolve) => server.once('error', () => resolve()))
+
+      expect(loggerError).toHaveBeenCalledTimes(1)
+      // Read back, not a nested expect.objectContaining: that matcher is typed
+      // `any`, which trips @typescript-eslint/no-unsafe-assignment.
+      const [message, meta] = loggerError.mock.calls[0] ?? []
+      expect(message).toBe('Server failed to start')
+      expect(meta?.error).toMatchObject({ code: 'EADDRINUSE' })
+      expect(process.exitCode).toBe(1)
+    } finally {
+      process.exitCode = previousExitCode
+      loggerError.mockRestore()
+      await new Promise<void>((resolve) => blocker.close(() => resolve()))
+    }
   })
 })
 

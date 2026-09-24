@@ -210,18 +210,27 @@ export function redactedForLog(error: unknown): unknown {
 /**
  * Terminal error handler. Must be registered last and must take four
  * parameters — Express identifies error handlers by arity, so dropping the
- * unused `next` silently turns this into ordinary middleware.
+ * `next` parameter silently turns this into ordinary middleware.
+ * Once headers are sent (a failure mid-stream), no second response can be
+ * written; the error goes to Express's final handler, which destroys the
+ * socket.
  * @param error - The thrown or forwarded error.
  * @param request - The request.
  * @param response - The response.
- * @param _next - Required for Express to recognise the arity.
+ * @param next - Express's final handler, used only when headers are already sent.
  */
 export function errorHandler(
   error: unknown,
   request: Request,
   response: Response,
-  _next: NextFunction
+  next: NextFunction
 ): void {
+  if (response.headersSent) {
+    logger.error('Error after response headers were sent', { error: redactedForLog(error) })
+    next(error)
+    return
+  }
+
   const httpError = error instanceof HttpError ? error : undefined
   const statusCode = httpError?.statusCode ?? clientStatusOf(error) ?? 500
 

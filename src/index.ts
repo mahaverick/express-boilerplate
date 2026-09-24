@@ -13,7 +13,9 @@ import { GRACEFUL_SHUTDOWN_TIMEOUT_MS } from '@/constants/global.constants'
  * The forced-exit backstop and the once-only guard live in
  * `createShutdownHandler` (lifecycle.service.ts). `process.exit` is passed in
  * from inside the `process.on` callback, which `unicorn/no-process-exit` requires.
- * @returns Resolves once the server is listening and signal handlers are wired.
+ * Fatal errors (unhandled rejection, uncaught exception, a failed bind) go
+ * through the same handler with exit code 1.
+ * @returns Resolves once exit handlers are wired and any workers have started.
  */
 async function boot(): Promise<void> {
   // `@/server` is imported dynamically, only after `main()` has already
@@ -27,7 +29,43 @@ async function boot(): Promise<void> {
   // trace from inside database.service.ts — exactly what `main()` exists to
   // avoid. getEnv() is memoised, so the second call this triggers is free.
   const { startServer, gracefulShutdown } = await import('@/server')
+  // Loaded before the server starts: the fatal handlers need the logger, and
+  // no await may sit between startServer() and its 'error' listener.
+  const { logger } = await import('@/services/logger.service')
+  const { createShutdownHandler } = await import('@/services/lifecycle.service')
+
+  // Filled in once the workers start; shutdown reads it only when it runs.
+  const workers: { email?: Worker; notification?: Worker } = {}
+
+  // One handler for every exit path: signals, fatal errors and a failed
+  // bind. A second call while shutdown runs is ignored.
+  const handleShutdown = createShutdownHandler(
+    () => gracefulShutdown(server, workers.email, workers.notification),
+    GRACEFUL_SHUTDOWN_TIMEOUT_MS
+  )
+
   const server = startServer()
+  // Same tick as listen(): a bind failure is emitted on nextTick.
+  // startServer has already logged it and set exitCode = 1.
+  server.once('error', () => {
+    // eslint-disable-next-line unicorn/no-process-exit -- a failed bind is fatal at boot; the exit still goes through the shared once-guard
+    handleShutdown((code) => process.exit(code), 1)
+  })
+
+  for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+    process.on(signal, () => {
+      handleShutdown((code) => process.exit(code))
+    })
+  }
+  // The logger has no `fatal`; error is its highest level.
+  process.on('unhandledRejection', (reason) => {
+    logger.error('Unhandled promise rejection', { error: reason })
+    handleShutdown((code) => process.exit(code), 1)
+  })
+  process.on('uncaughtException', (error) => {
+    logger.error('Uncaught exception', { error })
+    handleShutdown((code) => process.exit(code), 1)
+  })
 
   // Dynamic, same reasoning as `@/server` above and for the same effect:
   // `@/workers/email.worker` / `@/workers/notification.worker` ->
@@ -39,29 +77,12 @@ async function boot(): Promise<void> {
   // which never sets WORKER_ENABLED and has no business loading BullMQ at
   // all. Gating the import itself, not just the call, is what keeps that
   // test free of it.
-  let emailWorker: Worker | undefined
-  let notificationWorker: Worker | undefined
-  if (getEnv().WORKER_ENABLED) {
-    const { startEmailWorker } = await import('@/workers/email.worker')
-    const { startNotificationWorker } = await import('@/workers/notification.worker')
-    emailWorker = startEmailWorker()
-    notificationWorker = startNotificationWorker()
-    // logger is available here — getEnv() already succeeded in main().
-    const { logger } = await import('@/services/logger.service')
-    logger.info('Workers started (email + notification)')
-  }
-
-  // One handler for both signals: a second signal during shutdown is ignored.
-  const { createShutdownHandler } = await import('@/services/lifecycle.service')
-  const handleShutdown = createShutdownHandler(
-    () => gracefulShutdown(server, emailWorker, notificationWorker),
-    GRACEFUL_SHUTDOWN_TIMEOUT_MS
-  )
-  for (const signal of ['SIGTERM', 'SIGINT'] as const) {
-    process.on(signal, () => {
-      handleShutdown((code) => process.exit(code))
-    })
-  }
+  if (!getEnv().WORKER_ENABLED) return
+  const { startEmailWorker } = await import('@/workers/email.worker')
+  const { startNotificationWorker } = await import('@/workers/notification.worker')
+  workers.email = startEmailWorker()
+  workers.notification = startNotificationWorker()
+  logger.info('Workers started (email + notification)')
 }
 
 /**

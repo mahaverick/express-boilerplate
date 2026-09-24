@@ -22,12 +22,21 @@ import { closeRedis } from '@/services/redis.service'
  * ephemeral one, and would pass while testing the wrong thing.
  * @param port - Port to bind. Defaults to the configured one. Pass 0 to let the
  *   OS pick a free port, which is what makes the lifecycle test safe in parallel.
- * @returns The listening server.
+ * A bind failure (EADDRINUSE, EACCES) logs one line and sets exit code 1.
+ * `process.exit` is not allowed outside a `process.on` callback
+ * (`unicorn/no-process-exit`), so index.ts owns the actual exit.
+ * @returns The server, listening once its 'listening' event fires.
  */
 export function startServer(port: number = getEnv().APP_PORT): Server {
-  return createApp().listen(port, () => {
-    logger.info(`Listening on :${port}`)
+  // Express 5 calls this on a bind failure too, with the error; the 'error' listener below logs that.
+  const server = createApp().listen(port, (error) => {
+    if (error === undefined) logger.info(`Listening on :${port}`)
   })
+  server.on('error', (error) => {
+    logger.error('Server failed to start', { error })
+    process.exitCode = 1
+  })
+  return server
 }
 
 /**
