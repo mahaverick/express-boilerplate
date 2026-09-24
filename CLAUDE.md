@@ -397,9 +397,11 @@ otel-collector`.** It is bind-mounted; `docker compose up -d` does not
   with `--auto`; it merges once required checks pass. It uses a GitHub App
   token (variable `RELEASE_APP_CLIENT_ID`, secret `RELEASE_APP_PRIVATE_KEY`;
   Contents and Pull requests read/write) — not `GITHUB_TOKEN`, whose PRs and
-  tags start no workflow. The `vX.Y.Z` tag re-runs `deploy.yml`, which adds
-  `:X.Y.Z`, `:X.Y` and `:X` image tags; the `deploy` job skips tag runs. If
-  the App key is revoked, releases stop — fix it, don't use `GITHUB_TOKEN`.
+  tags start no workflow. The `vX.Y.Z` tag runs `deploy.yml`'s `promote` job,
+  which builds nothing: it waits for `:sha-<commit>` from `main`'s run and adds
+  `:X.Y.Z`, `:X.Y` and `:X` to that same digest; tag runs skip `ci`, `image`
+  and `deploy`. If the App key is revoked, releases stop — fix it, don't use
+  `GITHUB_TOKEN`.
 
 ## Testing
 

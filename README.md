@@ -332,7 +332,8 @@ deployment target has been chosen yet. A manual `workflow_dispatch` from
 another branch only pushes the sha-tagged image — the `:main` tag and the
 `deploy` job both run only from `main`. Releases are automatic: every `feat`
 or `fix` merge is released as `vX.Y.Z` once the release PR's checks pass,
-and the image gains `:X.Y.Z`, `:X.Y` and `:X` tags (see
+and the digest `main` already built gains `:X.Y.Z`, `:X.Y` and `:X` tags —
+nothing is rebuilt (see
 [CONTRIBUTING.md](CONTRIBUTING.md#releases) — it needs a release GitHub App).
 
 Three things need doing by hand, once, before any of this is live:

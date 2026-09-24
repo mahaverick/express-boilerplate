@@ -178,12 +178,13 @@ Releases are automatic. On every push to `main`, `release-please` opens a
 release pull request from the conventional commits since the last release, and
 `release.yml` queues it with `--auto`, so it merges once required checks pass;
 the next run tags `vX.Y.Z` and publishes the GitHub Release, and the tag push
-makes `deploy.yml` publish the image as `:X.Y.Z`, `:X.Y` and `:X`. Only
+makes `deploy.yml` add `:X.Y.Z`, `:X.Y` and `:X` to the image digest `main`
+already built and tested — a release rebuilds nothing. Only
 `feat`/`fix`/breaking commits cut a release — `chore`, `docs`, `ci` and the
 like do not. This uses a GitHub App token (variable `RELEASE_APP_CLIENT_ID`,
 secret `RELEASE_APP_PRIVATE_KEY`; Contents and Pull requests read/write): events
 `GITHUB_TOKEN` creates start no workflow, so its PR would get no CI and its tag
-no deploy. The version bump follows the commit types:
+no promotion. The version bump follows the commit types:
 
 - `feat` commits become a minor version bump
 - `fix` commits become a patch version bump
