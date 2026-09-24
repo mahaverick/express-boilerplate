@@ -402,6 +402,14 @@ export function createPinoLogger(options: LoggerOptions): Logger {
       messageKey: 'message',
       timestamp: () => `,"timestamp":"${new Date().toISOString()}"`,
       mixin: requestContextFields,
+      // pino's default merge lets the logged object's own fields overwrite
+      // the mixin's — so a caller passing `requestId` (or `tenantId`,
+      // `traceId`, `spanId`) in meta would silently spoof correlation data
+      // that is supposed to come only from the request's own
+      // AsyncLocalStorage context / active span. Reversing the merge order
+      // makes the mixin win, restoring the winston-era guarantee that
+      // callers cannot override correlation fields.
+      mixinMergeStrategy: (mergeObject, mixinObject) => Object.assign(mergeObject, mixinObject),
       formatters: {
         level: (label) => ({ level: label }),
         log: serializeErrors,

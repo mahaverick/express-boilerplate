@@ -73,7 +73,10 @@ until you check.
 - **Request-id correlation is automatic.** The `requestContext` middleware
   wraps each request in an `AsyncLocalStorage` context. The logger reads from
   it on every call — callers never pass the id. Code outside a request (startup,
-  Redis error handler) simply omits the field.
+  Redis error handler) simply omits the field. `mixinMergeStrategy`
+  (logger.service.ts) makes the mixin's correlation fields win over a
+  caller-supplied field of the same name — a caller passing `requestId` in
+  meta cannot override the real ALS value.
 - **Caller file:line is automatic.** The logger parses `new Error().stack` on
   each call. The `[moduleName]` prefixes that some call sites used to include
   in their messages are redundant — the `source` field handles it.

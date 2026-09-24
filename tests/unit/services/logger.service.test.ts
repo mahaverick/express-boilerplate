@@ -119,6 +119,27 @@ describe('createPinoLogger', () => {
         })
       }))
 
+    // Winston-era behaviour: request-context correlation fields must win
+    // over a caller-supplied field of the same name, not merge in whatever
+    // order pino happens to combine the mixin and the log call's own
+    // object. Without mixinMergeStrategy, pino's default merge lets the
+    // logged object's own `requestId` overwrite the mixin's.
+    it('the real request context requestId wins over a caller-supplied requestId in meta', () =>
+      new Promise<void>((resolve) => {
+        const { destination, output } = captureDestination()
+        const log = createPinoLogger({ level: 'info', isProduction: true, destination })
+
+        requestContextStore.run({ requestId: 'real-id' }, () => {
+          log.info({ requestId: 'spoofed', source: 'test.ts:1' }, 'x')
+        })
+
+        setImmediate(() => {
+          const parsed = parseLastRecord(output)
+          expect(parsed.requestId).toBe('real-id')
+          resolve()
+        })
+      }))
+
     it('omits requestId when called outside an ALS context', () =>
       new Promise<void>((resolve) => {
         const { destination, output } = captureDestination()
