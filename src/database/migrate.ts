@@ -36,7 +36,13 @@ const migrationsFolder = `${import.meta.dirname}/migrations`
  * @returns Resolves when the database is at the latest migration.
  */
 export async function runMigrations(databaseUrl: string = getDatabaseUrl()): Promise<void> {
-  const client = postgres(databaseUrl, { max: 1 })
+  // drizzle's migrator runs `CREATE SCHEMA/TABLE IF NOT EXISTS` for its own
+  // bookkeeping on every run, and Postgres answers each already-present one
+  // with a NOTICE ("... already exists, skipping"). postgres.js's default
+  // `onnotice` is console.log, which dumped every one as a raw object — on
+  // `pnpm db:migrate` and, once per worker database, on every test run. They
+  // carry no information; a real problem is an error, not a notice.
+  const client = postgres(databaseUrl, { max: 1, onnotice: () => {} })
   try {
     await migrate(drizzle(client), { migrationsFolder })
   } finally {
