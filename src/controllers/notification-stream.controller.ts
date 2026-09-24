@@ -56,8 +56,8 @@ const MAX_TIMER_DELAY_MS = 2_147_483_647
 
 /**
  * The wire shape one notification is serialized to for an SSE `data:` line
- * — a subset of the `notifications` row, matching what `GET
- * /api/v1/notifications` already exposes via `successResponse`. `readAt` is
+ * — a subset of the `notifications` row, and of what `GET
+ * /api/v1/notifications` returns (which also has `userId` and `metadata`). `readAt` is
  * carried as `string | null`, not omitted when unread, for the same reason
  * `deleteNotification` (notification.controller.ts) returns a JSON `null`
  * rather than nothing: a client parses `data:` as JSON text, where "absent"

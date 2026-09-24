@@ -128,7 +128,12 @@ add a real row:
 
 ## Schema migrations on a live database
 
-- **A generated `CREATE UNIQUE INDEX` (no `CONCURRENTLY`) blocks writes to its table while it builds** (e.g. `0013`'s `notifications_dedupe_key_unique`). On a large existing table, build the index `CONCURRENTLY` by hand first; the generated statement has no `IF NOT EXISTS`, so add it to that migration's statement before `pnpm db:migrate`, or the migration fails on the existing index.
+- **A generated `CREATE UNIQUE INDEX` (no `CONCURRENTLY`) blocks writes to its table while it builds.** For `0013` on a large existing `notifications` table, run this by hand before `pnpm db:migrate`:
+  ```sql
+  ALTER TABLE notifications ADD COLUMN IF NOT EXISTS dedupe_key varchar(128);
+  CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS notifications_dedupe_key_unique ON notifications (dedupe_key);
+  ```
+  Then add `IF NOT EXISTS` to both statements in the not-yet-applied `0013` file, or the migration fails on the existing column or index. A failed `CONCURRENTLY` build leaves an INVALID index that `IF NOT EXISTS` would skip: check `pg_index.indisvalid` for it, or drop it and build again.
 
 ## Supply-chain bypasses in `pnpm-workspace.yaml`
 
