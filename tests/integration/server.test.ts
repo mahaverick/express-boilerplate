@@ -183,7 +183,7 @@ describe('server lifecycle', () => {
 })
 
 describe('startServer on a port already in use', () => {
-  it('logs one readable line and sets exit code 1, instead of an uncaught EADDRINUSE', async () => {
+  it("logs one readable line and sets exit code 1, instead of a false 'Listening' line", async () => {
     // Bind a port the same way startServer does (no host), so the second
     // bind conflicts on every platform.
     const blocker = net.createServer()
@@ -191,12 +191,11 @@ describe('startServer on a port already in use', () => {
     const { port } = blocker.address() as AddressInfo
 
     const loggerError = vi.spyOn(logger, 'error').mockImplementation(() => {})
+    const loggerInfo = vi.spyOn(logger, 'info').mockImplementation(() => {})
     const previousExitCode = process.exitCode
     try {
       const server = startServer(port)
-      // Registered after startServer's own listener, so it runs second. On
-      // today's code it is the only listener, which keeps the red run an
-      // assertion failure rather than a crashed worker.
+      // Registered after startServer's own listener, so it runs second.
       await new Promise<void>((resolve) => server.once('error', () => resolve()))
 
       expect(loggerError).toHaveBeenCalledTimes(1)
@@ -205,10 +204,12 @@ describe('startServer on a port already in use', () => {
       const [message, meta] = loggerError.mock.calls[0] ?? []
       expect(message).toBe('Server failed to start')
       expect(meta?.error).toMatchObject({ code: 'EADDRINUSE' })
+      expect(loggerInfo).not.toHaveBeenCalledWith(`Listening on :${port}`)
       expect(process.exitCode).toBe(1)
     } finally {
       process.exitCode = previousExitCode
       loggerError.mockRestore()
+      loggerInfo.mockRestore()
       await new Promise<void>((resolve) => blocker.close(() => resolve()))
     }
   })

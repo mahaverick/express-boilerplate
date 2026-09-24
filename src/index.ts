@@ -32,7 +32,8 @@ async function boot(): Promise<void> {
   // Loaded before the server starts: the fatal handlers need the logger, and
   // no await may sit between startServer() and its 'error' listener.
   const { logger } = await import('@/services/logger.service')
-  const { createShutdownHandler } = await import('@/services/lifecycle.service')
+  const { createShutdownHandler, isShuttingDown } = await import('@/services/lifecycle.service')
+  const { redactedForLog } = await import('@/middlewares/error.middleware')
 
   // Filled in once the workers start; shutdown reads it only when it runs.
   const workers: { email?: Worker; notification?: Worker } = {}
@@ -59,11 +60,11 @@ async function boot(): Promise<void> {
   }
   // The logger has no `fatal`; error is its highest level.
   process.on('unhandledRejection', (reason) => {
-    logger.error('Unhandled promise rejection', { error: reason })
+    logger.error('Unhandled promise rejection', { error: redactedForLog(reason) })
     handleShutdown((code) => process.exit(code), 1)
   })
   process.on('uncaughtException', (error) => {
-    logger.error('Uncaught exception', { error })
+    logger.error('Uncaught exception', { error: redactedForLog(error) })
     handleShutdown((code) => process.exit(code), 1)
   })
 
@@ -80,6 +81,8 @@ async function boot(): Promise<void> {
   if (!getEnv().WORKER_ENABLED) return
   const { startEmailWorker } = await import('@/workers/email.worker')
   const { startNotificationWorker } = await import('@/workers/notification.worker')
+  // Shutdown may have begun during the imports above; workers started now would never be closed.
+  if (isShuttingDown()) return
   workers.email = startEmailWorker()
   workers.notification = startNotificationWorker()
   logger.info('Workers started (email + notification)')

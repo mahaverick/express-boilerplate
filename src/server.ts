@@ -32,7 +32,11 @@ export function startServer(port: number = getEnv().APP_PORT): Server {
   const server = createApp().listen(port, (error) => {
     if (error === undefined) logger.info(`Listening on :${port}`)
   })
-  server.on('error', (error) => {
+  server.once('error', (error) => {
+    if (server.listening) {
+      logger.error('Server error', { error })
+      return
+    }
     logger.error('Server failed to start', { error })
     process.exitCode = 1
   })

@@ -189,18 +189,19 @@ describe('errorHandler', () => {
     expect(body()).toMatchObject({ requestId: 'req-id-1' })
   })
 
-  it('hands the error to Express instead of writing a second response once headers are already sent', () => {
+  it('destroys the socket instead of writing a second response once headers are already sent', () => {
     const { response, status } = mockResponse()
     Object.assign(response, { headersSent: true })
+    const destroy = vi.fn()
     const next = vi.fn()
-    const error = new Error('stream write failed')
 
-    errorHandler(error, {} as never, response, next)
+    errorHandler(new Error('stream write failed'), { socket: { destroy } } as never, response, next)
 
-    // Express's final handler destroys the socket when headers are out;
-    // writing a status/body here would throw ERR_HTTP_HEADERS_SENT instead.
+    // Not next(error): Express's final handler console.errors the raw error,
+    // unredacted, for every NODE_ENV but 'test'.
     expect(status).not.toHaveBeenCalled()
-    expect(next).toHaveBeenCalledWith(error)
+    expect(destroy).toHaveBeenCalledTimes(1)
+    expect(next).not.toHaveBeenCalled()
   })
 
   // A failed database write is the one 5xx that arrives carrying the data it
