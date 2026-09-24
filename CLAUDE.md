@@ -337,7 +337,7 @@ otel-collector`.** It is bind-mounted; `docker compose up -d` does not
   `tests/integration/`, mirroring the src/ path of their subject
   (`src/services/queue.service.ts` →
   `tests/unit/services/queue.service.test.ts`); shared support lives in
-  `tests/helpers/` and `tests/fixtures/`, imported as `@/tests/...`. Names are
+  `tests/helpers/` and `tests/fixtures/`, imported by relative path. Names are
   `.test.ts`, never `.spec.`, never in a `__tests__/` folder. Linted:
   `check-file/filename-blocklist` rejects any `*.test.*`, `*.spec.*`,
   `__tests__/` or `src/tests/` file under `src/`, and vitest only collects
