@@ -80,6 +80,8 @@ export const INVITATION_EMAIL_UNVERIFIED_MESSAGE =
 export const INVITATION_NOT_FOUND_CODE = 'invitation_not_found'
 
 const INVITATION_NOT_FOUND_MESSAGE = 'Invitation not found'
+// Matches no membership: stands in for the invitee id when the address has no account.
+const NIL_UUID = '00000000-0000-0000-0000-000000000000'
 const INVITER_NAME_FALLBACK = 'A teammate'
 const MS_PER_DAY = 24 * 60 * 60 * 1000
 
@@ -255,7 +257,12 @@ export async function invite(
 ): Promise<void> {
   const normalizedEmail = email.trim().toLowerCase()
   const invitee = await userRepository.findByEmail(normalizedEmail)
-  if (invitee && (await userMembershipRepository.findByUserAndTenant(invitee.id, tenantId))) {
+  // Always run the lookup, so a registered and an unregistered address take the same queries.
+  const membership = await userMembershipRepository.findByUserAndTenant(
+    invitee?.id ?? NIL_UUID,
+    tenantId
+  )
+  if (invitee && membership) {
     throw new HttpError(ALREADY_MEMBER_MESSAGE, 409, ALREADY_MEMBER_CODE)
   }
   const tenant = await tenantForMessages(tenantId)
@@ -313,7 +320,7 @@ export type AuthorizeInvitation = (invitation: TenantInvitation) => void
  * @param invitationId - The invitation.
  * @param actorUserId - The owner or admin resending it, named in the email.
  * @param authorize - The caller's check on the pending row; resending re-issues its role.
- * @throws {HttpError} 404 `invitation_not_found`, when it is not pending in this tenant; whatever `authorize` throws.
+ * @throws {HttpError} 404 `invitation_not_found`, when it is not pending in this tenant; 404 when the tenant is gone, before anything is written; whatever `authorize` throws.
  */
 export async function resend(
   tenantId: string,
@@ -321,6 +328,8 @@ export async function resend(
   actorUserId: string,
   authorize: AuthorizeInvitation
 ): Promise<void> {
+  // Before the write, so a vanished tenant cannot leave the old link replaced and no email sent.
+  const tenant = await tenantForMessages(tenantId)
   const rawToken = generateInvitationToken()
   const invitation = await db.transaction(async (tx) => {
     const pending = await invitationRepository.findPendingById(tenantId, invitationId, tx)
@@ -335,7 +344,6 @@ export async function resend(
     if (!updated) throw invitationNotFound()
     return updated
   })
-  const tenant = await tenantForMessages(tenantId)
   const inviter = await userRepository.findById(actorUserId)
   const invitee = await userRepository.findByEmail(invitation.email)
 
@@ -443,7 +451,8 @@ export async function accept(rawToken: string, userId: string): Promise<Accepted
     assertInvitedAddress(user, valid.invitation.email)
 
     const claimed = await invitationRepository.claimForAccept(tokenHash, user.id, tx)
-    // A concurrent accept claimed it first; succeed only if that was this user.
+    // It stopped being redeemable after the read: a concurrent accept, a
+    // revoke, a resend, expiry or a tenant soft-delete. Succeed only if this user accepted it.
     if (!claimed) return acceptedEarlierBy(tokenHash, user.id, tx)
 
     const membership = await userMembershipRepository.createIfAbsent(

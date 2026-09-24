@@ -26,6 +26,7 @@ import {
   revoke,
 } from '@/services/tenant-invitation.service'
 import { hashToken } from '@/utilities/token.utilities'
+import { withMutatedMethod } from '../../helpers/mutate'
 import { expectNoJob, waitForInvitationEmail, waitForJob } from '../../helpers/queue-jobs'
 
 const invitationRepository = new TenantInvitationRepository()
@@ -110,6 +111,39 @@ function refuseReissue(pending: TenantInvitation): void {
   throw new HttpError(`May not re-issue the ${pending.role} role`, 403)
 }
 
+/**
+ * Run `run` while `findValidByTokenHash` answers with `stale`, as if accept
+ * had read the row just before another transaction changed it. Records what
+ * each `claimForAccept` returned, so a test can prove the claim was lost.
+ * @param stale - The redeemable view captured earlier.
+ * @param run - The accept to run.
+ * @returns What each claim returned while `run` ran.
+ */
+async function withStaleRead(
+  stale: Awaited<ReturnType<TenantInvitationRepository['findValidByTokenHash']>>,
+  run: () => Promise<void>
+): Promise<(TenantInvitation | undefined)[]> {
+  const realClaim = invitationRepository.claimForAccept.bind(invitationRepository)
+  const claims: (TenantInvitation | undefined)[] = []
+  await withMutatedMethod(
+    TenantInvitationRepository.prototype,
+    'findValidByTokenHash',
+    () => Promise.resolve(stale),
+    () =>
+      withMutatedMethod(
+        TenantInvitationRepository.prototype,
+        'claimForAccept',
+        async (tokenHash, userId, executor) => {
+          const claimed = await realClaim(tokenHash, userId, executor)
+          claims.push(claimed)
+          return claimed
+        },
+        run
+      )
+  )
+  return claims
+}
+
 describe('tenant-invitation.service', () => {
   const createdTenantIds: string[] = []
   const createdUserIds: string[] = []
@@ -126,14 +160,18 @@ describe('tenant-invitation.service', () => {
 
   /**
    * A fresh user, tracked for cleanup.
-   * @param options - Whether the address is verified, and an explicit address.
+   * @param options - Whether the address is verified and the account active, and an explicit address.
    * @param options.verified - Set `emailVerifiedAt` to now. Defaults to true.
+   * @param options.active - The account's `active` flag. Defaults to true.
    * @param options.email - The address. Defaults to a unique one.
    * @returns The created user.
    */
-  async function createUser(options: { verified?: boolean; email?: string } = {}): Promise<User> {
+  async function createUser(
+    options: { verified?: boolean; active?: boolean; email?: string } = {}
+  ): Promise<User> {
     const user = await userRepository.create({
       email: options.email ?? uniqueEmail(),
+      active: options.active ?? true,
       firstName: 'Ada',
       lastName: 'Lovelace',
       ...(options.verified !== false && { emailVerifiedAt: new Date() }),
@@ -256,6 +294,45 @@ describe('tenant-invitation.service', () => {
     })
   })
 
+  describe('invite, account state', () => {
+    it('enqueues no in-app notification for a verified but deactivated account', async () => {
+      const { owner, tenant } = await setup()
+      const invitee = await createUser({ active: false })
+
+      await invite(tenant.id, owner.id, invitee.email, 'viewer')
+
+      await waitForInvitationEmail(invitee.email)
+      const [pending] = await listPending(tenant.id)
+      await expectNoJob<NotificationJobData>(
+        getNotificationQueue(),
+        (data) => data.type === 'tenant_invitation' && data.metadata?.invitationId === pending?.id
+      )
+    })
+
+    it.each(['registered', 'unregistered'] as const)(
+      'runs the membership lookup for an %s address too',
+      async (kind) => {
+        const { owner, tenant } = await setup()
+        const registered = kind === 'registered' ? await createUser() : undefined
+        const email = registered?.email ?? uniqueEmail()
+        const original = userMembershipRepository.findByUserAndTenant.bind(userMembershipRepository)
+        const lookups: string[] = []
+
+        await withMutatedMethod(
+          UserMembershipRepository.prototype,
+          'findByUserAndTenant',
+          (userId, tenantId, executor) => {
+            lookups.push(tenantId)
+            return original(userId, tenantId, executor)
+          },
+          () => invite(tenant.id, owner.id, email, 'viewer')
+        )
+
+        expect(lookups).toEqual([tenant.id])
+      }
+    )
+  })
+
   describe('resend', () => {
     it('issues a new link and kills the old one', async () => {
       const { owner, tenant } = await setup()
@@ -301,6 +378,23 @@ describe('tenant-invitation.service', () => {
       )
       const unchanged = await preview(rawToken)
       expect(unchanged.role).toBe('owner')
+    })
+  })
+
+  describe('resend, vanished tenant', () => {
+    it('leaves the old link in place when the tenant is gone', async () => {
+      const { owner, tenant } = await setup()
+      const { rawToken, invitation } = await seedInvitation(tenant, owner, { email: uniqueEmail() })
+      await tenantRepository.softDelete(tenant.id)
+
+      await expect(
+        resend(tenant.id, invitation.id, owner.id, allowPendingInvitation)
+      ).rejects.toMatchObject({ statusCode: 404 })
+
+      const [row] = await sql<{ tokenHash: string }[]>`
+        select token_hash as "tokenHash" from tenant_invitations where id = ${invitation.id}
+      `
+      expect(row?.tokenHash).toBe(hashToken(rawToken))
     })
   })
 
@@ -480,6 +574,75 @@ describe('tenant-invitation.service', () => {
       const { rawToken } = await seedInvitation(tenant, owner, { email: invitee.email })
       await tenantRepository.softDelete(tenant.id)
       await expect(accept(rawToken, invitee.id)).rejects.toMatchObject(INVALID)
+    })
+
+    it('refuses an inactive account with 401, and claims nothing', async () => {
+      const { owner, tenant } = await setup()
+      const invitee = await createUser({ active: false })
+      const { rawToken } = await seedInvitation(tenant, owner, { email: invitee.email })
+
+      await expect(accept(rawToken, invitee.id)).rejects.toMatchObject({ statusCode: 401 })
+
+      const unclaimed = await preview(rawToken)
+      expect(unclaimed.email).toBe(invitee.email)
+    })
+
+    it('does not let a removed member rejoin with the link they already used', async () => {
+      const { owner, tenant } = await setup()
+      const invitee = await createUser()
+      const { rawToken } = await seedInvitation(tenant, owner, { email: invitee.email })
+      await accept(rawToken, invitee.id)
+      await sql`delete from user_memberships where user_id = ${invitee.id} and tenant_id = ${tenant.id}`
+
+      await expect(accept(rawToken, invitee.id)).rejects.toMatchObject(INVALID)
+
+      expect(
+        await userMembershipRepository.findByUserAndTenant(invitee.id, tenant.id)
+      ).toBeUndefined()
+    })
+
+    describe('when the claim is lost after a stale read', () => {
+      it('succeeds for the invitee when their own earlier accept committed first', async () => {
+        const { owner, tenant } = await setup()
+        const invitee = await createUser()
+        const { rawToken } = await seedInvitation(tenant, owner, { email: invitee.email })
+        const stale = await invitationRepository.findValidByTokenHash(hashToken(rawToken))
+        const first = await accept(rawToken, invitee.id)
+
+        let second: unknown
+        const claims = await withStaleRead(stale, async () => {
+          second = await accept(rawToken, invitee.id)
+        })
+
+        expect(claims).toEqual([undefined])
+
+        expect(second).toStrictEqual(first)
+        const [row] = await sql<{ count: number }[]>`
+          select count(*)::int as count from user_memberships
+          where user_id = ${invitee.id} and tenant_id = ${tenant.id}
+        `
+        expect(row?.count).toBe(1)
+      })
+
+      it('answers invitation_invalid, and adds no member, when a revoke committed first', async () => {
+        const { owner, tenant } = await setup()
+        const invitee = await createUser()
+        const { rawToken, invitation } = await seedInvitation(tenant, owner, {
+          email: invitee.email,
+        })
+        const stale = await invitationRepository.findValidByTokenHash(hashToken(rawToken))
+        await revoke(tenant.id, invitation.id)
+
+        const claims = await withStaleRead(stale, async () => {
+          await expect(accept(rawToken, invitee.id)).rejects.toMatchObject(INVALID)
+        })
+
+        expect(claims).toEqual([undefined])
+
+        expect(
+          await userMembershipRepository.findByUserAndTenant(invitee.id, tenant.id)
+        ).toBeUndefined()
+      })
     })
   })
 })
