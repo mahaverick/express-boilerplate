@@ -28,7 +28,8 @@ export const tenantInvitationModel = pgTable(
     tenantId: varchar('tenant_id', { length: 36 })
       .notNull()
       .references(() => tenantModel.id, { onDelete: 'cascade' }),
-    // Stored lowercased and trimmed; the same width as users.email, so any
+    // Callers write it trimmed and lowercased (the invitation service does);
+    // nothing here enforces that. The same width as users.email, so any
     // address that can register can be invited.
     email: varchar('email', { length: MAX_EMAIL_LENGTH }).notNull(),
     role: varchar('role', { length: 20 }).$type<MembershipRole>().notNull(),

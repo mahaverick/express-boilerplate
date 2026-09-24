@@ -18,18 +18,25 @@ import { db, type DbExecutor } from '@/services/database.service'
 
 // Postgres unique_violation, as in base.repository.ts.
 const UNIQUE_VIOLATION_CODE = '23505'
+// The partial unique index that allows one pending invitation per tenant and address.
+const PENDING_UNIQUE_CONSTRAINT = 'tenant_invitations_pending_unique'
 
 /**
- * Whether an error is (or wraps) a Postgres unique-constraint violation. A
- * copy of the same three-line check in user-membership.repository.ts: a
+ * Whether an error is (or wraps) a Postgres unique violation of one named
+ * constraint. Adapted from the check in user-membership.repository.ts: a
  * table outside BaseRepository re-implements it rather than exporting an
  * internal.
  * @param error - The error thrown by the insert.
- * @returns True when the error is a 23505.
+ * @param constraintName - The unique index or constraint that must have been violated.
+ * @returns True when the error is a 23505 on `constraintName`.
  */
-function isUniqueViolation(error: unknown): boolean {
+function isUniqueViolationOf(error: unknown, constraintName: string): boolean {
   const cause = error instanceof DrizzleQueryError ? error.cause : error
-  return cause instanceof postgres.PostgresError && cause.code === UNIQUE_VIOLATION_CODE
+  return (
+    cause instanceof postgres.PostgresError &&
+    cause.code === UNIQUE_VIOLATION_CODE &&
+    cause.constraint_name === constraintName
+  )
 }
 
 const invitation = tenantInvitationModel
@@ -57,7 +64,8 @@ function redeemableCondition() {
 }
 
 /**
- * What `createPending` writes. `email` must already be lowercased and trimmed.
+ * What `createPending` writes. The caller must pass `email` already trimmed
+ * and lowercased; nothing below normalises it.
  */
 export interface NewPendingInvitation {
   tenantId: string
@@ -112,7 +120,7 @@ export class TenantInvitationRepository {
    * @param input - The new invitation's columns.
    * @param executor - Where to run the queries. Defaults to the pool.
    * @returns The inserted row.
-   * @throws {HttpError} 409 `invitation_conflict`, when a concurrent invite of the same address committed first.
+   * @throws {HttpError} 409 `invitation_conflict`, when the insert violates `tenant_invitations_pending_unique` because a concurrent invite of the same address committed first. Any other error, including another 23505, is rethrown unchanged.
    */
   async createPending(
     input: NewPendingInvitation,
@@ -133,7 +141,7 @@ export class TenantInvitationRepository {
       if (!row) throw new HttpError('Insert returned no row', 500)
       return row
     } catch (error) {
-      if (isUniqueViolation(error)) {
+      if (isUniqueViolationOf(error, PENDING_UNIQUE_CONSTRAINT)) {
         throw new HttpError(
           'An invitation to that address is already being sent. Try again.',
           409,
@@ -270,7 +278,8 @@ export class TenantInvitationRepository {
   /**
    * Atomically mark a redeemable invitation accepted by `userId`. The check
    * and the write are one UPDATE, so of two concurrent claims exactly one
-   * gets the row. Unlike `claimOnce`, expiry is part of the predicate.
+   * gets the row. Unlike `claimOnce`, expiry is part of the predicate, and
+   * so is the tenant not being soft-deleted.
    * @param tokenHash - SHA-256 hex of the raw token.
    * @param userId - The accepting user.
    * @param executor - Where to run the query. Defaults to the pool.
@@ -284,7 +293,13 @@ export class TenantInvitationRepository {
     const [row] = await executor
       .update(invitation)
       .set({ acceptedAt: sql`now()`, acceptedBy: userId, updatedAt: sql`now()` })
-      .where(and(eq(invitation.tokenHash, tokenHash), redeemableCondition()))
+      .where(
+        and(
+          eq(invitation.tokenHash, tokenHash),
+          redeemableCondition(),
+          sql`exists (select 1 from ${tenantModel} where ${tenantModel.id} = ${invitation.tenantId} and ${tenantModel.deletedAt} is null)`
+        )
+      )
       .returning()
     return row
   }

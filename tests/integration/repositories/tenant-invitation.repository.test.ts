@@ -4,7 +4,7 @@
 // first (tenant_invitations.tenant_id cascades), then users
 // (invited_by/accepted_by are SET NULL).
 import { randomBytes, randomUUID } from 'node:crypto'
-import { eq } from 'drizzle-orm'
+import { DrizzleQueryError, eq } from 'drizzle-orm'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   tenantInvitationModel,
@@ -208,7 +208,60 @@ describe('TenantInvitationRepository', () => {
       await expect(
         sql`insert into tenant_invitations (tenant_id, email, role, token_hash, expires_at)
             values (${tenant.id}, ${email.toUpperCase()}, 'viewer', ${uniqueHash()}, now() + interval '1 hour')`
-      ).rejects.toMatchObject({ code: '23505' })
+      ).rejects.toMatchObject({
+        code: '23505',
+        constraint_name: 'tenant_invitations_pending_unique',
+      })
+    })
+
+    it('has the database refuse a duplicate token hash', async () => {
+      const { owner, tenant } = await setup()
+      const existing = await createPending({ tenantId: tenant.id, invitedBy: owner.id })
+
+      await expect(
+        sql`insert into tenant_invitations (tenant_id, email, role, token_hash, expires_at)
+            values (${tenant.id}, ${uniqueEmail()}, 'viewer', ${existing.tokenHash}, now() + interval '1 hour')`
+      ).rejects.toMatchObject({
+        code: '23505',
+        constraint_name: 'tenant_invitations_token_hash_unique',
+      })
+    })
+
+    it('rethrows a unique violation other than the pending slot, not as invitation_conflict', async () => {
+      const { owner, tenant } = await setup()
+      const existing = await createPending({ tenantId: tenant.id, invitedBy: owner.id })
+
+      let error: unknown
+      try {
+        await createPending({
+          tenantId: tenant.id,
+          invitedBy: owner.id,
+          tokenHash: existing.tokenHash,
+        })
+      } catch (error_) {
+        error = error_
+      }
+
+      expect(error).toBeInstanceOf(DrizzleQueryError)
+      expect(error).not.toBeInstanceOf(HttpError)
+      expect((error as DrizzleQueryError).cause).toMatchObject({
+        code: '23505',
+        constraint_name: 'tenant_invitations_token_hash_unique',
+      })
+    })
+
+    it('leaves an accepted invitation for the same address untouched', async () => {
+      const { owner, tenant } = await setup()
+      const invitee = await createUser()
+      const email = uniqueEmail()
+      const accepted = await createPending({ tenantId: tenant.id, invitedBy: owner.id, email })
+      await invitationRepository.claimForAccept(accepted.tokenHash, invitee.id)
+
+      await createPending({ tenantId: tenant.id, invitedBy: owner.id, email })
+
+      const reloaded = await reload(accepted.id)
+      expect(reloaded?.revokedAt).toBeNull()
+      expect(reloaded?.acceptedBy).toBe(invitee.id)
     })
 
     it('has the database refuse an unknown role', async () => {
@@ -283,6 +336,18 @@ describe('TenantInvitationRepository', () => {
       expect(pending).toBeDefined()
       expect(pending?.invitedBy).toBeNull()
     })
+
+    it('reports invitedBy as null once the inviter is soft-deleted', async () => {
+      const { tenant } = await setup()
+      const inviter = await createUser()
+      await createPending({ tenantId: tenant.id, invitedBy: inviter.id })
+
+      await userRepository.softDelete(inviter.id)
+
+      const [pending] = await invitationRepository.listPending(tenant.id)
+      expect(pending).toBeDefined()
+      expect(pending?.invitedBy).toBeNull()
+    })
   })
 
   describe('findPendingById', () => {
@@ -348,6 +413,18 @@ describe('TenantInvitationRepository', () => {
 
       expect(await invitationRepository.findValidByTokenHash(invitation.tokenHash)).toBeUndefined()
     })
+
+    it('reports invitedBy as null once the inviter is soft-deleted', async () => {
+      const { tenant } = await setup()
+      const inviter = await createUser()
+      const invitation = await createPending({ tenantId: tenant.id, invitedBy: inviter.id })
+
+      await userRepository.softDelete(inviter.id)
+
+      const found = await invitationRepository.findValidByTokenHash(invitation.tokenHash)
+      expect(found?.invitation.id).toBe(invitation.id)
+      expect(found?.invitedBy).toBeNull()
+    })
   })
 
   describe('findByTokenHash', () => {
@@ -398,6 +475,32 @@ describe('TenantInvitationRepository', () => {
 
       expect(await invitationRepository.claimForAccept(expired.tokenHash, owner.id)).toBeUndefined()
       expect(await invitationRepository.claimForAccept(revoked.tokenHash, owner.id)).toBeUndefined()
+    })
+
+    it('refuses an invitation to a soft-deleted tenant, and claims nothing', async () => {
+      const { owner, tenant } = await setup()
+      const invitee = await createUser()
+      const invitation = await createPending({ tenantId: tenant.id, invitedBy: owner.id })
+      await tenantRepository.softDelete(tenant.id)
+
+      expect(
+        await invitationRepository.claimForAccept(invitation.tokenHash, invitee.id)
+      ).toBeUndefined()
+      const reloaded = await reload(invitation.id)
+      expect(reloaded?.acceptedAt).toBeNull()
+    })
+
+    it('keeps the claim, with acceptedBy null, once the accepting user is deleted', async () => {
+      const { owner, tenant } = await setup()
+      const invitee = await createUser()
+      const invitation = await createPending({ tenantId: tenant.id, invitedBy: owner.id })
+      await invitationRepository.claimForAccept(invitation.tokenHash, invitee.id)
+
+      await sql`delete from users where id = ${invitee.id}`
+
+      const reloaded = await reload(invitation.id)
+      expect(reloaded?.acceptedBy).toBeNull()
+      expect(reloaded?.acceptedAt).toBeInstanceOf(Date)
     })
 
     it('lets exactly one of two concurrent claims win', async () => {
