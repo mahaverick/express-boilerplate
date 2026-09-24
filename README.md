@@ -331,15 +331,19 @@ provenance attestation. The `deploy` job itself is a placeholder — no
 deployment target has been chosen yet. A manual `workflow_dispatch` from
 another branch only pushes the sha-tagged image — the `:main` tag and the
 `deploy` job both run only from `main`. Releases are automatic: every `feat`
-or `fix` merge is released as `vX.Y.Z` within minutes and the image gains
-`:X.Y.Z`, `:X.Y` and `:X` tags (see [CONTRIBUTING.md](CONTRIBUTING.md#releases)
-— it needs the `RELEASE_PLEASE_TOKEN` secret).
+or `fix` merge is released as `vX.Y.Z` once the release PR's checks pass,
+and the image gains `:X.Y.Z`, `:X.Y` and `:X` tags (see
+[CONTRIBUTING.md](CONTRIBUTING.md#releases) — it needs a release GitHub App).
 
-Two things need doing by hand, once, before any of this is live:
+Three things need doing by hand, once, before any of this is live:
 
 - **Install the [Renovate GitHub App](https://github.com/apps/renovate)**
   on this repository. `renovate.json` is inert without it — nothing
   schedules or opens Renovate PRs until the app is installed.
+- **Create and install a release GitHub App** on this repository, with
+  Contents and Pull requests read/write. Set its client ID as the repo
+  variable `RELEASE_APP_CLIENT_ID` and its private key as the secret
+  `RELEASE_APP_PRIVATE_KEY`; `release.yml` fails without them.
 - **Add protection rules to the `production` GitHub Environment**
   (Settings → Environments → `production`) — at minimum, required
   reviewers — before replacing the placeholder `deploy` step with a real

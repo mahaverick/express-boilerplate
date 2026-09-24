@@ -176,14 +176,14 @@ committed and readable, so it is its own example.)
 
 Releases are automatic. On every push to `main`, `release-please` opens a
 release pull request from the conventional commits since the last release, and
-`release.yml` merges it straight away; that merge tags `vX.Y.Z`, publishes the
-GitHub Release, and the tag push makes `deploy.yml` publish the image as
-`:X.Y.Z`, `:X.Y` and `:X`. Only `feat`/`fix`/breaking commits cut a release —
-`chore`, `docs`, `ci` and the like do not. This needs the
-`RELEASE_PLEASE_TOKEN` repo secret (a fine-grained PAT with Contents and Pull
-requests read/write): GitHub never starts workflows from events `GITHUB_TOKEN`
-creates, so without it the merge would never be tagged or deployed. The
-version bump follows the commit types:
+`release.yml` queues it with `--auto`, so it merges once required checks pass;
+the next run tags `vX.Y.Z` and publishes the GitHub Release, and the tag push
+makes `deploy.yml` publish the image as `:X.Y.Z`, `:X.Y` and `:X`. Only
+`feat`/`fix`/breaking commits cut a release — `chore`, `docs`, `ci` and the
+like do not. This uses a GitHub App token (variable `RELEASE_APP_CLIENT_ID`,
+secret `RELEASE_APP_PRIVATE_KEY`; Contents and Pull requests read/write): events
+`GITHUB_TOKEN` creates start no workflow, so its PR would get no CI and its tag
+no deploy. The version bump follows the commit types:
 
 - `feat` commits become a minor version bump
 - `fix` commits become a patch version bump

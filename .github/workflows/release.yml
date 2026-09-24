@@ -1,20 +1,12 @@
 name: Release
 
-# Fully automatic releases. On every push to main, release-please opens or
-# updates a release PR (version bump + CHANGELOG + manifest) from the
-# conventional commits since the last release, and this workflow merges it
-# straight away. That merge is itself a push to main, so the next run tags
-# vX.Y.Z and publishes the GitHub Release; the tag push then makes deploy.yml
-# publish the semver image tags.
+# On every push to main, release-please opens or updates the release PR from
+# the conventional commits since the last release, and this workflow queues it
+# for auto-merge. It merges once required checks pass; the next run tags
+# vX.Y.Z, and the tag push makes deploy.yml promote the image main built.
 #
-# RELEASE_PLEASE_TOKEN (a fine-grained PAT: Contents + Pull requests
-# read/write), not GITHUB_TOKEN: GitHub never starts workflows from events
-# GITHUB_TOKEN creates, so a GITHUB_TOKEN merge would never be tagged,
-# released or deployed. The same token also makes release PRs get CI runs.
-#
-# Merging without waiting for CI is deliberate: a release PR only touches
-# package.json's version, CHANGELOG.md and the manifest, and the merge push
-# still goes through deploy.yml's CI gate before any image is built.
+# The token comes from a GitHub App: events made with GITHUB_TOKEN never start
+# workflows, so its release PRs would get no CI and its tags no promotion.
 on:
   push:
     branches: [main]
@@ -31,20 +23,26 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
       - id: release
         uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
-          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          token: ${{ steps.app-token.outputs.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
-      - name: Merge the release PR
+      - name: Queue the release PR for auto-merge
         if: steps.release.outputs.prs_created == 'true'
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
-          # Raw string, parsed below — NOT fromJSON() here: step env is
-          # evaluated even when there is no PR, and fromJSON('') is a template
-          # error that fails the whole job.
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          # Raw string, parsed below: fromJSON('') fails the job when there is no PR.
           PR_JSON: ${{ steps.release.outputs.pr }}
         run: |
           pr_number=$(jq -r '.number // empty' <<<"${PR_JSON:-null}")
@@ -52,4 +50,7 @@ jobs:
             echo "No release PR to merge."
             exit 0
           fi
-          gh pr merge "$pr_number" --repo "$GITHUB_REPOSITORY" --squash --delete-branch
+          # GitHub refuses --auto on a PR that is already mergeable; the
+          # ruleset still enforces required checks on the direct merge.
+          gh pr merge "$pr_number" --repo "$GITHUB_REPOSITORY" --auto --squash --delete-branch \
+            || gh pr merge "$pr_number" --repo "$GITHUB_REPOSITORY" --squash --delete-branch
