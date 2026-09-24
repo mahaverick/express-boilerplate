@@ -159,6 +159,8 @@ missed:
   the same tool (`pre-commit install`), which is defense in depth, not the
   enforcement layer: a developer can skip it with `--no-verify`, but not
   the PR-level check.
+- `pr-title` — the PR title must be a conventional commit; it becomes the
+  squash commit release-please reads.
 
 ## Secrets
 
