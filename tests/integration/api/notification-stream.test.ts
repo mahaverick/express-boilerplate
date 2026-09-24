@@ -37,6 +37,7 @@ import { NotificationRepository } from '@/repositories/notification.repository'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
+import { markShuttingDown, resetLifecycleForTests } from '@/services/lifecycle.service'
 import { emitNotification, listenerCount } from '@/services/notification-emitter.service'
 import { denySession } from '@/services/session-denylist.service'
 import { signAccessToken } from '@/utilities/token.utilities'
@@ -342,6 +343,7 @@ describe('GET /api/v1/notifications/stream', () => {
   })
 
   afterEach(async () => {
+    resetLifecycleForTests()
     for (const connection of openConnections) connection.destroy()
     openConnections.length = 0
 
@@ -433,6 +435,20 @@ describe('GET /api/v1/notifications/stream', () => {
     expect(response.headers['cache-control']).toBe('no-cache')
     expect(response.headers.connection).toBe('keep-alive')
     expect(response.headers['x-accel-buffering']).toBe('no')
+  })
+
+  // Same request as the test above; only the shutdown flag differs.
+  it('refuses to open a stream once shutdown has begun, as a 503 JSON response', async () => {
+    const { token } = await createAuthenticatedUser()
+    markShuttingDown()
+
+    const connection = openStream({ header: `Bearer ${token}` })
+    const response = await connection.waitForResponse()
+
+    expect(response.statusCode).toBe(503)
+    expect(response.headers['content-type']).not.toContain('text/event-stream')
+    const body = await connection.collectBody()
+    expect((JSON.parse(body) as { success: boolean }).success).toBe(false)
   })
 
   // `/stream` sits behind `requireAuth` (notification.routes.ts) like every

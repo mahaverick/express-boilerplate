@@ -3,8 +3,10 @@ import { type Server } from 'node:http'
 import type { Worker } from 'bullmq'
 import { createApp } from '@/app'
 import { getEnv } from '@/configs/env.config'
+import { SERVER_DRAIN_TIMEOUT_MS } from '@/constants/global.constants'
 import { shutdownOtel } from '@/observability/tracing'
 import { closeDatabase } from '@/services/database.service'
+import { closeAllStreams, markShuttingDown } from '@/services/lifecycle.service'
 import { logger } from '@/services/logger.service'
 import { closeQueue } from '@/services/queue.service'
 import { closeRedis } from '@/services/redis.service'
@@ -31,18 +33,14 @@ export function startServer(port: number = getEnv().APP_PORT): Server {
 /**
  * Stop accepting connections, drain, then close dependencies.
  *
- * Order matters: the socket closes first so no new request can arrive and
- * find a closed pool. `server.close()`'s callback does not fire until every
- * in-flight connection has ended (on Node's HTTP server, closing also stops
- * accepting new connections on idle keep-alive sockets), so by the time
- * `closeDatabase()`/`closeRedis()` run here, no handler is still mid-request.
+ * Order matters. Readiness flips to 503 first, then open SSE streams are
+ * ended, since they would otherwise hold `server.close()` open forever. Then
+ * the socket closes, so no new request finds a closed pool. Connections still
+ * open after `SERVER_DRAIN_TIMEOUT_MS` are force-closed.
  *
- * The forced-exit backstop for a connection that never drains is NOT here —
- * `unicorn/no-process-exit` only allows `process.exit()` inside a
- * `process.on`/`process.once` callback, and this function is called directly,
- * not from one. The backstop timer lives in index.ts's signal handler
- * instead, which both satisfies the lint rule and keeps this function fully
- * testable (it can safely resolve without ever touching `process.exit`).
+ * The forced-exit backstop is not here: it lives in `createShutdownHandler`
+ * (lifecycle.service.ts), called from index.ts's signal handler, so this
+ * function never touches `process.exit` and stays testable.
  *
  * Both workers close AFTER the socket and BEFORE the shared dependencies:
  * `Worker#close()` drains whatever job is currently being processed rather
@@ -68,7 +66,9 @@ export async function gracefulShutdown(
   emailWorker?: Worker,
   notificationWorker?: Worker
 ): Promise<void> {
-  await new Promise<void>((resolve) => server.close(() => resolve()))
+  markShuttingDown()
+  closeAllStreams()
+  await closeServer(server)
   // `.filter(Boolean)` alone leaves this typed as `(Promise<void> |
   // undefined)[]` — `Boolean` is not a type predicate, so TypeScript never
   // narrows `undefined` back out, which trips
@@ -81,4 +81,24 @@ export async function gracefulShutdown(
   await Promise.allSettled(workerCloses)
   await Promise.allSettled([closeDatabase(), closeRedis(), closeQueue()])
   await shutdownOtel()
+}
+
+/**
+ * Stop accepting connections and wait for open ones, force-closing any left after SERVER_DRAIN_TIMEOUT_MS.
+ * @param server - The server to close.
+ * @returns Resolves once the server has closed, or immediately if it was not listening.
+ */
+async function closeServer(server: Server): Promise<void> {
+  // Resolves on ERR_SERVER_NOT_RUNNING too, so a second shutdown still completes.
+  const closed = new Promise<void>((resolve) => server.close(() => resolve()))
+  server.closeIdleConnections()
+  // A just-ended keep-alive socket turns idle only after 'finish'; keep sweeping
+  // so the drain doesn't wait out keepAliveTimeout (5s).
+  const sweep = setInterval(() => server.closeIdleConnections(), 250)
+  const forceClose = setTimeout(() => server.closeAllConnections(), SERVER_DRAIN_TIMEOUT_MS)
+  sweep.unref()
+  forceClose.unref()
+  await closed
+  clearInterval(sweep)
+  clearTimeout(forceClose)
 }

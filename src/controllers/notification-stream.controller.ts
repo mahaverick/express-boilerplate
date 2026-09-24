@@ -18,12 +18,12 @@
 // token and a denied session (both `requireAuth`, `ACCESS_TOKEN_EXPIRED_CODE`),
 // and a sid-less token (`requireSessionId` below, also
 // `ACCESS_TOKEN_EXPIRED_CODE`) — see `tests/integration/api/notification-stream.test.ts`
-// for one test per case. A rejected request never opens a stream: both
-// `authenticatedUserId` and `requireSessionId` throw before
-// `response.writeHead` ever runs, so the `catch` below hands the rejection
-// to `next(error)` and `errorHandler` (error.middleware.ts) answers with
-// this codebase's ordinary JSON 401 envelope — not an event-stream response
-// that immediately closes.
+// for one test per case. A rejected request never opens a stream: the
+// shutdown check (503), `authenticatedUserId` and `requireSessionId` all
+// throw before `response.writeHead` ever runs, so the `catch` below hands
+// the rejection to `next(error)` and `errorHandler` (error.middleware.ts)
+// answers with this codebase's ordinary JSON error envelope — not an
+// event-stream response that immediately closes.
 import { type NextFunction, type Request, type Response } from 'express'
 import { getEnv } from '@/configs/env.config'
 import { MAX_NOTIFICATION_PAGE_SIZE } from '@/constants/notification.constants'
@@ -31,6 +31,7 @@ import type { Notification } from '@/database/models/notification.model'
 import { ACCESS_TOKEN_EXPIRED_CODE } from '@/middlewares/auth.middleware'
 import { HttpError } from '@/middlewares/error.middleware'
 import { NotificationRepository } from '@/repositories/notification.repository'
+import { isShuttingDown, registerStream } from '@/services/lifecycle.service'
 import { logger } from '@/services/logger.service'
 import { offNotification, onNotification } from '@/services/notification-emitter.service'
 import { isSessionDenied } from '@/services/session-denylist.service'
@@ -264,6 +265,9 @@ export async function streamNotifications(
   next: NextFunction
 ): Promise<void> {
   try {
+    if (isShuttingDown()) {
+      throw new HttpError('Server is shutting down', 503)
+    }
     const userId = authenticatedUserId(request)
     const sessionId = requireSessionId(request)
 
@@ -336,9 +340,16 @@ export async function streamNotifications(
     // test (or a graceful shutdown) waiting on a timer nothing else needs.
     heartbeat.unref()
 
+    const unregisterStream = registerStream(userId, () => {
+      clearInterval(heartbeat)
+      offNotification(userId, handleNotification)
+      response.end()
+    })
+
     let isClosed = false
     request.on('close', () => {
       isClosed = true
+      unregisterStream()
       offNotification(userId, handleNotification)
       clearInterval(heartbeat)
     })

@@ -10,12 +10,9 @@ import { GRACEFUL_SHUTDOWN_TIMEOUT_MS } from '@/constants/global.constants'
 /**
  * Start listening and wire graceful shutdown.
  *
- * The forced-exit backstop lives in the signal handler below, not inside
- * `gracefulShutdown` itself: `unicorn/no-process-exit` only allows
- * `process.exit()` inside a `process.on`/`process.once` callback, which this
- * is and a plain exported function is not. Putting the backstop here also
- * keeps `server.ts` free of `process.exit`, so its whole lifecycle is
- * testable without ever needing to fork a process.
+ * The forced-exit backstop and the once-only guard live in
+ * `createShutdownHandler` (lifecycle.service.ts). `process.exit` is passed in
+ * from inside the `process.on` callback, which `unicorn/no-process-exit` requires.
  * @returns Resolves once the server is listening and signal handlers are wired.
  */
 async function boot(): Promise<void> {
@@ -54,13 +51,15 @@ async function boot(): Promise<void> {
     logger.info('Workers started (email + notification)')
   }
 
+  // One handler for both signals: a second signal during shutdown is ignored.
+  const { createShutdownHandler } = await import('@/services/lifecycle.service')
+  const handleShutdown = createShutdownHandler(
+    () => gracefulShutdown(server, emailWorker, notificationWorker),
+    GRACEFUL_SHUTDOWN_TIMEOUT_MS
+  )
   for (const signal of ['SIGTERM', 'SIGINT'] as const) {
     process.on(signal, () => {
-      const forced = setTimeout(() => process.exit(1), GRACEFUL_SHUTDOWN_TIMEOUT_MS)
-      void gracefulShutdown(server, emailWorker, notificationWorker).then(() => {
-        clearTimeout(forced)
-        process.exit(0)
-      })
+      handleShutdown((code) => process.exit(code))
     })
   }
 }

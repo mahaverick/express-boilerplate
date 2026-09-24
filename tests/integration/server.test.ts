@@ -3,12 +3,82 @@
 // Lives under tests/integration/ because `@/app` (and `@/server` through it)
 // reaches `database.service.ts` at module scope — see CLAUDE.md on why that
 // makes a file integration regardless of what it asserts.
+import { randomUUID } from 'node:crypto'
+import http, { type IncomingMessage } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import express from 'express'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
 import { getEnv, trustProxySetting } from '@/configs/env.config'
+import { UserRepository } from '@/repositories/user.repository'
 import { gracefulShutdown, startServer } from '@/server'
+import { sql } from '@/services/database.service'
+import { markShuttingDown, resetLifecycleForTests } from '@/services/lifecycle.service'
+import { signAccessToken } from '@/utilities/token.utilities'
 import { request } from '../helpers/request'
+
+const userRepository = new UserRepository()
+
+async function resolveAfter<T>(ms: number, value: T): Promise<T> {
+  await new Promise((resolve) => setTimeout(resolve, ms))
+  return value
+}
+
+describe('graceful shutdown with open notification streams', () => {
+  afterEach(() => {
+    resetLifecycleForTests()
+  })
+
+  it('answers /health/ready with 503 once shutdown has begun', async () => {
+    markShuttingDown()
+    const response = await request(createApp()).get('/health/ready')
+    expect(response.status).toBe(503)
+    expect(response.body).toMatchObject({ status: 'shutting-down' })
+  })
+
+  it('ends an open notification stream and resolves within 2s', async () => {
+    // Bound to 127.0.0.1, matching the URL below; startServer's default bind is `::`.
+    const server = createApp().listen(0, '127.0.0.1')
+    await new Promise((resolve) => server.once('listening', resolve))
+    const { port } = server.address() as AddressInfo
+    const user = await userRepository.create({ email: `server-${randomUUID()}@example.test` })
+    const token = signAccessToken(user, randomUUID())
+
+    const streamRequest = http.get(`http://127.0.0.1:${port}/api/v1/notifications/stream`, {
+      // `close`, not the default keep-alive, so the socket ends with the response.
+      headers: { Authorization: `Bearer ${token}`, Connection: 'close' },
+    })
+    streamRequest.on('error', () => {
+      // Expected when the finally block destroys it.
+    })
+    const response = await new Promise<IncomingMessage>((resolve) => {
+      streamRequest.once('response', resolve)
+    })
+    expect(response.statusCode).toBe(200)
+    const streamEnded = new Promise<void>((resolve) => {
+      response.on('end', () => resolve())
+      response.resume()
+    })
+
+    // Deleted now: gracefulShutdown closes the database pool.
+    await sql`delete from users where id = ${user.id}`
+
+    try {
+      const outcome = await Promise.race([
+        (async () => {
+          await gracefulShutdown(server)
+          return 'shut down' as const
+        })(),
+        resolveAfter(2000, 'timed out' as const),
+      ])
+      expect(outcome).toBe('shut down')
+      await streamEnded
+    } finally {
+      streamRequest.destroy()
+      server.closeAllConnections()
+    }
+  })
+})
 
 describe('server lifecycle', () => {
   it('listens, then shuts down without leaving the socket open', async () => {
