@@ -172,6 +172,33 @@ describe('createPinoLogger', () => {
       }))
   })
 
+  describe('the err key', () => {
+    // pino's own default `err` serializer re-processes whatever is already
+    // under `err` into `{ type, message, stack }` — so serializeErrors's
+    // { name, message, stack } (from an Error instance) gets run through it
+    // a second time, landing as `{ type: 'Object', message, stack, name }`.
+    // The `err` key must instead pass through serializeErrors's output
+    // untouched.
+    it('does not re-serialize err through pino default serializer, and carries no type key', () =>
+      new Promise<void>((resolve) => {
+        const { destination, output } = captureDestination()
+        const log = createPinoLogger({ level: 'error', isProduction: true, destination })
+
+        log.error({ err: new Error('boom'), source: 'test.ts:1' }, 'x')
+
+        setImmediate(() => {
+          const parsed = parseLastRecord(output)
+          const parsedError = parsed.err as { name: string; message: string; stack: string }
+          expect(Object.keys(parsedError)).toHaveLength(3)
+          expect(parsedError.name).toBe('Error')
+          expect(parsedError.message).toBe('boom')
+          expect(parsedError.stack).toMatch(/at /)
+          expect(parsedError).not.toHaveProperty('type')
+          resolve()
+        })
+      }))
+  })
+
   describe('development format (human-readable)', () => {
     it('includes time, level, source, and message', () =>
       new Promise<void>((resolve) => {

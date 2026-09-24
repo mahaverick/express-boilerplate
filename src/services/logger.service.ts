@@ -406,6 +406,12 @@ export function createPinoLogger(options: LoggerOptions): Logger {
         level: (label) => ({ level: label }),
         log: serializeErrors,
       },
+      // pino's own default `err` serializer would otherwise re-process the
+      // { name, message, stack } shape serializeErrors already produced,
+      // turning it into { type: 'Object', message, stack, name } — losing
+      // the clean shape and adding a misleading `type`. Pass it through
+      // untouched so `err` serialises exactly like every other Error field.
+      serializers: { err: (value: unknown) => value },
     },
     pino.multistream(streams)
   )
