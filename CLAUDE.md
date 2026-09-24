@@ -371,7 +371,14 @@ otel-collector`.** It is bind-mounted; `docker compose up -d` does not
   `"prepare": "husky"` actually installs hooks by re-running `pnpm install`
   in a checkout that's already installed — it proves nothing either way.
   Test it from a fresh clone.
-- **Renovate, not dependabot.** Weekly, grouped, 3-day minimum release age.
+- **Renovate, not dependabot.** Weekly, grouped, 3-day minimum release age;
+  pnpm enforces the same 3 days on install (`minimumReleaseAge` in
+  `pnpm-workspace.yaml`). Minor, patch and digest updates auto-merge once
+  the required checks pass; majors and the pinned toolchain (`node`,
+  `typescript`, the devcontainer image) wait for a human. Vulnerability
+  fixes open immediately, outside the schedule and release-age wait,
+  labelled `security` — but CI's frozen install still rejects a fix younger
+  than 3 days until it ages or is added to `minimumReleaseAgeExclude`.
   Renovate pins actions to SHAs (its first PR converts the tags). TypeScript
   is held `<6.1.0`, and every Node version pin — the docker `node` image,
   `.nvmrc`, `actions/setup-node`'s `node-version:`, and the devcontainer's
