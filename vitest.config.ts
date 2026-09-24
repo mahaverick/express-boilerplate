@@ -14,7 +14,7 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    include: ['tests/**/*.test.ts', 'src/**/*.test.ts'],
+    include: ['tests/**/*.test.ts'],
     setupFiles: ['./tests/helpers/setup-global.ts'],
     // Runs once, in the main process, before any worker starts — unlike
     // setupFiles above, which runs per test file inside every forked

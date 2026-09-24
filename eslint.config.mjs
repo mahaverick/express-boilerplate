@@ -304,14 +304,46 @@ export default tseslint.config(
     extends: [tseslint.configs.disableTypeChecked],
   },
   {
-    files: ['**/*.test.ts', 'tests/**/*.ts'],
+    // Test placement. No test file lives under src/: tests go in tests/unit/
+    // or tests/integration/, mirroring the src/ path of their subject
+    // (src/services/queue.service.ts → tests/unit/services/queue.service.test.ts).
+    // src/ holds shipped code only. A custom `errorMessage` is required:
+    // without it, check-file validates the map's VALUES as glob patterns too
+    // (see its README), and free text fails that.
+    files: ['src/**/*.ts'],
+    rules: {
+      'check-file/filename-blocklist': [
+        'error',
+        {
+          '**/*.{test,spec}.ts': 'tests/{unit,integration}/**/*.test.ts',
+          '**/__tests__/**': 'tests/{unit,integration}/**/*.test.ts',
+          'src/tests/**': 'tests/**',
+        },
+        {
+          errorMessage:
+            '`{{ target }}` is a test file under src/. Tests live in tests/unit/ or tests/integration/, mirroring the src/ path of the subject, e.g. src/services/queue.service.ts → tests/unit/services/queue.service.test.ts.',
+        },
+      ],
+    },
+  },
+  {
+    files: ['tests/**/*.ts'],
     rules: {
       'jsdoc/require-jsdoc': 'off',
-      // Test filenames carry a middle extension (token.utilities.test.ts).
-      // A file colocated with its source under a governed directory ends in
-      // ".test", not the pattern's required suffix (e.g. ".utilities"), so
-      // it can never satisfy that directory's naming pattern. core disables
-      // the rule for tests for the same reason.
+      // `.test.`, never `.spec.`, and no `__tests__/` folders.
+      'check-file/filename-blocklist': [
+        'error',
+        {
+          '**/*.spec.ts': '*.test.ts',
+          '**/__tests__/**': '*.test.ts',
+        },
+        {
+          errorMessage:
+            'This project uses `.test.ts` filenames under tests/unit/ or tests/integration/ — not `.spec.` and not a `__tests__/` folder.',
+        },
+      ],
+      // The governed-directory patterns above are all scoped to src/**, so
+      // none applies here; off for the same reason core turns it off for tests.
       'check-file/filename-naming-convention': 'off',
       // Fixture credentials in tests are not real secrets — they exist so
       // the test can assert against a known value, never to guard anything.
