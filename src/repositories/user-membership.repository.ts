@@ -184,6 +184,28 @@ export class UserMembershipRepository {
   }
 
   /**
+   * Add a member unless a membership already exists for this (user, tenant)
+   * pair, in which case that membership and its role are kept.
+   * @param data - The membership to create.
+   * @param executor - Where to run the queries. Defaults to the pool.
+   * @returns The membership that now exists: the new row, or the one already there.
+   */
+  async createIfAbsent(
+    data: NewUserMembership,
+    executor: DbExecutor = db
+  ): Promise<UserMembership> {
+    const [inserted] = await executor
+      .insert(userMembershipModel)
+      .values(data)
+      .onConflictDoNothing({ target: [userMembershipModel.userId, userMembershipModel.tenantId] })
+      .returning()
+    if (inserted) return inserted
+    const existing = await this.findByUserAndTenant(data.userId, data.tenantId, executor)
+    if (!existing) throw new HttpError('Membership not found after a conflicting insert', 500)
+    return existing
+  }
+
+  /**
    * Change one membership's role.
    * @param id - The membership row's id.
    * @param role - The new role.

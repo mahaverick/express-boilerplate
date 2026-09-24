@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  buildInvitationAcceptUrl,
   buildPasswordResetUrl,
   buildVerificationUrl,
 } from '@/utilities/verification-link.utilities'
@@ -54,6 +55,22 @@ describe('buildPasswordResetUrl', () => {
   it('does not double a slash when WEB_URL has a trailing one', () => {
     expect(buildPasswordResetUrl('t', 'https://app.example.com/')).toBe(
       'https://app.example.com/reset-password?token=t'
+    )
+  })
+})
+
+describe('buildInvitationAcceptUrl', () => {
+  it('points at the frontend accept page with the token as a query parameter', () => {
+    const url = new URL(buildInvitationAcceptUrl('abc_123-XYZ', 'https://app.example.com'))
+
+    expect(url.origin).toBe('https://app.example.com')
+    expect(url.pathname).toBe('/invitations/accept')
+    expect(url.searchParams.get('token')).toBe('abc_123-XYZ')
+  })
+
+  it('does not double a slash when WEB_URL has a trailing one', () => {
+    expect(buildInvitationAcceptUrl('t', 'https://app.example.com/')).toBe(
+      'https://app.example.com/invitations/accept?token=t'
     )
   })
 })

@@ -1,6 +1,6 @@
 // src/utilities/verification-link.utilities.ts
 //
-// Both links below point at the FRONTEND (WEB_URL), not this API. The user
+// Every link below points at the FRONTEND (WEB_URL), not this API. The user
 // clicks one in a mail client, lands on a page, and that page POSTs the
 // token onward — with the account password for verification, with a new
 // password for a reset — to this API's own endpoint. A GET link that acted
@@ -15,6 +15,7 @@ const VERIFICATION_PATH = 'verify-email'
 // this is a URL path segment, not a secret, so the rename dodges a false
 // positive rather than suppressing a real one.
 const RESET_PATH = 'reset-password'
+const INVITATION_ACCEPT_PATH = 'invitations/accept'
 
 /**
  * Build the verification link mailed to a user.
@@ -42,6 +43,23 @@ export function buildVerificationUrl(rawToken: string, webUrl: string = getEnv()
  */
 export function buildPasswordResetUrl(rawToken: string, webUrl: string = getEnv().WEB_URL): string {
   const url = new URL(RESET_PATH, webUrl.endsWith('/') ? webUrl : `${webUrl}/`)
+  url.searchParams.set('token', rawToken)
+  return url.href
+}
+
+/**
+ * Build the invitation accept link mailed to an invitee. Same frontend host
+ * and URL handling as `buildVerificationUrl`; the page it opens POSTs the
+ * token to `/invitations/preview` and then `/invitations/accept`.
+ * @param rawToken - The raw invitation token, never its hash.
+ * @param webUrl - The frontend origin; defaults to the configured `WEB_URL`.
+ * @returns An absolute URL carrying the token as a query parameter.
+ */
+export function buildInvitationAcceptUrl(
+  rawToken: string,
+  webUrl: string = getEnv().WEB_URL
+): string {
+  const url = new URL(INVITATION_ACCEPT_PATH, webUrl.endsWith('/') ? webUrl : `${webUrl}/`)
   url.searchParams.set('token', rawToken)
   return url.href
 }

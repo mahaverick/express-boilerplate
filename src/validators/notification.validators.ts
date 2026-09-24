@@ -58,8 +58,8 @@ export const notificationIdSchema = z.object({
 export type NotificationIdParameters = z.infer<typeof notificationIdSchema>
 
 // Notification types a user is allowed to configure a preference for.
-// `'verify_email'`, `'password_reset_requested'`, and `'password_changed'`
-// are deliberately excluded — see notification-preference.repository.ts's
+// `'verify_email'`, `'password_reset_requested'`, `'password_changed'` and
+// `'tenant_invitation'` are deliberately excluded — see notification-preference.repository.ts's
 // `NON_DISABLEABLE_EMAIL_TYPES` for the full reasoning, which is now TWO
 // distinct reasons rather than one: the first two would lock a user out of
 // their own account if disabled, and `'password_changed'` locks nobody out
@@ -77,7 +77,7 @@ export type NotificationIdParameters = z.infer<typeof notificationIdSchema>
 // effect. KEPT IN SYNC BY HAND with that repository set — see its own
 // comment.
 //
-// NOTIFICATION_TYPES has exactly three entries today and all three are
+// NOTIFICATION_TYPES has exactly four entries today and all four are
 // excluded here, so this filter still produces an EMPTY array — there is
 // nothing left to configure until a notification type with a genuinely
 // disableable channel ships. That is not a bug to special-case away:
@@ -94,6 +94,7 @@ const NON_DISABLEABLE_NOTIFICATION_TYPES: ReadonlySet<string> = new Set([
   'verify_email',
   'password_reset_requested',
   'password_changed',
+  'tenant_invitation',
 ])
 
 /**

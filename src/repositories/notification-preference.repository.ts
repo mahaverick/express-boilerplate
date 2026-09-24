@@ -62,7 +62,8 @@ export interface NotificationPreferenceMatrixEntry {
 export type PreferenceMatrix = NotificationPreferenceMatrixEntry[]
 
 // Notification types whose email channel a user may never disable — for TWO
-// distinct reasons, not one stretched to cover both:
+// distinct reasons, not one stretched to cover both (plus a third, listing-only
+// entry, 3. below):
 //
 //   1. LOCKOUT. `'verify_email'`: a user who could turn off email for their
 //      OWN verification message would lock themselves out of ever verifying
@@ -84,6 +85,10 @@ export type PreferenceMatrix = NotificationPreferenceMatrixEntry[]
 //      before anyone notices. Non-disableable is what keeps that message
 //      reaching the owner regardless of what the attacker's own preference
 //      writes say.
+//   3. KEPT IN STEP WITH THE WRITE SIDE. `'tenant_invitation'` has no email
+//      on this path at all (the invitation mail goes straight to
+//      addEmailJob); it is listed so this set still matches
+//      NON_DISABLEABLE_NOTIFICATION_TYPES, where it is non-configurable.
 //
 // `ReadonlySet<string>`, not `ReadonlySet<NotificationType>`: `type` below
 // is already narrowed to `NotificationType` by `isChannelEnabled`'s own
@@ -100,6 +105,7 @@ const NON_DISABLEABLE_EMAIL_TYPES: ReadonlySet<string> = new Set<string>([
   'verify_email',
   'password_reset_requested',
   'password_changed',
+  'tenant_invitation',
 ])
 
 /**
@@ -165,9 +171,9 @@ export class NotificationPreferenceRepository {
    *
    * A type's email channel is a fixed exception whenever it is in
    * `NON_DISABLEABLE_EMAIL_TYPES` — today `'verify_email'`,
-   * `'password_reset_requested'`, and `'password_changed'`: it always
-   * answers true, regardless of any row a user may have — see that set's
-   * own comment for the two distinct reasons an entry can be there.
+   * `'password_reset_requested'`, `'password_changed'` and
+   * `'tenant_invitation'`: it always answers true, regardless of any row a
+   * user may have — see that set's own comment for why each entry is there.
    * Checked BEFORE the table is even queried, so this exception holds even
    * if a row exists with `emailEnabled: false` for it (which nothing in
    * this codebase's write path should produce, but this method does not
