@@ -301,7 +301,17 @@ const EnvSchema = z.object({
     .min(1)
     .default('express-boilerplate')
     .describe('Service name reported in OTEL traces.'),
-  LOG_LEVEL: LogLevelSchema.default('info'),
+  // `silent` is accepted here and NOT in LogLevelSchema itself: SLACK_LOG_LEVEL
+  // shares that schema, and logger.service.ts's toPinoLevel() maps an unknown
+  // stream level to 'info' — so a `silent` Slack level would have sent
+  // everything from info up to Slack. .env.test sets LOG_LEVEL=silent so the
+  // suite's deliberate failure paths do not flood the output.
+  LOG_LEVEL: z
+    .enum([...LogLevelSchema.options, 'silent'])
+    .default('info')
+    .describe(
+      'Console log level: error, warn, info or debug. silent disables logging entirely (the test suite uses it).'
+    ),
 
   SLACK_WEBHOOK_URL: z
     .url({ protocol: /^https?$/ })

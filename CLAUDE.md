@@ -342,6 +342,13 @@ otel-collector`.** It is bind-mounted; `docker compose up -d` does not
   `check-file/filename-blocklist` rejects any `*.test.*`, `*.spec.*`,
   `__tests__/` or `src/tests/` file under `src/`, and vitest only collects
   `tests/**/*.test.ts`.
+- **The suite runs with `LOG_LEVEL=silent`** (`.env.test` and the CI env
+  block). Many tests drive deliberate failure paths — Redis down, SMTP
+  failing, OAuth errors — and at `info` the logger buried the results under
+  ~1,300 lines of correct-but-useless output. To see logs while debugging,
+  run `LOG_LEVEL=debug pnpm test <file>`; the real environment beats
+  `.env.test`. A test that asserts on the real logger's output pins its own
+  level, as `tests/unit/services/logger.service.test.ts` does.
 - **Each vitest worker gets its own, physically separate database, and
   `WORKER_COUNT` is the one number that drives that.**
   `tests/helpers/worker-database.ts` provisions `WORKER_COUNT` databases up

@@ -66,7 +66,7 @@ const baseEnv: Env = {
   PASSWORD_RESET_TTL: '1h',
   TRUST_PROXY: 'false',
   OTEL_SERVICE_NAME: 'express-boilerplate',
-  LOG_LEVEL: 'info',
+  LOG_LEVEL: 'silent',
   SLACK_LOG_LEVEL: 'error',
   WORKER_ENABLED: true,
   QUEUE_PREFIX: 'bull',

@@ -19,6 +19,14 @@ import {
 } from '@/services/logger.service'
 import { withMutatedMethod } from '../../helpers/mutate'
 
+// .env.test sets LOG_LEVEL=silent to keep the suite's output readable, but the
+// `logger singleton` block below asserts on what the REAL singleton writes at
+// `info`. Hoisted so it runs before anything calls getEnv(), which memoises
+// the level for the rest of this file.
+vi.hoisted(() => {
+  process.env.LOG_LEVEL = 'info'
+})
+
 /**
  * A real Writable that records each chunk as a trimmed string. A real stream
  * (not a `{ write }` literal) because pino-pretty pipes into its destination.
@@ -379,7 +387,7 @@ describe('logger singleton', () => {
       })
     }))
 
-  it('debug is suppressed at the default test LOG_LEVEL (info)', () =>
+  it('debug is suppressed at LOG_LEVEL=info', () =>
     new Promise<void>((resolve) => {
       const output = captureStdout()
 
