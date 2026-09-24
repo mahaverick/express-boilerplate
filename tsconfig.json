@@ -25,5 +25,5 @@
   // fires on an ALIASED ("@/") import. It must sit under src/ because
   // tsconfig's paths map "@/*" to "./src/*" only — so it is excluded here
   // instead, and never reaches dist/.
-  "exclude": ["node_modules", "dist", "**/*.test.ts", "src/lint-fixtures/**"]
+  "exclude": ["node_modules", "dist", "src/lint-fixtures/**"]
 }
