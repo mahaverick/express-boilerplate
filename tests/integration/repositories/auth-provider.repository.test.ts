@@ -263,6 +263,33 @@ describe('AuthProviderRepository', () => {
     })
   })
 
+  describe('releaseEmailOfDeletedUsers', () => {
+    it("deletes a soft-deleted user's email row, keeping its google row", async () => {
+      const userId = await createUser()
+      const email = uniqueEmail()
+      await authProviderRepository.create({ userId, provider: 'email', providerId: email })
+      await authProviderRepository.create({ userId, provider: 'google', providerId: randomUUID() })
+      await userRepository.softDelete(userId)
+
+      const released = await authProviderRepository.releaseEmailOfDeletedUsers(email)
+
+      expect(released).toBe(1)
+      const remaining = await authProviderRepository.findByUser(userId)
+      expect(remaining.map((row) => row.provider)).toEqual(['google'])
+    })
+
+    it("never touches a live user's email row", async () => {
+      const userId = await createUser()
+      const email = uniqueEmail()
+      await authProviderRepository.create({ userId, provider: 'email', providerId: email })
+
+      const released = await authProviderRepository.releaseEmailOfDeletedUsers(email)
+
+      expect(released).toBe(0)
+      expect(await authProviderRepository.findByProviderAndId('email', email)).toBeDefined()
+    })
+  })
+
   it('deletes a user’s provider rows automatically via ON DELETE CASCADE', async () => {
     const user = await userRepository.create({ email: uniqueEmail() })
     const row = await authProviderRepository.create({

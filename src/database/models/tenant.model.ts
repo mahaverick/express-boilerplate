@@ -50,11 +50,9 @@ export const tenantModel = pgTable(
     // Uniqueness is enforced by `tenants_slug_unique` below, not a plain
     // NOT NULL + column-level unique: it must be a PARTIAL index (`WHERE
     // deleted_at IS NULL`) so a re-registered slug can reclaim a name an
-    // archived tenant no longer uses, the identical reasoning
-    // `users_email_unique` would need if `users` allowed re-registration
-    // after soft-delete (it does not, today — but tenants explicitly do:
-    // `archived` is a real, expected terminal state here, not an edge
-    // case).
+    // archived tenant no longer uses, the same reasoning as
+    // `users_email_unique` (`archived` is a real, expected terminal state
+    // here, not an edge case).
     slug: varchar('slug', { length: 100 }).notNull(),
     description: varchar('description', { length: 1000 }),
     // URL to a logo image — not the image itself; this table never stores

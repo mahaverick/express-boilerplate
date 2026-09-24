@@ -428,12 +428,9 @@ describe('POST /api/v1/auth/register and /login', () => {
     })
 
     it('answers identically for a soft-deleted address', async () => {
-      // The unique index is on lower(email) with no deleted_at predicate
-      // (user.model.ts:46), so create() still raises its 409 — but
-      // findByEmail excludes soft-deleted rows and returns undefined, so the
-      // taken branch has a 409 and NO row to read a name from. Reading
-      // `existing.firstName` there is a null dereference on a path no
-      // happy-path test covers.
+      // A soft-deleted address is free again (partial users_email_unique),
+      // so this now takes the fresh-account branch; either way the answer
+      // is the same 202, which is what this test pins.
       const email = uniqueEmail()
       const { email: registered } = await registerUser({ email })
       const user = await userRepository.findByEmail(registered)
@@ -442,9 +439,26 @@ describe('POST /api/v1/auth/register and /login', () => {
       const response = await request(app)
         .post('/api/v1/auth/register')
         .send({ email, password: VALID_PASSWORD })
+      const fresh = await userRepository.findByEmail(email)
+      if (fresh) createdIds.push(fresh.id)
 
       expect(response.status).toBe(202)
       expect(envelopeOf<unknown>(response).data).toBeNull()
+    })
+
+    it('lets a soft-deleted address be registered again, as a new account', async () => {
+      const email = uniqueEmail()
+      await registerUser({ email })
+      const original = await userRepository.findByEmail(email)
+      if (!original) throw new Error('first registration created no row')
+      await userRepository.softDelete(original.id)
+
+      const { response } = await registerUser({ email })
+
+      expect(response.status).toBe(202)
+      const fresh = await userRepository.findByEmail(email)
+      expect(fresh).toBeDefined()
+      expect(fresh?.id).not.toBe(original.id)
     })
 
     it('normalises email case on registration, and the stored row agrees', async () => {

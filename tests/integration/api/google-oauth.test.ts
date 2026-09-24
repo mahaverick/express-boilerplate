@@ -618,6 +618,22 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
       })
     })
 
+    it("creates a fresh account for a soft-deleted user's email under a different Google identity", async () => {
+      const email = uniqueEmail()
+      const deleted = await findOrCreateByGoogle(googleProfile({ email, emailVerified: true }))
+      createdIds.push(deleted.id)
+      await userRepository.softDelete(deleted.id)
+
+      const fresh = await findOrCreateByGoogle(googleProfile({ email, emailVerified: true }))
+      createdIds.push(fresh.id)
+
+      expect(fresh.id).not.toBe(deleted.id)
+      const providers = await authProviderRepository.findByUser(fresh.id)
+      expect(
+        providers.map((provider) => provider.provider).toSorted((a, b) => a.localeCompare(b))
+      ).toEqual(['email', 'google'])
+    })
+
     it('rejects a Google profile that carries no email at all', async () => {
       const profile = googleProfile({ includeEmails: false })
 

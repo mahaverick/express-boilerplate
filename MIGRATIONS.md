@@ -134,6 +134,7 @@ add a real row:
   CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS notifications_dedupe_key_unique ON notifications (dedupe_key);
   ```
   Then add `IF NOT EXISTS` to both statements in the not-yet-applied `0013` file, or the migration fails on the existing column or index. A failed `CONCURRENTLY` build leaves an INVALID index that `IF NOT EXISTS` would skip: check `pg_index.indisvalid` for it, or drop it and build again.
+- **`0014` drops and recreates `users_email_unique` with `WHERE deleted_at IS NULL`,** so it blocks writes to `users` while the new index builds. On a large table, build the replacement by hand first under a temporary name (`CREATE UNIQUE INDEX CONCURRENTLY users_email_unique_live ON users (lower(email)) WHERE deleted_at IS NULL`), then `DROP INDEX users_email_unique; ALTER INDEX users_email_unique_live RENAME TO users_email_unique;` in one transaction. Then, in the not-yet-applied `0014` file, delete the `DROP INDEX` statement and add `IF NOT EXISTS` to the `CREATE`, or `pnpm db:migrate` drops the index you just built and rebuilds it with the lock.
 
 ## Supply-chain bypasses in `pnpm-workspace.yaml`
 

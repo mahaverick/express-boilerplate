@@ -252,14 +252,13 @@ async function sendRegistrationAttemptMail(email: string): Promise<void> {
       variables: {
         // The STORED name, never the submitted one: the submitted value is
         // attacker-chosen text being delivered into the victim's inbox.
-        // `??` covers the soft-deleted case, where the address is taken but
-        // no visible row exists to read a name from.
+        // `??` is defensive: the holder may have been deleted since the
+        // insert failed, leaving no visible row to read a name from.
         firstName: existing?.firstName ?? MISSING_FIRST_NAME_FALLBACK,
         appName: getEnv().APP_NAME,
       },
     },
-    // Soft-deleted case: the address is taken but findByEmail returns no
-    // visible row, so there is no id to correlate the job to. '' rather than
+    // No visible row (see above) means no id to correlate the job to. '' rather than
     // a lookup fallback — this is logging/correlation only (email.job.ts),
     // never a DB key.
     existing?.id ?? '',
@@ -363,6 +362,10 @@ export async function register(
         // returns exactly one row.
         if (!user) throw new HttpError('Insert returned no row', 500)
 
+        // A soft-deleted account may still hold this address's 'email'
+        // provider row; release it so the new account can take it.
+        await authProviderRepository.releaseEmailOfDeletedUsers(input.email.toLowerCase(), tx)
+
         await tx.insert(authProviderModel).values({
           userId: user.id,
           provider: 'email',
@@ -375,7 +378,9 @@ export async function register(
       // A 23505 here almost always comes from the USER insert (the
       // `auth_providers` row can only collide on an address already
       // claimed as someone's login identity, which the user insert's own
-      // `users_email_unique` would already have rejected first) — but
+      // `users_email_unique` would already have rejected first; a
+      // soft-deleted account's leftover 'email' provider row is released
+      // first (`releaseEmailOfDeletedUsers`), so it cannot cause this) — but
       // either way, the transaction has rolled back the whole write, so
       // treating any unique violation from this block as "the address is
       // taken" is correct, not merely a fallback. Anything else is a real
@@ -397,9 +402,8 @@ export async function register(
       return
     }
 
-    // The address is taken. It may STILL have no visible row — the unique
-    // index ignores deleted_at while findByEmail does not — so the name
-    // falls back rather than being dereferenced.
+    // The address is taken. The index and findByEmail both ignore
+    // soft-deleted rows; the name still falls back defensively.
     // eslint-disable-next-line unicorn/prefer-await -- fire-and-forget: same reasoning as the verification branch above
     sendRegistrationAttemptMail(input.email).catch((error: unknown) => {
       logger.error('Registration-attempt mail failed', { error })
@@ -1114,9 +1118,9 @@ async function claimUnverifiedAccount(userId: string, googleId: string): Promise
  *    "does this user have a password login" without a second query against
  *    `users.password_hash`), and this SDD plan's Task 1 carry-forward for
  *    why repositories are bypassed in favour of `db.transaction` here:
- *    `UserRepository`/`AuthProviderRepository` accept no transaction handle,
- *    so an atomic multi-row write goes directly through `tx.insert(...)`
- *    against the Drizzle tables instead.
+ *    their `create` methods accept no transaction handle, so an atomic
+ *    multi-row write goes directly through `tx.insert(...)` against the
+ *    Drizzle tables instead.
  * @param profile - The raw Google profile handed to `passport.authenticate`'s custom callback.
  * @returns The user this Google identity resolves to — existing, newly linked, or newly created.
  * @throws {HttpError} 400 `google_email_missing` (no email in the profile), 403 `email_not_verified` (Google has not verified the email, whether it matches an existing account or not), or a translated/raw database error from the write itself.
@@ -1183,6 +1187,8 @@ export async function findOrCreateByGoogle(profile: GoogleProfile): Promise<User
     // own insertOne (user.repository.ts): a single-row insert.returning()
     // that does not throw always returns exactly one row.
     if (!createdUser) throw new HttpError('Insert returned no row', 500)
+
+    await authProviderRepository.releaseEmailOfDeletedUsers(email, tx)
 
     await tx.insert(authProviderModel).values([
       { userId: createdUser.id, provider: 'email', providerId: email },
