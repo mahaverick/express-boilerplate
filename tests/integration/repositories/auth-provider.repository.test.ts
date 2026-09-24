@@ -231,6 +231,38 @@ describe('AuthProviderRepository', () => {
     })
   })
 
+  describe('deleteFederatedForUser', () => {
+    it('deletes only non-email provider rows, keeping the email row', async () => {
+      const userId = await createUser()
+      await authProviderRepository.create({ userId, provider: 'email', providerId: uniqueEmail() })
+      await authProviderRepository.create({
+        userId,
+        provider: 'google',
+        providerId: randomUUID(),
+      })
+
+      await authProviderRepository.deleteFederatedForUser(userId)
+
+      const rows = await authProviderRepository.findByUser(userId)
+      expect(rows.map((row) => row.provider)).toEqual(['email'])
+    })
+
+    it('does not touch another user’s provider rows', async () => {
+      const userId = await createUser()
+      const otherUserId = await createUser()
+      await authProviderRepository.create({
+        userId: otherUserId,
+        provider: 'google',
+        providerId: randomUUID(),
+      })
+
+      await authProviderRepository.deleteFederatedForUser(userId)
+
+      const otherRows = await authProviderRepository.findByUser(otherUserId)
+      expect(otherRows.map((row) => row.provider)).toEqual(['google'])
+    })
+  })
+
   it('deletes a user’s provider rows automatically via ON DELETE CASCADE', async () => {
     const user = await userRepository.create({ email: uniqueEmail() })
     const row = await authProviderRepository.create({

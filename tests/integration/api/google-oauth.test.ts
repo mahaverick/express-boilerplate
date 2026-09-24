@@ -523,6 +523,33 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
       expect(refreshResponse.status).toBe(401)
     })
 
+    it("drops a squatter's own pre-existing Google link when a different, verified identity claims the account", async () => {
+      // Legacy state findOrCreateByGoogle's step 1 would otherwise honour
+      // forever: a squatter's Google row from before this fix existed,
+      // sitting on the same never-verified account the real owner now claims.
+      const email = uniqueEmail()
+      const existing = await userRepository.create({ email, passwordHash: 'not-a-real-hash' })
+      createdIds.push(existing.id)
+      const squatterGoogleId = randomUUID()
+      await authProviderRepository.create({
+        userId: existing.id,
+        provider: 'google',
+        providerId: squatterGoogleId,
+      })
+
+      const profile = googleProfile({ email, emailVerified: true })
+      const user = await findOrCreateByGoogle(profile)
+
+      expect(user.id).toBe(existing.id)
+      // The squatter's identity no longer resolves to this account at all.
+      expect(
+        await authProviderRepository.findByProviderAndId('google', squatterGoogleId)
+      ).toBeUndefined()
+      // The claimer's identity does.
+      const claimerLink = await authProviderRepository.findByProviderAndId('google', profile.id)
+      expect(claimerLink?.userId).toBe(existing.id)
+    })
+
     it('never moves an existing, earlier emailVerifiedAt timestamp when linking', async () => {
       const email = uniqueEmail()
       const existing = await userRepository.create({ email, passwordHash: 'not-a-real-hash' })

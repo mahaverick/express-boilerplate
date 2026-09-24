@@ -19,7 +19,7 @@
 //    own header comment there for how it stays in step with BCRYPT_COST and
 //    why it's memoised.
 import { randomUUID } from 'node:crypto'
-import { DrizzleQueryError, eq } from 'drizzle-orm'
+import { and, DrizzleQueryError, eq, ne } from 'drizzle-orm'
 import { type NextFunction, type Request, type RequestHandler, type Response } from 'express'
 import passport from 'passport'
 import type { Profile as GoogleProfile } from 'passport-google-oauth20'
@@ -649,21 +649,6 @@ export function forgotPassword(request: Request, response: Response, next: NextF
   }
 }
 
-/**
- * Re-create the `'email'` provider row a reset keeps, after its Google links are dropped.
- * @param userId - The user who just proved the mailbox.
- * @param email - The account's email, the row's provider id.
- * @returns Resolves once the row exists.
- */
-async function restoreEmailProvider(userId: string, email: string): Promise<void> {
-  try {
-    await authProviderRepository.create({ userId, provider: 'email', providerId: email })
-  } catch (error) {
-    if (error instanceof HttpError && error.statusCode === 409) return
-    throw error
-  }
-}
-
 const INVALID_RESET_TOKEN_MESSAGE = 'Invalid or expired reset link.'
 
 /**
@@ -713,9 +698,8 @@ export async function resetPassword(
     await revokeAllSessions(user.id)
 
     if (!user.emailVerifiedAt) {
-      // A Google link on a never-verified account may be a squatter's; the reset proves the mailbox.
-      await authProviderRepository.deleteAllForUser(user.id)
-      await restoreEmailProvider(user.id, user.email)
+      // A federated link on a never-verified account may be a squatter's; the reset proves the mailbox.
+      await authProviderRepository.deleteFederatedForUser(user.id)
     }
 
     await userRepository.update(user.id, {
@@ -1053,9 +1037,11 @@ async function linkGoogleProvider(userId: string, googleId: string): Promise<voi
 }
 
 /**
- * A verified Google identity takes over a never-verified account: the squatter's password is cleared and sessions revoked.
+ * A verified Google identity takes over a never-verified account: a
+ * squatter's password and any OTHER Google link are removed, and every
+ * session revoked.
  * @param userId - The unverified account's id.
- * @param googleId - Google's stable profile id (`profile.id`).
+ * @param googleId - Google's stable profile id (`profile.id`) of the claiming identity.
  * @returns The account, now verified, federated-only and linked.
  */
 async function claimUnverifiedAccount(userId: string, googleId: string): Promise<User> {
@@ -1063,6 +1049,20 @@ async function claimUnverifiedAccount(userId: string, googleId: string): Promise
   await revokeAllSessions(userId)
 
   return db.transaction(async (tx) => {
+    // A squatter may have linked their OWN Google identity to this account
+    // before this fix existed. Drop it before linking the claimer's — left
+    // in place, `findOrCreateByGoogle`'s own first lookup would still
+    // resolve the squatter's Google id to this account.
+    await tx
+      .delete(authProviderModel)
+      .where(
+        and(
+          eq(authProviderModel.userId, userId),
+          eq(authProviderModel.provider, 'google'),
+          ne(authProviderModel.providerId, googleId)
+        )
+      )
+
     await tx
       .insert(authProviderModel)
       .values({ userId, provider: 'google', providerId: googleId })
@@ -1105,7 +1105,7 @@ async function claimUnverifiedAccount(userId: string, googleId: string): Promise
  *    owns that address — the account-takeover this file's `handleGoogleCallback`
  *    header comment warns about.
  * 3. Linking to a never-verified account takes it over (`claimUnverifiedAccount`):
- *    Google proved the mailbox, so a squatter's password is cleared and every
+ *    a squatter's password and other Google links are removed and every
  *    session revoked. A verified account is linked untouched.
  * 4. A brand-new account (no provider link, no email match, and Google verified the email) is created with
  *    its `'email'` and `'google'` provider rows in ONE transaction — see

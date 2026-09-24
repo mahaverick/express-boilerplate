@@ -568,6 +568,16 @@ describe('POST /api/v1/auth/reset-password', () => {
   it('drops Google links from a never-verified account on reset, so a squatter’s Google identity no longer resolves to it', async () => {
     // Legacy state, seeded directly: after E1, an unverified Google identity can no longer create it.
     const { user, email } = await seedUser(false)
+    // A real account always carries this row (register()'s own invariant,
+    // see auth-provider.model.ts) — seeded directly here since `seedUser`
+    // bypasses `register()`. `deleteFederatedForUser` only ever removes
+    // non-'email' rows, so this one must exist up front for the assertion
+    // below to mean anything.
+    await authProviderRepository.create({
+      userId: user.id,
+      provider: 'email',
+      providerId: email,
+    })
     const squatterGoogleId = randomUUID()
     await authProviderRepository.create({
       userId: user.id,

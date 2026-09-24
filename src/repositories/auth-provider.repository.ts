@@ -13,7 +13,7 @@
 // comment: "the driver-level detail this file exists to keep out of every
 // caller"), so a table that cannot extend the class it belongs to
 // re-implements the three-line check rather than exporting an internal.
-import { and, DrizzleQueryError, eq } from 'drizzle-orm'
+import { and, DrizzleQueryError, eq, ne } from 'drizzle-orm'
 import postgres from 'postgres'
 import type { AuthProvider } from '@/constants/auth-provider.constants'
 import {
@@ -116,11 +116,15 @@ export class AuthProviderRepository {
   }
 
   /**
-   * Delete every provider row linked to a user.
-   * @param userId - The user whose provider rows are deleted.
+   * Delete every federated (non-`'email'`) provider row linked to a user,
+   * keeping the `'email'` row — the invariant every user has one relies on
+   * (auth-provider.model.ts's own header comment).
+   * @param userId - The user whose federated provider rows are deleted.
    * @returns Resolves once the rows are gone.
    */
-  async deleteAllForUser(userId: string): Promise<void> {
-    await db.delete(authProviderModel).where(eq(authProviderModel.userId, userId))
+  async deleteFederatedForUser(userId: string): Promise<void> {
+    await db
+      .delete(authProviderModel)
+      .where(and(eq(authProviderModel.userId, userId), ne(authProviderModel.provider, 'email')))
   }
 }
