@@ -15,6 +15,12 @@ import IORedis, { type RedisOptions } from 'ioredis'
 import { getEnv } from '@/configs/env.config'
 import { logger } from '@/services/logger.service'
 
+// One ioredis connection and whether it has ever reached 'ready'.
+interface QueueRedis {
+  connection: IORedis
+  readiness: { hasBeenReady: boolean }
+}
+
 // Same shape/reasoning as redis.service.ts's own `state`: a mutable property
 // on a top-level `const` rather than several top-level `let`s, so every
 // function below shares state without any of them reassigning a top-level
@@ -23,24 +29,20 @@ import { logger } from '@/services/logger.service'
 // `closed` mirrors redis.service.ts's own flag: once `closeQueue()` runs,
 // later calls must report unreachable/refuse to enqueue rather than silently
 // opening a brand-new connection during shutdown.
-// One ioredis connection and whether it has ever reached 'ready'.
-interface QueueRedis {
-  connection: IORedis
-  readiness: { hasBeenReady: boolean }
-}
-
 const state: {
   worker: QueueRedis | undefined
   producer: QueueRedis | undefined
   emailQueue: Queue | undefined
   notificationQueue: Queue | undefined
   closed: boolean
+  workerConnectionLost: Set<(dead: IORedis) => void>
 } = {
   worker: undefined,
   producer: undefined,
   emailQueue: undefined,
   notificationQueue: undefined,
   closed: false,
+  workerConnectionLost: new Set(),
 }
 
 /**
@@ -125,11 +127,24 @@ export function getQueueConnection(): IORedis {
       maxRetriesPerRequest: null,
     },
     (dead) => {
-      // A Worker already built on the dead connection does not follow; see CLAUDE.md.
       if (state.worker?.connection === dead) state.worker = undefined
+      // Synchronous, inside 'end': a Worker on `dead` can spin once its init rejects, a microtask later.
+      for (const listener of state.workerConnectionLost) listener(dead)
     }
   )
   return state.worker.connection
+}
+
+/**
+ * Subscribe to the Worker connection giving up before its first ready.
+ * @param listener - Called with the dead connection, synchronously within its 'end' event; the next getQueueConnection() builds a new one.
+ * @returns A function that unsubscribes.
+ */
+export function onWorkerConnectionLost(listener: (dead: IORedis) => void): () => void {
+  state.workerConnectionLost.add(listener)
+  return () => {
+    state.workerConnectionLost.delete(listener)
+  }
 }
 
 /**

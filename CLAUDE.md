@@ -63,9 +63,15 @@ until you check.
   for one in any post-ready status but `ready`; and `closeQueue` disconnects
   instead of queueing a `QUIT`. Only BullMQ Workers keep the offline queue,
   which they need. A queue connection that gives up before its first `ready`
-  is replaced on next use (the producer's Queues with it), but a Worker
-  already started on it is not: a process whose Workers booted during an
-  outage needs a restart.
+  is replaced on next use (the producer's Queues with it). Workers on it
+  never recover by themselves: BullMQ does not re-initialise a connection
+  whose init failed, and when that failure is anything but ECONNREFUSED
+  (ECONNRESET, say) its fetch loop retries with no delay, starving the
+  event loop. So `startWorkers()`
+  (`worker-supervisor.service.ts`) closes them inside that connection's `'end'`
+  event, before they can spin, and starts new ones on a fresh connection
+  (`worker-outage.test.ts`). Start Workers through it, not one by one, in
+  anything that runs through an outage.
 - **`drizzle.config.ts` uses `getDatabaseUrl()`, not `getEnv()`.** Routing
   it through `getEnv()` would make every `drizzle-kit` invocation require
   JWT/session secrets that have nothing to do with writing a migration. See

@@ -1,14 +1,10 @@
 // tests/integration/services/redis-outage.service.test.ts
 //
 // A real Redis outage without touching the shared compose Redis: both clients
-// connect through a TCP proxy this file owns, and the outage is the proxy
-// resetting every connection. Its own file because it mocks getEnv()'s
-// REDIS_URL (same reason as redis-unreachable.service.test.ts).
-//
-// The proxy holds one port for the whole file: re-listening on a hand-picked
-// port could take over another worker's test server on that port.
+// connect through a TCP proxy this file owns (tests/helpers/redis-proxy.ts).
+// Its own file because it mocks getEnv()'s REDIS_URL (same reason as
+// redis-unreachable.service.test.ts).
 import { randomUUID } from 'node:crypto'
-import net from 'node:net'
 import express from 'express'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { errorHandler } from '@/middlewares/error.middleware'
@@ -21,6 +17,7 @@ import {
   isQueueReachable,
 } from '@/services/queue.service'
 import { closeRedis, isRedisReachable } from '@/services/redis.service'
+import { isEventuallyTrue, RedisProxy, sleep } from '../../helpers/redis-proxy'
 import { request } from '../../helpers/request'
 
 // Longer than either client's pre-fix retry budget (node-redis ~600ms, ioredis ~1.2s).
@@ -37,88 +34,7 @@ vi.mock('@/configs/env.config', async (importOriginal) => {
   }
 })
 
-// `down` resets every connection; `silent` accepts connections and never answers.
-type ProxyMode = 'up' | 'down' | 'silent'
-
-class RedisProxy {
-  private server: net.Server | undefined
-  private readonly sockets = new Set<net.Socket>()
-  private mode: ProxyMode = 'up'
-  port = 0
-
-  private switchTo(mode: ProxyMode): void {
-    this.mode = mode
-    for (const socket of this.sockets) socket.destroy()
-    this.sockets.clear()
-  }
-
-  async start(upstream: URL): Promise<void> {
-    const server = net.createServer((client) => {
-      if (this.mode === 'down') {
-        client.resetAndDestroy()
-        return
-      }
-      this.sockets.add(client)
-      client.on('error', () => client.destroy()).on('close', () => this.sockets.delete(client))
-      if (this.mode === 'silent') return
-
-      const toRedis = net.connect(Number(upstream.port || 6379), upstream.hostname)
-      this.sockets.add(toRedis)
-      client.pipe(toRedis).pipe(client)
-      const teardown = (): void => {
-        client.destroy()
-        toRedis.destroy()
-        this.sockets.delete(client)
-        this.sockets.delete(toRedis)
-      }
-      client.on('error', teardown).on('close', teardown)
-      toRedis.on('error', teardown).on('close', teardown)
-    })
-    await new Promise<void>((resolve, reject) => {
-      server.once('error', reject)
-      server.listen(0, '127.0.0.1', () => resolve())
-    })
-    this.port = (server.address() as net.AddressInfo).port
-    this.server = server
-  }
-
-  goDown(): void {
-    this.switchTo('down')
-  }
-
-  goSilent(): void {
-    this.switchTo('silent')
-  }
-
-  comeBack(): void {
-    // Leaves live connections alone when already up; otherwise drops silent ones.
-    if (this.mode !== 'up') this.switchTo('up')
-  }
-
-  close(): void {
-    this.switchTo('down')
-    this.server?.close()
-    this.server = undefined
-  }
-}
-
 const proxy = new RedisProxy()
-
-async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-async function isEventuallyTrue(
-  isDone: () => Promise<boolean>,
-  timeoutMs: number
-): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    if (await isDone()) return true
-    await sleep(100)
-  }
-  return false
-}
 
 async function simulateOutage(): Promise<void> {
   proxy.goDown()
@@ -151,10 +67,7 @@ async function settleWithin(operation: Promise<unknown>, ms: number): Promise<st
 describe('Redis clients survive an outage', () => {
   beforeAll(async () => {
     await proxy.start(new URL(target.realUrl))
-    const proxied = new URL(target.realUrl)
-    proxied.hostname = '127.0.0.1'
-    proxied.port = String(proxy.port)
-    target.proxyUrl = proxied.href
+    target.proxyUrl = proxy.urlFor(new URL(target.realUrl))
   })
 
   // A failed test must not leave the next one talking to a dead proxy.

@@ -3,9 +3,9 @@
 // Excluded from coverage (vitest.config.ts): this file is signal wiring —
 // process.exit, process.on(SIGTERM/SIGINT) — which is not meaningfully unit
 // testable, and it is exercised for real by the boot check in the task brief.
-import type { Worker } from 'bullmq'
 import { getEnv } from '@/configs/env.config'
 import { GRACEFUL_SHUTDOWN_TIMEOUT_MS } from '@/constants/global.constants'
+import type { SupervisedWorkers } from '@/services/worker-supervisor.service'
 
 /**
  * Start listening and wire graceful shutdown.
@@ -36,12 +36,12 @@ async function boot(): Promise<void> {
   const { redactedForLog } = await import('@/middlewares/error.middleware')
 
   // Filled in once the workers start; shutdown reads it only when it runs.
-  const workers: { email?: Worker; notification?: Worker } = {}
+  const workers: { supervised?: SupervisedWorkers } = {}
 
   // One handler for every exit path: signals, fatal errors and a server
   // 'error'. A second call while shutdown runs is ignored.
   const handleShutdown = createShutdownHandler(
-    () => gracefulShutdown(server, workers.email, workers.notification),
+    () => gracefulShutdown(server, workers.supervised),
     GRACEFUL_SHUTDOWN_TIMEOUT_MS
   )
 
@@ -69,7 +69,7 @@ async function boot(): Promise<void> {
   })
 
   // Dynamic, same reasoning as `@/server` above and for the same effect:
-  // `@/workers/email.worker` / `@/workers/notification.worker` ->
+  // `@/services/worker-supervisor.service` -> the email/notification workers ->
   // `@/services/queue.service` opens no connection at import time (lazy,
   // like every other service here), but a STATIC import would still pull
   // the whole `bullmq`/`ioredis` module graph into every process that
@@ -79,12 +79,10 @@ async function boot(): Promise<void> {
   // all. Gating the import itself, not just the call, is what keeps that
   // test free of it.
   if (!getEnv().WORKER_ENABLED) return
-  const { startEmailWorker } = await import('@/workers/email.worker')
-  const { startNotificationWorker } = await import('@/workers/notification.worker')
-  // Shutdown may have begun during the imports above; workers started now would never be closed.
+  const { startWorkers } = await import('@/services/worker-supervisor.service')
+  // Shutdown may have begun during the import above; workers started now would never be closed.
   if (isShuttingDown()) return
-  workers.email = startEmailWorker()
-  workers.notification = startNotificationWorker()
+  workers.supervised = startWorkers()
   logger.info('Workers started (email + notification)')
 }
 
