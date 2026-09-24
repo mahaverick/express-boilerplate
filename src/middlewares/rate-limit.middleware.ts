@@ -1,12 +1,13 @@
 // src/middlewares/rate-limit.middleware.ts
 //
-// Seventeen limiters: `createRegisterRateLimiter`, the three login ones
+// Nineteen limiters: `createRegisterRateLimiter`, the three login ones
 // (`createLoginRateLimiter`, `createLoginIpRateLimiter`,
 // `createLoginAccountRateLimiter`), `createRefreshRateLimiter`, `createLogoutRateLimiter`,
 // `createVerifyEmailRateLimiter`, `createResetPasswordRateLimiter`,
 // `createGoogleOAuthRateLimiter`, `createGoogleOAuthCallbackRateLimiter`,
-// `createCreateTenantRateLimiter`, `createAddTenantMemberRateLimiter`,
-// `createChangePasswordRateLimiter`, and the two pairs for resend-verification
+// `createCreateTenantRateLimiter`, `createInviteTenantMemberRateLimiter`,
+// `createChangePasswordRateLimiter`, `createInvitationPreviewRateLimiter`,
+// `createInvitationAcceptRateLimiter`, and the two pairs for resend-verification
 // and forgot-password — `createResendVerificationIpRateLimiter` /
 // `createResendVerificationEmailRateLimiter`, and
 // `createForgotPasswordIpRateLimiter` / `createForgotPasswordEmailRateLimiter`.
@@ -653,7 +654,7 @@ export function createGoogleOAuthCallbackRateLimiter(
   })
 }
 
-// CREATE-TENANT and ADD-TENANT-MEMBER are keyed on the CALLER'S id
+// CREATE-TENANT and INVITE-TENANT-MEMBER are keyed on the CALLER'S id
 // (`request.user.id`), not IP — two of the three limiters in this file
 // keyed that way; `createChangePasswordRateLimiter`, further down, is the
 // third (see its own comment for why ITS threat differs from these two's).
@@ -664,24 +665,25 @@ export function createGoogleOAuthCallbackRateLimiter(
 // UNAUTHENTICATED, so IP is the only identity a caller cannot simply swap
 // out; these two are authenticated, so keying on IP would let one
 // legitimate office (shared NAT'd egress) throttle every OTHER user behind
-// it out of creating a tenant or adding a member, and would let a single
+// it out of creating a tenant or inviting a member, and would let a single
 // attacker with many source IPs but ONE stolen/created account bypass the
 // limit entirely — the identical "IP alone is the wrong axis" reasoning
 // `loginRateLimitKey`'s own comment gives for composing IP with email
 // there. Neither threat here is enumeration or bcrypt cost (both
 // endpoints already require an authenticated, tenant-scoped, owner/admin
-// caller for `createAddTenantMemberRateLimiter`, and merely an
+// caller for `createInviteTenantMemberRateLimiter`, and merely an
 // authenticated caller for `createCreateTenantRateLimiter`): this is
-// volume protection against one account creating tenants or spamming
-// membership-add calls in a loop.
+// volume protection against one account creating tenants or sending
+// invitation emails in a loop. Invite and resend share ONE instance of the
+// invite limiter (tenant.routes.ts), so together they spend one budget.
 const CREATE_TENANT_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000
 const CREATE_TENANT_RATE_LIMIT_MAX_ATTEMPTS = 20
 
-const ADD_TENANT_MEMBER_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000
-const ADD_TENANT_MEMBER_RATE_LIMIT_MAX_ATTEMPTS = 30
+const INVITE_TENANT_MEMBER_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000
+const INVITE_TENANT_MEMBER_RATE_LIMIT_MAX_ATTEMPTS = 30
 
 /**
- * The key `createCreateTenantRateLimiter`/`createAddTenantMemberRateLimiter`/
+ * The key `createCreateTenantRateLimiter`/`createInviteTenantMemberRateLimiter`/
  * `createChangePasswordRateLimiter` count attempts by: the authenticated
  * caller's id.
  *
@@ -726,22 +728,22 @@ export function createCreateTenantRateLimiter(
 }
 
 /**
- * Build an add-tenant-member rate limiter: `limit` attempts per `windowMs`,
+ * Build an invite-tenant-member rate limiter: `limit` attempts per `windowMs`,
  * keyed on the authenticated caller's id. See this file's header comment
  * for why this pair is keyed on the user rather than IP. A factory, not a
  * module-scope constant — see this file's header comment.
  * @param overrides - Options to override, e.g. a small `limit`/`windowMs` for a test.
  * @returns Express middleware enforcing the limit.
  */
-export function createAddTenantMemberRateLimiter(
+export function createInviteTenantMemberRateLimiter(
   overrides: Partial<Options> = {}
 ): RateLimitRequestHandler {
   return rateLimit({
-    windowMs: ADD_TENANT_MEMBER_RATE_LIMIT_WINDOW_MS,
-    limit: ADD_TENANT_MEMBER_RATE_LIMIT_MAX_ATTEMPTS,
+    windowMs: INVITE_TENANT_MEMBER_RATE_LIMIT_WINDOW_MS,
+    limit: INVITE_TENANT_MEMBER_RATE_LIMIT_MAX_ATTEMPTS,
     standardHeaders: true,
     legacyHeaders: false,
-    store: new SharedRateLimitStore('rl:add-tenant-member:'),
+    store: new SharedRateLimitStore('rl:invite-tenant-member:'),
     keyGenerator: authenticatedUserRateLimitKey,
     handler: sendRateLimitedResponse,
     ...overrides,
@@ -749,7 +751,7 @@ export function createAddTenantMemberRateLimiter(
 }
 
 // CHANGE-PASSWORD lives on the auth router (auth.routes.ts), but is grouped
-// down here with CREATE-TENANT/ADD-TENANT-MEMBER, and reuses their
+// down here with CREATE-TENANT/INVITE-TENANT-MEMBER, and reuses their
 // `authenticatedUserRateLimitKey`, rather than sitting beside
 // `createResetPasswordRateLimiter` above — because it shares their axis,
 // not reset-password's. Every OTHER limiter on the auth router is keyed on
@@ -803,6 +805,58 @@ export function createChangePasswordRateLimiter(
     legacyHeaders: false,
     store: new SharedRateLimitStore('rl:change-password:'),
     keyGenerator: authenticatedUserRateLimitKey,
+    handler: sendRateLimitedResponse,
+    ...overrides,
+  })
+}
+
+// INVITATION PREVIEW and ACCEPT are keyed on IP alone: preview is public,
+// and accept's limiter runs ahead of requireAuth (invitation.routes.ts), so
+// a flood is refused before any token or user lookup. A token is 256
+// random bits, so these bound volume, not guessing.
+const INVITATION_PREVIEW_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000
+const INVITATION_PREVIEW_RATE_LIMIT_MAX_ATTEMPTS = 60
+
+const INVITATION_ACCEPT_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000
+const INVITATION_ACCEPT_RATE_LIMIT_MAX_ATTEMPTS = 20
+
+/**
+ * Build the invitation-preview rate limiter: `limit` requests per
+ * `windowMs`, keyed on IP alone. A factory, not a module-scope constant —
+ * see this file's header comment.
+ * @param overrides - Options to override, e.g. a small `limit`/`windowMs` for a test.
+ * @returns Express middleware enforcing the limit.
+ */
+export function createInvitationPreviewRateLimiter(
+  overrides: Partial<Options> = {}
+): RateLimitRequestHandler {
+  return rateLimit({
+    windowMs: INVITATION_PREVIEW_RATE_LIMIT_WINDOW_MS,
+    limit: INVITATION_PREVIEW_RATE_LIMIT_MAX_ATTEMPTS,
+    standardHeaders: true,
+    legacyHeaders: false,
+    store: new SharedRateLimitStore('rl:invitation-preview:'),
+    handler: sendRateLimitedResponse,
+    ...overrides,
+  })
+}
+
+/**
+ * Build the invitation-accept rate limiter: `limit` attempts per
+ * `windowMs`, keyed on IP alone, mounted ahead of `requireAuth`. A factory,
+ * not a module-scope constant — see this file's header comment.
+ * @param overrides - Options to override, e.g. a small `limit`/`windowMs` for a test.
+ * @returns Express middleware enforcing the limit.
+ */
+export function createInvitationAcceptRateLimiter(
+  overrides: Partial<Options> = {}
+): RateLimitRequestHandler {
+  return rateLimit({
+    windowMs: INVITATION_ACCEPT_RATE_LIMIT_WINDOW_MS,
+    limit: INVITATION_ACCEPT_RATE_LIMIT_MAX_ATTEMPTS,
+    standardHeaders: true,
+    legacyHeaders: false,
+    store: new SharedRateLimitStore('rl:invitation-accept:'),
     handler: sendRateLimitedResponse,
     ...overrides,
   })

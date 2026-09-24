@@ -34,8 +34,8 @@ const MEMBERSHIP_ROLE_SQL_LIST = MEMBERSHIP_ROLES.map((role) => `'${role}'`).joi
  * that user's role within that tenant. `TenantRepository.create()`
  * (tenant.repository.ts) inserts the creator's `'owner'` row atomically
  * alongside the tenant itself; every other row comes from
- * `UserMembershipRepository.create` (a later task's "add member"
- * endpoint).
+ * `UserMembershipRepository.createIfAbsent`, when an invitation is accepted
+ * (tenant-invitation.service.ts).
  */
 export const userMembershipModel = pgTable(
   'user_memberships',

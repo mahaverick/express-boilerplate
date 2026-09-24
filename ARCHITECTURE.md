@@ -358,6 +358,8 @@ and "Notifications" sections), and OpenTelemetry SDK wiring in the app
 itself (`src/observability/tracing.ts` starts a `NodeSDK` and exports
 traces and logs — see CLAUDE.md's "Observability" section). The rate
 limiters this list used to describe as
-covering only the four auth routes now also cover two tenant routes
-(`createCreateTenantRateLimiter`, `createAddTenantMemberRateLimiter` on
-`tenant.routes.ts`).
+covering only the four auth routes now also cover the tenant and invitation
+routes (`createCreateTenantRateLimiter` and
+`createInviteTenantMemberRateLimiter` on `tenant.routes.ts`,
+`createInvitationPreviewRateLimiter` and `createInvitationAcceptRateLimiter`
+on `invitation.routes.ts`).
