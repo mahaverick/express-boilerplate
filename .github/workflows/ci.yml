@@ -175,6 +175,7 @@ jobs:
           JWT_ACCESS_SECRET: test-access-secret-that-is-long-enough-32
           SESSION_SECRET: test-session-secret-that-is-long-enough-1
           SSE_HEARTBEAT_INTERVAL_MS: 1000
+          SSE_MAX_STREAMS_PER_USER: 5
           LOG_LEVEL: silent
       # The env block above must mirror committed .env.test. When they drift, a
       # test passes locally and fails in CI (or worse, the reverse) for reasons

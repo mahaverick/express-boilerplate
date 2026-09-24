@@ -69,6 +69,12 @@ export interface AccessTokenPayload {
    * a Redis flush can be identified in logs.
    */
   jti?: string
+  /**
+   * Expiry, in seconds since the epoch, as verified by jsonwebtoken. Set on
+   * every verified token that carries one; the notification stream ends
+   * itself at this moment.
+   */
+  exp?: number
 }
 
 /**
@@ -217,6 +223,7 @@ export function verifyAccessToken(token: string): VerifyAccessTokenResult {
     const payload: AccessTokenPayload = { sub: decoded.sub }
     if (typeof decoded.sid === 'string') payload.sid = decoded.sid
     if (typeof decoded.jti === 'string') payload.jti = decoded.jti
+    if (typeof decoded.exp === 'number') payload.exp = decoded.exp
     return { ok: true, payload }
   } catch (error) {
     return { ok: false, reason: error instanceof jwt.TokenExpiredError ? 'expired' : 'invalid' }

@@ -30,6 +30,7 @@ import jwt from 'jsonwebtoken'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createApp } from '@/app'
 import { getEnv } from '@/configs/env.config'
+import { SSE_MAX_BUFFERED_BYTES } from '@/constants/notification.constants'
 import type { Notification } from '@/database/models/notification.model'
 import type { User } from '@/database/models/user.model'
 import { ACCESS_TOKEN_EXPIRED_CODE } from '@/middlewares/auth.middleware'
@@ -893,5 +894,119 @@ describe('GET /api/v1/notifications/stream', () => {
     const parsed = JSON.parse(body) as { message: string; code?: string }
     expect(parsed.message).toBe('Access token missing session')
     expect(parsed.code).toBe(ACCESS_TOKEN_EXPIRED_CODE)
+  })
+
+  it('answers 429 too_many_streams, before any stream opens, past the per-user cap', async () => {
+    const { user, token } = await createAuthenticatedUser()
+    const cap = getEnv().SSE_MAX_STREAMS_PER_USER
+
+    for (let index = 0; index < cap; index += 1) {
+      const stream = openStream({ header: `Bearer ${token}` })
+      const opened = await stream.waitForResponse()
+      expect(opened.statusCode).toBe(200)
+    }
+    expect(countStreams(user.id)).toBe(cap)
+
+    const rejected = openStream({ header: `Bearer ${token}` })
+    const response = await rejected.waitForResponse()
+    expect(response.statusCode).toBe(429)
+    expect(response.headers['content-type']).not.toContain('text/event-stream')
+    const parsed = JSON.parse(await rejected.collectBody()) as { code?: string }
+    expect(parsed.code).toBe('too_many_streams')
+
+    // A closed stream frees its slot.
+    openConnections[0]?.destroy()
+    await waitUntil(() => countStreams(user.id) < cap, 2000)
+    const again = openStream({ header: `Bearer ${token}` })
+    const reopened = await again.waitForResponse()
+    expect(reopened.statusCode).toBe(200)
+  })
+
+  it('ends the stream when the access token that opened it expires', async () => {
+    const user = await userRepository.create({ email: uniqueEmail() })
+    createdUserIds.push(user.id)
+    // Hand-signed, like the expired-token test above: ACCESS_TOKEN_TTL is
+    // memoised by getEnv() and cannot be shortened per test. 2s, not 1s: exp
+    // is whole seconds, so a 1s token can already be expired at requireAuth.
+    const token = jwt.sign({ sub: user.id, sid: randomUUID() }, getEnv().JWT_ACCESS_SECRET, {
+      algorithm: 'HS256',
+      expiresIn: 2,
+    })
+
+    const stream = openStream({ header: `Bearer ${token}` })
+    const response = await stream.waitForResponse()
+    expect(response.statusCode).toBe(200)
+
+    // exp is whole seconds, so the end lands 1-2s after the 2s TTL starts.
+    await expect(stream.closed(4000)).resolves.toBe(true)
+    // The registry slot is freed too (request 'close' ran), not just the listener.
+    await waitUntil(() => countStreams(user.id) === 0, 2000)
+    expect(listenerCount(user.id)).toBe(0)
+  })
+
+  it("clamps a long-lived token's expiry timer to setTimeout's 2^31-1 ms ceiling", async () => {
+    const user = await userRepository.create({ email: uniqueEmail() })
+    createdUserIds.push(user.id)
+    // 30 days is ~2.59e9 ms, past the ceiling: unclamped, Node fires it at once.
+    const token = jwt.sign({ sub: user.id, sid: randomUUID() }, getEnv().JWT_ACCESS_SECRET, {
+      algorithm: 'HS256',
+      expiresIn: '30d',
+    })
+
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout')
+    try {
+      const stream = openStream({ header: `Bearer ${token}` })
+      const response = await stream.waitForResponse()
+      expect(response.statusCode).toBe(200)
+
+      const delays = setTimeoutSpy.mock.calls.map(([, delay]) => delay ?? 0)
+      expect(Math.max(...delays)).toBe(2_147_483_647)
+      expect(await stream.closed(200)).toBe(false)
+    } finally {
+      setTimeoutSpy.mockRestore()
+    }
+  })
+
+  it('drops a client that stops reading once more than 1 MiB is buffered for it', async () => {
+    const { user, token } = await createAuthenticatedUser()
+    const stream = openStream({ header: `Bearer ${token}` })
+    const response = await stream.waitForResponse()
+    expect(response.statusCode).toBe(200)
+    await waitUntil(() => listenerCount(user.id) === 1, 2000)
+
+    // Stop reading: the client parser stops draining its socket, and the
+    // kernel buffers on both sides fill.
+    response.pause()
+
+    // 32 MiB of frames. That is far past any loopback kernel buffering, so
+    // the server-side writable buffer must pass SSE_MAX_BUFFERED_BYTES.
+    const body = 'x'.repeat(512 * 1024)
+    const frameCount = Math.ceil((32 * 1024 * 1024) / body.length)
+    expect(frameCount * body.length).toBeGreaterThan(SSE_MAX_BUFFERED_BYTES * 16)
+    for (let index = 0; index < frameCount; index += 1) {
+      emitNotification(user.id, {
+        id: randomUUID(),
+        userId: user.id,
+        type: 'verify_email',
+        title: 'Large',
+        body,
+        // eslint-disable-next-line unicorn/no-null -- Notification.metadata/readAt are `T | null` columns
+        metadata: null,
+        // eslint-disable-next-line unicorn/no-null -- see above
+        readAt: null,
+        createdAt: new Date(),
+      })
+    }
+
+    // Destroyed server-side: the request 'close' cleanup ran. That fires a
+    // tick after the stall path's own offNotification, so wait on the registry.
+    await waitUntil(() => countStreams(user.id) === 0, 5000)
+    expect(listenerCount(user.id)).toBe(0)
+
+    // Destroyed, not ended: the kernel buffers can drain a queued end(), so
+    // only a truncated body tells the two apart once the client reads again.
+    response.resume()
+    await waitUntil(() => response.destroyed, 5000)
+    expect(response.complete).toBe(false)
   })
 })

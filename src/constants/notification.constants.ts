@@ -56,3 +56,9 @@ export const DEFAULT_NOTIFICATION_PAGE_SIZE = 20
  * `limit` ever reaches `NotificationRepository.list`.
  */
 export const MAX_NOTIFICATION_PAGE_SIZE = 100
+
+/**
+ * Bytes a notification stream may have queued for a client before the
+ * client is treated as stalled and dropped. Bounds per-connection memory.
+ */
+export const SSE_MAX_BUFFERED_BYTES = 1_048_576

@@ -279,6 +279,9 @@ export async function requireAuth(
     if (payload.sid) {
       request.sessionId = payload.sid
     }
+    if (payload.exp !== undefined) {
+      request.accessTokenExpiresAt = new Date(payload.exp * 1000)
+    }
     request.user = await loadAuthenticatedUser(payload.sub)
     next()
   } catch (error) {
