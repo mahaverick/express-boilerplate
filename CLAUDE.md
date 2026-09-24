@@ -49,16 +49,19 @@ until you check.
   guaranteed red on the first pull request. The invariant worth guarding
   belongs to the committed files.
 - **The Redis clients' retry strategies are load-bearing, not
-  decoration.** Before a client's first `ready`, both give up after a few
-  retries, so `isRedisReachable()`/`isQueueReachable()` (and
+  decoration.** Before a client's first `ready`, every client gives up after
+  a few retries, so `isRedisReachable()`/`isQueueReachable()` (and
   `GET /health/ready`) report unreachable instead of hanging at boot
-  (`redis-unreachable.service.test.ts` pins this by timing out if removed).
-  After `ready`, both retry forever with backoff, so an outage never leaves a
-  dead client behind (`redis-outage.service.test.ts`, via a local TCP proxy,
-  never by stopping the shared Redis). node-redis runs with
-  `disableOfflineQueue`, and `isQueueReachable` short-circuits while
-  reconnecting: without them, every command during an outage would wait until
-  Redis came back.
+  (`redis-unreachable.service.test.ts` and `queue-unreachable.service.test.ts`
+  pin this by timing out if removed). After `ready`, every client retries
+  forever with backoff, so an outage never leaves a dead client behind
+  (`redis-outage.service.test.ts`, via a local TCP proxy, never by stopping
+  the shared Redis). While a client reconnects, nothing waits for Redis to
+  come back: node-redis runs with `disableOfflineQueue`; BullMQ producers
+  get their own ioredis connection with the offline queue off, so an enqueue
+  rejects; `isQueueReachable` reports false for the Worker connection in any
+  status but `ready`; and `closeQueue` disconnects instead of queueing a
+  `QUIT`. Only BullMQ Workers keep the offline queue, which they need.
 - **`drizzle.config.ts` uses `getDatabaseUrl()`, not `getEnv()`.** Routing
   it through `getEnv()` would make every `drizzle-kit` invocation require
   JWT/session secrets that have nothing to do with writing a migration. See

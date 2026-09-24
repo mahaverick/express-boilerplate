@@ -161,8 +161,11 @@ describe('SharedRateLimitStore', () => {
     ]
     // Counted per process during the outage, never thrown.
     expect(outageHits).toEqual([1, 2])
-    await expect(store.decrement('client-a')).resolves.toBeUndefined()
-    await expect(store.resetKey('client-a')).resolves.toBeUndefined()
+    // Decrement and reset act on the memory count while Redis is down.
+    await store.decrement('client-a')
+    expect(await hitsAfterIncrement(store, 'client-a')).toBe(2)
+    await store.resetKey('client-a')
+    expect(await hitsAfterIncrement(store, 'client-a')).toBe(1)
     expect(warn).toHaveBeenCalledTimes(1)
 
     outage.isDown = false
@@ -174,6 +177,32 @@ describe('SharedRateLimitStore', () => {
     await store.increment('client-a')
     // A second outage warns again: once per outage, not once per process.
     expect(warn).toHaveBeenCalledTimes(2)
+  })
+
+  it('serves from memory when the switch itself fails mid-outage, then switches once Redis answers', async () => {
+    const { client, commands, outage } = fakeRedisClient()
+    // getRedis() hands back the reconnecting client; its commands reject.
+    vi.mocked(getRedis).mockResolvedValue(client as never)
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    const info = vi.spyOn(logger, 'info').mockImplementation(() => {})
+    const store = new SharedRateLimitStore('rl:test:')
+    store.init(testOptions)
+
+    outage.isDown = true
+    const outageHits = [
+      await hitsAfterIncrement(store, 'client-a'),
+      await hitsAfterIncrement(store, 'client-a'),
+    ]
+    expect(outageHits).toEqual([1, 2])
+    expect(warn).toHaveBeenCalledTimes(1)
+
+    outage.isDown = false
+    commands.length = 0
+    // Switched: counted by Redis from zero, after loading the scripts.
+    expect(await hitsAfterIncrement(store, 'client-a')).toBe(1)
+    expect(commands.some((command) => command[0] === 'SCRIPT')).toBe(true)
+    expect(await hitsAfterIncrement(store, 'client-a')).toBe(2)
+    expect(info).toHaveBeenCalledTimes(1)
   })
 
   it('falls back to memory, instead of failing the request, when the client is closed after the switch', async () => {

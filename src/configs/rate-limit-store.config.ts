@@ -15,9 +15,10 @@
 // serve which request.
 //
 // SharedRateLimitStore instead LATCHES: every instance starts on
-// `MemoryStore`, and the first `increment()` call whose `getRedis()` call
-// resolves swaps the active backend to a Redis-backed store for the rest of
-// the process. It never calls `getRedis()` again from the latch path itself
+// `MemoryStore`, and the first `increment()` whose `getRedis()` resolves and
+// whose Lua scripts load makes a Redis-backed store its primary backend from
+// then on (a failed script load leaves it unlatched, to retry on the next
+// request). It never calls `getRedis()` again from the latch path itself
 // once switched — only `sendCommand` does, per actual Redis command, and
 // ALWAYS by asking `getRedis()` for the CURRENT client rather than holding
 // one captured at latch time. That is what makes shutdown safe without any
@@ -37,8 +38,8 @@
 //
 // After the switch, a Redis command that fails (an outage, or a closed client
 // during shutdown) falls back to this store's own MemoryStore for that call,
-// logged once per outage, and goes back to Redis as soon as a command
-// succeeds. A Redis outage must neither 500 every limited route nor switch
+// as does a failed switch. It is logged once per outage, and the store goes
+// back to Redis as soon as a command succeeds. A Redis outage must neither 500 every limited route nor switch
 // limiting off (`passOnStoreError`). The cost is per-process counting while
 // Redis is down.
 import { MemoryStore, type IncrementResponse, type Options, type Store } from 'express-rate-limit'
@@ -98,8 +99,39 @@ export class SharedRateLimitStore implements Store {
         return client.sendCommand(command)
       },
     })
-    if (this.options) await redisStore.init(this.options)
+    try {
+      // Loads the scripts: fails while the client reconnects, and must not stay latched as a failure.
+      if (this.options) await redisStore.init(this.options)
+    } catch (error) {
+      this.enterOutage(error)
+      this.latching = undefined
+      return
+    }
     this.redis = redisStore
+  }
+
+  /**
+   * Log the start of an outage once, however many commands fail during it.
+   * @param error - The failure that revealed the outage.
+   */
+  private enterOutage(error: unknown): void {
+    if (this.isInOutage) return
+    this.isInOutage = true
+    logger.warn('Redis rate-limit command failed; counting per process until Redis recovers', {
+      prefix: this.prefix,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+
+  /**
+   * Log the end of an outage once, when the first Redis command succeeds after it.
+   */
+  private leaveOutage(): void {
+    if (!this.isInOutage) return
+    this.isInOutage = false
+    logger.info('Redis rate-limit store recovered; counting is shared again', {
+      prefix: this.prefix,
+    })
   }
 
   /**
@@ -115,21 +147,10 @@ export class SharedRateLimitStore implements Store {
     if (!this.redis) return onMemory()
     try {
       const result = await onRedis(this.redis)
-      if (this.isInOutage) {
-        this.isInOutage = false
-        logger.info('Redis rate-limit store recovered; counting is shared again', {
-          prefix: this.prefix,
-        })
-      }
+      this.leaveOutage()
       return result
     } catch (error) {
-      if (!this.isInOutage) {
-        this.isInOutage = true
-        logger.warn('Redis rate-limit command failed; counting per process until Redis recovers', {
-          prefix: this.prefix,
-          error: error instanceof Error ? error.message : String(error),
-        })
-      }
+      this.enterOutage(error)
       return onMemory()
     }
   }
@@ -157,7 +178,8 @@ export class SharedRateLimitStore implements Store {
   }
 
   /**
-   * Decrement a client's hit counter.
+   * Decrement a client's hit counter. One that straddles an outage boundary
+   * lands on the other backend, so the count errs high (conservative).
    * @param key - The identifier for a client.
    */
   async decrement(key: string): Promise<void> {

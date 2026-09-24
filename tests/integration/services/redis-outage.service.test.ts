@@ -2,16 +2,25 @@
 //
 // A real Redis outage without touching the shared compose Redis: both clients
 // connect through a TCP proxy this file owns, and the outage is the proxy
-// refusing connections. Its own file because it mocks getEnv()'s REDIS_URL
-// (same reason as redis-unreachable.service.test.ts).
+// resetting every connection. Its own file because it mocks getEnv()'s
+// REDIS_URL (same reason as redis-unreachable.service.test.ts).
+//
+// The proxy holds one port for the whole file: re-listening on a hand-picked
+// port could take over another worker's test server on that port.
 import { randomUUID } from 'node:crypto'
 import net from 'node:net'
 import express from 'express'
 import request from 'supertest'
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { errorHandler } from '@/middlewares/error.middleware'
 import { createLoginRateLimiter } from '@/middlewares/rate-limit.middleware'
-import { closeQueue, isQueueReachable } from '@/services/queue.service'
+import {
+  addJob,
+  closeQueue,
+  getEmailQueue,
+  getQueueConnection,
+  isQueueReachable,
+} from '@/services/queue.service'
 import { closeRedis, isRedisReachable } from '@/services/redis.service'
 
 // Longer than either client's pre-fix retry budget (node-redis ~600ms, ioredis ~1.2s).
@@ -28,15 +37,32 @@ vi.mock('@/configs/env.config', async (importOriginal) => {
   }
 })
 
+// `down` resets every connection; `silent` accepts connections and never answers.
+type ProxyMode = 'up' | 'down' | 'silent'
+
 class RedisProxy {
   private server: net.Server | undefined
   private readonly sockets = new Set<net.Socket>()
+  private mode: ProxyMode = 'up'
   port = 0
+
+  private switchTo(mode: ProxyMode): void {
+    this.mode = mode
+    for (const socket of this.sockets) socket.destroy()
+    this.sockets.clear()
+  }
 
   async start(upstream: URL): Promise<void> {
     const server = net.createServer((client) => {
-      const toRedis = net.connect(Number(upstream.port || 6379), upstream.hostname)
+      if (this.mode === 'down') {
+        client.resetAndDestroy()
+        return
+      }
       this.sockets.add(client)
+      client.on('error', () => client.destroy()).on('close', () => this.sockets.delete(client))
+      if (this.mode === 'silent') return
+
+      const toRedis = net.connect(Number(upstream.port || 6379), upstream.hostname)
       this.sockets.add(toRedis)
       client.pipe(toRedis).pipe(client)
       const teardown = (): void => {
@@ -50,17 +76,29 @@ class RedisProxy {
     })
     await new Promise<void>((resolve, reject) => {
       server.once('error', reject)
-      server.listen(this.port, '127.0.0.1', () => resolve())
+      server.listen(0, '127.0.0.1', () => resolve())
     })
     this.port = (server.address() as net.AddressInfo).port
     this.server = server
   }
 
-  stop(): void {
+  goDown(): void {
+    this.switchTo('down')
+  }
+
+  goSilent(): void {
+    this.switchTo('silent')
+  }
+
+  comeBack(): void {
+    // Leaves live connections alone when already up; otherwise drops silent ones.
+    if (this.mode !== 'up') this.switchTo('up')
+  }
+
+  close(): void {
+    this.switchTo('down')
     this.server?.close()
     this.server = undefined
-    for (const socket of this.sockets) socket.destroy()
-    this.sockets.clear()
   }
 }
 
@@ -83,9 +121,31 @@ async function isEventuallyTrue(
 }
 
 async function simulateOutage(): Promise<void> {
-  proxy.stop()
+  proxy.goDown()
   await sleep(OUTAGE_MS)
-  await proxy.start(new URL(target.realUrl))
+  proxy.comeBack()
+}
+
+/**
+ * Settle a promise, or report that it was still pending after `ms`.
+ * @param operation - The operation under test.
+ * @param ms - How long to wait before calling it hung.
+ * @returns How it settled, or `'hung'`.
+ */
+async function settleWithin(operation: Promise<unknown>, ms: number): Promise<string> {
+  const settled = (async () => {
+    try {
+      await operation
+      return 'resolved'
+    } catch {
+      return 'rejected'
+    }
+  })()
+  const timedOut = (async () => {
+    await sleep(ms)
+    return 'hung'
+  })()
+  return Promise.race([settled, timedOut])
 }
 
 describe('Redis clients survive an outage', () => {
@@ -97,22 +157,27 @@ describe('Redis clients survive an outage', () => {
     target.proxyUrl = proxied.href
   })
 
+  // A failed test must not leave the next one talking to a dead proxy.
+  afterEach(() => {
+    proxy.comeBack()
+  })
+
   afterAll(async () => {
     await closeRedis()
     await closeQueue()
-    proxy.stop()
+    proxy.close()
   })
 
   it('node-redis reports unreachable promptly during an outage, then reconnects after it', async () => {
     expect(await isRedisReachable()).toBe(true)
 
-    proxy.stop()
+    proxy.goDown()
     await sleep(100)
     const probedAt = Date.now()
     expect(await isRedisReachable()).toBe(false)
     expect(Date.now() - probedAt).toBeLessThan(500)
     await sleep(OUTAGE_MS)
-    await proxy.start(new URL(target.realUrl))
+    proxy.comeBack()
 
     expect(await isEventuallyTrue(isRedisReachable, 5000)).toBe(true)
   }, 10_000)
@@ -120,13 +185,13 @@ describe('Redis clients survive an outage', () => {
   it('the BullMQ ioredis connection reports unreachable promptly during an outage, then reconnects', async () => {
     expect(await isQueueReachable()).toBe(true)
 
-    proxy.stop()
+    proxy.goDown()
     await sleep(100)
     const probedAt = Date.now()
     expect(await isQueueReachable()).toBe(false)
     expect(Date.now() - probedAt).toBeLessThan(500)
     await sleep(OUTAGE_MS)
-    await proxy.start(new URL(target.realUrl))
+    proxy.comeBack()
 
     expect(await isEventuallyTrue(isQueueReachable, 5000)).toBe(true)
   }, 10_000)
@@ -151,7 +216,7 @@ describe('Redis clients survive an outage', () => {
     const counted = await request(app).post('/login').send(body)
     expect(counted.status).toBe(401)
 
-    proxy.stop()
+    proxy.goDown()
     await sleep(100)
     const statuses: number[] = []
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -161,7 +226,58 @@ describe('Redis clients survive an outage', () => {
     // Per-process memory counting: a fresh count of 2 allowed, then 429.
     expect(statuses).toEqual([401, 401, 429])
 
-    await proxy.start(new URL(target.realUrl))
+    proxy.comeBack()
     expect(await isEventuallyTrue(isRedisReachable, 5000)).toBe(true)
+  }, 10_000)
+
+  it('reports the queue connection unreachable promptly while it reconnects to a silent Redis', async () => {
+    expect(await isEventuallyTrue(isQueueReachable, 5000)).toBe(true)
+
+    proxy.goSilent()
+    // The reconnect lands on the silent proxy: TCP connects, the ready check never answers.
+    const isStuckConnecting = await isEventuallyTrue(
+      () => Promise.resolve(['connecting', 'connect'].includes(getQueueConnection().status)),
+      3000
+    )
+    expect(isStuckConnecting).toBe(true)
+    const probedAt = Date.now()
+    expect(await settleWithin(isQueueReachable(), 1000)).toBe('resolved')
+    expect(await isQueueReachable()).toBe(false)
+    expect(Date.now() - probedAt).toBeLessThan(500)
+
+    proxy.comeBack()
+    expect(await isEventuallyTrue(isQueueReachable, 5000)).toBe(true)
+  }, 10_000)
+
+  it('rejects an enqueue promptly during an outage instead of holding the caller until Redis returns', async () => {
+    await getEmailQueue().waitUntilReady()
+
+    proxy.goDown()
+    await sleep(100)
+    const enqueuedAt = Date.now()
+    const outcome = await settleWithin(
+      addJob(getEmailQueue(), 'outage-probe', { to: 'outage@example.test' }),
+      1000
+    )
+    expect(outcome).toBe('rejected')
+    expect(Date.now() - enqueuedAt).toBeLessThan(500)
+
+    proxy.comeBack()
+    expect(await isEventuallyTrue(isQueueReachable, 5000)).toBe(true)
+  }, 10_000)
+
+  // Last: closeQueue() is final for this module.
+  it('closes the queue promptly during an outage, even with a command waiting to be sent', async () => {
+    await getEmailQueue().waitUntilReady()
+
+    proxy.goDown()
+    await sleep(100)
+    // Waits in the Worker connection's offline queue, like a Worker's own commands.
+    const pendingPing = settleWithin(getQueueConnection().ping(), 1000)
+    expect(await settleWithin(closeQueue(), 1000)).toBe('resolved')
+    // Not asserted: ioredis fails it only if disconnect() lands mid-connect, not between retries.
+    await pendingPing
+
+    proxy.comeBack()
   }, 10_000)
 })
