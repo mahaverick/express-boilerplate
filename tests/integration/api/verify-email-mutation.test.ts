@@ -31,13 +31,13 @@
 // the life of the worker process. Acceptable for the handful of calls a
 // mutation proof needs; do not call it in a loop.
 import { randomUUID } from 'node:crypto'
-import request from 'supertest'
 import { afterEach, describe, expect, it } from 'vitest'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { hashPassword } from '@/utilities/password.utilities'
 import { issueToken } from '@/utilities/token.utilities'
 import { withMutatedModule } from '../../helpers/mutate'
+import { request } from '../../helpers/request'
 
 const userRepository = new UserRepository()
 const VALID_PASSWORD = 'correct horse battery staple'

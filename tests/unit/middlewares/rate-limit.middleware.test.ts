@@ -15,7 +15,7 @@ import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import express, { type Express, type RequestHandler } from 'express'
-import request from 'supertest'
+import type { Test } from 'supertest'
 import { describe, expect, it, vi } from 'vitest'
 import { errorHandler } from '@/middlewares/error.middleware'
 import {
@@ -29,6 +29,7 @@ import {
   createResetPasswordRateLimiter,
   RATE_LIMITED_CODE,
 } from '@/middlewares/rate-limit.middleware'
+import { request } from '../../helpers/request'
 
 vi.mock('@/services/redis.service', () => ({
   getRedis: vi.fn(() => Promise.reject(new Error('no redis in unit tests'))),
@@ -114,7 +115,7 @@ function buildAppBehindAsUser(limiter: RequestHandler): Express {
  * @param password - The password to submit. Defaults to a fixed wrong one — never checked by the stub handler.
  * @returns The supertest response.
  */
-function attempt(app: Express, email: string, password = 'wrong-password'): request.Test {
+function attempt(app: Express, email: string, password = 'wrong-password'): Test {
   return request(app).post('/login').send({ email, password })
 }
 

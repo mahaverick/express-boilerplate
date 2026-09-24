@@ -14,13 +14,14 @@
 // extraction, replay) have no use for that file's registration-specific
 // assertions.
 import { randomUUID } from 'node:crypto'
-import request from 'supertest'
+import type { Response, Test } from 'supertest'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
 import { REFRESH_REUSE_GRACE_MS, REFRESH_TOKEN_COOKIE_NAME } from '@/constants/auth.constants'
 import type { User } from '@/database/models/user.model'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
+import { request } from '../../helpers/request'
 
 const app = createApp()
 const userRepository = new UserRepository()
@@ -52,7 +53,7 @@ interface ApiEnvelope<TData> {
  * @param response - The supertest response.
  * @returns The response body, typed.
  */
-function envelopeOf<TData>(response: request.Response): ApiEnvelope<TData> {
+function envelopeOf<TData>(response: Response): ApiEnvelope<TData> {
   return response.body as ApiEnvelope<TData>
 }
 
@@ -65,7 +66,7 @@ function envelopeOf<TData>(response: request.Response): ApiEnvelope<TData> {
  * @param response - The supertest response.
  * @returns The `refreshToken=...` pair, or undefined if the cookie was not set.
  */
-function refreshCookiePair(response: request.Response): string | undefined {
+function refreshCookiePair(response: Response): string | undefined {
   const cookieLines = response.headers['set-cookie'] as string[] | undefined
   const line = cookieLines?.find((cookie) => cookie.startsWith(`${REFRESH_TOKEN_COOKIE_NAME}=`))
   return line?.split(';', 1)[0]
@@ -85,7 +86,7 @@ function refreshCookiePair(response: request.Response): string | undefined {
  */
 async function registerAndLogin(
   createdIds: string[]
-): Promise<{ response: request.Response; email: string; user: User }> {
+): Promise<{ response: Response; email: string; user: User }> {
   const email = uniqueEmail()
   await request(app).post('/api/v1/auth/register').send({ email, password: VALID_PASSWORD })
   const user = await userRepository.findByEmail(email)
@@ -391,7 +392,7 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
   describe('login rate limiting (end to end, against the real production limiter and real Redis)', () => {
     it('returns 429 after the configured number of attempts, with RateLimit-* headers', async () => {
       const email = uniqueEmail()
-      const attempt = (): request.Test =>
+      const attempt = (): Test =>
         request(app).post('/api/v1/auth/login').send({ email, password: 'wrong-password' })
 
       // The production limiter allows 5 attempts per 15 minutes

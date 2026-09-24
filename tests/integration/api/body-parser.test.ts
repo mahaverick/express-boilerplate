@@ -6,10 +6,10 @@
 // parser proves the handler now agrees with it. Body parsing runs before
 // routing, so POSTing to an existing path is enough — no route, database or
 // Redis is ever reached.
-import request from 'supertest'
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { createApp } from '@/app'
 import { logger } from '@/services/logger.service'
+import { request } from '../../helpers/request'
 
 const app = createApp()
 

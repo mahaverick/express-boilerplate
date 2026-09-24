@@ -331,7 +331,7 @@ describe('GET /api/v1/notifications/stream', () => {
     // file, not something to route through a shared helper that also tears
     // down the database/Redis/queue connections every other test file in
     // this worker still needs.
-    server = createApp().listen(0)
+    server = createApp().listen(0, '127.0.0.1')
     await new Promise<void>((resolve) => server.once('listening', resolve))
     const address = server.address() as AddressInfo
     baseUrl = `http://127.0.0.1:${address.port}`

@@ -60,7 +60,6 @@
 import { randomUUID } from 'node:crypto'
 import passport from 'passport'
 import type { Profile as GoogleProfile } from 'passport-google-oauth20'
-import request from 'supertest'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { createApp as CreateApp } from '@/app'
 import { GOOGLE_STRATEGY_NAME, REFRESH_TOKEN_COOKIE_NAME } from '@/constants/auth.constants'
@@ -69,6 +68,7 @@ import type { AuthProviderRepository as AuthProviderRepositoryClass } from '@/re
 import type { UserRepository as UserRepositoryClass } from '@/repositories/user.repository'
 import type { sql as SqlType } from '@/services/database.service'
 import type { issueRefreshToken as IssueRefreshTokenType } from '@/utilities/token.utilities'
+import { request } from '../../helpers/request'
 
 /**
  * The `state` query parameter off a Google OAuth redirect URL, if present.

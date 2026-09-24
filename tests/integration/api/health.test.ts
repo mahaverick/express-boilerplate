@@ -1,9 +1,9 @@
 // tests/integration/api/health.test.ts
 import express from 'express'
-import request from 'supertest'
 import { describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
 import { errorHandler, HttpError } from '@/middlewares/error.middleware'
+import { request } from '../../helpers/request'
 
 const app = createApp()
 

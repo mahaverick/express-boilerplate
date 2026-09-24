@@ -14,10 +14,10 @@
 // it fails by TIMING OUT, not by a mismatched assertion, if the strategy
 // is ever removed.
 import { createClient } from 'redis'
-import request from 'supertest'
 import { afterAll, describe, expect, it, vi } from 'vitest'
 import { createApp } from '@/app'
 import { closeRedis, getRedis, isRedisReachable } from '@/services/redis.service'
+import { request } from '../../helpers/request'
 
 // Wrapped, not replaced: counts how many clients getRedis() creates.
 vi.mock('redis', async (importOriginal) => {

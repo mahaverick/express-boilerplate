@@ -4,11 +4,11 @@
 // reaches `database.service.ts` at module scope — see CLAUDE.md on why that
 // makes a file integration regardless of what it asserts.
 import express from 'express'
-import request from 'supertest'
 import { describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
 import { getEnv, trustProxySetting } from '@/configs/env.config'
 import { gracefulShutdown, startServer } from '@/server'
+import { request } from '../helpers/request'
 
 describe('server lifecycle', () => {
   it('listens, then shuts down without leaving the socket open', async () => {

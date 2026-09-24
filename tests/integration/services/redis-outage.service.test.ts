@@ -10,7 +10,6 @@
 import { randomUUID } from 'node:crypto'
 import net from 'node:net'
 import express from 'express'
-import request from 'supertest'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { errorHandler } from '@/middlewares/error.middleware'
 import { createLoginRateLimiter } from '@/middlewares/rate-limit.middleware'
@@ -22,6 +21,7 @@ import {
   isQueueReachable,
 } from '@/services/queue.service'
 import { closeRedis, isRedisReachable } from '@/services/redis.service'
+import { request } from '../../helpers/request'
 
 // Longer than either client's pre-fix retry budget (node-redis ~600ms, ioredis ~1.2s).
 const OUTAGE_MS = 1500

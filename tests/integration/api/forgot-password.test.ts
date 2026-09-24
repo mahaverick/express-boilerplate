@@ -13,7 +13,7 @@
 import { randomUUID } from 'node:crypto'
 import type { Worker } from 'bullmq'
 import type { Profile as GoogleProfile } from 'passport-google-oauth20'
-import request from 'supertest'
+import type { Response } from 'supertest'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
 import { REFRESH_TOKEN_COOKIE_NAME } from '@/constants/auth.constants'
@@ -36,6 +36,7 @@ import {
   getMailpitMessage,
 } from '../../helpers/mailpit'
 import { withMutatedMethod } from '../../helpers/mutate'
+import { request } from '../../helpers/request'
 
 const app = createApp()
 const userRepository = new UserRepository()
@@ -106,7 +107,7 @@ interface ApiEnvelope<TData> {
  * @param response - The supertest response.
  * @returns The response body, typed.
  */
-function envelopeOf<TData>(response: request.Response): ApiEnvelope<TData> {
+function envelopeOf<TData>(response: Response): ApiEnvelope<TData> {
   return response.body as ApiEnvelope<TData>
 }
 
@@ -115,7 +116,7 @@ function envelopeOf<TData>(response: request.Response): ApiEnvelope<TData> {
  * @param email - The address to submit.
  * @returns The supertest response.
  */
-async function forgotPassword(email: string): Promise<request.Response> {
+async function forgotPassword(email: string): Promise<Response> {
   return request(app).post('/api/v1/auth/forgot-password').send({ email })
 }
 
@@ -125,7 +126,7 @@ async function forgotPassword(email: string): Promise<request.Response> {
  * @param password - The new password to set.
  * @returns The supertest response.
  */
-async function resetPassword(token: string, password: string): Promise<request.Response> {
+async function resetPassword(token: string, password: string): Promise<Response> {
   return request(app).post('/api/v1/auth/reset-password').send({ token, password })
 }
 
@@ -135,7 +136,7 @@ async function resetPassword(token: string, password: string): Promise<request.R
  * @param password - The password to log in with.
  * @returns The supertest response.
  */
-async function login(email: string, password: string): Promise<request.Response> {
+async function login(email: string, password: string): Promise<Response> {
   return request(app).post('/api/v1/auth/login').send({ email, password })
 }
 
@@ -147,7 +148,7 @@ async function login(email: string, password: string): Promise<request.Response>
  * @param response - The supertest response.
  * @returns The `refreshToken=...` pair, or undefined if the cookie was not set.
  */
-function refreshCookiePair(response: request.Response): string | undefined {
+function refreshCookiePair(response: Response): string | undefined {
   const cookieLines = response.headers['set-cookie'] as string[] | undefined
   const line = cookieLines?.find((cookie) => cookie.startsWith(`${REFRESH_TOKEN_COOKIE_NAME}=`))
   return line?.split(';', 1)[0]

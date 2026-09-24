@@ -22,7 +22,7 @@
 // including the user-keyed discriminator, is proven with small overrides in
 // tests/unit/middlewares/rate-limit.middleware.test.ts.
 import { randomUUID } from 'node:crypto'
-import request from 'supertest'
+import type { Response } from 'supertest'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
 import type { MembershipRole } from '@/constants/tenant.constants'
@@ -35,6 +35,7 @@ import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { signAccessToken } from '@/utilities/token.utilities'
 import { withMutatedMethod } from '../../helpers/mutate'
+import { request } from '../../helpers/request'
 
 const app = createApp()
 const tenantRepository = new TenantRepository()
@@ -60,7 +61,7 @@ interface ApiEnvelope<TData> {
  * @param response - The supertest response.
  * @returns The response body, typed.
  */
-function envelopeOf<TData>(response: request.Response): ApiEnvelope<TData> {
+function envelopeOf<TData>(response: Response): ApiEnvelope<TData> {
   return response.body as ApiEnvelope<TData>
 }
 

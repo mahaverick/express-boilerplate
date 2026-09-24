@@ -346,6 +346,9 @@ otel-collector`.** It is bind-mounted; `docker compose up -d` does not
   `check-file/filename-blocklist` rejects any `*.test.*`, `*.spec.*`,
   `__tests__/` or `src/tests/` file under `src/`, and vitest only collects
   `tests/**/*.test.ts`.
+- **HTTP tests use `request` from `tests/helpers/request`, never supertest
+  directly:** a `::` bind can share a port another process holds on
+  `127.0.0.1`, and the request then reaches that process. Lint enforces it.
 - **The suite runs with `LOG_LEVEL=silent`** (`.env.test` and the CI env
   block). Many tests drive deliberate failure paths — Redis down, SMTP
   failing, OAuth errors — and at `info` the logger buried the results under

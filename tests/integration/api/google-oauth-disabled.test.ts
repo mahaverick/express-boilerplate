@@ -19,9 +19,9 @@
 // `process.env` assignment behind. If that file is ever changed to mutate
 // `process.env` directly again, this file can start failing (or silently
 // stop testing what it claims to) purely from run order.
-import request from 'supertest'
 import { describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
+import { request } from '../../helpers/request'
 
 const app = createApp()
 
