@@ -2,8 +2,9 @@
 #
 # Optional install: `pre-commit install`. This is defense in depth, not the
 # blocking layer — a developer can skip it with `git commit --no-verify`.
-# The blocking layer is .github/workflows/gitleaks.yml, which runs on every
-# pull request regardless of what ran (or didn't) on the laptop.
+# The blocking layer is .github/workflows/gitleaks.yml, whose check runs on
+# every pull request regardless of what ran (or didn't) on the laptop. The
+# same workflow re-scans each push to main, which detects but cannot block.
 repos:
   # Pinned to a tagged release, not a floating tag — re-run this repo's own
   # history through it before bumping.
