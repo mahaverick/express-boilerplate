@@ -6,7 +6,7 @@
 //
 // RATE LIMITS are wiring, not thresholds. The preview (60 per 15 min) and
 // accept (20 per 15 min) limiters are keyed on IP, and every request here
-// comes from 127.0.0.1. This file makes 12 accept and 11 preview requests;
+// comes from 127.0.0.1. This file makes 13 accept and 18 preview requests;
 // keep accepts under 20 or the file throttles itself. Thresholds are proven
 // with small overrides in tests/unit/middlewares/rate-limit.middleware.test.ts.
 import { randomBytes, randomUUID } from 'node:crypto'
@@ -246,6 +246,7 @@ describe('invitations API', () => {
       expect(forUnregistered.status).toBe(202)
       expect(forRegistered.body).toStrictEqual(INVITATION_SENT)
       expect(forUnregistered.body).toStrictEqual(forRegistered.body)
+      expect(forUnregistered.text).toBe(forRegistered.text)
     })
 
     it.each([
@@ -409,6 +410,25 @@ describe('invitations API', () => {
       expect(body).not.toContain(hashToken(rawToken))
     })
 
+    it('lets an admin list them', async () => {
+      const { owner, tenant } = await setup()
+      const { user: admin, token: adminToken } = await createUser()
+      await userMembershipRepository.create({
+        userId: admin.id,
+        tenantId: tenant.id,
+        role: 'admin',
+      })
+      const { invitationId } = await seedInvitation(tenant, owner, { email: uniqueEmail() })
+
+      const response = await request(app)
+        .get(`/api/v1/tenants/${tenant.slug}/invitations`)
+        .set('Authorization', `Bearer ${adminToken}`)
+
+      expect(response.status).toBe(200)
+      const items = envelopeOf<Array<{ id: string }>>(response).data ?? []
+      expect(items.map((item) => item.id)).toEqual([invitationId])
+    })
+
     it('403s a viewer', async () => {
       const { tenant } = await setup()
       const { user: viewer, token: viewerToken } = await createUser()
@@ -468,27 +488,50 @@ describe('invitations API', () => {
       )
     })
 
-    it('blocks an admin from resending an owner-role invitation, and the link survives', async () => {
-      const { owner, tenant } = await setup()
-      const { user: admin, token: adminToken } = await createUser()
-      await userMembershipRepository.create({
-        userId: admin.id,
-        tenantId: tenant.id,
-        role: 'admin',
-      })
-      const { rawToken, invitationId } = await seedInvitation(tenant, owner, {
-        email: uniqueEmail(),
-        role: 'owner',
-      })
+    it.each<MembershipRole>(['owner', 'admin'])(
+      'blocks an admin from resending an %s-role invitation, and the link survives',
+      async (role) => {
+        const { owner, tenant } = await setup()
+        const { user: admin, token: adminToken } = await createUser()
+        await userMembershipRepository.create({
+          userId: admin.id,
+          tenantId: tenant.id,
+          role: 'admin',
+        })
+        const { rawToken, invitationId } = await seedInvitation(tenant, owner, {
+          email: uniqueEmail(),
+          role,
+        })
 
-      const response = await request(app)
-        .post(`/api/v1/tenants/${tenant.slug}/invitations/${invitationId}/resend`)
-        .set('Authorization', `Bearer ${adminToken}`)
+        const response = await request(app)
+          .post(`/api/v1/tenants/${tenant.slug}/invitations/${invitationId}/resend`)
+          .set('Authorization', `Bearer ${adminToken}`)
 
-      expect(response.status).toBe(403)
-      const survivor = await previewVia(rawToken)
-      expect(survivor.status).toBe(200)
-    })
+        expect(response.status).toBe(403)
+        const survivor = await previewVia(rawToken)
+        expect(survivor.status).toBe(200)
+      }
+    )
+
+    it.each<MembershipRole>(['manager', 'editor', 'viewer'])(
+      '403s a %s, and the link survives',
+      async (role) => {
+        const { owner, tenant } = await setup()
+        const { user: member, token: memberToken } = await createUser()
+        await userMembershipRepository.create({ userId: member.id, tenantId: tenant.id, role })
+        const { rawToken, invitationId } = await seedInvitation(tenant, owner, {
+          email: uniqueEmail(),
+        })
+
+        const response = await request(app)
+          .post(`/api/v1/tenants/${tenant.slug}/invitations/${invitationId}/resend`)
+          .set('Authorization', `Bearer ${memberToken}`)
+
+        expect(response.status).toBe(403)
+        const survivor = await previewVia(rawToken)
+        expect(survivor.status).toBe(200)
+      }
+    )
 
     it('404s an unknown invitation and 400s a malformed id', async () => {
       const { ownerToken, tenant } = await setup()
@@ -507,6 +550,26 @@ describe('invitations API', () => {
   })
 
   describe('DELETE /api/v1/tenants/:slug/invitations/:id', () => {
+    it.each<MembershipRole>(['manager', 'editor', 'viewer'])(
+      '403s a %s, and the link survives',
+      async (role) => {
+        const { owner, tenant } = await setup()
+        const { user: member, token: memberToken } = await createUser()
+        await userMembershipRepository.create({ userId: member.id, tenantId: tenant.id, role })
+        const { rawToken, invitationId } = await seedInvitation(tenant, owner, {
+          email: uniqueEmail(),
+        })
+
+        const response = await request(app)
+          .delete(`/api/v1/tenants/${tenant.slug}/invitations/${invitationId}`)
+          .set('Authorization', `Bearer ${memberToken}`)
+
+        expect(response.status).toBe(403)
+        const survivor = await previewVia(rawToken)
+        expect(survivor.status).toBe(200)
+      }
+    )
+
     it('revokes: the link stops previewing and accepting, and a second revoke 404s', async () => {
       const { owner, ownerToken, tenant } = await setup()
       const { user: invitee, token: inviteeToken } = await createUser()
@@ -608,6 +671,15 @@ describe('invitations API', () => {
       // A used link previews as invalid; the React page shows "invalid or expired".
       const usedPreview = await previewVia(rawToken)
       expect(usedPreview.body).toMatchObject(INVALID)
+    })
+
+    it('answers a malformed token with invitation_invalid', async () => {
+      const { token } = await createUser()
+
+      const response = await acceptVia('not-a-token', token)
+
+      expect(response.status).toBe(404)
+      expect(response.body).toMatchObject(INVALID)
     })
 
     it('401s without a bearer token', async () => {

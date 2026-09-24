@@ -674,8 +674,9 @@ export function createGoogleOAuthCallbackRateLimiter(
 // caller for `createInviteTenantMemberRateLimiter`, and merely an
 // authenticated caller for `createCreateTenantRateLimiter`): this is
 // volume protection against one account creating tenants or sending
-// invitation emails in a loop. Invite and resend share ONE instance of the
-// invite limiter (tenant.routes.ts), so together they spend one budget.
+// invitation emails in a loop. Invite and resend share one budget: Redis
+// merges them by prefix, and tenant.routes.ts mounts ONE instance on both so
+// the in-memory fallback, which counts per instance, keeps them merged too.
 const CREATE_TENANT_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000
 const CREATE_TENANT_RATE_LIMIT_MAX_ATTEMPTS = 20
 

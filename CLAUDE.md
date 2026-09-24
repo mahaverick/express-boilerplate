@@ -245,9 +245,13 @@ until you check.
   `TenantInvitationRepository.createPending` revokes the old pending row
   before it inserts. Remove that UPDATE and every re-invite after an expiry
   fails with a 409.
-- **Invite and resend share one limiter instance.** `createTenantRouter`
-  builds `createInviteTenantMemberRateLimiter()` once and mounts it on
-  both. Calling the factory per route gives each its own 30 per hour.
+- **Invite and resend share one 30-per-hour budget.** Under Redis they
+  merge by the `rl:invite-tenant-member:` prefix and the user-id key. On the
+  in-memory fallback each limiter instance counts alone, so
+  `createTenantRouter` builds `createInviteTenantMemberRateLimiter()` once
+  and mounts it on both (`tests/unit/routes/tenant.routes.test.ts` pins
+  this). Calling the factory per route would split the budget only while
+  Redis is down.
 - **The raw token is never in an API URL.** Preview and accept both take
   `{ token }` in a JSON body (`POST /invitations/preview`,
   `POST /invitations/accept`). The only URL that carries the token is the

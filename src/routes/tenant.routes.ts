@@ -25,9 +25,9 @@
 // THE RATE LIMITERS (`createCreateTenantRateLimiter`,
 // `createInviteTenantMemberRateLimiter`) run BEFORE `resolveTenant()`, so
 // an over-budget caller gets its 429 before `resolveTenant()`'s two
-// database reads. The invite limiter is built ONCE and mounted on both
-// invite and resend, so the two spend one budget; building it per route
-// would give each its own.
+// database reads. Invite and resend share the `rl:invite-tenant-member:`
+// budget: Redis merges them by prefix, and building the limiter ONCE keeps
+// them merged on the in-memory fallback too, where each instance counts alone.
 import { Router } from 'express'
 import {
   createTenant,
