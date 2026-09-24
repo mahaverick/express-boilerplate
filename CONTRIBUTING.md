@@ -154,11 +154,11 @@ missed:
   refuses to run on one. Put any explanation of a term's purpose here in
   this document, or in a commit message — never as a line in the terms
   file itself.
-- `gitleaks` (separate workflow, on every PR) — secret scanning. There is
-  also an optional local `pre-commit` hook for the same tool
-  (`pre-commit install`), which is defense in depth, not the enforcement
-  layer: a developer can skip it with `--no-verify`, but not the PR-level
-  check.
+- `gitleaks` (separate workflow, on every PR and every push to `main`) —
+  secret scanning. There is also an optional local `pre-commit` hook for
+  the same tool (`pre-commit install`), which is defense in depth, not the
+  enforcement layer: a developer can skip it with `--no-verify`, but not
+  the PR-level check.
 
 ## Secrets
 

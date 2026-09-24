@@ -727,7 +727,7 @@ Postgres's `22001` is not a unique violation and nothing translates it. A
 
 [`gitleaks`](https://github.com/gitleaks/gitleaks) runs as an optional local
 pre-commit hook (`.pre-commit-config.yaml`, `.gitleaks.toml`) and as a
-blocking check on every pull request
+blocking check on every pull request and every push to `main`
 (`.github/workflows/gitleaks.yml`). The local hook alone is not a gate — it
 is one `git commit --no-verify` away from being skipped — so the CI workflow
 is the actual enforcement layer; the pre-commit hook exists to catch a leak
