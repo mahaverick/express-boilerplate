@@ -103,6 +103,7 @@ export function createTenantRouter(): Router {
     inviteMember
   )
   // Takes no body; an absent Content-Type passes requireJsonContentType.
+  // Resend and revoke answer a non-UUID :id with 400 validation, not 404.
   router.post(
     '/:slug/invitations/:id/resend',
     requireJsonContentType,

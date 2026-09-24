@@ -546,10 +546,22 @@ describe('invitations API', () => {
       expect(unknown.status).toBe(404)
       expect(unknown.body).toMatchObject({ code: 'invitation_not_found' })
       expect(malformed.status).toBe(400)
+      expect(malformed.body).toMatchObject({ message: 'Validation failed' })
     })
   })
 
   describe('DELETE /api/v1/tenants/:slug/invitations/:id', () => {
+    it('400s a malformed id, not 404', async () => {
+      const { ownerToken, tenant } = await setup()
+
+      const malformed = await request(app)
+        .delete(`/api/v1/tenants/${tenant.slug}/invitations/not-a-uuid`)
+        .set('Authorization', `Bearer ${ownerToken}`)
+
+      expect(malformed.status).toBe(400)
+      expect(malformed.body).toMatchObject({ message: 'Validation failed' })
+    })
+
     it.each<MembershipRole>(['manager', 'editor', 'viewer'])(
       '403s a %s, and the link survives',
       async (role) => {

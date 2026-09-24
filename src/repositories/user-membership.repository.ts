@@ -156,7 +156,11 @@ export class UserMembershipRepository {
   }
 
   /**
-   * Add a member to a tenant.
+   * Add a member to a tenant, failing if they already belong to it.
+   *
+   * No application path calls this: members join through
+   * `createIfAbsent` (invitation accept), and tenant creation inserts its
+   * owner itself. Tests use it to set up memberships.
    *
    * Translates a 23505 on `(userId, tenantId)` into `HttpError(409)` rather
    * than letting the raw driver error escape — the same translation

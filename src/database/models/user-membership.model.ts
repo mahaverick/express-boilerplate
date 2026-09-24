@@ -65,11 +65,10 @@ export const userMembershipModel = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
-    // One role per tenant per user — the constraint
-    // `UserMembershipRepository.create` depends on translating a violation
-    // of into `HttpError(409)` (adding a user who is already a member),
-    // and what stops a user from accumulating two different roles in the
-    // same tenant.
+    // One role per tenant per user — the conflict target
+    // `UserMembershipRepository.createIfAbsent` relies on to keep an existing
+    // member's role, and what stops a user from accumulating two different
+    // roles in the same tenant.
     uniqueIndex('user_memberships_user_id_tenant_id_unique').on(table.userId, table.tenantId),
     // `listByTenant` (user-membership.repository.ts) filters on this
     // column alone across potentially many rows; not indexed automatically

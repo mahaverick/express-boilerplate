@@ -35,6 +35,7 @@ import type { Notification } from '@/database/models/notification.model'
 import type { User } from '@/database/models/user.model'
 import { ACCESS_TOKEN_EXPIRED_CODE } from '@/middlewares/auth.middleware'
 import { NotificationRepository } from '@/repositories/notification.repository'
+import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
@@ -50,14 +51,17 @@ import {
   offNotification,
   onNotification,
 } from '@/services/notification-emitter.service'
+import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
 import { getRedis } from '@/services/redis.service'
 import { denySession } from '@/services/session-denylist.service'
 import { signAccessToken } from '@/utilities/token.utilities'
+import { startNotificationWorker } from '@/workers/notification.worker'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { waitForNotificationSubscriber } from '../../helpers/notification-subscriber'
 
 const userRepository = new UserRepository()
 const notificationRepository = new NotificationRepository()
+const tenantRepository = new TenantRepository()
 const userTokenRepository = new UserTokenRepository()
 
 /**
@@ -356,6 +360,10 @@ describe('GET /api/v1/notifications/stream', () => {
   afterAll(async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()))
     await closeNotificationSubscriber()
+    // The invitation test's jobs: its Worker is closed by then, and nothing consumes the email.
+    await getEmailQueue().obliterate({ force: true })
+    await getNotificationQueue().obliterate({ force: true })
+    await closeQueue()
   })
 
   afterEach(async () => {
@@ -439,6 +447,61 @@ describe('GET /api/v1/notifications/stream', () => {
 
     return { stream, userId: user.id, sessionId }
   }
+
+  it('delivers a tenant invitation, via the notification worker, to the invitee’s open stream', async () => {
+    const owner = await userRepository.create({
+      email: uniqueEmail(),
+      firstName: 'Ada',
+      lastName: 'Lovelace',
+      emailVerifiedAt: new Date(),
+    })
+    createdUserIds.push(owner.id)
+    // Verified, so the invitation also notifies them in-app.
+    const invitee = await userRepository.create({
+      email: uniqueEmail(),
+      emailVerifiedAt: new Date(),
+    })
+    createdUserIds.push(invitee.id)
+    const tenant = await tenantRepository.create({
+      name: 'Acme Inc',
+      slug: `tenant-${randomUUID()}`,
+      ownerId: owner.id,
+    })
+    const worker = startNotificationWorker()
+    try {
+      const connection = openStream({
+        header: `Bearer ${signAccessToken(invitee, randomUUID())}`,
+      })
+      await connection.waitForResponse()
+
+      const invited = await fetch(`${baseUrl}/api/v1/tenants/${tenant.slug}/invitations`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${signAccessToken(owner, randomUUID())}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ email: invitee.email, role: 'editor' }),
+      })
+      expect(invited.status).toBe(202)
+
+      await waitUntil(
+        () => connection.frames.some((frame) => frame.event === 'notification'),
+        10_000
+      )
+      const frame = connection.frames.find((frame) => frame.event === 'notification')
+      const delivered = JSON.parse(frame?.data ?? 'null') as Record<string, unknown>
+      expect(delivered).toMatchObject({
+        type: 'tenant_invitation',
+        title: 'Invitation to Acme Inc',
+      })
+      // The frame carries no owner or metadata; the stored row does.
+      const row = await notificationRepository.findByIdAndUser(frame?.id ?? '', invitee.id)
+      expect(row?.metadata).toMatchObject({ tenantSlug: tenant.slug })
+    } finally {
+      await worker.close()
+      await sql`delete from tenants where id = ${tenant.id}`
+    }
+  })
 
   it('opens an SSE stream with the expected headers for a valid Bearer token', async () => {
     const { token } = await createAuthenticatedUser()

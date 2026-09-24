@@ -531,8 +531,11 @@ address directly and answered 404 for an unregistered one.
   frontend page the email links to. The API takes it only in JSON bodies:
   `POST /api/v1/invitations/preview` and `POST /api/v1/invitations/accept`.
   So HTTP tracing, which records request URLs, and proxy access logs never
-  see it on the API side. The API sends `Referrer-Policy: no-referrer`, so the
-  page's URL doesn't leak onward either. The token never appears in the
+  see it on the API side. The frontend serves the accept page with
+  `Referrer-Policy: no-referrer` (react-boilerplate's `nginx.conf`), so the
+  page's URL doesn't leak onward as a `Referer`. The API sends the same header
+  (helmet), but that covers only the API's own responses. The Vite dev server
+  sets no such header. The token never appears in the
   database, the in-app notification, the list response or the application
   log.
 - **Resend re-checks the grant matrix.** Resending re-issues the invitation's

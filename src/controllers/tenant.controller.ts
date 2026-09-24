@@ -473,7 +473,8 @@ export async function inviteMember(
  * Mail a pending invitation again with a new link; the old link stops
  * working. Owner/admin only, it shares the invite endpoint's limiter, and
  * `canActorGrantRole` is re-checked against the invitation's role. Takes
- * no body.
+ * no body. A `:id` that is not a UUID answers 400 validation, not 404
+ * `invitation_not_found`.
  * @param request - The incoming request, resolved to a tenant by `resolveTenant`, carrying `:id`.
  * @param response - The response.
  * @param next - Forwards a rejection to the terminal error handler.
@@ -500,7 +501,8 @@ export async function resendInvitation(
 }
 
 /**
- * Revoke a pending invitation. Owner/admin only.
+ * Revoke a pending invitation. Owner/admin only. A `:id` that is not a UUID
+ * answers 400 validation, not 404 `invitation_not_found`.
  * @param request - The incoming request, resolved to a tenant by `resolveTenant`, carrying `:id`.
  * @param response - The response.
  * @param next - Forwards a rejection to the terminal error handler.
