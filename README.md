@@ -330,7 +330,10 @@ calls `ci.yml` as a gate and, once it passes, builds and pushes
 provenance attestation. The `deploy` job itself is a placeholder — no
 deployment target has been chosen yet. A manual `workflow_dispatch` from
 another branch only pushes the sha-tagged image — the `:main` tag and the
-`deploy` job both run only from `main`.
+`deploy` job both run only from `main`. Releases are automatic: every `feat`
+or `fix` merge is released as `vX.Y.Z` within minutes and the image gains
+`:X.Y.Z`, `:X.Y` and `:X` tags (see [CONTRIBUTING.md](CONTRIBUTING.md#releases)
+— it needs the `RELEASE_PLEASE_TOKEN` secret).
 
 Two things need doing by hand, once, before any of this is live:
 

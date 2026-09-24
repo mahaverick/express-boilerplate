@@ -1,24 +1,46 @@
 name: Release
 
-# Opens/updates a release PR from conventional commits on main; merging that
-# PR tags vX.Y.Z and creates the GitHub Release. The PR is opened with
-# GITHUB_TOKEN, so it gets NO CI runs (GitHub never triggers workflows from
-# GITHUB_TOKEN events) — acceptable while main is unprotected; switch to a
-# GitHub App token once required checks exist.
+# Fully automatic releases. On every push to main, release-please opens or
+# updates a release PR (version bump + CHANGELOG + manifest) from the
+# conventional commits since the last release, and this workflow merges it
+# straight away. That merge is itself a push to main, so the next run tags
+# vX.Y.Z and publishes the GitHub Release; the tag push then makes deploy.yml
+# publish the semver image tags.
+#
+# RELEASE_PLEASE_TOKEN (a fine-grained PAT: Contents + Pull requests
+# read/write), not GITHUB_TOKEN: GitHub never starts workflows from events
+# GITHUB_TOKEN creates, so a GITHUB_TOKEN merge would never be tagged,
+# released or deployed. The same token also makes release PRs get CI runs.
+#
+# Merging without waiting for CI is deliberate: a release PR only touches
+# package.json's version, CHANGELOG.md and the manifest, and the merge push
+# still goes through deploy.yml's CI gate before any image is built.
 on:
   push:
     branches: [main]
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   release-please:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: googleapis/release-please-action@v5
+      - id: release
+        uses: googleapis/release-please-action@v5
         with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+      - name: Merge the release PR
+        if: steps.release.outputs.prs_created == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          PR_NUMBER: ${{ fromJSON(steps.release.outputs.pr).number }}
+        run: gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --squash --delete-branch
