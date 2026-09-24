@@ -121,21 +121,23 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Wait for the image main built for this commit
         # The tag is pushed while main's run for the same commit may still be
-        # building; 80 tries × 20s leaves room for setup inside the 30-minute timeout.
+        # building; 75 tries × 20s leaves room for setup inside the 30-minute timeout.
+        # A tag that isn't vX.Y.Z fails here, before any polling.
         run: |
-          for _ in $(seq 1 80); do
+          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::$VERSION is not a vX.Y.Z release tag"; exit 1; }
+          for _ in $(seq 1 75); do
             if docker buildx imagetools inspect "$SOURCE" >/dev/null 2>&1; then
               echo "Found $SOURCE"
               exit 0
             fi
             sleep 20
           done
-          echo "::error::$SOURCE did not appear after 80 tries (about 27 minutes)"
+          echo "::error::$SOURCE did not appear after 75 tries (about 25 minutes)"
           exit 1
       - name: Add the semver tags to that digest
         run: |
+          # VERSION was checked against vX.Y.Z by the wait step.
           v="${VERSION#v}"
-          [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::$VERSION is not a vX.Y.Z release tag"; exit 1; }
           want=$(docker buildx imagetools inspect "$SOURCE" --format '{{json .Manifest}}' | jq -r .digest)
           docker buildx imagetools create \
             --tag "$IMAGE:$v" --tag "$IMAGE:${v%.*}" --tag "$IMAGE:${v%%.*}" \

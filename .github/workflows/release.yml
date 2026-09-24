@@ -50,7 +50,15 @@ jobs:
             echo "No release PR to merge."
             exit 0
           fi
-          # GitHub refuses --auto on a PR that is already mergeable; the
-          # ruleset still enforces required checks on the direct merge.
+          # A later push to main while the PR is queued finds auto-merge
+          # already armed. Skip the merge below rather than re-run it: its
+          # fallback can fail on the pending checks and turn the run red.
+          if [ "$(gh pr view "$pr_number" --repo "$GITHUB_REPOSITORY" --json autoMergeRequest --jq '.autoMergeRequest != null')" = true ]; then
+            echo "Auto-merge already queued."
+            exit 0
+          fi
+          # The || runs whenever --auto is refused, for any reason. With
+          # main's ruleset (see the README's one-time setup), the direct merge still
+          # can't skip required checks; without it, it merges unchecked.
           gh pr merge "$pr_number" --repo "$GITHUB_REPOSITORY" --auto --squash --delete-branch \
             || gh pr merge "$pr_number" --repo "$GITHUB_REPOSITORY" --squash --delete-branch

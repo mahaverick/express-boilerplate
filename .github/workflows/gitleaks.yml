@@ -10,7 +10,9 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: gitleaks-${{ github.event_name }}-${{ github.ref }}
+  # PRs group by ref so a new push cancels the stale scan; pushes to main
+  # group by commit so a newer push can't drop a pending post-merge scan.
+  group: gitleaks-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
