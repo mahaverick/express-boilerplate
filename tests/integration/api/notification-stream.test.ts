@@ -994,6 +994,8 @@ describe('GET /api/v1/notifications/stream', () => {
         metadata: null,
         // eslint-disable-next-line unicorn/no-null -- see above
         readAt: null,
+        // eslint-disable-next-line unicorn/no-null -- see above
+        dedupeKey: null,
         createdAt: new Date(),
       })
     }

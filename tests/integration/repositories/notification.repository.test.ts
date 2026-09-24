@@ -80,6 +80,26 @@ describe('NotificationRepository', () => {
     createdUserIds.length = 0
   })
 
+  it('createOnce inserts once per dedupe key and returns undefined for the repeat', async () => {
+    const user = await userRepository.create({ email: uniqueEmail() })
+    createdUserIds.push(user.id)
+    const data = {
+      userId: user.id,
+      type: 'verify_email' as const,
+      title: 'Verify your email',
+      body: 'body',
+      dedupeKey: `notification-job-${randomUUID()}-1`,
+    }
+
+    const first = await notificationRepository.createOnce(data)
+    const second = await notificationRepository.createOnce(data)
+
+    expect(first?.dedupeKey).toBe(data.dedupeKey)
+    expect(second).toBeUndefined()
+    const { notifications } = await notificationRepository.list(user.id, { limit: 10 })
+    expect(notifications).toHaveLength(1)
+  })
+
   /**
    * A fresh user for a test to own notifications with, tracked for cleanup.
    * @returns The created user's id.

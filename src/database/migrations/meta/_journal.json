@@ -92,6 +92,13 @@
       "when": 1789629397325,
       "tag": "0012_typical_raider",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1790255296994,
+      "tag": "0013_hard_stick",
+      "breakpoints": true
     }
   ]
 }

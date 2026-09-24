@@ -14,18 +14,15 @@
 //     never calls `sendMail` directly, the same "go through the queue"
 //     convention CLAUDE.md documents for every other email send.
 //
-// THE TWO CHANNELS FAIL DIFFERENTLY, DELIBERATELY. An in-app insert failure
-// throws, so BullMQ's own `attempts`/`backoff` (`notificationJobDefaults`,
-// notification.job.ts) retries the whole job — the in-app row is this
-// worker's own durable side effect, with nothing else to retry it if this
-// job is marked complete without one. An email enqueue failure is instead
-// caught and logged: `addEmailJob` only writes to Redis (the "email" queue
-// itself), which has its own independent `attempts`/`backoff`
-// (`emailJobDefaults`, email.job.ts) once the job actually lands there — a
-// failure to enqueue in the first place is rare (a Redis blip) and retrying
-// the OUTER notification job over it would risk a duplicate in-app row (the
-// insert above already succeeded) for the sake of a channel with its own
-// retry mechanism already.
+// A FAILED CHANNEL FAILS THE JOB, AND A RETRY IS SAFE. The in-app insert is
+// keyed by `notification-job-<jobId>-<jobTimestamp>` (`createOnce`, ON
+// CONFLICT DO NOTHING), so a retry never inserts or emits a second row. The
+// email is enqueued with a matching BullMQ jobId, so a retry while that job
+// is still queued adds nothing. Enqueue failures therefore propagate and
+// BullMQ retries (`notificationJobDefaults`). `job.timestamp` is part of both
+// keys because job ids restart at 1 when the queue's Redis keys are flushed.
+// One gap is accepted: email jobs are removed on completion, so a retry after
+// the email was already sent can send it again.
 import { Worker, type Job } from 'bullmq'
 import { getEnv } from '@/configs/env.config'
 import { addEmailJob } from '@/jobs/email.job'
@@ -58,15 +55,36 @@ function metadataWithoutVariables(metadata: Record<string, unknown>): Record<str
 }
 
 /**
+ * The idempotency key for this job's in-app row. Stable across retries of
+ * one job; the timestamp keeps it unique if job ids restart.
+ * @param job - The notification job.
+ * @returns The `notifications.dedupe_key` value.
+ * @throws {Error} When the job has no id, which BullMQ never does for a processed job.
+ */
+function dedupeKeyFor(job: Job<NotificationJobData>): string {
+  if (job.id === undefined) throw new Error('Notification job has no id')
+  return `notification-job-${job.id}-${job.timestamp}`
+}
+
+/**
+ * The BullMQ jobId for this job's email. BullMQ rejects a custom id
+ * containing ':' (other than its own 3-part form), so this uses '-'.
+ * @param job - The notification job.
+ * @returns The email job id.
+ */
+function emailJobIdFor(job: Job<NotificationJobData>): string {
+  return `notification-email-${job.id ?? 'unknown'}-${job.timestamp}`
+}
+
+/**
  * Process one notification job: insert an in-app row when the `in_app`
  * channel is enabled for this user and type, and enqueue the paired email
  * when both an `email` payload is present on the job AND the `email`
  * channel is enabled. Exported for unit testing — see this file's own
- * header comment for why the two channels are handled so differently on
- * failure.
+ * header comment for why a failure in either channel fails the job.
  * @param job - The BullMQ job to process; `job.data` is a `NotificationJobData`.
- * @returns Resolves once both channels have been attempted; rejects (so BullMQ retries the whole job) only when the in-app insert itself fails.
- * @throws {Error} Whatever `NotificationRepository.create` throws — deliberately not caught, so BullMQ's own `attempts`/`backoff` (`notificationJobDefaults`, notification.job.ts) retries. Never thrown for an email-enqueue failure — see this file's header comment.
+ * @returns Resolves once both channels have been handled; rejects when either the insert or the email enqueue fails, so BullMQ retries.
+ * @throws {Error} Whatever `createOnce` or `addEmailJob` throws — not caught; retries are safe (see header).
  */
 export async function processNotificationJob(job: Job<NotificationJobData>): Promise<void> {
   const { userId, type, title, body, metadata, email } = job.data
@@ -80,15 +98,17 @@ export async function processNotificationJob(job: Job<NotificationJobData>): Pro
     // wants to omit must be left out of the object literal, the same
     // conditional-construction pattern `NotificationRepository.list` already
     // uses for `nextCursor` (notification.repository.ts).
+    const dedupeKey = dedupeKeyFor(job)
     const created = metadata
-      ? await notificationRepository.create({
+      ? await notificationRepository.createOnce({
           userId,
           type,
           title,
           body,
           metadata: metadataWithoutVariables(metadata),
+          dedupeKey,
         })
-      : await notificationRepository.create({ userId, type, title, body })
+      : await notificationRepository.createOnce({ userId, type, title, body, dedupeKey })
 
     // Fire only after the insert has actually committed — never before, and
     // never for a channel that is disabled — so an SSE connection can never
@@ -99,22 +119,23 @@ export async function processNotificationJob(job: Job<NotificationJobData>): Pro
     // a connection with nothing subscribed just misses it, the same as any
     // other client that was not listening at the time.
     //
-    // Caught, not left to propagate — same "the insert already committed,
-    // so nothing after it may fail the job" reasoning this file's header
-    // comment gives for the email channel. `EventEmitter#emit` runs every
+    // Caught, not left to propagate: the row is already committed, and a
+    // listener's throw is not a reason to retry. `EventEmitter#emit` runs every
     // subscribed SSE connection's listener synchronously and re-throws
     // whatever the first one throws; an uncaught throw here would reject
-    // this job and BullMQ would retry the WHOLE thing, producing a second
-    // in-app row for a failure that has nothing to do with the insert that
-    // already succeeded.
-    try {
-      emitNotification(userId, created)
-    } catch (error) {
-      logger.error('Failed to publish notification to the SSE emitter', {
-        error: redactedForLog(error),
-        notificationId: created.id,
-        type,
-      })
+    // this job and BullMQ would retry the whole thing for a failure that
+    // has nothing to do with the insert that already succeeded.
+    // undefined: a retry, and this row was already inserted and emitted.
+    if (created) {
+      try {
+        emitNotification(userId, created)
+      } catch (error) {
+        logger.error('Failed to publish notification to the SSE emitter', {
+          error: redactedForLog(error),
+          notificationId: created.id,
+          type,
+        })
+      }
     }
   }
 
@@ -123,18 +144,8 @@ export async function processNotificationJob(job: Job<NotificationJobData>): Pro
   const isEmailEnabled = await preferenceRepository.isChannelEnabled(userId, type, 'email')
   if (!isEmailEnabled) return
 
-  try {
-    // `email` is `MailMessage` — email.job.ts's own discriminated union
-    // — passed straight through with zero casts, per task-2-brief.md's
-    // own design decision.
-    await addEmailJob(email, userId)
-  } catch (error) {
-    logger.error('Failed to enqueue email from notification worker', {
-      error,
-      jobId: job.id,
-      type,
-    })
-  }
+  // Propagates on failure so BullMQ retries; see this file's header.
+  await addEmailJob(email, userId, { jobId: emailJobIdFor(job) })
 }
 
 /**
@@ -157,14 +168,15 @@ export function startNotificationWorker(): Worker<NotificationJobData> {
     // redactedForLog, not the raw error: unlike email.worker.ts's own
     // `failed` handler (processEmailJob only ever throws a plain `Error` it
     // constructs itself), the retry path here can fail with whatever
-    // `NotificationRepository.create` propagates — a real
+    // `NotificationRepository.createOnce` propagates — a real
     // `DrizzleQueryError`, which carries enumerable `query`/`params`
     // (CLAUDE.md's own "never log bound query parameters" rule, already
     // applied for the identical reason in mailer.service.ts's
     // `recordDelivery`). Nothing here is a raw token — `metadataWithoutVariables`
-    // already stripped `variables` before the insert this error came from —
-    // but the bound params still include title/body/userId, and this is the
-    // one place in this file they could otherwise reach the log stream.
+    // already stripped `variables` before the insert — but the bound params
+    // still include title/body/userId. An `addEmailJob` rejection also lands
+    // here; the logger keeps only name/message/stack of an Error, so an
+    // ioredis reply error's `command.args` (the job, with its token) is dropped.
     logger.error('Notification job failed', {
       jobId: job?.id,
       type: job?.data.type,

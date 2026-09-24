@@ -24,6 +24,7 @@ import {
   primaryKey,
   text,
   timestamp,
+  uniqueIndex,
   varchar,
 } from 'drizzle-orm/pg-core'
 import type { NotificationType } from '@/constants/notification.constants'
@@ -80,6 +81,11 @@ export const notificationModel = pgTable(
     // Precision 3 — see this table's own header comment for why this
     // column specifically cannot use the bare (microsecond) default.
     createdAt: timestamp('created_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
+    // Idempotency key for the producer that wrote this row: the notification
+    // worker sets `notification-job-<jobId>-<jobTimestamp>`, so a retried job
+    // cannot insert twice. Null for rows with no such producer; Postgres
+    // unique indexes treat nulls as distinct.
+    dedupeKey: varchar('dedupe_key', { length: 128 }),
   },
   (table) => [
     // Supports NotificationRepository.list's keyset pagination query:
@@ -90,6 +96,7 @@ export const notificationModel = pgTable(
     // millisecond, e.g. a worker burst), and without `id` in the index a
     // cursor built from one such row could not reliably resume after it.
     index('notifications_user_created_idx').on(table.userId, table.createdAt, table.id),
+    uniqueIndex('notifications_dedupe_key_unique').on(table.dedupeKey),
   ]
 )
 
