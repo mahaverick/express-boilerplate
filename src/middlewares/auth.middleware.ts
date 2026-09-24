@@ -2,10 +2,11 @@
 //
 // requireAuth is the gate every protected route sits behind. It does three
 // things that are deliberately kept as separate steps inside one exported
-// middleware, not several exported middlewares — a later plan (MFA step-up,
-// tenant scoping) composes by reading `request.user` AFTER requireAuth has
-// run, not by re-running part of this one, so there is no seam worth
-// exporting yet:
+// middleware, not several exported middlewares — tenant scoping
+// (`resolveTenant()`, tenant.middleware.ts) already composes this way,
+// reading `request.user` AFTER requireAuth has run rather than re-running
+// part of this one, and a future MFA step-up would compose the same way, so
+// there is no seam worth exporting yet:
 //
 //   1. Verify the bearer token's signature — delegated entirely to
 //      `verifyAccessToken` (token.utilities.ts), the one place that knows
