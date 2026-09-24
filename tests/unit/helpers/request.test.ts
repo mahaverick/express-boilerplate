@@ -20,6 +20,21 @@ describe('request helper', () => {
     vi.restoreAllMocks()
   })
 
+  // First in the file: Node emits each deprecation once per process.
+  it('binds without a DEP0208 deprecation warning for Server#_listen2', async () => {
+    const emitWarning = vi.spyOn(process, 'emitWarning')
+
+    await request(echoLocalAddress).get('/')
+
+    // Node's deprecate() uses the positional form (warning, type, code); also read { code }.
+    const codes = emitWarning.mock.calls.flatMap((call) => {
+      const [, second, third] = call as unknown[]
+      const optionsCode = (second as { code?: unknown } | undefined)?.code
+      return [optionsCode, third]
+    })
+    expect(codes).not.toContain('DEP0208')
+  })
+
   it('binds the server supertest starts to 127.0.0.1, not ::', async () => {
     const response = await request(echoLocalAddress).get('/')
 

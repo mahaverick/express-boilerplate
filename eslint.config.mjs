@@ -359,7 +359,7 @@ export default tseslint.config(
           paths: [
             {
               name: 'supertest',
-              importNames: ['default'],
+              importNames: ['default', 'agent'],
               message:
                 'Use `request` from tests/helpers/request: it binds 127.0.0.1 (see that file).',
             },
