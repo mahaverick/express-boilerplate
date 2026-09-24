@@ -376,10 +376,19 @@ is per-process only.
   a victim's address lock that victim out of their own account: submit
   wrong passwords against someone else's email from anywhere, and the real
   owner starts seeing 429s too — a free denial-of-service needing no
-  credentials of the attacker's own. IP alone is bypassed by a distributed
-  attacker (many source IPs, one target account), since every IP would
-  carry its own independent counter. The key is built from the raw request
-  body before validation, and never checks whether the submitted email
+  credentials of the attacker's own. IP alone, at a limit this tight,
+  would have everyone behind one NAT'd address share five attempts. The
+  composite does **not** stop a distributed attacker (many source IPs, one
+  target account): each (IP, email) pair gets its own counter. Two more
+  limiters sit behind it, in this order: **per-IP** (`rl:login-ip:`, 100
+  attempts per 15 minutes across every email — one IP spraying many
+  accounts) and **per-account** (`rl:login-account:`, 100 attempts per hour
+  against one normalised email from every IP — the distributed case). The
+  per-account limit is high on purpose: an attacker who knows an address
+  can still lock its owner out, but it costs 100 attempts an hour. Attempts
+  the ip+email limiter already rejected never reach the other two, so they
+  spend neither budget. The email in each key is read from the raw request
+  body before validation, and no limiter checks whether the submitted email
   belongs to a real account, so the number of attempts before a 429 cannot
   be used to probe which addresses are registered — that would reopen the
   exact enumeration channel closed above.

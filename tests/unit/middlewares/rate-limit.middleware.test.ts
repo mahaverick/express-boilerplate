@@ -23,6 +23,8 @@ import {
   createCreateTenantRateLimiter,
   createForgotPasswordEmailRateLimiter,
   createForgotPasswordIpRateLimiter,
+  createLoginAccountRateLimiter,
+  createLoginIpRateLimiter,
   createLoginRateLimiter,
   createLogoutRateLimiter,
   createRegisterRateLimiter,
@@ -190,6 +192,77 @@ describe('createLoginRateLimiter', () => {
 
     expect(first.status).toBe(401)
     expect(second.status).toBe(429)
+  })
+})
+
+describe('createLoginIpRateLimiter', () => {
+  it('returns 429 once one IP spends its budget, even with a different email every time', async () => {
+    const app = buildAppBehind(createLoginIpRateLimiter({ limit: 3, windowMs: 60_000 }))
+
+    for (let index = 0; index < 3; index += 1) {
+      const allowed = await request(app)
+        .post('/endpoint')
+        .send({ email: `user-${index}@example.com` })
+      expect(allowed.status).toBe(201)
+    }
+    const limited = await request(app).post('/endpoint').send({ email: 'user-3@example.com' })
+
+    expect(limited.status).toBe(429)
+    expect(limited.body).toMatchObject({ success: false, code: RATE_LIMITED_CODE })
+  })
+})
+
+/**
+ * The account limiter behind a proxy-aware bare app, so each request can
+ * claim its own client IP via X-Forwarded-For. 'loopback' trusts exactly
+ * supertest's 127.0.0.1 hop; `true` would trip express-rate-limit's
+ * permissive-trust-proxy validation.
+ * @param limit - Max attempts per window.
+ * @returns The app.
+ */
+function buildAccountLimitedApp(limit: number): Express {
+  const app = buildAppBehind(createLoginAccountRateLimiter({ limit, windowMs: 60_000 }))
+  app.set('trust proxy', 'loopback')
+  return app
+}
+
+describe('createLoginAccountRateLimiter', () => {
+  it('returns 429 once one account is guessed at from many different IPs', async () => {
+    const app = buildAccountLimitedApp(3)
+
+    for (let index = 0; index < 3; index += 1) {
+      const allowed = await request(app)
+        .post('/endpoint')
+        .set('X-Forwarded-For', `203.0.113.${index + 1}`)
+        .send({ email: 'Victim@Example.com' })
+      expect(allowed.status).toBe(201)
+    }
+    const limited = await request(app)
+      .post('/endpoint')
+      .set('X-Forwarded-For', '203.0.113.99')
+      .send({ email: 'victim@example.com' })
+
+    expect(limited.status).toBe(429)
+    expect(limited.body).toMatchObject({ success: false, code: RATE_LIMITED_CODE })
+
+    // Another account is unaffected.
+    const bystander = await request(app)
+      .post('/endpoint')
+      .set('X-Forwarded-For', '203.0.113.99')
+      .send({ email: 'someone-else@example.com' })
+    expect(bystander.status).toBe(201)
+  })
+})
+
+describe('POST /login wiring', () => {
+  it('mounts the ip+email, per-IP and per-account limiters, in that order, before login', () => {
+    // Asserted against the committed route file, the same way `store
+    // prefixes` below guards the prefixes: a built router does not expose
+    // which limiter factories produced its middleware.
+    const routes = fs.readFileSync(path.resolve(process.cwd(), 'src/routes/auth.routes.ts'), 'utf8')
+    expect(routes).toMatch(
+      /router\.post\(\s*'\/login',\s*createLoginRateLimiter\(\),\s*createLoginIpRateLimiter\(\),\s*createLoginAccountRateLimiter\(\),\s*login\s*\)/
+    )
   })
 })
 
@@ -422,6 +495,8 @@ describe('store prefixes', () => {
     expect(prefixes).toEqual([
       'rl:register:',
       'rl:login:',
+      'rl:login-ip:',
+      'rl:login-account:',
       'rl:refresh:',
       'rl:logout:',
       'rl:verify-email:',

@@ -1,7 +1,8 @@
 // src/middlewares/rate-limit.middleware.ts
 //
-// Fifteen limiters: `createRegisterRateLimiter`, `createLoginRateLimiter`,
-// `createRefreshRateLimiter`, `createLogoutRateLimiter`,
+// Seventeen limiters: `createRegisterRateLimiter`, the three login ones
+// (`createLoginRateLimiter`, `createLoginIpRateLimiter`,
+// `createLoginAccountRateLimiter`), `createRefreshRateLimiter`, `createLogoutRateLimiter`,
 // `createVerifyEmailRateLimiter`, `createResetPasswordRateLimiter`,
 // `createGoogleOAuthRateLimiter`, `createGoogleOAuthCallbackRateLimiter`,
 // `createCreateTenantRateLimiter`, `createAddTenantMemberRateLimiter`,
@@ -125,13 +126,14 @@
 // that would reopen exactly the user-enumeration channel auth.controller.ts
 // closes for the login response itself (see that file's header comment).
 //
-// The gap this leaves OPEN, deliberately: a large botnet spread across many
-// IPs can still accumulate many attempts against ONE victim email, because
-// each (ip, email) pair is independent. Closing that needs a SECOND,
-// email-only limiter layered on top — which reintroduces the lock-out-by-
-// guessing-an-address risk above unless it fails soft (CAPTCHA, backoff
-// communicated only to the account's own verified channels, etc.). Out of
-// this task's scope.
+// Two more limiters sit behind it on /login (auth.routes.ts, in this order):
+// per-IP (100 / 15 min, one IP spraying many emails) and per-account (100 /
+// 1 h, many IPs guessing one email). The per-account limit is high on
+// purpose: an attacker who knows an address can still lock its owner out,
+// but it costs 100 attempts an hour. Attempts the tighter ip+email limiter
+// already rejected never reach the other two, so blocked attempts do not
+// spend the victim's account budget. Neither limiter consults the database,
+// so a 429 still says nothing about whether an account exists.
 //
 // REFRESH is keyed on IP alone, and is volume/abuse protection, not a
 // defence against a stolen token: a raw refresh token is a 256-bit random
@@ -172,6 +174,12 @@ const REGISTER_RATE_LIMIT_MAX_ATTEMPTS = 100
 
 const LOGIN_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000
 const LOGIN_RATE_LIMIT_MAX_ATTEMPTS = 5
+
+const LOGIN_IP_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000
+const LOGIN_IP_RATE_LIMIT_MAX_ATTEMPTS = 100
+
+const LOGIN_ACCOUNT_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000
+const LOGIN_ACCOUNT_RATE_LIMIT_MAX_ATTEMPTS = 100
 
 // Generous on purpose — see this file's header comment on why the refresh
 // limiter is not a security boundary. High enough that no realistic client
@@ -220,6 +228,23 @@ function submittedEmail(request: Request): string {
  */
 function loginRateLimitKey(request: Request): string {
   return `${ipKeyGenerator(request.ip ?? 'unknown')}:${submittedEmail(request)}`
+}
+
+/**
+ * The key an email-keyed limiter counts attempts by: the submitted address
+ * ALONE — deliberately not composed with IP the way `loginRateLimitKey` is.
+ * A composite key here would make the per-address budget actually
+ * per-address-PER-IP, which bounds nothing: a distributed attacker gets a
+ * fresh counter on every source IP against the same victim address,
+ * defeating the one thing this limiter exists to cap. Shared by
+ * `createLoginAccountRateLimiter`, `createResendVerificationEmailRateLimiter`
+ * and `createForgotPasswordEmailRateLimiter`, so the key logic has exactly
+ * one implementation rather than one per endpoint.
+ * @param request - The incoming request.
+ * @returns The submitted, normalised email — or an empty string when the body carries none, a case the IP-keyed limiter beside it still bounds regardless.
+ */
+function submittedEmailRateLimitKey(request: Request): string {
+  return submittedEmail(request)
 }
 
 /**
@@ -279,6 +304,52 @@ export function createLoginRateLimiter(overrides: Partial<Options> = {}): RateLi
     legacyHeaders: false,
     store: new SharedRateLimitStore('rl:login:'),
     keyGenerator: loginRateLimitKey,
+    handler: sendRateLimitedResponse,
+    ...overrides,
+  })
+}
+
+/**
+ * Build the per-IP login limiter: `limit` attempts per `windowMs` from one
+ * IP across every email. Stops one IP spraying many accounts (credential
+ * stuffing), which the ip+email limiter cannot see. A factory, not a
+ * module-scope constant — see this file's header comment.
+ * @param overrides - Options to override, e.g. a small `limit`/`windowMs` for a test.
+ * @returns Express middleware enforcing the limit.
+ */
+export function createLoginIpRateLimiter(
+  overrides: Partial<Options> = {}
+): RateLimitRequestHandler {
+  return rateLimit({
+    windowMs: LOGIN_IP_RATE_LIMIT_WINDOW_MS,
+    limit: LOGIN_IP_RATE_LIMIT_MAX_ATTEMPTS,
+    standardHeaders: true,
+    legacyHeaders: false,
+    store: new SharedRateLimitStore('rl:login-ip:'),
+    handler: sendRateLimitedResponse,
+    ...overrides,
+  })
+}
+
+/**
+ * Build the per-account login limiter: `limit` attempts per `windowMs`
+ * against one normalised email from every IP. Stops distributed guessing;
+ * the limit is high so locking a victim out costs an attacker 100
+ * attempts an hour. A factory, not a module-scope constant — see this
+ * file's header comment.
+ * @param overrides - Options to override, e.g. a small `limit`/`windowMs` for a test.
+ * @returns Express middleware enforcing the limit.
+ */
+export function createLoginAccountRateLimiter(
+  overrides: Partial<Options> = {}
+): RateLimitRequestHandler {
+  return rateLimit({
+    windowMs: LOGIN_ACCOUNT_RATE_LIMIT_WINDOW_MS,
+    limit: LOGIN_ACCOUNT_RATE_LIMIT_MAX_ATTEMPTS,
+    standardHeaders: true,
+    legacyHeaders: false,
+    store: new SharedRateLimitStore('rl:login-account:'),
+    keyGenerator: submittedEmailRateLimitKey,
     handler: sendRateLimitedResponse,
     ...overrides,
   })
@@ -364,24 +435,6 @@ const RESEND_VERIFICATION_IP_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000
 const RESEND_VERIFICATION_IP_RATE_LIMIT_MAX_ATTEMPTS = 5
 const RESEND_VERIFICATION_EMAIL_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000
 const RESEND_VERIFICATION_EMAIL_RATE_LIMIT_MAX_ATTEMPTS = 20
-
-/**
- * The key an email-keyed limiter counts attempts by: the submitted address
- * ALONE — deliberately not composed with IP the way `loginRateLimitKey` is.
- * A composite key here would make the per-address budget actually
- * per-address-PER-IP, which bounds nothing: a distributed attacker gets a
- * fresh counter on every source IP against the same victim address,
- * defeating the one thing this limiter exists to cap. Shared by
- * `createResendVerificationEmailRateLimiter` and
- * `createForgotPasswordEmailRateLimiter` — both endpoints face the identical
- * mail-amplification shape (this file's header comment), so the key logic
- * has exactly one implementation rather than one per endpoint.
- * @param request - The incoming request.
- * @returns The submitted, normalised email — or an empty string when the body carries none, a case the IP-keyed limiter above still bounds regardless.
- */
-function submittedEmailRateLimitKey(request: Request): string {
-  return submittedEmail(request)
-}
 
 /**
  * Build the IP-keyed resend-verification limiter: `limit` attempts per
