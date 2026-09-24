@@ -109,10 +109,11 @@ describe('refresh token issuance, rotation, and revocation', () => {
     // shape (not just `payload`) proves acceptance, not merely that a
     // payload-shaped object came back. `sid`/`jti` are now part of that
     // shape (token.utilities.ts's signAccessToken) — `jti` is asserted only
-    // as ANY_STRING since its value is random by design.
+    // as ANY_STRING since its value is random by design. `exp` must be the
+    // token's own signed expiry, which the notification stream ends at.
     expect(verifyAccessToken(token)).toEqual({
       ok: true,
-      payload: { sub: user.id, sid: sessionId, jti: ANY_STRING },
+      payload: { sub: user.id, sid: sessionId, jti: ANY_STRING, exp: decoded.exp },
     })
   })
 
