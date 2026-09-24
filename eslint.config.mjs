@@ -295,12 +295,12 @@ export default tseslint.config(
   },
   {
     // Root-level flat configs (eslint.config.mjs, prettier.config.mjs,
-    // vitest.config.ts, commitlint.config.js) sit outside
+    // vitest.config.ts, vitest.unit.config.ts, commitlint.config.js) sit outside
     // tsconfig.typecheck.json's "src/**/*" / "tests/**/*" include, so the
     // type-aware project cannot parse them. Lint them syntactically only.
     // Listed explicitly (not "*.config.ts") so this does not accidentally
     // widen to src/configs/**/*.config.ts, which must stay type-checked.
-    files: ['**/*.mjs', 'vitest.config.ts', 'commitlint.config.js'],
+    files: ['**/*.mjs', 'vitest.config.ts', 'vitest.unit.config.ts', 'commitlint.config.js'],
     extends: [tseslint.configs.disableTypeChecked],
   },
   {

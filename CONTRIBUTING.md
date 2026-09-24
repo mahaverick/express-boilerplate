@@ -38,23 +38,19 @@ existing.
 - **`pre-commit`** (~4.6s on a one-file change): checks the lockfile isn't
   stale, runs `lint-staged` (eslint --fix + prettier on staged files),
   regenerates `.env.example` if `env.config.ts` is staged, then runs
-  `vitest run --changed HEAD` **excluding** `tests/integration/**`. About
-  70% of the time is ESLint's type-aware cold start (building the
-  TypeScript program) — it is not worth removing; see CLAUDE.md for why.
-  Integration tests are excluded here specifically because
-  `--changed HEAD` fans out along the import graph: editing a
-  widely-imported file (a service, a response utility) pulls integration
-  tests in even when Docker is down, which hangs on a health probe and
-  then fails the commit outright. A hook that fails when Docker happens to
-  be down gets disabled with `--no-verify` permanently and protects
-  nothing from then on.
+  `vitest run --changed HEAD` against `vitest.unit.config.ts`, which
+  excludes `tests/integration/**` and skips the database setup, so it runs
+  with Docker down. About 70% of the time is ESLint's type-aware cold start
+  (building the TypeScript program). It is not worth removing; see CLAUDE.md
+  for why. A hook that fails when Docker happens to be down gets disabled
+  with `--no-verify` permanently, and then it protects nothing.
 - **`commit-msg`**: runs `commitlint` against
   [Conventional Commits](https://www.conventionalcommits.org/). Use
   `pnpm commit` for an interactive prompt if you don't want to remember the
   format by hand.
-- **`pre-push`**: runs the full `pnpm lint` and `pnpm test:coverage`,
-  including integration tests. This is where Docker being up is a fair
-  expectation to enforce.
+- **`pre-push`**: runs `pnpm lint` (ESLint and typecheck) and
+  `pnpm test:unit`, with no Docker needed. Integration tests and the
+  coverage gate run in CI, which main requires.
 
 ## Commit messages
 

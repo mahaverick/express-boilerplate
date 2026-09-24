@@ -341,15 +341,17 @@ otel-collector`.** It is bind-mounted; `docker compose up -d` does not
   — the dominant real-bug class in async Express code. `eslint --cache`
   does **not** help here: `lint-staged` only ever passes the files you
   changed, so the cache never has a hit to give.
-- **Pre-commit deliberately excludes `tests/integration/**`.** Those need
-  the Docker compose stack up, and `vitest --changed HEAD` fans out along
-  the import graph — editing a widely-imported file (a service, a response
-  utility) pulls integration tests in even when Docker is down, which
-  measured at 20s+ hung on a health probe before failing the commit
-  outright. A hook that fails whenever Docker happens to be down gets
-  disabled with `--no-verify` permanently and never comes back — which
-  protects nothing. `pre-push` runs the full suite via `test:coverage`,
-  where Docker being up is a fair expectation. **The exclusion is by path
+- **Both hooks run unit tests only, via `vitest.unit.config.ts`, and
+  need no Docker.** That config drops `tests/integration/**` and the base
+  config's `globalSetup`, which creates and migrates the per-worker Postgres
+  databases and fails outright when Postgres is down, even on a unit-only
+  run. `vitest --changed HEAD` fans out along the import graph, so without
+  the exclusion, editing a widely-imported file (a service, a response
+  utility) pulls integration tests into pre-commit. A hook that fails
+  whenever Docker happens to be down gets disabled with `--no-verify`
+  permanently, and then it protects nothing. `pre-push` runs `pnpm lint`
+  (ESLint and typecheck) and `pnpm test:unit`. Integration tests and the
+  coverage gate run in CI, which main requires. **The exclusion is by path
   only, not by what a test actually touches** — so a test that hits the
   real database or Redis MUST live under `tests/integration/`, never
   `tests/unit/`, regardless of what else is colocated there. This bit
