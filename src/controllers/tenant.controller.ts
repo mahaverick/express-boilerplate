@@ -133,7 +133,7 @@ function targetUserIdParameter(request: Request): string {
  * tenant-membership.service.ts, inside a transaction that locks the
  * tenant's owners, so two owners leaving at once cannot both pass it.
  * @param actorRole - The caller's role in this tenant.
- * @param targetRole - The target member's CURRENT role.
+ * @param targetRole - The target member's CURRENT role, as read under the owner lock.
  * @param isSelf - Whether the actor and the target are the same user.
  * @returns True when `actorRole` may act on a member currently holding `targetRole`.
  */
@@ -393,7 +393,7 @@ export async function addMember(
  * (`requireRole('owner')`, tenant.routes.ts) — so `principal.role` is
  * always `'owner'` by the time this handler runs, and `canActorModifyTarget`
  * below therefore only ever evaluates its owner row. Kept as a real call
- * (not inlined as `targetMembership.role !== 'owner' ||
+ * (not inlined as `target.role !== 'owner' ||
  * targetUserId === actorUserId`) so this handler and `removeMember` share
  * one definition of the matrix rather than two copies that could drift.
  * @param request - The incoming request, resolved to a tenant by `resolveTenant`, carrying `{ role }`.
@@ -410,23 +410,15 @@ export async function updateMemberRole(
     const actorUserId = authenticatedUserId(request)
     const targetUserId = targetUserIdParameter(request)
     const input = parseBody(updateMemberRoleSchema, request.body)
-
-    const targetMembership = await userMembershipRepository.findByUserAndTenant(
-      targetUserId,
-      principal.tenantId
-    )
-    if (!targetMembership) {
-      throw new HttpError('Member not found', 404)
-    }
-
     const isSelf = targetUserId === actorUserId
-    if (!canActorModifyTarget(principal.role, targetMembership.role, isSelf)) {
-      throw new HttpError("Insufficient permissions to change this member's role", 403)
-    }
 
-    // The last-owner guard runs inside the service's transaction, under a
-    // lock on the tenant's owners; see tenant-membership.service.ts.
-    const updated = await changeRole(principal.tenantId, targetUserId, input.role)
+    // The matrix and the last-owner guard both run inside the service's
+    // transaction, on the target as read under the owner lock.
+    const updated = await changeRole(principal.tenantId, targetUserId, input.role, (target) => {
+      if (!canActorModifyTarget(principal.role, target.role, isSelf)) {
+        throw new HttpError("Insufficient permissions to change this member's role", 403)
+      }
+    })
     successResponse(response, updated, 'Member role updated.')
   } catch (error) {
     next(error)
@@ -453,22 +445,14 @@ export async function removeMember(
     const principal = tenantPrincipal(request)
     const actorUserId = authenticatedUserId(request)
     const targetUserId = targetUserIdParameter(request)
-
-    const targetMembership = await userMembershipRepository.findByUserAndTenant(
-      targetUserId,
-      principal.tenantId
-    )
-    if (!targetMembership) {
-      throw new HttpError('Member not found', 404)
-    }
-
     const isSelf = targetUserId === actorUserId
-    if (!canActorModifyTarget(principal.role, targetMembership.role, isSelf)) {
-      throw new HttpError('Insufficient permissions to remove this member', 403)
-    }
 
-    // Last-owner guard and delete run atomically in the service.
-    await removeTenantMember(principal.tenantId, targetUserId)
+    // Matrix, last-owner guard and delete run atomically in the service.
+    await removeTenantMember(principal.tenantId, targetUserId, (target) => {
+      if (!canActorModifyTarget(principal.role, target.role, isSelf)) {
+        throw new HttpError('Insufficient permissions to remove this member', 403)
+      }
+    })
     successResponse(response, undefined, 'Member removed.')
   } catch (error) {
     next(error)

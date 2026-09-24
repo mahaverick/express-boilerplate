@@ -981,14 +981,13 @@ describe('/api/v1/tenants', () => {
   })
 
   describe('last-owner guard: atomic and blind to soft-deleted owners', () => {
-    // Two owners demote themselves at once. Deterministic both ways:
-    // countOwners is wrapped so the first caller waits (up to 1s) for the
-    // second to have counted too.
-    // - Unfixed code: both count 2 before either writes, both succeed, and
-    //   the tenant is left with no owner.
-    // - Fixed code: the second transaction is blocked at lockOwners, so the
-    //   first times out of the wait, commits, and the second then counts 1
-    //   and gets 409.
+    // Two owners demote themselves at once. countOwners is wrapped so the
+    // first caller waits (up to 1s) for the second to have counted too.
+    // - Pins: with the owner lock, the second transaction is blocked at
+    //   lockOwners, so the first times out of the wait, commits, and the
+    //   second then counts 1 and gets 409.
+    // - Without the lock both usually count 2 and both succeed, leaving no
+    //   owner; a start gap over 1s could still let that pass.
     // Pool note: test mode has max 2 connections. The two transactions hold
     // both, which works only because B waits inside its own connection and A
     // needs no third. A repository call inside the service that forgot the
@@ -1077,6 +1076,73 @@ describe('/api/v1/tenants', () => {
       expect(
         await userMembershipRepository.findByUserAndTenant(liveOwner.id, tenant.id)
       ).toBeDefined()
+    })
+
+    // An admin's DELETE is held just before it takes the owner lock, after
+    // any earlier read of the target, while an owner promotes that target to
+    // owner. The permission check must see the promotion and refuse.
+    it("re-checks the admin's permission under the lock, so a target promoted to owner mid-request is not removed", async () => {
+      const { user: owner, token: ownerToken } = await createAuthenticatedUser()
+      const { user: admin, token: adminToken } = await createAuthenticatedUser()
+      const { user: target } = await createAuthenticatedUser()
+      const tenant = await createTenant(owner.id)
+      await addMembership(admin.id, tenant.id, 'admin')
+      await addMembership(target.id, tenant.id, 'manager')
+
+      // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
+      const realLockOwners = UserMembershipRepository.prototype.lockOwners
+      let signalArrived: () => void
+      // eslint-disable-next-line unicorn/prefer-promise-with-resolvers -- tsconfig.json pins `lib: ["ES2023"]`; `Promise.withResolvers` is ES2024 and untyped under it.
+      const arrived = new Promise<void>((resolve) => {
+        signalArrived = resolve
+      })
+      let releaseHeld: () => void
+      // eslint-disable-next-line unicorn/prefer-promise-with-resolvers -- see the disable above.
+      const heldReleased = new Promise<void>((resolve) => {
+        releaseHeld = resolve
+      })
+      let calls = 0
+      const heldLockOwners: typeof realLockOwners = async function (
+        this: UserMembershipRepository,
+        tenantId: string,
+        executor?: DbExecutor
+      ) {
+        calls += 1
+        // Only the first caller (the admin's DELETE) is held.
+        if (calls === 1) {
+          signalArrived()
+          await heldReleased
+        }
+        return realLockOwners.call(this, tenantId, executor)
+      }
+
+      await withMutatedMethod(
+        UserMembershipRepository.prototype,
+        'lockOwners',
+        heldLockOwners,
+        async () => {
+          // Promise.resolve starts the request now (supertest is lazy until then'd).
+          const deleting = Promise.resolve(
+            request(app)
+              .delete(`/api/v1/tenants/${tenant.slug}/members/${target.id}`)
+              .set('Authorization', `Bearer ${adminToken}`)
+          )
+          await arrived
+
+          const promotion = await request(app)
+            .patch(`/api/v1/tenants/${tenant.slug}/members/${target.id}`)
+            .set('Authorization', `Bearer ${ownerToken}`)
+            .send({ role: 'owner' })
+          expect(promotion.status).toBe(200)
+
+          releaseHeld()
+          const removal = await deleting
+          expect(removal.status).toBe(403)
+        }
+      )
+
+      const membership = await userMembershipRepository.findByUserAndTenant(target.id, tenant.id)
+      expect(membership?.role).toBe('owner')
     })
   })
 
