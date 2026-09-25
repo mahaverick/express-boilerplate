@@ -2,7 +2,9 @@
 //
 // The pool options as a pure function: database.service.ts opens its pool at
 // module scope, and .env.test's DB_POOL_MAX=2 matches the value the pool
-// used before it read DB_POOL_MAX, so only this proves both variables are read.
+// used before it read DB_POOL_MAX, so this is the only proof that
+// DB_POOL_MAX is read. DB_STATEMENT_TIMEOUT_MS is also proven against a live
+// connection in tests/integration/services/database.service.test.ts.
 import { describe, expect, it } from 'vitest'
 import { databaseClientOptions } from '@/configs/database.config'
 

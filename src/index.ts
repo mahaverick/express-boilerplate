@@ -7,7 +7,8 @@
 import { assertEnvConsistent } from '@/configs/env-consistency.config'
 import { getEnv } from '@/configs/env.config'
 // Static, unlike `@/server` below: constructing the logger is lazy, so this
-// import reads no environment. main() needs it for boot-check warnings.
+// import calls no getEnv(). It does load env.config, which runs dotenv.
+// main() needs it for boot-check warnings.
 import { logger } from '@/services/logger.service'
 import type { SupervisedWorkers } from '@/services/worker-supervisor.service'
 

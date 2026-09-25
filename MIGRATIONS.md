@@ -52,7 +52,8 @@ never sent behind a TLS-terminating proxy.
 
 ### New, with defaults
 
-These are new, and nothing needs setting unless you want a different value:
+These are new, and nothing needs setting unless you want a different
+value, except `DB_STATEMENT_TIMEOUT_MS` (below):
 
 - `COOKIE_SECURE` (from `APP_ENV`);
 - `COOKIE_DOMAIN` (unset: host-only);
@@ -62,9 +63,26 @@ These are new, and nothing needs setting unless you want a different value:
 - `WORKER_CONCURRENCY` (5);
 - `SHUTDOWN_TIMEOUT_MS` (25000).
 
+`DB_STATEMENT_TIMEOUT_MS` changes behaviour at upgrade. 3.0 sends
+`statement_timeout=30000` on every pooled connection; 2.0 sent none.
+
+- Behind PgBouncer, add `statement_timeout` to `ignore_startup_parameters`,
+  or set `DB_STATEMENT_TIMEOUT_MS=0`. Otherwise PgBouncer refuses every
+  connection.
+- A statement that runs longer than 30s is now cancelled. Set
+  `DB_STATEMENT_TIMEOUT_MS=0` to keep the 2.0 behaviour.
+
 `COOKIE_SECURE` now defaults to `true` everywhere except `local`, and SMTP
 requires TLS everywhere except `local`. Before 3.0, both followed
-`NODE_ENV === 'production'`.
+`NODE_ENV === 'production'`, and 3.0 requires `NODE_ENV=production`
+outside `local`. A `dev` or `qa` environment served without TLS must set
+`COOKIE_SECURE=false`: browsers drop a Secure cookie set over plain HTTP, so
+login stops working. SMTP there must also offer STARTTLS.
+
+The trace resource attribute `deployment.environment.name` used to be
+`NODE_ENV` (`production`, `development`). It is now the `APP_ENV` value
+(`local`, `dev`, `qa`, `prod`). Update dashboards and alerts that filter on
+it.
 
 Setting `COOKIE_DOMAIN` at upgrade, where users hold host-only refresh
 cookies, heals itself: every response that sets or clears the refresh
@@ -93,10 +111,15 @@ deploy, the new code stops seeing:
 - **In-flight Google sign-ins** (`sess:*`). A user mid-way through the
   consent screen gets a failed callback and signs in again.
 
-During a rolling deploy, old and new pods also publish live notifications
-on different channels (`bull:notifications` and
-`<prefix>:notifications`), so a stream open on one side misses live
-notifications published by the other until the rollout finishes.
+During a rolling deploy, old and new pods also use different keys until
+the old pods are gone:
+
+- live notifications go out on different channels (`bull:notifications`
+  and `<prefix>:notifications`), so a stream open on one side misses those
+  published by the other;
+- the session denylists differ, so a logout on one side is not honoured by
+  the other: its access tokens still work there until they expire;
+- the rate-limit counters differ, so each budget is effectively doubled.
 
 The denylist, rate-limit and session keys expire on their own, so they
 need no cleanup. The old BullMQ keys do not expire. Once the drained queues
@@ -117,13 +140,18 @@ These patterns name only the two old queues, so they leave anything else on
 that Redis under `$OLD:` alone. They cannot match a 3.0 key either:
 `redisKey()` puts every new key under `REDIS_KEY_PREFIX` + `:`, and BullMQ's
 under `<prefix>:bull:`, so a new queue key is `<prefix>:bull:email:…`. The
-one exception is an old prefix ending in `:bull` whose front equals the new
-prefix (old `myapp:bull`, new `myapp`); then skip this step.
+exceptions are a new prefix that itself starts with `$OLD:email` or
+`$OLD:notification`, and an old prefix ending in `:bull` whose front equals
+the new prefix (old `myapp:bull`, new `myapp`); in either case skip this
+step.
 
-If you delete the expiring keys early anyway, the bare patterns `rl:*`,
-`denylist:session:*` and `sess:*` match only pre-3.0 keys as long as
-`REDIS_KEY_PREFIX` itself does not start with `rl`, `denylist` or `sess`:
-every 3.0 key starts with that prefix, and the prefix can never be empty.
+If you delete the expiring keys early anyway, use the bare patterns
+`rl:*`, `denylist:session:*` and `sess:*` only on a Redis this app has to
+itself: on a shared Redis they also match other apps' keys (`sess:` is
+connect-redis's default prefix). On a Redis of its own they match no 3.0
+key as long as `REDIS_KEY_PREFIX` itself does not start with `rl`,
+`denylist` or `sess`: every 3.0 key starts with that prefix, and the prefix
+can never be empty.
 
 If you had set `QUEUE_PREFIX`, the old notification channel above was
 `<QUEUE_PREFIX>:notifications`, not `bull:notifications`.
