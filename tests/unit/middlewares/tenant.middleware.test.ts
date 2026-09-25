@@ -45,6 +45,7 @@ const mockTenant: Tenant = {
   // eslint-disable-next-line unicorn/no-null -- see comment above.
   website: null,
   lifecycleState: 'active',
+  isPlatform: false,
   // eslint-disable-next-line unicorn/no-null -- Tenant.deletedAt is a `Date | null` soft-delete column.
   deletedAt: null,
   createdAt: new Date('2026-01-01T00:00:00Z'),

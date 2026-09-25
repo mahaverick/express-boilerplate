@@ -9,7 +9,16 @@
 // mirrors how `notification.model.ts` already holds two closely-related
 // tables (`notifications` + `notification_preferences`) in one file.
 import { isNull, sql, type InferInsertModel, type InferSelectModel } from 'drizzle-orm'
-import { check, jsonb, pgTable, timestamp, uniqueIndex, varchar } from 'drizzle-orm/pg-core'
+import {
+  boolean,
+  check,
+  index,
+  jsonb,
+  pgTable,
+  timestamp,
+  uniqueIndex,
+  varchar,
+} from 'drizzle-orm/pg-core'
 import { TENANT_LIFECYCLE_STATES } from '@/constants/tenant.constants'
 
 // `TENANT_LIFECYCLE_STATES`, pre-rendered as a literal SQL value list —
@@ -68,6 +77,8 @@ export const tenantModel = pgTable(
       .$type<(typeof TENANT_LIFECYCLE_STATES)[number]>()
       .notNull()
       .default('active'),
+    // The one staff tenant. `tenants_single_platform` allows at most one row.
+    isPlatform: boolean('is_platform').notNull().default(false),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -88,6 +99,21 @@ export const tenantModel = pgTable(
       'tenants_lifecycle_state_check',
       sql`${table.lifecycleState} in (${sql.raw(TENANT_LIFECYCLE_STATE_SQL_LIST)})`
     ),
+    uniqueIndex('tenants_single_platform')
+      .on(sql`(true)`)
+      .where(sql`${table.isPlatform}`),
+    // The platform tenant can never be suspended, archived or soft-deleted.
+    check(
+      'tenants_platform_active',
+      sql`not ${table.isPlatform} or (${table.lifecycleState} = 'active' and ${table.deletedAt} is null)`
+    ),
+    // Trigram indexes for the staff tenant search (needs pg_trgm, migration 0016).
+    index('tenants_name_trgm_idx')
+      .using('gin', sql`lower(${table.name}) gin_trgm_ops`)
+      .where(isNull(table.deletedAt)),
+    index('tenants_slug_trgm_idx')
+      .using('gin', table.slug.op('gin_trgm_ops'))
+      .where(isNull(table.deletedAt)),
   ]
 )
 

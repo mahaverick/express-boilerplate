@@ -12,6 +12,7 @@ import { UserMembershipRepository } from '@/repositories/user-membership.reposit
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { createTenant, getTenant, updateSettings, updateTenant } from '@/services/tenant.service'
+import { truncateAuditLogs } from '../../helpers/audit-log'
 import { withMutatedMethod } from '../../helpers/mutate'
 
 const tenantSettingsRepository = new TenantSettingsRepository()
@@ -22,6 +23,7 @@ const createdTenantIds: string[] = []
 const createdUserIds: string[] = []
 
 afterEach(async () => {
+  await truncateAuditLogs()
   if (createdTenantIds.length > 0) {
     await sql`delete from tenants where id = any(${createdTenantIds})`
     createdTenantIds.length = 0

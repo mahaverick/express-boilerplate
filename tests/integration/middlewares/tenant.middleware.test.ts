@@ -29,6 +29,7 @@ import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { requestContextStore, type TenantContext } from '@/services/request-context.service'
 import type { RequestPrincipal } from '@/types/actor'
+import { truncateAuditLogs } from '../../helpers/audit-log'
 import { request } from '../../helpers/request'
 
 /**
@@ -147,6 +148,7 @@ describe('resolveTenant + requireRole (integration)', () => {
   const createdUserIds: string[] = []
 
   afterEach(async () => {
+    await truncateAuditLogs()
     if (createdTenantIds.length > 0) {
       await sql`delete from tenants where id = any(${createdTenantIds})`
       createdTenantIds.length = 0

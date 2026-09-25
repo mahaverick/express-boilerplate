@@ -36,6 +36,7 @@ import { UserRepository } from '@/repositories/user.repository'
 import type { DbExecutor } from '@/services/database.service'
 import { sql } from '@/services/database.service'
 import { signAccessToken } from '@/services/session.service'
+import { truncateAuditLogs } from '../../helpers/audit-log'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { request } from '../../helpers/request'
 
@@ -102,6 +103,7 @@ describe('/api/v1/tenants', () => {
   const createdUserIds: string[] = []
 
   afterEach(async () => {
+    await truncateAuditLogs()
     // Tenants first: `tenant_settings.tenant_id` and
     // `user_memberships.tenant_id` both carry `ON DELETE CASCADE`
     // (tenant.model.ts, user-membership.model.ts), so deleting the tenant

@@ -26,6 +26,7 @@ import { db, sql } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
 import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
 import { hashToken, signAccessToken } from '@/services/session.service'
+import { truncateAuditLogs } from '../../helpers/audit-log'
 import {
   expectNoJob,
   waitForInvitationEmail,
@@ -174,6 +175,7 @@ describe('invitations API', () => {
   const createdUserIds: string[] = []
 
   afterEach(async () => {
+    await truncateAuditLogs()
     if (createdTenantIds.length > 0) {
       await sql`delete from tenants where id = any(${createdTenantIds})`
       createdTenantIds.length = 0

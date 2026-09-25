@@ -56,6 +56,21 @@ export interface MembershipWithTenant {
 }
 
 /**
+ * The select behind `findPlatformRole` and `lockPlatformRole`: the user's
+ * membership role in the one `is_platform` tenant.
+ * @param userId - The user to look up.
+ * @param executor - Where to run the query.
+ * @returns The unexecuted query.
+ */
+function platformRoleQuery(userId: string, executor: DbExecutor) {
+  return executor
+    .select({ role: userMembershipModel.role })
+    .from(userMembershipModel)
+    .innerJoin(tenantModel, eq(userMembershipModel.tenantId, tenantModel.id))
+    .where(and(eq(userMembershipModel.userId, userId), eq(tenantModel.isPlatform, true)))
+}
+
+/**
  * Query access to the `user_memberships` table: lookup a single
  * membership, list a tenant's members (with safe user info) or a user's
  * memberships (with tenant info), create/update/delete a membership, and
@@ -84,6 +99,41 @@ export class UserMembershipRepository {
         and(eq(userMembershipModel.userId, userId), eq(userMembershipModel.tenantId, tenantId))
       )
     return row
+  }
+
+  /**
+   * The user's role in the platform tenant, read with no cache so a
+   * revocation takes effect on the next call.
+   * @param userId - The user to look up.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns The platform role, or null when the user is not staff.
+   */
+  async findPlatformRole(
+    userId: string,
+    executor: DbExecutor = db
+  ): Promise<MembershipRole | null> {
+    const [row] = await platformRoleQuery(userId, executor)
+    // eslint-disable-next-line unicorn/no-null -- the platform-role contract is `MembershipRole | null`.
+    return row?.role ?? null
+  }
+
+  /**
+   * `findPlatformRole`, holding the membership row `FOR SHARE` until the
+   * transaction ends. Lock order: after the tenant's owner rows
+   * (`lockOwners`) and memberships (`lockMemberships`).
+   * @param userId - The user to look up.
+   * @param executor - The transaction to hold the lock in.
+   * @returns The platform role, or null when the user is not staff.
+   */
+  async lockPlatformRole(
+    userId: string,
+    executor: DbExecutor = db
+  ): Promise<MembershipRole | null> {
+    const [row] = await platformRoleQuery(userId, executor).for('share', {
+      of: userMembershipModel,
+    })
+    // eslint-disable-next-line unicorn/no-null -- the platform-role contract is `MembershipRole | null`.
+    return row?.role ?? null
   }
 
   /**

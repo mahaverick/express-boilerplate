@@ -123,6 +123,15 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
   }
 
   /**
+   * The seeded platform tenant, the one row with `isPlatform` set.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns The platform tenant, or undefined only on a database migration 0016 has not reached.
+   */
+  findPlatformTenant(executor: DbExecutor = db): Promise<Tenant | undefined> {
+    return this.selectOne(this.scope(eq(tenantModel.isPlatform, true)), executor)
+  }
+
+  /**
    * Every tenant one user belongs to, with the role they hold in each —
    * the query `GET /tenants` (a later task's controller) runs to list "my
    * organizations". A soft-deleted tenant is never included, even if the
