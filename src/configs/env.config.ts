@@ -144,7 +144,7 @@ const EnvSchema = z.object({
     .nonnegative()
     .default(30_000)
     .describe(
-      "Milliseconds a single SQL statement may run before Postgres cancels it (statement_timeout). Defaults to 30000 (30s). 0 sends no limit, leaving the server's own setting. A statement_timeout in DATABASE_URL's query string overrides it. Behind PgBouncer in transaction mode, which refuses unknown startup parameters, set 0."
+      "Milliseconds a single SQL statement may run before Postgres cancels it (statement_timeout). Defaults to 30000 (30s). 0 sends no limit, leaving the server's own setting. A statement_timeout in DATABASE_URL's query string overrides it. PgBouncer, in every pool mode, refuses a startup parameter not listed in its ignore_startup_parameters, so behind it set 0 or list statement_timeout there."
     ),
 
   JWT_ACCESS_SECRET: z

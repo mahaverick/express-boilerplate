@@ -3,8 +3,9 @@
 Upgrade notes for each breaking release of this repo, then every major
 dependency bump taken during its rebuild, the breaking change it carried,
 and what changed here because of it — so the same upgrade can be replayed
-elsewhere with the reasoning intact instead of rediscovered. Also: every supply-chain bypass currently sitting in
-`pnpm-workspace.yaml`, a generated file nobody reads by default.
+elsewhere with the reasoning intact instead of rediscovered. Also: every
+supply-chain bypass currently sitting in `pnpm-workspace.yaml`, a generated
+file nobody reads by default.
 
 ## Upgrading to 3.0.0
 
@@ -73,9 +74,10 @@ becomes `<prefix>:bull:*`, and the other keyspaces had no prefix at all. At
 deploy, the new code stops seeing:
 
 - **Queued jobs** (`bull:*`), including delayed retries. Before deploying,
-  stop the API and let the workers drain both queues (`email`,
-  `notification`) to zero waiting and delayed. Otherwise accept that those
-  emails and notifications are never sent.
+  stop traffic to the API (or scale API-only pods to zero) and let the
+  workers drain both queues (`email`, `notification`) to zero waiting,
+  delayed, active and prioritized jobs. Otherwise accept that those emails
+  and notifications are never sent.
 - **Session-denylist entries** (`denylist:session:*`) written during the
   last `ACCESS_TOKEN_TTL`. An access token revoked in that window is honoured
   again until it expires. To avoid this, deploy at least `ACCESS_TOKEN_TTL`
@@ -89,17 +91,35 @@ on different channels (`bull:notifications` and
 `<prefix>:notifications`), so a stream open on one side misses live
 notifications published by the other until the rollout finishes.
 
-The denylist, rate-limit and session keys expire on their own. The old
-`bull:*` keys do not. Once the drained queues are confirmed empty, delete
-them. Do this only if nothing else on that Redis uses `bull:`, and never
-with FLUSHDB:
+The denylist, rate-limit and session keys expire on their own, so they
+need no cleanup. The old BullMQ keys do not expire. Once the drained queues
+are confirmed empty, delete them, never with FLUSHDB. Choose a
+`REDIS_KEY_PREFIX` different from the old `QUEUE_PREFIX` value; if they
+match, skip this step rather than reason about the shared namespace. Set
+`OLD` to the old `QUEUE_PREFIX` value (`bull` if you never set it):
 
 ```bash
-redis-cli -u "$REDIS_URL" --scan --pattern 'bull:*' | xargs -r -n 500 redis-cli -u "$REDIS_URL" del
+OLD=bull
+for queue in email notification; do
+  redis-cli -u "$REDIS_URL" --scan --pattern "$OLD:$queue:*" \
+    | xargs -r -n 500 redis-cli -u "$REDIS_URL" del
+done
 ```
 
-If you had set `QUEUE_PREFIX`, use its value instead of `bull` in both the
-pattern and the channel name above.
+These patterns name only the two old queues, so they leave anything else on
+that Redis under `$OLD:` alone. They cannot match a 3.0 key either:
+`redisKey()` puts every new key under `REDIS_KEY_PREFIX` + `:`, and BullMQ's
+under `<prefix>:bull:`, so a new queue key is `<prefix>:bull:email:…`. The
+one exception is an old prefix ending in `:bull` whose front equals the new
+prefix (old `myapp:bull`, new `myapp`); then skip this step.
+
+If you delete the expiring keys early anyway, the bare patterns `rl:*`,
+`denylist:session:*` and `sess:*` match only pre-3.0 keys as long as
+`REDIS_KEY_PREFIX` itself does not start with `rl`, `denylist` or `sess`:
+every 3.0 key starts with that prefix, and the prefix can never be empty.
+
+If you had set `QUEUE_PREFIX`, the old notification channel above was
+`<QUEUE_PREFIX>:notifications`, not `bull:notifications`.
 
 ## Majors taken
 

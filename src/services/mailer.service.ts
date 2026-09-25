@@ -1,8 +1,9 @@
 // src/services/mailer.service.ts
 //
-// Ruling G: a mail-send failure must NEVER propagate to the caller. `sendMail` below is structured so
-// that holds for every failure mode nodemailer itself produces — read this
-// comment before touching the control flow. (Not an absolute "cannot ever
+// Ruling G: a mail-send failure must NEVER propagate to the caller.
+// `sendMail` below is structured so that holds for every failure mode
+// nodemailer itself produces — read this comment before touching the
+// control flow. (Not an absolute "cannot ever
 // reject" guarantee: both catch BODIES run unguarded code —
 // `redactedMailErrorForLog`/`extractErrorCode` read a handful of properties
 // off `error`, and `console.error` itself could theoretically throw — so a
@@ -17,11 +18,11 @@
 // `forgot-password` sends only when the user actually exists, so if a send
 // failure propagated as a rejection here, an SMTP outage would become a
 // perfect account-enumeration oracle the moment anyone is listening during
-// one: a registered address throws, an unregistered one
-// doesn't. The cost accepted for this ruling: when mail is down, a user
-// gets no email and no error — mitigated by this function recording every
-// attempt in the delivery log (below) and by `POST /auth/resend-verification`
-// letting them retry once mail is back.
+// one: a registered address throws, an unregistered one doesn't. The cost
+// accepted for this ruling: when mail is down, a user gets no email and no
+// error — mitigated by this function recording every attempt in the
+// delivery log (below) and by `POST /auth/resend-verification` letting them
+// retry once mail is back.
 //
 // RENDERING HAPPENS INSIDE THE SAME TRY THAT GUARDS THE TRANSPORT CALL.
 // Three channels could each defeat Ruling G. The STATUS channel is closed by
@@ -62,8 +63,9 @@
 // (registration-attempt.template.ts), so a caller that put content there would
 // still reach a Subject header. Closing that properly means sourcing `appName`
 // from config instead of accepting it per-message. Re-exposing a
-// caller-suppliable `subject` (or `text`/`html`) on this interface would silently reopen both of these; don't, no
-// matter how convenient it looks for a one-off caller.
+// caller-suppliable `subject` (or `text`/`html`) on this interface would
+// silently reopen both of these; don't, no matter how convenient it looks
+// for a one-off caller.
 //
 // TWO INDEPENDENT catches, not one wrapping both halves, on purpose:
 //

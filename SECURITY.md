@@ -331,18 +331,19 @@ deployment with no existing users has nothing to backfill.
 
 ### Rate limiting: one limiter per auth route, one store prefix each
 
-`src/middlewares/rate-limit.middleware.ts` ships seven limiters — one for
-every route on the auth router, `/verify-email` included, and
-`/resend-verification` carrying two in series — which is a standing rule
-for that router rather than seven separate decisions. Each is backed by its
-**own** `SharedRateLimitStore`, with its own key prefix (`rl:register:`,
-`rl:login:`, `rl:refresh:`, `rl:logout:`, `rl:verify-email:`,
-`rl:resend-verification-ip:`, `rl:resend-verification-email:`), each under
-`REDIS_KEY_PREFIX` (so `<prefix>:rl:login:` in Redis), so no endpoint can spend another's budget and a 429 is only ever a statement
-about the endpoint that returned it. A new auth route — B3's
-`/forgot-password` and `/reset-password` (Task 6) are next — takes its own
-prefix on the same pattern; `tests/unit/middlewares/rate-limit.middleware.test.ts`
-fails if two ever collide. `/verify-email` and `/resend-verification`'s
+`src/middlewares/rate-limit.middleware.ts` ships nineteen limiters.
+Fifteen guard the auth router, which is a standing rule for that router:
+every route on it except `GET /providers` has at least one, and `/login`
+(three), `/resend-verification` (two) and `/forgot-password` (two) carry
+several in series. The other four guard tenant creation, member invitation,
+and invitation preview and accept. Each is backed by its **own**
+`SharedRateLimitStore`, with its own key prefix `rl:<name>:` (for example
+`rl:register:`, `rl:login-ip:`, `rl:forgot-password-email:`), under
+`REDIS_KEY_PREFIX` (so `<prefix>:rl:login:` in Redis). No endpoint can
+spend another's budget, and a 429 is only ever a statement about the
+endpoint that returned it. A new route takes its own prefix on the same
+pattern; `tests/unit/middlewares/rate-limit.middleware.test.ts` fails if two
+ever collide. `/verify-email` and `/resend-verification`'s
 own per-limiter reasoning — including why `/resend-verification`'s IP layer
 is the tight one and its email layer the generous one — lives in
 `rate-limit.middleware.ts`'s own header comment. The store starts in
@@ -418,8 +419,8 @@ a client can make up to N× the limit.
   runs, so it would leave the refresh cookie uncleared. This limiter must
   never plausibly be the reason a real user cannot log out.
 
-There is no general-purpose rate limiter beyond the auth router's four
-routes.
+There is no general-purpose rate limiter: each limiter guards only the
+route it is mounted on.
 
 ### Deploying behind a proxy: `TRUST_PROXY` is a required decision
 
