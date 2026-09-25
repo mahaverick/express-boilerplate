@@ -167,10 +167,9 @@ jobs:
           # services: cannot remap ports, so DATABASE_URL/REDIS_URL here use
           # the container-default 5432/6379, not the compose stack's
           # deliberately-nonstandard 5433/6380 (see docker-compose.yml).
-          # Every other key mirrors .env.test's committed value verbatim —
-          # the "Assert the CI env block mirrors .env.test" step below
-          # depends on every key from that file appearing, textually, in
-          # this workflow.
+          # Every other value mirrors .env.test verbatim, and the key sets
+          # match both ways: the "Assert the CI env block mirrors .env.test"
+          # step below compares this block with that file.
           APP_ENV: local
           NODE_ENV: test
           APP_PORT: 4040
@@ -187,27 +186,49 @@ jobs:
           REDIS_KEY_PREFIX: test
       # The env block above must mirror committed .env.test. When they drift, a
       # test passes locally and fails in CI (or worse, the reverse) for reasons
-      # that look nothing like the cause. This asserts every key in .env.test is
-      # accounted for here.
-      #
-      # Anchored to an actual "  KEY:" line, not a bare substring match. An
-      # unanchored `grep -q "$key" ci.yml` is satisfied by a key name that only
-      # appears in a comment — such as the sentence right above this one, which
-      # names every key it's checking for — so the gate could pass while the
-      # real env: block is missing that key entirely. That is the same
-      # pass-while-checking-nothing shape as an inert lint rule: configured,
-      # green, enforcing nothing.
+      # that look nothing like the cause. This compares both directions, keys
+      # and values, and reads only that step's env: block: a key that appears
+      # in another step (the migrations step's DATABASE_URL) or in a comment
+      # does not count. The only difference allowed is the port in
+      # DATABASE_URL and REDIS_URL.
       - name: Assert the CI env block mirrors .env.test
+        shell: bash
         run: |
-          missing=0
-          while IFS='=' read -r key _; do
-            case "$key" in ''|\#*) continue ;; esac
-            if ! grep -qE "^[[:space:]]+${key}:" .github/workflows/ci.yml; then
-              echo "::error::$key is in .env.test but not in the CI env block"
-              missing=1
-            fi
-          done < .env.test
-          exit $missing
+          ci=.github/workflows/ci.yml
+          # KEY=value pairs from the "Test with coverage gate" step's env: block only,
+          # not from any other step or service. Indentation decides scope: steps sit
+          # at 6 spaces, a step's keys at 8, and its env: entries at 10.
+          ci_env=$(awk '
+            { match($0, /^ */); indent = RLENGTH }
+            /^[[:space:]]*$/ { next }
+            indent == 6 && /^ *- name: / { in_step = ($0 ~ /- name: Test with coverage gate[[:space:]]*$/); in_env = 0; next }
+            indent <= 6 { in_step = 0; in_env = 0; next }
+            in_step && indent == 8 && /^ *env:[[:space:]]*$/ { in_env = 1; next }
+            in_env && indent <= 8 { in_env = 0 }
+            in_env && indent == 10 && /^ *[A-Z][A-Z0-9_]*:/ {
+              line = $0; sub(/^ */, "", line)
+              key = line; sub(/:.*/, "", key)
+              value = line; sub(/^[A-Z0-9_]*:[[:space:]]*/, "", value)
+              print key "=" value
+            }
+          ' "$ci" | sort)
+          env_test=$(grep -E '^[A-Z][A-Z0-9_]*=' .env.test | sort)
+          if [ -z "$ci_env" ]; then
+            echo "::error::No env: block found under the \"Test with coverage gate\" step in $ci"
+            exit 1
+          fi
+          # GitHub services: cannot remap ports, so these two differ from .env.test
+          # in the port only. Blank the port in both before comparing.
+          normalise() {
+            sed -E '/^(DATABASE_URL|REDIS_URL)=/ s#:[0-9]+(/|$)#:<port>\1#' \
+              | sed -E -e "s/^([A-Z0-9_]+)=\"(.*)\"\$/\\1=\\2/" -e "s/^([A-Z0-9_]+)='(.*)'\$/\\1=\\2/"
+          }
+          diff_out=$(diff <(printf '%s\n' "$env_test" | normalise) <(printf '%s\n' "$ci_env" | normalise) || true)
+          if [ -n "$diff_out" ]; then
+            printf '%s\n' "$diff_out" | sed -n 's/^< /::error::only in .env.test (or a different value): /p; s/^> /::error::only in the CI test env (or a different value): /p'
+            exit 1
+          fi
+          echo "CI test env and .env.test match ($(printf '%s\n' "$env_test" | wc -l | tr -d ' ') keys)"
       - name: Build
         run: pnpm build
       - name: Audit production dependencies
