@@ -9,7 +9,7 @@
 // membership read.
 //
 // The last test is DELIBERATELY red under MUTATION_PROOF=1. It also makes
-// the service's locked re-read return the row resolveTenant saw, which is
+// the service's locked re-read return the role resolveTenant saw, which is
 // what a service trusting that earlier read would do, and keeps the real
 // test's assertions:
 //

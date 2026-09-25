@@ -385,8 +385,49 @@ describe('platform access over the API', () => {
       expect(invitation.status).toBe(202)
       expect(adminChange.status).toBe(200)
       expect(managerChange.status).toBe(200)
+      const rows = await sql`select role from tenant_invitations where tenant_id = ${tenant.id}`
+      expect(rows).toEqual([{ role: 'owner' }])
       expect(await roleOf(tenant, admin)).toBe('manager')
       expect(await roleOf(tenant, manager)).toBe('editor')
+    })
+
+    it('lets a staff admin invite a manager, an editor and a viewer', async () => {
+      const { tenant } = await ownedTenant()
+      const { token } = await staffUser('admin')
+
+      for (const role of ['manager', 'editor', 'viewer'] as const) {
+        const response = await invite(tenant, token, role)
+        expect(response.status).toBe(202)
+      }
+      const rows = await sql<{ role: string }[]>`
+        select role from tenant_invitations where tenant_id = ${tenant.id} order by role
+      `
+      expect(rows.map((row) => row.role)).toEqual(['editor', 'manager', 'viewer'])
+    })
+
+    it('refuses a staff admin removing an admin, and the admin stays', async () => {
+      const { tenant } = await ownedTenant()
+      const admin = await addMember(tenant, 'admin')
+      const { token } = await staffUser('admin')
+
+      const removal = await removeMember(tenant, token, admin)
+
+      expect(removal.body).toMatchObject({
+        statusCode: 403,
+        message: 'Insufficient permissions to remove this member',
+      })
+      expect(await roleOf(tenant, admin)).toBe('admin')
+    })
+
+    it('lets a staff owner remove an admin', async () => {
+      const { tenant } = await ownedTenant()
+      const admin = await addMember(tenant, 'admin')
+      const { token } = await staffUser('owner')
+
+      const removal = await removeMember(tenant, token, admin)
+
+      expect(removal.status).toBe(200)
+      expect(await roleOf(tenant, admin)).toBeUndefined()
     })
 
     it('refuses even a staff owner changing or removing an owner', async () => {

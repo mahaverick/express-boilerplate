@@ -2,9 +2,16 @@
 //
 // resolveActorAccess against the real per-worker Postgres, and the lock
 // order it adds: owners, then memberships, then the platform membership FOR
-// SHARE. The deadlock test races a staff write in a customer tenant against
-// that staff member's demotion in the platform tenant, the one pair of
-// transactions that lock rows in two tenants.
+// SHARE. The lock test runs a staff write in a customer tenant while that
+// staff member's demotion in the platform tenant is still uncommitted. Only
+// the staff write locks rows in two tenants.
+//
+// The last test is DELIBERATELY red under MUTATION_PROOF=1. It swaps the
+// FOR SHARE read for a plain read in the same transaction and keeps the
+// real test's assertions:
+//
+//   MUTATION_PROOF=1 pnpm exec vitest run tests/integration/services/tenant-access.service.test.ts   # red
+//   pnpm exec vitest run tests/integration/services/tenant-access.service.test.ts                    # green
 //
 // Pool note: test mode has max 2 connections, and the race holds both. A
 // query inside a service that skipped `tx` would hang here.
@@ -17,7 +24,7 @@ import { HttpError } from '@/errors/http-error'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
-import { db, sql, type DbExecutor } from '@/services/database.service'
+import { db, sql } from '@/services/database.service'
 import { resolveActorAccess } from '@/services/tenant-access.service'
 import { changeRole, removeMember } from '@/services/tenant-membership.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
@@ -50,6 +57,28 @@ function outcomeOf(result: PromiseSettledResult<unknown>): string | number {
  */
 async function addMember(tenant: Tenant, user: User, role: MembershipRole): Promise<void> {
   await userMembershipRepository.create({ userId: user.id, tenantId: tenant.id, role })
+}
+
+/**
+ * A promise with its resolver exposed.
+ * @returns The promise and its resolve function.
+ */
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let settle: (() => void) | undefined
+  // eslint-disable-next-line unicorn/prefer-promise-with-resolvers -- tsconfig.json pins `lib: ["ES2023"]`; `Promise.withResolvers` is ES2024 and untyped under it.
+  const promise = new Promise<void>((resolve) => {
+    settle = resolve
+  })
+  return { promise, resolve: () => settle?.() }
+}
+
+/**
+ * Wait for `promise`, or give up after `ms`.
+ * @param promise - What to wait for.
+ * @param ms - The longest wait.
+ */
+async function withTimeout(promise: Promise<void>, ms: number): Promise<void> {
+  await Promise.race([promise, new Promise((resolve) => setTimeout(resolve, ms))])
 }
 
 describe('tenant-access.service', () => {
@@ -145,71 +174,137 @@ describe('tenant-access.service', () => {
   })
 
   describe('the platform-membership lock', () => {
-    // Staff admin S removes manager M from tenant T (T owners, T memberships,
-    // then S's platform row FOR SHARE) while platform owner P demotes S (P
-    // owners, P memberships incl. S's row FOR UPDATE). Both meet at lockOwners.
-    // - If P locks S's row first, S's share lock waits, sees viewer: 403.
-    // - If S's share lock comes first, P's demotion waits for S to commit.
-    // Either way no cycle, so never 40P01.
-    it('settles a staff removal racing that staff member’s demotion without a deadlock', async () => {
+    /**
+     * What the staff write's locked platform read ran and saw, in order
+     * with the demotion's commit.
+     */
+    interface DemotionRace {
+      outcomes: (string | number)[]
+      events: string[]
+    }
+
+    /**
+     * Staff admin S removes manager M from tenant T while platform owner P's
+     * demotion of S to viewer holds S's platform row FOR UPDATE, uncommitted.
+     * P's transaction waits (inside `updateRole`) until S has called
+     * `lockPlatformRole` and that call has either returned or had time to
+     * block, then commits.
+     * @param platformRead - The read S's transaction makes in place of `lockPlatformRole`.
+     * @returns The two outcomes (S, then P) and the order of S's read against P's commit.
+     */
+    async function raceStaffRemovalAgainstDemotion(
+      platformRead: UserMembershipRepository['lockPlatformRole']
+    ): Promise<DemotionRace & { staff: User; tenant: Tenant; manager: User }> {
       const platform = await platformTenant()
+      const owner = await createUser()
+      const tenant = await createTenant(owner)
+      const manager = await createUser()
+      await addMember(tenant, manager, 'manager')
+      const staff = await createUser()
+      await addMember(platform, staff, 'admin')
+      const platformOwner = await createUser()
+      await addMember(platform, platformOwner, 'owner')
 
-      for (let round = 0; round < 3; round += 1) {
-        const owner = await createUser()
-        const tenant = await createTenant(owner)
-        const manager = await createUser()
-        await addMember(tenant, manager, 'manager')
-        const staff = await createUser()
-        await addMember(platform, staff, 'admin')
-        const platformOwner = await createUser()
-        await addMember(platform, platformOwner, 'owner')
+      const events: string[] = []
+      const demotionHolds = deferred()
+      const staffReadCalled = deferred()
+      const staffReadReturned = deferred()
 
-        // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
-        const realLockOwners = UserMembershipRepository.prototype.lockOwners
-        let arrivals = 0
-        let releaseBarrier: () => void
-        // eslint-disable-next-line unicorn/prefer-promise-with-resolvers -- tsconfig.json pins `lib: ["ES2023"]`; `Promise.withResolvers` is ES2024 and untyped under it.
-        const barrier = new Promise<void>((resolve) => {
-          releaseBarrier = resolve
-        })
-        const meetingLockOwners: typeof realLockOwners = async function (
-          this: UserMembershipRepository,
-          tenantId: string,
-          executor?: DbExecutor
-        ) {
-          arrivals += 1
-          if (arrivals >= 2) releaseBarrier()
-          await Promise.race([barrier, new Promise((resolve) => setTimeout(resolve, 1000))])
-          return realLockOwners.call(this, tenantId, executor)
-        }
-
-        let outcomes: (string | number)[] = []
-        await withMutatedMethod(
-          UserMembershipRepository.prototype,
-          'lockOwners',
-          meetingLockOwners,
-          async () => {
-            const settled = await Promise.allSettled([
-              removeMember({ userId: staff.id }, tenant.id, manager.id),
-              changeRole({ userId: platformOwner.id }, platform.id, staff.id, 'viewer'),
-            ])
-            outcomes = settled.map((result) => outcomeOf(result))
-          }
-        )
-
-        expect(arrivals).toBe(2)
-        expect(outcomes).not.toContain('40P01')
-        expect([
-          ['fulfilled', 'fulfilled'],
-          [403, 'fulfilled'],
-        ]).toContainEqual(outcomes)
-        expect(await userMembershipRepository.findPlatformRole(staff.id)).toBe('viewer')
-        const managerMembership = await userMembershipRepository.findByUserAndTenant(
-          manager.id,
-          tenant.id
-        )
-        expect(managerMembership === undefined).toBe(outcomes[0] === 'fulfilled')
+      // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
+      const realUpdateRole = UserMembershipRepository.prototype.updateRole
+      const holdingUpdateRole: typeof realUpdateRole = async function (
+        this: UserMembershipRepository,
+        ...parameters: Parameters<typeof realUpdateRole>
+      ) {
+        const updated = await realUpdateRole.apply(this, parameters)
+        demotionHolds.resolve()
+        await withTimeout(staffReadCalled.promise, 5000)
+        await withTimeout(staffReadReturned.promise, 500)
+        events.push('demotion committing')
+        return updated
       }
+      const recordingRead: typeof platformRead = async function (
+        this: UserMembershipRepository,
+        userId,
+        tx
+      ) {
+        staffReadCalled.resolve()
+        const role = await platformRead.call(this, userId, tx)
+        events.push(`staff read ${String(role)}`)
+        staffReadReturned.resolve()
+        return role
+      }
+
+      let outcomes: (string | number)[] = []
+      await withMutatedMethod(
+        UserMembershipRepository.prototype,
+        'updateRole',
+        holdingUpdateRole,
+        async () => {
+          await withMutatedMethod(
+            UserMembershipRepository.prototype,
+            'lockPlatformRole',
+            recordingRead,
+            async () => {
+              const demotion = changeRole(
+                { userId: platformOwner.id },
+                platform.id,
+                staff.id,
+                'viewer'
+              )
+              await withTimeout(demotionHolds.promise, 5000)
+              const removal = removeMember({ userId: staff.id }, tenant.id, manager.id)
+              const settled = await Promise.allSettled([removal, demotion])
+              outcomes = settled.map((result) => outcomeOf(result))
+            }
+          )
+        }
+      )
+      return { outcomes, events, staff, tenant, manager }
+    }
+
+    /**
+     * Assert the staff write waited for the demotion and was refused on it.
+     * @param race - The race's result.
+     */
+    async function expectRefusedOnTheDemotedRole(
+      race: Awaited<ReturnType<typeof raceStaffRemovalAgainstDemotion>>
+    ): Promise<void> {
+      expect(race.outcomes).toEqual([403, 'fulfilled'])
+      expect(race.events).toEqual(['demotion committing', 'staff read viewer'])
+      expect(await userMembershipRepository.findPlatformRole(race.staff.id)).toBe('viewer')
+      const kept = await userMembershipRepository.findByUserAndTenant(
+        race.manager.id,
+        race.tenant.id
+      )
+      expect(kept?.role).toBe('manager')
+    }
+
+    // No lock cycle is possible by construction: the only lock that reaches
+    // a second tenant is this FOR SHARE on one platform row, and no
+    // platform-tenant transaction locks rows in a customer tenant.
+    it('serialises a staff write behind a concurrent demotion (the FOR SHARE lock)', async () => {
+      const race = await raceStaffRemovalAgainstDemotion(
+        // eslint-disable-next-line @typescript-eslint/unbound-method -- called with `this` bound by recordingRead
+        UserMembershipRepository.prototype.lockPlatformRole
+      )
+      await expectRefusedOnTheDemotedRole(race)
     })
+
+    // DELIBERATELY red under MUTATION_PROOF=1: the same assertions, with an
+    // unlocked read of the platform role in the same transaction.
+    it.runIf(process.env.MUTATION_PROOF === '1')(
+      'reproduces the lock test against an unlocked platform read',
+      async () => {
+        const race = await raceStaffRemovalAgainstDemotion(function (
+          this: UserMembershipRepository,
+          userId,
+          tx
+        ) {
+          return this.findPlatformRole(userId, tx)
+        })
+        await expectRefusedOnTheDemotedRole(race)
+      }
+    )
   })
 })
