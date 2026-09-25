@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.1.0](https://github.com/mahaverick/express-boilerplate/compare/v3.0.0...v3.1.0) (2026-09-25)
+
+
+### Features
+
+* platform users, cross-tenant access and audit log (stream 4b) ([#53](https://github.com/mahaverick/express-boilerplate/issues/53)) ([0bc57c8](https://github.com/mahaverick/express-boilerplate/commit/0bc57c8a312df47a34d664303fa161d0633dcf25))
+
 ## [3.0.0](https://github.com/mahaverick/express-boilerplate/compare/v2.0.0...v3.0.0) (2026-09-25)
 
 
