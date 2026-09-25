@@ -1,7 +1,17 @@
 import { describe, expect, it } from 'vitest'
-import { getDatabaseUrl, getEnv, parseEnv, trustProxySetting } from '@/configs/env.config'
+import {
+  getDatabaseUrl,
+  getEnv,
+  isCookieSecure,
+  logFormat,
+  parseEnv,
+  requiresSmtpTls,
+  trustProxySetting,
+  type AppEnv,
+} from '@/configs/env.config'
 
 const valid = {
+  APP_ENV: 'local',
   NODE_ENV: 'test',
   APP_PORT: '4040',
   APP_URL: 'http://localhost:4040',
@@ -169,6 +179,7 @@ describe('getEnv', () => {
   // memoised parse of process.env rather than a hand-built source object.
   it('parses process.env and reports the test environment', () => {
     expect(getEnv().NODE_ENV).toBe('test')
+    expect(getEnv().APP_ENV).toBe('local')
   })
 
   it('memoises: repeated calls return the same object reference', () => {
@@ -351,5 +362,134 @@ describe('trustProxySetting', () => {
   it('passes anything else through as an address list for Express to parse', () => {
     expect(trustProxySetting('loopback')).toBe('loopback')
     expect(trustProxySetting('10.0.0.0/8, 172.16.0.0/12')).toBe('10.0.0.0/8, 172.16.0.0/12')
+  })
+})
+
+describe('APP_ENV and NODE_ENV', () => {
+  it.each(['local', 'dev', 'qa', 'prod'])('accepts APP_ENV=%s', (value) => {
+    expect(parseEnv({ ...valid, APP_ENV: value }).APP_ENV).toBe(value)
+  })
+
+  it('refuses a missing APP_ENV instead of defaulting it', () => {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { APP_ENV, ...rest } = valid
+    expect(() => parseEnv(rest)).toThrow(/APP_ENV/)
+  })
+
+  it('refuses an APP_ENV outside local, dev, qa and prod', () => {
+    expect(() => parseEnv({ ...valid, APP_ENV: 'production' })).toThrow(/APP_ENV/)
+    expect(() => parseEnv({ ...valid, APP_ENV: 'staging' })).toThrow(/APP_ENV/)
+  })
+
+  it('refuses a missing NODE_ENV instead of defaulting it to development', () => {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { NODE_ENV, ...rest } = valid
+    expect(() => parseEnv(rest)).toThrow(/NODE_ENV/)
+  })
+
+  it('treats an empty APP_ENV as missing', () => {
+    expect(() => parseEnv({ ...valid, APP_ENV: '' })).toThrow(/APP_ENV/)
+  })
+})
+
+describe('COOKIE_SECURE, COOKIE_DOMAIN and LOG_FORMAT', () => {
+  it('leaves all three undefined when unset, so the derivations decide', () => {
+    const parsed = parseEnv(valid)
+    expect(parsed.COOKIE_SECURE).toBeUndefined()
+    expect(parsed.COOKIE_DOMAIN).toBeUndefined()
+    expect(parsed.LOG_FORMAT).toBeUndefined()
+  })
+
+  it('parses COOKIE_SECURE=false as boolean false, not the truthy string', () => {
+    expect(parseEnv({ ...valid, COOKIE_SECURE: 'false' }).COOKIE_SECURE).toBe(false)
+    expect(parseEnv({ ...valid, COOKIE_SECURE: 'true' }).COOKIE_SECURE).toBe(true)
+  })
+
+  it('refuses a COOKIE_SECURE that is not a boolean word', () => {
+    expect(() => parseEnv({ ...valid, COOKIE_SECURE: 'sometimes' })).toThrow(/COOKIE_SECURE/)
+  })
+
+  it('accepts a bare COOKIE_DOMAIN and refuses one with a scheme, port or path', () => {
+    expect(parseEnv({ ...valid, COOKIE_DOMAIN: 'example.com' }).COOKIE_DOMAIN).toBe('example.com')
+    expect(() => parseEnv({ ...valid, COOKIE_DOMAIN: 'https://example.com' })).toThrow(
+      /COOKIE_DOMAIN/
+    )
+    expect(() => parseEnv({ ...valid, COOKIE_DOMAIN: 'example.com:443' })).toThrow(/COOKIE_DOMAIN/)
+    expect(() => parseEnv({ ...valid, COOKIE_DOMAIN: 'example.com/app' })).toThrow(/COOKIE_DOMAIN/)
+  })
+
+  it('accepts LOG_FORMAT json or pretty and refuses anything else', () => {
+    expect(parseEnv({ ...valid, LOG_FORMAT: 'json' }).LOG_FORMAT).toBe('json')
+    expect(parseEnv({ ...valid, LOG_FORMAT: 'pretty' }).LOG_FORMAT).toBe('pretty')
+    expect(() => parseEnv({ ...valid, LOG_FORMAT: 'text' })).toThrow(/LOG_FORMAT/)
+  })
+})
+
+describe('pool, statement timeout, worker concurrency and shutdown budget', () => {
+  it('defaults each to its documented value', () => {
+    const parsed = parseEnv(valid)
+    expect(parsed.DB_POOL_MAX).toBe(10)
+    expect(parsed.DB_STATEMENT_TIMEOUT_MS).toBe(30_000)
+    expect(parsed.WORKER_CONCURRENCY).toBe(5)
+    expect(parsed.SHUTDOWN_TIMEOUT_MS).toBe(25_000)
+  })
+
+  it('coerces string overrides to numbers', () => {
+    const parsed = parseEnv({
+      ...valid,
+      DB_POOL_MAX: '2',
+      DB_STATEMENT_TIMEOUT_MS: '1500',
+      WORKER_CONCURRENCY: '1',
+      SHUTDOWN_TIMEOUT_MS: '40000',
+    })
+    expect(parsed.DB_POOL_MAX).toBe(2)
+    expect(parsed.DB_STATEMENT_TIMEOUT_MS).toBe(1500)
+    expect(parsed.WORKER_CONCURRENCY).toBe(1)
+    expect(parsed.SHUTDOWN_TIMEOUT_MS).toBe(40_000)
+  })
+
+  it('allows DB_STATEMENT_TIMEOUT_MS=0, which turns the limit off', () => {
+    expect(parseEnv({ ...valid, DB_STATEMENT_TIMEOUT_MS: '0' }).DB_STATEMENT_TIMEOUT_MS).toBe(0)
+  })
+
+  it.each(['DB_POOL_MAX', 'WORKER_CONCURRENCY', 'SHUTDOWN_TIMEOUT_MS'])('refuses %s=0', (key) => {
+    expect(() => parseEnv({ ...valid, [key]: '0' })).toThrow(new RegExp(key))
+  })
+
+  it('refuses a negative DB_STATEMENT_TIMEOUT_MS', () => {
+    expect(() => parseEnv({ ...valid, DB_STATEMENT_TIMEOUT_MS: '-1' })).toThrow(
+      /DB_STATEMENT_TIMEOUT_MS/
+    )
+  })
+})
+
+describe('derivations from APP_ENV', () => {
+  const appEnvironments: AppEnv[] = ['local', 'dev', 'qa', 'prod']
+
+  it.each(appEnvironments)(
+    'isCookieSecure, logFormat and requiresSmtpTls on %s with no override',
+    (appEnv) => {
+      const isLocal = appEnv === 'local'
+      expect(isCookieSecure({ APP_ENV: appEnv })).toBe(!isLocal)
+      expect(logFormat({ APP_ENV: appEnv })).toBe(isLocal ? 'pretty' : 'json')
+      expect(requiresSmtpTls({ APP_ENV: appEnv })).toBe(!isLocal)
+    }
+  )
+
+  it.each(appEnvironments)('an explicit COOKIE_SECURE wins on %s, in both directions', (appEnv) => {
+    expect(isCookieSecure({ APP_ENV: appEnv, COOKIE_SECURE: true })).toBe(true)
+    expect(isCookieSecure({ APP_ENV: appEnv, COOKIE_SECURE: false })).toBe(false)
+  })
+
+  it.each(appEnvironments)('an explicit LOG_FORMAT wins on %s, in both directions', (appEnv) => {
+    expect(logFormat({ APP_ENV: appEnv, LOG_FORMAT: 'json' })).toBe('json')
+    expect(logFormat({ APP_ENV: appEnv, LOG_FORMAT: 'pretty' })).toBe('pretty')
+  })
+
+  it('derives from the parsed env the same way', () => {
+    const parsed = parseEnv({ ...valid, APP_ENV: 'prod', NODE_ENV: 'production' })
+    expect(isCookieSecure(parsed)).toBe(true)
+    expect(logFormat(parsed)).toBe('json')
+    expect(requiresSmtpTls(parsed)).toBe(true)
   })
 })

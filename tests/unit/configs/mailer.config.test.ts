@@ -119,12 +119,15 @@ describe('getMailTransporter', () => {
 // could reach instead).
 describe('getMailTransporter — half-set credential warning', () => {
   const halfSetUserOnlyEnv: Env = {
+    APP_ENV: 'local',
     NODE_ENV: 'test',
     APP_PORT: 4040,
     APP_URL: 'http://localhost:4040',
     WEB_URL: 'http://localhost:5173',
     DATABASE_URL: 'postgres://user:pass@localhost:5432/boilerplate',
     REDIS_URL: 'redis://localhost:6379',
+    DB_POOL_MAX: 10,
+    DB_STATEMENT_TIMEOUT_MS: 30_000,
     JWT_ACCESS_SECRET: 'a'.repeat(32),
     SESSION_SECRET: 'b'.repeat(32),
     ACCESS_TOKEN_TTL: '15m',
@@ -138,6 +141,7 @@ describe('getMailTransporter — half-set credential warning', () => {
     LOG_LEVEL: 'info',
     SLACK_LOG_LEVEL: 'error',
     WORKER_ENABLED: true,
+    WORKER_CONCURRENCY: 5,
     QUEUE_PREFIX: 'bull',
     SSE_HEARTBEAT_INTERVAL_MS: 30_000,
     SSE_MAX_STREAMS_PER_USER: 5,
@@ -150,6 +154,7 @@ describe('getMailTransporter — half-set credential warning', () => {
     SMTP_CONNECTION_TIMEOUT: 5000,
     SMTP_GREETING_TIMEOUT: 5000,
     SMTP_SOCKET_TIMEOUT: 10_000,
+    SHUTDOWN_TIMEOUT_MS: 25_000,
   }
 
   it('warns when exactly one of SMTP_USER/SMTP_PASS is set', async () => {

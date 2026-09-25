@@ -171,12 +171,14 @@ jobs:
           # the "Assert the CI env block mirrors .env.test" step below
           # depends on every key from that file appearing, textually, in
           # this workflow.
+          APP_ENV: local
           NODE_ENV: test
           APP_PORT: 4040
           APP_URL: http://localhost:4040
           WEB_URL: http://localhost:5173
           DATABASE_URL: postgres://test:test@localhost:5432/boilerplate_test
           REDIS_URL: redis://localhost:6379
+          DB_POOL_MAX: 2
           JWT_ACCESS_SECRET: test-access-secret-that-is-long-enough-32
           SESSION_SECRET: test-session-secret-that-is-long-enough-1
           SSE_HEARTBEAT_INTERVAL_MS: 1000

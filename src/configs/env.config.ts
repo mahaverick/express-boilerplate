@@ -40,8 +40,29 @@ if (!process.env.VITEST) {
 // while accepting any hostname, including localhost.
 const LogLevelSchema = z.enum(['error', 'warn', 'info', 'debug'])
 
+const AppEnvSchema = z.enum(['local', 'dev', 'qa', 'prod'])
+
+/**
+ * The deployment an `APP_ENV` value names.
+ */
+export type AppEnv = z.infer<typeof AppEnvSchema>
+
 const EnvSchema = z.object({
-  NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+  // Both required, with no default: a deploy that forgets to name its
+  // environment refuses to boot instead of quietly running with local
+  // settings. `.meta({ example })` is what `pnpm env:example` writes as the
+  // value, since a required field has no default to write.
+  APP_ENV: AppEnvSchema.describe(
+    'Which deployment this is: local, dev, qa or prod. Required. COOKIE_SECURE and LOG_FORMAT default from it, and SMTP requires TLS everywhere but local.'
+  ).meta({ example: 'local' }),
+  // Kept alongside APP_ENV because Express reads it itself (app.get('env')):
+  // only `production` hides stack traces in Express's built-in error handler.
+  NODE_ENV: z
+    .enum(['development', 'test', 'production'])
+    .describe(
+      'Node runtime mode: development, test or production. Required. Express reads it directly, and only production hides stack traces in its built-in error handler, so every APP_ENV but local must run production. test is for the test suite.'
+    )
+    .meta({ example: 'development' }),
   APP_PORT: z.coerce.number().int().positive().default(4040),
 
   // FORMER PLACEHOLDERS. APP_URL and SESSION_SECRET used to be forward
@@ -90,6 +111,25 @@ const EnvSchema = z.object({
 
   DATABASE_URL: z.url(),
   REDIS_URL: z.url(),
+
+  DB_POOL_MAX: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(10)
+    .describe(
+      "Most open connections in the Postgres pool, per process. Defaults to 10. The test suite sets 2, so its parallel workers stay under Postgres's default 100 connections."
+    ),
+  // 0 is allowed and means "no timeout", which is Postgres's own meaning for
+  // statement_timeout = 0.
+  DB_STATEMENT_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .nonnegative()
+    .default(30_000)
+    .describe(
+      'Milliseconds a single SQL statement may run before Postgres cancels it (statement_timeout). 0 turns the limit off. Defaults to 30000 (30s).'
+    ),
 
   JWT_ACCESS_SECRET: z
     .string()
@@ -282,6 +322,26 @@ const EnvSchema = z.object({
       'How much of X-Forwarded-For to believe. "false" (default) trusts none: correct when clients reach this app directly, WRONG behind a proxy, where every IP-keyed rate limiter then shares one bucket for the whole deployment. Behind a proxy set the NUMBER of proxies in front of this app (e.g. "1"), or a comma-separated list of trusted proxy addresses/subnets or presets ("loopback", "linklocal", "uniquelocal"). Never "true" — it is refused, because it lets any client spoof its own IP and bypass the limiters.'
     ),
 
+  // Optional with no schema default on purpose: the default depends on
+  // APP_ENV, and only isCookieSecure() below applies it. A plain `.default()`
+  // cannot read a sibling field.
+  COOKIE_SECURE: z
+    .stringbool()
+    .optional()
+    .describe(
+      'Whether the refresh-token and OAuth session cookies carry the Secure attribute ("true" or "false"). Defaults from APP_ENV: false on local, true elsewhere. With Secure on behind a TLS-terminating proxy, TRUST_PROXY must be set, or the OAuth session cookie is never sent.'
+    ),
+  COOKIE_DOMAIN: z
+    .string()
+    .refine((value) => !/[\s/:]/.test(value), {
+      message:
+        'COOKIE_DOMAIN must be a bare domain such as "example.com", with no scheme, port or path.',
+    })
+    .optional()
+    .describe(
+      'Domain attribute for the refresh-token and OAuth session cookies, e.g. "example.com" to share them with subdomains. Unset means host-only cookies, the narrowest scope.'
+    ),
+
   // Extra browser origins allowed to call this API, comma-separated, e.g.
   // "https://admin.example.com,https://shop.example.com". WEB_URL is ALWAYS
   // allowed and does not need listing. Same-origin requests send no Origin
@@ -324,6 +384,14 @@ const EnvSchema = z.object({
     .describe(
       'Console log level: error, warn, info or debug. silent disables logging entirely (the test suite uses it).'
     ),
+  // Optional with no schema default, for the same reason as COOKIE_SECURE:
+  // logFormat() below derives it from APP_ENV.
+  LOG_FORMAT: z
+    .enum(['json', 'pretty'])
+    .optional()
+    .describe(
+      'Console log format: json or pretty. Defaults from APP_ENV: pretty on local, json elsewhere. pretty needs the pino-pretty devDependency; without it the logger writes json.'
+    ),
 
   SLACK_WEBHOOK_URL: z
     .url({ protocol: /^https?$/ })
@@ -347,6 +415,14 @@ const EnvSchema = z.object({
     .default(true)
     .describe(
       'Whether the BullMQ workers (email + notification) start in-process alongside the HTTP server. Set to false for API-only pods behind a load balancer; a separate worker deployment sets this to true.'
+    ),
+  WORKER_CONCURRENCY: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(5)
+    .describe(
+      'Jobs each BullMQ worker (email, notification) processes at once, per process. Defaults to 5.'
     ),
   QUEUE_PREFIX: z
     .string()
@@ -429,25 +505,16 @@ const EnvSchema = z.object({
       'The From address on every outbound email. Mailpit accepts any value; a real provider may require this to be a verified sender.'
     ),
 
-  // The product name Task 3's email templates (src/templates/email/) put in
-  // their subject lines and sign-offs (e.g. "Verify your email for
-  // <APP_NAME>") — never hardcoded into a template, per this repo's own
-  // "anything configurable goes in this schema" convention. PLACEHOLDER at
-  // THIS layer specifically: nothing in src/ calls `getEnv().APP_NAME` yet,
-  // because the controller that would (Task 5/6) does not exist in this
-  // plan's execution order yet — every template function takes `appName` as
-  // an ordinary string argument, not by reading this schema itself, so it
-  // stays a pure function with no config dependency of its own to mock in a
-  // unit test. Defaulted, unlike APP_URL/WEB_URL's required-placeholder
-  // pattern: a product name carries no security consequence the way a
-  // missing secret or a wrong CORS origin would, so there is no fail-fast
-  // argument for making a cloner set this before anything boots.
+  // The product name in email copy and notification text. Callers read
+  // `getEnv().APP_NAME` and pass it to a template as `appName`, so the
+  // templates stay pure functions. Defaulted: a product name carries no
+  // security consequence, so there is no reason to fail boot without one.
   APP_NAME: z
     .string()
     .min(1)
     .default('Express Boilerplate')
     .describe(
-      'Product name used in outbound email copy (src/templates/email/). PLACEHOLDER — nothing in src/ reads it yet; reserved for a later task\'s controller to pass into a template\'s appName variable. Defaults to "Express Boilerplate".'
+      'Product name in outbound email copy and notification text: verification, password reset, password changed and invitation messages (auth.controller.ts, verification-mail.utilities.ts, tenant-invitation.service.ts). Defaults to "Express Boilerplate".'
     ),
 
   // THESE THREE BOUND A TIMING ORACLE, NOT MERELY A RESOURCE LEAK — read
@@ -501,6 +568,15 @@ const EnvSchema = z.object({
     .default(20_000)
     .describe(
       "Milliseconds of inactivity before an open SMTP connection is closed. Bounds a timing side-channel — see SMTP_CONNECTION_TIMEOUT. nodemailer's own default is 10 minutes."
+    ),
+
+  SHUTDOWN_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(25_000)
+    .describe(
+      "Milliseconds graceful shutdown may take before the process exits with code 1 anyway. Defaults to 25000, under Kubernetes' default 30s termination grace period."
     ),
 })
 
@@ -584,6 +660,38 @@ export function trustProxySetting(value: string): boolean | number | string {
   const normalised = value.trim()
   if (normalised.toLowerCase() === 'false') return false
   return /^\d+$/.test(normalised) ? Number(normalised) : normalised
+}
+
+/**
+ * Whether the auth cookies (refresh token, OAuth session) carry `Secure`.
+ *
+ * The one place the rule lives: an explicit COOKIE_SECURE wins, otherwise
+ * every APP_ENV but `local` is secure.
+ * @param env - The COOKIE_SECURE and APP_ENV slice of the validated environment.
+ * @returns True when the cookies must only travel over HTTPS.
+ */
+export function isCookieSecure(env: Pick<Env, 'COOKIE_SECURE' | 'APP_ENV'>): boolean {
+  return env.COOKIE_SECURE ?? env.APP_ENV !== 'local'
+}
+
+/**
+ * Console log format: an explicit LOG_FORMAT wins, otherwise `pretty` on
+ * local and `json` everywhere else.
+ * @param env - The LOG_FORMAT and APP_ENV slice of the validated environment.
+ * @returns The format the logger writes.
+ */
+export function logFormat(env: Pick<Env, 'LOG_FORMAT' | 'APP_ENV'>): 'json' | 'pretty' {
+  return env.LOG_FORMAT ?? (env.APP_ENV === 'local' ? 'pretty' : 'json')
+}
+
+/**
+ * Whether SMTP must upgrade to TLS rather than only negotiating it when the
+ * server offers it. Off on local only, where Mailpit cannot speak TLS.
+ * @param env - The APP_ENV slice of the validated environment.
+ * @returns True on every APP_ENV but `local`.
+ */
+export function requiresSmtpTls(env: Pick<Env, 'APP_ENV'>): boolean {
+  return env.APP_ENV !== 'local'
 }
 
 /**
