@@ -52,6 +52,59 @@ function dataOf<TData>(body: unknown): TData {
   return (body as { data: TData }).data
 }
 
+/**
+ * Invite an address with `role` as the bearer of `token`.
+ * @param tenant - The tenant.
+ * @param token - The inviter's token.
+ * @param role - The role offered.
+ * @returns The response.
+ */
+async function invite(tenant: Tenant, token: string, role: MembershipRole) {
+  return request(app)
+    .post(`/api/v1/tenants/${tenant.slug}/invitations`)
+    .set('Authorization', `Bearer ${token}`)
+    .send({ email: uniqueEmail(), role })
+}
+
+/**
+ * Change `target`'s role as the bearer of `token`.
+ * @param tenant - The tenant.
+ * @param token - The actor's token.
+ * @param target - The member to change.
+ * @param role - The new role.
+ * @returns The response.
+ */
+async function changeRole(tenant: Tenant, token: string, target: User, role: MembershipRole) {
+  return request(app)
+    .patch(`/api/v1/tenants/${tenant.slug}/members/${target.id}`)
+    .set('Authorization', `Bearer ${token}`)
+    .send({ role })
+}
+
+/**
+ * Remove `target` as the bearer of `token`.
+ * @param tenant - The tenant.
+ * @param token - The actor's token.
+ * @param target - The member to remove.
+ * @returns The response.
+ */
+async function removeMember(tenant: Tenant, token: string, target: User) {
+  return request(app)
+    .delete(`/api/v1/tenants/${tenant.slug}/members/${target.id}`)
+    .set('Authorization', `Bearer ${token}`)
+}
+
+/**
+ * The target's current role in the tenant.
+ * @param tenant - The tenant.
+ * @param target - The member.
+ * @returns The role, or undefined when no longer a member.
+ */
+async function roleOf(tenant: Tenant, target: User): Promise<string | undefined> {
+  const membership = await userMembershipRepository.findByUserAndTenant(target.id, tenant.id)
+  return membership?.role
+}
+
 describe('platform access over the API', () => {
   const createdTenantIds: string[] = []
   const createdUserIds: string[] = []
@@ -106,6 +159,18 @@ describe('platform access over the API', () => {
     const staff = await createAuthenticatedUser()
     await makeStaff(staff.user.id, role)
     return staff
+  }
+
+  /**
+   * A fresh member of `tenant` with `role`, bypassing the API.
+   * @param tenant - The tenant.
+   * @param role - The role.
+   * @returns The member.
+   */
+  async function addMember(tenant: Tenant, role: MembershipRole): Promise<User> {
+    const { user } = await createAuthenticatedUser()
+    await userMembershipRepository.create({ userId: user.id, tenantId: tenant.id, role })
+    return user
   }
 
   describe('reads and the role bar', () => {
@@ -246,6 +311,100 @@ describe('platform access over the API', () => {
       // The search works (the look-alike is found) and skips the platform tenant.
       expect(serialised).toContain(lookalike.id)
       expect(serialised).not.toContain(platform.id)
+    })
+  })
+
+  describe('staff and owners, under the unchanged policies', () => {
+    it('refuses a staff admin inviting an owner or an admin, and records no invitation', async () => {
+      const { tenant } = await ownedTenant()
+      const { token } = await staffUser('admin')
+
+      for (const role of ['owner', 'admin'] as const) {
+        const response = await invite(tenant, token, role)
+        expect(response.status).toBe(403)
+        expect(response.body).toMatchObject({
+          statusCode: 403,
+          message: 'Insufficient permissions to grant this role',
+        })
+      }
+      const rows = await sql`select id from tenant_invitations where tenant_id = ${tenant.id}`
+      expect(rows).toHaveLength(0)
+    })
+
+    it('refuses a staff admin changing or removing an owner, or changing an admin', async () => {
+      const { owner, tenant } = await ownedTenant()
+      const admin = await addMember(tenant, 'admin')
+      const { token } = await staffUser('admin')
+
+      const changeOwner = await changeRole(tenant, token, owner, 'viewer')
+      const ownerRemoval = await removeMember(tenant, token, owner)
+      const changeAdmin = await changeRole(tenant, token, admin, 'viewer')
+
+      // PATCH /members is owner-only at the route, so both changes stop at requireRole.
+      expect(changeOwner.body).toMatchObject({
+        statusCode: 403,
+        message: 'Insufficient permissions',
+      })
+      expect(changeAdmin.body).toMatchObject({
+        statusCode: 403,
+        message: 'Insufficient permissions',
+      })
+      expect(ownerRemoval.body).toMatchObject({
+        statusCode: 403,
+        message: 'Insufficient permissions to remove this member',
+      })
+      expect(await roleOf(tenant, owner)).toBe('owner')
+      expect(await roleOf(tenant, admin)).toBe('admin')
+    })
+
+    it('lets a staff admin remove a manager, but not change one (PATCH /members is owner-only)', async () => {
+      const { tenant } = await ownedTenant()
+      const kept = await addMember(tenant, 'manager')
+      const removed = await addMember(tenant, 'manager')
+      const { token } = await staffUser('admin')
+
+      const change = await changeRole(tenant, token, kept, 'viewer')
+      const removal = await removeMember(tenant, token, removed)
+
+      expect(change.body).toMatchObject({ statusCode: 403, message: 'Insufficient permissions' })
+      expect(removal.status).toBe(200)
+      expect(await roleOf(tenant, kept)).toBe('manager')
+      expect(await roleOf(tenant, removed)).toBeUndefined()
+    })
+
+    it('lets a staff owner invite an owner, and change an admin or a manager', async () => {
+      const { tenant } = await ownedTenant()
+      const admin = await addMember(tenant, 'admin')
+      const manager = await addMember(tenant, 'manager')
+      const { token } = await staffUser('owner')
+
+      const invitation = await invite(tenant, token, 'owner')
+      const adminChange = await changeRole(tenant, token, admin, 'manager')
+      const managerChange = await changeRole(tenant, token, manager, 'editor')
+
+      expect(invitation.status).toBe(202)
+      expect(adminChange.status).toBe(200)
+      expect(managerChange.status).toBe(200)
+      expect(await roleOf(tenant, admin)).toBe('manager')
+      expect(await roleOf(tenant, manager)).toBe('editor')
+    })
+
+    it('refuses even a staff owner changing or removing an owner', async () => {
+      const { owner, tenant } = await ownedTenant()
+      const { token } = await staffUser('owner')
+
+      const change = await changeRole(tenant, token, owner, 'admin')
+      const removal = await removeMember(tenant, token, owner)
+
+      expect(change.body).toMatchObject({
+        statusCode: 403,
+        message: "Insufficient permissions to change this member's role",
+      })
+      expect(removal.body).toMatchObject({
+        statusCode: 403,
+        message: 'Insufficient permissions to remove this member',
+      })
+      expect(await roleOf(tenant, owner)).toBe('owner')
     })
   })
 })

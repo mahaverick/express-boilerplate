@@ -337,8 +337,9 @@ export class UserMembershipRepository {
    * transaction ends (`SELECT … FOR UPDATE`, in `user_id` order).
    *
    * Lock order within one transaction: the tenant's owner rows first
-   * (`lockOwners`), then this. Every service that locks memberships follows
-   * it, so two transactions never wait on each other in a cycle.
+   * (`lockOwners`), then this, then `lockPlatformRole` when the actor has no
+   * membership here. Every service that locks memberships follows it, so two
+   * transactions never wait on each other in a cycle.
    * @param tenantId - The tenant.
    * @param userIds - The users whose memberships to lock. Duplicates and non-members are ignored.
    * @param executor - The transaction to hold the locks in.

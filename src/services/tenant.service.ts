@@ -4,7 +4,7 @@
 // membership changes (tenant-membership.service.ts) and invitations
 // (tenant-invitation.service.ts). Every function below except `createTenant`
 // and `listForUser` assumes `resolveTenant` has already confirmed the caller
-// is a member of `tenantId`.
+// has access to `tenantId`; the two writes re-read that access under lock.
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { NewTenant, Tenant, TenantSettings } from '@/database/models/tenant.model'
 import { HttpError } from '@/errors/http-error'
@@ -15,6 +15,7 @@ import {
   type MembershipWithUser,
 } from '@/repositories/user-membership.repository'
 import { withTransaction } from '@/services/database.service'
+import { lockActorRole } from '@/services/tenant-membership.service'
 import type { Actor } from '@/types/actor'
 import type {
   CreateTenantInput,
@@ -105,19 +106,29 @@ export async function getTenant(tenantId: string): Promise<Tenant> {
 }
 
 /**
- * Update a tenant's name, description, logo or website. A body with no
- * recognised field skips the write and returns the current row.
+ * Update a tenant's name, description, logo or website. The actor's access
+ * is re-read under lock first, so a demotion after `resolveTenant` still
+ * counts. A body with no recognised field skips the write and returns the
+ * current row.
+ * @param actor - The signed-in user making the change.
  * @param tenantId - The tenant.
  * @param input - The validated PATCH body.
  * @returns The tenant after the update.
- * @throws {HttpError} 404, when the tenant no longer exists.
+ * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access or the tenant is gone; 403 `Insufficient permissions` when the actor is now below admin.
  */
-export async function updateTenant(tenantId: string, input: UpdateTenantInput): Promise<Tenant> {
+export async function updateTenant(
+  actor: Actor,
+  tenantId: string,
+  input: UpdateTenantInput
+): Promise<Tenant> {
   const values = toTenantUpdateValues(input)
   const hasChanges = Object.keys(values).length > 0
-  const tenant = hasChanges
-    ? await tenantRepository.update(tenantId, values)
-    : await tenantRepository.findById(tenantId)
+  const tenant = await withTransaction(async (tx) => {
+    await lockActorRole(actor, tenantId, 'admin', tx)
+    return hasChanges
+      ? tenantRepository.update(tenantId, values, {}, tx)
+      : tenantRepository.findById(tenantId, {}, tx)
+  })
   if (!tenant) throw new HttpError('Tenant not found', 404)
   return tenant
 }
@@ -144,22 +155,28 @@ export async function getSettings(tenantId: string): Promise<TenantSettings> {
 }
 
 /**
- * Update a tenant's settings. A body with no recognised field skips the
- * write and returns the current row.
+ * Update a tenant's settings. The actor's access is re-read under lock
+ * first. A body with no recognised field skips the write and returns the
+ * current row.
+ * @param actor - The signed-in user making the change.
  * @param tenantId - The tenant.
  * @param input - The validated PATCH body.
  * @returns The settings after the update.
- * @throws {HttpError} 404, when no settings row exists.
+ * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access; 403 `Insufficient permissions` when the actor is now below admin; 404 when no settings row exists.
  */
 export async function updateSettings(
+  actor: Actor,
   tenantId: string,
   input: UpdateTenantSettingsInput
 ): Promise<TenantSettings> {
   const values = toSettingsUpdateValues(input)
   const hasChanges = Object.keys(values).length > 0
-  const settings = hasChanges
-    ? await tenantSettingsRepository.update(tenantId, values)
-    : await tenantSettingsRepository.findByTenantId(tenantId)
+  const settings = await withTransaction(async (tx) => {
+    await lockActorRole(actor, tenantId, 'admin', tx)
+    return hasChanges
+      ? tenantSettingsRepository.update(tenantId, values, tx)
+      : tenantSettingsRepository.findByTenantId(tenantId, tx)
+  })
   if (!settings) throw new HttpError('Tenant settings not found', 404)
   return settings
 }

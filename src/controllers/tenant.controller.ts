@@ -132,12 +132,13 @@ class TenantController extends BaseController {
    * `PATCH /tenants/:slug`: update a tenant's `name`/`description`/`logo`/
    * `website`. Owner/admin only — `requireRole('owner', 'admin')`
    * (tenant.routes.ts) gates this before the handler runs. `slug` cannot be
-   * changed here — see `updateTenantSchema`'s own comment for why.
+   * changed here — see `updateTenantSchema`'s own comment for why. The
+   * service re-reads the caller's access under lock.
    */
   updateTenant = this.handle(async (request, response) => {
     const principal = tenantPrincipal(request)
     const input = parseBody(updateTenantSchema, request.body)
-    const tenant = await updateTenant(principal.tenantId, input)
+    const tenant = await updateTenant(actorFrom(request), principal.tenantId, input)
     successResponse(response, tenant, 'Tenant updated.')
   })
 
@@ -248,12 +249,13 @@ class TenantController extends BaseController {
 
   /**
    * `PATCH /tenants/:slug/settings`: update a tenant's settings. Owner/admin
-   * only (`requireRole('owner', 'admin')`, tenant.routes.ts).
+   * only (`requireRole('owner', 'admin')`, tenant.routes.ts). The service
+   * re-reads the caller's access under lock.
    */
   updateSettings = this.handle(async (request, response) => {
     const principal = tenantPrincipal(request)
     const input = parseBody(updateTenantSettingsSchema, request.body)
-    const settings = await updateSettings(principal.tenantId, input)
+    const settings = await updateSettings(actorFrom(request), principal.tenantId, input)
     successResponse(response, settings, 'Settings updated.')
   })
 }

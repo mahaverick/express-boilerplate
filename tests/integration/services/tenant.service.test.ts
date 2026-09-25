@@ -99,10 +99,46 @@ describe('updateTenant and updateSettings with no recognised field', () => {
     createdTenantIds.push(tenant.id)
 
     await withMutatedMethod(TenantRepository.prototype, 'update', refuseWrite, async () => {
-      await expect(updateTenant(tenant.id, {})).resolves.toMatchObject({ id: tenant.id })
+      await expect(updateTenant({ userId }, tenant.id, {})).resolves.toMatchObject({
+        id: tenant.id,
+      })
     })
     await withMutatedMethod(TenantSettingsRepository.prototype, 'update', refuseWrite, async () => {
-      await expect(updateSettings(tenant.id, {})).resolves.toMatchObject({ tenantId: tenant.id })
+      await expect(updateSettings({ userId }, tenant.id, {})).resolves.toMatchObject({
+        tenantId: tenant.id,
+      })
     })
+  })
+})
+
+describe('updateTenant and updateSettings re-read the actor under lock', () => {
+  it('refuse a member below admin before any write', async () => {
+    const ownerId = await createUser()
+    const editorId = await createUser()
+    const tenant = await createTenant({ userId: ownerId }, { name: 'Acme', slug: uniqueSlug() })
+    createdTenantIds.push(tenant.id)
+    await userMembershipRepository.create({ userId: editorId, tenantId: tenant.id, role: 'editor' })
+
+    await withMutatedMethod(TenantRepository.prototype, 'update', refuseWrite, async () => {
+      await expect(
+        updateTenant({ userId: editorId }, tenant.id, { name: 'Nope' })
+      ).rejects.toMatchObject({ statusCode: 403, message: 'Insufficient permissions' })
+    })
+    await withMutatedMethod(TenantSettingsRepository.prototype, 'update', refuseWrite, async () => {
+      await expect(
+        updateSettings({ userId: editorId }, tenant.id, { locale: 'fr' })
+      ).rejects.toMatchObject({ statusCode: 403, message: 'Insufficient permissions' })
+    })
+  })
+
+  it('answer 404 Tenant not found to a caller with no access', async () => {
+    const ownerId = await createUser()
+    const outsiderId = await createUser()
+    const tenant = await createTenant({ userId: ownerId }, { name: 'Acme', slug: uniqueSlug() })
+    createdTenantIds.push(tenant.id)
+
+    await expect(
+      updateTenant({ userId: outsiderId }, tenant.id, { name: 'Nope' })
+    ).rejects.toMatchObject({ statusCode: 404, message: 'Tenant not found' })
   })
 })

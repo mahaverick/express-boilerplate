@@ -257,7 +257,7 @@ async function tenantForMessages(
  * @param tenantId - The tenant.
  * @param email - The address to invite, in any case.
  * @param role - The role offered.
- * @throws {HttpError} 404 `Tenant not found` when the actor is no longer a member, or when the tenant is gone; 403 when the actor is now below admin or may not grant `role`; 409 `already_member` when the address belongs to a member; 409 `invitation_conflict` from a racing duplicate invite.
+ * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access, or when the tenant is gone; 403 when the actor is now below admin or may not grant `role`; 409 `already_member` when the address belongs to a member; 409 `invitation_conflict` from a racing duplicate invite.
  */
 export async function invite(
   actor: Actor,
@@ -269,7 +269,7 @@ export async function invite(
   const rawToken = generateInvitationToken()
 
   const context: InvitationMessageContext = await db.transaction(async (tx) => {
-    const actorRole = await lockActorRole(actor, tenantId, 'admin', tx)
+    const { role: actorRole } = await lockActorRole(actor, tenantId, 'admin', tx)
     if (!canActorGrantRole(actorRole, role)) throw new HttpError(GRANT_REFUSED_MESSAGE, 403)
 
     const invitee = await userRepository.findByEmail(normalizedEmail, {}, tx)
@@ -325,14 +325,14 @@ export async function listPending(tenantId: string): Promise<PendingInvitationSu
  * @param actor - The signed-in user resending it, named in the email.
  * @param tenantId - The tenant it must belong to.
  * @param invitationId - The invitation.
- * @throws {HttpError} 404 when the tenant is gone, before anything is written; 404 `Tenant not found` when the actor is no longer a member; 403 when the actor is now below admin; 404 `invitation_not_found` when it is not pending in this tenant; 403 when the actor may not grant its role.
+ * @throws {HttpError} 404 when the tenant is gone, before anything is written; 404 `Tenant not found` when the actor no longer has access; 403 when the actor is now below admin; 404 `invitation_not_found` when it is not pending in this tenant; 403 when the actor may not grant its role.
  */
 export async function resend(actor: Actor, tenantId: string, invitationId: string): Promise<void> {
   // Before the write, so a vanished tenant cannot leave the old link replaced and no email sent.
   const tenant = await tenantForMessages(tenantId)
   const rawToken = generateInvitationToken()
   const invitation = await db.transaction(async (tx) => {
-    const actorRole = await lockActorRole(actor, tenantId, 'admin', tx)
+    const { role: actorRole } = await lockActorRole(actor, tenantId, 'admin', tx)
     const pending = await invitationRepository.findPendingById(tenantId, invitationId, tx)
     if (!pending) throw invitationNotFound()
     if (!canActorGrantRole(actorRole, pending.role)) {
@@ -368,7 +368,7 @@ export async function resend(actor: Actor, tenantId: string, invitationId: strin
  * @param actor - The signed-in user revoking it.
  * @param tenantId - The tenant it must belong to.
  * @param invitationId - The invitation.
- * @throws {HttpError} 404 `Tenant not found` when the actor is no longer a member; 403 when the actor is now below admin; 404 `invitation_not_found` when it is not pending in this tenant.
+ * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access; 403 when the actor is now below admin; 404 `invitation_not_found` when it is not pending in this tenant.
  */
 export async function revoke(actor: Actor, tenantId: string, invitationId: string): Promise<void> {
   await db.transaction(async (tx) => {
