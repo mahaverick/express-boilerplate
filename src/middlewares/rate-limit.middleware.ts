@@ -1,15 +1,13 @@
 // src/middlewares/rate-limit.middleware.ts
 //
-// One generic limiter, `createRateLimiter(spec)`, replaces the 19 factories
-// that used to live here — the specs (window, limit, key axis) now live in
+// One generic limiter, `createRateLimiter(spec)`, builds every rate
+// limiter this API mounts. The specs (window, limit, key axis) live in
 // `constants/rate-limit.constants.ts`'s `RATE_LIMITS` table, which is the
-// single source of truth for the per-endpoint threat model. See that
-// file's own header comment for why the key-derivation functions live
-// there too (import-x/no-cycle), and ARCHITECTURE.md/SECURITY.md for the
-// full per-endpoint reasoning (composite login key, tight-IP/generous-email
+// single source of truth for the per-endpoint threat model — see each
+// entry's own comment there (composite login key, tight-IP/generous-email
 // resend-verification and forgot-password pairs, user-keyed tenant/
-// change-password limiters, etc.) that used to be this file's own header
-// comment.
+// change-password limiters, etc.). See that file's own header comment for
+// why the key-derivation functions live there too (import-x/no-cycle).
 //
 // A factory, not a module-scope constant: `rateLimit(...)` allocates a
 // `Store` instance, and express-rate-limit refuses to let two limiter
@@ -54,8 +52,8 @@ function limiterStore(name: string): SharedRateLimitStore {
 /**
  * Resolve `spec.keyBy` to the `keyGenerator` express-rate-limit needs, or
  * `undefined` for `'ip'` — which leaves express-rate-limit's own default
- * (IPv6-normalising) key generator in place, exactly as every IP-keyed
- * factory did today by omitting `keyGenerator` entirely.
+ * (IPv6-normalising) key generator in place, the same one every IP-keyed
+ * `RATE_LIMITS` entry uses by omitting a custom key generator.
  * @param keyBy - The spec's key axis.
  * @returns A key generator, or undefined to use express-rate-limit's default.
  */

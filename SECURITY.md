@@ -345,8 +345,9 @@ endpoint that returned it. A new route takes its own prefix on the same
 pattern; `tests/unit/middlewares/rate-limit.middleware.test.ts` fails if two
 ever collide. `/verify-email` and `/resend-verification`'s
 own per-limiter reasoning — including why `/resend-verification`'s IP layer
-is the tight one and its email layer the generous one — lives in
-`rate-limit.middleware.ts`'s own header comment. The store starts in
+is the tight one and its email layer the generous one — lives in the
+matching entries of `RATE_LIMITS` (rate-limit.constants.ts), one comment
+per limiter. The store starts in
 memory and switches to Redis once Redis answers, so the limit is shared
 across replicas. Whenever a Redis command fails, that request is counted in
 the store's own memory instead, and the next successful command returns it

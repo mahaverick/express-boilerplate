@@ -115,7 +115,7 @@ function attempt(app: Express, email: string, password = 'wrong-password'): Test
   return request(app).post('/login').send({ email, password })
 }
 
-describe('createLoginRateLimiter', () => {
+describe('RATE_LIMITS.login', () => {
   it('returns 429 with standardized RateLimit-* headers (never the legacy X-RateLimit-* ones) once the limit is exceeded', async () => {
     const app = buildApp(2)
 
@@ -189,7 +189,7 @@ describe('createLoginRateLimiter', () => {
   })
 })
 
-describe('createLoginIpRateLimiter', () => {
+describe('RATE_LIMITS.loginIp', () => {
   it('returns 429 once one IP spends its budget, even with a different email every time', async () => {
     const app = buildAppBehind(
       createRateLimiter(RATE_LIMITS.loginIp, { limit: 3, windowMs: 60_000 })
@@ -224,7 +224,7 @@ function buildAccountLimitedApp(limit: number): Express {
   return app
 }
 
-describe('createLoginAccountRateLimiter', () => {
+describe('RATE_LIMITS.loginAccount', () => {
   it('returns 429 once one account is guessed at from many different IPs', async () => {
     const app = buildAccountLimitedApp(3)
 
@@ -255,8 +255,9 @@ describe('createLoginAccountRateLimiter', () => {
 describe('POST /login wiring', () => {
   it('mounts the ip+email, per-IP and per-account limiters, in that order, before login', () => {
     // Asserted against the committed route file, the same way `store
-    // prefixes` below guards the prefixes: a built router does not expose
-    // which limiter factories produced its middleware.
+    // prefix derivation` below asserts against the committed middleware
+    // source: a built router does not expose which `RATE_LIMITS` entry
+    // produced each piece of its middleware.
     const routes = fs.readFileSync(path.resolve(process.cwd(), 'src/routes/auth.routes.ts'), 'utf8')
     expect(routes).toMatch(
       /router\.post\(\s*'\/login',\s*createRateLimiter\(RATE_LIMITS\.login\),\s*createRateLimiter\(RATE_LIMITS\.loginIp\),\s*createRateLimiter\(RATE_LIMITS\.loginAccount\),\s*authController\.login\s*\)/
@@ -264,7 +265,7 @@ describe('POST /login wiring', () => {
   })
 })
 
-describe('createRegisterRateLimiter', () => {
+describe('RATE_LIMITS.register', () => {
   it('returns 429 with standardized RateLimit-* headers once the limit is exceeded', async () => {
     const app = buildAppBehind(
       createRateLimiter(RATE_LIMITS.register, { limit: 2, windowMs: 60_000 })
@@ -314,7 +315,7 @@ describe('createRegisterRateLimiter', () => {
   })
 })
 
-describe('createLogoutRateLimiter', () => {
+describe('RATE_LIMITS.logout', () => {
   it('returns 429 once the limit is exceeded, keyed on IP alone', async () => {
     const app = buildAppBehind(
       createRateLimiter(RATE_LIMITS.logout, { limit: 1, windowMs: 60_000 })
@@ -329,7 +330,7 @@ describe('createLogoutRateLimiter', () => {
   })
 })
 
-describe('createForgotPasswordIpRateLimiter', () => {
+describe('RATE_LIMITS.forgotPasswordIp', () => {
   it('returns 429 once the limit is exceeded, keyed on IP alone', async () => {
     const app = buildAppBehind(
       createRateLimiter(RATE_LIMITS.forgotPasswordIp, { limit: 2, windowMs: 60_000 })
@@ -346,7 +347,7 @@ describe('createForgotPasswordIpRateLimiter', () => {
   })
 })
 
-describe('createForgotPasswordEmailRateLimiter', () => {
+describe('RATE_LIMITS.forgotPasswordEmail', () => {
   it('keys on the submitted address alone: a different address is unaffected by the victim’s counter', async () => {
     const app = buildAppBehind(
       createRateLimiter(RATE_LIMITS.forgotPasswordEmail, { limit: 2, windowMs: 60_000 })
@@ -368,7 +369,7 @@ describe('createForgotPasswordEmailRateLimiter', () => {
   })
 })
 
-describe('createResetPasswordRateLimiter', () => {
+describe('RATE_LIMITS.resetPassword', () => {
   it('returns 429 once the limit is exceeded, keyed on IP alone', async () => {
     const app = buildAppBehind(
       createRateLimiter(RATE_LIMITS.resetPassword, { limit: 1, windowMs: 60_000 })
@@ -383,7 +384,7 @@ describe('createResetPasswordRateLimiter', () => {
   })
 })
 
-describe('createCreateTenantRateLimiter', () => {
+describe('RATE_LIMITS.createTenant', () => {
   it('returns 429 with standardized RateLimit-* headers once the limit is exceeded', async () => {
     const app = buildAppBehindAsUser(
       createRateLimiter(RATE_LIMITS.createTenant, { limit: 2, windowMs: 60_000 })
@@ -404,16 +405,17 @@ describe('createCreateTenantRateLimiter', () => {
 
   // The property that makes this limiter genuinely different from every
   // IP-keyed one above, and the one this file's own precedent
-  // (`loginRateLimitKey`'s "keys on IP AND email" test, and
-  // `createForgotPasswordEmailRateLimiter`'s "a different address is
-  // unaffected" test) already establishes matters enough to prove directly:
-  // two different authenticated callers behind the SAME client IP (one
-  // supertest agent, so one shared underlying connection/IP) must not share
-  // a counter. Red if `createCreateTenantRateLimiter` were built with
-  // express-rate-limit's default IP-based `keyGenerator` instead of
-  // `authenticatedUserRateLimitKey` — every request in this test would then
-  // land in the same bucket regardless of `x-test-user-id`, and `bystander`
-  // below would come back 429 instead of 201.
+  // (`loginRateLimitKey`'s "keys on IP AND email" test, and the
+  // `RATE_LIMITS.forgotPasswordEmail` describe block's "a different
+  // address is unaffected" test) already establishes matters enough to
+  // prove directly: two different authenticated callers behind the SAME
+  // client IP (one supertest agent, so one shared underlying
+  // connection/IP) must not share a counter. Red if `RATE_LIMITS.createTenant`
+  // were built with express-rate-limit's default IP-based `keyGenerator`
+  // instead of `authenticatedUserRateLimitKey` — every request in this
+  // test would then land in the same bucket regardless of
+  // `x-test-user-id`, and `bystander` below would come back 429 instead
+  // of 201.
   it('keys on the authenticated user id, not IP: a different user is unaffected by another user’s counter', async () => {
     const app = buildAppBehindAsUser(
       createRateLimiter(RATE_LIMITS.createTenant, { limit: 1, windowMs: 60_000 })
@@ -448,7 +450,7 @@ describe('createCreateTenantRateLimiter', () => {
   })
 })
 
-describe('createInviteTenantMemberRateLimiter', () => {
+describe('RATE_LIMITS.inviteTenantMember', () => {
   it('returns 429 with standardized RateLimit-* headers once the limit is exceeded', async () => {
     const app = buildAppBehindAsUser(
       createRateLimiter(RATE_LIMITS.inviteTenantMember, { limit: 2, windowMs: 60_000 })
@@ -465,10 +467,11 @@ describe('createInviteTenantMemberRateLimiter', () => {
     expect(limited.body).toMatchObject({ success: false, code: RATE_LIMITED_CODE })
   })
 
-  // Same discriminator as `createCreateTenantRateLimiter` above, proven
-  // again for this limiter specifically — the two do not share a factory
-  // implementation, only the same `authenticatedUserRateLimitKey` function,
-  // so each is proven independently rather than one standing in for both.
+  // Same discriminator as `RATE_LIMITS.createTenant` above, proven again
+  // for this limiter specifically — the two share `createRateLimiter` and
+  // `authenticatedUserRateLimitKey`, but each is a distinct `RATE_LIMITS`
+  // entry with its own store prefix, so each is proven independently
+  // rather than one standing in for both.
   it('keys on the authenticated user id, not IP: a different user is unaffected by another user’s counter', async () => {
     const app = buildAppBehindAsUser(
       createRateLimiter(RATE_LIMITS.inviteTenantMember, { limit: 1, windowMs: 60_000 })
@@ -486,7 +489,7 @@ describe('createInviteTenantMemberRateLimiter', () => {
   })
 })
 
-describe('createInvitationPreviewRateLimiter', () => {
+describe('RATE_LIMITS.invitationPreview', () => {
   it('returns 429 once the limit is exceeded, keyed on IP alone', async () => {
     const app = buildAppBehind(
       createRateLimiter(RATE_LIMITS.invitationPreview, { limit: 1, windowMs: 60_000 })
@@ -501,7 +504,7 @@ describe('createInvitationPreviewRateLimiter', () => {
   })
 })
 
-describe('createInvitationAcceptRateLimiter', () => {
+describe('RATE_LIMITS.invitationAccept', () => {
   // Keyed on IP, not the user: two different signed-in callers behind one
   // IP share the bucket, because the limiter runs before requireAuth.
   it('returns 429 once the limit is exceeded, whoever the caller claims to be', async () => {

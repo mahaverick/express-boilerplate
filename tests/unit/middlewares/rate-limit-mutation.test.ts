@@ -1,32 +1,34 @@
 // tests/unit/middlewares/rate-limit-mutation.test.ts
 //
-// Fix round 1 on B3 Task 0: withMutatedMethod was proven against a real
-// security behaviour (reuse detection); withMutatedModule was proven only
-// against a pure fixture pair. That asymmetry is exactly the pattern this
-// project keeps finding — a mechanism that works on a toy and has never
-// been fired at the thing it exists for. This file fires it at
-// loginRateLimitKey (src/middlewares/rate-limit.middleware.ts): the exact
-// mutation a background scanner caught by hand during B2, reducing the
-// composite `${ip}:${email}` key to IP alone.
+// withMutatedMethod was proven against a real security behaviour (reuse
+// detection); withMutatedModule was proven only against a pure fixture
+// pair. That asymmetry is exactly the pattern this project keeps finding
+// — a mechanism that works on a toy and has never been fired at the thing
+// it exists for. This file fires it at loginRateLimitKey
+// (src/constants/rate-limit.constants.ts): the exact mutation a background
+// scanner once caught by hand, reducing the composite `${ip}:${email}` key
+// to IP alone.
 //
-// loginRateLimitKey is PRIVATE to rate-limit.middleware.ts — never
-// exported, used only inside createLoginRateLimiter()'s own call to
-// `rateLimit({ ..., keyGenerator: loginRateLimitKey })` — so there is no
-// exported binding withMutatedModule could replace directly; it mutates a
-// SUBJECT's DEPENDENCY, and a private same-file function is not reachable
-// through any import edge. What IS a genuine dependency edge is `rateLimit`
-// itself, imported from the third-party `express-rate-limit` package
-// (rate-limit.middleware.ts's own import line). Wrapping it to force
-// `keyGenerator` to an IP-only function — whatever createLoginRateLimiter
+// loginRateLimitKey is PRIVATE to rate-limit.constants.ts — never
+// exported, reached only through `RATE_LIMITS.login.keyBy`, which
+// `createRateLimiter` (rate-limit.middleware.ts) resolves via
+// `keyGeneratorFor` into `rateLimit({ ..., keyGenerator: loginRateLimitKey })`
+// — so there is no exported binding withMutatedModule could replace
+// directly; it mutates a SUBJECT's DEPENDENCY, and a private function is
+// not reachable through any import edge. What IS a genuine dependency edge
+// is `rateLimit` itself, imported from the third-party `express-rate-limit`
+// package (rate-limit.middleware.ts's own import line). Wrapping it to
+// force `keyGenerator` to an IP-only function — whatever `createRateLimiter`
 // actually passed — reproduces the identical observable bug: the composite
-// key collapses to IP alone. Every other limiter in this file is
-// unaffected: none of the other three pass their own `keyGenerator`, so
-// they already fall back to express-rate-limit's own IP-based default.
+// key collapses to IP alone. Every other limiter built through
+// `createRateLimiter` is unaffected: none of the other 18 `RATE_LIMITS`
+// entries pass their own key-generating function, so they already fall
+// back to express-rate-limit's own IP-based default.
 //
 // This IS proof the variant works against a module imported the way this
 // one is (ESM, extensionless `@/` alias, a factory called at module
 // scope): `loadSubject` is a literal `import('@/middlewares/rate-limit.middleware')`,
-// and createLoginRateLimiter is called fresh, post-mutation, exactly as
+// and `createRateLimiter` is called fresh, post-mutation, exactly as
 // production code calls it.
 //
 // Same in-memory-store setup as the sibling rate-limit.middleware.test.ts:
@@ -47,17 +49,18 @@ vi.mock('@/services/redis.service', async (importOriginal) => ({
 }))
 
 /**
- * Build a bare app behind a login rate limiter built by the given factory —
- * real or, while a mutation is active, freshly-loaded-and-mutated.
- * @param createLoginRateLimiter - The factory to build the limiter from.
+ * Build a bare app behind a login rate limiter built by the given
+ * `createRateLimiter` — real or, while a mutation is active,
+ * freshly-loaded-and-mutated.
+ * @param createRateLimiter - The `createRateLimiter` to build the limiter from.
  * @returns The app.
  */
-function buildApp(createLoginRateLimiter: typeof CreateRateLimiter): Express {
+function buildApp(createRateLimiter: typeof CreateRateLimiter): Express {
   const app = express()
   app.use(express.json())
   app.post(
     '/login',
-    createLoginRateLimiter(RATE_LIMITS.login, { limit: 2, windowMs: 60_000 }),
+    createRateLimiter(RATE_LIMITS.login, { limit: 2, windowMs: 60_000 }),
     (_request, response) => {
       response.status(401).json({ success: false, message: 'Invalid email or password' })
     }
@@ -79,13 +82,13 @@ function attempt(app: Express, email: string): Test {
 /**
  * Exhaust `victim@example.com`'s budget (limit 2), then probe whether a
  * different email sharing the same IP is also blocked.
- * @param createLoginRateLimiter - The factory to build the limiter from.
+ * @param createRateLimiter - The `createRateLimiter` to build the limiter from.
  * @returns The status code of the request from the different email.
  */
 async function bystanderStatusAfterExhaustingVictim(
-  createLoginRateLimiter: typeof CreateRateLimiter
+  createRateLimiter: typeof CreateRateLimiter
 ): Promise<number> {
-  const app = buildApp(createLoginRateLimiter)
+  const app = buildApp(createRateLimiter)
   await attempt(app, 'victim@example.com')
   await attempt(app, 'victim@example.com')
   const victimBlocked = await attempt(app, 'victim@example.com')

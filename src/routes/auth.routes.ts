@@ -17,14 +17,14 @@
 // prefix. That is the standing rule for this file, not nine independent
 // decisions: an unlimited auth route is either an enumeration oracle, a
 // bcrypt/email amplifier, a password oracle, or some combination.
-// ARCHITECTURE.md/SECURITY.md hold the per-endpoint reasoning.
-// verify-email and reset-password each carry their own single
-// `rl:verify-email:` / `rl:reset-password:` prefix; resend-verification
-// and forgot-password each carry TWO limiters in series, with their own
-// prefixes (`rl:resend-verification-ip:` / `rl:resend-verification-email:`,
-// `rl:forgot-password-ip:` / `rl:forgot-password-email:`) — see
-// ARCHITECTURE.md/SECURITY.md for why one composite key is not enough for
-// either pair of threats.
+// `RATE_LIMITS` (rate-limit.constants.ts) holds the per-endpoint reasoning,
+// one comment per entry. verify-email and reset-password each carry their
+// own single `rl:verify-email:` / `rl:reset-password:` prefix;
+// resend-verification and forgot-password each carry TWO limiters in
+// series, with their own prefixes (`rl:resend-verification-ip:` /
+// `rl:resend-verification-email:`, `rl:forgot-password-ip:` /
+// `rl:forgot-password-email:`) — see the matching `RATE_LIMITS` entries for
+// why one composite key is not enough for either pair of threats.
 import { Router, type RequestHandler } from 'express'
 import passport from 'passport'
 import {
@@ -74,8 +74,9 @@ export function createAuthRouter(): Router {
     verificationController.verifyEmail
   )
   // Two limiters in series, not a composite key — each bounds its own
-  // threat, and either firing alone must be enough. See
-  // ARCHITECTURE.md/SECURITY.md.
+  // threat, and either firing alone must be enough. See the
+  // resendVerificationIp/resendVerificationEmail entries in
+  // `RATE_LIMITS`.
   router.post(
     '/resend-verification',
     createRateLimiter(RATE_LIMITS.resendVerificationIp),
@@ -83,8 +84,9 @@ export function createAuthRouter(): Router {
     verificationController.resendVerification
   )
   // Same two-limiters-in-series shape as resend-verification, for the
-  // identical reason (see ARCHITECTURE.md/SECURITY.md): Ruling G
-  // already makes forgot-password's RESPONSE identical for a known and an
+  // identical reason (see the forgotPasswordIp/forgotPasswordEmail
+  // entries in `RATE_LIMITS`): Ruling G already makes forgot-password's
+  // RESPONSE identical for a known and an
   // unknown address, but that alone does not bound how much outbound mail
   // one IP — or one victim address — can trigger.
   router.post(
