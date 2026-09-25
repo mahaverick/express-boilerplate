@@ -236,9 +236,13 @@ function clearRefreshTokenCookie(response: Response): void {
  * Takes the LAST `refreshToken` value. A browser can hold two, one per
  * domain scope, after `COOKIE_DOMAIN` is changed or unset. It sends
  * same-path cookies oldest first (RFC 6265 §5.4, by creation time), so the
- * last is the most recently created one, the one this API set under its
- * current scope. The first would be a stale token, whose reuse detection
- * revokes the live session.
+ * last is the most recently created one. That is the one set under the
+ * current scope, except after `COOKIE_DOMAIN` is reverted to an earlier
+ * value: overwriting a cookie keeps its original creation time (RFC 6265
+ * §5.3 step 11.3), so the other scope's cookie reads as newer, and refresh
+ * fails until the user logs in again or it expires (REFRESH_TOKEN_TTL).
+ * Reading the first cookie instead would hand the stale token to reuse
+ * detection after every domain change, which revokes the live session.
  * @param request - The incoming request.
  * @returns The raw refresh token, or undefined when the cookie is absent.
  */

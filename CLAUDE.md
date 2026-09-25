@@ -244,8 +244,10 @@ until you check.
   With it set, the refresh-cookie set and clear also clear the host-only
   cookie, before the set. After a domain change the browser sends two
   `refreshToken` values, oldest first, and `readRefreshTokenCookie` takes the
-  last. Reading the first would hand a stale token to reuse detection, which
-  revokes the live session.
+  last, the most recently created. Reading the first would hand a stale token
+  to reuse detection, which revokes the live session. Reverting to an earlier
+  domain is the one case last-wins misses: an overwritten cookie keeps its
+  original creation time.
 
 ## Multi-tenancy and RBAC
 

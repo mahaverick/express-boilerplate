@@ -87,9 +87,12 @@ it.
 Setting `COOKIE_DOMAIN` at upgrade, where users hold host-only refresh
 cookies, heals itself: every response that sets or clears the refresh
 cookie also clears the host-only one. Changing or unsetting it later leaves
-the old domain's refresh cookie in browsers. The API ignores it, because it
-reads the newest `refreshToken` cookie, and it expires within
-`REFRESH_TOKEN_TTL`.
+the old domain's refresh cookie in browsers. The API reads the most recently
+created `refreshToken` cookie, which is the current one, so the old one is
+ignored and expires within `REFRESH_TOKEN_TTL`. Reverting to an earlier
+value is the exception: the browser keeps that cookie's original creation
+time, so the other scope's cookie reads as newer and refresh fails until the
+user logs in again or it expires.
 
 ### Redis state under the old prefixes is abandoned
 

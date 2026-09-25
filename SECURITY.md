@@ -492,9 +492,12 @@ ever receives it), set with:
   cookie also clears the host-only one, so setting it on a live deployment
   heals itself. Changing or unsetting it leaves the old domain's cookie in
   the browser, which then sends two `refreshToken` values, oldest first
-  (RFC 6265 §5.4). The API reads the last one, so the stale token never
-  reaches reuse detection, and the old cookie expires within
-  `REFRESH_TOKEN_TTL`.
+  (RFC 6265 §5.4). The API reads the last, most recently created one, so the
+  stale token never reaches reuse detection, and the old cookie expires
+  within `REFRESH_TOKEN_TTL`. Reverting `COOKIE_DOMAIN` to an earlier value
+  is the exception: an overwritten cookie keeps its original creation time
+  (§5.3), so the other scope's cookie reads as newer and refresh fails until
+  the user logs in again or that cookie expires.
 - `sameSite: 'strict'` — the cookie half of this API's CSRF position (see
   below).
 

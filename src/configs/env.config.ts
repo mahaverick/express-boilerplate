@@ -355,7 +355,7 @@ const EnvSchema = z.object({
     })
     .optional()
     .describe(
-      'Domain attribute for the refresh-token and OAuth session cookies, e.g. "example.com" to share them with subdomains. Unset means host-only cookies, the narrowest scope. Boot refuses a value that APP_URL\'s host is not within, since browsers would reject the cookies. Setting it on a deployment with live sessions heals itself: every response that sets or clears the refresh cookie also clears the host-only one. Changing or unsetting it leaves the old domain\'s refresh cookie in browsers. The API ignores it, because it reads the newest refreshToken cookie, and it expires within REFRESH_TOKEN_TTL.'
+      "Domain attribute for the refresh-token and OAuth session cookies, e.g. \"example.com\" to share them with subdomains. Unset means host-only cookies, the narrowest scope. Boot refuses a value that APP_URL's host is not within, since browsers would reject the cookies. Setting it on a deployment with live sessions heals itself: every response that sets or clears the refresh cookie also clears the host-only one. Changing or unsetting it leaves the old domain's refresh cookie in browsers. The API reads the most recently created refreshToken cookie, which is the current one, so the old one is ignored and expires within REFRESH_TOKEN_TTL. Reverting to an earlier value is the exception: the browser keeps that cookie's original creation time, so the other scope's cookie reads as newer and refresh fails until the user logs in again or it expires."
     ),
 
   // Extra browser origins allowed to call this API, comma-separated, e.g.
@@ -541,8 +541,8 @@ const EnvSchema = z.object({
     ),
 
   // These three bound the stages of a send to an SMTP host that stops
-  // responding. SMTP_CONNECTION_TIMEOUT_MS also bounds each DNS query
-  // (nodemailer's dnsTimeout). nodemailer's own defaults (smtp-connection)
+  // responding. SMTP_CONNECTION_TIMEOUT_MS is also nodemailer's dnsTimeout,
+  // which bounds only the first try of each DNS query. nodemailer's own defaults (smtp-connection)
   // are 2 minutes (connectionTimeout), 30 seconds (greetingTimeout and
   // dnsTimeout) and 10 minutes (socketTimeout, an inactivity timer).
   //
@@ -556,8 +556,10 @@ const EnvSchema = z.object({
   // flushing traces.
   //
   // They are per-stage bounds, not a per-send deadline. The resolver retries
-  // a DNS query that times out, and when it finds no address nodemailer
-  // falls back to the OS resolver, which has no timeout. A host that resolves
+  // a DNS query that times out and doubles the timeout on each retry, so at
+  // the 3000 ms default one address family can take about 45s; when neither
+  // family returns an address, nodemailer falls back to the OS resolver,
+  // which has no timeout. A host that resolves
   // to several addresses can take the connection timeout once per address.
   // A server that keeps sending bytes resets the inactivity timer. The boot
   // check in env-consistency.config.ts sums connect, greeting and inactivity
@@ -575,7 +577,7 @@ const EnvSchema = z.object({
     .positive()
     .default(3000)
     .describe(
-      "Milliseconds to wait for each SMTP connection attempt to establish, and for each DNS query, before failing. A host that resolves to several addresses can take it once per address. Boot checks that it plus SMTP_GREETING_TIMEOUT_MS, SMTP_SOCKET_TIMEOUT_MS and the 5s HTTP drain stays at least 5s under SHUTDOWN_TIMEOUT_MS; that assumes one address and is a sanity check, not a per-send deadline. nodemailer's own defaults are 2 minutes to connect and 30 seconds per DNS query."
+      "Milliseconds to wait for each SMTP connection attempt to establish before failing. Also the timeout for the first try of each DNS query; the resolver doubles it on each retry, and the OS-lookup fallback has no timeout. A host that resolves to several addresses can take it once per address. Boot checks that it plus SMTP_GREETING_TIMEOUT_MS, SMTP_SOCKET_TIMEOUT_MS and the 5s HTTP drain stays at least 5s under SHUTDOWN_TIMEOUT_MS; that assumes one address and is a sanity check, not a per-send deadline. nodemailer's own defaults are 2 minutes to connect and 30 seconds per DNS query."
     ),
   SMTP_GREETING_TIMEOUT_MS: z.coerce
     .number()
