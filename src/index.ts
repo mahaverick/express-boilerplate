@@ -4,7 +4,6 @@
 // process.exit, process.on(SIGTERM/SIGINT) — which is not meaningfully unit
 // testable, and it is exercised for real by the boot check in the task brief.
 import { getEnv } from '@/configs/env.config'
-import { GRACEFUL_SHUTDOWN_TIMEOUT_MS } from '@/constants/global.constants'
 import type { SupervisedWorkers } from '@/services/worker-supervisor.service'
 
 /**
@@ -39,11 +38,9 @@ async function boot(): Promise<void> {
   const workers: { supervised?: SupervisedWorkers } = {}
 
   // One handler for every exit path: signals, fatal errors and a server
-  // 'error'. A second call while shutdown runs is ignored.
-  const handleShutdown = createShutdownHandler(
-    () => gracefulShutdown(server, workers.supervised),
-    GRACEFUL_SHUTDOWN_TIMEOUT_MS
-  )
+  // 'error'. A second call while shutdown runs is ignored. Its backstop is
+  // SHUTDOWN_TIMEOUT_MS.
+  const handleShutdown = createShutdownHandler(() => gracefulShutdown(server, workers.supervised))
 
   const server = startServer()
   // Same tick as listen(): a bind failure is emitted on nextTick. This also

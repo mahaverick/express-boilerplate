@@ -470,7 +470,7 @@ const EnvSchema = z.object({
   // the same reasoning TRUST_PROXY/ACCESS_TOKEN_TTL use for their own
   // defaults, and unlike DATABASE_URL/REDIS_URL, where a wrong default would
   // point at a real dependency silently. Mailpit does not require or check
-  // SMTP_USER/SMTP_PASS at all, which is exactly why they stay optional with
+  // SMTP_USERNAME/SMTP_PASSWORD at all, which is exactly why they stay optional with
   // no default rather than joining APP_URL/WEB_URL's required-placeholder
   // pattern: a real provider (SES, SendGrid, ...) needs both, and a
   // downstream project sets them then, not before.
@@ -487,14 +487,14 @@ const EnvSchema = z.object({
     .positive()
     .default(1025)
     .describe("SMTP server port. Defaults to 1025 — Mailpit's SMTP port."),
-  SMTP_USER: z
+  SMTP_USERNAME: z
     .string()
     .optional()
     .describe(
-      'SMTP username. Absent means no authentication is attempted, which is correct for Mailpit and wrong for most real providers — set this alongside SMTP_PASS.'
+      'SMTP username. Absent means no authentication is attempted, which is correct for Mailpit and wrong for most real providers — set this alongside SMTP_PASSWORD.'
     ),
-  SMTP_PASS: z.string().optional().describe('SMTP password. See SMTP_USER.'),
-  // Not cross-validated against SMTP_USER/SMTP_PASS with a schema-level
+  SMTP_PASSWORD: z.string().optional().describe('SMTP password. See SMTP_USERNAME.'),
+  // Not cross-validated against SMTP_USERNAME/SMTP_PASSWORD with a schema-level
   // .refine(): EnvSchema.pick({ DATABASE_URL: true }) (getDatabaseUrl, below)
   // throws "cannot be used on object schemas containing refinements" the
   // moment ANY .refine() sits on the object itself — verified empirically —
@@ -535,42 +535,39 @@ const EnvSchema = z.object({
   // hang reopens the identical enumeration oracle through LATENCY instead:
   // a registered address blocks for minutes, an unregistered one returns
   // instantly. An attacker does not need to cause the outage, only to
-  // measure during one. These defaults bound the worst case to tens of
-  // seconds instead of minutes.
+  // measure during one. These defaults bound the worst case to 20 seconds
+  // instead of minutes.
   //
-  // greetingTimeout specifically is NOT single-digit seconds, and that
-  // floor is measured, not guessed: this project's own shared Mailpit
-  // container takes ~8.3 seconds to send its greeting (confirmed at the raw
-  // TCP socket level — `nc`/a Python socket connects in under 5ms, then
-  // waits ~8s for the first byte — almost certainly a reverse-DNS lookup on
-  // the connecting address timing out inside the container's network
-  // environment before Mailpit proceeds anyway). A first attempt at 5000ms
-  // here made the real-Mailpit integration test fail outright — caught by
-  // actually running it, not assumed. 15000ms clears that with real margin
-  // while staying nowhere near nodemailer's 30-second default.
-  SMTP_CONNECTION_TIMEOUT: z.coerce
+  // A job mid-send also holds the email worker's close during shutdown for
+  // up to their sum, so keep that sum well under SHUTDOWN_TIMEOUT_MS.
+  //
+  // The compose Mailpit sends its greeting in 8–16 ms (3 raw-socket runs),
+  // so 5000 ms leaves ample margin. If the real-Mailpit integration tests
+  // time out on the greeting, raise SMTP_GREETING_TIMEOUT_MS in .env.test and
+  // the CI env block, not this default.
+  SMTP_CONNECTION_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(5000)
+    .describe(
+      "Milliseconds to wait for the SMTP connection to establish before failing. Bounds a timing side-channel (see this schema field group's own comment), not just a resource leak — do not raise this to accommodate a slow provider without reading that comment first. nodemailer's own default is 2 minutes."
+    ),
+  SMTP_GREETING_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(5000)
+    .describe(
+      "Milliseconds to wait for the SMTP server's greeting after connecting. Bounds a timing side-channel — see SMTP_CONNECTION_TIMEOUT_MS. nodemailer's own default is 30 seconds."
+    ),
+  SMTP_SOCKET_TIMEOUT_MS: z.coerce
     .number()
     .int()
     .positive()
     .default(10_000)
     .describe(
-      "Milliseconds to wait for the SMTP connection to establish before failing. Bounds a timing side-channel (see this schema field group's own comment), not just a resource leak — do not raise this to accommodate a slow provider without reading that comment first. nodemailer's own default is 2 minutes."
-    ),
-  SMTP_GREETING_TIMEOUT: z.coerce
-    .number()
-    .int()
-    .positive()
-    .default(15_000)
-    .describe(
-      "Milliseconds to wait for the SMTP server's greeting after connecting. Bounds a timing side-channel — see SMTP_CONNECTION_TIMEOUT. nodemailer's own default is 30 seconds; this project's own Mailpit measured at ~8.3s is why this isn't lower."
-    ),
-  SMTP_SOCKET_TIMEOUT: z.coerce
-    .number()
-    .int()
-    .positive()
-    .default(20_000)
-    .describe(
-      "Milliseconds of inactivity before an open SMTP connection is closed. Bounds a timing side-channel — see SMTP_CONNECTION_TIMEOUT. nodemailer's own default is 10 minutes."
+      "Milliseconds of inactivity before an open SMTP connection is closed. Bounds a timing side-channel — see SMTP_CONNECTION_TIMEOUT_MS. nodemailer's own default is 10 minutes."
     ),
 
   SHUTDOWN_TIMEOUT_MS: z.coerce

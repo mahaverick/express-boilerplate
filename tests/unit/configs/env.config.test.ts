@@ -217,16 +217,22 @@ describe('SMTP configuration', () => {
     expect(parseEnv({ ...valid, SMTP_PORT: '2525' }).SMTP_PORT).toBe(2525)
   })
 
-  it('leaves SMTP_USER/SMTP_PASS undefined when absent — Mailpit needs no credentials', () => {
+  it('leaves SMTP_USERNAME/SMTP_PASSWORD undefined when absent — Mailpit needs no credentials', () => {
     const parsed = parseEnv(valid)
-    expect(parsed.SMTP_USER).toBeUndefined()
-    expect(parsed.SMTP_PASS).toBeUndefined()
+    expect(parsed.SMTP_USERNAME).toBeUndefined()
+    expect(parsed.SMTP_PASSWORD).toBeUndefined()
   })
 
-  it('accepts SMTP_USER/SMTP_PASS when a real provider needs them', () => {
+  it('accepts SMTP_USERNAME/SMTP_PASSWORD when a real provider needs them', () => {
+    const parsed = parseEnv({ ...valid, SMTP_USERNAME: 'apikey', SMTP_PASSWORD: 'secret' })
+    expect(parsed.SMTP_USERNAME).toBe('apikey')
+    expect(parsed.SMTP_PASSWORD).toBe('secret')
+  })
+
+  it('no longer reads the old SMTP_USER/SMTP_PASS names', () => {
     const parsed = parseEnv({ ...valid, SMTP_USER: 'apikey', SMTP_PASS: 'secret' })
-    expect(parsed.SMTP_USER).toBe('apikey')
-    expect(parsed.SMTP_PASS).toBe('secret')
+    expect(parsed.SMTP_USERNAME).toBeUndefined()
+    expect(parsed.SMTP_PASSWORD).toBeUndefined()
   })
 
   it('defaults MAIL_FROM to a working local address', () => {
@@ -237,30 +243,31 @@ describe('SMTP configuration', () => {
     expect(() => parseEnv({ ...valid, MAIL_FROM: 'not-an-address' })).toThrow(/MAIL_FROM/)
   })
 
-  // Fix round 2 (task-2-review.md, finding 2): these bound a TIMING oracle
-  // (Ruling G reopened through latency, not status), not merely a resource
-  // leak — the defaults must stay bounded to tens of seconds, far below
-  // nodemailer's own multi-minute defaults. Not single-digit seconds: this
-  // project's own shared Mailpit measured at ~8.3s to send its greeting
-  // (env.config.ts's own comment on SMTP_GREETING_TIMEOUT has the
-  // measurement), so 15s is the real floor, not an arbitrary round number.
-  it('defaults SMTP_CONNECTION_TIMEOUT/SMTP_GREETING_TIMEOUT/SMTP_SOCKET_TIMEOUT to bounded values, far below nodemailer', () => {
+  // These bound a timing oracle and how long one hung send holds shutdown
+  // (env.config.ts's comment on the SMTP timeout group). The defaults sum to
+  // 20s, under the default SHUTDOWN_TIMEOUT_MS minus its 5s drain.
+  it('defaults the SMTP_*_TIMEOUT_MS variables to 5000/5000/10000', () => {
     const parsed = parseEnv(valid)
-    expect(parsed.SMTP_CONNECTION_TIMEOUT).toBe(10_000)
-    expect(parsed.SMTP_GREETING_TIMEOUT).toBe(15_000)
-    expect(parsed.SMTP_SOCKET_TIMEOUT).toBe(20_000)
+    expect(parsed.SMTP_CONNECTION_TIMEOUT_MS).toBe(5000)
+    expect(parsed.SMTP_GREETING_TIMEOUT_MS).toBe(5000)
+    expect(parsed.SMTP_SOCKET_TIMEOUT_MS).toBe(10_000)
+    expect(
+      parsed.SMTP_CONNECTION_TIMEOUT_MS +
+        parsed.SMTP_GREETING_TIMEOUT_MS +
+        parsed.SMTP_SOCKET_TIMEOUT_MS
+    ).toBeLessThanOrEqual(parsed.SHUTDOWN_TIMEOUT_MS - 5000)
   })
 
   it('coerces the SMTP timeout variables from strings to numbers', () => {
     const parsed = parseEnv({
       ...valid,
-      SMTP_CONNECTION_TIMEOUT: '1000',
-      SMTP_GREETING_TIMEOUT: '2000',
-      SMTP_SOCKET_TIMEOUT: '3000',
+      SMTP_CONNECTION_TIMEOUT_MS: '1000',
+      SMTP_GREETING_TIMEOUT_MS: '2000',
+      SMTP_SOCKET_TIMEOUT_MS: '3000',
     })
-    expect(parsed.SMTP_CONNECTION_TIMEOUT).toBe(1000)
-    expect(parsed.SMTP_GREETING_TIMEOUT).toBe(2000)
-    expect(parsed.SMTP_SOCKET_TIMEOUT).toBe(3000)
+    expect(parsed.SMTP_CONNECTION_TIMEOUT_MS).toBe(1000)
+    expect(parsed.SMTP_GREETING_TIMEOUT_MS).toBe(2000)
+    expect(parsed.SMTP_SOCKET_TIMEOUT_MS).toBe(3000)
   })
 })
 
