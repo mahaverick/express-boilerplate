@@ -2,7 +2,8 @@
 import express from 'express'
 import { describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
-import { errorHandler, HttpError } from '@/middlewares/error.middleware'
+import { HttpError } from '@/errors/http-error'
+import { errorHandler } from '@/middlewares/error.middleware'
 import { request } from '../../helpers/request'
 
 const app = createApp()

@@ -16,7 +16,7 @@
 import type { NextFunction, Request, Response } from 'express'
 import { describe, expect, it, vi } from 'vitest'
 import { getProfile, updateProfile } from '@/controllers/profile.controller'
-import { HttpError } from '@/middlewares/error.middleware'
+import { HttpError } from '@/errors/http-error'
 
 const unauthenticatedRequest = { user: undefined } as unknown as Request
 const unusedResponse = {} as Response

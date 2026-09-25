@@ -11,8 +11,7 @@
 // would select every `users` column, `passwordHash` included, into the
 // response a later task's "list members" endpoint serializes straight to
 // JSON).
-import { and, count, DrizzleQueryError, eq, isNull, sql } from 'drizzle-orm'
-import postgres from 'postgres'
+import { and, count, eq, isNull, sql } from 'drizzle-orm'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import { tenantModel, type Tenant } from '@/database/models/tenant.model'
 import {
@@ -21,30 +20,9 @@ import {
   type UserMembership,
 } from '@/database/models/user-membership.model'
 import { userModel, type User } from '@/database/models/user.model'
-import { HttpError } from '@/middlewares/error.middleware'
+import { HttpError } from '@/errors/http-error'
+import { isUniqueViolation } from '@/errors/postgres-errors'
 import { db, type DbExecutor } from '@/services/database.service'
-
-// Postgres error code for a unique-constraint violation. Same source and
-// same value as base.repository.ts's own — see that file's comment for the
-// PostgreSQL docs reference.
-const UNIQUE_VIOLATION_CODE = '23505'
-
-/**
- * Whether an error thrown by `create` is a Postgres unique-constraint
- * violation — i.e. `user_memberships_user_id_tenant_id_unique`
- * (user-membership.model.ts) already has a row for this `(userId,
- * tenantId)` pair. A deliberate copy of `BaseRepository`'s
- * identically-named private helper, not an import — see
- * `auth-provider.repository.ts`'s own header comment for why a table that
- * cannot extend `BaseRepository` re-implements this three-line check
- * rather than exporting an internal.
- * @param error - The error thrown by the insert.
- * @returns True when the error is (or wraps) a 23505 unique violation.
- */
-function isUniqueViolation(error: unknown): boolean {
-  const cause = error instanceof DrizzleQueryError ? error.cause : error
-  return cause instanceof postgres.PostgresError && cause.code === UNIQUE_VIOLATION_CODE
-}
 
 /**
  * One `user_memberships` row for `listByTenant`, joined with the subset of

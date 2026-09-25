@@ -7,14 +7,8 @@
 // (`SoftDeletableTableConfig`, base.repository.ts, requires both), and this
 // table has no soft-delete concept to justify adding one — an unlinked
 // provider (were that ever built) would be a hard delete, same as
-// email-log.repository.ts's audit rows. `isUniqueViolation` below is a
-// deliberate copy of base.repository.ts's private helper of the same name,
-// not an import: that function is module-private there by design (its own
-// comment: "the driver-level detail this file exists to keep out of every
-// caller"), so a table that cannot extend the class it belongs to
-// re-implements the three-line check rather than exporting an internal.
-import { and, DrizzleQueryError, eq, inArray, isNotNull, ne } from 'drizzle-orm'
-import postgres from 'postgres'
+// email-log.repository.ts's audit rows.
+import { and, eq, inArray, isNotNull, ne } from 'drizzle-orm'
 import type { AuthProvider } from '@/constants/auth-provider.constants'
 import {
   authProviderModel,
@@ -22,32 +16,9 @@ import {
   type NewAuthProvider,
 } from '@/database/models/auth-provider.model'
 import { userModel } from '@/database/models/user.model'
-import { HttpError } from '@/middlewares/error.middleware'
+import { HttpError } from '@/errors/http-error'
+import { isUniqueViolation } from '@/errors/postgres-errors'
 import { db, type DbExecutor } from '@/services/database.service'
-
-// Postgres error code for a unique-constraint violation. Same source and
-// same value as base.repository.ts's own — see that file's comment for the
-// PostgreSQL docs reference.
-const UNIQUE_VIOLATION_CODE = '23505'
-
-/**
- * Whether an error thrown by `create` is a Postgres unique-constraint
- * violation — i.e. `auth_providers_provider_provider_id_unique`
- * (auth-provider.model.ts) already has a row for this `(provider,
- * providerId)` pair. A real race, not a theoretical one: Task 3's Google
- * callback does `findByProviderAndId` then `create` with no lock between
- * them, so two requests for the same not-yet-linked Google account (e.g. a
- * double-submitted callback) can both pass the lookup and race the insert.
- * See this file's header comment for why this duplicates
- * base.repository.ts's identically-named private function instead of
- * importing it.
- * @param error - The error thrown by the insert.
- * @returns True when the error is (or wraps) a 23505 unique violation.
- */
-function isUniqueViolation(error: unknown): boolean {
-  const cause = error instanceof DrizzleQueryError ? error.cause : error
-  return cause instanceof postgres.PostgresError && cause.code === UNIQUE_VIOLATION_CODE
-}
 
 /**
  * Query access to the `auth_providers` table: look up the one row for a
@@ -93,9 +64,10 @@ export class AuthProviderRepository {
    * rather than letting the raw driver error escape — the same translation
    * `BaseRepository.create` gives every table that extends it, applied by
    * hand here since this table cannot (see this file's header comment). A
-   * caller that hits this (e.g. Task 3's callback losing the race described
-   * on `isUniqueViolation`) should treat it as "already linked" and
-   * re-fetch via `findByProviderAndId`, not as an unexpected failure.
+   * caller that hits this (e.g. Task 3's callback losing a race between
+   * `findByProviderAndId` and this insert for the same not-yet-linked
+   * Google account) should treat it as "already linked" and re-fetch via
+   * `findByProviderAndId`, not as an unexpected failure.
    * @param data - The row's initial column values.
    * @returns The inserted row, including its generated `id` and timestamps.
    */

@@ -25,8 +25,8 @@
 // pending promise microtasks have already flushed.
 import { Writable } from 'node:stream'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { requestContextStore } from '@/middlewares/request-context.middleware'
 import { createPinoLogger } from '@/services/logger.service'
+import { requestContextStore } from '@/services/request-context.service'
 
 // Narrower than the global RequestInit on purpose: the Slack destination
 // always calls fetch with a string `body` (JSON.stringify'd), never the

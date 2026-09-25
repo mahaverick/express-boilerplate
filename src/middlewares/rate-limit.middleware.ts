@@ -158,7 +158,7 @@ import {
   type RateLimitRequestHandler,
 } from 'express-rate-limit'
 import { SharedRateLimitStore } from '@/configs/rate-limit-store.config'
-import { HttpError } from '@/middlewares/error.middleware'
+import { HttpError } from '@/errors/http-error'
 import { redisKey } from '@/services/redis.service'
 
 // Deliberately a RATE, not a tight cap — see this file's header comment on
@@ -201,7 +201,7 @@ const LOGOUT_RATE_LIMIT_MAX_ATTEMPTS = 300
 
 /**
  * Machine-readable code identifying a rate-limited request, carried in the
- * error envelope's `code` field (error.middleware.ts / `HttpError`) — the
+ * error envelope's `code` field (errors/http-error.ts / `HttpError`) — the
  * same pattern `ACCESS_TOKEN_EXPIRED` uses, so a client can branch on this
  * without matching on `message`.
  */

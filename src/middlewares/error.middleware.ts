@@ -18,29 +18,9 @@
 // response that also sets `code` would collide with it.
 import { STATUS_CODES } from 'node:http'
 import { type NextFunction, type Request, type Response } from 'express'
+import { HttpError } from '@/errors/http-error'
 import { logger } from '@/services/logger.service'
 import { errorResponse } from '@/utilities/response.utilities'
-
-/**
- * An error carrying the HTTP status the client should receive.
- */
-export class HttpError extends Error {
-  /**
-   * @param message - Message safe to return to the client.
-   * @param statusCode - HTTP status. Defaults to 500.
-   * @param code - Optional stable, machine-readable token a client can branch on (e.g. `ACCESS_TOKEN_EXPIRED`), independent of `message` or `errors`.
-   * @param errors - Optional field-level detail, e.g. from a validator.
-   */
-  constructor(
-    message: string,
-    public readonly statusCode = 500,
-    public readonly code?: string,
-    public readonly errors?: unknown
-  ) {
-    super(message)
-    this.name = 'HttpError'
-  }
-}
 
 // Express's own body parser does not throw HttpError. `express.json()` and
 // `express.urlencoded()` raise `http-errors` instances, which carry the

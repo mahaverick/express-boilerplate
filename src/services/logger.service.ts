@@ -12,7 +12,7 @@ import { trace } from '@opentelemetry/api'
 import pino, { type DestinationStream, type Logger, type StreamEntry } from 'pino'
 import type { PrettyOptions } from 'pino-pretty'
 import { getEnv, logFormat, type Env } from '@/configs/env.config'
-import { requestContextStore } from '@/middlewares/request-context.middleware'
+import { requestContextStore } from '@/services/request-context.service'
 
 /**
  * Parse a single V8 stack frame — `at functionName (path:line:col)` or

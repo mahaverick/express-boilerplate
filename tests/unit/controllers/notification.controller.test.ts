@@ -18,7 +18,7 @@ import {
   listNotifications,
   markAllRead,
 } from '@/controllers/notification.controller'
-import { HttpError } from '@/middlewares/error.middleware'
+import { HttpError } from '@/errors/http-error'
 
 const unauthenticatedRequest = { user: undefined } as unknown as Request
 const unusedResponse = {} as Response

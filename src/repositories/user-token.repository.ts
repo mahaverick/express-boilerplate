@@ -28,7 +28,7 @@ import {
   type TokenPurpose,
   type UserToken,
 } from '@/database/models/user-token.model'
-import { HttpError } from '@/middlewares/error.middleware'
+import { HttpError } from '@/errors/http-error'
 import {
   BaseRepository,
   type SoftDeleteOptions,

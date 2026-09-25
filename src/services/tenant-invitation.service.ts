@@ -9,9 +9,9 @@ import { getEnv } from '@/configs/env.config'
 import { INVITATION_TOKEN_BYTES, type MembershipRole } from '@/constants/tenant.constants'
 import type { TenantInvitation } from '@/database/models/tenant-invitation.model'
 import type { User } from '@/database/models/user.model'
+import { HttpError } from '@/errors/http-error'
 import { addEmailJob } from '@/jobs/email.job'
 import { addNotificationJob } from '@/jobs/notification.job'
-import { HttpError } from '@/middlewares/error.middleware'
 import {
   TenantInvitationRepository,
   type PendingInvitationSummary,

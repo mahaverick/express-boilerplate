@@ -2,15 +2,16 @@
 //
 // The first authenticated routes in this codebase — both handlers assume
 // `requireAuth` (auth.middleware.ts) has already run and populated
-// `request.user`. `authenticatedUserId` below still guards against a missing
-// `request.user` rather than asserting it with `!`: today that can only
-// happen if a route is wired up wrong (profile.routes.ts mounts requireAuth
-// ahead of both handlers), but a defensive 401 here costs nothing and turns
-// a future routing mistake into an auth failure instead of a crash or,
-// worse, `undefined` flowing into a database lookup.
+// `request.user`. `authenticatedUserId` (helpers.controller.ts) still
+// guards against a missing `request.user` rather than asserting it with
+// `!`: today that can only happen if a route is wired up wrong
+// (profile.routes.ts mounts requireAuth ahead of both handlers), but a
+// defensive 401 here costs nothing and turns a future routing mistake into
+// an auth failure instead of a crash or, worse, `undefined` flowing into a
+// database lookup.
 //
 // `getProfile`/`updateProfile` both respond with `toPublicUser` (imported
-// from auth.controller.ts, not redefined) — see that function's own header
+// from user.presenter.ts, not redefined) — see that function's own header
 // comment for why this codebase keeps exactly one definition of "what a
 // user looks like to a client".
 //
@@ -22,31 +23,16 @@
 // independent allow-list is exactly the kind of duplicate definition that
 // drifts from the first one over time.
 import { type NextFunction, type Request, type Response } from 'express'
-import { toPublicUser } from '@/controllers/auth.controller'
+import { authenticatedUserId } from '@/controllers/helpers.controller'
 import type { NewUser } from '@/database/models/user.model'
-import { HttpError } from '@/middlewares/error.middleware'
+import { HttpError } from '@/errors/http-error'
+import { toPublicUser } from '@/presenters/user.presenter'
 import { UserRepository } from '@/repositories/user.repository'
 import { successResponse } from '@/utilities/response.utilities'
-import { parseBody } from '@/validators/auth.validators'
+import { parseBody } from '@/validators/parse.validators'
 import { updateProfileSchema, type UpdateProfileInput } from '@/validators/profile.validators'
 
 const userRepository = new UserRepository()
-
-/**
- * The authenticated principal's id, guarding against a route reaching this
- * controller without `requireAuth` ahead of it. See this file's header
- * comment for why this is a runtime check rather than a `request.user!`
- * assertion.
- * @param request - The incoming request.
- * @returns The authenticated user's id.
- * @throws {HttpError} 401, when `request.user` was never populated.
- */
-function authenticatedUserId(request: Request): string {
-  if (!request.user) {
-    throw new HttpError('Authentication required', 401)
-  }
-  return request.user.id
-}
 
 /**
  * The row columns a validated `PATCH /api/v1/profile` body should write,

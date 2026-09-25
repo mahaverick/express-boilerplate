@@ -16,20 +16,21 @@
 // controller adds no ownership check of its own; it relies entirely on the
 // repository already having one, per method, on every call.
 import { type NextFunction, type Request, type Response } from 'express'
+import { authenticatedUserId } from '@/controllers/helpers.controller'
 import type { Notification } from '@/database/models/notification.model'
-import { HttpError } from '@/middlewares/error.middleware'
+import { HttpError } from '@/errors/http-error'
 import { NotificationPreferenceRepository } from '@/repositories/notification-preference.repository'
 import {
   decodeNotificationCursor,
   NotificationRepository,
 } from '@/repositories/notification.repository'
 import { successResponse } from '@/utilities/response.utilities'
-import { parseBody } from '@/validators/auth.validators'
 import {
   listNotificationsSchema,
   notificationIdSchema,
   updatePreferencesSchema,
 } from '@/validators/notification.validators'
+import { parseBody } from '@/validators/parse.validators'
 
 const notificationRepository = new NotificationRepository()
 const notificationPreferenceRepository = new NotificationPreferenceRepository()
@@ -56,23 +57,6 @@ function toNotificationResponse(notification: Notification): NotificationRespons
     readAt: notification.readAt,
     createdAt: notification.createdAt,
   }
-}
-
-/**
- * The authenticated principal's id, guarding against a route reaching this
- * controller without `requireAuth` ahead of it. Mirrors
- * `profile.controller.ts`'s helper of the same name and purpose — see its
- * own comment for why this is a runtime check rather than a `request.user!`
- * assertion.
- * @param request - The incoming request.
- * @returns The authenticated user's id.
- * @throws {HttpError} 401, when `request.user` was never populated.
- */
-function authenticatedUserId(request: Request): string {
-  if (!request.user) {
-    throw new HttpError('Authentication required', 401)
-  }
-  return request.user.id
 }
 
 /**

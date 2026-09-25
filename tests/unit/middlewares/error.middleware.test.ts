@@ -2,9 +2,10 @@
 import { DrizzleQueryError } from 'drizzle-orm'
 import { type Response } from 'express'
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
-import { errorHandler, HttpError } from '@/middlewares/error.middleware'
-import { requestContextStore } from '@/middlewares/request-context.middleware'
+import { HttpError } from '@/errors/http-error'
+import { errorHandler } from '@/middlewares/error.middleware'
 import { logger } from '@/services/logger.service'
+import { requestContextStore } from '@/services/request-context.service'
 
 /**
  * Build a minimal mock Express response, enough for errorHandler to call

@@ -13,7 +13,7 @@
 // would tell whoever holds a link that the address is squatted.
 import { type NextFunction, type Request, type Response } from 'express'
 import type { User } from '@/database/models/user.model'
-import { HttpError } from '@/middlewares/error.middleware'
+import { HttpError } from '@/errors/http-error'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { logger } from '@/services/logger.service'
@@ -21,7 +21,7 @@ import { getDummyHash, isPasswordValid } from '@/utilities/password.utilities'
 import { successResponse } from '@/utilities/response.utilities'
 import { claimToken } from '@/utilities/token.utilities'
 import { sendVerificationMail } from '@/utilities/verification-mail.utilities'
-import { parseBody } from '@/validators/auth.validators'
+import { parseBody } from '@/validators/parse.validators'
 import {
   resendVerificationSchema,
   verifyEmailSchema,
@@ -51,7 +51,7 @@ export async function verifyEmail(
 ): Promise<void> {
   try {
     // parseBody throws HttpError('Validation failed', 400, ..., fieldErrors)
-    // (auth.validators.ts:130-143). That envelope is DISTINGUISHABLE from
+    // (parse.validators.ts). That envelope is DISTINGUISHABLE from
     // this endpoint's identical-failure envelope, so a body missing
     // `password` would answer differently from a wrong password — the
     // oracle this endpoint exists to avoid, reintroduced through the

@@ -21,7 +21,7 @@
 // caller could never produce.
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
-import { HttpError } from '@/middlewares/error.middleware'
+import { HttpError } from '@/errors/http-error'
 import { TenantSettingsRepository } from '@/repositories/tenant-settings.repository'
 import { TenantRepository, type CreateTenantInput } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'

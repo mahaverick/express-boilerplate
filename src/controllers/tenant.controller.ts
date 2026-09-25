@@ -26,8 +26,9 @@
 // current role and self-ness, which no router-level check can express.
 import { type NextFunction, type Request, type Response } from 'express'
 import { type MembershipRole } from '@/constants/tenant.constants'
+import { authenticatedUserId } from '@/controllers/helpers.controller'
 import type { NewTenant } from '@/database/models/tenant.model'
-import { HttpError } from '@/middlewares/error.middleware'
+import { HttpError } from '@/errors/http-error'
 import type { RequestPrincipal } from '@/middlewares/tenant.middleware'
 import { TenantSettingsRepository } from '@/repositories/tenant-settings.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
@@ -38,7 +39,7 @@ import {
   removeMember as removeTenantMember,
 } from '@/services/tenant-membership.service'
 import { successResponse } from '@/utilities/response.utilities'
-import { parseBody } from '@/validators/auth.validators'
+import { parseBody } from '@/validators/parse.validators'
 import {
   invitationIdSchema,
   inviteMemberSchema,
@@ -53,28 +54,6 @@ import {
 const tenantRepository = new TenantRepository()
 const tenantSettingsRepository = new TenantSettingsRepository()
 const userMembershipRepository = new UserMembershipRepository()
-
-/**
- * The authenticated caller's id, guarding against a route reaching this
- * controller without `requireAuth` ahead of it — the same defensive check
- * `profile.controller.ts`'s own `authenticatedUserId` makes, and for the
- * identical reason: today this can only happen if a route is wired up
- * wrong (`tenant.routes.ts` mounts `requireAuth` router-wide), but a 401
- * here costs nothing and turns a future routing mistake into an auth
- * failure instead of `undefined` flowing into a repository call. Not
- * imported from `profile.controller.ts` — that helper is module-private
- * there, and a four-line check duplicated once, in this file's own terms,
- * is cheaper than exporting a cross-controller dependency for it.
- * @param request - The incoming request.
- * @returns The authenticated user's id.
- * @throws {HttpError} 401, when `request.user` was never populated.
- */
-function authenticatedUserId(request: Request): string {
-  if (!request.user) {
-    throw new HttpError('Authentication required', 401)
-  }
-  return request.user.id
-}
 
 /**
  * The caller's tenant-scoped principal, guarding against a route reaching

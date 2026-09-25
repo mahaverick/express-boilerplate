@@ -23,8 +23,7 @@
 // column) and still returns `Promise<Tenant>`, so it type-checks as a
 // valid override without weakening what a caller of the base type could
 // rely on.
-import { and, DrizzleQueryError, eq, isNull, sql, type SQL } from 'drizzle-orm'
-import postgres from 'postgres'
+import { and, eq, isNull, sql, type SQL } from 'drizzle-orm'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import {
   tenantModel,
@@ -33,38 +32,14 @@ import {
   type Tenant,
 } from '@/database/models/tenant.model'
 import { userMembershipModel } from '@/database/models/user-membership.model'
-import { HttpError } from '@/middlewares/error.middleware'
+import { HttpError } from '@/errors/http-error'
+import { isUniqueViolation } from '@/errors/postgres-errors'
 import {
   BaseRepository,
   type SoftDeleteOptions,
   type Touched,
 } from '@/repositories/base.repository'
 import { db } from '@/services/database.service'
-
-// Postgres error code for a unique-constraint violation. Same source and
-// same value as base.repository.ts's own — see that file's comment for the
-// PostgreSQL docs reference.
-const UNIQUE_VIOLATION_CODE = '23505'
-
-/**
- * Whether an error thrown by `create`'s transaction is a Postgres
- * unique-constraint violation — i.e. `tenants_slug_unique`
- * (tenant.model.ts) already has a visible row for this slug. A deliberate
- * copy of `BaseRepository`'s identically-named private helper, not an
- * import: that method is module-private there by design (its own comment:
- * "the driver-level detail this file exists to keep out of every caller"),
- * and `create` here bypasses `BaseRepository.create`/
- * `translatingUniqueViolation` entirely (this file's header comment) —
- * same reasoning `auth-provider.repository.ts` and `register()`
- * (auth.controller.ts) already give for their own copies of this exact
- * check.
- * @param error - The error thrown by the transaction.
- * @returns True when the error is (or wraps) a 23505 unique violation.
- */
-function isUniqueViolation(error: unknown): boolean {
-  const cause = error instanceof DrizzleQueryError ? error.cause : error
-  return cause instanceof postgres.PostgresError && cause.code === UNIQUE_VIOLATION_CODE
-}
 
 /**
  * The columns `TenantRepository.create` accepts for the tenant row itself,

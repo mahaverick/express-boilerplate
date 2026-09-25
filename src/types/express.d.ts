@@ -32,8 +32,8 @@
 // property, and its type is exactly `AuthenticatedUser` because `User`
 // extends it — so there is no second, conflicting declaration left for
 // `skipLibCheck` to silently arbitrate between.
-import type { AuthenticatedUser } from '@/middlewares/auth.middleware'
 import type { RequestPrincipal } from '@/middlewares/tenant.middleware'
+import type { AuthenticatedUser } from '@/presenters/user.presenter'
 
 declare global {
   namespace Express {

@@ -9,7 +9,7 @@
 // both files.
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
-import { HttpError } from '@/middlewares/error.middleware'
+import { HttpError } from '@/errors/http-error'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 

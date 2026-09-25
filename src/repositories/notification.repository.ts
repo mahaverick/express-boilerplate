@@ -17,7 +17,7 @@ import {
   type NewNotification,
   type Notification,
 } from '@/database/models/notification.model'
-import { HttpError } from '@/middlewares/error.middleware'
+import { HttpError } from '@/errors/http-error'
 import { db } from '@/services/database.service'
 
 /**

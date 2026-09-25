@@ -36,7 +36,7 @@ import {
   listTenants,
   updateMemberRole,
 } from '@/controllers/tenant.controller'
-import { HttpError } from '@/middlewares/error.middleware'
+import { HttpError } from '@/errors/http-error'
 import type { RequestPrincipal } from '@/middlewares/tenant.middleware'
 
 const unusedResponse = {} as Response

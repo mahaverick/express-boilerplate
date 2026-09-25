@@ -62,8 +62,8 @@
 // false`) denies nothing either — step 3's `findById` read below is what
 // catches that, on the next request.
 import { type NextFunction, type Request, type Response } from 'express'
-import type { User } from '@/database/models/user.model'
-import { HttpError } from '@/middlewares/error.middleware'
+import { HttpError } from '@/errors/http-error'
+import { toAuthenticatedUser, type AuthenticatedUser } from '@/presenters/user.presenter'
 import { UserRepository } from '@/repositories/user.repository'
 import { isSessionDenied } from '@/services/session-denylist.service'
 import { verifyAccessToken } from '@/utilities/token.utilities'
@@ -78,7 +78,7 @@ const BEARER_PATTERN = /^Bearer\s+(\S+)$/
 
 /**
  * Machine-readable code identifying a STALE-BUT-OTHERWISE-VALID credential,
- * carried in the error envelope's `code` field (`error.middleware.ts` /
+ * carried in the error envelope's `code` field (`errors/http-error.ts` /
  * `HttpError`).
  *
  * This is the distinction a client needs to act correctly: a 401 carrying
@@ -109,49 +109,6 @@ const BEARER_PATTERN = /^Bearer\s+(\S+)$/
  *      handler reads the fact without re-verifying the token a second time.
  */
 export const ACCESS_TOKEN_EXPIRED_CODE = 'ACCESS_TOKEN_EXPIRED'
-
-/**
- * The subset of a user row it is safe to attach to `request.user`.
- * Deliberately excludes `passwordHash` — and everything else a route
- * handler has no business reading off the authenticated principal.
- *
- * This is the NARROWER of this codebase's two user projections, and the one
- * the other is built from: `PublicUser` (auth.controller.ts) extends this
- * interface with `createdAt`, and `toPublicUser` calls
- * `toAuthenticatedUser` below rather than repeating its field list. Before
- * that, the two were independent hand-maintained copies differing only in
- * `createdAt` — exactly the duplicate-definition drift auth.controller.ts's
- * own header comment argues against. The dependency runs in this direction
- * (controller -> middleware) because that is the direction imports already
- * run here; the reverse would be a new layering inversion.
- *
- * WHAT THAT MAKES TRUE, for whoever adds a field next: everything on
- * `request.user` is CLIENT-VISIBLE by construction, because `PublicUser`
- * inherits it and `GET /api/v1/profile` returns that. A later plan adding
- * server-only principal data — a role, a tenant id, an impersonation flag —
- * must not add it here expecting it to stay internal. Put that on its own
- * request property (`request.principal`, say) and leave this one meaning
- * "the user, as the user may see themselves".
- */
-export interface AuthenticatedUser {
-  id: string
-  email: string
-  firstName: string | null
-  lastName: string | null
-}
-
-/**
- * Narrow a full user row to the fields `request.user` exposes.
- *
- * Exported because `toPublicUser` (auth.controller.ts) builds on it — see
- * `AuthenticatedUser` above for why the two projections are related this
- * way round rather than duplicated.
- * @param user - The loaded, already-validated user row.
- * @returns The fields safe to attach to a request.
- */
-export function toAuthenticatedUser(user: User): AuthenticatedUser {
-  return { id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName }
-}
 
 /**
  * Read the bearer token out of the Authorization header.

@@ -16,7 +16,7 @@
 // in the generic base class.
 import { sql, type SQL } from 'drizzle-orm'
 import { userModel, type User } from '@/database/models/user.model'
-import { HttpError } from '@/middlewares/error.middleware'
+import { HttpError } from '@/errors/http-error'
 import {
   BaseRepository,
   type SoftDeleteOptions,

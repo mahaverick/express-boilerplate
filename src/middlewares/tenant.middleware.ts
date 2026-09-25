@@ -27,10 +27,10 @@
 // #3).
 import { type NextFunction, type Request, type Response } from 'express'
 import { TENANT_ID_HEADER, type MembershipRole } from '@/constants/tenant.constants'
-import { HttpError } from '@/middlewares/error.middleware'
-import { requestContextStore, type TenantContext } from '@/middlewares/request-context.middleware'
+import { HttpError } from '@/errors/http-error'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
+import { requestContextStore, type TenantContext } from '@/services/request-context.service'
 
 const tenantRepository = new TenantRepository()
 const userMembershipRepository = new UserMembershipRepository()

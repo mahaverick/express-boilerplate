@@ -1,4 +1,4 @@
-// tests/unit/validators/auth.validators.test.ts
+// tests/unit/validators/parse.validators.test.ts
 //
 // parseBody's own behaviour needs no database — this lives under
 // tests/unit/, not tests/integration/ (see CLAUDE.md on why a DB-dependent
@@ -11,8 +11,8 @@
 // reaches for it next, which is exactly what this test proves.
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
-import { HttpError } from '@/middlewares/error.middleware'
-import { parseBody } from '@/validators/auth.validators'
+import { HttpError } from '@/errors/http-error'
+import { parseBody } from '@/validators/parse.validators'
 
 /**
  * Call `parseBody` and capture the `HttpError` it throws, rather than

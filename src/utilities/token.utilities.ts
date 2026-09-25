@@ -30,7 +30,7 @@ import { getEnv } from '@/configs/env.config'
 import { REFRESH_REUSE_GRACE_MS } from '@/constants/auth.constants'
 import type { TokenPurpose, UserToken } from '@/database/models/user-token.model'
 import type { User } from '@/database/models/user.model'
-import { HttpError } from '@/middlewares/error.middleware'
+import { HttpError } from '@/errors/http-error'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { MS_PER_SECOND, requireDurationMs } from '@/utilities/duration.utilities'
 

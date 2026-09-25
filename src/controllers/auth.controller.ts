@@ -2,10 +2,11 @@
 //
 // Two properties matter more than the endpoints themselves:
 //
-// 1. Registration never returns `passwordHash`. `toPublicUser` below builds
-//    the response from an explicit field list rather than `delete`-ing the
-//    key off the row — a `delete` is exactly the thing someone forgets to
-//    add when a new sensitive column shows up later.
+// 1. Registration never returns `passwordHash`. `toPublicUser`
+//    (user.presenter.ts) builds the response from an explicit field list
+//    rather than `delete`-ing the key off the row — a `delete` is exactly
+//    the thing someone forgets to add when a new sensitive column shows up
+//    later.
 //
 // 2. An unknown email and a wrong password are answered IDENTICALLY: same
 //    status, same body, AND the same cost. Returning the same body but
@@ -19,11 +20,10 @@
 //    own header comment there for how it stays in step with BCRYPT_COST and
 //    why it's memoised.
 import { randomUUID } from 'node:crypto'
-import { and, DrizzleQueryError, eq, ne } from 'drizzle-orm'
+import { and, eq, ne } from 'drizzle-orm'
 import { type NextFunction, type Request, type RequestHandler, type Response } from 'express'
 import passport from 'passport'
 import type { Profile as GoogleProfile } from 'passport-google-oauth20'
-import postgres from 'postgres'
 import { getEnv, isCookieSecure, type Env } from '@/configs/env.config'
 import type { AuthProvider } from '@/constants/auth-provider.constants'
 import {
@@ -32,14 +32,16 @@ import {
   REFRESH_TOKEN_COOKIE_PATH,
 } from '@/constants/auth.constants'
 import { JobPriority } from '@/constants/queue.constants'
+import { authenticatedUserId } from '@/controllers/helpers.controller'
 import { authProviderModel } from '@/database/models/auth-provider.model'
 import type { AuthProviderRecord } from '@/database/models/auth-provider.model'
 import type { User } from '@/database/models/user.model'
 import { userModel } from '@/database/models/user.model'
+import { HttpError } from '@/errors/http-error'
+import { isUniqueViolation } from '@/errors/postgres-errors'
 import { addEmailJob } from '@/jobs/email.job'
 import { addNotificationJob } from '@/jobs/notification.job'
-import { toAuthenticatedUser, type AuthenticatedUser } from '@/middlewares/auth.middleware'
-import { HttpError } from '@/middlewares/error.middleware'
+import { toPublicUser } from '@/presenters/user.presenter'
 import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { db } from '@/services/database.service'
@@ -69,46 +71,13 @@ import {
   changePasswordSchema,
   forgotPasswordSchema,
   loginSchema,
-  parseBody,
   registerSchema,
   resetPasswordSchema,
 } from '@/validators/auth.validators'
+import { parseBody } from '@/validators/parse.validators'
 
 const userRepository = new UserRepository()
 const authProviderRepository = new AuthProviderRepository()
-
-/**
- * The fields of a user row it is safe to return to a client. An explicit
- * allow-list — see this file's header comment for why.
- *
- * DERIVED, not declared: this is `AuthenticatedUser` (auth.middleware.ts,
- * the projection attached to `request.user`) plus `createdAt`, which is the
- * only field the two ever differed by. They used to be two independent
- * hand-maintained lists, which is precisely the drift this file's header
- * comment warns about one paragraph earlier — a field added to one and not
- * the other, or excluded from one and not the other, with nothing to catch
- * it. Extending rather than repeating makes that impossible: a change to
- * the narrower shape reaches this one automatically.
- *
- * Exported so profile.controller.ts can reuse this exact shape for
- * `GET`/`PATCH /api/v1/profile` instead of defining a third "what a user
- * looks like to a client".
- */
-export interface PublicUser extends AuthenticatedUser {
-  createdAt: Date
-}
-
-/**
- * Narrow a full user row to the fields `PublicUser` exposes.
- *
- * Built from `toAuthenticatedUser` for the same reason `PublicUser` extends
- * `AuthenticatedUser`: one field list, not two that agree today.
- * @param user - The full row read from or written to the database.
- * @returns The public projection of that row.
- */
-export function toPublicUser(user: User): PublicUser {
-  return { ...toAuthenticatedUser(user), createdAt: user.createdAt }
-}
 
 /**
  * Attach a freshly issued refresh token to the response as an httpOnly
@@ -294,32 +263,6 @@ async function sendRegistrationAttemptMail(email: string): Promise<void> {
     existing?.id ?? '',
     { priority: JobPriority.normal }
   )
-}
-
-// Postgres error code for a unique-constraint violation. Same source and
-// same value as base.repository.ts's and auth-provider.repository.ts's own
-// copies of this check — see the latter's header comment for why this is a
-// deliberate per-caller duplication rather than an import: `register`
-// below is a SECOND caller in this file that needs an atomic, multi-table
-// write through a raw `db.transaction()` handle (`tx`), which — same as
-// `findOrCreateByGoogle`'s own transaction below — bypasses
-// `UserRepository.create`'s built-in translation of this exact error into
-// `HttpError(409)`. A `tx.insert(...)` raises the raw driver error, so
-// register() needs its own copy of the check to keep answering the
-// identical enumeration-safe 202 a duplicate email got before this task.
-const UNIQUE_VIOLATION_CODE = '23505'
-
-/**
- * Whether an error thrown by a write through `db.transaction()` is a
- * Postgres unique-constraint violation. See the constant above for why
- * this exists here instead of reusing `UserRepository.create`'s own
- * translation.
- * @param error - The error thrown by the transaction.
- * @returns True when the error is (or wraps) a 23505 unique violation.
- */
-function isUniqueViolation(error: unknown): boolean {
-  const cause = error instanceof DrizzleQueryError ? error.cause : error
-  return cause instanceof postgres.PostgresError && cause.code === UNIQUE_VIOLATION_CODE
 }
 
 /**
@@ -749,35 +692,12 @@ const FEDERATED_ONLY_MESSAGE =
   'This account signs in with Google and has no password. Use forgot-password to set one.'
 
 /**
- * The authenticated principal's id, guarding against a route reaching this
- * handler without `requireAuth` ahead of it. Same pattern, and the same
- * reasoning, as `authenticatedUserId` in profile.controller.ts and
- * notification.controller.ts — a private copy per controller file rather
- * than one shared export, since `Request.user` (express.d.ts) is typed
- * `User | undefined` regardless of which router actually gates a given
- * handler with `requireAuth`: today `changePassword` can only reach this
- * with `request.user` unset if auth.routes.ts's own mount is wired wrong
- * (it attaches `requireAuth` ahead of this handler), but a defensive 401
- * costs nothing and turns a future routing mistake into an auth failure
- * instead of `undefined` flowing into `userRepository.findById`.
- * @param request - The incoming request.
- * @returns The authenticated user's id.
- * @throws {HttpError} 401, when `request.user` was never populated.
- */
-function authenticatedUserId(request: Request): string {
-  if (!request.user) {
-    throw new HttpError('Authentication required', 401)
-  }
-  return request.user.id
-}
-
-/**
  * Change the authenticated caller's own password.
  *
  * Sits on the auth router, per-route behind `requireAuth` (auth.routes.ts)
  * — this router is otherwise public, unlike profile.routes.ts, which is
  * gated router-wide. `request.user` is `AuthenticatedUser`
- * (auth.middleware.ts), the narrow client-visible projection with no
+ * (user.presenter.ts), the narrow client-visible projection with no
  * `passwordHash`; the real row is loaded again here because this handler
  * needs the one field that projection deliberately excludes.
  *
@@ -814,7 +734,7 @@ export async function changePassword(
   try {
     const input = parseBody(changePasswordSchema, request.body)
 
-    // request.user is narrowed to AuthenticatedUser (auth.middleware.ts) —
+    // request.user is narrowed to AuthenticatedUser (user.presenter.ts) —
     // no passwordHash. Re-load the real row for the one field that
     // projection deliberately never carries.
     const user = await userRepository.findById(authenticatedUserId(request))
@@ -975,7 +895,7 @@ export async function getAuthProviders(
   try {
     const userId = authenticatedUserId(request)
     // Re-loaded rather than read off `request.user`: `AuthenticatedUser`
-    // (auth.middleware.ts) is a PublicUser subset and carries no
+    // (user.presenter.ts) is a PublicUser subset and carries no
     // `passwordHash`. `changePassword` above does the same for the same
     // reason. Two endpoints needing this is not yet an argument for
     // widening what the middleware attaches — a third would be.

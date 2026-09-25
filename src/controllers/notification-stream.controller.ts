@@ -31,9 +31,10 @@ import {
   MAX_NOTIFICATION_PAGE_SIZE,
   SSE_MAX_BUFFERED_BYTES,
 } from '@/constants/notification.constants'
+import { authenticatedUserId } from '@/controllers/helpers.controller'
 import type { Notification } from '@/database/models/notification.model'
+import { HttpError } from '@/errors/http-error'
 import { ACCESS_TOKEN_EXPIRED_CODE } from '@/middlewares/auth.middleware'
-import { HttpError } from '@/middlewares/error.middleware'
 import { NotificationRepository } from '@/repositories/notification.repository'
 import { countStreams, isShuttingDown, registerStream } from '@/services/lifecycle.service'
 import { logger } from '@/services/logger.service'
@@ -72,23 +73,6 @@ interface NotificationStreamPayload {
   body: string
   readAt: string | null
   createdAt: string
-}
-
-/**
- * The authenticated principal's id, guarding against a routing mistake that
- * reaches this controller without `requireAuth` ahead of it. Copied from
- * `notification.controller.ts` (which copies it from `profile.controller.ts`
- * in turn) rather than imported — see that file's header comment for why a
- * three-line defensive check is repeated per controller instead of shared.
- * @param request - The incoming request.
- * @returns The authenticated user's id.
- * @throws {HttpError} 401, when `request.user` was never populated.
- */
-function authenticatedUserId(request: Request): string {
-  if (!request.user) {
-    throw new HttpError('Authentication required', 401)
-  }
-  return request.user.id
 }
 
 /**

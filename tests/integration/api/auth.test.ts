@@ -23,8 +23,8 @@ import {
   REFRESH_TOKEN_COOKIE_PATH,
 } from '@/constants/auth.constants'
 import type { User } from '@/database/models/user.model'
+import { HttpError } from '@/errors/http-error'
 import type { EmailJobData } from '@/jobs/email.job'
-import { HttpError } from '@/middlewares/error.middleware'
 import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { db, sql } from '@/services/database.service'

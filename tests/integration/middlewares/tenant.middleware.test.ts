@@ -20,17 +20,14 @@ import express, { type Express, type NextFunction, type Request, type Response }
 import { afterEach, describe, expect, it } from 'vitest'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import { errorHandler } from '@/middlewares/error.middleware'
-import {
-  requestContext,
-  requestContextStore,
-  type TenantContext,
-} from '@/middlewares/request-context.middleware'
+import { requestContext } from '@/middlewares/request-context.middleware'
 import { requestId } from '@/middlewares/request-id.middleware'
 import { requireRole, resolveTenant, type RequestPrincipal } from '@/middlewares/tenant.middleware'
 import { TenantRepository, type CreateTenantInput } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
+import { requestContextStore, type TenantContext } from '@/services/request-context.service'
 import { request } from '../../helpers/request'
 
 /**

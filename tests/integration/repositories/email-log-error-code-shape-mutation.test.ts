@@ -53,7 +53,7 @@ import {
   type EmailLog,
   type NewEmailLog,
 } from '@/database/models/email-log.model'
-import { HttpError } from '@/middlewares/error.middleware'
+import { HttpError } from '@/errors/http-error'
 import { EmailLogRepository } from '@/repositories/email-log.repository'
 import { db, sql } from '@/services/database.service'
 import { withMutatedMethod } from '../../helpers/mutate'

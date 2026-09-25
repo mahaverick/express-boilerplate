@@ -10,7 +10,6 @@ import { Writable } from 'node:stream'
 import { context, trace, TraceFlags } from '@opentelemetry/api'
 import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import { requestContextStore } from '@/middlewares/request-context.middleware'
 import {
   createPinoLogger,
   getCallerSource,
@@ -18,6 +17,7 @@ import {
   loggerOptionsFromEnv,
   pinoPrettyLoader,
 } from '@/services/logger.service'
+import { requestContextStore } from '@/services/request-context.service'
 import { withMutatedMethod } from '../../helpers/mutate'
 
 // .env.test sets LOG_LEVEL=silent to keep the suite's output readable, but the

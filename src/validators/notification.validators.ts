@@ -2,7 +2,7 @@
 //
 // Three request shapes for notification.routes.ts: a list query
 // (pagination), a path `:id` (mark-read/delete), and a preferences update
-// body. `parseBody` (auth.validators.ts) is reused for all three — it takes
+// body. `parseBody` (parse.validators.ts) is reused for all three — it takes
 // `unknown` and only cares that its argument is a plain object a zod schema
 // can walk, so it works identically for `request.query`/`request.params` as
 // it does for `request.body`, and this file does not need a second,

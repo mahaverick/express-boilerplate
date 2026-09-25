@@ -23,7 +23,7 @@ import {
   type EmailLog,
   type NewEmailLog,
 } from '@/database/models/email-log.model'
-import { HttpError } from '@/middlewares/error.middleware'
+import { HttpError } from '@/errors/http-error'
 import { db } from '@/services/database.service'
 
 /**

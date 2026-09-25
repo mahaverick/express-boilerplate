@@ -27,7 +27,6 @@
 // what non-column-specific writes every mutation gets* (base).
 import {
   and,
-  DrizzleQueryError,
   eq,
   isNull,
   sql,
@@ -36,27 +35,8 @@ import {
   type SQL,
 } from 'drizzle-orm'
 import type { PgColumn, PgTableWithColumns, TableConfig } from 'drizzle-orm/pg-core'
-import postgres from 'postgres'
-import { HttpError } from '@/middlewares/error.middleware'
-
-// Postgres error code for a unique-constraint violation. Sourced from
-// https://www.postgresql.org/docs/current/errcodes-appendix.html — this is
-// the driver-level detail this file exists to keep out of every caller.
-const UNIQUE_VIOLATION_CODE = '23505'
-
-/**
- * Whether an error thrown by a write is a Postgres unique-constraint
- * violation. Drizzle's postgres-js driver wraps the underlying
- * `postgres.PostgresError` in its own `DrizzleQueryError`, with the
- * original error on `.cause` — checking `error` alone (without unwrapping)
- * would never match, and this translation would silently never fire.
- * @param error - The error thrown by the query.
- * @returns True when the error is (or wraps) a 23505 unique violation.
- */
-function isUniqueViolation(error: unknown): boolean {
-  const cause = error instanceof DrizzleQueryError ? error.cause : error
-  return cause instanceof postgres.PostgresError && cause.code === UNIQUE_VIOLATION_CODE
-}
+import { HttpError } from '@/errors/http-error'
+import { isUniqueViolation } from '@/errors/postgres-errors'
 
 /**
  * The minimum column shape a table must have for `BaseRepository` to manage

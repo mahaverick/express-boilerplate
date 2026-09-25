@@ -23,12 +23,12 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 import { TENANT_ID_HEADER } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { UserMembership } from '@/database/models/user-membership.model'
-import type { AuthenticatedUser } from '@/middlewares/auth.middleware'
-import { HttpError } from '@/middlewares/error.middleware'
-import { requestContextStore } from '@/middlewares/request-context.middleware'
+import { HttpError } from '@/errors/http-error'
 import { requireRole, resolveTenant } from '@/middlewares/tenant.middleware'
+import type { AuthenticatedUser } from '@/presenters/user.presenter'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
+import { requestContextStore } from '@/services/request-context.service'
 
 /**
  * A fixed tenant row — only `id`/`slug` are read by `resolveTenant`, but the

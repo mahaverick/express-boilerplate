@@ -4,7 +4,8 @@
 // in). A malformed token answers exactly like an unknown one, so the shape
 // check tells a caller nothing the lookup would not.
 import { type NextFunction, type Request, type Response } from 'express'
-import { HttpError } from '@/middlewares/error.middleware'
+import { authenticatedUserId } from '@/controllers/helpers.controller'
+import { HttpError } from '@/errors/http-error'
 import {
   accept,
   INVITATION_INVALID_CODE,
@@ -26,18 +27,6 @@ function invitationTokenFrom(input: unknown): string {
     throw new HttpError(INVITATION_INVALID_MESSAGE, 404, INVITATION_INVALID_CODE)
   }
   return result.data.token
-}
-
-/**
- * The authenticated caller's id; a 401 if a route reaches this handler
- * without `requireAuth`. Same four-line guard as tenant.controller.ts's.
- * @param request - The incoming request.
- * @returns The caller's id.
- * @throws {HttpError} 401, when `request.user` was never populated.
- */
-function authenticatedUserId(request: Request): string {
-  if (!request.user) throw new HttpError('Authentication required', 401)
-  return request.user.id
 }
 
 /**

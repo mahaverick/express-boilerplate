@@ -5,7 +5,7 @@
 // actor against that fresh row, check the last-owner rule, write.
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { UserMembership } from '@/database/models/user-membership.model'
-import { HttpError } from '@/middlewares/error.middleware'
+import { HttpError } from '@/errors/http-error'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { db, type DbExecutor } from '@/services/database.service'
 

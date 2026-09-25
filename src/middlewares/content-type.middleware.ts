@@ -58,7 +58,7 @@
 // and the handler answers 400 for the missing fields. There is nothing an
 // attacker can smuggle through this gap that a validator will read.
 import { type NextFunction, type Request, type Response } from 'express'
-import { HttpError } from '@/middlewares/error.middleware'
+import { HttpError } from '@/errors/http-error'
 
 // A request declaring no content type at all normalises to '' — see this
 // file's header comment for why that is allowed rather than refused.
