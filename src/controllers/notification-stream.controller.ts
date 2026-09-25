@@ -25,9 +25,10 @@
 // the `catch` below hands the rejection to `next(error)` and `errorHandler`
 // (error.middleware.ts) answers with this codebase's ordinary JSON error
 // envelope — not an event-stream response that immediately closes.
-import { type NextFunction, type Request, type Response } from 'express'
+import type { NextFunction, Request, Response } from 'express'
 import { getEnv } from '@/configs/env.config'
 import { SSE_MAX_BUFFERED_BYTES } from '@/constants/notification.constants'
+import { BaseController } from '@/controllers/base.controller'
 import { authenticatedUserId } from '@/controllers/helpers.controller'
 import type { Notification } from '@/database/models/notification.model'
 import { HttpError } from '@/errors/http-error'
@@ -119,7 +120,7 @@ function toStreamPayload(notification: Notification): NotificationStreamPayload 
     type: notification.type,
     title: notification.title,
     body: notification.body,
-    // eslint-disable-next-line unicorn/no-null -- the wire format is JSON: an unread notification must serialize readAt as `null`, not omit the key, so a client parsing `data:` can tell "unread" apart from "this server doesn't send readAt" — same reasoning notification.controller.ts's deleteNotification already documents for its own `null` response.
+    // eslint-disable-next-line unicorn/no-null -- the wire format is JSON: an unread notification must serialize readAt as `null`, not omit the key, so a client parsing `data:` can tell "unread" apart from "this server doesn't send readAt" — same reasoning messageResponse (response.utilities.ts) documents for the envelope's `null` data.
     readAt: notification.readAt ? notification.readAt.toISOString() : null,
     createdAt: notification.createdAt.toISOString(),
   }
@@ -152,190 +153,202 @@ function writeNotificationEvent(response: Response, notification: Notification):
 }
 
 /**
- * `GET /api/v1/notifications/stream` — open a Server-Sent Events connection
- * for the authenticated user's notifications.
- *
- * EVERYTHING SYNCHRONOUS-UP-FRONT, THE REPLAY QUERY LAST — not the more
- * obvious "replay, then subscribe" order. `fetchMissedNotifications`
- * (notification.service.ts) awaits the database twice; if the live
- * listener, heartbeat, and close handler were registered only after that
- * awaits resolved, two things could go wrong in that window:
- *
- *   - A notification emitted while the query was in flight would be in
- *     neither the replay burst (already queried) nor the live stream (not
- *     subscribed yet) — silently lost until the next reconnect, which is
- *     the exact gap `Last-Event-ID` exists to close.
- *   - A client that disconnects while the query is in flight would fire
- *     `request`'s `'close'` event before this function ever attached a
- *     listener for it — `offNotification`/`clearInterval` would never run,
- *     leaking the subscription and a heartbeat timer for as long as the
- *     process lives.
- *
- * `onNotification`/the heartbeat/`request.on('close')` are registered
- * first, unconditionally, before the one `await` on the reconnect path.
- * While that query is in flight, `isReplaying` routes any live notification
- * into `pendingDuringReplay` instead of writing it immediately; once the
- * queried burst is written, the pending queue is flushed, deduplicated
- * against ids the burst already covered (the two windows can legitimately
- * overlap by one notification).
- * @param request - The incoming request, already authenticated by `requireAuth`, and, on reconnect, carrying a `Last-Event-ID` header.
- * @param response - The response, upgraded to an SSE stream once authenticated.
- * @param next - Forwards an authentication failure to the terminal error handler.
+ * The SSE handler for `GET /api/v1/notifications/stream`.
  */
-export async function streamNotifications(
-  request: Request,
-  response: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    if (isShuttingDown()) {
-      throw new HttpError('Server is shutting down', 503)
-    }
-    const userId = authenticatedUserId(request)
-    // Before writeHead, so the rejection is an ordinary JSON 429. There is no
-    // await between this and registerStream below, so the count is exact
-    // within this process.
-    if (countStreams(userId) >= getEnv().SSE_MAX_STREAMS_PER_USER) {
-      throw new HttpError('Too many open notification streams', 429, 'too_many_streams')
-    }
-    const sessionId = requireSessionId(request)
-
-    response.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
-      // nginx buffers a proxied response by default, which would hold every
-      // frame below until the buffer fills or the connection closes —
-      // defeating "real-time" entirely. This header is nginx-specific and
-      // harmless to send through anything else.
-      'X-Accel-Buffering': 'no',
-    })
-    response.flushHeaders()
-    response.write(`retry: ${SSE_RETRY_MS}\n`)
-
-    // A write racing the client's own disconnect (see writeNotificationEvent)
-    // can still surface as an 'error' event on the response itself — an
-    // unlistened 'error' event on a Node stream throws and crashes the
-    // process, so this must never be removed.
-    response.on('error', (error: unknown) => {
-      logger.debug('Notification stream connection error', { error })
-    })
-
-    const lastEventId = request.get('Last-Event-ID')
-
-    // See this function's own comment for why this is `true` from the
-    // start on a reconnect, and why registration below cannot wait for
-    // `fetchMissedNotifications` to resolve first.
-    let isReplaying = Boolean(lastEventId)
-    const pendingDuringReplay: Notification[] = []
-    // Ids the replay burst wrote: a live copy can still arrive after it.
-    const missedIds = new Set<string>()
-
-    const handleNotification = (notification: Notification): void => {
-      if (isReplaying) {
-        pendingDuringReplay.push(notification)
-        return
+class NotificationStreamController extends BaseController {
+  /**
+   * `GET /api/v1/notifications/stream` — open a Server-Sent Events connection
+   * for the authenticated user's notifications.
+   *
+   * EVERYTHING SYNCHRONOUS-UP-FRONT, THE REPLAY QUERY LAST — not the more
+   * obvious "replay, then subscribe" order. `fetchMissedNotifications`
+   * (notification.service.ts) awaits the database twice; if the live
+   * listener, heartbeat, and close handler were registered only after that
+   * awaits resolved, two things could go wrong in that window:
+   *
+   *   - A notification emitted while the query was in flight would be in
+   *     neither the replay burst (already queried) nor the live stream (not
+   *     subscribed yet) — silently lost until the next reconnect, which is
+   *     the exact gap `Last-Event-ID` exists to close.
+   *   - A client that disconnects while the query is in flight would fire
+   *     `request`'s `'close'` event before this function ever attached a
+   *     listener for it — `offNotification`/`clearInterval` would never run,
+   *     leaking the subscription and a heartbeat timer for as long as the
+   *     process lives.
+   *
+   * `onNotification`/the heartbeat/`request.on('close')` are registered
+   * first, unconditionally, before the one `await` on the reconnect path.
+   * While that query is in flight, `isReplaying` routes any live notification
+   * into `pendingDuringReplay` instead of writing it immediately; once the
+   * queried burst is written, the pending queue is flushed, deduplicated
+   * against ids the burst already covered (the two windows can legitimately
+   * overlap by one notification).
+   *
+   * Not wrapped in `handle()`: its own `catch` sits beside the `writeHead` it guards, and every rejection still reaches `next`.
+   * @param request - The incoming request, already authenticated by `requireAuth`, and, on reconnect, carrying a `Last-Event-ID` header.
+   * @param response - The response, upgraded to an SSE stream once authenticated.
+   * @param next - Forwards an authentication failure to the terminal error handler.
+   */
+  streamNotifications = async (
+    request: Request,
+    response: Response,
+    next: NextFunction
+  ): Promise<void> => {
+    try {
+      if (isShuttingDown()) {
+        throw new HttpError('Server is shutting down', 503)
       }
-      if (missedIds.has(notification.id)) return
-      writeNotificationEvent(response, notification)
-      dropIfStalled()
-    }
-    onNotification(userId, handleNotification)
+      const userId = authenticatedUserId(request)
+      // Before writeHead, so the rejection is an ordinary JSON 429. There is no
+      // await between this and registerStream below, so the count is exact
+      // within this process.
+      if (countStreams(userId) >= getEnv().SSE_MAX_STREAMS_PER_USER) {
+        throw new HttpError('Too many open notification streams', 429, 'too_many_streams')
+      }
+      const sessionId = requireSessionId(request)
 
-    const heartbeat = setInterval(() => {
-      if (response.writableEnded || response.destroyed) return
-      void (async () => {
-        // The ONLY recurring check on an open connection.
-        // `requireAuth` (denylist and sid tolerance) and `requireSessionId`
-        // above ran once, at connect; nothing else revisits them — in
-        // particular, nothing here re-reads `user.active`. The stream also
-        // ends at token expiry (below), which bounds that gap to one
-        // access-token lifetime.
-        if (await isSessionDenied(sessionId)) {
-          clearInterval(heartbeat)
-          // Belt-and-braces: `request.on('close')` below also unsubscribes
-          // this handler and would fire shortly after `response.end()`
-          // regardless, but calling it here too makes this branch's
-          // teardown self-contained rather than depending on a race with
-          // an event this same code path is the one triggering.
-          offNotification(userId, handleNotification)
-          response.end()
+      response.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+        // nginx buffers a proxied response by default, which would hold every
+        // frame below until the buffer fills or the connection closes —
+        // defeating "real-time" entirely. This header is nginx-specific and
+        // harmless to send through anything else.
+        'X-Accel-Buffering': 'no',
+      })
+      response.flushHeaders()
+      response.write(`retry: ${SSE_RETRY_MS}\n`)
+
+      // A write racing the client's own disconnect (see writeNotificationEvent)
+      // can still surface as an 'error' event on the response itself — an
+      // unlistened 'error' event on a Node stream throws and crashes the
+      // process, so this must never be removed.
+      response.on('error', (error: unknown) => {
+        logger.debug('Notification stream connection error', { error })
+      })
+
+      const lastEventId = request.get('Last-Event-ID')
+
+      // See this function's own comment for why this is `true` from the
+      // start on a reconnect, and why registration below cannot wait for
+      // `fetchMissedNotifications` to resolve first.
+      let isReplaying = Boolean(lastEventId)
+      const pendingDuringReplay: Notification[] = []
+      // Ids the replay burst wrote: a live copy can still arrive after it.
+      const missedIds = new Set<string>()
+
+      const handleNotification = (notification: Notification): void => {
+        if (isReplaying) {
+          pendingDuringReplay.push(notification)
           return
         }
-        // Re-checked after the `await` above: the client may have
-        // disconnected while that Redis round trip was in flight.
+        if (missedIds.has(notification.id)) return
+        writeNotificationEvent(response, notification)
+        dropIfStalled()
+      }
+      onNotification(userId, handleNotification)
+
+      const heartbeat = setInterval(() => {
         if (response.writableEnded || response.destroyed) return
-        response.write(':ping\n\n')
-        dropIfStalled()
-      })()
-    }, getEnv().SSE_HEARTBEAT_INTERVAL_MS)
-    // Without this, a pending heartbeat timer keeps the Node event loop
-    // alive for as long as the connection is open — fine in production,
-    // where the process is meant to stay up, but it would otherwise hang a
-    // test (or a graceful shutdown) waiting on a timer nothing else needs.
-    heartbeat.unref()
+        void (async () => {
+          // The ONLY recurring check on an open connection.
+          // `requireAuth` (denylist and sid tolerance) and `requireSessionId`
+          // above ran once, at connect; nothing else revisits them — in
+          // particular, nothing here re-reads `user.active`. The stream also
+          // ends at token expiry (below), which bounds that gap to one
+          // access-token lifetime.
+          if (await isSessionDenied(sessionId)) {
+            clearInterval(heartbeat)
+            // Belt-and-braces: `request.on('close')` below also unsubscribes
+            // this handler and would fire shortly after `response.end()`
+            // regardless, but calling it here too makes this branch's
+            // teardown self-contained rather than depending on a race with
+            // an event this same code path is the one triggering.
+            offNotification(userId, handleNotification)
+            response.end()
+            return
+          }
+          // Re-checked after the `await` above: the client may have
+          // disconnected while that Redis round trip was in flight.
+          if (response.writableEnded || response.destroyed) return
+          response.write(':ping\n\n')
+          dropIfStalled()
+        })()
+      }, getEnv().SSE_HEARTBEAT_INTERVAL_MS)
+      // Without this, a pending heartbeat timer keeps the Node event loop
+      // alive for as long as the connection is open — fine in production,
+      // where the process is meant to stay up, but it would otherwise hang a
+      // test (or a graceful shutdown) waiting on a timer nothing else needs.
+      heartbeat.unref()
 
-    // One teardown for every server-initiated close: shutdown (registry),
-    // token expiry and a stalled client. The destroyed check makes it safe to
-    // call after the stall path has destroyed the response.
-    const closeStream = (): void => {
-      clearInterval(heartbeat)
-      offNotification(userId, handleNotification)
-      if (!response.writableEnded && !response.destroyed) response.end()
-    }
-    const unregisterStream = registerStream(userId, closeStream)
+      // One teardown for every server-initiated close: shutdown (registry),
+      // token expiry and a stalled client. The destroyed check makes it safe to
+      // call after the stall path has destroyed the response.
+      const closeStream = (): void => {
+        clearInterval(heartbeat)
+        offNotification(userId, handleNotification)
+        if (!response.writableEnded && !response.destroyed) response.end()
+      }
+      const unregisterStream = registerStream(userId, closeStream)
 
-    // Run after every write. A client over SSE_MAX_BUFFERED_BYTES has stopped
-    // reading. Destroy, never end: end() queues behind the stalled buffer and
-    // keeps the socket open, and its closing chunk can still reach the client.
-    // Destroyed first, so closeStream() skips end(). Destroy still fires
-    // request 'close', which unregisters.
-    const dropIfStalled = (): void => {
-      if (response.writableLength <= SSE_MAX_BUFFERED_BYTES) return
-      response.destroy()
-      closeStream()
-    }
-
-    // End at token expiry: the client reconnects with a fresh token, and
-    // requireAuth re-checks active/denylist. Unref'd so it never holds the
-    // process open.
-    const expiresAt = request.accessTokenExpiresAt
-    const msUntilExpiry = expiresAt ? expiresAt.getTime() - Date.now() : 0
-    const expiryTimer = expiresAt
-      ? setTimeout(closeStream, Math.min(Math.max(0, msUntilExpiry), MAX_TIMER_DELAY_MS))
-      : undefined
-    expiryTimer?.unref()
-
-    let isClosed = false
-    request.on('close', () => {
-      isClosed = true
-      unregisterStream()
-      offNotification(userId, handleNotification)
-      clearInterval(heartbeat)
-      clearTimeout(expiryTimer)
-    })
-
-    if (lastEventId) {
-      const missed = await fetchMissedNotifications(userId, lastEventId)
-      // The client disconnected while that query was in flight — the
-      // `'close'` handler above already unsubscribed and cleared the
-      // heartbeat; there is nothing left to write.
-      if (isClosed) return
-
-      for (const notification of missed) {
-        missedIds.add(notification.id)
-        writeNotificationEvent(response, notification)
-        dropIfStalled()
+      // Run after every write. A client over SSE_MAX_BUFFERED_BYTES has stopped
+      // reading. Destroy, never end: end() queues behind the stalled buffer and
+      // keeps the socket open, and its closing chunk can still reach the client.
+      // Destroyed first, so closeStream() skips end(). Destroy still fires
+      // request 'close', which unregisters.
+      const dropIfStalled = (): void => {
+        if (response.writableLength <= SSE_MAX_BUFFERED_BYTES) return
+        response.destroy()
+        closeStream()
       }
 
-      isReplaying = false
-      for (const notification of pendingDuringReplay) {
-        if (missedIds.has(notification.id)) continue
-        writeNotificationEvent(response, notification)
-        dropIfStalled()
+      // End at token expiry: the client reconnects with a fresh token, and
+      // requireAuth re-checks active/denylist. Unref'd so it never holds the
+      // process open.
+      const expiresAt = request.accessTokenExpiresAt
+      const msUntilExpiry = expiresAt ? expiresAt.getTime() - Date.now() : 0
+      const expiryTimer = expiresAt
+        ? setTimeout(closeStream, Math.min(Math.max(0, msUntilExpiry), MAX_TIMER_DELAY_MS))
+        : undefined
+      expiryTimer?.unref()
+
+      let isClosed = false
+      request.on('close', () => {
+        isClosed = true
+        unregisterStream()
+        offNotification(userId, handleNotification)
+        clearInterval(heartbeat)
+        clearTimeout(expiryTimer)
+      })
+
+      if (lastEventId) {
+        const missed = await fetchMissedNotifications(userId, lastEventId)
+        // The client disconnected while that query was in flight — the
+        // `'close'` handler above already unsubscribed and cleared the
+        // heartbeat; there is nothing left to write.
+        if (isClosed) return
+
+        for (const notification of missed) {
+          missedIds.add(notification.id)
+          writeNotificationEvent(response, notification)
+          dropIfStalled()
+        }
+
+        isReplaying = false
+        for (const notification of pendingDuringReplay) {
+          if (missedIds.has(notification.id)) continue
+          writeNotificationEvent(response, notification)
+          dropIfStalled()
+        }
       }
+    } catch (error) {
+      next(error)
     }
-  } catch (error) {
-    next(error)
   }
 }
+
+/**
+ * The notification-stream controller the notification routes mount.
+ */
+export const notificationStreamController = new NotificationStreamController()

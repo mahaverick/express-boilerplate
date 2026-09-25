@@ -387,6 +387,23 @@ describe('/api/v1/notifications', () => {
       expect(rows).toHaveLength(0)
     })
 
+    it('answers the no-content envelope, with data: null', async () => {
+      const { user, token } = await createAuthenticatedUser()
+      const notification = await seedNotification(user.id)
+
+      const response = await request(app)
+        .delete(`/api/v1/notifications/${notification.id}`)
+        .set('Authorization', `Bearer ${token}`)
+
+      expect(response.body).toEqual({
+        success: true,
+        message: 'Notification deleted.',
+        statusCode: 200,
+        // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data"
+        data: null,
+      })
+    })
+
     it('returns 404 for another user’s notification and leaves it intact', async () => {
       const { user: owner } = await createAuthenticatedUser()
       const { token: otherToken } = await createAuthenticatedUser()

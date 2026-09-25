@@ -3,10 +3,11 @@
 // HTTP only; the rules are in verification.service.ts. Every failure answers
 // identically: distinguishable failures would be a token-state oracle, and a
 // distinguishable wrong password would tell a link holder the address is squatted.
-import { type NextFunction, type Request, type Response } from 'express'
+import type { Response } from 'express'
+import { BaseController } from '@/controllers/base.controller'
 import { HttpError } from '@/errors/http-error'
 import * as verificationService from '@/services/verification.service'
-import { successResponse } from '@/utilities/response.utilities'
+import { messageResponse } from '@/utilities/response.utilities'
 import { parseBody } from '@/validators/parse.validators'
 import {
   resendVerificationSchema,
@@ -15,19 +16,26 @@ import {
   type VerifyEmailInput,
 } from '@/validators/verification.validators'
 
+const RESEND_RESPONSE_MESSAGE = 'If that address needs verification, a new link has been sent.'
+
 /**
- * Verify an email address with a token from the mailed link and the
- * account's password.
- * @param request - The incoming request, carrying `{ token, password }`.
- * @param response - The response.
- * @param next - Forwards a rejection to the terminal error handler.
+ * Send resend-verification's one response shape, so the envelope can never
+ * drift between branches.
+ * @param response - The response to send on.
  */
-export async function verifyEmail(
-  request: Request,
-  response: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
+function respondResendAccepted(response: Response): void {
+  messageResponse(response, RESEND_RESPONSE_MESSAGE, 202)
+}
+
+/**
+ * Handlers for the email-verification routes under `/api/v1/auth`.
+ */
+class VerificationController extends BaseController {
+  /**
+   * `POST /auth/verify-email`: verify an email address with a token from the
+   * mailed link and the account's password.
+   */
+  verifyEmail = this.handle(async (request, response) => {
     // parseBody's field-level 400 is distinguishable from this endpoint's one
     // failure, so a body missing `password` would answer differently.
     let input: VerifyEmailInput
@@ -39,41 +47,18 @@ export async function verifyEmail(
 
     await verificationService.verifyEmail(input.token, input.password)
 
-    // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data", not undefined (which JSON.stringify omits entirely)
-    successResponse(response, null, 'Email verified.')
-  } catch (error) {
-    next(error)
-  }
-}
+    messageResponse(response, 'Email verified.')
+  })
 
-const RESEND_RESPONSE_MESSAGE = 'If that address needs verification, a new link has been sent.'
-
-/**
- * Send resend-verification's one response shape, so the envelope can never
- * drift between branches.
- * @param response - The response to send on.
- */
-function respondResendAccepted(response: Response): void {
-  // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data", not undefined (which JSON.stringify omits entirely)
-  successResponse(response, null, RESEND_RESPONSE_MESSAGE, 202)
-}
-
-/**
- * Send a fresh verification link, if and only if the address belongs to an
- * existing, unverified account. Identical response in every case.
- *
- * The lookup runs before the response on every branch; the mail runs after
- * it, so an SMTP round trip on one branch cannot be timed.
- * @param request - The incoming request, carrying `{ email }`.
- * @param response - The response.
- * @param next - Forwards a rejection to the terminal error handler.
- */
-export async function resendVerification(
-  request: Request,
-  response: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
+  /**
+   * `POST /auth/resend-verification`: send a fresh verification link, if and
+   * only if the address belongs to an existing, unverified account.
+   * Identical response in every case.
+   *
+   * The lookup runs before the response on every branch; the mail runs after
+   * it, so an SMTP round trip on one branch cannot be timed.
+   */
+  resendVerification = this.handle(async (request, response) => {
     // A malformed address must answer like a well-formed unknown one.
     let input: ResendVerificationInput
     try {
@@ -88,7 +73,10 @@ export async function resendVerification(
     // Not awaited, and never rejects: the service logs its own failure, so a
     // mail failure can neither delay nor change a response already sent.
     void sendMail()
-  } catch (error) {
-    next(error)
-  }
+  })
 }
+
+/**
+ * The verification controller the auth routes mount.
+ */
+export const verificationController = new VerificationController()

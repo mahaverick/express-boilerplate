@@ -17,14 +17,14 @@
 //     codebase does not use. Reaching it needs a param object Express
 //     itself would never build.
 //
-// Every case below calls the exported handler/function directly, the same
+// Every case below calls a `tenantController` handler directly, the same
 // technique tests/unit/controllers/profile.controller.test.ts already
 // establishes, rather than routing through `createApp()` — no database
 // import is reached by doing this: every branch here throws (or returns)
-// before any repository call.
+// before any service call.
 import type { NextFunction, Request, Response } from 'express'
 import { describe, expect, it, vi } from 'vitest'
-import { listMembers, listTenants, updateMemberRole } from '@/controllers/tenant.controller'
+import { tenantController } from '@/controllers/tenant.controller'
 import { HttpError } from '@/errors/http-error'
 import type { RequestPrincipal } from '@/middlewares/tenant.middleware'
 
@@ -52,7 +52,7 @@ describe('authenticatedUserId (via listTenants)', () => {
     const { next, lastCallArgument } = mockNext()
     const request = { user: undefined } as unknown as Request
 
-    await listTenants(request, unusedResponse, next)
+    await tenantController.listTenants(request, unusedResponse, next)
 
     expect(next).toHaveBeenCalledTimes(1)
     const error = lastCallArgument()
@@ -67,7 +67,7 @@ describe('tenantPrincipal (via listMembers)', () => {
     const { next, lastCallArgument } = mockNext()
     const request = { principal: undefined } as unknown as Request
 
-    await listMembers(request, unusedResponse, next)
+    await tenantController.listMembers(request, unusedResponse, next)
 
     expect(next).toHaveBeenCalledTimes(1)
     const error = lastCallArgument()
@@ -92,7 +92,7 @@ describe('targetUserIdParameter (via updateMemberRole)', () => {
       body: {},
     } as unknown as Request
 
-    await updateMemberRole(request, unusedResponse, next)
+    await tenantController.updateMemberRole(request, unusedResponse, next)
 
     expect(next).toHaveBeenCalledTimes(1)
     const error = lastCallArgument()

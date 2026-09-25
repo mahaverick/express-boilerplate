@@ -377,6 +377,18 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
       expect(response.status).toBe(200)
     })
 
+    it('answers the no-content envelope, with data: null', async () => {
+      const response = await request(app).post('/api/v1/auth/logout')
+
+      expect(response.body).toEqual({
+        success: true,
+        message: 'Logged out.',
+        statusCode: 200,
+        // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data"
+        data: null,
+      })
+    })
+
     it('answers identically for an already-revoked token as for one that never existed', async () => {
       const { response: loginResponse } = await registerAndLogin(createdIds)
       const cookie = refreshCookiePair(loginResponse) as string

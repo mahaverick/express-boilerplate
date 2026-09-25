@@ -1,8 +1,8 @@
 // tests/unit/controllers/profile.controller.test.ts
 //
-// Covers `authenticatedUserId`'s own defensive branch — the one profile.controller.ts's
-// own header comment describes as unreachable "unless a route is wired up
-// wrong": every real route these handlers sit behind mounts `requireAuth`
+// Covers the defensive 401 branch, the one helpers.controller.ts's
+// `authenticatedUserId` guards against, reachable only when a route is wired
+// up wrong: every real route these handlers sit behind mounts `requireAuth`
 // (auth.middleware.ts) first, and that middleware either populates
 // `request.user` or answers 401 itself before this controller ever runs.
 // tests/integration/api/profile.test.ts already covers both handlers' "not
@@ -12,10 +12,10 @@
 // `!request.user` guard at all, since it requires calling the handler
 // directly with no `request.user` set, bypassing routing entirely. No
 // database import reached by doing this: `authenticatedUserId` throws
-// before either handler ever calls `userRepository`.
+// before either handler ever calls the profile service.
 import type { NextFunction, Request, Response } from 'express'
 import { describe, expect, it, vi } from 'vitest'
-import { getProfile, updateProfile } from '@/controllers/profile.controller'
+import { profileController } from '@/controllers/profile.controller'
 import { HttpError } from '@/errors/http-error'
 
 const unauthenticatedRequest = { user: undefined } as unknown as Request
@@ -36,7 +36,7 @@ describe('authenticatedUserId (via getProfile/updateProfile)', () => {
   it('getProfile forwards a 401 HttpError to next() when request.user is unset', async () => {
     const { next, lastCallArgument } = mockNext()
 
-    await getProfile(unauthenticatedRequest, unusedResponse, next)
+    await profileController.getProfile(unauthenticatedRequest, unusedResponse, next)
 
     expect(next).toHaveBeenCalledTimes(1)
     const error = lastCallArgument()
@@ -48,7 +48,7 @@ describe('authenticatedUserId (via getProfile/updateProfile)', () => {
   it('updateProfile forwards the same 401 HttpError to next() when request.user is unset', async () => {
     const { next, lastCallArgument } = mockNext()
 
-    await updateProfile(unauthenticatedRequest, unusedResponse, next)
+    await profileController.updateProfile(unauthenticatedRequest, unusedResponse, next)
 
     expect(next).toHaveBeenCalledTimes(1)
     const error = lastCallArgument()

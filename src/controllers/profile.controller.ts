@@ -22,62 +22,47 @@
 // (e.g. re-validating that `email`/`active` were not requested) — a second,
 // independent allow-list is exactly the kind of duplicate definition that
 // drifts from the first one over time.
-import { type NextFunction, type Request, type Response } from 'express'
+import { BaseController } from '@/controllers/base.controller'
 import { authenticatedUserId } from '@/controllers/helpers.controller'
 import { toPublicUser } from '@/presenters/user.presenter'
-import {
-  getProfile as getProfileRecord,
-  updateProfile as updateProfileRecord,
-} from '@/services/profile.service'
+import { getProfile, updateProfile } from '@/services/profile.service'
 import { successResponse } from '@/utilities/response.utilities'
 import { parseBody } from '@/validators/parse.validators'
 import { updateProfileSchema } from '@/validators/profile.validators'
 
 /**
- * Get the authenticated user's own profile.
- * @param request - The incoming request, carrying the authenticated user set by `requireAuth`.
- * @param response - The response.
- * @param next - Forwards a rejection to the terminal error handler.
+ * Handlers for `/api/v1/profile`.
  */
-export async function getProfile(
-  request: Request,
-  response: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const user = await getProfileRecord(authenticatedUserId(request))
+class ProfileController extends BaseController {
+  /**
+   * `GET /profile`: the authenticated user's own profile.
+   */
+  getProfile = this.handle(async (request, response) => {
+    const user = await getProfile(authenticatedUserId(request))
     successResponse(response, toPublicUser(user), 'Profile retrieved.')
-  } catch (error) {
-    next(error)
-  }
+  })
+
+  /**
+   * `PATCH /profile`: update the authenticated user's own profile.
+   *
+   * Only the fields `updateProfileSchema` names (`firstName`, `lastName`) can
+   * ever reach the database from this handler — see this file's header
+   * comment and profile.validators.ts's for why `email`, `id`, `passwordHash`
+   * and `active` cannot be changed here no matter what the request body
+   * contains. A body with no recognised fields at all (every key stripped, or
+   * none supplied) skips the write entirely and returns the current row
+   * unchanged, rather than issuing a no-op `UPDATE` that would still bump
+   * `updatedAt` for a request that changed nothing.
+   */
+  updateProfile = this.handle(async (request, response) => {
+    const userId = authenticatedUserId(request)
+    const input = parseBody(updateProfileSchema, request.body)
+    const user = await updateProfile(userId, input)
+    successResponse(response, toPublicUser(user), 'Profile updated.')
+  })
 }
 
 /**
- * Update the authenticated user's own profile.
- *
- * Only the fields `updateProfileSchema` names (`firstName`, `lastName`) can
- * ever reach the database from this handler — see this file's header
- * comment and profile.validators.ts's for why `email`, `id`, `passwordHash`
- * and `active` cannot be changed here no matter what the request body
- * contains. A body with no recognised fields at all (every key stripped, or
- * none supplied) skips the write entirely and returns the current row
- * unchanged, rather than issuing a no-op `UPDATE` that would still bump
- * `updatedAt` for a request that changed nothing.
- * @param request - The incoming request, carrying the authenticated user set by `requireAuth`.
- * @param response - The response.
- * @param next - Forwards a rejection to the terminal error handler.
+ * The profile controller the profile routes mount.
  */
-export async function updateProfile(
-  request: Request,
-  response: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const userId = authenticatedUserId(request)
-    const input = parseBody(updateProfileSchema, request.body)
-    const user = await updateProfileRecord(userId, input)
-    successResponse(response, toPublicUser(user), 'Profile updated.')
-  } catch (error) {
-    next(error)
-  }
-}
+export const profileController = new ProfileController()

@@ -3,7 +3,7 @@
 // HTTP only: parse the body, call auth.service / google-auth.service, and
 // shape the reply — cookies, redirects, status and envelope. The
 // enumeration and timing rules live with the work, in auth.service.ts.
-import { type NextFunction, type Request, type RequestHandler, type Response } from 'express'
+import type { NextFunction, Request, RequestHandler, Response } from 'express'
 import passport from 'passport'
 import type { Profile as GoogleProfile } from 'passport-google-oauth20'
 import { getEnv, isCookieSecure, type Env } from '@/configs/env.config'
@@ -12,6 +12,7 @@ import {
   REFRESH_TOKEN_COOKIE_NAME,
   REFRESH_TOKEN_COOKIE_PATH,
 } from '@/constants/auth.constants'
+import { BaseController } from '@/controllers/base.controller'
 import { authenticatedUserId } from '@/controllers/helpers.controller'
 import { HttpError } from '@/errors/http-error'
 import { toPublicAuthProviders } from '@/presenters/auth-provider.presenter'
@@ -20,7 +21,7 @@ import * as authService from '@/services/auth.service'
 import { completeGoogleSignIn } from '@/services/google-auth.service'
 import { logger } from '@/services/logger.service'
 import { revokeRefreshToken } from '@/services/session.service'
-import { successResponse } from '@/utilities/response.utilities'
+import { messageResponse, successResponse } from '@/utilities/response.utilities'
 import {
   changePasswordSchema,
   forgotPasswordSchema,
@@ -188,47 +189,34 @@ function readRefreshTokenCookie(request: Request): string | undefined {
 const REGISTER_RESPONSE_MESSAGE =
   'If that address can be registered, a verification email has been sent.'
 
+const FORGOT_PASSWORD_RESPONSE_MESSAGE =
+  'If that address has an account, a password reset email has been sent.'
+
 /**
- * Register a new user with an email and password.
- *
- * A free and a taken address answer an identical 202 with `data: null`
- * (a 201/409 split would be an enumeration oracle). The reply goes out
- * BEFORE the mail, so the branches do not differ by an SMTP round trip.
- * @param request - The incoming request, carrying the registration body.
- * @param response - The response.
- * @param next - Forwards a rejection to the terminal error handler.
+ * Handlers for `/api/v1/auth`, except email verification.
  */
-export async function register(
-  request: Request,
-  response: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
+class AuthController extends BaseController {
+  /**
+   * `POST /auth/register`: register a new user with an email and password.
+   *
+   * A free and a taken address answer an identical 202 with `data: null`
+   * (a 201/409 split would be an enumeration oracle). The reply goes out
+   * BEFORE the mail, so the branches do not differ by an SMTP round trip.
+   */
+  register = this.handle(async (request, response) => {
     const input = parseBody(registerSchema, request.body)
     const sendFollowUpMail = await authService.register(input)
 
-    // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data", not undefined (which JSON.stringify omits entirely)
-    successResponse(response, null, REGISTER_RESPONSE_MESSAGE, 202)
+    messageResponse(response, REGISTER_RESPONSE_MESSAGE, 202)
     // Never rejects: the service logs its own failure.
     void sendFollowUpMail()
-  } catch (error) {
-    next(error)
-  }
-}
+  })
 
-/**
- * Log in with an email and password. See auth.service.ts for why every
- * failure is one identical, equally-costly 401.
- * @param request - The incoming request, carrying the login body.
- * @param response - The response.
- * @param next - Forwards a rejection to the terminal error handler.
- */
-export async function login(
-  request: Request,
-  response: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
+  /**
+   * `POST /auth/login`: log in with an email and password. See
+   * auth.service.ts for why every failure is one identical, equally-costly 401.
+   */
+  login = this.handle(async (request, response) => {
     const input = parseBody(loginSchema, request.body)
     const session = await authService.login(input)
 
@@ -238,28 +226,18 @@ export async function login(
       { user: toPublicUser(session.user), accessToken: session.accessToken },
       'Login successful.'
     )
-  } catch (error) {
-    next(error)
-  }
-}
+  })
 
-/**
- * Rotate a refresh token for a new access/refresh token pair.
- *
- * Reads the refresh token from its httpOnly cookie ONLY, never the body:
- * accepting a body token would let any page that can make the browser POST
- * attempt a refresh with a token it chose. A non-browser client sends the
- * same `Cookie` header.
- * @param request - The incoming request, carrying the refresh cookie.
- * @param response - The response.
- * @param next - Forwards a rejection (missing cookie, or the service's 401s) to the terminal error handler.
- */
-export async function refresh(
-  request: Request,
-  response: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
+  /**
+   * `POST /auth/refresh`: rotate a refresh token for a new access/refresh
+   * token pair.
+   *
+   * Reads the refresh token from its httpOnly cookie ONLY, never the body:
+   * accepting a body token would let any page that can make the browser POST
+   * attempt a refresh with a token it chose. A non-browser client sends the
+   * same `Cookie` header.
+   */
+  refresh = this.handle(async (request, response) => {
     const rawToken = readRefreshTokenCookie(request)
     if (!rawToken) {
       throw new HttpError('Missing refresh token', 401)
@@ -269,134 +247,79 @@ export async function refresh(
 
     setRefreshTokenCookie(response, refreshed.refreshToken.raw, refreshed.refreshToken.expiresAt)
     successResponse(response, { accessToken: refreshed.accessToken }, 'Token refreshed.')
-  } catch (error) {
-    next(error)
-  }
-}
+  })
 
-/**
- * Log out: revoke the session the presented refresh token belongs to, and
- * clear the cookie either way.
- *
- * Reads the same cookie `refresh` above does — see that function's header
- * comment for why not the body too. Deliberately does not require a valid
- * access token: a user wanting to log out has often just watched their
- * access token expire, and revocation only ever needs the refresh cookie.
- * A missing, forged, or already-revoked token is treated identically to a
- * live one — see `revokeRefreshToken`'s own header comment for why logout
- * must never let a caller learn which raw value was actually live.
- * @param request - The incoming request, carrying the refresh cookie if any.
- * @param response - The response.
- * @param next - Forwards an unexpected failure to the terminal error handler.
- */
-export async function logout(
-  request: Request,
-  response: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
+  /**
+   * `POST /auth/logout`: revoke the session the presented refresh token
+   * belongs to, and clear the cookie either way.
+   *
+   * Reads the same cookie `refresh` above does — see that handler's comment
+   * for why not the body too. Deliberately does not require a valid
+   * access token: a user wanting to log out has often just watched their
+   * access token expire, and revocation only ever needs the refresh cookie.
+   * A missing, forged, or already-revoked token is treated identically to a
+   * live one — see `revokeRefreshToken`'s own header comment for why logout
+   * must never let a caller learn which raw value was actually live.
+   */
+  logout = this.handle(async (request, response) => {
     const rawToken = readRefreshTokenCookie(request)
     if (rawToken) {
       await revokeRefreshToken(rawToken)
     }
     clearRefreshTokenCookie(response)
-    successResponse(response, undefined, 'Logged out.')
-  } catch (error) {
-    next(error)
-  }
-}
+    messageResponse(response, 'Logged out.')
+  })
 
-const FORGOT_PASSWORD_RESPONSE_MESSAGE =
-  'If that address has an account, a password reset email has been sent.'
-
-/**
- * Request a password-reset email.
- *
- * An identical 202 for every address. Unlike register, nothing is shared
- * between branches to hide behind, so the reply goes out before the lookup
- * even starts, and the rest is fire-and-forget. Synchronous on purpose:
- * nothing here is awaited.
- * @param request - The incoming request, carrying `{ email }`.
- * @param response - The response.
- * @param next - Forwards a validation failure to the terminal error handler.
- */
-export function forgotPassword(request: Request, response: Response, next: NextFunction): void {
-  try {
+  /**
+   * `POST /auth/forgot-password`: request a password-reset email.
+   *
+   * An identical 202 for every address. Unlike register, nothing is shared
+   * between branches to hide behind, so the reply goes out before the lookup
+   * even starts, and the rest is fire-and-forget. Synchronous on purpose:
+   * nothing here is awaited.
+   */
+  forgotPassword = this.handle((request, response) => {
     const input = parseBody(forgotPasswordSchema, request.body)
 
-    // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data", not undefined (which JSON.stringify omits entirely)
-    successResponse(response, null, FORGOT_PASSWORD_RESPONSE_MESSAGE, 202)
+    messageResponse(response, FORGOT_PASSWORD_RESPONSE_MESSAGE, 202)
     // Never rejects: the service logs its own failure.
     void authService.requestPasswordReset(input.email)
-  } catch (error) {
-    next(error)
-  }
-}
+  })
 
-/**
- * Reset a password with a token from the mailed link.
- *
- * A weak password gets parseBody's ordinary field-level 400 before the token
- * is looked at. That is safe here, unlike verify-email: the token is the only
- * secret in play, so "too short" leaks nothing about it.
- * @param request - The incoming request, carrying `{ token, password }`.
- * @param response - The response.
- * @param next - Forwards a rejection to the terminal error handler.
- */
-export async function resetPassword(
-  request: Request,
-  response: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
+  /**
+   * `POST /auth/reset-password`: reset a password with a token from the
+   * mailed link.
+   *
+   * A weak password gets parseBody's ordinary field-level 400 before the token
+   * is looked at. That is safe here, unlike verify-email: the token is the only
+   * secret in play, so "too short" leaks nothing about it.
+   */
+  resetPassword = this.handle(async (request, response) => {
     const input = parseBody(resetPasswordSchema, request.body)
     await authService.resetPassword(input)
 
-    // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data", not undefined (which JSON.stringify omits entirely)
-    successResponse(response, null, 'Password has been reset.')
-  } catch (error) {
-    next(error)
-  }
-}
+    messageResponse(response, 'Password has been reset.')
+  })
 
-/**
- * Change the authenticated caller's own password, behind `requireAuth`.
- * The session presenting this request is spared (`request.sessionId`); see
- * auth.service.ts's `changePassword` for the order and the failure design.
- * @param request - The incoming request, carrying `{ currentPassword, newPassword }`, authenticated by `requireAuth`.
- * @param response - The response.
- * @param next - Forwards a rejection to the terminal error handler.
- */
-export async function changePassword(
-  request: Request,
-  response: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
+  /**
+   * `POST /auth/change-password`: change the authenticated caller's own
+   * password, behind `requireAuth`. The session presenting this request is
+   * spared (`request.sessionId`); see auth.service.ts's `changePassword` for
+   * the order and the failure design.
+   */
+  changePassword = this.handle(async (request, response) => {
     const input = parseBody(changePasswordSchema, request.body)
     await authService.changePassword(authenticatedUserId(request), request.sessionId, input)
 
-    // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data", not undefined (which JSON.stringify omits entirely)
-    successResponse(response, null, 'Password has been changed.')
-  } catch (error) {
-    next(error)
-  }
-}
+    messageResponse(response, 'Password has been changed.')
+  })
 
-/**
- * GET /api/v1/auth/providers — which methods can sign this account in, and
- * whether it has a password. Read-only by design: unlinking is a separate
- * feature (may you remove your last way in?).
- * @param request - The incoming request; `requireAuth` has already populated `request.user`.
- * @param response - The response to write the provider list to.
- * @param next - Passes any failure to `errorHandler`.
- */
-export async function getAuthProviders(
-  request: Request,
-  response: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
+  /**
+   * `GET /auth/providers`: which methods can sign this account in, and
+   * whether it has a password. Read-only by design: unlinking is a separate
+   * feature (may you remove your last way in?).
+   */
+  getAuthProviders = this.handle(async (request, response) => {
     const { providers, hasPassword } = await authService.getAuthProviders(
       authenticatedUserId(request)
     )
@@ -406,67 +329,68 @@ export async function getAuthProviders(
       { providers: toPublicAuthProviders(providers), hasPassword },
       'Auth providers retrieved.'
     )
-  } catch (error) {
-    next(error)
+  })
+
+  /**
+   * `GET /auth/google/callback`: handle Google's redirect back to this API
+   * once the user completes (or abandons) Google's consent screen.
+   *
+   * `session: false`: the OAuth express-session exists only to carry the CSRF
+   * `state`; letting Passport call `req.login()` would serialize the profile
+   * into it for nothing. Passport does not await the custom callback, so its
+   * body is an immediately-invoked async function — an async callback passed
+   * directly would turn a rejection into an unhandled one.
+   *
+   * Every failure redirects to the frontend's `/login?error=...`, never this
+   * API's JSON envelope (the browser arrived by a full-page navigation).
+   * `HttpError.code` is forwarded verbatim; anything else is
+   * `processing_failed`; Google reporting an error or no profile is
+   * `google_auth_failed`.
+   *
+   * Not wrapped in `handle()`: every failure redirects to the frontend, and a JSON error envelope would reach a browser mid-navigation.
+   * @param request - The incoming callback request, carrying Google's `code`/`state` query parameters.
+   * @param response - The response.
+   * @param next - Forwards a synchronous failure from `passport.authenticate` itself; every failure from the async body redirects instead.
+   */
+  handleGoogleCallback = (request: Request, response: Response, next: NextFunction): void => {
+    const env = getEnv()
+
+    const authenticate = passport.authenticate(
+      GOOGLE_STRATEGY_NAME,
+      { session: false },
+      (error: unknown, profile: GoogleProfile | false | null) => {
+        void (async () => {
+          if (error || !profile) {
+            logger.error('Google OAuth callback failed', { error })
+            response.redirect(`${env.WEB_URL}/login?error=google_auth_failed`)
+            return
+          }
+
+          try {
+            const refreshToken = await completeGoogleSignIn(profile)
+            setOAuthRefreshTokenCookie(response, refreshToken.raw, refreshToken.expiresAt)
+
+            response.redirect(`${env.WEB_URL}/auth/callback`)
+          } catch (innerError) {
+            logger.error('Google OAuth callback failed', { error: innerError })
+            const code =
+              innerError instanceof HttpError && innerError.code
+                ? innerError.code
+                : 'processing_failed'
+            response.redirect(`${env.WEB_URL}/login?error=${code}`)
+          }
+        })()
+      }
+      // `as RequestHandler`: identical cast, for the identical reason, as the
+      // `/google` redirect route's own `passport.authenticate(...)` call —
+      // see auth.routes.ts's header comment beside that cast.
+    ) as RequestHandler
+
+    authenticate(request, response, next)
   }
 }
 
 /**
- * Handle Google's redirect back to this API once the user completes (or
- * abandons) Google's consent screen.
- *
- * `session: false`: the OAuth express-session exists only to carry the CSRF
- * `state`; letting Passport call `req.login()` would serialize the profile
- * into it for nothing. Passport does not await the custom callback, so its
- * body is an immediately-invoked async function — an async callback passed
- * directly would turn a rejection into an unhandled one.
- *
- * Every failure redirects to the frontend's `/login?error=...`, never this
- * API's JSON envelope (the browser arrived by a full-page navigation).
- * `HttpError.code` is forwarded verbatim; anything else is
- * `processing_failed`; Google reporting an error or no profile is
- * `google_auth_failed`.
- * @param request - The incoming callback request, carrying Google's `code`/`state` query parameters.
- * @param response - The response.
- * @param next - Forwards a synchronous failure from `passport.authenticate` itself; every failure from the async body redirects instead.
+ * The auth controller the auth routes mount.
  */
-export function handleGoogleCallback(
-  request: Request,
-  response: Response,
-  next: NextFunction
-): void {
-  const env = getEnv()
-
-  const authenticate = passport.authenticate(
-    GOOGLE_STRATEGY_NAME,
-    { session: false },
-    (error: unknown, profile: GoogleProfile | false | null) => {
-      void (async () => {
-        if (error || !profile) {
-          logger.error('Google OAuth callback failed', { error })
-          response.redirect(`${env.WEB_URL}/login?error=google_auth_failed`)
-          return
-        }
-
-        try {
-          const refreshToken = await completeGoogleSignIn(profile)
-          setOAuthRefreshTokenCookie(response, refreshToken.raw, refreshToken.expiresAt)
-
-          response.redirect(`${env.WEB_URL}/auth/callback`)
-        } catch (innerError) {
-          logger.error('Google OAuth callback failed', { error: innerError })
-          const code =
-            innerError instanceof HttpError && innerError.code
-              ? innerError.code
-              : 'processing_failed'
-          response.redirect(`${env.WEB_URL}/login?error=${code}`)
-        }
-      })()
-    }
-    // `as RequestHandler`: identical cast, for the identical reason, as the
-    // `/google` redirect route's own `passport.authenticate(...)` call —
-    // see auth.routes.ts's header comment beside that cast.
-  ) as RequestHandler
-
-  authenticate(request, response, next)
-}
+export const authController = new AuthController()

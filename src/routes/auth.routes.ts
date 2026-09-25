@@ -33,18 +33,8 @@ import {
   GOOGLE_STRATEGY_NAME,
   isGoogleOAuthEnabled,
 } from '@/configs/passport.config'
-import {
-  changePassword,
-  forgotPassword,
-  getAuthProviders,
-  handleGoogleCallback,
-  login,
-  logout,
-  refresh,
-  register,
-  resetPassword,
-} from '@/controllers/auth.controller'
-import { resendVerification, verifyEmail } from '@/controllers/verification.controller'
+import { authController } from '@/controllers/auth.controller'
+import { verificationController } from '@/controllers/verification.controller'
 import { requireAuth } from '@/middlewares/auth.middleware'
 import { requireJsonContentType } from '@/middlewares/content-type.middleware'
 import {
@@ -80,7 +70,7 @@ export function createAuthRouter(): Router {
   // per-route so every route on this router inherits it by default
   // instead of having to remember. See content-type.middleware.ts.
   router.use(requireJsonContentType)
-  router.post('/register', createRegisterRateLimiter(), register)
+  router.post('/register', createRegisterRateLimiter(), authController.register)
   // Three limiters in series, tightest first, so an attempt it rejects
   // never spends the per-IP or per-account budget. See
   // rate-limit.middleware.ts's header comment.
@@ -89,11 +79,11 @@ export function createAuthRouter(): Router {
     createLoginRateLimiter(),
     createLoginIpRateLimiter(),
     createLoginAccountRateLimiter(),
-    login
+    authController.login
   )
-  router.post('/refresh', createRefreshRateLimiter(), refresh)
-  router.post('/logout', createLogoutRateLimiter(), logout)
-  router.post('/verify-email', createVerifyEmailRateLimiter(), verifyEmail)
+  router.post('/refresh', createRefreshRateLimiter(), authController.refresh)
+  router.post('/logout', createLogoutRateLimiter(), authController.logout)
+  router.post('/verify-email', createVerifyEmailRateLimiter(), verificationController.verifyEmail)
   // Two limiters in series, not a composite key — each bounds its own
   // threat, and either firing alone must be enough. See
   // rate-limit.middleware.ts's header comment.
@@ -101,7 +91,7 @@ export function createAuthRouter(): Router {
     '/resend-verification',
     createResendVerificationIpRateLimiter(),
     createResendVerificationEmailRateLimiter(),
-    resendVerification
+    verificationController.resendVerification
   )
   // Same two-limiters-in-series shape as resend-verification, for the
   // identical reason (rate-limit.middleware.ts's header comment): Ruling G
@@ -112,9 +102,9 @@ export function createAuthRouter(): Router {
     '/forgot-password',
     createForgotPasswordIpRateLimiter(),
     createForgotPasswordEmailRateLimiter(),
-    forgotPassword
+    authController.forgotPassword
   )
-  router.post('/reset-password', createResetPasswordRateLimiter(), resetPassword)
+  router.post('/reset-password', createResetPasswordRateLimiter(), authController.resetPassword)
   // The two routes on this router that are NOT public: siblings of
   // forgot-password/reset-password (same "what this account signs in with"
   // family), not of /profile (name/avatar) — so they live here, not on
@@ -127,13 +117,18 @@ export function createAuthRouter(): Router {
   // handler, because every other route is unauthenticated; this is the one
   // exception, for the identical reason its limiter is keyed on the user
   // rather than IP.
-  router.post('/change-password', requireAuth, createChangePasswordRateLimiter(), changePassword)
+  router.post(
+    '/change-password',
+    requireAuth,
+    createChangePasswordRateLimiter(),
+    authController.changePassword
+  )
 
   // No rate limiter: this one only reads, returns nothing an unauthenticated
   // caller could obtain, and offers no oracle to probe — unlike
   // change-password above, whose limiter exists because it says whether a
   // supplied password is correct. `requireAuth` is the whole guard.
-  router.get('/providers', requireAuth, getAuthProviders)
+  router.get('/providers', requireAuth, authController.getAuthProviders)
 
   // Google OAuth — only mounted when GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET
   // are configured (isGoogleOAuthEnabled(), passport.config.ts); an
@@ -182,27 +177,28 @@ export function createAuthRouter(): Router {
         scope: ['profile', 'email'],
       }) as RequestHandler
     )
-    // The callback route: Google redirects here after the user completes
-    // (or abandons) its consent screen. `createGoogleOAuthCallbackRateLimiter()`
+    // The callback route: Google redirects here after the user completes (or
+    // abandons) its consent screen. `createGoogleOAuthCallbackRateLimiter()`
     // runs first, ahead of `oauthSession`, for the same ordering reason as
     // `/google` above — a 429 must land before `oauthSession` (or
-    // `handleGoogleCallback`'s own database work) spends anything. Reuses
-    // the SAME `oauthSession` middleware instance built above rather than a
-    // second `createOAuthSessionMiddleware()` call: both routes read/write
-    // one session (the `state` value `/google` wrote, `passport-oauth2`
-    // reads back here for its CSRF check), so both must resolve to the same
-    // underlying express-session configuration — a second call would still
-    // work (it lazily builds an equivalent middleware) but would needlessly
-    // duplicate the Redis-latch machinery `createOAuthSessionMiddleware`'s
-    // own header comment describes. The account-linking policy lives in
-    // `findOrCreateByGoogle` (google-auth.service.ts), which
-    // `handleGoogleCallback` reaches through `completeGoogleSignIn`.
+    // `authController.handleGoogleCallback`'s own database work) spends
+    // anything. Reuses the SAME `oauthSession` middleware instance built
+    // above rather than a second `createOAuthSessionMiddleware()` call: both
+    // routes read/write one session (the `state` value `/google` wrote,
+    // `passport-oauth2` reads back here for its CSRF check), so both must
+    // resolve to the same underlying express-session configuration — a
+    // second call would still work (it lazily builds an equivalent
+    // middleware) but would needlessly duplicate the Redis-latch machinery
+    // `createOAuthSessionMiddleware`'s own header comment describes. The
+    // account-linking policy lives in `findOrCreateByGoogle`
+    // (google-auth.service.ts), which `authController.handleGoogleCallback`
+    // reaches through `completeGoogleSignIn`.
     router.get(
       '/google/callback',
       createGoogleOAuthCallbackRateLimiter(),
       oauthSession,
       passport.initialize(),
-      handleGoogleCallback
+      authController.handleGoogleCallback
     )
   }
 

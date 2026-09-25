@@ -6,7 +6,7 @@
 // signing in. Accept needs a signed-in user. Each limiter runs before any
 // database read.
 import { Router } from 'express'
-import { acceptInvitation, previewInvitation } from '@/controllers/invitation.controller'
+import { invitationController } from '@/controllers/invitation.controller'
 import { requireAuth } from '@/middlewares/auth.middleware'
 import { requireJsonContentType } from '@/middlewares/content-type.middleware'
 import {
@@ -24,14 +24,14 @@ export function createInvitationRouter(): Router {
     '/preview',
     requireJsonContentType,
     createInvitationPreviewRateLimiter(),
-    previewInvitation
+    invitationController.previewInvitation
   )
   router.post(
     '/accept',
     requireJsonContentType,
     createInvitationAcceptRateLimiter(),
     requireAuth,
-    acceptInvitation
+    invitationController.acceptInvitation
   )
   return router
 }

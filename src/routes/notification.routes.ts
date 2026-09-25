@@ -25,15 +25,8 @@
 // both halves share the one auth gate and nothing else in this file is
 // route-specific enough to warrant its own middleware.
 import { Router } from 'express'
-import { streamNotifications } from '@/controllers/notification-stream.controller'
-import {
-  deleteNotification,
-  getPreferences,
-  listNotifications,
-  markAllRead,
-  markRead,
-  updatePreferences,
-} from '@/controllers/notification.controller'
+import { notificationStreamController } from '@/controllers/notification-stream.controller'
+import { notificationController } from '@/controllers/notification.controller'
 import { requireAuth } from '@/middlewares/auth.middleware'
 
 /**
@@ -45,13 +38,13 @@ export function createNotificationRouter(): Router {
 
   router.use(requireAuth)
 
-  router.get('/stream', streamNotifications)
-  router.get('/', listNotifications)
-  router.patch('/:id/read', markRead)
-  router.patch('/read-all', markAllRead)
-  router.delete('/:id', deleteNotification)
-  router.get('/preferences', getPreferences)
-  router.put('/preferences', updatePreferences)
+  router.get('/stream', notificationStreamController.streamNotifications)
+  router.get('/', notificationController.listNotifications)
+  router.patch('/:id/read', notificationController.markRead)
+  router.patch('/read-all', notificationController.markAllRead)
+  router.delete('/:id', notificationController.deleteNotification)
+  router.get('/preferences', notificationController.getPreferences)
+  router.put('/preferences', notificationController.updatePreferences)
 
   return router
 }

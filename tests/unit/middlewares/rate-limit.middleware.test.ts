@@ -264,7 +264,7 @@ describe('POST /login wiring', () => {
     // which limiter factories produced its middleware.
     const routes = fs.readFileSync(path.resolve(process.cwd(), 'src/routes/auth.routes.ts'), 'utf8')
     expect(routes).toMatch(
-      /router\.post\(\s*'\/login',\s*createLoginRateLimiter\(\),\s*createLoginIpRateLimiter\(\),\s*createLoginAccountRateLimiter\(\),\s*login\s*\)/
+      /router\.post\(\s*'\/login',\s*createLoginRateLimiter\(\),\s*createLoginIpRateLimiter\(\),\s*createLoginAccountRateLimiter\(\),\s*authController\.login\s*\)/
     )
   })
 })
