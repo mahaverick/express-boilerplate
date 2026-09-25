@@ -186,9 +186,10 @@ export class UserMembershipRepository {
   /**
    * Add a member to a tenant, failing if they already belong to it.
    *
-   * No application path calls this: members join through
-   * `createIfAbsent` (invitation accept), and tenant creation inserts its
-   * owner itself. Tests use it to set up memberships.
+   * Members of a customer tenant join through `createIfAbsent` (invitation
+   * accept), and tenant creation inserts its owner itself. The one
+   * application caller is `platform.service.bootstrapGrant`, for a user with
+   * no platform membership yet. Tests use it to set up memberships.
    *
    * Translates a 23505 on `(userId, tenantId)` into `HttpError(409)` rather
    * than letting the raw driver error escape — the same translation
@@ -218,6 +219,25 @@ export class UserMembershipRepository {
 
   /**
    * Add a member unless a membership already exists for this (user, tenant)
+   * pair; an existing membership and its role are left alone.
+   * @param data - The membership to create.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns The new row, or undefined when a membership already existed.
+   */
+  async insertIfAbsent(
+    data: NewUserMembership,
+    executor: DbExecutor = db
+  ): Promise<UserMembership | undefined> {
+    const [inserted] = await executor
+      .insert(userMembershipModel)
+      .values(data)
+      .onConflictDoNothing({ target: [userMembershipModel.userId, userMembershipModel.tenantId] })
+      .returning()
+    return inserted
+  }
+
+  /**
+   * Add a member unless a membership already exists for this (user, tenant)
    * pair, in which case that membership and its role are kept.
    * @param data - The membership to create.
    * @param executor - Where to run the queries. Defaults to the pool.
@@ -227,11 +247,7 @@ export class UserMembershipRepository {
     data: NewUserMembership,
     executor: DbExecutor = db
   ): Promise<UserMembership> {
-    const [inserted] = await executor
-      .insert(userMembershipModel)
-      .values(data)
-      .onConflictDoNothing({ target: [userMembershipModel.userId, userMembershipModel.tenantId] })
-      .returning()
+    const inserted = await this.insertIfAbsent(data, executor)
     if (inserted) return inserted
     const existing = await this.findByUserAndTenant(data.userId, data.tenantId, executor)
     if (!existing) throw new HttpError('Membership not found after a conflicting insert', 500)
