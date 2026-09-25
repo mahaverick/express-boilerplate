@@ -1,5 +1,16 @@
 # Changelog
 
+## [3.0.0](https://github.com/mahaverick/express-boilerplate/compare/v2.0.0...v3.0.0) (2026-09-25)
+
+
+### ⚠ BREAKING CHANGES
+
+* environment alignment (stream 3) ([#50](https://github.com/mahaverick/express-boilerplate/issues/50))
+
+### Features
+
+* environment alignment (stream 3) ([#50](https://github.com/mahaverick/express-boilerplate/issues/50)) ([503d731](https://github.com/mahaverick/express-boilerplate/commit/503d731e75d2261fc6b34943423ce82db75dca59))
+
 ## [2.0.0](https://github.com/mahaverick/express-boilerplate/compare/v1.1.1...v2.0.0) (2026-09-25)
 
 
