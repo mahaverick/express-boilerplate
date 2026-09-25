@@ -1,6 +1,6 @@
 // src/constants/rate-limit.constants.ts
 //
-// The 19 rate-limit specs this API enforces, and the key-derivation
+// The 20 rate-limit specs this API enforces, and the key-derivation
 // functions `createRateLimiter` (rate-limit.middleware.ts) maps `keyBy` to.
 // The key-derivation functions live here, not in rate-limit.middleware.ts,
 // because `loginRateLimitKey` (the one composite key) must be constructible
@@ -17,7 +17,7 @@
 // Every limiter shares one 429 body/handler (rate-limit.middleware.ts's
 // `createRateLimiter`) and `standardHeaders: true` / `legacyHeaders: false`
 // — neither varies per limiter, so `message` is the identical literal on
-// all 19 rather than 19 independent copies that could drift.
+// all 20 rather than 20 independent copies that could drift.
 //
 // This table is the single source of truth for the per-endpoint threat
 // model: each entry below carries its own comment for why its window,
@@ -59,7 +59,7 @@ export interface RateLimiterSpec {
 }
 
 /**
- * The 19 rate limiters this API mounts, by name.
+ * The 20 rate limiters this API mounts, by name.
  */
 export type RateLimitName =
   | 'register'
@@ -81,6 +81,7 @@ export type RateLimitName =
   | 'changePassword'
   | 'invitationPreview'
   | 'invitationAccept'
+  | 'platformSearch'
 
 const RATE_LIMITED_MESSAGE = 'Too many attempts. Please try again later.'
 
@@ -137,7 +138,7 @@ export function authenticatedUserRateLimitKey(request: Request): string {
 }
 
 /**
- * The 19 rate-limit specs this API enforces. `name` is the live Redis key
+ * The 20 rate-limit specs this API enforces. `name` is the live Redis key
  * prefix — see this file's own header comment before changing one.
  */
 export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
@@ -374,6 +375,18 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     windowMs: 15 * 60 * 1000,
     limit: 20,
     keyBy: 'ip',
+    message: RATE_LIMITED_MESSAGE,
+  },
+  /**
+   * Keyed on the caller's id: only staff reach it, past requireAuth and
+   * requirePlatformRole. 60 a minute is ample for a debounced search box
+   * and bounds a script walking every tenant.
+   */
+  platformSearch: {
+    name: 'platform-search',
+    windowMs: 60 * 1000,
+    limit: 60,
+    keyBy: 'user',
     message: RATE_LIMITED_MESSAGE,
   },
 }

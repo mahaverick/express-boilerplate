@@ -1,6 +1,6 @@
 // src/routes/tenant.routes.ts
 //
-// Thirteen routes, mounted at `/api/v1/tenants` by index.routes.ts. Same
+// Fourteen routes, mounted at `/api/v1/tenants` by index.routes.ts. Same
 // "build inside a function" convention every other router in this codebase
 // follows — see auth.routes.ts's own header comment for why (
 // unicorn/no-top-level-side-effects, plus `rateLimit(...)`'s per-instance
@@ -31,6 +31,7 @@
 // too, where each instance counts alone.
 import { Router } from 'express'
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
+import { auditController } from '@/controllers/audit.controller'
 import { tenantController } from '@/controllers/tenant.controller'
 import { requireAuth } from '@/middlewares/auth.middleware'
 import { requireJsonContentType } from '@/middlewares/content-type.middleware'
@@ -123,6 +124,14 @@ export function createTenantRouter(): Router {
     resolveTenant(),
     requireRole('owner', 'admin'),
     tenantController.updateSettings
+  )
+
+  // -- Audit log -- (the effective role: staff admins pass, staff viewers don't)
+  router.get(
+    '/:slug/audit-log',
+    resolveTenant(),
+    requireRole('owner', 'admin'),
+    auditController.listTenantAuditLog
   )
 
   return router

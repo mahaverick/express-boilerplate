@@ -9,9 +9,9 @@
 // `/tenants/:slug/...` route additionally assumes `resolveTenant` has
 // already run (populating `request.principal`) — see
 // `tenant.middleware.ts`'s own header comment for what that guarantees:
-// the caller is confirmed to be a member of the tenant the route names,
-// with `request.principal.role` holding THAT tenant's role, before this
-// file's code ever runs.
+// the caller is confirmed to have access to the tenant the route names, as
+// a member or through their platform role, with `request.principal.role`
+// holding their effective role there, before this file's code ever runs.
 //
 // Member and invitation writes pass the actor, never `principal.role`: the
 // services re-read the actor's role under lock inside their transaction and
@@ -19,8 +19,9 @@
 // only the early gate.
 import type { Request } from 'express'
 import { BaseController } from '@/controllers/base.controller'
-import { actorFrom, authenticatedUserId } from '@/controllers/helpers.controller'
+import { actorFrom, authenticatedUserId, tenantPrincipal } from '@/controllers/helpers.controller'
 import { HttpError } from '@/errors/http-error'
+import { toTenantDetail, toTenantListRow } from '@/presenters/tenant.presenter'
 import { invite, listPending, resend, revoke } from '@/services/tenant-invitation.service'
 import { changeRole, removeMember } from '@/services/tenant-membership.service'
 import {
@@ -32,7 +33,6 @@ import {
   updateSettings,
   updateTenant,
 } from '@/services/tenant.service'
-import type { RequestPrincipal } from '@/types/actor'
 import { messageResponse, successResponse } from '@/utilities/response.utilities'
 import { parseBody } from '@/validators/parse.validators'
 import {
@@ -45,22 +45,6 @@ import {
 } from '@/validators/tenant.validators'
 
 const INVITATION_SENT_MESSAGE = 'If that address can be invited, an invitation has been sent.'
-
-/**
- * The caller's tenant-scoped principal, guarding against a route reaching
- * this controller without `resolveTenant` ahead of it. Every `/tenants/
- * :slug/...` handler below (everything except `createTenant`/`listTenants`,
- * which have no `:slug` to resolve) calls this first.
- * @param request - The incoming request.
- * @returns The caller's principal for the tenant this route names.
- * @throws {HttpError} 404, when `request.principal` was never populated — the same fail-safe direction `requireRole` (tenant.middleware.ts) already takes on a missing principal, so a misconfigured route never behaves more permissively than a real non-member would.
- */
-function tenantPrincipal(request: Request): RequestPrincipal {
-  if (!request.principal) {
-    throw new HttpError('Tenant not found', 404)
-  }
-  return request.principal
-}
 
 /**
  * The `:userId` route param on a member-management route, narrowed to a
@@ -116,36 +100,43 @@ class TenantController extends BaseController {
    */
   listTenants = this.handle(async (request, response) => {
     const tenants = await listForUser(authenticatedUserId(request))
-    successResponse(response, tenants, 'Tenants retrieved.')
+    successResponse(
+      response,
+      tenants.map((entry) => toTenantListRow(entry)),
+      'Tenants retrieved.'
+    )
   })
 
   /**
-   * `GET /tenants/:slug`: one tenant's details. Any member may call this —
-   * `resolveTenant` (composed ahead of this handler on the route) already
-   * confirmed membership; there is no further role check.
+   * `GET /tenants/:slug`: one tenant's details, plus the caller's effective
+   * `role` and `access` as `resolveTenant` found them. Anyone `resolveTenant`
+   * admits may call this; there is no further role check.
    */
   getTenant = this.handle(async (request, response) => {
-    const tenant = await getTenant(tenantPrincipal(request).tenantId)
-    successResponse(response, tenant, 'Tenant retrieved.')
+    const principal = tenantPrincipal(request)
+    const tenant = await getTenant(principal.tenantId)
+    successResponse(response, toTenantDetail(tenant, principal), 'Tenant retrieved.')
   })
 
   /**
    * `PATCH /tenants/:slug`: update a tenant's `name`/`description`/`logo`/
    * `website`. Owner/admin only — `requireRole('owner', 'admin')`
    * (tenant.routes.ts) gates this before the handler runs. `slug` cannot be
-   * changed here — see `updateTenantSchema`'s own comment for why.
+   * changed here — see `updateTenantSchema`'s own comment for why. The
+   * service re-reads the caller's access under lock.
    */
   updateTenant = this.handle(async (request, response) => {
     const principal = tenantPrincipal(request)
     const input = parseBody(updateTenantSchema, request.body)
-    const tenant = await updateTenant(principal.tenantId, input)
+    const tenant = await updateTenant(actorFrom(request), principal.tenantId, input)
     successResponse(response, tenant, 'Tenant updated.')
   })
 
   /**
    * `GET /tenants/:slug/members`: a tenant's members, each with their safe
    * user info (`UserMembershipRepository.listByTenant` never joins
-   * `passwordHash` — see that method's own comment). Any member may call this.
+   * `passwordHash` — see that method's own comment). Anyone `resolveTenant`
+   * admits may call this.
    */
   listMembers = this.handle(async (request, response) => {
     const members = await listMembers(tenantPrincipal(request).tenantId)
@@ -238,7 +229,8 @@ class TenantController extends BaseController {
   })
 
   /**
-   * `GET /tenants/:slug/settings`: a tenant's settings. Any member may call this.
+   * `GET /tenants/:slug/settings`: a tenant's settings. Anyone `resolveTenant` admits
+   * may call this.
    */
   getSettings = this.handle(async (request, response) => {
     const settings = await getSettings(tenantPrincipal(request).tenantId)
@@ -247,12 +239,13 @@ class TenantController extends BaseController {
 
   /**
    * `PATCH /tenants/:slug/settings`: update a tenant's settings. Owner/admin
-   * only (`requireRole('owner', 'admin')`, tenant.routes.ts).
+   * only (`requireRole('owner', 'admin')`, tenant.routes.ts). The service
+   * re-reads the caller's access under lock.
    */
   updateSettings = this.handle(async (request, response) => {
     const principal = tenantPrincipal(request)
     const input = parseBody(updateTenantSettingsSchema, request.body)
-    const settings = await updateSettings(principal.tenantId, input)
+    const settings = await updateSettings(actorFrom(request), principal.tenantId, input)
     successResponse(response, settings, 'Settings updated.')
   })
 }

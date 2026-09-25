@@ -14,15 +14,18 @@
 import { randomUUID } from 'node:crypto'
 import { getEnv } from '@/configs/env.config'
 import { JobPriority } from '@/constants/queue.constants'
+import type { MembershipRole } from '@/constants/tenant.constants'
 import type { AuthProviderRecord } from '@/database/models/auth-provider.model'
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
+import { redactedForLog } from '@/errors/postgres-errors'
 import { addEmailJob } from '@/jobs/email.job'
 import { addNotificationJob } from '@/jobs/notification.job'
 import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { withTransaction } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
+import { autoJoinSafely, getPlatformMembership } from '@/services/platform.service'
 import {
   claimToken,
   issueRefreshToken,
@@ -65,6 +68,7 @@ export interface LoginResult {
   user: User
   accessToken: string
   refreshToken: IssuedRefreshToken
+  platformRole: MembershipRole | null
 }
 
 /**
@@ -171,7 +175,7 @@ export async function register(input: RegisterInput): Promise<() => Promise<void
       try {
         await sendVerificationMail(user)
       } catch (error) {
-        logger.error('Verification mail failed', { error })
+        logger.error('Verification mail failed', { error: redactedForLog(error) })
       }
     }
   }
@@ -180,8 +184,27 @@ export async function register(input: RegisterInput): Promise<() => Promise<void
     try {
       await sendRegistrationAttemptMail(input.email)
     } catch (error) {
-      logger.error('Registration-attempt mail failed', { error })
+      logger.error('Registration-attempt mail failed', { error: redactedForLog(error) })
     }
+  }
+}
+
+/**
+ * The signed-in user's platform role, for the login response only. A failed
+ * read answers null: the credentials passed, and the next /profile corrects it.
+ * @param userId - The user who just signed in.
+ * @returns Their platform role, or null.
+ */
+async function platformRoleForLogin(userId: string): Promise<MembershipRole | null> {
+  try {
+    return await getPlatformMembership(userId)
+  } catch (error) {
+    logger.warn('Platform role could not be read for the login response', {
+      error: redactedForLog(error),
+      userId,
+    })
+    // eslint-disable-next-line unicorn/no-null -- the login user reports JSON null for "not staff"
+    return null
   }
 }
 
@@ -193,7 +216,7 @@ export async function register(input: RegisterInput): Promise<() => Promise<void
  * return for any of them would be a timing oracle. The message is literally
  * false for an unverified account with the right password; that is accepted.
  * @param input - The validated login body.
- * @returns The user, an access token and a new refresh token.
+ * @returns The user, their platform role, an access token and a new refresh token.
  * @throws {HttpError} 401 'Invalid email or password'.
  */
 export async function login(input: LoginInput): Promise<LoginResult> {
@@ -208,11 +231,14 @@ export async function login(input: LoginInput): Promise<LoginResult> {
   // After the guard, so a failed attempt leaves no trace; before tokens, so
   // a failed UPDATE answers 500 without a refresh cookie already set.
   await userRepository.update(user.id, { lastLoggedInAt: new Date() })
+  // After the guard, so a failed attempt never reaches it; it never throws.
+  await autoJoinSafely(user)
 
   const sessionId = randomUUID()
   const accessToken = signAccessToken(user, sessionId)
   const refreshToken = await issueRefreshToken(user.id, sessionId)
-  return { user, accessToken, refreshToken }
+  const platformRole = await platformRoleForLogin(user.id)
+  return { user, accessToken, refreshToken, platformRole }
 }
 
 /**
@@ -275,7 +301,7 @@ export async function requestPasswordReset(email: string): Promise<void> {
   try {
     await sendPasswordResetMailIfRegistered(email)
   } catch (error) {
-    logger.error('Forgot-password mail failed', { error })
+    logger.error('Forgot-password mail failed', { error: redactedForLog(error) })
   }
 }
 

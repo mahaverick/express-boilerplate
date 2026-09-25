@@ -25,6 +25,7 @@ import {
   resend,
   revoke,
 } from '@/services/tenant-invitation.service'
+import { truncateAuditLogs } from '../../helpers/audit-log'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { expectNoJob, waitForInvitationEmail, waitForJob } from '../../helpers/queue-jobs'
 
@@ -130,6 +131,7 @@ describe('tenant-invitation.service', () => {
   const createdUserIds: string[] = []
 
   afterEach(async () => {
+    await truncateAuditLogs()
     if (createdTenantIds.length > 0) {
       await sql`delete from tenants where id = any(${createdTenantIds})`
       createdTenantIds.length = 0

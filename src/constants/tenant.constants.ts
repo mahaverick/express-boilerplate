@@ -111,6 +111,8 @@ export const RESERVED_SLUGS = [
   'staging',
   'dev',
   'localhost',
+  // The seeded staff tenant (migration 0016).
+  'platform',
 ] as const
 
 /**

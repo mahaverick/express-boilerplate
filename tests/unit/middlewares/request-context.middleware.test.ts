@@ -11,7 +11,7 @@ import { requestContextStore } from '@/services/request-context.service'
 
 describe('requestContext middleware', () => {
   it('sets requestId in the store from request.id', () => {
-    const request = { id: 'test-uuid-1234' } as unknown as Request
+    const request = { id: 'test-uuid-1234', headers: {} } as unknown as Request
     let capturedRequestId: string | undefined
 
     requestContext(request, {} as never, () => {
@@ -19,6 +19,35 @@ describe('requestContext middleware', () => {
     })
 
     expect(capturedRequestId).toBe('test-uuid-1234')
+  })
+
+  it('carries the client address and user agent for the audit log', () => {
+    const request = {
+      id: 'test-uuid-5678',
+      ip: '203.0.113.7',
+      headers: { 'user-agent': 'Probe/1.0' },
+    } as unknown as Request
+    let captured: ReturnType<typeof requestContextStore.getStore>
+
+    requestContext(request, {} as never, () => {
+      captured = requestContextStore.getStore()
+    })
+
+    expect(captured).toEqual({
+      requestId: 'test-uuid-5678',
+      ip: '203.0.113.7',
+      userAgent: 'Probe/1.0',
+    })
+  })
+
+  it('omits the address and user agent when the request has neither', () => {
+    let captured: ReturnType<typeof requestContextStore.getStore>
+
+    requestContext({ id: 'req-bare', headers: {} } as unknown as Request, {} as never, () => {
+      captured = requestContextStore.getStore()
+    })
+
+    expect(captured).toEqual({ requestId: 'req-bare' })
   })
 
   it('returns undefined from getStore() outside a request context', () => {
@@ -30,7 +59,7 @@ describe('requestContext middleware', () => {
 
     await Promise.all([
       new Promise<void>((resolve) => {
-        requestContext({ id: 'req-a' } as unknown as Request, {} as never, () => {
+        requestContext({ id: 'req-a', headers: {} } as unknown as Request, {} as never, () => {
           setTimeout(() => {
             const store = requestContextStore.getStore()
             if (store) results.push(store.requestId)
@@ -39,7 +68,7 @@ describe('requestContext middleware', () => {
         })
       }),
       new Promise<void>((resolve) => {
-        requestContext({ id: 'req-b' } as unknown as Request, {} as never, () => {
+        requestContext({ id: 'req-b', headers: {} } as unknown as Request, {} as never, () => {
           const store = requestContextStore.getStore()
           if (store) results.push(store.requestId)
           resolve()

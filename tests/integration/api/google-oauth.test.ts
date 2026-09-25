@@ -68,6 +68,8 @@ import type { UserRepository as UserRepositoryClass } from '@/repositories/user.
 import type { sql as SqlType } from '@/services/database.service'
 import type { findOrCreateByGoogle as FindOrCreateByGoogleType } from '@/services/google-auth.service'
 import type { issueRefreshToken as IssueRefreshTokenType } from '@/services/session.service'
+import { withMutatedMethod } from '../../helpers/mutate'
+import { fakeQueryError, LEAKED_PARAM, loggedText } from '../../helpers/query-error'
 import { request } from '../../helpers/request'
 
 /**
@@ -407,6 +409,33 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
         expect(cookies?.some((cookie) => cookie.startsWith('refreshToken='))).not.toBe(true)
         const untouched = await userRepository.findById(existing.id)
         expect(untouched?.lastLoggedInAt).toBeNull()
+      })
+
+      it('logs a failed sign-in query without its bound parameters', async () => {
+        const profile = googleProfile({ emailVerified: true })
+        const email = profile.emails?.[0]?.value
+        if (!email) throw new Error('test fixture has no email')
+        passport.use(GOOGLE_STRATEGY_NAME, new FakeGoogleSuccessStrategy(profile))
+        const { logger } = await import('@/services/logger.service')
+        const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {})
+
+        await withMutatedMethod(
+          Object.getPrototypeOf(userRepository) as InstanceType<typeof UserRepositoryClass>,
+          'update',
+          () => Promise.reject(fakeQueryError()),
+          async () => {
+            const response = await request(app).get('/api/v1/auth/google/callback')
+            expect(response.status).toBe(302)
+            expect(response.headers.location).toBe(
+              'http://localhost:5173/login?error=processing_failed'
+            )
+          }
+        )
+
+        const user = await userRepository.findByEmail(email)
+        if (user) createdIds.push(user.id)
+        expect(errorSpy).toHaveBeenCalledWith('Google OAuth callback failed', expect.anything())
+        expect(loggedText(errorSpy)).not.toContain(LEAKED_PARAM)
       })
 
       it('redirects with email_not_verified and creates no user when Google has not verified a new email', async () => {

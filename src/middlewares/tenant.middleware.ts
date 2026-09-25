@@ -1,7 +1,7 @@
 // src/middlewares/tenant.middleware.ts
 //
 // The tenant-scoping seam: `resolveTenant` (composed after `requireAuth` on
-// every `/tenants/:slug/*` route) confirms the caller belongs to the tenant
+// every `/tenants/:slug/*` route) confirms the caller has access to the tenant
 // the route names and attaches that fact to the request; `requireRole`
 // (composed after `resolveTenant`) gates on the role it found. Neither
 // exists as a top-level `const` middleware the way `requestContext` does —
@@ -11,12 +11,19 @@
 // is a factory too).
 //
 // RULING G — NOT A 403. Both "no tenant with this slug exists" and "this
-// tenant exists but you are not a member of it" answer with the exact same
+// tenant exists but you have no access to it" answer with the exact same
 // 404, from the same thrown `HttpError`, at the same point below. A 403
 // would tell an unauthenticated-for-this-tenant caller that the slug they
 // guessed or enumerated is real; 404 tells them nothing a truly nonexistent
 // slug would not also tell them. This is the plan's spec correction #2,
 // overriding the original design doc's illustrative 403.
+//
+// PLATFORM ACCESS. A caller with no membership may still reach a tenant
+// through their platform-tenant membership (staff), with that platform role
+// as the effective role. Membership always wins: staff who belong to the
+// tenant act with their member role there. The platform tenant itself is
+// members-only. A staff visit is audited (`recordPlatformAccess`), and a
+// failed audit write is logged at warn, never failing the request.
 //
 // ONE STORE, NOT TWO. `resolveTenant` extends the SAME `RequestContext` ALS
 // store `requestContext` (request-context.middleware.ts) already opened for
@@ -27,11 +34,17 @@
 // #3).
 import { type NextFunction, type Request, type Response } from 'express'
 import { type MembershipRole } from '@/constants/tenant.constants'
+import type { Tenant } from '@/database/models/tenant.model'
 import { HttpError } from '@/errors/http-error'
+import { redactedForLog } from '@/errors/postgres-errors'
 import { isRoleAtLeast } from '@/policies/tenant.policy'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
+import { recordPlatformAccess } from '@/services/audit.service'
+import { logger } from '@/services/logger.service'
+import { getPlatformMembership } from '@/services/platform.service'
 import { requestContextStore, type TenantContext } from '@/services/request-context.service'
+import type { RequestPrincipal } from '@/types/actor'
 
 const tenantRepository = new TenantRepository()
 const userMembershipRepository = new UserMembershipRepository()
@@ -55,6 +68,58 @@ function tenantIdentifierFrom(request: Request): string | undefined {
 }
 
 /**
+ * Record a staff visit, logging a failure instead of failing the request.
+ * @param userId - The staff user.
+ * @param tenantId - The tenant visited.
+ * @param platformRole - The platform role the visit used.
+ */
+async function recordStaffVisit(
+  userId: string,
+  tenantId: string,
+  platformRole: MembershipRole
+): Promise<void> {
+  try {
+    await recordPlatformAccess({ userId }, tenantId, platformRole)
+  } catch (error) {
+    logger.warn('Platform access audit failed', { error: redactedForLog(error), tenantId })
+  }
+}
+
+/**
+ * The caller's principal in `tenant`: their membership when they have one,
+ * otherwise their platform role, except in the platform tenant itself.
+ * @param userId - The authenticated caller.
+ * @param tenant - The tenant the route names.
+ * @returns The principal, or undefined when the caller has no access.
+ */
+async function principalFor(userId: string, tenant: Tenant): Promise<RequestPrincipal | undefined> {
+  const scope = {
+    tenantId: tenant.id,
+    tenantSlug: tenant.slug,
+    isPlatformTenant: tenant.isPlatform,
+  }
+  // A pool read with no executor: tenant-actor-race.test.ts hooks this call shape.
+  const membership = await userMembershipRepository.findByUserAndTenant(userId, tenant.id)
+  if (membership) {
+    return {
+      ...scope,
+      role: membership.role,
+      memberRole: membership.role,
+      // eslint-disable-next-line unicorn/no-null -- membership wins, so no platform role applies
+      platformRole: null,
+      access: 'member',
+    }
+  }
+  if (tenant.isPlatform) return undefined
+
+  const platformRole = await getPlatformMembership(userId)
+  if (platformRole === null) return undefined
+  await recordStaffVisit(userId, tenant.id, platformRole)
+  // eslint-disable-next-line unicorn/no-null -- staff reach this tenant with no membership
+  return { ...scope, role: platformRole, memberRole: null, platformRole, access: 'platform' }
+}
+
+/**
  * The middleware `resolveTenant` returns — see its JSDoc.
  * @param request - The incoming request.
  * @param _response - Unused.
@@ -73,24 +138,21 @@ async function scopeRequestToTenant(
     // which is exactly the gate a suspended/archived tenant must fail the
     // same way a nonexistent one does.
     const tenant = identifier ? await tenantRepository.findActiveBySlug(identifier) : undefined
-    const membership =
-      tenant && request.user
-        ? await userMembershipRepository.findByUserAndTenant(request.user.id, tenant.id)
-        : undefined
+    const principal =
+      tenant && request.user ? await principalFor(request.user.id, tenant) : undefined
 
     // Ruling G: identical 404 whether the tenant does not exist or the
-    // caller is simply not a member of it — see this file's header
-    // comment.
-    if (!tenant || !membership) {
+    // caller has no access to it — see this file's header comment.
+    if (!principal) {
       throw new HttpError('Tenant not found', 404)
     }
 
+    request.principal = principal
     const tenantContext: TenantContext = {
-      tenantId: tenant.id,
-      tenantSlug: tenant.slug,
-      role: membership.role,
+      tenantId: principal.tenantId,
+      tenantSlug: principal.tenantSlug,
+      role: principal.role,
     }
-    request.principal = tenantContext
 
     // Extend the EXISTING store in place, not a new `.run()` — this
     // middleware does not own the rest of the request's control flow the
@@ -133,7 +195,8 @@ async function scopeRequestToTenant(
 
 /**
  * Resolve the tenant a request is scoped to, and confirm the authenticated
- * caller belongs to it. On success, attaches `request.principal` and
+ * caller has access to it: a membership, or a platform role outside the
+ * platform tenant (see this file's header comment). On success, attaches `request.principal` and
  * extends the request's `RequestContext` ALS store with `.tenant` — see
  * this file's header comment for both.
  *
@@ -145,8 +208,8 @@ async function scopeRequestToTenant(
  * Must run AFTER `requireAuth` — reads `request.user.id`. A route that
  * omits `requireAuth` ahead of this is a routing bug this middleware does
  * not itself defend against beyond failing safe: with no `request.user`,
- * the membership lookup is skipped and the request 404s exactly like
- * a real non-member would, rather than throwing on a missing id. That is
+ * both lookups are skipped and the request 404s exactly like a caller with
+ * no access would, rather than throwing on a missing id. That is
  * the safe direction for the mistake to fail in, but it also means such a
  * misconfigured route never surfaces as anything louder than a 404 in
  * testing.

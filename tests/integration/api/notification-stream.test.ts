@@ -55,6 +55,7 @@ import { getRedis } from '@/services/redis.service'
 import { denySession } from '@/services/session-denylist.service'
 import { revokeSession, signAccessToken } from '@/services/session.service'
 import { startNotificationWorker } from '@/workers/notification.worker'
+import { truncateAuditLogs } from '../../helpers/audit-log'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { waitForNotificationSubscriber } from '../../helpers/notification-subscriber'
 
@@ -369,6 +370,7 @@ describe('GET /api/v1/notifications/stream', () => {
     for (const connection of openConnections) connection.destroy()
     openConnections.length = 0
 
+    await truncateAuditLogs()
     if (createdUserIds.length === 0) {
       return
     }
@@ -497,6 +499,7 @@ describe('GET /api/v1/notifications/stream', () => {
       expect(row?.metadata).toMatchObject({ tenantSlug: tenant.slug })
     } finally {
       await worker.close()
+      await truncateAuditLogs()
       await sql`delete from tenants where id = ${tenant.id}`
     }
   })

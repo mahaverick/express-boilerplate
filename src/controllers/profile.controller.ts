@@ -10,10 +10,9 @@
 // an auth failure instead of a crash or, worse, `undefined` flowing into a
 // database lookup.
 //
-// `getProfile`/`updateProfile` both respond with `toPublicUser` (imported
-// from user.presenter.ts, not redefined) — see that function's own header
-// comment for why this codebase keeps exactly one definition of "what a
-// user looks like to a client".
+// `getProfile`/`updateProfile` both respond with `toProfileResponse`
+// (user.presenter.ts): `toPublicUser` plus `platformRole`, so the one
+// definition of "what a user looks like to a client" stays in that file.
 //
 // `updateProfile`'s mass-assignment defence is `updateProfileSchema`
 // (profile.validators.ts) alone: it is the only allow-list of writable
@@ -24,7 +23,7 @@
 // drifts from the first one over time.
 import { BaseController } from '@/controllers/base.controller'
 import { authenticatedUserId } from '@/controllers/helpers.controller'
-import { toPublicUser } from '@/presenters/user.presenter'
+import { toProfileResponse } from '@/presenters/user.presenter'
 import { getProfile, updateProfile } from '@/services/profile.service'
 import { successResponse } from '@/utilities/response.utilities'
 import { parseBody } from '@/validators/parse.validators'
@@ -38,8 +37,8 @@ class ProfileController extends BaseController {
    * `GET /profile`: the authenticated user's own profile.
    */
   getProfile = this.handle(async (request, response) => {
-    const user = await getProfile(authenticatedUserId(request))
-    successResponse(response, toPublicUser(user), 'Profile retrieved.')
+    const { user, platformRole } = await getProfile(authenticatedUserId(request))
+    successResponse(response, toProfileResponse(user, platformRole), 'Profile retrieved.')
   })
 
   /**
@@ -57,8 +56,8 @@ class ProfileController extends BaseController {
   updateProfile = this.handle(async (request, response) => {
     const userId = authenticatedUserId(request)
     const input = parseBody(updateProfileSchema, request.body)
-    const user = await updateProfile(userId, input)
-    successResponse(response, toPublicUser(user), 'Profile updated.')
+    const { user, platformRole } = await updateProfile(userId, input)
+    successResponse(response, toProfileResponse(user, platformRole), 'Profile updated.')
   })
 }
 

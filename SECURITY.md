@@ -333,14 +333,14 @@ deployment with no existing users has nothing to backfill.
 
 ### Rate limiting: one limiter per auth route, one store prefix each
 
-`RATE_LIMITS` (`src/constants/rate-limit.constants.ts`) lists nineteen
+`RATE_LIMITS` (`src/constants/rate-limit.constants.ts`) lists twenty
 rate-limiter specs, each built by `rate-limit.middleware.ts`'s single
 `createRateLimiter(spec)`.
 Fifteen guard the auth router, which is a standing rule for that router:
 every route on it except `GET /providers` has at least one, and `/login`
 (three), `/resend-verification` (two) and `/forgot-password` (two) carry
-several in series. The other four guard tenant creation, member invitation,
-and invitation preview and accept. Each is backed by its **own**
+several in series. The other five guard tenant creation, member invitation,
+invitation preview and accept, and staff tenant search. Each is backed by its **own**
 `SharedRateLimitStore`, with its own key prefix `rl:<name>:` (for example
 `rl:register:`, `rl:login-ip:`, `rl:forgot-password-email:`), under
 `REDIS_KEY_PREFIX` (so `<prefix>:rl:login:` in Redis). No endpoint can
@@ -577,18 +577,91 @@ address directly and answered 404 for an unregistered one.
   - Accept allows 20 per 15 minutes per IP (`rl:invitation-accept:`), and its
     limiter runs ahead of `requireAuth`.
 
+### Platform staff access and the audit log
+
+Staff are the members of one seeded tenant, the row with `tenants.is_platform = true`
+(slug `platform`, a reserved slug). Their role there is their **platform
+role**. There is no separate staff table and no per-membership permission
+blob.
+
+- **What staff can do in a customer tenant.** In a tenant they don't belong
+  to, `resolveTenant` makes the platform role the effective role
+  (`access: 'platform'`). It must clear the route's own `requireRole` bar and
+  the service policies, and every write re-reads it under lock in
+  its own transaction (`resolveActorAccess`,
+  `src/services/tenant-access.service.ts`). A staff user demoted or removed
+  mid-request can't finish on the old role. So:
+  - a platform viewer can read but gets 403 on every write;
+  - no platform role can change or remove an owner;
+  - only a platform owner can change an admin, or grant owner or admin.
+- **Membership wins.** Where a staff user is also a member, only the
+  membership role counts.
+- **The platform tenant is members-only.** Anyone who isn't a member of the
+  platform tenant gets 404 there, and it never appears in staff search. A
+  CHECK keeps it active and undeleted, and a partial unique index allows
+  only one.
+- **Joining.** A **verified** address whose domain is listed in
+  `PLATFORM_EMAIL_DOMAINS` joins as `viewer`.
+  - The domain is the exact part after the last `@`; subdomains don't match.
+  - It happens when the address is verified, and on each successful sign-in
+    after the credential check. A failed sign-in never joins, and a join
+    error never fails a sign-in.
+  - It never promotes or demotes an existing platform membership. Anything
+    above viewer takes an invitation or `pnpm platform:grant`.
+  - The list is empty by default. A compromised inbox on a listed domain
+    gets read access to every customer tenant, so list only domains whose
+    mailboxes you control.
+- **Discovery.** `/api/v1/platform/*` answers non-staff with the app's own
+  `404 Not found`, identical to an unknown route. The search limiter
+  (`rl:platform-search:`, 60 a minute per user) runs after the role check,
+  so a refused caller never sees `RateLimit-*` headers. An unauthenticated
+  caller still gets 401, as on every authenticated router.
+- **Search is a separate path.** `GET /api/v1/platform/tenants` is the only
+  reader of `repositories/platform-tenant.repository.ts`, and a lint gate in
+  `eslint.config.mjs` keeps it that way. `GET /tenants` still lists the
+  caller's memberships only. `q` matches literally: `%`, `_` and `\` are
+  escaped.
+- **The audit log.** `audit_logs` records:
+  - every tenant, settings, member and invitation change, in the same
+    transaction as the change;
+  - platform auto-joins and grants;
+  - one `tenant.accessed_by_platform` row per staff user, tenant and hour.
+    It's deduplicated in Redis; while Redis is down, every staff request
+    writes one.
+
+  Each action's metadata has a strict Zod schema. Invitation entries keep
+  the role and the address's domain, never the address or the token.
+
+  A `BEFORE UPDATE OR DELETE` trigger makes the table append-only for every
+  role. Its foreign keys are `ON DELETE RESTRICT`, so hard-deleting a user or
+  tenant with history fails instead of erasing it. `TRUNCATE` is not blocked:
+  a role with `TRUNCATE` privilege on the table — its owner by default, or a
+  superuser — can still empty it, and the test suite relies on that. There
+  is no retention job.
+
+- **Who reads it.**
+  - `GET /api/v1/tenants/:slug/audit-log`: effective owners and admins, so a
+    platform admin can read it and a platform viewer can't.
+  - `GET /api/v1/platform/audit-log`: platform owners and admins only;
+    anyone else gets the 404 above.
+
+  Entries name the actor, staff included, with name and email, and
+  `access: 'platform'` marks staff actions. Both reads filter by `access`
+  (`member`, `platform` or `system`). The IP, user agent and request
+  id are stored but never returned.
+
+- **Not here:** impersonation ("act as user"), break-glass access,
+  row-level security, and auditing of login, logout and password changes.
+
 ## What this boilerplate does NOT implement
 
 Everything below genuinely ships nothing today, in either direction:
 
-| Control                       | Status              | What that means for you                                                                                                                                                                                                                                                                 |
-| ----------------------------- | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| CSRF tokens                   | **Not implemented** | See "No CSRF middleware" below — reasoning, not an oversight. The forced-login direction IS defended, by a content-type gate on the auth router; see the section after it.                                                                                                              |
-| MFA                           | **Not implemented** | No TOTP enrolment, no recovery codes. Owned by a later plan (B4).                                                                                                                                                                                                                       |
-| Forgot / reset password       | **Not implemented** | No `/forgot-password` or `/reset-password` route exists — email _verification_ is implemented (see "Email verification" above); this is the recovery half. It is also the only recovery path for a squatted address. Owned by plan B3 Task 6 — see ARCHITECTURE.md's "B3 seam" section. |
-| OAuth / social login          | **Not implemented** | No provider integration. Owned by a later plan (B4).                                                                                                                                                                                                                                    |
-| Tenancy / RBAC                | **Not implemented** | Every authenticated user has the same access to their own resources; there is no role or organization model.                                                                                                                                                                            |
-| General-purpose rate limiting | **Partial**         | All six auth routes are covered (above, seven limiters total — `resend-verification` carries two). No limiter exists on the profile routes or any future non-auth route.                                                                                                                |
+| Control                       | Status              | What that means for you                                                                                                                                                                                                                                                                                                                                                             |
+| ----------------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CSRF tokens                   | **Not implemented** | See "No CSRF middleware" below — reasoning, not an oversight. The forced-login direction IS defended, by a content-type gate on the auth router; see the section after it.                                                                                                                                                                                                          |
+| MFA                           | **Not implemented** | No TOTP enrolment, no recovery codes. Owned by a later plan (B4).                                                                                                                                                                                                                                                                                                                   |
+| General-purpose rate limiting | **Partial**         | Twenty per-route limiters (see "Rate limiting" above). There is no global limiter; the profile, notification and audit-log routes have none, and every tenant route except create, invite and resend has none either — five tenant writes are unlimited: `PATCH /:slug`, `PATCH` and `DELETE /:slug/members/:userId`, `DELETE /:slug/invitations/:id`, and `PATCH /:slug/settings`. |
 
 `JWT_ACCESS_SECRET` is required by the environment schema and **is** read —
 by `signAccessToken`/`verifyAccessToken`. `WEB_URL` is also read now, twice

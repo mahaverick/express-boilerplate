@@ -18,11 +18,13 @@
 import { getEnv } from '@/configs/env.config'
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
+import { redactedForLog } from '@/errors/postgres-errors'
 import { addNotificationJob } from '@/jobs/notification.job'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { db, type DbExecutor } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
+import { autoJoinSafely } from '@/services/platform.service'
 import { claimToken, issueToken } from '@/services/session.service'
 import { EMAIL_VERIFICATION_TEMPLATE_KEY } from '@/templates/email/email-verification.template'
 import { requireDurationMs } from '@/utilities/duration.utilities'
@@ -131,13 +133,17 @@ export async function sendVerificationMail(user: User): Promise<void> {
 
 /**
  * Mark a user's email verified. The only writer of users.email_verified_at;
- * a no-op when it is already set, so an earlier timestamp never moves.
+ * a no-op when it is already set, so an earlier timestamp never moves. On
+ * the transition to verified, an address on PLATFORM_EMAIL_DOMAINS joins the
+ * platform tenant as viewer, unless it already has a platform membership; a
+ * failure there is logged, never thrown.
  * @param userId - The user whose mailbox has been proven.
  * @param executor - The pool, or the caller's transaction to join.
  * @returns Resolves once the row is verified, or was already.
  */
 export async function markEmailVerified(userId: string, executor: DbExecutor = db): Promise<void> {
-  await userRepository.markEmailVerified(userId, executor)
+  const verified = await userRepository.markEmailVerified(userId, executor)
+  if (verified) await autoJoinSafely(verified, executor)
 }
 
 /**
@@ -197,7 +203,7 @@ export async function prepareResendVerification(email: string): Promise<() => Pr
     try {
       await resendVerificationMail(user)
     } catch (error) {
-      logger.error('Resend verification mail failed', { error })
+      logger.error('Resend verification mail failed', { error: redactedForLog(error) })
     }
   }
 }

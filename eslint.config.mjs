@@ -319,6 +319,26 @@ export default tseslint.config(
     rules: { 'check-file/filename-naming-convention': 'off' },
   },
   {
+    // The cross-tenant staff search reads every tenant, so only the platform
+    // services may import it. tests/unit/lint-gates.test.ts proves this fires.
+    files: ['src/**/*.ts'],
+    ignores: ['src/services/platform-*.service.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['@/repositories/platform-tenant.repository', '**/platform-tenant.repository'],
+              message:
+                'Only services/platform-*.service.ts may import repositories/platform-tenant.repository.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     // Rules specific to src/controllers/**. Keep every controller-scoped
     // rule in this one block rather than adding a second files: [...] entry
     // for the same directory.

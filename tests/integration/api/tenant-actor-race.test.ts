@@ -23,6 +23,7 @@ import { UserRepository } from '@/repositories/user.repository'
 import { db, sql, type DbExecutor } from '@/services/database.service'
 import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
 import { hashToken, signAccessToken } from '@/services/session.service'
+import { truncateAuditLogs } from '../../helpers/audit-log'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { request } from '../../helpers/request'
 
@@ -142,6 +143,7 @@ describe('the actor role is re-read under lock (actor changed after resolveTenan
   const createdUserIds: string[] = []
 
   afterEach(async () => {
+    await truncateAuditLogs()
     if (createdTenantIds.length > 0) {
       await sql`delete from tenants where id = any(${createdTenantIds})`
       createdTenantIds.length = 0

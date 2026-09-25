@@ -22,7 +22,7 @@ import {
 import { userModel, type User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
 import { isUniqueViolation } from '@/errors/postgres-errors'
-import { db, type DbExecutor } from '@/services/database.service'
+import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
 
 /**
  * One `user_memberships` row for `listByTenant`, joined with the subset of
@@ -56,6 +56,21 @@ export interface MembershipWithTenant {
 }
 
 /**
+ * The select behind `findPlatformRole` and `lockPlatformRole`: the user's
+ * membership role in the one `is_platform` tenant.
+ * @param userId - The user to look up.
+ * @param executor - Where to run the query.
+ * @returns The unexecuted query.
+ */
+function platformRoleQuery(userId: string, executor: DbExecutor) {
+  return executor
+    .select({ role: userMembershipModel.role })
+    .from(userMembershipModel)
+    .innerJoin(tenantModel, eq(userMembershipModel.tenantId, tenantModel.id))
+    .where(and(eq(userMembershipModel.userId, userId), eq(tenantModel.isPlatform, true)))
+}
+
+/**
  * Query access to the `user_memberships` table: lookup a single
  * membership, list a tenant's members (with safe user info) or a user's
  * memberships (with tenant info), create/update/delete a membership, and
@@ -84,6 +99,39 @@ export class UserMembershipRepository {
         and(eq(userMembershipModel.userId, userId), eq(userMembershipModel.tenantId, tenantId))
       )
     return row
+  }
+
+  /**
+   * The user's role in the platform tenant, read with no cache so a
+   * revocation takes effect on the next call.
+   * @param userId - The user to look up.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns The platform role, or null when the user is not staff.
+   */
+  async findPlatformRole(
+    userId: string,
+    executor: DbExecutor = db
+  ): Promise<MembershipRole | null> {
+    const [row] = await platformRoleQuery(userId, executor)
+    // eslint-disable-next-line unicorn/no-null -- the platform-role contract is `MembershipRole | null`.
+    return row?.role ?? null
+  }
+
+  /**
+   * `findPlatformRole`, holding the membership row `FOR SHARE` until the
+   * transaction ends. Lock order: after the tenant's owner rows
+   * (`lockOwners`) and memberships (`lockMemberships`).
+   * @param userId - The user to look up.
+   * @param executor - The transaction to hold the lock in. Required: on the
+   *   pool, the lock would release as soon as the statement finished.
+   * @returns The platform role, or null when the user is not staff.
+   */
+  async lockPlatformRole(userId: string, executor: DbTransaction): Promise<MembershipRole | null> {
+    const [row] = await platformRoleQuery(userId, executor).for('share', {
+      of: userMembershipModel,
+    })
+    // eslint-disable-next-line unicorn/no-null -- the platform-role contract is `MembershipRole | null`.
+    return row?.role ?? null
   }
 
   /**
@@ -138,9 +186,10 @@ export class UserMembershipRepository {
   /**
    * Add a member to a tenant, failing if they already belong to it.
    *
-   * No application path calls this: members join through
-   * `createIfAbsent` (invitation accept), and tenant creation inserts its
-   * owner itself. Tests use it to set up memberships.
+   * Members of a customer tenant join through `createIfAbsent` (invitation
+   * accept), and tenant creation inserts its owner itself. The one
+   * application caller is `platform.service.bootstrapGrant`, for a user with
+   * no platform membership yet. Tests use it to set up memberships.
    *
    * Translates a 23505 on `(userId, tenantId)` into `HttpError(409)` rather
    * than letting the raw driver error escape — the same translation
@@ -170,6 +219,25 @@ export class UserMembershipRepository {
 
   /**
    * Add a member unless a membership already exists for this (user, tenant)
+   * pair; an existing membership and its role are left alone.
+   * @param data - The membership to create.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns The new row, or undefined when a membership already existed.
+   */
+  async insertIfAbsent(
+    data: NewUserMembership,
+    executor: DbExecutor = db
+  ): Promise<UserMembership | undefined> {
+    const [inserted] = await executor
+      .insert(userMembershipModel)
+      .values(data)
+      .onConflictDoNothing({ target: [userMembershipModel.userId, userMembershipModel.tenantId] })
+      .returning()
+    return inserted
+  }
+
+  /**
+   * Add a member unless a membership already exists for this (user, tenant)
    * pair, in which case that membership and its role are kept.
    * @param data - The membership to create.
    * @param executor - Where to run the queries. Defaults to the pool.
@@ -179,11 +247,7 @@ export class UserMembershipRepository {
     data: NewUserMembership,
     executor: DbExecutor = db
   ): Promise<UserMembership> {
-    const [inserted] = await executor
-      .insert(userMembershipModel)
-      .values(data)
-      .onConflictDoNothing({ target: [userMembershipModel.userId, userMembershipModel.tenantId] })
-      .returning()
+    const inserted = await this.insertIfAbsent(data, executor)
     if (inserted) return inserted
     const existing = await this.findByUserAndTenant(data.userId, data.tenantId, executor)
     if (!existing) throw new HttpError('Membership not found after a conflicting insert', 500)
@@ -273,8 +337,9 @@ export class UserMembershipRepository {
    * transaction ends (`SELECT … FOR UPDATE`, in `user_id` order).
    *
    * Lock order within one transaction: the tenant's owner rows first
-   * (`lockOwners`), then this. Every service that locks memberships follows
-   * it, so two transactions never wait on each other in a cycle.
+   * (`lockOwners`), then this, then `lockPlatformRole` when the actor has no
+   * membership here. Every service that locks memberships follows it, so two
+   * transactions never wait on each other in a cycle.
    * @param tenantId - The tenant.
    * @param userIds - The users whose memberships to lock. Duplicates and non-members are ignored.
    * @param executor - The transaction to hold the locks in.

@@ -14,6 +14,7 @@
 import { config } from 'dotenv'
 import { z } from 'zod'
 import { parseDurationMs } from '@/utilities/duration.utilities'
+import { EMAIL_DOMAIN_PATTERN } from '@/utilities/email.utilities'
 
 // Populate process.env from .env before anything below ever reads it.
 // `pnpm dev` and `pnpm start` already load it with Node's --env-file-if-exists
@@ -49,6 +50,19 @@ const AppEnvSchema = z.enum(['local', 'dev', 'qa', 'prod'])
  * The deployment an `APP_ENV` value names.
  */
 export type AppEnv = z.infer<typeof AppEnvSchema>
+
+const TOP_LEVEL_LABEL = /^[a-z]{2,}$/
+
+/**
+ * Whether `value` is a lowercase domain: a dotted hostname by
+ * `EMAIL_DOMAIN_PATTERN`, the shape the audit log stores for an auto-join,
+ * whose last label is two or more letters.
+ * @param value - One trimmed entry of PLATFORM_EMAIL_DOMAINS.
+ * @returns True for a domain such as `example.com`.
+ */
+function isLowercaseDomain(value: string): boolean {
+  return EMAIL_DOMAIN_PATTERN.test(value) && TOP_LEVEL_LABEL.test(value.split('.').at(-1) ?? '')
+}
 
 const EnvSchema = z.object({
   // Both required, with no default: a deploy that forgets to name its
@@ -369,6 +383,19 @@ const EnvSchema = z.object({
     .optional()
     .describe(
       'Extra browser origins allowed to call this API, comma-separated (e.g. "https://admin.example.com,https://shop.example.com"). WEB_URL is ALWAYS allowed and does not need listing here, and same-origin requests send no Origin header at all. Leave empty for a single-frontend deployment. Never a wildcard: this API sends credentials, and the CORS spec forbids "*" with credentials.'
+    ),
+
+  // Grants viewer only, and only to a verified address; anything higher is
+  // an explicit grant. Parsed by parsePlatformEmailDomains (platform.service.ts).
+  PLATFORM_EMAIL_DOMAINS: z
+    .string()
+    .refine((value) => value.split(',').every((domain) => isLowercaseDomain(domain.trim())), {
+      message:
+        'PLATFORM_EMAIL_DOMAINS must be lowercase domains separated by commas, e.g. "example.com,example.org".',
+    })
+    .optional()
+    .describe(
+      'Comma-separated email domains, e.g. "example.com,example.org". A user whose verified address is on one of them joins the platform tenant as viewer, when the address is verified and at every sign-in. Viewer can see every tenant and change nothing; a higher platform role needs an explicit grant (pnpm platform:grant, or an invitation to the platform tenant). Only the exact domain after the last "@" matches, never a subdomain. Empty means nobody joins automatically.'
     ),
 
   OTEL_EXPORTER_OTLP_ENDPOINT: z

@@ -29,6 +29,7 @@ import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { requestContextStore, type TenantContext } from '@/services/request-context.service'
 import type { RequestPrincipal } from '@/types/actor'
+import { truncateAuditLogs } from '../../helpers/audit-log'
 import { request } from '../../helpers/request'
 
 /**
@@ -147,6 +148,7 @@ describe('resolveTenant + requireRole (integration)', () => {
   const createdUserIds: string[] = []
 
   afterEach(async () => {
+    await truncateAuditLogs()
     if (createdTenantIds.length > 0) {
       await sql`delete from tenants where id = any(${createdTenantIds})`
       createdTenantIds.length = 0
@@ -195,7 +197,16 @@ describe('resolveTenant + requireRole (integration)', () => {
 
     expect(response.status).toBe(200)
     expect(response.body).toEqual({
-      principal: { tenantId: tenant.id, tenantSlug: tenant.slug, role: 'owner' },
+      principal: {
+        tenantId: tenant.id,
+        tenantSlug: tenant.slug,
+        isPlatformTenant: false,
+        role: 'owner',
+        memberRole: 'owner',
+        // eslint-disable-next-line unicorn/no-null -- a member's principal carries no platform role
+        platformRole: null,
+        access: 'member',
+      },
       contextTenant: { tenantId: tenant.id, tenantSlug: tenant.slug, role: 'owner' },
     })
   })

@@ -272,6 +272,11 @@ until you check.
   tenant in the path and another in the header, with whichever a handler
   forgets to re-check becoming a confused-deputy hole.
 - **Non-members get 404** (not 403). Ruling G — don't leak tenant existence.
+  Staff (members of the `is_platform` tenant) are the one exception: in a
+  tenant they don't belong to, `resolveTenant` admits them with their
+  platform role as the effective role (`access: 'platform'`). A staff user
+  who IS a member gets only their membership role: membership wins. The
+  platform tenant itself is members-only.
 - **5-tier roles:** owner > admin > manager > editor > viewer. The
   actor→target matrix (`canActorModifyTarget`) is a pure function in
   `src/policies/tenant.policy.ts`, applied inside
@@ -281,19 +286,30 @@ until you check.
   the actor-side role race: a demotion that lands between the coarse
   route-level `requireRole` gate and the write cannot slip through on a
   stale role. See ARCHITECTURE.md's `## Layers` section for the lock order
-  (owner rows, then memberships by `user_id`). `requireRole(...roles)`
+  (owner rows, then memberships by `user_id`, then the actor's
+  platform-tenant membership `FOR SHARE`). `requireRole(...roles)`
   itself treats each listed role as a floor (`isRoleAtLeast`), not an exact
   match. Every member and invitation write re-applies the route's own bar
   on the role it just re-read: `changeRole` requires owner; `removeMember`,
-  `invite`, `resend` and `revoke` all require admin (`lockActorRole`/
-  `lockActorAndTarget`, `tenant-membership.service.ts`). The two statuses
-  this can produce are both races, not routine errors: an actor removed
-  from the tenant mid-request gets 404 `Tenant not found` (the same
-  not-a-member answer `resolveTenant` gives), and one demoted below the
+  `invite`, `resend`, `revoke`, `updateTenant` and `updateSettings` all
+  require admin (`lockActorRole`/`lockActorAndTarget`,
+  `tenant-membership.service.ts`: the first calls `resolveActorAccess`, the
+  second calls `lockTenantAccess` directly — both in
+  `tenant-access.service.ts` and taking the same lock order, so a staff
+  user demoted mid-request is refused the same way). The two statuses
+  this can produce are both races, not routine errors: an actor with no way
+  into the tenant by the time the write locks it — a member removed, or a
+  staff user whose platform role is gone — gets 404 `Tenant not found` (the
+  same not-a-member answer `resolveTenant` gives), and one demoted below the
   bar mid-request gets 403 `Insufficient permissions`.
-- **`request.principal`** carries `{ tenantId, tenantSlug, role }` after
-  `resolveTenant` runs. Separate from `request.user` (which is the
-  authenticated identity, not the authorization context).
+- **`request.principal`** carries
+  `{ tenantId, tenantSlug, isPlatformTenant, role, memberRole, platformRole, access }`
+  after `resolveTenant` runs. `role` is the effective role that
+  `requireRole` checks. Services never trust it: they re-read access under
+  lock. A controller may report
+  `role`/`access` (`GET /tenants/:slug` does) but never authorize on them.
+  Separate from `request.user` (the authenticated identity, not the
+  authorization context).
 - **Tenant context in logs.** `tenantId` appears in every log line for
   tenant-scoped requests, read from the same `RequestContext`
   AsyncLocalStorage store the request-id uses.
@@ -339,6 +355,40 @@ until you check.
   `changeRole`/`removeMember` use. Revoke re-reads the actor's membership
   under lock too, at the same admin bar, closing the same race, but has no
   role being granted, so it has nothing for `canActorGrantRole` to check.
+- **Every tenant, member and invitation write records its audit entry in
+  the same transaction.** Call `record(entry, tx)` from
+  `audit.service.ts` after the write, with the write's own `tx`. A pool
+  write survives a rollback, and `audit-writes.test.ts` catches it. Each
+  action's metadata schema is a strict object schema (`z.strictObject`), so
+  a new key fails the write until the schema lists it. Never put an
+  address or a token in metadata. For an address, record
+  `hostnameDomain(email) ?? null` (`utilities/email.utilities.ts`), as the
+  invitation service's `auditEmailDomain` does: the schemas accept only a
+  lowercase dotted hostname (or null, on the invitation actions), and
+  `emailDomain` can return a value they reject.
+- **`audit_logs` is append-only, and that bites test cleanup.** A trigger
+  refuses UPDATE and DELETE, and its foreign keys to `users` and `tenants`
+  are RESTRICT. So an `afterEach` that deletes a tenant or user that has
+  audit rows fails. Call `truncateAuditLogs()`
+  (`tests/helpers/audit-log.ts`) first. TRUNCATE fires no row trigger;
+  don't add a `BEFORE TRUNCATE` trigger, or only a superuser can clean up.
+- **Staff routes answer 404, and the limiter sits after the gate.**
+  `requirePlatformRole` (`platform.middleware.ts`) answers non-staff with
+  the app's own `404 Not found`. In `platform.routes.ts` the limiter comes
+  after it, the reverse of `tenant.routes.ts`: a limiter first would put
+  `RateLimit-*` headers on the 404 and reveal the route.
+- **The all-tenants repository has one importer.**
+  `repositories/platform-tenant.repository.ts` may be imported only from
+  `services/platform-*.service.ts` (a `no-restricted-imports` block in
+  `eslint.config.mjs`). "Your tenants" stays on
+  `TenantRepository.listForUser`. Don't merge the two paths.
+- **Auto-join grants viewer, and nothing more.** `PLATFORM_EMAIL_DOMAINS`
+  admits verified addresses as `viewer` only. It runs after the credential
+  check and never fails a sign-in. Don't widen the grant — a single
+  compromised inbox on a listed domain would then get write access across
+  every customer tenant, not just read — and don't run it before the
+  timing-equalised credential check, which would leak whether an address
+  is registered through response timing.
 
 ### How to scope your own model by tenant
 

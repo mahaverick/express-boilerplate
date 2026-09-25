@@ -39,7 +39,12 @@ import {
   type SoftDeleteOptions,
   type Touched,
 } from '@/repositories/base.repository'
-import { db, withTransaction, type DbExecutor } from '@/services/database.service'
+import {
+  db,
+  withTransaction,
+  type DbExecutor,
+  type DbTransaction,
+} from '@/services/database.service'
 
 /**
  * The columns `TenantRepository.create` accepts for the tenant row itself,
@@ -120,6 +125,33 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
       this.scope(sql`${tenantModel.slug} = ${slug} and ${tenantModel.lifecycleState} = 'active'`),
       executor
     )
+  }
+
+  /**
+   * Find a live tenant by id and lock its row (`SELECT … FOR UPDATE`) for
+   * the rest of the transaction. Lock order: after the access locks
+   * `lockTenantAccess` takes (tenant-access.service.ts).
+   * @param id - The tenant's id.
+   * @param executor - The transaction to hold the lock in. Required: on the pool, the lock would release as soon as the statement finished.
+   * @returns The locked tenant, or undefined when none exists or it is soft-deleted.
+   */
+  async lockById(id: string, executor: DbTransaction): Promise<Tenant | undefined> {
+    const [row] = await executor
+      .select()
+      .from(tenantModel)
+      .where(this.scope(eq(tenantModel.id, id)))
+      .limit(1)
+      .for('update')
+    return row
+  }
+
+  /**
+   * The seeded platform tenant, the one row with `isPlatform` set.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns The platform tenant, or undefined only on a database migration 0016 has not reached.
+   */
+  findPlatformTenant(executor: DbExecutor = db): Promise<Tenant | undefined> {
+    return this.selectOne(this.scope(eq(tenantModel.isPlatform, true)), executor)
   }
 
   /**

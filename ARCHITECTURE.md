@@ -116,17 +116,17 @@ nothing for `BaseRepository`'s policy to apply to.
 
 ## Layers
 
-| Layer        | Directory           | Job                                                                                             | May import                                                                                                                                                                                                                                               |
-| ------------ | ------------------- | ----------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| routes       | `src/routes/`       | Wire middleware to controller methods.                                                          | controllers, middlewares, configs, constants                                                                                                                                                                                                             |
-| middlewares  | `src/middlewares/`  | Cross-cutting request handling (auth, tenant resolution, rate limits, errors).                  | services, repositories (read-only lookups in `resolveTenant`/`requireAuth`), policies, presenters (e.g. `auth.middleware.ts` builds `request.user` via `toAuthenticatedUser`, `src/presenters/user.presenter.ts`), errors, configs, utilities, constants |
-| configs      | `src/configs/`      | Env and library configuration.                                                                  | services, utilities, constants                                                                                                                                                                                                                           |
-| presenters   | `src/presenters/`   | Pure mappers from a database row to its wire shape.                                             | types from `database/models`, and constants (e.g. `AuthProvider`)                                                                                                                                                                                        |
-| controllers  | `src/controllers/`  | Parse and validate input, call service methods, shape the response.                             | services, presenters, validators, errors, configs, utilities/response.utilities, constants, types, and `database/models` types via `import type` only                                                                                                    |
-| services     | `src/services/`     | Business rules, transactions, authorization, side effects.                                      | repositories, policies, other services, workers, jobs, templates, errors, utilities, configs, constants, types, `database/models`, `database.service`, validator types (`import type`, for a validated-input shape a service signature needs)            |
-| policies     | `src/policies/`     | Pure, boolean-returning authorization functions. Never throw.                                   | constants and types only                                                                                                                                                                                                                                 |
-| repositories | `src/repositories/` | Queries only.                                                                                   | models, `database.service`, errors, constants                                                                                                                                                                                                            |
-| errors       | `src/errors/`       | Error classes and Postgres error handling (`HttpError`, `isUniqueViolation`, `redactedForLog`). | nothing under `src/`                                                                                                                                                                                                                                     |
+| Layer        | Directory           | Job                                                                                             | May import                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ------------ | ------------------- | ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| routes       | `src/routes/`       | Wire middleware to controller methods.                                                          | controllers, middlewares, configs, constants                                                                                                                                                                                                                                                                                                                                                                                            |
+| middlewares  | `src/middlewares/`  | Cross-cutting request handling (auth, tenant resolution, rate limits, errors).                  | services (`resolveTenant` reads the platform role through `platform.service` and writes its staff-access entry through `audit.service`; `requirePlatformRole` reads `platform.service`), repositories (read-only lookups in `resolveTenant`/`requireAuth`), policies, presenters (e.g. `auth.middleware.ts` builds `request.user` via `toAuthenticatedUser`, `src/presenters/user.presenter.ts`), errors, configs, utilities, constants |
+| configs      | `src/configs/`      | Env and library configuration.                                                                  | services, utilities, constants                                                                                                                                                                                                                                                                                                                                                                                                          |
+| presenters   | `src/presenters/`   | Pure mappers from a database row to its wire shape.                                             | types from `database/models` and `types/`, and constants (e.g. `AuthProvider`)                                                                                                                                                                                                                                                                                                                                                          |
+| controllers  | `src/controllers/`  | Parse and validate input, call service methods, shape the response.                             | services, presenters, validators, errors, configs, utilities/response.utilities, constants, types, and `database/models` types via `import type` only                                                                                                                                                                                                                                                                                   |
+| services     | `src/services/`     | Business rules, transactions, authorization, side effects.                                      | repositories, policies, other services, workers, jobs, templates, errors, utilities, configs, constants, types, `database/models`, `database.service`, validator types (`import type`, for a validated-input shape a service signature needs)                                                                                                                                                                                           |
+| policies     | `src/policies/`     | Pure, boolean-returning authorization functions. Never throw.                                   | constants and types only                                                                                                                                                                                                                                                                                                                                                                                                                |
+| repositories | `src/repositories/` | Queries only.                                                                                   | models, `database.service`, errors, constants                                                                                                                                                                                                                                                                                                                                                                                           |
+| errors       | `src/errors/`       | Error classes and Postgres error handling (`HttpError`, `isUniqueViolation`, `redactedForLog`). | nothing under `src/`                                                                                                                                                                                                                                                                                                                                                                                                                    |
 
 `eslint.config.mjs`'s `import-x/no-restricted-paths` turns six of this
 table's boundaries into `error`-level lint gates: controllers may not
@@ -140,17 +140,21 @@ controllers. A seventh boundary is enforced separately, by
 `@typescript-eslint/no-restricted-imports`: controllers may import
 `database/models` for TYPES only, never a value, so a controller reads a
 model's shape (`User`, `Notification`) through `import type` and never its
-runtime export. `tests/unit/lint-gates.test.ts` proves each of the seven
+runtime export. An eighth, core `no-restricted-imports` over `src/**`
+with `src/services/platform-*.service.ts` ignored, keeps
+`repositories/platform-tenant.repository.ts` (every customer tenant, for
+staff search) out of every other module, so "your tenants" can never be
+served from it. `tests/unit/lint-gates.test.ts` proves each of the eight
 actually fires, against a committed violating fixture under
 `tests/fixtures/lint-zones/`. `import-x/no-restricted-paths` is a
 blocklist, not an allowlist, so a "may import" cell above with no zone
 naming it — most of middlewares' own imports, services importing validator
 types, presenters importing constants — is simply unrestricted by lint,
 not separately enforced: the table states the intended shape, and only
-the six zones plus the controllers' type-only models rule are
-lint-enforced. Controllers never import a repository or `database.service`
-directly — every controller method calls a service method and shapes the
-response.
+the six zones, the controllers' type-only models rule and the
+platform-tenant repository rule are lint-enforced. Controllers never
+import a repository or `database.service` directly — every controller
+method calls a service method and shapes the response.
 
 Every route handler is a `BaseController` (`src/controllers/base.controller.ts`)
 method. Nearly all are arrow-function class fields built through
@@ -168,12 +172,35 @@ redirect and an SSE stream; both still call a service, so this is an
 exception to `handle()`, not to the layering above.
 
 **Lock order**, binding for every transaction that locks more than one row
-set: the tenant's owner rows first (`lockOwners`, ordered by `id`), then
-memberships ordered by `user_id` (`lockMemberships`) — written into
-`user-membership.repository.ts`'s JSDoc on both methods, and enforced only
-by convention plus a deadlock regression test
+set:
+
+1. the tenant's owner rows (`lockOwners`, ordered by `id`);
+2. memberships, ordered by `user_id` (`lockMemberships`);
+3. only when the actor has no membership in the tenant, the actor's
+   platform-tenant membership, `FOR SHARE` (`lockTenantAccess`,
+   `tenant-access.service.ts`, via `lockPlatformRole`,
+   `user-membership.repository.ts`);
+4. the row a tenant or settings update writes (`lockById`,
+   `tenant.repository.ts`; `lockByTenantId`,
+   `tenant-settings.repository.ts`).
+
+It's written into the JSDoc of `lockOwners`, `lockMemberships` and
+`lockPlatformRole` (`user-membership.repository.ts`), of
+`lockTenantAccess` (`tenant-access.service.ts`), and of `lockById` and
+`lockByTenantId`, and enforced only by
+convention plus a deadlock regression test
 (`tests/integration/services/tenant-membership.service.test.ts`), since
 Postgres itself has no way to enforce an application-level lock order.
+
+**Platform access.** Four services carry it. Their callers stay in the
+layers above.
+
+| Service                      | Job                                                                                                                                                                                                                                                                                                                                                                                              |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `tenant-access.service.ts`   | `lockTenantAccess(actor, tenantId, otherUserIds, tx)`: locks owners, memberships and, when the actor has no membership, the platform membership, in that order (step 3 above), returning the actor's access and the locked memberships. `resolveActorAccess(actor, tenantId, tx)` wraps it for a caller with no other memberships to lock. Membership wins; the platform tenant is members-only. |
+| `platform.service.ts`        | `getPlatformMembership` (one indexed read, no cache), `autoJoin` (viewer only, verified addresses on `PLATFORM_EMAIL_DOMAINS`), `bootstrapGrant` (the `platform:grant` script only).                                                                                                                                                                                                             |
+| `platform-tenant.service.ts` | `searchAll`: every customer tenant, for staff. The only importer of `platform-tenant.repository.ts`.                                                                                                                                                                                                                                                                                             |
+| `audit.service.ts`           | `record(entry, tx)`, in the caller's transaction, with strict per-action metadata; `recordPlatformAccess` (hourly, deduplicated in Redis); `listForTenant` and `listPlatformWide` (keyset).                                                                                                                                                                                                      |
 
 ## The B3 seam: email verification is wired up; password recovery is not
 
@@ -445,9 +472,10 @@ BullMQ job queue (`src/jobs/`, `src/workers/` — see CLAUDE.md's "Job queue"
 and "Notifications" sections), and OpenTelemetry SDK wiring in the app
 itself (`src/observability/tracing.ts` starts a `NodeSDK` and exports
 traces and logs — see CLAUDE.md's "Observability" section). The rate
-limiters this list used to describe as
-covering only the four auth routes now also cover the tenant and invitation
-routes (`createRateLimiter(RATE_LIMITS.createTenant)` and
+limiters also cover the tenant, invitation and staff-search routes
+(`createRateLimiter(RATE_LIMITS.createTenant)` and
 `createRateLimiter(RATE_LIMITS.inviteTenantMember)` on `tenant.routes.ts`,
 `createRateLimiter(RATE_LIMITS.invitationPreview)` and
-`createRateLimiter(RATE_LIMITS.invitationAccept)` on `invitation.routes.ts`).
+`createRateLimiter(RATE_LIMITS.invitationAccept)` on `invitation.routes.ts`,
+and `createRateLimiter(RATE_LIMITS.platformSearch)` on
+`platform.routes.ts`).

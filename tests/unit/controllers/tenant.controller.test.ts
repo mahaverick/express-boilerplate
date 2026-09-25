@@ -44,7 +44,12 @@ function mockNext(): { next: NextFunction; lastCallArgument: () => unknown } {
 const authenticatedPrincipal: RequestPrincipal = {
   tenantId: 'tenant-id',
   tenantSlug: 'acme',
+  isPlatformTenant: false,
   role: 'owner',
+  memberRole: 'owner',
+  // eslint-disable-next-line unicorn/no-null -- a member's principal carries no platform role
+  platformRole: null,
+  access: 'member',
 }
 
 describe('authenticatedUserId (via listTenants)', () => {

@@ -1,8 +1,9 @@
 // src/services/tenant-invitation.service.ts
 //
 // Invitations to join a tenant: invite, list, resend, revoke, preview,
-// accept. HTTP-free. Multi-step writes run in one transaction, and every
-// query inside one goes through its `tx`. Mail and the in-app notification
+// accept. HTTP-free. Multi-step writes run in one transaction with their
+// audit entry, and every query inside one goes through its `tx`. The audit
+// metadata carries the address's domain only. Mail and the in-app notification
 // are enqueued after the write commits, fire-and-forget.
 import { randomBytes } from 'node:crypto'
 import { getEnv } from '@/configs/env.config'
@@ -20,6 +21,7 @@ import {
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
+import { record } from '@/services/audit.service'
 import { db, type DbExecutor } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
 import { hashToken } from '@/services/session.service'
@@ -28,6 +30,7 @@ import { buildInvitationAcceptUrl } from '@/services/verification.service'
 import { TENANT_INVITATION_TEMPLATE_KEY } from '@/templates/email/tenant-invitation.template'
 import type { Actor } from '@/types/actor'
 import { requireDurationMs } from '@/utilities/duration.utilities'
+import { hostnameDomain } from '@/utilities/email.utilities'
 
 const invitationRepository = new TenantInvitationRepository()
 const tenantRepository = new TenantRepository()
@@ -166,6 +169,16 @@ function isNotifiable(user: User | undefined): user is User {
 }
 
 /**
+ * The domain the audit log keeps for an invited address.
+ * @param email - The invited address.
+ * @returns Its lowercased domain, or null when it has none or it is not a dotted hostname.
+ */
+function auditEmailDomain(email: string): string | null {
+  // eslint-disable-next-line unicorn/no-null -- stored as JSON null in the audit metadata
+  return hostnameDomain(email) ?? null
+}
+
+/**
  * The 404 for a resend or revoke of an invitation that is not pending here.
  * @returns The error to throw.
  */
@@ -257,7 +270,7 @@ async function tenantForMessages(
  * @param tenantId - The tenant.
  * @param email - The address to invite, in any case.
  * @param role - The role offered.
- * @throws {HttpError} 404 `Tenant not found` when the actor is no longer a member, or when the tenant is gone; 403 when the actor is now below admin or may not grant `role`; 409 `already_member` when the address belongs to a member; 409 `invitation_conflict` from a racing duplicate invite.
+ * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access, or when the tenant is gone; 403 when the actor is now below admin or may not grant `role`; 409 `already_member` when the address belongs to a member; 409 `invitation_conflict` from a racing duplicate invite.
  */
 export async function invite(
   actor: Actor,
@@ -269,7 +282,7 @@ export async function invite(
   const rawToken = generateInvitationToken()
 
   const context: InvitationMessageContext = await db.transaction(async (tx) => {
-    const actorRole = await lockActorRole(actor, tenantId, 'admin', tx)
+    const { role: actorRole, access } = await lockActorRole(actor, tenantId, 'admin', tx)
     if (!canActorGrantRole(actorRole, role)) throw new HttpError(GRANT_REFUSED_MESSAGE, 403)
 
     const invitee = await userRepository.findByEmail(normalizedEmail, {}, tx)
@@ -293,6 +306,17 @@ export async function invite(
         tokenHash: hashToken(rawToken),
         invitedBy: actor.userId,
         expiresAt: invitationExpiry(),
+      },
+      tx
+    )
+    await record(
+      {
+        action: 'invitation.created',
+        actor,
+        access,
+        tenantId,
+        targetId: invitation.id,
+        metadata: { role, emailDomain: auditEmailDomain(normalizedEmail) },
       },
       tx
     )
@@ -325,14 +349,14 @@ export async function listPending(tenantId: string): Promise<PendingInvitationSu
  * @param actor - The signed-in user resending it, named in the email.
  * @param tenantId - The tenant it must belong to.
  * @param invitationId - The invitation.
- * @throws {HttpError} 404 when the tenant is gone, before anything is written; 404 `Tenant not found` when the actor is no longer a member; 403 when the actor is now below admin; 404 `invitation_not_found` when it is not pending in this tenant; 403 when the actor may not grant its role.
+ * @throws {HttpError} 404 when the tenant is gone, before anything is written; 404 `Tenant not found` when the actor no longer has access; 403 when the actor is now below admin; 404 `invitation_not_found` when it is not pending in this tenant; 403 when the actor may not grant its role.
  */
 export async function resend(actor: Actor, tenantId: string, invitationId: string): Promise<void> {
   // Before the write, so a vanished tenant cannot leave the old link replaced and no email sent.
   const tenant = await tenantForMessages(tenantId)
   const rawToken = generateInvitationToken()
   const invitation = await db.transaction(async (tx) => {
-    const actorRole = await lockActorRole(actor, tenantId, 'admin', tx)
+    const { role: actorRole, access } = await lockActorRole(actor, tenantId, 'admin', tx)
     const pending = await invitationRepository.findPendingById(tenantId, invitationId, tx)
     if (!pending) throw invitationNotFound()
     if (!canActorGrantRole(actorRole, pending.role)) {
@@ -345,6 +369,17 @@ export async function resend(actor: Actor, tenantId: string, invitationId: strin
       tx
     )
     if (!updated) throw invitationNotFound()
+    await record(
+      {
+        action: 'invitation.resent',
+        actor,
+        access,
+        tenantId,
+        targetId: updated.id,
+        metadata: { role: updated.role, emailDomain: auditEmailDomain(updated.email) },
+      },
+      tx
+    )
     return updated
   })
   const inviter = await userRepository.findById(actor.userId)
@@ -368,13 +403,27 @@ export async function resend(actor: Actor, tenantId: string, invitationId: strin
  * @param actor - The signed-in user revoking it.
  * @param tenantId - The tenant it must belong to.
  * @param invitationId - The invitation.
- * @throws {HttpError} 404 `Tenant not found` when the actor is no longer a member; 403 when the actor is now below admin; 404 `invitation_not_found` when it is not pending in this tenant.
+ * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access; 403 when the actor is now below admin; 404 `invitation_not_found` when it is not pending in this tenant.
  */
 export async function revoke(actor: Actor, tenantId: string, invitationId: string): Promise<void> {
   await db.transaction(async (tx) => {
-    await lockActorRole(actor, tenantId, 'admin', tx)
+    const { access } = await lockActorRole(actor, tenantId, 'admin', tx)
+    // Read first: the audit entry needs the role and address the revoke doesn't return.
+    const pending = await invitationRepository.findPendingById(tenantId, invitationId, tx)
+    if (!pending) throw invitationNotFound()
     const wasRevoked = await invitationRepository.revoke(tenantId, invitationId, tx)
     if (!wasRevoked) throw invitationNotFound()
+    await record(
+      {
+        action: 'invitation.revoked',
+        actor,
+        access,
+        tenantId,
+        targetId: pending.id,
+        metadata: { role: pending.role, emailDomain: auditEmailDomain(pending.email) },
+      },
+      tx
+    )
   })
 }
 
@@ -464,6 +513,18 @@ export async function accept(rawToken: string, userId: string): Promise<Accepted
 
     const membership = await userMembershipRepository.createIfAbsent(
       { userId: user.id, tenantId: claimed.tenantId, role: claimed.role },
+      tx
+    )
+    // The role now held: an existing member keeps theirs.
+    await record(
+      {
+        action: 'invitation.accepted',
+        actor: { userId: user.id },
+        access: 'member',
+        tenantId: claimed.tenantId,
+        targetId: membership.id,
+        metadata: { role: membership.role, invitationId: claimed.id },
+      },
       tx
     )
     return {

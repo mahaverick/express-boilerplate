@@ -514,3 +514,38 @@ describe('derivations from APP_ENV', () => {
     expect(requiresSmtpTls(parsed)).toBe(true)
   })
 })
+
+describe('PLATFORM_EMAIL_DOMAINS', () => {
+  it('is unset by default, so nobody joins the platform tenant automatically', () => {
+    expect(parseEnv(valid).PLATFORM_EMAIL_DOMAINS).toBeUndefined()
+  })
+
+  it('treats an empty value as unset', () => {
+    expect(
+      parseEnv({ ...valid, PLATFORM_EMAIL_DOMAINS: '' }).PLATFORM_EMAIL_DOMAINS
+    ).toBeUndefined()
+  })
+
+  it('accepts lowercase domains separated by commas, with spaces around the commas', () => {
+    const value = 'staff.example.com, example.org'
+    expect(parseEnv({ ...valid, PLATFORM_EMAIL_DOMAINS: value }).PLATFORM_EMAIL_DOMAINS).toBe(value)
+  })
+
+  it.each([
+    'Example.com',
+    'example',
+    '*.example.com',
+    'example.com,',
+    'example..com',
+    '.example.com',
+    'https://example.com',
+    'example.c0m',
+    'foo-.com',
+    '-foo.com',
+    `${'a'.repeat(64)}.com`,
+  ])('refuses %s', (value) => {
+    expect(() => parseEnv({ ...valid, PLATFORM_EMAIL_DOMAINS: value })).toThrow(
+      /PLATFORM_EMAIL_DOMAINS/
+    )
+  })
+})

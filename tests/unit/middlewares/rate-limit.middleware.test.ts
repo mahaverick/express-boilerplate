@@ -521,8 +521,26 @@ describe('RATE_LIMITS.invitationAccept', () => {
   })
 })
 
+describe('RATE_LIMITS.platformSearch', () => {
+  it('returns 429 once one user spends the budget, and keys on the user id', async () => {
+    const app = buildAppBehindAsUser(
+      createRateLimiter(RATE_LIMITS.platformSearch, { limit: 1, windowMs: 60_000 })
+    )
+    const staff = randomUUID()
+
+    const first = await request(app).post('/endpoint').set('x-test-user-id', staff)
+    const limited = await request(app).post('/endpoint').set('x-test-user-id', staff)
+    const bystander = await request(app).post('/endpoint').set('x-test-user-id', randomUUID())
+
+    expect(first.status).toBe(201)
+    expect(limited.status).toBe(429)
+    expect(limited.body).toMatchObject({ success: false, code: RATE_LIMITED_CODE })
+    expect(bystander.status).toBe(201)
+  })
+})
+
 describe('store prefix derivation', () => {
-  // The 19-name list and order now live in
+  // The 20-name list and order now live in
   // tests/unit/constants/rate-limit.constants.test.ts, asserted directly
   // against the real RATE_LIMITS object. What that test alone cannot prove
   // is that createRateLimiter actually THREADS spec.name into

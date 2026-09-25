@@ -6,15 +6,20 @@
 // object in scope. Must run immediately after requestId: it reads
 // `request.id`.
 import { type NextFunction, type Request, type Response } from 'express'
-import { requestContextStore } from '@/services/request-context.service'
+import { requestContextStore, type RequestContext } from '@/services/request-context.service'
 
 /**
  * Wrap the rest of the request in an AsyncLocalStorage context carrying the
- * request-id. Runs immediately after the requestId middleware in the chain.
+ * request-id, client address and user agent. Runs immediately after the
+ * requestId middleware in the chain.
  * @param request - The request (with `id` already set by requestId middleware).
  * @param _response - Unused.
  * @param next - Passes control into the ALS context.
  */
 export function requestContext(request: Request, _response: Response, next: NextFunction): void {
-  requestContextStore.run({ requestId: request.id }, next)
+  const context: RequestContext = { requestId: request.id }
+  if (request.ip !== undefined) context.ip = request.ip
+  const userAgent = request.headers['user-agent']
+  if (userAgent !== undefined) context.userAgent = userAgent
+  requestContextStore.run(context, next)
 }
