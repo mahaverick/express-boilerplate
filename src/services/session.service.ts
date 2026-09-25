@@ -475,8 +475,7 @@ export async function revokeSession(sessionId: string): Promise<void> {
  * how long it takes. Logout must feel like unconditional success to
  * whoever calls it, not a way to test whether a given token string is
  * still live — exactly the same reasoning `rotateRefreshToken` (this
- * module) and the login endpoint (auth.controller.ts) already apply to
- * their own callers.
+ * module) and login (auth.service.ts) already apply to their own callers.
  * @param raw - The raw refresh token presented by the client.
  * @returns Resolves once the token's session (if any matched) is revoked and its access tokens are denied, best-effort.
  */

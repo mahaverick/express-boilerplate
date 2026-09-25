@@ -28,7 +28,7 @@
  *
  * BEFORE YOU RAISE IT, read this. That last sentence has a consequence for
  * the login timing defence, and this is the place it will actually be seen.
- * `login` (auth.controller.ts) answers an unknown email by verifying
+ * `login` (auth.service.ts) answers an unknown email by verifying
  * against a dummy hash, so both paths pay one real bcrypt comparison and
  * the response time cannot say whether an address is registered. The dummy
  * is hashed at the CURRENT value of this constant; every stored hash

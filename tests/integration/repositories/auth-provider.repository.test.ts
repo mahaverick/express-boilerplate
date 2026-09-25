@@ -24,6 +24,16 @@ function uniqueEmail(): string {
   return `auth-provider-repo-${randomUUID()}@example.test`
 }
 
+/**
+ * Alphabetical order, for comparing unordered row lists.
+ * @param left - One value.
+ * @param right - The other.
+ * @returns Negative, zero or positive, as `localeCompare`.
+ */
+function byName(left: string, right: string): number {
+  return left.localeCompare(right)
+}
+
 describe('AuthProviderRepository', () => {
   const createdUserIds: string[] = []
 
@@ -305,5 +315,41 @@ describe('AuthProviderRepository', () => {
 
     const [remaining] = await sql`select * from auth_providers where id = ${row.id}`
     expect(remaining).toBeUndefined()
+  })
+
+  describe('deleteGoogleLinksExcept and createIfAbsent', () => {
+    it("deletes the user's other Google links, keeping the named one and the 'email' row", async () => {
+      const userId = await createUser()
+      const keptGoogleId = randomUUID()
+      await authProviderRepository.create({ userId, provider: 'email', providerId: uniqueEmail() })
+      await authProviderRepository.create({ userId, provider: 'google', providerId: keptGoogleId })
+      await authProviderRepository.create({ userId, provider: 'google', providerId: randomUUID() })
+
+      await authProviderRepository.deleteGoogleLinksExcept(userId, keptGoogleId)
+
+      const rows = await authProviderRepository.findByUser(userId)
+      expect(
+        rows
+          .map((row) => `${row.provider}:${row.provider === 'google' ? row.providerId : ''}`)
+          .toSorted(byName)
+      ).toEqual(['email:', `google:${keptGoogleId}`].toSorted(byName))
+    })
+
+    it('createIfAbsent inserts once and is silent on a conflicting second insert', async () => {
+      const userId = await createUser()
+      const googleId = randomUUID()
+
+      await authProviderRepository.createIfAbsent({
+        userId,
+        provider: 'google',
+        providerId: googleId,
+      })
+      await expect(
+        authProviderRepository.createIfAbsent({ userId, provider: 'google', providerId: googleId })
+      ).resolves.toBeUndefined()
+
+      const rows = await authProviderRepository.findByUser(userId)
+      expect(rows.filter((row) => row.provider === 'google')).toHaveLength(1)
+    })
   })
 })

@@ -68,7 +68,7 @@
 //     containing the email hands them a fresh counter each time and bounds
 //     nothing at all; only a key that ignores the email (IP) actually caps
 //     how much mail one caller can trigger.
-//   - bcrypt CPU exhaustion. `register` (auth.controller.ts) hashes at
+//   - bcrypt CPU exhaustion. `register` (auth.service.ts) hashes at
 //     BCRYPT_COST — roughly 250ms — before anything else, and node-bcrypt
 //     runs on libuv's threadpool: 4 threads by default, shared with fs and
 //     DNS. A few dozen concurrent registrations starve the whole process,
@@ -126,7 +126,7 @@
 // entirely made up; a caller probing many addresses from one IP learns
 // nothing about which ones exist by watching for the point at which 429s
 // start, because that point never depends on registration status. Undoing
-// that would reopen exactly the user-enumeration channel auth.controller.ts
+// that would reopen exactly the user-enumeration channel auth.service.ts
 // closes for the login response itself (see that file's header comment).
 //
 // Two more limiters sit behind it on /login (auth.routes.ts, in this order):
@@ -631,7 +631,7 @@ export function createGoogleOAuthRateLimiter(
 // (ONE STORE PREFIX PER ENDPOINT) for why sharing one would let traffic on
 // either step spend the other's budget. This route does real work per
 // request that the redirect step never does: `findOrCreateByGoogle`
-// (auth.controller.ts) runs a `findByProviderAndId` lookup, potentially a
+// (google-auth.service.ts) runs a `findByProviderAndId` lookup, potentially a
 // `findByEmail` lookup, and — for a first-time Google sign-in — an atomic
 // user-plus-two-providers INSERT inside a database transaction, then a
 // `user_tokens` INSERT to issue the refresh token. Kept at the same
@@ -780,7 +780,7 @@ export function createInviteTenantMemberRateLimiter(
 //
 // The threat this one actually bounds is also different from the tenant
 // pair's own "volume protection" framing: step 2 of `changePassword`
-// (auth.controller.ts) compares a caller-supplied `currentPassword` against
+// (auth.service.ts) compares a caller-supplied `currentPassword` against
 // the stored hash — a password oracle an attacker holding a stolen (but
 // still live) access token could otherwise brute-force with unlimited
 // attempts. Keying on the user id, not IP, is what makes the budget follow

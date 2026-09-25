@@ -14,7 +14,7 @@
 // `UserMembershipRepository` — see this method's own comment for why) and
 // instead writes all three rows directly against a `withTransaction`
 // handle, mirroring `register()`'s user+auth_provider transaction in
-// auth.controller.ts.
+// auth.service.ts.
 //
 // Overriding `create` still has to satisfy `BaseRepository`'s own
 // (non-abstract) `create(values, ...): Promise<Tenant>` signature — this

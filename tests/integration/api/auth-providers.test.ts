@@ -9,7 +9,7 @@
 //
 // The case this file exists for is the Google-only user. A Google signup
 // writes BOTH an `'email'` row and a `'google'` row in one transaction
-// (auth.controller.ts's `createGoogleUser`), so the presence of an
+// (google-auth.service.ts's `findOrCreateByGoogle`), so the presence of an
 // `'email'` provider says nothing about whether a password exists — a
 // naive implementation that inferred `hasPassword` from the provider list
 // would report `true` for an account that cannot log in with a password at
@@ -103,7 +103,7 @@ async function seedUser(options: {
       provider,
       // The real shapes: the `'email'` row's providerId IS the address,
       // Google's is its stable `sub`. Both are what the production paths
-      // write (auth.controller.ts), so a test asserting the response never
+      // write (auth.service.ts, google-auth.service.ts), so a test asserting the response never
       // leaks `providerId` is asserting against realistic values rather
       // than a placeholder that could not leak anything anyway.
       providerId: provider === 'email' ? email : `google-sub-${randomUUID()}`,

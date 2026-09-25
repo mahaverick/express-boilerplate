@@ -5,10 +5,10 @@
 // length floor as a weak-password guard, and a byte ceiling — see below).
 // Login's does not: a login attempt with a too-short or too-long password
 // must fail with the exact same "invalid credentials" response as a wrong
-// password for a real account (auth.controller.ts's identical-error
+// password for a real account (auth.service.ts's identical-error
 // property), and routing it through a DIFFERENT validation error first
-// would leak that distinction back to an unauthenticated caller before the
-// controller ever gets a chance to make the two paths agree.
+// would leak that distinction back to an unauthenticated caller before
+// login ever gets a chance to make the two paths agree.
 //
 // The byte ceiling on registration matters for a reason that has nothing to
 // do with password strength: `hashPassword` (password.utilities.ts) throws

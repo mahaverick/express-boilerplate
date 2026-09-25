@@ -194,9 +194,9 @@ export function createAuthRouter(): Router {
     // underlying express-session configuration — a second call would still
     // work (it lazily builds an equivalent middleware) but would needlessly
     // duplicate the Redis-latch machinery `createOAuthSessionMiddleware`'s
-    // own header comment describes. `handleGoogleCallback` (auth.controller.ts)
-    // is where the actual account-linking policy — and Task 3's
-    // `findOrCreateByGoogle` — lives.
+    // own header comment describes. The account-linking policy lives in
+    // `findOrCreateByGoogle` (google-auth.service.ts), which
+    // `handleGoogleCallback` reaches through `completeGoogleSignIn`.
     router.get(
       '/google/callback',
       createGoogleOAuthCallbackRateLimiter(),

@@ -17,8 +17,7 @@
 // when a concrete feature reads them.
 //
 // `provider = 'email'` ROWS EXIST FOR PASSWORD-BASED USERS TOO, not just
-// Google. `register()` (auth.controller.ts, wired in Task 4 of
-// docs/superpowers/plans/2026-09-17-google-oauth.md) creates one at signup
+// Google. `register()` (auth.service.ts) creates one at signup
 // (`providerId` = the user's email address), and migration 0010's seed
 // backfills one for every pre-existing user that already has a
 // `password_hash` (user.model.ts's own header explains why that column is
@@ -83,11 +82,11 @@ export const authProviderModel = pgTable(
     // `users.email` (also `MAX_EMAIL_LENGTH`) or a registration for a
     // legitimately long-but-valid address succeeds inserting into `users`
     // and then fails inserting here, inside the SAME transaction
-    // (`register`, auth.controller.ts) — a 500 for input `registerSchema`
+    // (`register`, auth.service.ts) — a 500 for input `registerSchema`
     // already accepted. Verified empirically, not assumed: this column was
     // first sized at 255 and a boundary test ("accepts an email exactly at
     // the column width", auth.test.ts) caught the mismatch the moment
-    // `register()` started writing this row (Task 4).
+    // `register()` started writing this row.
     providerId: varchar('provider_id', { length: MAX_EMAIL_LENGTH }).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

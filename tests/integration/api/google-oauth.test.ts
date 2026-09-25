@@ -63,10 +63,10 @@ import type { Profile as GoogleProfile } from 'passport-google-oauth20'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { createApp as CreateApp } from '@/app'
 import { GOOGLE_STRATEGY_NAME, REFRESH_TOKEN_COOKIE_NAME } from '@/constants/auth.constants'
-import type { findOrCreateByGoogle as FindOrCreateByGoogleType } from '@/controllers/auth.controller'
 import type { AuthProviderRepository as AuthProviderRepositoryClass } from '@/repositories/auth-provider.repository'
 import type { UserRepository as UserRepositoryClass } from '@/repositories/user.repository'
 import type { sql as SqlType } from '@/services/database.service'
+import type { findOrCreateByGoogle as FindOrCreateByGoogleType } from '@/services/google-auth.service'
 import type { issueRefreshToken as IssueRefreshTokenType } from '@/services/session.service'
 import { request } from '../../helpers/request'
 
@@ -96,7 +96,7 @@ function uniqueEmail(): string {
 /**
  * Build a fixture Google profile shaped exactly like what
  * `passthroughGoogleProfile` (passport.config.ts) hands `done()` — the raw
- * value `findOrCreateByGoogle` (auth.controller.ts) receives, with none of
+ * value `findOrCreateByGoogle` (google-auth.service.ts) receives, with none of
  * this repo's own account-linking logic run yet. Every field
  * `findOrCreateByGoogle` actually reads (`id`, `emails[0].value`,
  * `emails[0].verified`, `_json.email_verified`) is controllable via
@@ -208,7 +208,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
   // (a static import's whole dependency graph, including
   // database.service.ts's own module-scope `getEnv()`, evaluates before
   // `beforeAll` ever runs); the identical reasoning applies to EVERY one of
-  // these imports, since `@/controllers/auth.controller`,
+  // these imports, since `@/services/google-auth.service`,
   // `@/repositories/user.repository`, `@/repositories/auth-provider.repository`,
   // and `@/services/database.service` all transitively reach that same
   // module-scope `getEnv()` call. By the time this `await import('@/app')`
@@ -222,8 +222,8 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
     const { createApp } = await import('@/app')
     app = createApp()
 
-    const authController = await import('@/controllers/auth.controller')
-    findOrCreateByGoogle = authController.findOrCreateByGoogle
+    const googleAuthService = await import('@/services/google-auth.service')
+    findOrCreateByGoogle = googleAuthService.findOrCreateByGoogle
 
     const { UserRepository } = await import('@/repositories/user.repository')
     userRepository = new UserRepository()
@@ -429,7 +429,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
     })
   })
 
-  describe('findOrCreateByGoogle (auth.controller.ts)', () => {
+  describe('findOrCreateByGoogle (google-auth.service.ts)', () => {
     it('creates a new user, an email provider, and a google provider, with emailVerifiedAt set, when Google verified the email', async () => {
       const email = uniqueEmail()
       const profile = googleProfile({ email, emailVerified: true })
@@ -491,8 +491,8 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
       expect(link?.userId).toBe(existing.id)
       // No second `'email'` row is created. `existing` is seeded directly
       // through `userRepository.create` above, bypassing `register()` —
-      // the only place an `'email'` row is written (Task 4,
-      // auth.controller.ts) — so this user genuinely has none, and linking
+      // the only place an `'email'` row is written for a
+      // password account (auth.service.ts) — so this user genuinely has none, and linking
       // must not fabricate one; it only adds the `'google'` row.
       const providers = await authProviderRepository.findByUser(existing.id)
       expect(providers.map((provider) => provider.provider)).toEqual(['google'])

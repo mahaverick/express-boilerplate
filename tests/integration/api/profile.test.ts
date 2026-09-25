@@ -52,7 +52,7 @@ interface ApiEnvelope<TData> {
 }
 
 /**
- * The public projection of a user row (auth.controller.ts's `PublicUser`,
+ * The public projection of a user row (user.presenter.ts's `PublicUser`,
  * reused by profile.controller.ts).
  */
 interface PublicUserBody {

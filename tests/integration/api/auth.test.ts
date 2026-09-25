@@ -11,8 +11,6 @@
 // .husky/pre-commit whenever Docker is down.
 import { randomUUID } from 'node:crypto'
 import type { Worker } from 'bullmq'
-import { DrizzleQueryError } from 'drizzle-orm'
-import postgres from 'postgres'
 import type { Response } from 'supertest'
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { createApp } from '@/app'
@@ -27,7 +25,7 @@ import { HttpError } from '@/errors/http-error'
 import type { EmailJobData } from '@/jobs/email.job'
 import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
 import { UserRepository } from '@/repositories/user.repository'
-import { db, sql } from '@/services/database.service'
+import { sql } from '@/services/database.service'
 import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
 import * as passwordUtilities from '@/utilities/password.utilities'
 import { startEmailWorker } from '@/workers/email.worker'
@@ -104,7 +102,7 @@ interface ApiEnvelope<TData> {
 }
 
 /**
- * The public projection of a user row (auth.controller.ts's `PublicUser`).
+ * The public projection of a user row (user.presenter.ts's `PublicUser`).
  */
 interface PublicUserBody {
   id: string
@@ -402,7 +400,7 @@ describe('POST /api/v1/auth/register and /login', () => {
     it('mails the STORED firstName on the taken branch, never the submitted one', async () => {
       // The response body carries no name either way (the test above), but
       // that leaves the outbound MAIL itself unpinned — `sendRegistrationAttemptMail`
-      // (auth.controller.ts) reads `existing?.firstName` off the row already
+      // (auth.service.ts) reads `existing?.firstName` off the row already
       // in the database, not `input.firstName` off this request's body. A
       // refactor that swapped one for the other would pass every test above
       // while delivering attacker-chosen text into the victim's inbox. This
@@ -480,9 +478,8 @@ describe('POST /api/v1/auth/register and /login', () => {
     })
 
     it('creates an email auth_providers row at registration, keyed on the lowercased address', async () => {
-      // Task 4 carry-forward (see auth.controller.ts's own header comment
-      // on `register`): the row must use the LOWERCASED address as
-      // `providerId`, matching `findOrCreateByGoogle`'s own `'email'` row
+      // See auth.service.ts's `register`: the row must use the LOWERCASED
+      // address as `providerId`, matching `findOrCreateByGoogle`'s own `'email'` row
       // for a brand-new Google user — `auth_providers_provider_provider_id_unique`
       // (auth-provider.model.ts) has no case-folding of its own, so a
       // raw-cased row here could let the same address collide
@@ -511,49 +508,32 @@ describe('POST /api/v1/auth/register and /login', () => {
       expect(providers.map((row) => row.provider)).toEqual(['email'])
     })
 
-    // Mutation proof: if the unique-violation check that classifies the
-    // taken branch were weakened so a genuine duplicate re-throws as a
-    // non-409-shaped error (making the taken branch answer differently
-    // from the free branch), the oracle test above must go RED.
-    //
-    // Targets `db.transaction`, not `UserRepository.prototype.create` (an
-    // earlier version of this test did, back when `register` inserted the
-    // user through that repository method alone). Since Task 4,
-    // `register()` writes the user AND its `'email'` auth_providers row
-    // together via a raw `tx` handle (see auth.controller.ts's own header
-    // comment on why: neither repository accepts a transaction handle, so
-    // true atomicity means bypassing both) — a duplicate email now
-    // surfaces as a raw `DrizzleQueryError`/`postgres.PostgresError` out of
-    // `db.transaction` itself, never through `UserRepository.create`,
-    // which this mutation no longer touches at all. Uses
-    // withMutatedMethod per CLAUDE.md — no source files touched.
+    // Mutation proof: if the check that classifies the taken branch (a 409
+    // from UserRepository.create inside auth.service's register transaction)
+    // stopped recognising a duplicate, the taken branch would answer
+    // differently from the free one and the oracle test above must go RED.
+    // Disguises that 409 as a 422 on UserRepository.prototype; withMutatedMethod
+    // per CLAUDE.md, no source files touched.
     it.runIf(process.env.MUTATION_PROOF === '1')(
       'MUTATION PROOF: an unrecognised unique violation on the taken branch is detected as an oracle',
       async () => {
-        const originalTransaction = db.transaction.bind(db)
-        // `as typeof db.transaction`: drizzle's `transaction` is generic
-        // over the callback's return type, the same shape this codebase
-        // already casts around elsewhere (e.g. auth.routes.ts's own
-        // `as RequestHandler`, beside `passport.authenticate`) rather than
-        // fight a signature no call site here actually needs to vary.
-        const mutatedTransaction = (async (callback: Parameters<typeof db.transaction>[0]) => {
+        // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
+        const originalCreate = UserRepository.prototype.create
+        const mutatedCreate: typeof originalCreate = async function (
+          this: UserRepository,
+          ...arguments_
+        ) {
           try {
-            return await originalTransaction(callback)
+            return await originalCreate.apply(this, arguments_)
           } catch (error) {
-            // Disguise a genuine 23505 as an unrelated HttpError, BEFORE
-            // register()'s own `isUniqueViolation` check ever sees it —
-            // proving that check (not merely "some error happened to look
-            // like 409") is what keeps the taken branch answering
-            // identically to the free one.
-            const cause = error instanceof DrizzleQueryError ? error.cause : error
-            if (cause instanceof postgres.PostgresError && cause.code === '23505') {
-              throw new HttpError(cause.message, 422)
+            if (error instanceof HttpError && error.statusCode === 409) {
+              throw new HttpError(error.message, 422)
             }
             throw error
           }
-        }) as typeof db.transaction
+        }
 
-        await withMutatedMethod(db, 'transaction', mutatedTransaction, async () => {
+        await withMutatedMethod(UserRepository.prototype, 'create', mutatedCreate, async () => {
           const taken = uniqueEmail()
           // First register succeeds (no duplicate yet).
           const firstResponse = await request(app)

@@ -132,4 +132,37 @@ export class AuthProviderRepository {
       .delete(authProviderModel)
       .where(and(eq(authProviderModel.userId, userId), ne(authProviderModel.provider, 'email')))
   }
+
+  /**
+   * Delete a user's Google links other than one, keeping every non-Google row.
+   * @param userId - The user whose Google links are pruned.
+   * @param googleId - The one Google profile id to keep.
+   * @param executor - The pool or a caller's transaction.
+   * @returns Resolves once the other links are gone.
+   */
+  async deleteGoogleLinksExcept(
+    userId: string,
+    googleId: string,
+    executor: DbExecutor = db
+  ): Promise<void> {
+    await executor
+      .delete(authProviderModel)
+      .where(
+        and(
+          eq(authProviderModel.userId, userId),
+          eq(authProviderModel.provider, 'google'),
+          ne(authProviderModel.providerId, googleId)
+        )
+      )
+  }
+
+  /**
+   * Link one auth method unless `(provider, providerId)` is already linked.
+   * @param data - The row's column values.
+   * @param executor - The pool or a caller's transaction.
+   * @returns Resolves once the row exists, inserted now or earlier.
+   */
+  async createIfAbsent(data: NewAuthProvider, executor: DbExecutor = db): Promise<void> {
+    await executor.insert(authProviderModel).values(data).onConflictDoNothing()
+  }
 }

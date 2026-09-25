@@ -537,7 +537,7 @@ const EnvSchema = z.object({
     .min(1)
     .default('Express Boilerplate')
     .describe(
-      'Product name in outbound email copy and notification text: verification, password reset, password changed and invitation messages (auth.controller.ts, verification.service.ts, tenant-invitation.service.ts). Defaults to "Express Boilerplate".'
+      'Product name in outbound email copy and notification text: verification, password reset, password changed and invitation messages (auth.service.ts, verification.service.ts, tenant-invitation.service.ts). Defaults to "Express Boilerplate".'
     ),
 
   // These three bound the stages of a send to an SMTP host that stops
