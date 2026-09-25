@@ -31,4 +31,11 @@ describe('createPlatformRouter', () => {
     expect(limiter).toHaveProperty('resetKey')
     expect(handler).toBeDefined()
   })
+
+  it('gates the platform audit log at admin, with no limiter', () => {
+    const handlers = handlersFor(createPlatformRouter(), 'get', '/audit-log')
+
+    expect(handlers).toHaveLength(2)
+    expect(handlers[0]).not.toHaveProperty('resetKey')
+  })
 })

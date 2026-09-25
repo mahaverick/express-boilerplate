@@ -1,8 +1,8 @@
 // tests/integration/repositories/audit-log.repository.test.ts
 //
 // AuditLogRepository against the real per-worker Postgres. Every row is
-// scoped to a tenant this file creates, so the platform-wide listing is
-// filtered by that tenant to stay isolated from other files' rows.
+// scoped to a tenant this file creates, and every listing filters by that
+// tenant to stay isolated from other files' rows.
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { NewAuditLog } from '@/database/models/audit-log.model'
@@ -93,7 +93,7 @@ async function readAllPages(
   let cursor: AuditLogCursor | undefined
   let pages = 0
   do {
-    const page = await auditLogRepository.listForTenant(tenantId, { limit, cursor })
+    const page = await auditLogRepository.list({ tenantId, limit, cursor })
     rows.push(...page.rows)
     pages += 1
     cursor = page.nextCursor
@@ -113,7 +113,7 @@ describe('AuditLogRepository.insert', () => {
   })
 })
 
-describe('AuditLogRepository.listForTenant', () => {
+describe('AuditLogRepository.list, one tenant', () => {
   it('pages newest first without duplicates or gaps across equal timestamps', async () => {
     const { userId, tenantId } = await createOwnerAndTenant()
     const shared = new Date('2026-09-25T10:00:00.123Z')
@@ -127,7 +127,7 @@ describe('AuditLogRepository.listForTenant', () => {
       entry(tenantId, userId, { occurredAt: new Date('2026-09-25T11:00:00.000Z') })
     )
 
-    const everything = await auditLogRepository.listForTenant(tenantId, { limit: 100 })
+    const everything = await auditLogRepository.list({ tenantId, limit: 100 })
     const paged = await readAllPages(tenantId, 2)
 
     expect(everything.nextCursor).toBeUndefined()
@@ -147,7 +147,7 @@ describe('AuditLogRepository.listForTenant', () => {
     await auditLogRepository.insert(entry(tenantId, userId))
     await auditLogRepository.insert(entry(tenantId, userId))
 
-    const exact = await auditLogRepository.listForTenant(tenantId, { limit: 2 })
+    const exact = await auditLogRepository.list({ tenantId, limit: 2 })
 
     expect(exact.rows).toHaveLength(2)
     expect(exact.nextCursor).toBeUndefined()
@@ -165,12 +165,14 @@ describe('AuditLogRepository.listForTenant', () => {
     )
     await auditLogRepository.insert(entry(second.tenantId, second.userId))
 
-    const all = await auditLogRepository.listForTenant(first.tenantId, { limit: 10 })
-    const byAction = await auditLogRepository.listForTenant(first.tenantId, {
+    const all = await auditLogRepository.list({ tenantId: first.tenantId, limit: 10 })
+    const byAction = await auditLogRepository.list({
+      tenantId: first.tenantId,
       limit: 10,
       action: 'tenant.settings_updated',
     })
-    const byActor = await auditLogRepository.listForTenant(first.tenantId, {
+    const byActor = await auditLogRepository.list({
+      tenantId: first.tenantId,
       limit: 10,
       actorUserId: first.userId,
     })
@@ -188,7 +190,7 @@ describe('AuditLogRepository.listForTenant', () => {
       entry(tenantId, userId, { actorKind: 'system', actorUserId: undefined, access: 'system' })
     )
 
-    const { rows } = await auditLogRepository.listForTenant(tenantId, { limit: 10 })
+    const { rows } = await auditLogRepository.list({ tenantId, limit: 10 })
     const userRow = rows.find((row) => row.entry.actorKind === 'user')
     const systemRow = rows.find((row) => row.entry.actorKind === 'system')
 
@@ -203,7 +205,7 @@ describe('AuditLogRepository.listForTenant', () => {
   })
 })
 
-describe('AuditLogRepository.listAll', () => {
+describe('AuditLogRepository.list, with its tenant', () => {
   it('attaches each row’s tenant and filters by tenant, access and action', async () => {
     const { userId, tenantId } = await createOwnerAndTenant()
     await auditLogRepository.insert(entry(tenantId, userId))
@@ -215,9 +217,9 @@ describe('AuditLogRepository.listAll', () => {
       })
     )
 
-    const scoped = await auditLogRepository.listAll({ limit: 10, tenantId })
-    const staffOnly = await auditLogRepository.listAll({ limit: 10, tenantId, access: 'platform' })
-    const byAction = await auditLogRepository.listAll({
+    const scoped = await auditLogRepository.list({ limit: 10, tenantId })
+    const staffOnly = await auditLogRepository.list({ limit: 10, tenantId, access: 'platform' })
+    const byAction = await auditLogRepository.list({
       limit: 10,
       tenantId,
       action: 'tenant.updated',
@@ -240,8 +242,8 @@ describe('AuditLogRepository.listAll', () => {
       await auditLogRepository.insert(entry(tenantId, userId, { occurredAt: shared }))
     }
 
-    const first = await auditLogRepository.listAll({ limit: 2, tenantId })
-    const second = await auditLogRepository.listAll({
+    const first = await auditLogRepository.list({ limit: 2, tenantId })
+    const second = await auditLogRepository.list({
       limit: 2,
       tenantId,
       cursor: first.nextCursor,

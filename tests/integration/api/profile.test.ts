@@ -61,6 +61,7 @@ interface PublicUserBody {
   firstName: string | null
   lastName: string | null
   createdAt: string
+  platformRole: string | null
 }
 
 /**
@@ -125,6 +126,7 @@ describe('/api/v1/profile', () => {
         firstName: NO_NAME,
         lastName: NO_NAME,
         createdAt: ANY_STRING,
+        platformRole: NO_NAME,
       })
       expect(JSON.stringify(response.body)).not.toMatch(/password/i)
     })
@@ -185,6 +187,7 @@ describe('/api/v1/profile', () => {
         firstName: 'Ada',
         lastName: 'Lovelace',
         createdAt: ANY_STRING,
+        platformRole: NO_NAME,
       })
 
       const [row] = await sql`select first_name, last_name from users where id = ${user.id}`

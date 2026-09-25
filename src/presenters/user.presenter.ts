@@ -6,6 +6,7 @@
 // lives here rather than in a middleware because presenters may not import
 // middlewares, and PublicUser must still be built by extending it, not by
 // re-declaring its field list a second time.
+import type { MembershipRole } from '@/constants/tenant.constants'
 import type { User } from '@/database/models/user.model'
 
 /**
@@ -55,4 +56,27 @@ export interface PublicUser extends AuthenticatedUser {
  */
 export function toPublicUser(user: User): PublicUser {
   return { ...toAuthenticatedUser(user), createdAt: user.createdAt }
+}
+
+/**
+ * Every client-facing user (profile GET and PATCH, and the login user): the
+ * public user plus their platform role. It's client-visible on purpose: it
+ * only drives the staff UI, and the server re-checks the platform role on
+ * every request.
+ */
+export interface ProfileResponse extends PublicUser {
+  platformRole: MembershipRole | null
+}
+
+/**
+ * Build the profile response.
+ * @param user - The full user row.
+ * @param platformRole - Their role in the platform tenant, or null.
+ * @returns The public projection plus `platformRole`.
+ */
+export function toProfileResponse(
+  user: User,
+  platformRole: MembershipRole | null
+): ProfileResponse {
+  return { ...toPublicUser(user), platformRole }
 }

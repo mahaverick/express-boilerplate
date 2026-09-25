@@ -29,43 +29,31 @@ export interface AuditActorRow {
 }
 
 /**
- * One entry of a tenant's log, with its actor (null for the system).
+ * One entry with its actor (null when no user row joined) and its tenant.
  */
 export interface AuditLogListRow {
   entry: AuditLog
   actor: AuditActorRow | null
-}
-
-/**
- * One entry of the platform-wide log: a tenant row plus the tenant it belongs to.
- */
-export interface PlatformAuditLogListRow extends AuditLogListRow {
   tenant: { id: string; name: string; slug: string }
 }
 
 /**
- * Filters and paging shared by both listings.
+ * Paging and the optional filters. A tenant read always sets `tenantId`.
  */
 export interface AuditLogListOptions {
   limit: number
   cursor?: AuditLogCursor | undefined
-  action?: AuditAction | undefined
-  actorUserId?: string | undefined
-}
-
-/**
- * The platform-wide listing's extra filters.
- */
-export interface PlatformAuditLogListOptions extends AuditLogListOptions {
   tenantId?: string | undefined
+  actorUserId?: string | undefined
+  action?: AuditAction | undefined
   access?: AuditAccess | undefined
 }
 
 /**
  * A page of rows and, when more remain, the cursor for the next one.
  */
-export interface AuditLogPage<TRow> {
-  rows: TRow[]
+export interface AuditLogPage {
+  rows: AuditLogListRow[]
   nextCursor?: AuditLogCursor
 }
 
@@ -77,16 +65,20 @@ const actorColumns = {
 }
 
 /**
- * The filter and keyset conditions both listings share.
+ * The filter and keyset conditions for one listing.
  * @param options - The listing's filters and cursor.
  * @returns The conditions to AND together.
  */
-function sharedConditions(options: AuditLogListOptions): SQL[] {
+function conditionsFor(options: AuditLogListOptions): SQL[] {
   const conditions: SQL[] = []
-  if (options.action !== undefined) conditions.push(eq(auditLogModel.action, options.action))
+  if (options.tenantId !== undefined) {
+    conditions.push(eq(auditLogModel.tenantId, options.tenantId))
+  }
   if (options.actorUserId !== undefined) {
     conditions.push(eq(auditLogModel.actorUserId, options.actorUserId))
   }
+  if (options.action !== undefined) conditions.push(eq(auditLogModel.action, options.action))
+  if (options.access !== undefined) conditions.push(eq(auditLogModel.access, options.access))
   if (options.cursor !== undefined) {
     // An ISO string cast back, not a bare Date: postgres.js cannot bind a Date inside a raw `sql` fragment.
     conditions.push(
@@ -102,7 +94,7 @@ function sharedConditions(options: AuditLogListOptions): SQL[] {
  * @param limit - The page size.
  * @returns The page.
  */
-function toPage<TRow extends { entry: AuditLog }>(rows: TRow[], limit: number): AuditLogPage<TRow> {
+function toPage(rows: AuditLogListRow[], limit: number): AuditLogPage {
   const hasMore = rows.length > limit
   if (hasMore) rows.pop()
   const last = rows.at(-1)
@@ -113,8 +105,8 @@ function toPage<TRow extends { entry: AuditLog }>(rows: TRow[], limit: number): 
 }
 
 /**
- * Query access to `audit_logs`: append one entry, and page through a
- * tenant's log or the whole platform's, newest first.
+ * Query access to `audit_logs`: append one entry, and page through one
+ * tenant's log or every tenant's, newest first.
  */
 export class AuditLogRepository {
   /**
@@ -130,42 +122,13 @@ export class AuditLogRepository {
   }
 
   /**
-   * A page of one tenant's entries, newest first, keyset on `(occurredAt, id)`.
-   * @param tenantId - The tenant whose log to read.
-   * @param options - Page size, cursor, and the optional action and actor filters.
-   * @param executor - Where to run the query. Defaults to the pool.
-   * @returns The page, with `nextCursor` only when more rows remain.
-   */
-  async listForTenant(
-    tenantId: string,
-    options: AuditLogListOptions,
-    executor: DbExecutor = db
-  ): Promise<AuditLogPage<AuditLogListRow>> {
-    const rows = await executor
-      .select({ entry: auditLogModel, actor: actorColumns })
-      .from(auditLogModel)
-      .leftJoin(userModel, eq(auditLogModel.actorUserId, userModel.id))
-      .where(and(eq(auditLogModel.tenantId, tenantId), ...sharedConditions(options)))
-      .orderBy(desc(auditLogModel.occurredAt), desc(auditLogModel.id))
-      .limit(options.limit + 1)
-    return toPage(rows, options.limit)
-  }
-
-  /**
-   * A page of every tenant's entries, newest first, keyset on `(occurredAt, id)`.
+   * A page of entries, newest first, keyset on `(occurredAt, id)`. The actor
+   * is a left join, so an entry whose actor has no user row still lists.
    * @param options - Page size, cursor, and the optional tenant, actor, action and access filters.
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns The page, with `nextCursor` only when more rows remain.
    */
-  async listAll(
-    options: PlatformAuditLogListOptions,
-    executor: DbExecutor = db
-  ): Promise<AuditLogPage<PlatformAuditLogListRow>> {
-    const conditions = sharedConditions(options)
-    if (options.tenantId !== undefined) {
-      conditions.push(eq(auditLogModel.tenantId, options.tenantId))
-    }
-    if (options.access !== undefined) conditions.push(eq(auditLogModel.access, options.access))
+  async list(options: AuditLogListOptions, executor: DbExecutor = db): Promise<AuditLogPage> {
     const rows = await executor
       .select({
         entry: auditLogModel,
@@ -175,7 +138,7 @@ export class AuditLogRepository {
       .from(auditLogModel)
       .innerJoin(tenantModel, eq(auditLogModel.tenantId, tenantModel.id))
       .leftJoin(userModel, eq(auditLogModel.actorUserId, userModel.id))
-      .where(and(...conditions))
+      .where(and(...conditionsFor(options)))
       .orderBy(desc(auditLogModel.occurredAt), desc(auditLogModel.id))
       .limit(options.limit + 1)
     return toPage(rows, options.limit)

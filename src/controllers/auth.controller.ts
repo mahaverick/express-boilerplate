@@ -16,7 +16,7 @@ import { BaseController } from '@/controllers/base.controller'
 import { authenticatedUserId } from '@/controllers/helpers.controller'
 import { HttpError } from '@/errors/http-error'
 import { toPublicAuthProviders } from '@/presenters/auth-provider.presenter'
-import { toPublicUser } from '@/presenters/user.presenter'
+import { toProfileResponse } from '@/presenters/user.presenter'
 import * as authService from '@/services/auth.service'
 import { completeGoogleSignIn } from '@/services/google-auth.service'
 import { logger } from '@/services/logger.service'
@@ -223,7 +223,10 @@ class AuthController extends BaseController {
     setRefreshTokenCookie(response, session.refreshToken.raw, session.refreshToken.expiresAt)
     successResponse(
       response,
-      { user: toPublicUser(session.user), accessToken: session.accessToken },
+      {
+        user: toProfileResponse(session.user, session.platformRole),
+        accessToken: session.accessToken,
+      },
       'Login successful.'
     )
   })

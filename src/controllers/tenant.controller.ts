@@ -19,8 +19,9 @@
 // only the early gate.
 import type { Request } from 'express'
 import { BaseController } from '@/controllers/base.controller'
-import { actorFrom, authenticatedUserId } from '@/controllers/helpers.controller'
+import { actorFrom, authenticatedUserId, tenantPrincipal } from '@/controllers/helpers.controller'
 import { HttpError } from '@/errors/http-error'
+import { toTenantDetail, toTenantListRow } from '@/presenters/tenant.presenter'
 import { invite, listPending, resend, revoke } from '@/services/tenant-invitation.service'
 import { changeRole, removeMember } from '@/services/tenant-membership.service'
 import {
@@ -32,7 +33,6 @@ import {
   updateSettings,
   updateTenant,
 } from '@/services/tenant.service'
-import type { RequestPrincipal } from '@/types/actor'
 import { messageResponse, successResponse } from '@/utilities/response.utilities'
 import { parseBody } from '@/validators/parse.validators'
 import {
@@ -45,22 +45,6 @@ import {
 } from '@/validators/tenant.validators'
 
 const INVITATION_SENT_MESSAGE = 'If that address can be invited, an invitation has been sent.'
-
-/**
- * The caller's tenant-scoped principal, guarding against a route reaching
- * this controller without `resolveTenant` ahead of it. Every `/tenants/
- * :slug/...` handler below (everything except `createTenant`/`listTenants`,
- * which have no `:slug` to resolve) calls this first.
- * @param request - The incoming request.
- * @returns The caller's principal for the tenant this route names.
- * @throws {HttpError} 404, when `request.principal` was never populated — the same fail-safe direction `requireRole` (tenant.middleware.ts) already takes on a missing principal, so a misconfigured route never behaves more permissively than a real non-member would.
- */
-function tenantPrincipal(request: Request): RequestPrincipal {
-  if (!request.principal) {
-    throw new HttpError('Tenant not found', 404)
-  }
-  return request.principal
-}
 
 /**
  * The `:userId` route param on a member-management route, narrowed to a
@@ -116,16 +100,22 @@ class TenantController extends BaseController {
    */
   listTenants = this.handle(async (request, response) => {
     const tenants = await listForUser(authenticatedUserId(request))
-    successResponse(response, tenants, 'Tenants retrieved.')
+    successResponse(
+      response,
+      tenants.map((entry) => toTenantListRow(entry)),
+      'Tenants retrieved.'
+    )
   })
 
   /**
-   * `GET /tenants/:slug`: one tenant's details. Anyone `resolveTenant`
+   * `GET /tenants/:slug`: one tenant's details, plus the caller's effective
+   * `role` and `access` as `resolveTenant` found them. Anyone `resolveTenant`
    * admits may call this; there is no further role check.
    */
   getTenant = this.handle(async (request, response) => {
-    const tenant = await getTenant(tenantPrincipal(request).tenantId)
-    successResponse(response, tenant, 'Tenant retrieved.')
+    const principal = tenantPrincipal(request)
+    const tenant = await getTenant(principal.tenantId)
+    successResponse(response, toTenantDetail(tenant, principal), 'Tenant retrieved.')
   })
 
   /**
