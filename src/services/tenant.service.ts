@@ -6,6 +6,7 @@
 // assumes `resolveTenant` has already admitted the caller to `tenantId`; the
 // two updates re-read that access under lock. Every write records its audit
 // entry in the same transaction.
+import { isDeepStrictEqual } from 'node:util'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { NewTenant, Tenant, TenantSettings } from '@/database/models/tenant.model'
 import { HttpError } from '@/errors/http-error'
@@ -73,13 +74,37 @@ function toSettingsUpdateValues(input: UpdateTenantSettingsInput): SettingsUpdat
 }
 
 /**
- * The names of the columns a write sets, sorted, for the audit entry. Never
- * the values.
- * @param values - The columns being written.
- * @returns Their names in a stable order.
+ * Whether a submitted value equals the stored one. `null` and `undefined`
+ * both mean "no value"; objects (the jsonb `metadata` column) compare by
+ * content, not identity.
+ * @param submitted - The value the PATCH body carries.
+ * @param stored - The value the row holds now.
+ * @returns True when writing `submitted` would leave the column as it is.
  */
-function changedFields(values: object): string[] {
-  return Object.keys(values).toSorted((a, b) => a.localeCompare(b))
+function isSameValue(submitted: unknown, stored: unknown): boolean {
+  return isDeepStrictEqual(submitted ?? undefined, stored ?? undefined)
+}
+
+/**
+ * The columns whose submitted value differs from the current row, for the
+ * write and its audit entry. The audit entry lists the names only, never the
+ * values.
+ * @param values - The columns the body supplied.
+ * @param current - The row as it is now.
+ * @returns The differing columns' values, and their names sorted.
+ */
+function changedFields<TValues extends object>(
+  values: TValues,
+  current: object
+): { changes: Partial<TValues>; changed: string[] } {
+  const changes: Partial<TValues> = {}
+  for (const key of Object.keys(values) as Array<keyof TValues & string>) {
+    if (!isSameValue(values[key], (current as Record<string, unknown>)[key])) {
+      changes[key] = values[key]
+    }
+  }
+  const changed = Object.keys(changes).toSorted((a, b) => a.localeCompare(b))
+  return { changes, changed }
 }
 
 /**
@@ -135,8 +160,10 @@ export async function getTenant(tenantId: string): Promise<Tenant> {
 /**
  * Update a tenant's name, description, logo or website, and audit it in the
  * same transaction. The actor's access is re-read under lock first, so a
- * demotion after `resolveTenant` still counts. A body with no recognised
- * field skips the write and the audit entry, and returns the current row.
+ * demotion after `resolveTenant` still counts; the tenant row is locked
+ * after it. Only the fields whose value differs from the row are written and
+ * audited. When none differs, the write and the audit entry are skipped,
+ * `updatedAt` stays as it was, and the current row is returned.
  * @param actor - The signed-in user making the change.
  * @param tenantId - The tenant.
  * @param input - The validated PATCH body.
@@ -149,15 +176,13 @@ export async function updateTenant(
   input: UpdateTenantInput
 ): Promise<Tenant> {
   const values = toTenantUpdateValues(input)
-  const changed = changedFields(values)
   return withTransaction(async (tx) => {
     const { access } = await lockActorRole(actor, tenantId, 'admin', tx)
-    if (changed.length === 0) {
-      const current = await tenantRepository.findById(tenantId, {}, tx)
-      if (!current) throw new HttpError('Tenant not found', 404)
-      return current
-    }
-    const tenant = await tenantRepository.update(tenantId, values, {}, tx)
+    const current = await tenantRepository.lockById(tenantId, tx)
+    if (!current) throw new HttpError('Tenant not found', 404)
+    const { changes, changed } = changedFields(values, current)
+    if (changed.length === 0) return current
+    const tenant = await tenantRepository.update(tenantId, changes, {}, tx)
     if (!tenant) throw new HttpError('Tenant not found', 404)
     await record(
       {
@@ -197,8 +222,10 @@ export async function getSettings(tenantId: string): Promise<TenantSettings> {
 
 /**
  * Update a tenant's settings, and audit it in the same transaction. The
- * actor's access is re-read under lock first. A body with no recognised
- * field skips the write and the audit entry, and returns the current row.
+ * actor's access is re-read under lock first; the settings row is locked
+ * after it. Only the fields whose value differs from the row are written and
+ * audited. When none differs, the write and the audit entry are skipped,
+ * `updatedAt` stays as it was, and the current row is returned.
  * @param actor - The signed-in user making the change.
  * @param tenantId - The tenant.
  * @param input - The validated PATCH body.
@@ -211,15 +238,13 @@ export async function updateSettings(
   input: UpdateTenantSettingsInput
 ): Promise<TenantSettings> {
   const values = toSettingsUpdateValues(input)
-  const changed = changedFields(values)
   return withTransaction(async (tx) => {
     const { access } = await lockActorRole(actor, tenantId, 'admin', tx)
-    if (changed.length === 0) {
-      const current = await tenantSettingsRepository.findByTenantId(tenantId, tx)
-      if (!current) throw new HttpError('Tenant settings not found', 404)
-      return current
-    }
-    const settings = await tenantSettingsRepository.update(tenantId, values, tx)
+    const current = await tenantSettingsRepository.lockByTenantId(tenantId, tx)
+    if (!current) throw new HttpError('Tenant settings not found', 404)
+    const { changes, changed } = changedFields(values, current)
+    if (changed.length === 0) return current
+    const settings = await tenantSettingsRepository.update(tenantId, changes, tx)
     if (!settings) throw new HttpError('Tenant settings not found', 404)
     // The settings row's key is the tenant id.
     await record(

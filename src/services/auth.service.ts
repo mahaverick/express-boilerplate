@@ -18,6 +18,7 @@ import type { MembershipRole } from '@/constants/tenant.constants'
 import type { AuthProviderRecord } from '@/database/models/auth-provider.model'
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
+import { redactedForLog } from '@/errors/postgres-errors'
 import { addEmailJob } from '@/jobs/email.job'
 import { addNotificationJob } from '@/jobs/notification.job'
 import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
@@ -174,7 +175,7 @@ export async function register(input: RegisterInput): Promise<() => Promise<void
       try {
         await sendVerificationMail(user)
       } catch (error) {
-        logger.error('Verification mail failed', { error })
+        logger.error('Verification mail failed', { error: redactedForLog(error) })
       }
     }
   }
@@ -183,7 +184,7 @@ export async function register(input: RegisterInput): Promise<() => Promise<void
     try {
       await sendRegistrationAttemptMail(input.email)
     } catch (error) {
-      logger.error('Registration-attempt mail failed', { error })
+      logger.error('Registration-attempt mail failed', { error: redactedForLog(error) })
     }
   }
 }
@@ -198,7 +199,10 @@ async function platformRoleForLogin(userId: string): Promise<MembershipRole | nu
   try {
     return await getPlatformMembership(userId)
   } catch (error) {
-    logger.warn('Platform role could not be read for the login response', { error, userId })
+    logger.warn('Platform role could not be read for the login response', {
+      error: redactedForLog(error),
+      userId,
+    })
     // eslint-disable-next-line unicorn/no-null -- the login user reports JSON null for "not staff"
     return null
   }
@@ -297,7 +301,7 @@ export async function requestPasswordReset(email: string): Promise<void> {
   try {
     await sendPasswordResetMailIfRegistered(email)
   } catch (error) {
-    logger.error('Forgot-password mail failed', { error })
+    logger.error('Forgot-password mail failed', { error: redactedForLog(error) })
   }
 }
 

@@ -10,6 +10,7 @@ import type { MembershipRole } from '@/constants/tenant.constants'
 import type { UserMembership } from '@/database/models/user-membership.model'
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
+import { redactedForLog } from '@/errors/postgres-errors'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
@@ -145,7 +146,7 @@ export async function autoJoinSafely(
   try {
     await (executor instanceof PgTransaction ? executor.transaction(join) : db.transaction(join))
   } catch (error) {
-    logger.warn('Platform auto-join failed', { error, userId: user.id })
+    logger.warn('Platform auto-join failed', { error: redactedForLog(error), userId: user.id })
   }
 }
 

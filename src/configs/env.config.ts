@@ -14,6 +14,7 @@
 import { config } from 'dotenv'
 import { z } from 'zod'
 import { parseDurationMs } from '@/utilities/duration.utilities'
+import { EMAIL_DOMAIN_PATTERN } from '@/utilities/email.utilities'
 
 // Populate process.env from .env before anything below ever reads it.
 // `pnpm dev` and `pnpm start` already load it with Node's --env-file-if-exists
@@ -50,22 +51,17 @@ const AppEnvSchema = z.enum(['local', 'dev', 'qa', 'prod'])
  */
 export type AppEnv = z.infer<typeof AppEnvSchema>
 
-const DOMAIN_LABEL = /^[a-z0-9-]+$/
 const TOP_LEVEL_LABEL = /^[a-z]{2,}$/
 
 /**
- * Whether `value` is a lowercase domain: two or more dot-separated labels
- * of letters, digits and hyphens, the last of two or more letters.
+ * Whether `value` is a lowercase domain: a dotted hostname by
+ * `EMAIL_DOMAIN_PATTERN`, the shape the audit log stores for an auto-join,
+ * whose last label is two or more letters.
  * @param value - One trimmed entry of PLATFORM_EMAIL_DOMAINS.
  * @returns True for a domain such as `example.com`.
  */
 function isLowercaseDomain(value: string): boolean {
-  const labels = value.split('.')
-  return (
-    labels.length >= 2 &&
-    TOP_LEVEL_LABEL.test(labels.at(-1) ?? '') &&
-    labels.every((label) => DOMAIN_LABEL.test(label))
-  )
+  return EMAIL_DOMAIN_PATTERN.test(value) && TOP_LEVEL_LABEL.test(value.split('.').at(-1) ?? '')
 }
 
 const EnvSchema = z.object({

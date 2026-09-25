@@ -36,6 +36,7 @@ import { type NextFunction, type Request, type Response } from 'express'
 import { type MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import { HttpError } from '@/errors/http-error'
+import { redactedForLog } from '@/errors/postgres-errors'
 import { isRoleAtLeast } from '@/policies/tenant.policy'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
@@ -80,7 +81,7 @@ async function recordStaffVisit(
   try {
     await recordPlatformAccess({ userId }, tenantId, platformRole)
   } catch (error) {
-    logger.warn('Platform access audit failed', { error, tenantId })
+    logger.warn('Platform access audit failed', { error: redactedForLog(error), tenantId })
   }
 }
 

@@ -15,6 +15,7 @@ import {
 import { BaseController } from '@/controllers/base.controller'
 import { authenticatedUserId } from '@/controllers/helpers.controller'
 import { HttpError } from '@/errors/http-error'
+import { redactedForLog } from '@/errors/postgres-errors'
 import { toPublicAuthProviders } from '@/presenters/auth-provider.presenter'
 import { toProfileResponse } from '@/presenters/user.presenter'
 import * as authService from '@/services/auth.service'
@@ -376,7 +377,7 @@ class AuthController extends BaseController {
 
             response.redirect(`${env.WEB_URL}/auth/callback`)
           } catch (innerError) {
-            logger.error('Google OAuth callback failed', { error: innerError })
+            logger.error('Google OAuth callback failed', { error: redactedForLog(innerError) })
             const code =
               innerError instanceof HttpError && innerError.code
                 ? innerError.code

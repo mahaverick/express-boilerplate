@@ -120,11 +120,12 @@ function stackFramesOf(error: QueryErrorShape): string | undefined {
  * `detail` field does so routinely (`Key (lower(email))=(...) already
  * exists.`). The code says the same thing without the value.
  *
- * The redaction every failed-query log goes through: `errorHandler`
- * (error.middleware.ts), `mailer.service.ts`'s `recordDelivery` (a failed
+ * Its callers are `errorHandler` (error.middleware.ts), the process-level
+ * handlers in `index.ts`, the notification worker, and the services and
+ * middleware that log a failed query instead of throwing it, such as
+ * `mailer.service.ts`'s `recordDelivery` (a failed
  * `EmailLogRepository.record()` write, whose bound parameters include a
- * recipient email address), the notification worker, and the process-level
- * handlers in `index.ts`.
+ * recipient email address).
  * @param error - The thrown or forwarded error.
  * @returns The error itself when it is not a query error; a redacted, parameter-free record when it is.
  */

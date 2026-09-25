@@ -361,8 +361,11 @@ until you check.
   write survives a rollback, and `audit-writes.test.ts` catches it. Each
   action's metadata schema is a strict object schema (`z.strictObject`), so
   a new key fails the write until the schema lists it. Never put an
-  address or a token in metadata:
-  use `emailDomain(...)` (`utilities/email.utilities.ts`).
+  address or a token in metadata. For an address, record
+  `hostnameDomain(email) ?? null` (`utilities/email.utilities.ts`), as the
+  invitation service's `auditEmailDomain` does: the schemas accept only a
+  lowercase dotted hostname (or null, on the invitation actions), and
+  `emailDomain` can return a value they reject.
 - **`audit_logs` is append-only, and that bites test cleanup.** A trigger
   refuses UPDATE and DELETE, and its foreign keys to `users` and `tenants`
   are RESTRICT. So an `afterEach` that deletes a tenant or user that has

@@ -179,11 +179,15 @@ set:
 3. only when the actor has no membership in the tenant, the actor's
    platform-tenant membership, `FOR SHARE` (`lockTenantAccess`,
    `tenant-access.service.ts`, via `lockPlatformRole`,
-   `user-membership.repository.ts`).
+   `user-membership.repository.ts`);
+4. the row a tenant or settings update writes (`lockById`,
+   `tenant.repository.ts`; `lockByTenantId`,
+   `tenant-settings.repository.ts`).
 
 It's written into the JSDoc of `lockOwners`, `lockMemberships` and
-`lockPlatformRole` (`user-membership.repository.ts`) and of
-`lockTenantAccess` (`tenant-access.service.ts`), and enforced only by
+`lockPlatformRole` (`user-membership.repository.ts`), of
+`lockTenantAccess` (`tenant-access.service.ts`), and of `lockById` and
+`lockByTenantId`, and enforced only by
 convention plus a deadlock regression test
 (`tests/integration/services/tenant-membership.service.test.ts`), since
 Postgres itself has no way to enforce an application-level lock order.

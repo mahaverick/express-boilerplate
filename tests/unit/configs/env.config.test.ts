@@ -540,6 +540,9 @@ describe('PLATFORM_EMAIL_DOMAINS', () => {
     '.example.com',
     'https://example.com',
     'example.c0m',
+    'foo-.com',
+    '-foo.com',
+    `${'a'.repeat(64)}.com`,
   ])('refuses %s', (value) => {
     expect(() => parseEnv({ ...valid, PLATFORM_EMAIL_DOMAINS: value })).toThrow(
       /PLATFORM_EMAIL_DOMAINS/

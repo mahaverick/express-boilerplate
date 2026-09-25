@@ -31,8 +31,8 @@ the seed, and the append-only function and trigger — each marked
   it raises its own exception naming the slug, rather than letting the seed
   fail on `tenants_slug_unique`. Rename that tenant before upgrading.
 - Seeds the platform tenant (name `Platform`, slug `platform`) and its
-  settings row, by hand. It has no members until you run the bootstrap
-  script below.
+  settings row, by hand. It starts with no members; run the bootstrap
+  script below to make its first owner.
 - Creates `audit_logs`. It's append-only (a trigger refuses UPDATE and
   DELETE for every role), and its foreign keys to `users` and `tenants` are
   `ON DELETE RESTRICT`. After this, a hard `DELETE` of a user or tenant with

@@ -36,7 +36,7 @@ export function actorFrom(request: Request): Actor {
  * controller without `resolveTenant` ahead of it.
  * @param request - The incoming request.
  * @returns The caller's principal for the tenant the route names.
- * @throws {HttpError} 404, when `request.principal` was never populated, which is the answer a non-member gets.
+ * @throws {HttpError} 404, when `request.principal` was never populated, which is the answer a caller with no access gets.
  */
 export function tenantPrincipal(request: Request): RequestPrincipal {
   if (!request.principal) {

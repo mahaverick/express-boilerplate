@@ -6,14 +6,14 @@
 // own header comment for why), and nothing to translate a 23505 into
 // (`tenant_id` is this table's own primary key, so there is no separate
 // unique constraint a write here could violate). A plain class with
-// exactly the two operations a settings row needs.
+// exactly the operations a settings row needs.
 import { eq, sql } from 'drizzle-orm'
 import {
   tenantSettingsModel,
   type NewTenantSettings,
   type TenantSettings,
 } from '@/database/models/tenant.model'
-import { db, type DbExecutor } from '@/services/database.service'
+import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
 
 /**
  * The columns `TenantSettingsRepository.update` may change. Excludes
@@ -45,6 +45,26 @@ export class TenantSettingsRepository {
       .select()
       .from(tenantSettingsModel)
       .where(eq(tenantSettingsModel.tenantId, tenantId))
+    return row
+  }
+
+  /**
+   * Find the settings row for one tenant and lock it (`SELECT … FOR
+   * UPDATE`) for the rest of the transaction. Lock order: after the access
+   * locks `lockTenantAccess` takes (tenant-access.service.ts).
+   * @param tenantId - The tenant whose settings to lock.
+   * @param executor - The transaction to hold the lock in. Required: on the pool, the lock would release as soon as the statement finished.
+   * @returns The locked row, or undefined when no such tenant exists.
+   */
+  async lockByTenantId(
+    tenantId: string,
+    executor: DbTransaction
+  ): Promise<TenantSettings | undefined> {
+    const [row] = await executor
+      .select()
+      .from(tenantSettingsModel)
+      .where(eq(tenantSettingsModel.tenantId, tenantId))
+      .for('update')
     return row
   }
 

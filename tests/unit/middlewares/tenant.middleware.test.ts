@@ -32,6 +32,7 @@ import * as auditService from '@/services/audit.service'
 import { logger } from '@/services/logger.service'
 import { requestContextStore } from '@/services/request-context.service'
 import type { RequestPrincipal } from '@/types/actor'
+import { fakeQueryError, LEAKED_PARAM, loggedText } from '../../helpers/query-error'
 
 /**
  * A fixed tenant row — only `id`/`slug` are read by `resolveTenant`, but the
@@ -429,6 +430,25 @@ describe('resolveTenant', () => {
       'Platform access audit failed',
       expect.objectContaining({ tenantId: 'tenant-1' })
     )
+  })
+
+  it('logs a failed audit query without its bound parameters', async () => {
+    findActiveBySlugSpy.mockResolvedValue(mockTenant)
+    findByUserAndTenantSpy.mockResolvedValue(undefined)
+    findPlatformRoleSpy.mockResolvedValue('viewer')
+    recordPlatformAccessSpy.mockRejectedValue(fakeQueryError())
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+
+    const { next } = mockNext()
+
+    await resolveTenant()(buildRequest({ slug: 'acme', user: mockUser }), noResponse, next)
+
+    expect(warn).toHaveBeenCalledWith(
+      'Platform access audit failed',
+      expect.objectContaining({ tenantId: 'tenant-1' })
+    )
+    expect(loggedText(warn)).toContain('paramCount: 1')
+    expect(loggedText(warn)).not.toContain(LEAKED_PARAM)
   })
 })
 

@@ -122,6 +122,36 @@ async function rowsFor(tenantId: string, action: string): Promise<AuditRow[]> {
     from audit_logs where tenant_id = ${tenantId} and action = ${action}`
 }
 
+// The update tests backdate `updated_at` an hour first, so "left alone" is
+// visible at any clock resolution. The raw client returns it as text.
+async function backdateTenant(tenantId: string): Promise<string> {
+  const [row] = await sql<{ updated_at: string }[]>`
+    update tenants set updated_at = now() - interval '1 hour'
+    where id = ${tenantId} returning updated_at`
+  if (!row) throw new Error('tenant row missing')
+  return row.updated_at
+}
+
+async function tenantUpdatedAt(tenantId: string): Promise<string | undefined> {
+  const [row] = await sql<{ updated_at: string }[]>`
+    select updated_at from tenants where id = ${tenantId}`
+  return row?.updated_at
+}
+
+async function backdateSettings(tenantId: string): Promise<string> {
+  const [row] = await sql<{ updated_at: string }[]>`
+    update tenant_settings set updated_at = now() - interval '1 hour'
+    where tenant_id = ${tenantId} returning updated_at`
+  if (!row) throw new Error('settings row missing')
+  return row.updated_at
+}
+
+async function settingsUpdatedAt(tenantId: string): Promise<string | undefined> {
+  const [row] = await sql<{ updated_at: string }[]>`
+    select updated_at from tenant_settings where tenant_id = ${tenantId}`
+  return row?.updated_at
+}
+
 // The real insert runs, then the transaction fails: a row written through
 // `tx` rolls back with the change; one written on the pool would survive.
 async function expectRollback(run: () => Promise<unknown>): Promise<void> {
@@ -199,6 +229,40 @@ describe('tenant.updated', () => {
     expect(await rowsFor(tenant.id, 'tenant.updated')).toHaveLength(0)
   })
 
+  it('writes nothing and leaves updatedAt alone when every value matches the row', async () => {
+    const { owner, tenant } = await seedTenant()
+    const before = await backdateTenant(tenant.id)
+
+    const result = await updateTenant({ userId: owner.id }, tenant.id, {
+      name: 'Audit Co',
+      // eslint-disable-next-line unicorn/no-null -- null is the stored value, submitted to prove it counts as unchanged
+      description: null,
+      // eslint-disable-next-line unicorn/no-null -- null is the stored value, submitted to prove it counts as unchanged
+      logo: null,
+      // eslint-disable-next-line unicorn/no-null -- null is the stored value, submitted to prove it counts as unchanged
+      website: null,
+    })
+
+    expect(await rowsFor(tenant.id, 'tenant.updated')).toHaveLength(0)
+    expect(await tenantUpdatedAt(tenant.id)).toEqual(before)
+    expect(result.updatedAt.getTime()).toBe(new Date(before).getTime())
+  })
+
+  it('records only the fields whose value differs from the row', async () => {
+    const { owner, tenant } = await seedTenant()
+
+    await updateTenant({ userId: owner.id }, tenant.id, {
+      name: 'Audit Co',
+      // eslint-disable-next-line unicorn/no-null -- null is the stored value, submitted to prove it counts as unchanged
+      description: null,
+      website: 'https://acme.example',
+    })
+
+    const rows = await rowsFor(tenant.id, 'tenant.updated')
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.metadata).toEqual({ changed: ['website'] })
+  })
+
   it('records platform access for a staff admin who is not a member', async () => {
     const { tenant } = await seedTenant()
     const staff = await seedUser()
@@ -241,6 +305,39 @@ describe('tenant.settings_updated', () => {
       target_id: tenant.id,
       metadata: { changed: ['locale', 'timezone'] },
     })
+  })
+
+  it('writes nothing and leaves updatedAt alone when every value matches the row', async () => {
+    const { owner, tenant } = await seedTenant()
+    await sql`
+      update tenant_settings set metadata = ${JSON.stringify({ theme: { accent: 'blue' }, beta: true })}::jsonb
+      where tenant_id = ${tenant.id}`
+    const before = await backdateSettings(tenant.id)
+
+    const result = await updateSettings({ userId: owner.id }, tenant.id, {
+      timezone: 'UTC',
+      locale: 'en',
+      metadata: { beta: true, theme: { accent: 'blue' } },
+    })
+
+    expect(await rowsFor(tenant.id, 'tenant.settings_updated')).toHaveLength(0)
+    expect(await settingsUpdatedAt(tenant.id)).toEqual(before)
+    expect(result.updatedAt.getTime()).toBe(new Date(before).getTime())
+  })
+
+  it('records only the fields whose value differs from the row', async () => {
+    const { owner, tenant } = await seedTenant()
+
+    await updateSettings({ userId: owner.id }, tenant.id, {
+      timezone: 'UTC',
+      locale: 'fr',
+      // eslint-disable-next-line unicorn/no-null -- null is the stored value, submitted to prove it counts as unchanged
+      metadata: null,
+    })
+
+    const rows = await rowsFor(tenant.id, 'tenant.settings_updated')
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.metadata).toEqual({ changed: ['locale'] })
   })
 
   it('leaves the old settings and no row when the transaction rolls back', async () => {

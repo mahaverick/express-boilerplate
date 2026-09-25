@@ -52,7 +52,7 @@ export interface AuditLogListOptions {
 /**
  * A page of rows and, when more remain, the cursor for the next one.
  */
-export interface AuditLogPage {
+export interface AuditLogRepositoryPage {
   rows: AuditLogListRow[]
   nextCursor?: AuditLogCursor
 }
@@ -94,7 +94,7 @@ function conditionsFor(options: AuditLogListOptions): SQL[] {
  * @param limit - The page size.
  * @returns The page.
  */
-function toPage(rows: AuditLogListRow[], limit: number): AuditLogPage {
+function toPage(rows: AuditLogListRow[], limit: number): AuditLogRepositoryPage {
   const hasMore = rows.length > limit
   if (hasMore) rows.pop()
   const last = rows.at(-1)
@@ -128,7 +128,10 @@ export class AuditLogRepository {
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns The page, with `nextCursor` only when more rows remain.
    */
-  async list(options: AuditLogListOptions, executor: DbExecutor = db): Promise<AuditLogPage> {
+  async list(
+    options: AuditLogListOptions,
+    executor: DbExecutor = db
+  ): Promise<AuditLogRepositoryPage> {
     const rows = await executor
       .select({
         entry: auditLogModel,
