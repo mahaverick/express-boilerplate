@@ -13,6 +13,9 @@
 # would pass against a developer's personal instance without ever touching
 # this stack. Container-internal ports stay 5432/6379 — a URL like
 # postgres://…@postgres:5432/… (container-to-container) is unaffected.
+#
+# No app service: the app runs on the host with APP_ENV=local (.env.example),
+# which is what lets it use Mailpit and the defaults below.
 services:
   postgres:
     image: postgres:18
@@ -39,6 +42,8 @@ services:
       timeout: 5s
       retries: 10
 
+  # Shared by `pnpm dev` and the test suite. Each writes under its own
+  # REDIS_KEY_PREFIX (express-boilerplate by default, test-w<N> per test worker).
   redis:
     image: redis:7.2-alpine
     ports: ['6380:6379']
@@ -107,6 +112,8 @@ services:
     # host's gateway address, which has no PTR record and times out after ~8
     # seconds — long enough for any fire-and-forget test to fail before the
     # mail arrives. Disabling it brings the SMTP greeting down to < 50ms.
+    # The app's SMTP defaults (localhost:1025, no auth) point here; boot
+    # refuses that host and port whenever APP_ENV is not local.
     command: ['--smtp-disable-rdns']
     ports: ['1025:1025', '8025:8025']
     # `readyz` is the image's own subcommand for exactly this — verified

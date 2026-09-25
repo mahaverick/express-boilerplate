@@ -87,20 +87,37 @@ Conventional Commits (`type(scope): subject`), enforced by
   rule. A blanket disable in a boilerplate propagates into every project
   derived from it.
 
-## Adding a required environment variable
+## Adding, renaming or removing an environment variable
 
-Four things have to move together, or a gate below will catch the one you
-missed:
+These move together, or a gate below will catch the one you missed:
 
-1. Add the field to `EnvSchema` in `src/configs/env.config.ts`.
-2. Regenerate `.env.example`: `pnpm env:example` (the pre-commit hook does
-   this for you automatically when `env.config.ts` is staged — CI fails the
-   build if the committed file doesn't match what the schema generates).
-3. Add it to `.env.test`.
-4. Add it to the `env:` block in `.github/workflows/ci.yml` — CI asserts
-   every key in `.env.test` has a matching `KEY:` line there, anchored
-   (not a bare substring match), so an entry that only appears in a
-   comment doesn't satisfy it.
+1. Add the field to `EnvSchema` in `src/configs/env.config.ts`, with a
+   `.describe()`. That text becomes the variable's `.env.example` comment and
+   its README row. When its default depends on `APP_ENV`, make the field
+   optional and add a derivation helper beside `isCookieSecure`/`logFormat` in
+   the same file; never repeat the rule at a call site.
+2. Regenerate `.env.example` with `pnpm env:example`. The pre-commit hook does
+   this when `env.config.ts` is staged, and CI fails if the committed file
+   differs from what the schema generates.
+3. Regenerate README's environment table from the schema, never by hand.
+   `pnpm --silent env:table` prints it (`renderEnvTable()` in
+   `src/scripts/generate-env-example.ts`). Paste its output over the table
+   in README.md, then run `pnpm exec prettier --write README.md`.
+   `tests/unit/readme-env-table.test.ts` compares the committed table with
+   that output row for row, ignoring column padding, and fails on any
+   difference.
+
+4. If the tests need a value, add it to `.env.test`.
+5. Mirror `.env.test` in `ci.yml`, in the `env:` block of the step named
+   `Test with coverage gate`. CI compares keys and values in both
+   directions: every `.env.test` line must appear there with the same
+   value, and every entry there must be in `.env.test`. The only difference allowed is the port in
+   `DATABASE_URL` and `REDIS_URL`, because CI's services publish the
+   container-default ports.
+6. Renaming or removing a variable: add the old name to `REMOVED_ENV_NAMES`
+   (`src/configs/env-consistency.config.ts`), so that setting it refuses boot
+   with a message naming the new one. Add a row to the release's upgrade notes
+   in MIGRATIONS.md.
 
 ## What CI checks, beyond `pnpm lint`/`test:coverage`/`build`
 
@@ -113,7 +130,8 @@ missed:
   advisories in production dependencies.
 - `.env.example` matches what `pnpm env:example` generates from the current
   schema (see step 2 above).
-- The CI `env:` block mirrors `.env.test` key-for-key (see step 4 above).
+- The test step's `env:` block and `.env.test` mirror each other in both
+  directions, keys and values (see step 5 above).
 - A domain-leak grep over **every tracked file** (`git ls-files`, minus
   `.github/domain-terms.txt` itself) for the terms listed in
   [`.github/domain-terms.txt`](.github/domain-terms.txt). This _mechanism_ —

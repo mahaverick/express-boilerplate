@@ -14,6 +14,7 @@ import { Queue, type Job, type JobsOptions } from 'bullmq'
 import IORedis, { type RedisOptions } from 'ioredis'
 import { getEnv } from '@/configs/env.config'
 import { logger } from '@/services/logger.service'
+import { redisKey } from '@/services/redis.service'
 
 // One ioredis connection and whether it has ever reached 'ready'.
 interface QueueRedis {
@@ -191,7 +192,7 @@ export function getEmailQueue(): Queue {
   if (!state.emailQueue) {
     state.emailQueue = new Queue('email', {
       connection: getProducerConnection(),
-      prefix: getEnv().QUEUE_PREFIX,
+      prefix: redisKey('bull'),
     })
     state.emailQueue.on('error', (error: unknown) => {
       logger.error('Email queue error', { error })
@@ -210,7 +211,7 @@ export function getNotificationQueue(): Queue {
   if (!state.notificationQueue) {
     state.notificationQueue = new Queue('notification', {
       connection: getProducerConnection(),
-      prefix: getEnv().QUEUE_PREFIX,
+      prefix: redisKey('bull'),
     })
     state.notificationQueue.on('error', (error: unknown) => {
       logger.error('Notification queue error', { error })

@@ -11,7 +11,7 @@ import { createRequire } from 'node:module'
 import { trace } from '@opentelemetry/api'
 import pino, { type DestinationStream, type Logger, type StreamEntry } from 'pino'
 import type { PrettyOptions } from 'pino-pretty'
-import { getEnv } from '@/configs/env.config'
+import { getEnv, logFormat, type Env } from '@/configs/env.config'
 import { requestContextStore } from '@/middlewares/request-context.middleware'
 
 /**
@@ -131,7 +131,10 @@ function serializeErrors(object: Record<string, unknown>): Record<string, unknow
  */
 export interface LoggerOptions {
   level: string
-  isProduction: boolean
+  /**
+   * `json` writes pino JSON lines; `pretty` writes pino-pretty text.
+   */
+  format: 'json' | 'pretty'
   slackWebhookUrl?: string
   slackLogLevel?: string
   /**
@@ -309,13 +312,11 @@ export const pinoPrettyLoader = {
 }
 
 /**
- * Human-readable development output. pino-pretty is a devDependency, only
- * reached when isProduction is false — but the production image is built
- * with NODE_ENV baked into its start command, not into the image itself, so
- * a pruned image can still be launched with NODE_ENV=development/test (e.g.
- * a one-off debug run). Dev deps are pruned from that image, so the require
- * below throws MODULE_NOT_FOUND in that case; fall back to the raw JSON
- * destination instead of crashing the first log call.
+ * Human-readable output, used when the format is `pretty`. pino-pretty is a
+ * devDependency and is pruned from the production image, so an image run
+ * with LOG_FORMAT=pretty (or APP_ENV=local) throws MODULE_NOT_FOUND below;
+ * fall back to the raw JSON destination instead of crashing the first log
+ * call.
  * @param destination - Where the pretty text goes.
  * @returns A pino destination.
  */
@@ -365,15 +366,15 @@ function toPinoLevel(level: string): pino.Level {
 }
 
 /**
- * Build a pino logger. Production writes JSON; development writes
- * pino-pretty text. With a Slack webhook, records at or above
- * slackLogLevel are also sent to Slack via pino.multistream.
+ * Build a pino logger that writes JSON or pino-pretty text, per `format`.
+ * With a Slack webhook, records at or above slackLogLevel are also sent to
+ * Slack via pino.multistream.
  * @param options - Level, format, Slack settings, optional destination.
  * @returns The pino logger.
  */
 export function createPinoLogger(options: LoggerOptions): Logger {
   const base = options.destination ?? process.stdout
-  const consoleStream = options.isProduction ? base : createPrettyStream(base)
+  const consoleStream = options.format === 'json' ? base : createPrettyStream(base)
 
   const streams: StreamEntry[] = [
     // level MUST be explicit: a multistream entry defaults to 'info', which
@@ -425,21 +426,28 @@ export function createPinoLogger(options: LoggerOptions): Logger {
   )
 }
 
+/**
+ * Map the validated environment to the process logger's options.
+ * @param env - The logging slice of the validated environment.
+ * @returns Options for `createPinoLogger`.
+ */
+export function loggerOptionsFromEnv(
+  env: Pick<Env, 'LOG_LEVEL' | 'LOG_FORMAT' | 'APP_ENV' | 'SLACK_WEBHOOK_URL' | 'SLACK_LOG_LEVEL'>
+): LoggerOptions {
+  return {
+    level: env.LOG_LEVEL,
+    format: logFormat(env),
+    // Spread: exactOptionalPropertyTypes rejects an explicit undefined. Same
+    // pattern mailer.config.ts uses for the SMTP credentials.
+    ...(env.SLACK_WEBHOOK_URL !== undefined && { slackWebhookUrl: env.SLACK_WEBHOOK_URL }),
+    slackLogLevel: env.SLACK_LOG_LEVEL,
+  }
+}
+
 const getLogger: () => Logger = (() => {
   let cached: Logger | undefined
   return (): Logger => {
-    const env = getEnv()
-    cached ??= createPinoLogger({
-      level: env.LOG_LEVEL,
-      isProduction: env.NODE_ENV === 'production',
-      // Spread rather than `slackWebhookUrl: env.SLACK_WEBHOOK_URL` directly:
-      // tsconfig's `exactOptionalPropertyTypes` treats an optional property
-      // as "string or absent", not "string or undefined", so explicitly
-      // assigning `undefined` to it is a type error. Same pattern
-      // mailer.config.ts uses for SMTP_USER/SMTP_PASS.
-      ...(env.SLACK_WEBHOOK_URL !== undefined && { slackWebhookUrl: env.SLACK_WEBHOOK_URL }),
-      slackLogLevel: env.SLACK_LOG_LEVEL,
-    })
+    cached ??= createPinoLogger(loggerOptionsFromEnv(getEnv()))
     return cached
   }
 })()

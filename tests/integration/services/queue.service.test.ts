@@ -7,8 +7,8 @@
 // reconnect lazily, so the "closed" assertions must run last, after every
 // test that still needs a working connection).
 //
-// Runs under this worker's own QUEUE_PREFIX (tests/helpers/setup-global.ts
-// sets `bull:test-w${VITEST_POOL_ID}`), so jobs this file adds never
+// Runs under this worker's own REDIS_KEY_PREFIX (tests/helpers/setup-global.ts
+// sets `test-w${VITEST_POOL_ID}`), so jobs this file adds never
 // collide with another vitest worker's keyspace.
 import { afterAll, describe, expect, it } from 'vitest'
 import {

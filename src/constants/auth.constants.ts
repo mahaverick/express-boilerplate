@@ -128,17 +128,9 @@ export const REFRESH_TOKEN_COOKIE_PATH = '/api/v1/auth'
  * The strategy name every `passport.use`/`passport.authenticate` call in
  * this codebase refers to for Google Sign-In.
  *
- * Lives here, not in passport.config.ts where it originated, specifically
- * so `auth.controller.ts` can import it too: `handleGoogleCallback`
- * (auth.controller.ts) needs the exact same name `configurePassport()`
- * (passport.config.ts) registered the strategy under, and importing it
- * FROM passport.config.ts would create a real cycle —
- * passport.config.ts already imports `isSecureCookieEnvironment` FROM
- * auth.controller.ts (for its session cookie's `secure` flag), and
- * `import-x/no-cycle` correctly flags the two-file cycle that would result.
- * A shared constants module both can depend on, with neither depending on
- * the other, is what this file exists for generally (see its own header
- * comment) and what resolves this specific case.
+ * Lives here so `handleGoogleCallback` (auth.controller.ts) and
+ * `configurePassport()` (passport.config.ts) share one name without either
+ * module importing the other.
  */
 export const GOOGLE_STRATEGY_NAME = 'google'
 

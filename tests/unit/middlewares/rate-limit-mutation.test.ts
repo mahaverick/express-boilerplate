@@ -40,7 +40,8 @@ import type { createLoginRateLimiter as CreateLoginRateLimiter } from '@/middlew
 import { withMutatedModule } from '../../helpers/mutate'
 import { request } from '../../helpers/request'
 
-vi.mock('@/services/redis.service', () => ({
+vi.mock('@/services/redis.service', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/services/redis.service')>()),
   getRedis: vi.fn(() => Promise.reject(new Error('no redis in unit tests'))),
 }))
 

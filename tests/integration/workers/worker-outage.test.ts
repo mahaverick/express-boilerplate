@@ -3,7 +3,7 @@
 // BullMQ Workers through a Redis outage, over the TCP proxy in
 // tests/helpers/redis-proxy.ts. Its own file because it mocks getEnv()'s
 // REDIS_URL, and because its first test needs a Worker connection that has
-// never been ready. Runs under its own QUEUE_PREFIX, so no other Worker can
+// never been ready. Runs under its own REDIS_KEY_PREFIX, so no other Worker can
 // pick up its jobs.
 import { randomUUID } from 'node:crypto'
 import { Queue, Worker } from 'bullmq'
@@ -20,10 +20,14 @@ const target = vi.hoisted(() => ({ realUrl: '', proxyUrl: '', prefix: '' }))
 vi.mock('@/configs/env.config', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/configs/env.config')>()
   target.realUrl = actual.getEnv().REDIS_URL
-  target.prefix = `${actual.getEnv().QUEUE_PREFIX}:outage-${randomUUID()}`
+  target.prefix = `${actual.getEnv().REDIS_KEY_PREFIX}:outage-${randomUUID()}`
   return {
     ...actual,
-    getEnv: () => ({ ...actual.getEnv(), REDIS_URL: target.proxyUrl, QUEUE_PREFIX: target.prefix }),
+    getEnv: () => ({
+      ...actual.getEnv(),
+      REDIS_URL: target.proxyUrl,
+      REDIS_KEY_PREFIX: target.prefix,
+    }),
   }
 })
 
@@ -112,7 +116,7 @@ describe('Queue Workers through a Redis outage', () => {
     for (const name of ['email', 'notification']) {
       const cleanup = new Queue(name, {
         connection: { url: target.realUrl },
-        prefix: target.prefix,
+        prefix: `${target.prefix}:bull`,
       })
       await cleanup.obliterate({ force: true })
       await cleanup.close()

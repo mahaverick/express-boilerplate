@@ -14,6 +14,34 @@ import { z } from 'zod'
 import { EnvSchemaShape } from '@/configs/env.config'
 
 /**
+ * A default or example as it is written after `KEY=`.
+ * @param value - A parsed default or a `.meta({ example })` value.
+ * @returns The text form, or `undefined` for anything that is not a scalar.
+ */
+function asEnvText(value: unknown): string | undefined {
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  return undefined
+}
+
+/**
+ * The value one field is written with in `.env.example`, if it has one.
+ *
+ * The default comes from parsing `undefined`, not from the JSON schema: with
+ * `io: 'input'`, a `z.stringbool().default(true)` carries no `default` there,
+ * because its input is a string and its default a boolean.
+ * @param schema - One field of the environment schema.
+ * @param example - The field's `.meta({ example })` value, if any.
+ * @returns The value to write, or `undefined` when the field has none.
+ */
+function exampleValue(schema: z.ZodType, example: unknown): string | undefined {
+  const parsed = schema.safeParse(undefined)
+  if (parsed.success && parsed.data !== undefined) return asEnvText(parsed.data)
+  // A required field with no default: write its example, if it has one.
+  return asEnvText(example)
+}
+
+/**
  * Render `.env.example` file content from the environment schema's field map.
  * @param shape - The schema's field map (`EnvSchema.shape`), keyed by environment variable name.
  * @returns The full `.env.example` file content, including the generated-file header.
@@ -23,27 +51,54 @@ export function render(shape: Record<string, z.ZodType>): string {
 
   for (const [key, schema] of Object.entries(shape)) {
     const json = z.toJSONSchema(schema, { target: 'openapi-3.0', io: 'input' })
-    const hasDefault = typeof json === 'object' && 'default' in json
-    const description = typeof json === 'object' && 'description' in json ? json.description : ''
-    const fallback = hasDefault ? String(json.default) : ''
-    // A field with no default that still accepts undefined is genuinely
-    // optional (e.g. OTEL_EXPORTER_OTLP_ENDPOINT). Emit it commented out:
-    // an uncommented `KEY=` looks identical to a required field left blank,
-    // and a reader cannot tell "no value needed" from "fill this in".
-    // Fields with a default are never commented — their fallback is already
-    // a usable value, not a placeholder.
-    // `schema.isOptional()` is deprecated in zod 4 in favour of this exact
-    // safe-parse check (see the schema's own deprecation notice).
-    const isOptional = !hasDefault && schema.safeParse(undefined).success
+    const description = typeof json.description === 'string' ? json.description : ''
+    const value = exampleValue(schema, json.example)
+    // A field with no value that still accepts undefined is genuinely
+    // optional (e.g. OTEL_EXPORTER_OTLP_ENDPOINT, or COOKIE_SECURE, whose
+    // default is derived from APP_ENV in code). Emit it commented out: an
+    // uncommented `KEY=` looks identical to a required field left blank.
+    const isOptional = value === undefined && schema.safeParse(undefined).success
     if (description) lines.push(`# ${description}`)
-    lines.push(`${isOptional ? '# ' : ''}${key}=${fallback}`, '')
+    lines.push(`${isOptional ? '# ' : ''}${key}=${value ?? ''}`, '')
   }
 
   return lines.join('\n')
 }
 
-// Only write the file when this module is run directly (`pnpm env:example`),
-// not when `render`/`EnvSchemaShape` are imported by a test.
+/**
+ * Render README's environment table from the environment schema's field map.
+ *
+ * One row per field, in schema order: whether it is required, its default,
+ * and its `.describe()` text with `|` escaped. The output is unpadded;
+ * prettier pads the columns once it is pasted into README.md.
+ * @param shape - The schema's field map (`EnvSchema.shape`), keyed by environment variable name.
+ * @returns The Markdown table, header row first, with no trailing newline.
+ */
+export function renderEnvTable(shape: Record<string, z.ZodType>): string {
+  const rows = Object.entries(shape).map(([key, schema]) => {
+    const json = z.toJSONSchema(schema, { target: 'openapi-3.0', io: 'input' })
+    const text = typeof json.description === 'string' ? json.description : ''
+    const unset = schema.safeParse(undefined)
+    const required = unset.success ? 'no' : '**yes**'
+    const defaultText = unset.success ? asEnvText(unset.data) : undefined
+    const fallback = defaultText === undefined ? '—' : `\`${defaultText}\``
+    const escaped = text.replaceAll('|', String.raw`\|`)
+    return `| \`${key}\` | ${required} | ${fallback} | ${escaped} |`
+  })
+  return [
+    '| Variable | Required | Default | What it does |',
+    '| --- | --- | --- | --- |',
+    ...rows,
+  ].join('\n')
+}
+
+// Only act when this module is run directly, not when it is imported by a
+// test. `pnpm env:example` writes .env.example; `pnpm env:table` passes
+// --table and prints README's table to stdout instead.
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  fs.writeFileSync('.env.example', render(EnvSchemaShape))
+  if (process.argv.includes('--table')) {
+    process.stdout.write(`${renderEnvTable(EnvSchemaShape)}\n`)
+  } else {
+    fs.writeFileSync('.env.example', render(EnvSchemaShape))
+  }
 }

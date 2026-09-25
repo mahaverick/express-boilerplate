@@ -78,7 +78,7 @@ describe('Slack transport', () => {
     new Promise<void>((resolve) => {
       const log = createPinoLogger({
         level: 'error',
-        isProduction: true,
+        format: 'json',
         slackWebhookUrl: 'https://hooks.slack.com/services/T/B/X',
         slackLogLevel: 'error',
         destination: discardDestination(),
@@ -103,7 +103,7 @@ describe('Slack transport', () => {
     new Promise<void>((resolve) => {
       const log = createPinoLogger({
         level: 'info',
-        isProduction: true,
+        format: 'json',
         slackWebhookUrl: 'https://hooks.slack.com/services/T/B/X',
         slackLogLevel: 'error',
         destination: discardDestination(),
@@ -121,7 +121,7 @@ describe('Slack transport', () => {
     new Promise<void>((resolve) => {
       const log = createPinoLogger({
         level: 'error',
-        isProduction: true,
+        format: 'json',
         slackWebhookUrl: 'https://hooks.slack.com/services/T/B/X',
         slackLogLevel: 'error',
         destination: discardDestination(),
@@ -147,7 +147,7 @@ describe('Slack transport', () => {
 
       const log = createPinoLogger({
         level: 'error',
-        isProduction: true,
+        format: 'json',
         slackWebhookUrl: 'https://hooks.slack.com/services/T/B/X',
         slackLogLevel: 'error',
         destination: discardDestination(),
@@ -181,7 +181,7 @@ describe('Slack transport', () => {
 
       const log = createPinoLogger({
         level: 'error',
-        isProduction: true,
+        format: 'json',
         slackWebhookUrl: 'https://hooks.slack.com/services/T/B/X',
         slackLogLevel: 'error',
         destination: discardDestination(),
@@ -210,7 +210,7 @@ describe('Slack transport', () => {
     new Promise<void>((resolve) => {
       const log = createPinoLogger({
         level: 'error',
-        isProduction: true,
+        format: 'json',
         slackWebhookUrl: 'https://hooks.slack.com/services/T/B/X',
         slackLogLevel: 'error',
         destination: discardDestination(),
@@ -237,7 +237,7 @@ describe('Slack transport', () => {
 
       const log = createPinoLogger({
         level: 'error',
-        isProduction: true,
+        format: 'json',
         slackWebhookUrl: 'https://hooks.slack.com/services/T/B/X',
         slackLogLevel: 'error',
         destination: discardDestination(),
@@ -259,7 +259,7 @@ describe('Slack transport', () => {
 
       const log = createPinoLogger({
         level: 'error',
-        isProduction: true,
+        format: 'json',
         slackWebhookUrl: 'https://hooks.slack.com/services/T/B/X',
         slackLogLevel: 'error',
         destination: discardDestination(),
@@ -278,7 +278,7 @@ describe('Slack transport', () => {
     new Promise<void>((resolve) => {
       const log = createPinoLogger({
         level: 'error',
-        isProduction: true,
+        format: 'json',
         slackWebhookUrl: 'https://hooks.slack.com/services/T/B/X',
         slackLogLevel: 'error',
         destination: discardDestination(),
@@ -301,7 +301,7 @@ describe('Slack transport', () => {
     new Promise<void>((resolve) => {
       const log = createPinoLogger({
         level: 'error',
-        isProduction: true,
+        format: 'json',
         destination: discardDestination(),
       })
 

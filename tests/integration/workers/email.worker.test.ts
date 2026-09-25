@@ -16,8 +16,8 @@
 // something also checks it there" ethos as mailer.service.ts's own header
 // comment.
 //
-// Runs under this worker's own QUEUE_PREFIX (tests/helpers/setup-global.ts
-// sets `bull:test-w${VITEST_POOL_ID}`), same as
+// Runs under this worker's own REDIS_KEY_PREFIX (tests/helpers/setup-global.ts
+// sets `test-w${VITEST_POOL_ID}`), same as
 // tests/integration/services/queue.service.test.ts, so jobs this file adds
 // never collide with another vitest worker's keyspace.
 import { randomUUID } from 'node:crypto'

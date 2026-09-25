@@ -41,6 +41,7 @@ describe('render', () => {
       expectedText: 'Used to build the Google OAuth callback URL',
     },
     { field: 'SESSION_SECRET', expectedText: 'Signs the express-session cookie' },
+    { field: 'APP_NAME', expectedText: 'Product name in outbound email copy' },
   ])(
     'describes what $field actually does, not a stale placeholder note',
     ({ field, expectedText }) => {
@@ -66,5 +67,39 @@ describe('render', () => {
 
   it('does not comment out a field with a default', () => {
     expect(output).toContain('\nAPP_PORT=4040\n')
+  })
+
+  // io: 'input' JSON schema drops a stringbool's default (its input is a
+  // string, its default a boolean), which used to render `# WORKER_ENABLED=`.
+  it('renders a z.stringbool() default as its value, uncommented', () => {
+    expect(output).toContain('\nWORKER_ENABLED=true\n')
+    expect(output).not.toContain('# WORKER_ENABLED=')
+  })
+
+  it('renders a required enum with its example value, uncommented', () => {
+    expect(output).toContain('\nAPP_ENV=local\n')
+    expect(output).toContain('\nNODE_ENV=development\n')
+    expect(output).not.toContain('# APP_ENV=')
+  })
+
+  it.each(['COOKIE_SECURE', 'LOG_FORMAT'])(
+    'comments out %s, whose default comes from APP_ENV in code',
+    (key) => {
+      const index = output.indexOf(`# ${key}=\n`)
+      expect(index).toBeGreaterThan(-1)
+      const preceding = output.slice(Math.max(0, index - 300), index)
+      expect(preceding).toContain('Defaults from APP_ENV')
+    }
+  )
+
+  it('renders every new numeric default', () => {
+    for (const line of [
+      'DB_POOL_MAX=10',
+      'DB_STATEMENT_TIMEOUT_MS=30000',
+      'WORKER_CONCURRENCY=5',
+      'SHUTDOWN_TIMEOUT_MS=25000',
+    ]) {
+      expect(output).toContain(`\n${line}\n`)
+    }
   })
 })

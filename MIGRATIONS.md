@@ -1,10 +1,163 @@
 # Migrations
 
-Every major dependency bump taken during this repo's rebuild, the breaking
-change it carried, and what changed here because of it — so the same
-upgrade can be replayed elsewhere with the reasoning intact instead of
-rediscovered. Also: every supply-chain bypass currently sitting in
-`pnpm-workspace.yaml`, a generated file nobody reads by default.
+Upgrade notes for each breaking release of this repo, then every major
+dependency bump taken during its rebuild, the breaking change it carried,
+and what changed here because of it — so the same upgrade can be replayed
+elsewhere with the reasoning intact instead of rediscovered. Also: every
+supply-chain bypass currently sitting in `pnpm-workspace.yaml`, a generated
+file nobody reads by default.
+
+## Upgrading to 3.0.0
+
+### Renamed variables
+
+Setting an old name now refuses boot, with a message naming the new one.
+
+| Old                       | New                          | Notes                           |
+| ------------------------- | ---------------------------- | ------------------------------- |
+| `SMTP_USER`               | `SMTP_USERNAME`              |                                 |
+| `SMTP_PASS`               | `SMTP_PASSWORD`              |                                 |
+| `SMTP_CONNECTION_TIMEOUT` | `SMTP_CONNECTION_TIMEOUT_MS` | Default 10000 → 3000            |
+| `SMTP_GREETING_TIMEOUT`   | `SMTP_GREETING_TIMEOUT_MS`   | Default 15000 → 5000            |
+| `SMTP_SOCKET_TIMEOUT`     | `SMTP_SOCKET_TIMEOUT_MS`     | Default 20000 → 7000            |
+| `QUEUE_PREFIX`            | `REDIS_KEY_PREFIX`           | Now covers every key; see below |
+
+### Now required
+
+- **`APP_ENV`** (`local`, `dev`, `qa` or `prod`), with no default. Boot
+  fails without it. The Docker image does not set it, so the deployment
+  must. A local `.env` needs `APP_ENV=local`.
+- **`NODE_ENV`**, which has lost its `development` default. Outside
+  `APP_ENV=local` it must be `production`. The Docker image already sets it.
+
+### Boot checks that refuse a stale config
+
+`index.ts` runs these before anything starts, and lists every failure in
+one message. Outside local, boot refuses:
+
+- `NODE_ENV` other than `production`;
+- the SMTP defaults: `SMTP_HOST` `localhost` or `127.0.0.1`, `SMTP_PORT`
+  1025, `MAIL_FROM` `no-reply@example.com`;
+- SMTP timeouts that add up to more than `SHUTDOWN_TIMEOUT_MS` − 10000 (the
+  5-second HTTP drain plus 5 seconds of headroom). On local this is a
+  warning.
+
+Everywhere, boot refuses any old name from the table above, setting
+only one of `SMTP_USERNAME`/`SMTP_PASSWORD`, which used to be a warning, and
+a `COOKIE_DOMAIN` that `APP_URL`'s host is neither equal to nor a subdomain
+of, since browsers would reject every auth cookie.
+Boot warns when `COOKIE_SECURE` resolves to `true` and `GOOGLE_CLIENT_ID` is
+set while `TRUST_PROXY=false`, because the OAuth session cookie is then
+never sent behind a TLS-terminating proxy.
+
+### New, with defaults
+
+These are new, and nothing needs setting unless you want a different
+value, except `DB_STATEMENT_TIMEOUT_MS` (below):
+
+- `COOKIE_SECURE` (from `APP_ENV`);
+- `COOKIE_DOMAIN` (unset: host-only);
+- `LOG_FORMAT` (from `APP_ENV`);
+- `DB_POOL_MAX` (10);
+- `DB_STATEMENT_TIMEOUT_MS` (30000);
+- `WORKER_CONCURRENCY` (5);
+- `SHUTDOWN_TIMEOUT_MS` (25000).
+
+`DB_STATEMENT_TIMEOUT_MS` changes behaviour at upgrade. 3.0 sends
+`statement_timeout=30000` on every pooled connection; 2.0 sent none.
+
+- Behind PgBouncer, add `statement_timeout` to `ignore_startup_parameters`,
+  or set `DB_STATEMENT_TIMEOUT_MS=0`. Otherwise PgBouncer refuses every
+  connection.
+- A statement that runs longer than 30s is now cancelled. Set
+  `DB_STATEMENT_TIMEOUT_MS=0` to keep the 2.0 behaviour.
+
+`COOKIE_SECURE` now defaults to `true` everywhere except `local`, and SMTP
+requires TLS everywhere except `local`. Before 3.0, both followed
+`NODE_ENV === 'production'`, and 3.0 requires `NODE_ENV=production`
+outside `local`. A `dev` or `qa` environment served without TLS must set
+`COOKIE_SECURE=false`: browsers drop a Secure cookie set over plain HTTP, so
+login stops working. SMTP there must also offer STARTTLS.
+
+The trace resource attribute `deployment.environment.name` used to be
+`NODE_ENV` (`production`, `development`). It is now the `APP_ENV` value
+(`local`, `dev`, `qa`, `prod`). Update dashboards and alerts that filter on
+it.
+
+Setting `COOKIE_DOMAIN` at upgrade, where users hold host-only refresh
+cookies, heals itself: every response that sets or clears the refresh
+cookie also clears the host-only one. Changing or unsetting it later leaves
+the old domain's refresh cookie in browsers. The API reads the most recently
+created `refreshToken` cookie, which is the current one, so the old one is
+ignored and expires within `REFRESH_TOKEN_TTL`. Reverting to an earlier
+value is the exception: the browser keeps that cookie's original creation
+time, so the other scope's cookie reads as newer and refresh fails until the
+user logs in again or it expires.
+
+### Redis state under the old prefixes is abandoned
+
+Every key moves under `REDIS_KEY_PREFIX` (default `express-boilerplate`).
+No prefix value maps the old keys onto the new ones: BullMQ's `bull:*`
+becomes `<prefix>:bull:*`, and the other keyspaces had no prefix at all. At
+deploy, the new code stops seeing:
+
+- **Queued jobs** (`bull:*`), including delayed retries. Before deploying,
+  stop traffic to the API (or scale API-only pods to zero) and let the
+  workers drain both queues (`email`, `notification`) to zero waiting,
+  delayed, active and prioritized jobs. Otherwise accept that those emails
+  and notifications are never sent.
+- **Session-denylist entries** (`denylist:session:*`) written during the
+  last `ACCESS_TOKEN_TTL`. An access token revoked in that window is honoured
+  again until it expires. To avoid this, deploy at least `ACCESS_TOKEN_TTL`
+  after the last forced logout you care about.
+- **Rate-limit counters** (`rl:*`). Every budget resets once.
+- **In-flight Google sign-ins** (`sess:*`). A user mid-way through the
+  consent screen gets a failed callback and signs in again.
+
+During a rolling deploy, old and new pods also use different keys until
+the old pods are gone:
+
+- live notifications go out on different channels (`bull:notifications`
+  and `<prefix>:notifications`), so a stream open on one side misses those
+  published by the other;
+- the session denylists differ, so a logout on one side is not honoured by
+  the other: its access tokens still work there until they expire;
+- the rate-limit counters differ, so each budget is effectively doubled.
+
+The denylist, rate-limit and session keys expire on their own, so they
+need no cleanup. The old BullMQ keys do not expire. Once the drained queues
+are confirmed empty, delete them, never with FLUSHDB. Choose a
+`REDIS_KEY_PREFIX` different from the old `QUEUE_PREFIX` value; if they
+match, skip this step rather than reason about the shared namespace. Set
+`OLD` to the old `QUEUE_PREFIX` value (`bull` if you never set it):
+
+```bash
+OLD=bull
+for queue in email notification; do
+  redis-cli -u "$REDIS_URL" --scan --pattern "$OLD:$queue:*" \
+    | xargs -r -n 500 redis-cli -u "$REDIS_URL" del
+done
+```
+
+These patterns name only the two old queues, so they leave anything else on
+that Redis under `$OLD:` alone. They cannot match a 3.0 key either:
+`redisKey()` puts every new key under `REDIS_KEY_PREFIX` + `:`, and BullMQ's
+under `<prefix>:bull:`, so a new queue key is `<prefix>:bull:email:…`. The
+exceptions are a new prefix that itself starts with `$OLD:email` or
+`$OLD:notification`, and an old prefix ending in `:bull` whose front equals
+the new prefix (old `myapp:bull`, new `myapp`); in either case skip this
+step.
+
+If you delete the expiring keys early anyway, use the bare patterns
+`rl:*`, `denylist:session:*` and `sess:*` only on a Redis this app has to
+itself: on a shared Redis they also match other apps' keys (`sess:` is
+connect-redis's default prefix). On a Redis of its own they match no 3.0
+key as long as `REDIS_KEY_PREFIX` itself does not start with `rl`,
+`denylist` or `sess`: every 3.0 key starts with that prefix, and the prefix
+can never be empty.
+
+If you had set `QUEUE_PREFIX`, the old notification channel above was
+`<QUEUE_PREFIX>:notifications`, not `bull:notifications`.
 
 ## Majors taken
 
@@ -46,7 +199,7 @@ Vitest 4, so it is already gone by the 5.0.0 installed here — is replaced
 by a top-level `test.maxWorkers`. `vitest.config.ts` uses
 `maxWorkers: 8` — pinned rather than left to the default
 (`availableParallelism() - 1`) because `database.service.ts` opens a real
-Postgres pool (`max: 2` in test mode) at module scope in every forked
+Postgres pool (`DB_POOL_MAX=2` in `.env.test`) at module scope in every forked
 worker, so the connection ceiling is `workers x pool.max`; left unpinned,
 that ceiling tracks whichever machine happens to run the suite. Verified
 directly against the installed package (both a runtime warning —

@@ -59,18 +59,13 @@ import {
   type Profile as GoogleProfile,
   type VerifyCallback,
 } from 'passport-google-oauth20'
-import { getEnv } from '@/configs/env.config'
+import { getEnv, isCookieSecure } from '@/configs/env.config'
 import { GOOGLE_STRATEGY_NAME } from '@/constants/auth.constants'
-import { isSecureCookieEnvironment } from '@/controllers/auth.controller'
 import { logger } from '@/services/logger.service'
-import { getRedis } from '@/services/redis.service'
+import { getRedis, redisKey } from '@/services/redis.service'
 
-// `GOOGLE_STRATEGY_NAME` itself now lives in constants/auth.constants.ts —
-// see that constant's own header comment for why it moved (breaking a
-// cycle with auth.controller.ts, this file's own Task 3 consumer of it).
-// Re-exported from here too, via `export…from`, so `auth.routes.ts`'s
-// existing `import { ..., GOOGLE_STRATEGY_NAME, ... } from
-// '@/configs/passport.config'` needs no change.
+// Defined in constants/auth.constants.ts (see its JSDoc); re-exported for
+// auth.routes.ts.
 export { GOOGLE_STRATEGY_NAME } from '@/constants/auth.constants'
 
 /**
@@ -187,17 +182,22 @@ const OAUTH_SESSION_MAX_AGE_MS = 5 * 60 * 1000
  * @returns Options for `express-session`'s `session()` factory.
  */
 function buildOAuthSessionOptions(client: Awaited<ReturnType<typeof getRedis>>): SessionOptions {
+  const env = getEnv()
   return {
-    store: new RedisStore({ client }),
-    secret: getEnv().SESSION_SECRET,
+    // connect-redis's own default prefix, `sess:`, would sit outside REDIS_KEY_PREFIX.
+    store: new RedisStore({ client, prefix: `${redisKey('sess')}:` }),
+    secret: env.SESSION_SECRET,
     resave: false,
     saveUninitialized: false,
     name: OAUTH_SESSION_COOKIE_NAME,
     cookie: {
       maxAge: OAUTH_SESSION_MAX_AGE_MS,
       httpOnly: true,
-      secure: isSecureCookieEnvironment(),
+      // express-session drops a Secure cookie unless req.secure, so behind TLS
+      // termination this needs TRUST_PROXY and X-Forwarded-Proto.
+      secure: isCookieSecure(env),
       sameSite: 'lax',
+      ...(env.COOKIE_DOMAIN !== undefined && { domain: env.COOKIE_DOMAIN }),
     },
   }
 }

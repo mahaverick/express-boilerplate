@@ -33,6 +33,7 @@ import { NotificationRepository } from '@/repositories/notification.repository'
 import { logger } from '@/services/logger.service'
 import { emitNotification } from '@/services/notification-emitter.service'
 import { getQueueConnection } from '@/services/queue.service'
+import { redisKey } from '@/services/redis.service'
 
 const notificationRepository = new NotificationRepository()
 const preferenceRepository = new NotificationPreferenceRepository()
@@ -160,10 +161,11 @@ export async function processNotificationJob(job: Job<NotificationJobData>): Pro
  * @returns The running Worker instance (for graceful shutdown).
  */
 export function startNotificationWorker(): Worker<NotificationJobData> {
+  const env = getEnv()
   const worker = new Worker<NotificationJobData>('notification', processNotificationJob, {
     connection: getQueueConnection(),
-    prefix: getEnv().QUEUE_PREFIX,
-    concurrency: 5,
+    prefix: redisKey('bull'),
+    concurrency: env.WORKER_CONCURRENCY,
     lockDuration: 30_000,
   })
 

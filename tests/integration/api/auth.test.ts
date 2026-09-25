@@ -62,7 +62,7 @@ const notificationWorker = startNotificationWorker()
 afterAll(async () => {
   // Same ordering as tests/integration/workers/email.worker.test.ts: workers
   // first (drains anything in flight), then obliterate so no job this file
-  // enqueued lingers under this vitest worker's shared QUEUE_PREFIX for the
+  // enqueued lingers under this vitest worker's shared REDIS_KEY_PREFIX for the
   // next test file to trip over, then the shared connection.
   await worker.close()
   await notificationWorker.close()
@@ -606,11 +606,10 @@ describe('POST /api/v1/auth/register and /login', () => {
       expect(refreshCookie).toMatch(/HttpOnly/i)
       expect(refreshCookie).toMatch(/SameSite=Strict/i)
       expect(refreshCookie).toContain(`Path=${REFRESH_TOKEN_COOKIE_PATH}`)
-      // Not Secure under NODE_ENV=test — see
-      // tests/unit/controllers/auth.controller.test.ts for the production
-      // branch, which cannot be exercised here: getEnv() is memoised for
-      // the life of the process once any module has called it.
+      // Neither Secure nor Domain under APP_ENV=local with no COOKIE_*
+      // overrides; cookie-attributes.test.ts covers the other settings.
       expect(refreshCookie).not.toMatch(/Secure/i)
+      expect(refreshCookie).not.toMatch(/Domain=/i)
     })
 
     it('gives the SAME error for an unknown email and a wrong password', async () => {

@@ -1,7 +1,7 @@
 // tests/integration/services/notification-emitter.service.test.ts
 //
 // Delivery runs through the real Redis, on this worker's own channel
-// (QUEUE_PREFIX is per vitest worker). A second module graph, loaded after
+// (REDIS_KEY_PREFIX is per vitest worker). A second module graph, loaded after
 // vi.resetModules(), stands in for another replica with its own clients,
 // subscriber and EventEmitter. That graph never reaches database.service.ts
 // (the model import is type-only), so no extra Postgres pool is opened.

@@ -6,6 +6,7 @@
 // the first test that mutates rows is the trigger for a per-worker schema
 // or transaction-rollback strategy, not this file.
 import { afterAll, describe, expect, it } from 'vitest'
+import { getEnv } from '@/configs/env.config'
 import { closeDatabase, isDatabaseReachable, sql } from '@/services/database.service'
 
 describe('database.service', () => {
@@ -20,6 +21,21 @@ describe('database.service', () => {
 
   it('reports health', async () => {
     expect(await isDatabaseReachable()).toBe(true)
+  })
+
+  // postgres.js sends `connection` in the startup packet, so every pooled
+  // connection carries it. SHOW formats the value with a unit (30000 ms reads
+  // back as '30s'); pg_settings gives the raw milliseconds.
+  it('applies DB_STATEMENT_TIMEOUT_MS to pooled connections', async () => {
+    expect(getEnv().DB_STATEMENT_TIMEOUT_MS).toBe(30_000)
+
+    const shown = await sql<{ statement_timeout: string }[]>`show statement_timeout`
+    expect(shown[0]?.statement_timeout).toBe('30s')
+
+    const settings = await sql<{ setting: string }[]>`
+      select setting from pg_settings where name = 'statement_timeout'
+    `
+    expect(Number(settings[0]?.setting)).toBe(getEnv().DB_STATEMENT_TIMEOUT_MS)
   })
 
   it('is safe to close twice', async () => {

@@ -331,18 +331,19 @@ deployment with no existing users has nothing to backfill.
 
 ### Rate limiting: one limiter per auth route, one store prefix each
 
-`src/middlewares/rate-limit.middleware.ts` ships seven limiters — one for
-every route on the auth router, `/verify-email` included, and
-`/resend-verification` carrying two in series — which is a standing rule
-for that router rather than seven separate decisions. Each is backed by its
-**own** `SharedRateLimitStore`, with its own key prefix (`rl:register:`,
-`rl:login:`, `rl:refresh:`, `rl:logout:`, `rl:verify-email:`,
-`rl:resend-verification-ip:`, `rl:resend-verification-email:`), so no
-endpoint can spend another's budget and a 429 is only ever a statement
-about the endpoint that returned it. A new auth route — B3's
-`/forgot-password` and `/reset-password` (Task 6) are next — takes its own
-prefix on the same pattern; `tests/unit/middlewares/rate-limit.middleware.test.ts`
-fails if two ever collide. `/verify-email` and `/resend-verification`'s
+`src/middlewares/rate-limit.middleware.ts` ships nineteen limiters.
+Fifteen guard the auth router, which is a standing rule for that router:
+every route on it except `GET /providers` has at least one, and `/login`
+(three), `/resend-verification` (two) and `/forgot-password` (two) carry
+several in series. The other four guard tenant creation, member invitation,
+and invitation preview and accept. Each is backed by its **own**
+`SharedRateLimitStore`, with its own key prefix `rl:<name>:` (for example
+`rl:register:`, `rl:login-ip:`, `rl:forgot-password-email:`), under
+`REDIS_KEY_PREFIX` (so `<prefix>:rl:login:` in Redis). No endpoint can
+spend another's budget, and a 429 is only ever a statement about the
+endpoint that returned it. A new route takes its own prefix on the same
+pattern; `tests/unit/middlewares/rate-limit.middleware.test.ts` fails if two
+ever collide. `/verify-email` and `/resend-verification`'s
 own per-limiter reasoning — including why `/resend-verification`'s IP layer
 is the tight one and its email layer the generous one — lives in
 `rate-limit.middleware.ts`'s own header comment. The store starts in
@@ -418,8 +419,8 @@ a client can make up to N× the limit.
   runs, so it would leave the refresh cookie uncleared. This limiter must
   never plausibly be the reason a real user cannot log out.
 
-There is no general-purpose rate limiter beyond the auth router's four
-routes.
+There is no general-purpose rate limiter: each limiter guards only the
+route it is mounted on.
 
 ### Deploying behind a proxy: `TRUST_PROXY` is a required decision
 
@@ -460,6 +461,14 @@ position from which `X-Forwarded-For` can be forged. `createApp()` applies
 the value at boot and a malformed one throws there, so a typo stops the
 process rather than quietly disabling the limiters.
 
+**`TRUST_PROXY` also decides whether the OAuth session cookie is sent.**
+express-session only emits a `Secure` cookie when `req.secure` is true, and
+behind TLS termination that needs `TRUST_PROXY` plus the proxy's
+`X-Forwarded-Proto: https`. Otherwise `oauth.sid` is silently never set, and
+the Google OAuth `state` check fails. Boot logs a warning when
+`COOKIE_SECURE` resolves to `true` and `GOOGLE_CLIENT_ID` is set while
+`TRUST_PROXY=false`. The refresh cookie has no such dependency.
+
 ### Cookies: httpOnly, environment-derived `secure`, `sameSite: 'strict'`
 
 The refresh token travels only in a cookie (`REFRESH_TOKEN_COOKIE_NAME`,
@@ -468,12 +477,27 @@ ever receives it), set with:
 
 - `httpOnly: true` — no script on the frontend origin can ever read the raw
   value.
-- `secure: isSecureCookieEnvironment()` — exactly `NODE_ENV === 'production'`,
-  not a hardcoded literal in either direction. A hardcoded `true` would make
+- `secure: isCookieSecure(env)` — `COOKIE_SECURE` when it is set, otherwise
+  `APP_ENV !== 'local'`. The rule lives only in `env.config.ts`, and the
+  refresh cookie and the OAuth session cookie both use it. It is not a
+  hardcoded literal in either direction. A hardcoded `true` would make
   cookie-based login impossible over plain HTTP in local development
-  (browsers refuse a `Secure` cookie set over `http://`); a hardcoded
-  `false` would ship a refresh token over an unencrypted connection in
-  production.
+  (browsers refuse a `Secure` cookie set over `http://`). A hardcoded `false`
+  would ship a refresh token over an unencrypted connection in every other
+  environment. `X-Forwarded-Proto` has no effect on this flag.
+- `domain: COOKIE_DOMAIN` — omitted when unset, so the cookie is host-only.
+  When it is set, the same domain goes on the set, the clear (a clear with a
+  different domain leaves the old cookie in the browser), and the OAuth
+  session cookie. With it set, every response that sets or clears the refresh
+  cookie also clears the host-only one, so setting it on a live deployment
+  heals itself. Changing or unsetting it leaves the old domain's cookie in
+  the browser, which then sends two `refreshToken` values, oldest first
+  (RFC 6265 §5.4). The API reads the last, most recently created one, so the
+  stale token never reaches reuse detection, and the old cookie expires
+  within `REFRESH_TOKEN_TTL`. Reverting `COOKIE_DOMAIN` to an earlier value
+  is the exception: an overwritten cookie keeps its original creation time
+  (§5.3), so the other scope's cookie reads as newer and refresh fails until
+  the user logs in again or that cookie expires.
 - `sameSite: 'strict'` — the cookie half of this API's CSRF position (see
   below).
 

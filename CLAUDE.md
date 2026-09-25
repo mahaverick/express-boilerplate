@@ -33,6 +33,18 @@ until you check.
   without it, dotenv's own startup banner lands on stdout ahead of
   anything this process prints, which corrupts a command whose output is
   meant to be machine-readable (a CI step piping JSON, for instance).
+  `.env` also reaches `tracing.ts`, which loads first: `pnpm dev` and
+  `pnpm start` pass `--env-file-if-exists=.env` to Node. The Docker `CMD`
+  does not; the image has no `.env`, and the orchestrator supplies the
+  environment.
+- **`APP_ENV` names the deployment; `NODE_ENV` is Express's.** `APP_ENV`
+  (`local`/`dev`/`qa`/`prod`) is required and every environment-dependent
+  default derives from it, only through the helpers in `env.config.ts`
+  (`isCookieSecure`, `logFormat`, `requiresSmtpTls`). Never read `APP_ENV` or
+  `NODE_ENV` at a call site to pick behaviour. Cross-variable rules live in
+  `assertEnvConsistent` (`env-consistency.config.ts`), called first in
+  `index.ts`, not in the schema: an object-level `.refine()` breaks
+  `getDatabaseUrl()`'s `.pick()`.
 - **`/health` is shallow, `/health/ready` is deep, on purpose.** Making
   `/health` check the database would turn a transient blip into a restart
   loop. Don't "improve" liveness by adding a dependency check to it.
@@ -44,9 +56,9 @@ until you check.
   (`tests/unit/connection-target.test.ts`) guards against reverting this — by
   reading `docker-compose.yml` and `.env.test` off disk and asserting they
   agree, **not** by asserting on `getEnv()` at runtime. That distinction is
-  load-bearing: GitHub Actions `services:` cannot remap container ports, so
-  CI necessarily runs against 5432/6379, and a runtime assertion was
-  guaranteed red on the first pull request. The invariant worth guarding
+  load-bearing: CI's `services:` publish the container-default ports, so CI
+  runs against 5432/6379, and a runtime assertion was guaranteed red on the
+  first pull request. The invariant worth guarding
   belongs to the committed files.
 - **The Redis clients' retry strategies are load-bearing, not
   decoration.** Before a client's first `ready`, every client gives up after
@@ -101,7 +113,8 @@ until you check.
 - **Slack destination deduplicates by `${source}:${message}`.** The first
   occurrence sends immediately; duplicates within a 60-second window are
   suppressed. A summary is sent after the window expires if any were suppressed.
-- **pino, JSON in production, pino-pretty in development.**
+- **pino, format from `logFormat(env)`:** `LOG_FORMAT` when set, else
+  pino-pretty on `APP_ENV=local` and JSON everywhere else.
   `createPinoLogger` keeps the winston-era shape (`level` label, ISO
   `timestamp`, `message`). Direct pino calls are `(meta, message)`;
   application code uses the `logger` facade, which keeps `(message, meta)`.
@@ -120,9 +133,16 @@ until you check.
 - **`WORKER_ENABLED` gates the in-process worker.** Default `true` (API +
   worker in one process). Set `false` for API-only pods; a separate worker
   deployment sets `true` and processes jobs from the shared Redis queue.
-- **`QUEUE_PREFIX` isolates test queues.** Each vitest worker gets
-  `bull:test-w${VITEST_POOL_ID}` — same mechanism as per-worker databases.
-  Without it, a Worker in pool 1 processes pool 2's jobs.
+  `WORKER_CONCURRENCY` (default 5) sets both workers' concurrency.
+- **Every Redis key and channel goes through `redisKey()`**
+  (redis.service.ts): `REDIS_KEY_PREFIX` + `:` + parts, covering BullMQ
+  (`bull`), rate limits (`rl:<name>`), the denylist, OAuth sessions (`sess`)
+  and the notification channel. Never write a literal key. Each vitest worker
+  runs under `test-w${VITEST_POOL_ID}` (tests/helpers/redis-prefix.ts), so a
+  Worker in pool 1 never processes pool 2's jobs, and global setup clears
+  only `test-w*:rl:*`, so a dev server sharing the compose Redis keeps its
+  keys. Two concurrent `pnpm test` runs on one compose stack still share
+  those prefixes, as they share the worker databases; that is unsupported.
 - **`sendMail()` returns `'sent' | 'failed'`**, not `void`. The worker uses
   this to decide whether BullMQ should retry. The never-reject guarantee
   (Ruling G) is unchanged.
@@ -177,7 +197,7 @@ until you check.
   sid-less stream would survive a logout or revocation until its token
   expired, rather than closing at the next heartbeat.
 - **Live notifications cross replicas via Redis pub/sub** on
-  `${QUEUE_PREFIX}:notifications` (notification-emitter.service.ts). The
+  `redisKey('notifications')` (notification-emitter.service.ts). The
   publishing process gets its own copy back through its subscriber, and
   delivers locally only when the publish fails. The subscriber is opened on
   the first `onNotification`, not at boot, and when it reconnects after an
@@ -214,6 +234,20 @@ until you check.
 - **Sessions are OAuth-scoped only.** `express-session` runs on
   `/auth/google` and `/auth/google/callback` only (5-minute TTL). The rest
   of the API is stateless (JWT).
+- **`oauth.sid` needs `req.secure` when `COOKIE_SECURE` resolves true.**
+  express-session silently skips a `Secure` Set-Cookie on a non-HTTPS
+  request, so behind TLS termination set `TRUST_PROXY` and forward
+  `X-Forwarded-Proto`. Boot warns when Google login is on and
+  `TRUST_PROXY=false`.
+- **`COOKIE_DOMAIN` goes on the refresh-cookie set, its clear, and the OAuth
+  session cookie.** A clear with a different domain leaves the cookie behind.
+  With it set, the refresh-cookie set and clear also clear the host-only
+  cookie, before the set. After a domain change the browser sends two
+  `refreshToken` values, oldest first, and `readRefreshTokenCookie` takes the
+  last, the most recently created. Reading the first would hand a stale token
+  to reuse detection, which revokes the live session. Reverting to an earlier
+  domain is the one case last-wins misses: an overwritten cookie keeps its
+  original creation time.
 
 ## Multi-tenancy and RBAC
 
@@ -299,9 +333,12 @@ until you check.
 ## Observability
 
 - **`src/observability/tracing.ts` loads via `--import` before the app.**
-  It reads `process.env` directly (not `getEnv()`) because it must
-  initialize before env validation. When `OTEL_EXPORTER_OTLP_ENDPOINT` is
-  unset, the file is a complete no-op — no SDK started, no spans generated.
+  It reads `process.env` directly (not `getEnv()`), because it must
+  initialize before env validation. It reports `deployment.environment.name`
+  from `APP_ENV`, or nothing when that is unset. `pnpm dev` and `pnpm start`
+  pass `--env-file-if-exists=.env` to Node, so `.env` is loaded before it
+  starts. When `OTEL_EXPORTER_OTLP_ENDPOINT` is unset, the file is a
+  complete no-op — no SDK started, no spans generated.
 - **Trace-id appears in log output** as `traceId` and `spanId` fields when
   OTEL is active. When disabled, these fields are simply absent.
 - **`IORedisInstrumentation` covers BullMQ's Redis traffic, not
@@ -325,8 +362,8 @@ until you check.
   Grafana.
 - **`tracing.ts` registers OTel's ESM loader hook** — without it the
   CommonJS pino imported from ESM is never patched (proved 2026-09-24).
-- **The Docker image loads tracing via `--import`** (Dockerfile CMD mirrors
-  `pnpm start`).
+- **The Docker image loads tracing via `--import`** (the Dockerfile CMD is
+  `pnpm start` minus `--env-file-if-exists`).
 - **Editing `otel-collector.yaml` needs `docker compose restart
 otel-collector`.** It is bind-mounted; `docker compose up -d` does not
   pick up content changes to an already-running container's bind mount.
@@ -611,10 +648,13 @@ instruction in any dispatch written here.
 - **helmet is the first middleware** (`src/configs/helmet.config.ts`).
   Anything that must answer without security headers does not exist here;
   don't mount routes above it.
-- **No module outside `src/configs/env.config.ts` may read
-  `process.env`.** An eslint rule (`no-restricted-properties`) enforces
-  this; `env.config.ts` is the one file explicitly exempted, because
-  parsing `process.env` is its entire job.
+- **In `src/`, `process.env` is read only where `eslint.config.mjs` exempts
+  it** from `no-restricted-properties`. The exemptions are
+  `env.config.ts` (parsing is its job), `tracing.ts` (it loads before
+  validation), and `logger.service.ts` and `index.ts` (whose exemption exists
+  for `console.*`; `index.ts` also hands `process.env` to
+  `assertEnvConsistent` for its removed-name check). Everything else reads
+  `getEnv()`.
 - **`src/lint-fixtures/` is not application code.** It is a
   deliberately-circular pair of modules importing each other through the
   `@/` alias, so `tests/unit/lint-gates.test.ts` can prove

@@ -51,12 +51,15 @@ vi.mock('@/services/redis.service', async (importOriginal) => {
 })
 
 const baseEnv: Env = {
+  APP_ENV: 'local',
   NODE_ENV: 'test',
   APP_PORT: 4040,
   APP_URL: 'http://localhost:4040',
   WEB_URL: 'http://localhost:5173',
   DATABASE_URL: 'postgres://user:pass@localhost:5432/boilerplate',
   REDIS_URL: 'redis://localhost:6379',
+  DB_POOL_MAX: 10,
+  DB_STATEMENT_TIMEOUT_MS: 30_000,
   JWT_ACCESS_SECRET: 'a'.repeat(32),
   SESSION_SECRET: 'c'.repeat(32),
   ACCESS_TOKEN_TTL: '15m',
@@ -70,16 +73,18 @@ const baseEnv: Env = {
   LOG_LEVEL: 'silent',
   SLACK_LOG_LEVEL: 'error',
   WORKER_ENABLED: true,
-  QUEUE_PREFIX: 'bull',
+  WORKER_CONCURRENCY: 5,
+  REDIS_KEY_PREFIX: 'express-boilerplate',
   SSE_HEARTBEAT_INTERVAL_MS: 30_000,
   SSE_MAX_STREAMS_PER_USER: 5,
   SMTP_HOST: 'localhost',
   SMTP_PORT: 1025,
   MAIL_FROM: 'no-reply@example.com',
   APP_NAME: 'Test App',
-  SMTP_CONNECTION_TIMEOUT: 5000,
-  SMTP_GREETING_TIMEOUT: 5000,
-  SMTP_SOCKET_TIMEOUT: 10_000,
+  SMTP_CONNECTION_TIMEOUT_MS: 5000,
+  SMTP_GREETING_TIMEOUT_MS: 5000,
+  SMTP_SOCKET_TIMEOUT_MS: 10_000,
+  SHUTDOWN_TIMEOUT_MS: 25_000,
 }
 
 /**

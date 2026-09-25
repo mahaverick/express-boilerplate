@@ -273,10 +273,10 @@ export default tseslint.config(
     // createSlackDestination's sendToSlack uses console.error for
     // failure logging to avoid re-entering the logger.
     // index.ts is the pre-boot error path where the logger is not yet
-    // available (env validation failed before any service could initialize).
-    // Both rules (process.env and console.*) are lifted — the process.env
-    // exemption is a side effect, not the intent, but harmless: neither
-    // module reads process.env.
+    // available (env validation failed before any service could initialize),
+    // and it hands process.env to assertEnvConsistent, which needs the raw
+    // names the schema no longer declares. Both rules (process.env and
+    // console.*) are lifted; logger.service.ts reads no process.env.
     files: ['src/services/logger.service.ts', 'src/index.ts'],
     rules: { 'no-restricted-properties': 'off' },
   },
@@ -284,7 +284,7 @@ export default tseslint.config(
     // tracing.ts loads via `--import` before env.config.ts's own
     // `getEnv()` has ever run (before `src/index.ts` itself, in fact), so it
     // cannot go through `getEnv()` the way every other module must — it reads
-    // `process.env.OTEL_EXPORTER_OTLP_ENDPOINT`/`NODE_ENV`/`OTEL_SERVICE_NAME`
+    // `process.env.OTEL_EXPORTER_OTLP_ENDPOINT`/`APP_ENV`/`OTEL_SERVICE_NAME`
     // directly. For the same load-order reason it cannot use the pino
     // logger (not loaded yet, and must not depend on the library it
     // instruments) — it uses `console.info`/`console.error` for its own

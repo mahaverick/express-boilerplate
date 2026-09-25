@@ -35,7 +35,8 @@ import {
 } from '@/middlewares/rate-limit.middleware'
 import { request } from '../../helpers/request'
 
-vi.mock('@/services/redis.service', () => ({
+vi.mock('@/services/redis.service', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/services/redis.service')>()),
   getRedis: vi.fn(() => Promise.reject(new Error('no redis in unit tests'))),
 }))
 
@@ -518,32 +519,29 @@ describe('store prefixes', () => {
     path.resolve(process.cwd(), 'src/middlewares/rate-limit.middleware.ts'),
     'utf8'
   )
-  const prefixes = Array.from(
-    source.matchAll(/new SharedRateLimitStore\('([^']+)'\)/g),
-    (match) => match[1]
-  )
+  const prefixes = Array.from(source.matchAll(/limiterStore\('([a-z-]+)'\)/g), (match) => match[1])
 
-  it('builds one store per limiter, each with its own prefix', () => {
+  it('builds one store per limiter, each under its own rl:<name> keyspace', () => {
     expect(prefixes).toEqual([
-      'rl:register:',
-      'rl:login:',
-      'rl:login-ip:',
-      'rl:login-account:',
-      'rl:refresh:',
-      'rl:logout:',
-      'rl:verify-email:',
-      'rl:resend-verification-ip:',
-      'rl:resend-verification-email:',
-      'rl:forgot-password-ip:',
-      'rl:forgot-password-email:',
-      'rl:reset-password:',
-      'rl:google-oauth:',
-      'rl:google-oauth-callback:',
-      'rl:create-tenant:',
-      'rl:invite-tenant-member:',
-      'rl:change-password:',
-      'rl:invitation-preview:',
-      'rl:invitation-accept:',
+      'register',
+      'login',
+      'login-ip',
+      'login-account',
+      'refresh',
+      'logout',
+      'verify-email',
+      'resend-verification-ip',
+      'resend-verification-email',
+      'forgot-password-ip',
+      'forgot-password-email',
+      'reset-password',
+      'google-oauth',
+      'google-oauth-callback',
+      'create-tenant',
+      'invite-tenant-member',
+      'change-password',
+      'invitation-preview',
+      'invitation-accept',
     ])
   })
 

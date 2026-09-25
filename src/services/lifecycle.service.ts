@@ -2,6 +2,7 @@
 //
 // Process-wide shutdown state, and the registry of open SSE streams: an SSE
 // response never ends by itself, so without this `server.close()` never resolves.
+import { getEnv } from '@/configs/env.config'
 import { logger } from '@/services/logger.service'
 
 const state: { isShuttingDown: boolean; streams: Map<string, Set<() => void>> } = {
@@ -78,12 +79,12 @@ export function resetLifecycleForTests(): void {
 /**
  * Build the process shutdown handler: the first call runs shutdown and exits; later calls are ignored.
  * @param shutdown - Runs graceful shutdown.
- * @param timeoutMs - Backstop after which the process exits 1 even if shutdown hangs.
+ * @param timeoutMs - Backstop after which the process exits 1 even if shutdown hangs. Defaults to `SHUTDOWN_TIMEOUT_MS`.
  * @returns A handler taking the exit function, and the code to exit with once shutdown succeeds (default 0).
  */
 export function createShutdownHandler(
   shutdown: () => Promise<void>,
-  timeoutMs: number
+  timeoutMs: number = getEnv().SHUTDOWN_TIMEOUT_MS
 ): (exit: (code: number) => void, exitCode?: number) => void {
   const guard = { hasStarted: false }
   return (exit, exitCode = 0) => {

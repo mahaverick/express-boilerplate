@@ -13,7 +13,7 @@
 // exercises the "tracing disabled" branch — same as every other test file
 // that transitively imports it.
 import { describe, expect, it } from 'vitest'
-import { shutdownOtel } from '@/observability/tracing'
+import { shutdownOtel, tracingResourceAttributes } from '@/observability/tracing'
 
 describe('tracing (OTEL_EXPORTER_OTLP_ENDPOINT unset, the test-env default)', () => {
   it('imports without throwing', () => {
@@ -26,5 +26,26 @@ describe('tracing (OTEL_EXPORTER_OTLP_ENDPOINT unset, the test-env default)', ()
 
   it('shutdownOtel() resolves without error when no SDK was ever started', async () => {
     await expect(shutdownOtel()).resolves.toBeUndefined()
+  })
+})
+
+describe('tracingResourceAttributes', () => {
+  it('reports APP_ENV as deployment.environment.name', () => {
+    expect(tracingResourceAttributes({ APP_ENV: 'qa' })['deployment.environment.name']).toBe('qa')
+  })
+
+  // Tracing runs before env validation, so an unset APP_ENV reports nothing
+  // rather than a guess, and NODE_ENV is never used in its place.
+  it('omits deployment.environment.name when APP_ENV is unset, whatever NODE_ENV says', () => {
+    expect(Object.keys(tracingResourceAttributes({ NODE_ENV: 'production' }))).toEqual([
+      'service.name',
+    ])
+  })
+
+  it('reports OTEL_SERVICE_NAME, defaulting to express-boilerplate', () => {
+    expect(tracingResourceAttributes({})['service.name']).toBe('express-boilerplate')
+    expect(tracingResourceAttributes({ OTEL_SERVICE_NAME: 'billing' })['service.name']).toBe(
+      'billing'
+    )
   })
 })

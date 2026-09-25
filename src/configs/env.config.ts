@@ -16,6 +16,9 @@ import { z } from 'zod'
 import { parseDurationMs } from '@/utilities/duration.utilities'
 
 // Populate process.env from .env before anything below ever reads it.
+// `pnpm dev` and `pnpm start` already load it with Node's --env-file-if-exists
+// (tracing.ts needs it first), and dotenv never overrides a set key, so there
+// it only fills keys Node's parser left unset; tsx scripts rely on it.
 // Skipped under Vitest: tests/helpers/setup-global.ts already assembles the
 // test environment (process env > .env.test.local > .env.test) before any
 // test file is imported, and loading a developer's own .env on top of that
@@ -40,9 +43,35 @@ if (!process.env.VITEST) {
 // while accepting any hostname, including localhost.
 const LogLevelSchema = z.enum(['error', 'warn', 'info', 'debug'])
 
+const AppEnvSchema = z.enum(['local', 'dev', 'qa', 'prod'])
+
+/**
+ * The deployment an `APP_ENV` value names.
+ */
+export type AppEnv = z.infer<typeof AppEnvSchema>
+
 const EnvSchema = z.object({
-  NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
-  APP_PORT: z.coerce.number().int().positive().default(4040),
+  // Both required, with no default: a deploy that forgets to name its
+  // environment refuses to boot instead of quietly running with local
+  // settings. `.meta({ example })` is what `pnpm env:example` writes as the
+  // value, since a required field has no default to write.
+  APP_ENV: AppEnvSchema.describe(
+    'Which deployment this is: local, dev, qa or prod. Required. COOKIE_SECURE and LOG_FORMAT default from it, and SMTP requires TLS everywhere but local.'
+  ).meta({ example: 'local' }),
+  // Kept alongside APP_ENV because Express reads it itself (app.get('env')):
+  // only `production` hides stack traces in Express's built-in error handler.
+  NODE_ENV: z
+    .enum(['development', 'test', 'production'])
+    .describe(
+      'Node runtime mode: development, test or production. Required. Express reads it directly, and only production hides stack traces in its built-in error handler, so every APP_ENV but local must run production. test is for the test suite.'
+    )
+    .meta({ example: 'development' }),
+  APP_PORT: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(4040)
+    .describe('Port the HTTP server listens on. Defaults to 4040.'),
 
   // FORMER PLACEHOLDERS. APP_URL and SESSION_SECRET used to be forward
   // declarations for the CORS/session plans (see SECURITY.md, "Intended
@@ -88,8 +117,35 @@ const EnvSchema = z.object({
       'Public origin of the frontend. Email verification links are built from it — the link points at your frontend, which POSTs the token to this API. http://localhost:5173 locally.'
     ),
 
-  DATABASE_URL: z.url(),
-  REDIS_URL: z.url(),
+  DATABASE_URL: z
+    .url()
+    .describe(
+      'Postgres connection URL. The compose stack publishes Postgres on localhost:5433: postgres://boilerplate:boilerplate@localhost:5433/boilerplate.'
+    ),
+  REDIS_URL: z
+    .url()
+    .describe(
+      'Redis connection URL. The compose stack publishes Redis on localhost:6380: redis://localhost:6380.'
+    ),
+
+  DB_POOL_MAX: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(10)
+    .describe(
+      "Most open connections in the Postgres pool, per process. Defaults to 10. The test suite sets 2, so its parallel workers stay under Postgres's default 100 connections."
+    ),
+  // 0 is allowed: databaseClientOptions() then sends no statement_timeout,
+  // so the server's own setting (by default none) applies.
+  DB_STATEMENT_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .nonnegative()
+    .default(30_000)
+    .describe(
+      "Milliseconds a single SQL statement may run before Postgres cancels it (statement_timeout). Defaults to 30000 (30s). 0 sends no limit, leaving the server's own setting. A statement_timeout in DATABASE_URL's query string overrides it. PgBouncer, in every pool mode, refuses a startup parameter not listed in its ignore_startup_parameters, so behind it set 0 or list statement_timeout there."
+    ),
 
   JWT_ACCESS_SECRET: z
     .string()
@@ -282,6 +338,26 @@ const EnvSchema = z.object({
       'How much of X-Forwarded-For to believe. "false" (default) trusts none: correct when clients reach this app directly, WRONG behind a proxy, where every IP-keyed rate limiter then shares one bucket for the whole deployment. Behind a proxy set the NUMBER of proxies in front of this app (e.g. "1"), or a comma-separated list of trusted proxy addresses/subnets or presets ("loopback", "linklocal", "uniquelocal"). Never "true" — it is refused, because it lets any client spoof its own IP and bypass the limiters.'
     ),
 
+  // Optional with no schema default on purpose: the default depends on
+  // APP_ENV, and only isCookieSecure() below applies it. A plain `.default()`
+  // cannot read a sibling field.
+  COOKIE_SECURE: z
+    .stringbool()
+    .optional()
+    .describe(
+      'Whether the refresh-token and OAuth session cookies carry the Secure attribute ("true" or "false"). Defaults from APP_ENV: false on local, true elsewhere. With Secure on behind a TLS-terminating proxy, TRUST_PROXY must be set, or the OAuth session cookie is never sent.'
+    ),
+  COOKIE_DOMAIN: z
+    .string()
+    .refine((value) => !/[\s/:]/.test(value), {
+      message:
+        'COOKIE_DOMAIN must be a bare domain such as "example.com", with no scheme, port or path.',
+    })
+    .optional()
+    .describe(
+      "Domain attribute for the refresh-token and OAuth session cookies, e.g. \"example.com\" to share them with subdomains. Unset means host-only cookies, the narrowest scope. Boot refuses a value that APP_URL's host is not within, since browsers would reject the cookies. Setting it on a deployment with live sessions heals itself: every response that sets or clears the refresh cookie also clears the host-only one. Changing or unsetting it leaves the old domain's refresh cookie in browsers. The API reads the most recently created refreshToken cookie, which is the current one, so the old one is ignored and expires within REFRESH_TOKEN_TTL. Reverting to an earlier value is the exception: the browser keeps that cookie's original creation time, so the other scope's cookie reads as newer and refresh fails until the user logs in again or it expires."
+    ),
+
   // Extra browser origins allowed to call this API, comma-separated, e.g.
   // "https://admin.example.com,https://shop.example.com". WEB_URL is ALWAYS
   // allowed and does not need listing. Same-origin requests send no Origin
@@ -324,6 +400,14 @@ const EnvSchema = z.object({
     .describe(
       'Console log level: error, warn, info or debug. silent disables logging entirely (the test suite uses it).'
     ),
+  // Optional with no schema default, for the same reason as COOKIE_SECURE:
+  // logFormat() below derives it from APP_ENV.
+  LOG_FORMAT: z
+    .enum(['json', 'pretty'])
+    .optional()
+    .describe(
+      'Console log format: json or pretty. Defaults from APP_ENV: pretty on local, json elsewhere. pretty needs the pino-pretty devDependency; without it the logger writes json.'
+    ),
 
   SLACK_WEBHOOK_URL: z
     .url({ protocol: /^https?$/ })
@@ -348,12 +432,23 @@ const EnvSchema = z.object({
     .describe(
       'Whether the BullMQ workers (email + notification) start in-process alongside the HTTP server. Set to false for API-only pods behind a load balancer; a separate worker deployment sets this to true.'
     ),
-  QUEUE_PREFIX: z
-    .string()
-    .min(1)
-    .default('bull')
+  WORKER_CONCURRENCY: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(5)
     .describe(
-      'BullMQ Redis key prefix. Tests override this per vitest worker to prevent cross-worker job leaks.'
+      'Jobs each BullMQ worker (email, notification) processes at once, per process. Defaults to 5.'
+    ),
+  // Every Redis key and channel goes through redisKey() (redis.service.ts),
+  // which joins this and its parts with ':'. A trailing colon would double it.
+  REDIS_KEY_PREFIX: z
+    .string()
+    .regex(/^[a-z0-9][a-z0-9:_-]*$/, 'Use lowercase letters, digits, ":", "_" and "-"')
+    .refine((value) => !value.endsWith(':'), 'No trailing colon: keys are joined with ":"')
+    .default('express-boilerplate')
+    .describe(
+      'Namespace for every Redis key and channel this app uses: BullMQ queues (`<prefix>:bull`), rate-limit counters (`<prefix>:rl`), the session denylist (`<prefix>:denylist`), OAuth sessions (`<prefix>:sess`) and the notification channel (`<prefix>:notifications`). Lowercase letters, digits, ":", "_" and "-", with no trailing colon. Give each app or environment sharing one Redis its own value; changing it abandons every existing key.'
     ),
 
   // How often notification-stream.controller.ts writes a `:ping\n\n` comment
@@ -391,7 +486,7 @@ const EnvSchema = z.object({
   // the same reasoning TRUST_PROXY/ACCESS_TOKEN_TTL use for their own
   // defaults, and unlike DATABASE_URL/REDIS_URL, where a wrong default would
   // point at a real dependency silently. Mailpit does not require or check
-  // SMTP_USER/SMTP_PASS at all, which is exactly why they stay optional with
+  // SMTP_USERNAME/SMTP_PASSWORD at all, which is exactly why they stay optional with
   // no default rather than joining APP_URL/WEB_URL's required-placeholder
   // pattern: a real provider (SES, SendGrid, ...) needs both, and a
   // downstream project sets them then, not before.
@@ -408,20 +503,24 @@ const EnvSchema = z.object({
     .positive()
     .default(1025)
     .describe("SMTP server port. Defaults to 1025 — Mailpit's SMTP port."),
-  SMTP_USER: z
+  SMTP_USERNAME: z
     .string()
     .optional()
     .describe(
-      'SMTP username. Absent means no authentication is attempted, which is correct for Mailpit and wrong for most real providers — set this alongside SMTP_PASS.'
+      'SMTP username. Absent means no authentication is attempted, which is correct for Mailpit and wrong for most real providers. Set it together with SMTP_PASSWORD: boot refuses one without the other.'
     ),
-  SMTP_PASS: z.string().optional().describe('SMTP password. See SMTP_USER.'),
-  // Not cross-validated against SMTP_USER/SMTP_PASS with a schema-level
-  // .refine(): EnvSchema.pick({ DATABASE_URL: true }) (getDatabaseUrl, below)
-  // throws "cannot be used on object schemas containing refinements" the
-  // moment ANY .refine() sits on the object itself — verified empirically —
-  // which would break drizzle-kit's one entry point into this file.
-  // mailer.config.ts's own comment covers what happens when only one of the
-  // two is set (auth is not attempted, same as neither being set).
+  SMTP_PASSWORD: z
+    .string()
+    .optional()
+    .describe(
+      'SMTP password. Set it together with SMTP_USERNAME: boot refuses one without the other.'
+    ),
+  // The pair is not cross-validated here with a schema-level .refine():
+  // EnvSchema.pick({ DATABASE_URL: true }) (getDatabaseUrl, below) throws
+  // "cannot be used on object schemas containing refinements" the moment ANY
+  // .refine() sits on the object itself, which would break drizzle-kit's one
+  // entry point into this file. assertEnvConsistent (env-consistency.config.ts)
+  // refuses a half-set pair at boot instead.
   MAIL_FROM: z
     .email()
     .default('no-reply@example.com')
@@ -429,78 +528,81 @@ const EnvSchema = z.object({
       'The From address on every outbound email. Mailpit accepts any value; a real provider may require this to be a verified sender.'
     ),
 
-  // The product name Task 3's email templates (src/templates/email/) put in
-  // their subject lines and sign-offs (e.g. "Verify your email for
-  // <APP_NAME>") — never hardcoded into a template, per this repo's own
-  // "anything configurable goes in this schema" convention. PLACEHOLDER at
-  // THIS layer specifically: nothing in src/ calls `getEnv().APP_NAME` yet,
-  // because the controller that would (Task 5/6) does not exist in this
-  // plan's execution order yet — every template function takes `appName` as
-  // an ordinary string argument, not by reading this schema itself, so it
-  // stays a pure function with no config dependency of its own to mock in a
-  // unit test. Defaulted, unlike APP_URL/WEB_URL's required-placeholder
-  // pattern: a product name carries no security consequence the way a
-  // missing secret or a wrong CORS origin would, so there is no fail-fast
-  // argument for making a cloner set this before anything boots.
+  // The product name in email copy and notification text. Callers read
+  // `getEnv().APP_NAME` and pass it to a template as `appName`, so the
+  // templates stay pure functions. Defaulted: a product name carries no
+  // security consequence, so there is no reason to fail boot without one.
   APP_NAME: z
     .string()
     .min(1)
     .default('Express Boilerplate')
     .describe(
-      'Product name used in outbound email copy (src/templates/email/). PLACEHOLDER — nothing in src/ reads it yet; reserved for a later task\'s controller to pass into a template\'s appName variable. Defaults to "Express Boilerplate".'
+      'Product name in outbound email copy and notification text: verification, password reset, password changed and invitation messages (auth.controller.ts, verification-mail.utilities.ts, tenant-invitation.service.ts). Defaults to "Express Boilerplate".'
     ),
 
-  // THESE THREE BOUND A TIMING ORACLE, NOT MERELY A RESOURCE LEAK — read
-  // this before raising any of them to "fix" a flaky provider.
+  // These three bound the stages of a send to an SMTP host that stops
+  // responding. SMTP_CONNECTION_TIMEOUT_MS is also nodemailer's dnsTimeout,
+  // which bounds only the first try of each DNS query. nodemailer's own defaults (smtp-connection)
+  // are 2 minutes (connectionTimeout), 30 seconds (greetingTimeout and
+  // dnsTimeout) and 10 minutes (socketTimeout, an inactivity timer).
   //
-  // nodemailer's own defaults (smtp-connection) are 2 minutes
-  // (connectionTimeout), 30 seconds (greetingTimeout), and 10 minutes
-  // (socketTimeout) — all far longer than an HTTP request should ever
-  // legitimately take. Left at those defaults, a HUNG (not merely refused)
-  // SMTP host makes `sendMail` (mailer.service.ts) block for minutes on
-  // whichever branch actually attempts a send. Ruling G (that file's own
-  // header comment) already closed the STATUS-CODE version of this leak —
-  // a registered address and an unregistered one must answer identically —
-  // but forgot-password only sends when the address exists, so an unbounded
-  // hang reopens the identical enumeration oracle through LATENCY instead:
-  // a registered address blocks for minutes, an unregistered one returns
-  // instantly. An attacker does not need to cause the outage, only to
-  // measure during one. These defaults bound the worst case to tens of
-  // seconds instead of minutes.
+  // No HTTP response waits on SMTP: every send runs in email.worker.ts off
+  // the queue, and forgot-password answers 202 before it even looks the user
+  // up, so latency cannot reveal whether an address is registered. What the
+  // timeouts shorten is (1) how long a hung send holds an email-worker slot,
+  // and (2) how long it delays graceful shutdown: gracefulShutdown
+  // (server.ts) drains HTTP for up to SERVER_DRAIN_TIMEOUT_MS, then waits
+  // for the in-flight job before closing the database, Redis and queues and
+  // flushing traces.
   //
-  // greetingTimeout specifically is NOT single-digit seconds, and that
-  // floor is measured, not guessed: this project's own shared Mailpit
-  // container takes ~8.3 seconds to send its greeting (confirmed at the raw
-  // TCP socket level — `nc`/a Python socket connects in under 5ms, then
-  // waits ~8s for the first byte — almost certainly a reverse-DNS lookup on
-  // the connecting address timing out inside the container's network
-  // environment before Mailpit proceeds anyway). A first attempt at 5000ms
-  // here made the real-Mailpit integration test fail outright — caught by
-  // actually running it, not assumed. 15000ms clears that with real margin
-  // while staying nowhere near nodemailer's 30-second default.
-  SMTP_CONNECTION_TIMEOUT: z.coerce
+  // They are per-stage bounds, not a per-send deadline. The resolver retries
+  // a DNS query that times out and doubles the timeout on each retry, so at
+  // the 3000 ms default one address family can take about 45s; when neither
+  // family returns an address, nodemailer falls back to the OS resolver,
+  // which has no timeout. A host that resolves
+  // to several addresses can take the connection timeout once per address.
+  // A server that keeps sending bytes resets the inactivity timer. The boot
+  // check in env-consistency.config.ts sums connect, greeting and inactivity
+  // for one address against SHUTDOWN_TIMEOUT_MS: a sanity check, not a
+  // guarantee. With the defaults that sum is 15s, which with the 5s drain
+  // leaves 5s of the default 25s budget.
+  //
+  // The compose Mailpit sends its greeting in 8–16 ms (3 raw-socket runs),
+  // so 5000 ms leaves ample margin. If the real-Mailpit integration tests
+  // time out on the greeting, raise SMTP_GREETING_TIMEOUT_MS in .env.test and
+  // the CI env block, not this default.
+  SMTP_CONNECTION_TIMEOUT_MS: z.coerce
     .number()
     .int()
     .positive()
-    .default(10_000)
+    .default(3000)
     .describe(
-      "Milliseconds to wait for the SMTP connection to establish before failing. Bounds a timing side-channel (see this schema field group's own comment), not just a resource leak — do not raise this to accommodate a slow provider without reading that comment first. nodemailer's own default is 2 minutes."
+      "Milliseconds to wait for each SMTP connection attempt to establish before failing. Also the timeout for the first try of each DNS query; the resolver doubles it on each retry, and the OS-lookup fallback has no timeout. A host that resolves to several addresses can take it once per address. Boot checks that it plus SMTP_GREETING_TIMEOUT_MS, SMTP_SOCKET_TIMEOUT_MS and the 5s HTTP drain stays at least 5s under SHUTDOWN_TIMEOUT_MS; that assumes one address and is a sanity check, not a per-send deadline. nodemailer's own defaults are 2 minutes to connect and 30 seconds per DNS query."
     ),
-  SMTP_GREETING_TIMEOUT: z.coerce
+  SMTP_GREETING_TIMEOUT_MS: z.coerce
     .number()
     .int()
     .positive()
-    .default(15_000)
+    .default(5000)
     .describe(
-      "Milliseconds to wait for the SMTP server's greeting after connecting. Bounds a timing side-channel — see SMTP_CONNECTION_TIMEOUT. nodemailer's own default is 30 seconds; this project's own Mailpit measured at ~8.3s is why this isn't lower."
+      "Milliseconds to wait for the SMTP server's greeting after connecting. Counts toward the shutdown budget — see SMTP_CONNECTION_TIMEOUT_MS. nodemailer's own default is 30 seconds."
     ),
-  SMTP_SOCKET_TIMEOUT: z.coerce
+  SMTP_SOCKET_TIMEOUT_MS: z.coerce
     .number()
     .int()
     .positive()
-    .default(20_000)
+    .default(7000)
     .describe(
-      "Milliseconds of inactivity before an open SMTP connection is closed. Bounds a timing side-channel — see SMTP_CONNECTION_TIMEOUT. nodemailer's own default is 10 minutes."
+      "Milliseconds of inactivity before an open SMTP connection is closed. Counts toward the shutdown budget — see SMTP_CONNECTION_TIMEOUT_MS. nodemailer's own default is 10 minutes."
+    ),
+
+  SHUTDOWN_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(25_000)
+    .describe(
+      "Milliseconds graceful shutdown may take before the process exits with code 1 anyway. Defaults to 25000, under Kubernetes' default 30s termination grace period."
     ),
 })
 
@@ -584,6 +686,38 @@ export function trustProxySetting(value: string): boolean | number | string {
   const normalised = value.trim()
   if (normalised.toLowerCase() === 'false') return false
   return /^\d+$/.test(normalised) ? Number(normalised) : normalised
+}
+
+/**
+ * Whether the auth cookies (refresh token, OAuth session) carry `Secure`.
+ *
+ * The one place the rule lives: an explicit COOKIE_SECURE wins, otherwise
+ * every APP_ENV but `local` is secure.
+ * @param env - The COOKIE_SECURE and APP_ENV slice of the validated environment.
+ * @returns True when the cookies must only travel over HTTPS.
+ */
+export function isCookieSecure(env: Pick<Env, 'COOKIE_SECURE' | 'APP_ENV'>): boolean {
+  return env.COOKIE_SECURE ?? env.APP_ENV !== 'local'
+}
+
+/**
+ * Console log format: an explicit LOG_FORMAT wins, otherwise `pretty` on
+ * local and `json` everywhere else.
+ * @param env - The LOG_FORMAT and APP_ENV slice of the validated environment.
+ * @returns The format the logger writes.
+ */
+export function logFormat(env: Pick<Env, 'LOG_FORMAT' | 'APP_ENV'>): 'json' | 'pretty' {
+  return env.LOG_FORMAT ?? (env.APP_ENV === 'local' ? 'pretty' : 'json')
+}
+
+/**
+ * Whether SMTP must upgrade to TLS rather than only negotiating it when the
+ * server offers it. Off on local only, where Mailpit cannot speak TLS.
+ * @param env - The APP_ENV slice of the validated environment.
+ * @returns True on every APP_ENV but `local`.
+ */
+export function requiresSmtpTls(env: Pick<Env, 'APP_ENV'>): boolean {
+  return env.APP_ENV !== 'local'
 }
 
 /**

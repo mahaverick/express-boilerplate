@@ -1,5 +1,6 @@
 // tests/unit/services/lifecycle.service.test.ts
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { getEnv } from '@/configs/env.config'
 import {
   closeAllStreams,
   countStreams,
@@ -10,10 +11,18 @@ import {
   resetLifecycleForTests,
 } from '@/services/lifecycle.service'
 
+vi.mock('@/configs/env.config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/configs/env.config')>()
+  return { ...actual, getEnv: vi.fn(actual.getEnv) }
+})
+
+const realEnv = getEnv()
+
 describe('lifecycle.service', () => {
   afterEach(() => {
     resetLifecycleForTests()
     vi.useRealTimers()
+    vi.mocked(getEnv).mockReturnValue(realEnv)
   })
 
   it('reports shutting down only once markShuttingDown has run, idempotently', () => {
@@ -101,6 +110,18 @@ describe('lifecycle.service', () => {
       createShutdownHandler(() => new Promise<void>(() => {}), 25_000)(exit)
 
       await vi.advanceTimersByTimeAsync(24_999)
+      expect(exit).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1)
+      expect(exit).toHaveBeenCalledWith(1)
+    })
+
+    it('defaults the backstop to SHUTDOWN_TIMEOUT_MS', async () => {
+      vi.useFakeTimers()
+      vi.mocked(getEnv).mockReturnValue({ ...realEnv, SHUTDOWN_TIMEOUT_MS: 1234 })
+      const exit = vi.fn()
+      createShutdownHandler(() => new Promise<void>(() => {}))(exit)
+
+      await vi.advanceTimersByTimeAsync(1233)
       expect(exit).not.toHaveBeenCalled()
       await vi.advanceTimersByTimeAsync(1)
       expect(exit).toHaveBeenCalledWith(1)

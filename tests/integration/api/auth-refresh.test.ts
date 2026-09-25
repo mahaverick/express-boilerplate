@@ -21,6 +21,7 @@ import { REFRESH_REUSE_GRACE_MS, REFRESH_TOKEN_COOKIE_NAME } from '@/constants/a
 import type { User } from '@/database/models/user.model'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
+import { hashToken } from '@/utilities/token.utilities'
 import { request } from '../../helpers/request'
 
 const app = createApp()
@@ -142,6 +143,15 @@ async function ageConsumedTokensPastGrace(userId: string): Promise<void> {
     update user_tokens set consumed_at = consumed_at - interval '11 seconds'
     where user_id = ${userId} and consumed_at is not null
   `
+}
+
+/**
+ * The raw token inside a `refreshToken=<value>` pair.
+ * @param pair - A pair from `refreshCookiePair`.
+ * @returns The decoded raw token.
+ */
+function rawTokenOf(pair: string): string {
+  return decodeURIComponent(pair.slice(`${REFRESH_TOKEN_COOKIE_NAME}=`.length))
 }
 
 describe('POST /api/v1/auth/refresh and /logout', () => {
@@ -270,6 +280,26 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
       expect(replayed.status).toBe(401)
     })
 
+    // After a COOKIE_DOMAIN change the browser holds two refreshToken cookies
+    // (one per domain scope) and sends the older one first (RFC 6265 §5.4).
+    it('reads the last of two refreshToken cookies: a stale one first does not revoke the live session', async () => {
+      const { response: loginResponse, user } = await registerAndLogin(createdIds)
+      const stale = refreshCookiePair(loginResponse) as string
+      const rotated = await request(app).post('/api/v1/auth/refresh').set('Cookie', stale)
+      expect(rotated.status).toBe(200)
+      const live = refreshCookiePair(rotated) as string
+      await ageConsumedTokensPastGrace(user.id)
+
+      const both = await request(app)
+        .post('/api/v1/auth/refresh')
+        .set('Cookie', `${stale}; ${live}`)
+      expect(both.status).toBe(200)
+      const next = await request(app)
+        .post('/api/v1/auth/refresh')
+        .set('Cookie', refreshCookiePair(both) as string)
+      expect(next.status).toBe(200)
+    })
+
     it('rejects a refresh request with no cookie at all', async () => {
       const response = await request(app).post('/api/v1/auth/refresh')
       expect(response.status).toBe(401)
@@ -319,6 +349,27 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
       const logoutResponse = await request(app).post('/api/v1/auth/logout').set('Cookie', cookie)
 
       expect(refreshCookiePair(logoutResponse)).toBe(`${REFRESH_TOKEN_COOKIE_NAME}=`)
+    })
+
+    it('revokes the session of the last of two refreshToken cookies', async () => {
+      const { response: firstLogin, email } = await registerAndLogin(createdIds)
+      const stale = refreshCookiePair(firstLogin) as string
+      await request(app).post('/api/v1/auth/logout').set('Cookie', stale)
+      const secondLogin = await request(app)
+        .post('/api/v1/auth/login')
+        .send({ email, password: VALID_PASSWORD })
+      const live = refreshCookiePair(secondLogin) as string
+
+      const loggedOut = await request(app)
+        .post('/api/v1/auth/logout')
+        .set('Cookie', `${stale}; ${live}`)
+      expect(loggedOut.status).toBe(200)
+
+      const [row] = await sql<{ isRevoked: boolean }[]>`
+        select revoked_at is not null as "isRevoked" from user_tokens
+        where token_hash = ${hashToken(rawTokenOf(live))}
+      `
+      expect(row?.isRevoked).toBe(true)
     })
 
     it('succeeds even with no refresh cookie at all — logout never leaks whether a token was live', async () => {

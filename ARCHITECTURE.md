@@ -141,7 +141,8 @@ grepping, the way the previous version of this section had to be:**
 - Both new routes carry their own rate limiters — three limiters between
   them, since `resend-verification` carries two in series — on the same
   one-prefix-per-route convention `auth.routes.ts`'s header comment already
-  states: `rl:verify-email:` and the two-layer
+  states: `rl:verify-email:` (under `REDIS_KEY_PREFIX`, like every Redis key)
+  and the two-layer
   `rl:resend-verification-ip:` / `rl:resend-verification-email:` pair.
 
 **What is still not built, and is not confused with the above:**
@@ -162,10 +163,17 @@ SECURITY.md for the exact statement to run and why.
 All configuration is read through `getEnv()` in
 [`src/configs/env.config.ts`](src/configs/env.config.ts), which validates
 `process.env` against a Zod schema once, on first call, and memoises the
-result. No other module reads `process.env` directly — an eslint rule
-(`no-restricted-properties`) enforces this outside `env.config.ts` itself.
-See [DATABASE.md](DATABASE.md) for `getDatabaseUrl()`, the narrower sibling
-function `drizzle.config.ts` uses.
+result. `APP_ENV` (`local`/`dev`/`qa`/`prod`) is required and names the
+deployment. Environment-dependent defaults such as `COOKIE_SECURE`,
+`LOG_FORMAT` and SMTP's TLS requirement derive from it through helpers in
+that file. Before anything starts, `index.ts` runs `assertEnvConsistent`
+([`src/configs/env-consistency.config.ts`](src/configs/env-consistency.config.ts)),
+which refuses stale names and unsafe combinations. No other application
+module reads `process.env`; the exceptions are listed in CLAUDE.md.
+`tracing.ts` is the notable one, since it loads before validation. Every
+Redis key and channel is namespaced by `REDIS_KEY_PREFIX` through
+`redisKey()`. See [DATABASE.md](DATABASE.md) for `getDatabaseUrl()`, the
+narrower sibling function `drizzle.config.ts` uses.
 
 ## Health checks
 
@@ -295,10 +303,10 @@ talking to a personal, unrelated Redis. Container-internal ports remain
 `.env.test` off disk and asserts they agree on the non-default ports,
 specifically so a well-meaning "tidy this up" edit fails loudly instead of
 silently passing against a developer's own instance. It deliberately checks
-the committed **files**, not `getEnv()` at runtime: GitHub Actions
-`services:` cannot remap container ports, so CI necessarily runs against
-5432/6379, and the earlier runtime version of this assertion was guaranteed
-to fail on the first pull request.
+the committed **files**, not `getEnv()` at runtime: CI's `services:`
+publish the container-default ports, so CI runs against 5432/6379, and the
+earlier runtime version of this assertion was guaranteed to fail on the
+first pull request.
 
 The OTel Collector's health-check extension is reachable on `:13133` for
 manual verification, but the image has no shell/`curl`/`wget`, so it
