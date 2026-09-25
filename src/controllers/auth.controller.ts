@@ -1145,7 +1145,7 @@ export async function findOrCreateByGoogle(profile: GoogleProfile): Promise<User
     // Google verified this address (checked above).
     await markEmailVerified(createdUser.id, tx) // tx
     const verified = await userRepository.findById(createdUser.id, {}, tx) // tx
-    if (!verified) throw new HttpError('Insert returned no row', 500)
+    if (!verified) throw new HttpError('Created user not found', 500)
     return verified
   })
 }

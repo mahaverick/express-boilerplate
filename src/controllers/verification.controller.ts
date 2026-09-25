@@ -85,7 +85,8 @@ export async function resendVerification(
     const sendMail = await verificationService.prepareResendVerification(input.email)
 
     respondResendAccepted(response)
-    // Never rejects: the service logs its own failure (Ruling T).
+    // Not awaited, and never rejects: the service logs its own failure, so a
+    // mail failure can neither delay nor change a response already sent.
     void sendMail()
   } catch (error) {
     next(error)

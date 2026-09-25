@@ -44,11 +44,12 @@ export async function denySession(sessionId: string): Promise<void> {
       expiration: { type: 'EX', value: seconds },
     })
   } catch (error) {
-    // Never rethrow. This runs inside logout, refresh-token reuse detection
-    // (both via session.service's revokeAndDenySession), and password reset
-    // (via revokeAllSessions) — a Redis blip must not turn any of them into a
-    // 500, because the database revocation is the half that actually ends
-    // the session.
+    // Never rethrow. This runs inside every revocation in session.service.ts
+    // (logout, refresh-token reuse detection and absolute-TTL expiry via
+    // revokeAndDenySession; password reset and change via revokeAllSessions
+    // and revokeAllSessionsExceptCurrent) — a Redis blip must not turn any
+    // of them into a 500, because the database revocation is the half that
+    // actually ends the session.
     logger.warn('Could not deny session; access tokens stay valid until they expire', {
       sessionId,
       error: error instanceof Error ? error.message : String(error),

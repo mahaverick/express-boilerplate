@@ -168,7 +168,9 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
   /**
    * Revoke every still-live token sharing a session id — the whole rotation
    * chain for one login. Used by logout and by reuse detection;
-   * session.service.ts denies the session's access tokens afterwards.
+   * session.service.ts denies the session's access tokens afterwards. A
+   * caller that runs this inside its own transaction must deny the session
+   * only after that transaction commits.
    * @param sessionId - The session id shared by every token in the chain.
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns Resolves once every matching row is revoked.
@@ -189,7 +191,9 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    * session, and report each revoked session id so session.service.ts can
    * deny its access tokens. Used where every session must end at once —
    * e.g. a password reset. Its returned ids are what let a reset end an
-   * already-issued access token immediately.
+   * already-issued access token immediately. A caller that runs this inside
+   * its own transaction must deny the returned ids only after that
+   * transaction commits.
    *
    * This method has no purpose predicate — it deliberately revokes
    * `password_reset`, `email_verification`, and every other purpose too,
@@ -232,7 +236,8 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
   /**
    * Revoke every still-live token belonging to a user EXCEPT the ones
    * sharing one given session id, and report each revoked session id so
-   * session.service.ts can deny it. Used by password change:
+   * session.service.ts can deny it (after commit, when a caller runs this
+   * inside its own transaction). Used by password change:
    * every OTHER session must end at once, while the session presenting the
    * request that triggered the change keeps working uninterrupted.
    *

@@ -13,7 +13,12 @@ import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { db, sql } from '@/services/database.service'
 import { isSessionDenied } from '@/services/session-denylist.service'
-import { issueRefreshToken, issueToken, rotateRefreshToken } from '@/services/session.service'
+import {
+  hashToken,
+  issueRefreshToken,
+  issueToken,
+  rotateRefreshToken,
+} from '@/services/session.service'
 
 const userRepository = new UserRepository()
 const userTokenRepository = new UserTokenRepository()
@@ -352,14 +357,26 @@ describe('UserTokenRepository', () => {
     expect(revoked.toSorted(byId)).toEqual([sessionIdOne, sessionIdTwo].toSorted(byId))
   })
 
-  it('no revocation method writes the denylist; session.service does', async () => {
+  // A fresh user and live row per method, so each one revokes something.
+  it.each([
+    [
+      'revokeAllForSession',
+      (_userId: string, sessionId: string) => userTokenRepository.revokeAllForSession(sessionId),
+    ],
+    ['revokeAllForUser', (userId: string) => userTokenRepository.revokeAllForUser(userId)],
+    [
+      'revokeAllForUserExceptSession',
+      (userId: string) => userTokenRepository.revokeAllForUserExceptSession(userId, randomUUID()),
+    ],
+  ] as const)('%s revokes the row but never writes the denylist', async (_name, revoke) => {
     const userId = await createUser()
     const sessionId = randomUUID()
-    await issueRefreshToken(userId, sessionId)
+    const issued = await issueRefreshToken(userId, sessionId)
 
-    await userTokenRepository.revokeAllForSession(sessionId)
-    await userTokenRepository.revokeAllForUser(userId)
+    await revoke(userId, sessionId)
 
+    const row = await userTokenRepository.findByHash(hashToken(issued.raw))
+    expect(row?.revokedAt).not.toBeNull()
     expect(await isSessionDenied(sessionId)).toBe(false)
   })
 
@@ -543,9 +560,8 @@ describe('UserTokenRepository', () => {
       // asking for a verification mail.
       expect(await rotateRefreshToken(refresh.raw)).toBeDefined()
 
-      // IssuedToken (session.service.ts) carries no row id, and hashToken
-      // is not exported, so the verification row is identified by
-      // userId + purpose rather than by hash or id.
+      // IssuedToken (session.service.ts) carries no row id, so the
+      // verification row is identified by userId + purpose.
       const [remaining] = await db
         .select()
         .from(userTokenModel)

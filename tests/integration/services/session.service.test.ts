@@ -13,13 +13,15 @@
 // passing for test 5's reason. Test 5 is the only test that presents an
 // already-rotated token, and it ages the row past the reuse grace window first.
 import { createHash, randomUUID } from 'node:crypto'
+import { eq } from 'drizzle-orm'
 import jwt from 'jsonwebtoken'
 import { afterEach, describe, expect, it } from 'vitest'
 import { getEnv } from '@/configs/env.config'
+import { userTokenModel } from '@/database/models/user-token.model'
 import type { User } from '@/database/models/user.model'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
-import { sql, withTransaction } from '@/services/database.service'
+import { sql, withTransaction, type DbExecutor } from '@/services/database.service'
 import { isSessionDenied } from '@/services/session-denylist.service'
 import {
   claimToken,
@@ -33,11 +35,12 @@ import {
   verifyAccessToken,
 } from '@/services/session.service'
 import { parseDurationMs } from '@/utilities/duration.utilities'
+import { withMutatedMethod } from '../../helpers/mutate'
 
 /**
- * SHA-256 hash a raw token exactly as session.service.ts's own (private)
- * hashToken does, so a test can look up the row `issueToken` just wrote
- * without reaching into that module's internals.
+ * SHA-256 hash a raw token the way session.service.ts's hashToken does,
+ * derived independently so a test checks the stored form without trusting
+ * the function under test.
  * @param raw - The raw token.
  * @returns The hex-encoded digest.
  */
@@ -47,6 +50,27 @@ function hashRawToken(raw: string): string {
 
 const userRepository = new UserRepository()
 const userTokenRepository = new UserTokenRepository()
+
+// Each repository revocation, called for one user's one session. The
+// except-session case spares an unrelated id, so the session is revoked.
+const REPOSITORY_REVOKES: readonly [
+  string,
+  (userId: string, sessionId: string, tx: DbExecutor) => Promise<unknown>,
+][] = [
+  [
+    'revokeAllForSession',
+    (_userId, sessionId, tx) => userTokenRepository.revokeAllForSession(sessionId, tx),
+  ],
+  [
+    'revokeAllForUser',
+    (userId, _sessionId, tx) => userTokenRepository.revokeAllForUser(userId, tx),
+  ],
+  [
+    'revokeAllForUserExceptSession',
+    (userId, _sessionId, tx) =>
+      userTokenRepository.revokeAllForUserExceptSession(userId, randomUUID(), tx),
+  ],
+]
 
 // vitest types `expect.any(...)` as `any` (it's an asymmetric matcher, not a
 // real string) — assigning it directly into an object literal's property
@@ -131,8 +155,8 @@ describe('refresh token issuance, rotation, and revocation', () => {
     expect(byRawValue).toHaveLength(0)
 
     // A row keyed by the token's actual (hashed) representation does exist.
-    // Re-derive the same hash issueRefreshToken computed, without reaching
-    // into its private hashToken() — proves the raw value is NOT what got
+    // Re-derive the same hash issueRefreshToken computed, without calling
+    // hashToken() itself — proves the raw value is NOT what got
     // stored, by confirming the raw value itself still doesn't match
     // anything even though a row for this session does.
     const storedRows = await sql`
@@ -584,24 +608,50 @@ describe('revocation denies the revoked sessions (session.service owns the denyl
     expect(await isSessionDenied(otherUsersSession)).toBe(false)
   })
 
-  it("a rolled-back transaction's revocation denies nothing", async () => {
+  // Each case gets its own user and live row, so every method has a row to
+  // revoke: a method that matched nothing would prove nothing.
+  it.each(REPOSITORY_REVOKES)(
+    '%s in a rolled-back transaction revokes and denies nothing',
+    async (_name, revoke) => {
+      const userId = await createUser()
+      const sessionId = randomUUID()
+      await issueRefreshToken(userId, sessionId)
+
+      await expect(
+        withTransaction(async (tx) => {
+          await revoke(userId, sessionId, tx)
+          // Inside the transaction the row IS revoked: the method matched it.
+          const [inside] = await tx
+            .select({ revokedAt: userTokenModel.revokedAt })
+            .from(userTokenModel)
+            .where(eq(userTokenModel.sessionId, sessionId))
+          expect(inside?.revokedAt).not.toBeNull()
+          throw new Error('roll back')
+        })
+      ).rejects.toThrow('roll back')
+
+      const [row] = await sql<{ revoked_at: Date | null }[]>`
+        select revoked_at from user_tokens where session_id = ${sessionId}`
+      expect(row).toBeDefined()
+      expect(row?.revoked_at).toBeNull()
+      expect(await isSessionDenied(sessionId)).toBe(false)
+    }
+  )
+
+  it('denies only after the database revocation: a failed revoke denies nothing', async () => {
     const userId = await createUser()
     const sessionId = randomUUID()
     await issueRefreshToken(userId, sessionId)
 
-    await expect(
-      withTransaction(async (tx) => {
-        await userTokenRepository.revokeAllForSession(sessionId, tx)
-        await userTokenRepository.revokeAllForUser(userId, tx)
-        await userTokenRepository.revokeAllForUserExceptSession(userId, randomUUID(), tx)
-        throw new Error('roll back')
-      })
-    ).rejects.toThrow('roll back')
+    await withMutatedMethod(
+      UserTokenRepository.prototype,
+      'revokeAllForSession',
+      () => Promise.reject(new Error('database down')),
+      async () => {
+        await expect(revokeSession(sessionId)).rejects.toThrow('database down')
+      }
+    )
 
-    // The rows were never revoked, so the session must not be denied either.
-    const [row] = await sql<{ revoked_at: Date | null }[]>`
-      select revoked_at from user_tokens where session_id = ${sessionId}`
-    expect(row?.revoked_at).toBeNull()
     expect(await isSessionDenied(sessionId)).toBe(false)
   })
 })
