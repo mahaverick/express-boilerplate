@@ -1,15 +1,15 @@
-// tests/unit/utilities/token.utilities.test.ts
+// tests/unit/services/session.service.test.ts
 //
 // Pure JWT verify behaviour — no database, no user row. "Issues an access
 // token carrying the user id and an expiry" (the property that needs a real
-// `User`) lives in tests/integration/utilities/token.utilities.test.ts
+// `User`) lives in tests/integration/services/session.service.test.ts
 // instead, against a real created user rather than a hand-built fixture —
 // signAccessToken's User parameter has non-optional `T | null` fields
 // (mirroring Postgres NULL), and a real row is the natural way to get one
 // without constructing null literals by hand.
 //
 // verifyAccessToken returns a discriminated result rather than throwing
-// (VerifyAccessTokenResult, token.utilities.ts) — every case below asserts
+// (VerifyAccessTokenResult, session.service.ts) — every case below asserts
 // the FULL literal `{ ok: false, reason }` via toEqual, not just `ok` or
 // just `reason` in isolation. That is deliberate: a bare `result.ok` check
 // would still pass if a mutation flipped every rejection to the same
@@ -22,7 +22,7 @@ import jwt from 'jsonwebtoken'
 import { describe, expect, it } from 'vitest'
 import { getEnv } from '@/configs/env.config'
 import type { User } from '@/database/models/user.model'
-import { hashToken, signAccessToken, verifyAccessToken } from '@/utilities/token.utilities'
+import { hashToken, signAccessToken, verifyAccessToken } from '@/services/session.service'
 
 describe('verifyAccessToken', () => {
   it('rejects a token signed with the wrong secret', () => {

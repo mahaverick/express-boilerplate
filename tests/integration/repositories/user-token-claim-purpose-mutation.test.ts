@@ -7,7 +7,7 @@
 // into "I can take over this account." The real, always-green proof of
 // this lives in tests/integration/repositories/user-token.repository.test.ts
 // ("claimOnce rejects a claim for a different purpose...") and
-// tests/integration/utilities/token.utilities.test.ts ("rejects claiming a
+// tests/integration/services/session.service.test.ts ("rejects claiming a
 // password-reset token as an email verification..."); THIS file exists to
 // show those tests would actually catch a regression, not just that they
 // pass today — same rationale, same two-test shape, as

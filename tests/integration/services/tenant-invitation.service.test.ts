@@ -16,6 +16,7 @@ import { UserMembershipRepository } from '@/repositories/user-membership.reposit
 import { UserRepository } from '@/repositories/user.repository'
 import { db, sql } from '@/services/database.service'
 import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
+import { hashToken } from '@/services/session.service'
 import {
   accept,
   invite,
@@ -24,7 +25,6 @@ import {
   resend,
   revoke,
 } from '@/services/tenant-invitation.service'
-import { hashToken } from '@/utilities/token.utilities'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { expectNoJob, waitForInvitationEmail, waitForJob } from '../../helpers/queue-jobs'
 

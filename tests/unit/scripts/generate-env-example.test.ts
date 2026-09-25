@@ -27,7 +27,7 @@ describe('render', () => {
   // Three fields that all graduated out of the same "PLACEHOLDER — nothing
   // reads this yet" note, at three different points in this repo's history,
   // once something in src/ actually started reading them:
-  // JWT_ACCESS_SECRET earliest (token.utilities.ts signs/verifies access
+  // JWT_ACCESS_SECRET earliest (session.service.ts signs/verifies access
   // tokens with it), then APP_URL and SESSION_SECRET together in this task
   // (passport.config.ts's `configurePassport()`/`createOAuthSessionMiddleware()`
   // read them respectively). One parameterized test, not three near-identical

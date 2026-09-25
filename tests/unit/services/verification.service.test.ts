@@ -3,7 +3,7 @@ import {
   buildInvitationAcceptUrl,
   buildPasswordResetUrl,
   buildVerificationUrl,
-} from '@/utilities/verification-link.utilities'
+} from '@/services/verification.service'
 
 describe('buildVerificationUrl', () => {
   it('points at the frontend WEB_URL, not the API', () => {
@@ -18,7 +18,7 @@ describe('buildVerificationUrl', () => {
   })
 
   it('percent-encodes the token rather than concatenating it raw', () => {
-    // Tokens are hex today (token.utilities.ts:116), so nothing needs
+    // Tokens are hex today (session.service.ts generateRawToken), so nothing needs
     // escaping yet. This pins the behaviour anyway: the day the encoding
     // changes, a '+' or '/' in a query string silently decodes to
     // something else, and a verification link stops working for a

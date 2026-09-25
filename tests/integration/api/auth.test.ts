@@ -784,7 +784,7 @@ describe('POST /api/v1/auth/register and /login', () => {
     })
 
     // Mutation proof for the `!user.emailVerifiedAt` clause, same two-part
-    // shape as tests/integration/utilities/token-reuse-mutation.test.ts:
+    // shape as tests/integration/services/token-reuse-mutation.test.ts:
     //
     //   1. Always on: mutate UserRepository.prototype.findByEmail to report
     //      every row as verified regardless of its real emailVerifiedAt

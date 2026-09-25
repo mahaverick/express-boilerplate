@@ -59,11 +59,12 @@ export class UserRepository extends BaseRepository<(typeof userModel)['_']['conf
   }
 
   /**
-   * Mark a user's email verified, once. The `email_verified_at is null`
-   * predicate is what makes this idempotent in the database rather than in
-   * a caller's read-then-write: a second valid token, or two tabs
-   * submitting the same one, must not move a timestamp that already
-   * records when the mailbox was first proven.
+   * Mark a user's email verified, once.
+   * Call it through verification.service.ts's `markEmailVerified`, never directly.
+   * The `email_verified_at is null` predicate is what makes this idempotent
+   * in the database rather than in a caller's read-then-write: a second
+   * valid token, or two tabs submitting the same one, must not move a
+   * timestamp that already records when the mailbox was first proven.
    * @param id - The user's id.
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns The updated row, or undefined when the user does not exist or was already verified.

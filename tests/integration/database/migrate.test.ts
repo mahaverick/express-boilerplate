@@ -140,7 +140,7 @@ describe('migrations', () => {
   // Migration 0007 adds `email_logs_error_code_check`, replacing a
   // width-only column (`errorCode` was originally `varchar(64)`, changed to
   // `varchar(32)` in this same migration) with a shape constraint. Width
-  // alone did not exclude a raw token: RAW_TOKEN_BYTES (token.utilities.ts)
+  // alone did not exclude a raw token: RAW_TOKEN_BYTES (session.service.ts)
   // hex-encoded is EXACTLY 64 characters, so the old width was chosen to
   // fit one perfectly rather than reject it. This proves the actual
   // guarantee — the uppercase-only shape — at the database level, with a

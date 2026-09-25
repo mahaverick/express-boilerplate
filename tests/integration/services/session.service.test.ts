@@ -1,4 +1,4 @@
-// tests/integration/utilities/token.utilities.test.ts
+// tests/integration/services/session.service.test.ts
 //
 // The six security properties this task exists to prove, against the real
 // per-worker Postgres database. Every user row this file creates is
@@ -19,21 +19,23 @@ import { getEnv } from '@/configs/env.config'
 import type { User } from '@/database/models/user.model'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
-import { sql } from '@/services/database.service'
-import { parseDurationMs } from '@/utilities/duration.utilities'
+import { sql, withTransaction } from '@/services/database.service'
+import { isSessionDenied } from '@/services/session-denylist.service'
 import {
   claimToken,
   issueRefreshToken,
   issueToken,
   revokeAllSessions,
+  revokeAllSessionsExceptCurrent,
   revokeSession,
   rotateRefreshToken,
   signAccessToken,
   verifyAccessToken,
-} from '@/utilities/token.utilities'
+} from '@/services/session.service'
+import { parseDurationMs } from '@/utilities/duration.utilities'
 
 /**
- * SHA-256 hash a raw token exactly as token.utilities.ts's own (private)
+ * SHA-256 hash a raw token exactly as session.service.ts's own (private)
  * hashToken does, so a test can look up the row `issueToken` just wrote
  * without reaching into that module's internals.
  * @param raw - The raw token.
@@ -104,11 +106,11 @@ describe('refresh token issuance, rotation, and revocation', () => {
     expect(decoded.exp).toBeGreaterThan(decoded.iat as number)
 
     // verifyAccessToken returns a discriminated result, not the bare
-    // payload — see token.utilities.ts's own header comment on
+    // payload — see session.service.ts's own header comment on
     // VerifyAccessTokenResult. Asserting the full `{ ok: true, payload }`
     // shape (not just `payload`) proves acceptance, not merely that a
     // payload-shaped object came back. `sid`/`jti` are now part of that
-    // shape (token.utilities.ts's signAccessToken) — `jti` is asserted only
+    // shape (session.service.ts's signAccessToken) — `jti` is asserted only
     // as ANY_STRING since its value is random by design. `exp` must be the
     // token's own signed expiry, which the notification stream ends at.
     expect(verifyAccessToken(token)).toEqual({
@@ -511,5 +513,95 @@ describe('claimToken', () => {
 
   it('refuses an unknown token', async () => {
     expect(await claimToken('deadbeef', 'email_verification')).toBeUndefined()
+  })
+})
+
+describe('revocation denies the revoked sessions (session.service owns the denylist write)', () => {
+  const createdIds: string[] = []
+
+  afterEach(async () => {
+    if (createdIds.length === 0) return
+    await sql`delete from users where id = any(${createdIds})`
+    createdIds.length = 0
+  })
+
+  /**
+   * Create a disposable user and track it for cleanup.
+   * @returns The created user's id.
+   */
+  async function createUser(): Promise<string> {
+    const user = await userRepository.create({ email: uniqueEmail() })
+    createdIds.push(user.id)
+    return user.id
+  }
+
+  it('revokeSession denies that session, and no other', async () => {
+    const userId = await createUser()
+    const revoked = randomUUID()
+    const untouched = randomUUID()
+    await issueRefreshToken(userId, revoked)
+    await issueRefreshToken(userId, untouched)
+
+    await revokeSession(revoked)
+
+    expect(await isSessionDenied(revoked)).toBe(true)
+    expect(await isSessionDenied(untouched)).toBe(false)
+  })
+
+  it('revokeAllSessions denies every session it revoked, and only those', async () => {
+    const userId = await createUser()
+    const otherUserId = await createUser()
+    const sessionOne = randomUUID()
+    const sessionTwo = randomUUID()
+    const otherUsersSession = randomUUID()
+    await issueRefreshToken(userId, sessionOne)
+    await issueRefreshToken(userId, sessionTwo)
+    // No session id: must neither crash the null filter nor deny a bogus key.
+    await issueToken(userId, 'password_reset', 60_000)
+    await issueRefreshToken(otherUserId, otherUsersSession)
+
+    await revokeAllSessions(userId)
+
+    expect(await isSessionDenied(sessionOne)).toBe(true)
+    expect(await isSessionDenied(sessionTwo)).toBe(true)
+    expect(await isSessionDenied(otherUsersSession)).toBe(false)
+  })
+
+  it('revokeAllSessionsExceptCurrent denies every revoked session except the spared one, and never another user’s', async () => {
+    const userId = await createUser()
+    const otherUserId = await createUser()
+    const spared = randomUUID()
+    const revoked = randomUUID()
+    const otherUsersSession = randomUUID()
+    await issueRefreshToken(userId, spared)
+    await issueRefreshToken(userId, revoked)
+    await issueRefreshToken(otherUserId, otherUsersSession)
+
+    await revokeAllSessionsExceptCurrent(userId, spared)
+
+    expect(await isSessionDenied(spared)).toBe(false)
+    expect(await isSessionDenied(revoked)).toBe(true)
+    expect(await isSessionDenied(otherUsersSession)).toBe(false)
+  })
+
+  it("a rolled-back transaction's revocation denies nothing", async () => {
+    const userId = await createUser()
+    const sessionId = randomUUID()
+    await issueRefreshToken(userId, sessionId)
+
+    await expect(
+      withTransaction(async (tx) => {
+        await userTokenRepository.revokeAllForSession(sessionId, tx)
+        await userTokenRepository.revokeAllForUser(userId, tx)
+        await userTokenRepository.revokeAllForUserExceptSession(userId, randomUUID(), tx)
+        throw new Error('roll back')
+      })
+    ).rejects.toThrow('roll back')
+
+    // The rows were never revoked, so the session must not be denied either.
+    const [row] = await sql<{ revoked_at: Date | null }[]>`
+      select revoked_at from user_tokens where session_id = ${sessionId}`
+    expect(row?.revoked_at).toBeNull()
+    expect(await isSessionDenied(sessionId)).toBe(false)
   })
 })

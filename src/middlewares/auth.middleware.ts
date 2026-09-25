@@ -9,7 +9,7 @@
 // there is no seam worth exporting yet:
 //
 //   1. Verify the bearer token's signature — delegated entirely to
-//      `verifyAccessToken` (token.utilities.ts), the one place that knows
+//      `verifyAccessToken` (session.service.ts), the one place that knows
 //      the signing secret and the pinned algorithm, and returns a
 //      discriminated result naming why a rejected token was rejected. This
 //      module never re-implements that check, and never re-derives WHY a
@@ -51,10 +51,10 @@
 // built here; this paragraph is what makes that a chosen trade-off rather
 // than an oversight for the next person to rediscover.
 //
-// Every session-revocation path inside `UserTokenRepository` —
-// `revokeAllForSession` (logout, refresh-token reuse detection) and
-// `revokeAllForUser` (password reset) — denies every session it revokes, so
-// within this middleware revocation does imply denial. Two things stay
+// Every session-revocation function in session.service.ts — logout,
+// refresh-token reuse detection, password reset and change — denies every
+// session it revokes, so within this middleware revocation does imply
+// denial. Two things stay
 // outside that on purpose:
 // `revokeAllForUserAndPurpose` denies nothing, correctly, since it is used
 // for purpose-scoped cleanups (stale verification links) that are not
@@ -66,7 +66,7 @@ import { HttpError } from '@/errors/http-error'
 import { toAuthenticatedUser, type AuthenticatedUser } from '@/presenters/user.presenter'
 import { UserRepository } from '@/repositories/user.repository'
 import { isSessionDenied } from '@/services/session-denylist.service'
-import { verifyAccessToken } from '@/utilities/token.utilities'
+import { verifyAccessToken } from '@/services/session.service'
 
 const userRepository = new UserRepository()
 

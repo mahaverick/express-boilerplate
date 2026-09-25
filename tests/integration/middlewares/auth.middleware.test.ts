@@ -26,7 +26,7 @@ import { ACCESS_TOKEN_EXPIRED_CODE, requireAuth } from '@/middlewares/auth.middl
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { denySession } from '@/services/session-denylist.service'
-import { signAccessToken } from '@/utilities/token.utilities'
+import { signAccessToken } from '@/services/session.service'
 import { withMutatedModule } from '../../helpers/mutate'
 
 const userRepository = new UserRepository()
@@ -272,7 +272,7 @@ describe('requireAuth', () => {
     const token = jwt.sign({ sub: randomUUID() }, getEnv().JWT_ACCESS_SECRET, {
       algorithm: 'HS256',
       // Already expired the moment it's signed — mirrors
-      // tests/unit/utilities/token.utilities.test.ts's own approach.
+      // tests/unit/services/session.service.test.ts's own approach.
       expiresIn: -10,
     })
     const { next, lastCallArgument } = mockNext()

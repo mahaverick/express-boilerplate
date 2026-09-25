@@ -2,7 +2,7 @@
 //
 // Stores only a HASH of the token — the raw value never reaches the
 // database. The raw token is a high-entropy random string
-// (crypto.randomBytes(32), see token.utilities.ts), not a user-chosen
+// (crypto.randomBytes(32), see session.service.ts), not a user-chosen
 // secret, so it is hashed with SHA-256 rather than bcrypt: bcrypt's slow,
 // salted design defends against an attacker guessing a low-entropy human
 // password, which does not apply to 256 bits of randomness, and bcrypt
@@ -99,7 +99,7 @@ export type TokenPurpose = (typeof TOKEN_PURPOSES)[number]
  * The `user_tokens` table: one row per issued or rotated-to token, for any
  * of the three purposes above.
  *
- * What tells `rotateRefreshToken` (token.utilities.ts) that a token was
+ * What tells `rotateRefreshToken` (session.service.ts) that a token was
  * "already rotated" (reuse) rather than "never issued" is `revokedAt` — the
  * row exists and is already revoked — and what it revokes in response is
  * every row sharing the presented row's `sessionId`. `replacedById` links a
@@ -226,7 +226,7 @@ export const userTokenModel = pgTable(
     // load-bearing uniqueness rule the application depends on.
     uniqueIndex('user_tokens_token_hash_unique').on(table.tokenHash),
     // Both revocation paths (revokeSession/revokeAllSessions,
-    // token.utilities.ts) filter by exactly one of these columns across
+    // session.service.ts) filter by exactly one of these columns across
     // potentially many rows; neither is indexed automatically just by
     // virtue of being a foreign key.
     index('user_tokens_session_id_idx').on(table.sessionId),

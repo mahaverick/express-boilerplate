@@ -44,14 +44,8 @@ import { addNotificationJob } from '@/jobs/notification.job'
 import { toPublicUser } from '@/presenters/user.presenter'
 import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
 import { UserRepository } from '@/repositories/user.repository'
-import { db } from '@/services/database.service'
+import { db, withTransaction } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
-import { PASSWORD_CHANGED_TEMPLATE_KEY } from '@/templates/email/password-changed.template'
-import { PASSWORD_RESET_TEMPLATE_KEY } from '@/templates/email/password-reset.template'
-import { REGISTRATION_ATTEMPT_TEMPLATE_KEY } from '@/templates/email/registration-attempt.template'
-import { requireDurationMs } from '@/utilities/duration.utilities'
-import { getDummyHash, hashPassword, isPasswordValid } from '@/utilities/password.utilities'
-import { successResponse } from '@/utilities/response.utilities'
 import {
   claimToken,
   issueRefreshToken,
@@ -61,12 +55,19 @@ import {
   revokeRefreshToken,
   rotateRefreshToken,
   signAccessToken,
-} from '@/utilities/token.utilities'
-import { buildPasswordResetUrl } from '@/utilities/verification-link.utilities'
+} from '@/services/session.service'
 import {
+  buildPasswordResetUrl,
+  markEmailVerified,
   MISSING_FIRST_NAME_FALLBACK,
   sendVerificationMail,
-} from '@/utilities/verification-mail.utilities'
+} from '@/services/verification.service'
+import { PASSWORD_CHANGED_TEMPLATE_KEY } from '@/templates/email/password-changed.template'
+import { PASSWORD_RESET_TEMPLATE_KEY } from '@/templates/email/password-reset.template'
+import { REGISTRATION_ATTEMPT_TEMPLATE_KEY } from '@/templates/email/registration-attempt.template'
+import { requireDurationMs } from '@/utilities/duration.utilities'
+import { getDummyHash, hashPassword, isPasswordValid } from '@/utilities/password.utilities'
+import { successResponse } from '@/utilities/response.utilities'
 import {
   changePasswordSchema,
   forgotPasswordSchema,
@@ -550,9 +551,7 @@ const FORGOT_PASSWORD_RESPONSE_MESSAGE =
  * belongs to an existing account. Runs entirely AFTER `forgotPassword` has
  * already responded (see that function's own comment), the same
  * fire-and-forget shape `sendRegistrationAttemptMail` above uses: a single
- * caller today, so this stays a private helper rather than joining
- * verification-mail.utilities.ts — see that file's own header comment on
- * when a second caller justifies the move.
+ * caller today, so this stays a private helper.
  * @param email - The address submitted to `/forgot-password`.
  */
 async function sendPasswordResetMailIfRegistered(email: string): Promise<void> {
@@ -639,7 +638,7 @@ const INVALID_RESET_TOKEN_MESSAGE = 'Invalid or expired reset link.'
  * nothing about the token's validity.
  *
  * `claimToken` both atomically claims the token AND checks its `purpose`
- * and expiry (token.utilities.ts) — a claim that resolves undefined for ANY
+ * and expiry (session.service.ts) — a claim that resolves undefined for ANY
  * reason (unknown, wrong purpose, already used, expired) answers the same
  * generic 400, so a caller cannot learn which of those actually happened. A
  * soft-deleted user, or one deleted between issuing and claiming, is folded
@@ -675,10 +674,11 @@ export async function resetPassword(
       await authProviderRepository.deleteFederatedForUser(user.id)
     }
 
-    await userRepository.update(user.id, {
-      passwordHash,
-      // Set only when never verified: a reset proves the mailbox, but must not move an earlier timestamp.
-      ...(!user.emailVerifiedAt && { emailVerifiedAt: new Date() }),
+    // One transaction, so the new password and the verification land together.
+    await withTransaction(async (tx) => {
+      await userRepository.update(user.id, { passwordHash }, {}, tx) // tx
+      // A reset proves the mailbox; markEmailVerified never moves an earlier timestamp.
+      if (!user.emailVerifiedAt) await markEmailVerified(user.id, tx) // tx
     })
 
     // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data", not undefined (which JSON.stringify omits entirely)
@@ -1018,12 +1018,14 @@ async function claimUnverifiedAccount(userId: string, googleId: string): Promise
       .values({ userId, provider: 'google', providerId: googleId })
       .onConflictDoNothing()
 
+    // The claiming identity is Google-verified, which proves the mailbox.
+    await markEmailVerified(userId, tx) // tx
+
     const [claimed] = await tx
       .update(userModel)
       .set({
         // eslint-disable-next-line unicorn/no-null -- a null hash is the federated-only state (user.model.ts)
         passwordHash: null,
-        emailVerifiedAt: new Date(),
         updatedAt: new Date(),
       })
       .where(eq(userModel.id, userId))
@@ -1125,7 +1127,6 @@ export async function findOrCreateByGoogle(profile: GoogleProfile): Promise<User
         email,
         // eslint-disable-next-line unicorn/no-null -- passwordHash is nullable specifically for a federated-only user (user.model.ts's own comment) — this account IS that case, not merely "no value given yet"
         passwordHash: null,
-        emailVerifiedAt: new Date(),
       })
       .returning()
 
@@ -1141,7 +1142,11 @@ export async function findOrCreateByGoogle(profile: GoogleProfile): Promise<User
       { userId: createdUser.id, provider: 'google', providerId: profile.id },
     ])
 
-    return createdUser
+    // Google verified this address (checked above).
+    await markEmailVerified(createdUser.id, tx) // tx
+    const verified = await userRepository.findById(createdUser.id, {}, tx) // tx
+    if (!verified) throw new HttpError('Insert returned no row', 500)
+    return verified
   })
 }
 

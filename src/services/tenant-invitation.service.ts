@@ -22,12 +22,12 @@ import { UserMembershipRepository } from '@/repositories/user-membership.reposit
 import { UserRepository } from '@/repositories/user.repository'
 import { db, type DbExecutor } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
+import { hashToken } from '@/services/session.service'
 import { lockActorRole } from '@/services/tenant-membership.service'
+import { buildInvitationAcceptUrl } from '@/services/verification.service'
 import { TENANT_INVITATION_TEMPLATE_KEY } from '@/templates/email/tenant-invitation.template'
 import type { Actor } from '@/types/actor'
 import { requireDurationMs } from '@/utilities/duration.utilities'
-import { hashToken } from '@/utilities/token.utilities'
-import { buildInvitationAcceptUrl } from '@/utilities/verification-link.utilities'
 
 const invitationRepository = new TenantInvitationRepository()
 const tenantRepository = new TenantRepository()

@@ -22,7 +22,7 @@ import { UserMembershipRepository } from '@/repositories/user-membership.reposit
 import { UserRepository } from '@/repositories/user.repository'
 import { db, sql, type DbExecutor } from '@/services/database.service'
 import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
-import { hashToken, signAccessToken } from '@/utilities/token.utilities'
+import { hashToken, signAccessToken } from '@/services/session.service'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { request } from '../../helpers/request'
 

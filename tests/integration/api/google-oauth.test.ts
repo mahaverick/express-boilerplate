@@ -67,7 +67,7 @@ import type { findOrCreateByGoogle as FindOrCreateByGoogleType } from '@/control
 import type { AuthProviderRepository as AuthProviderRepositoryClass } from '@/repositories/auth-provider.repository'
 import type { UserRepository as UserRepositoryClass } from '@/repositories/user.repository'
 import type { sql as SqlType } from '@/services/database.service'
-import type { issueRefreshToken as IssueRefreshTokenType } from '@/utilities/token.utilities'
+import type { issueRefreshToken as IssueRefreshTokenType } from '@/services/session.service'
 import { request } from '../../helpers/request'
 
 /**
@@ -234,8 +234,8 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
     const database = await import('@/services/database.service')
     sql = database.sql
 
-    const tokenUtilities = await import('@/utilities/token.utilities')
-    issueRefreshToken = tokenUtilities.issueRefreshToken
+    const sessionService = await import('@/services/session.service')
+    issueRefreshToken = sessionService.issueRefreshToken
   })
 
   afterAll(() => {

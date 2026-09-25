@@ -140,7 +140,7 @@
 //
 // REFRESH is keyed on IP alone, and is volume/abuse protection, not a
 // defence against a stolen token: a raw refresh token is a 256-bit random
-// value (token.utilities.ts), so guessing one is computationally infeasible
+// value (session.service.ts), so guessing one is computationally infeasible
 // regardless of any rate limit, and a burst of replays of an
 // ALREADY-rotated token gains an attacker nothing beyond the first attempt —
 // rotateRefreshToken's reuse detection revokes the whole session on that
@@ -567,7 +567,7 @@ const RESET_PASSWORD_RATE_LIMIT_MAX_ATTEMPTS = 10
 /**
  * Build a reset-password rate limiter: `limit` attempts per `windowMs`,
  * keyed on IP alone. Same reasoning as `createVerifyEmailRateLimiter`: the
- * token is single-use and high-entropy (256 bits, token.utilities.ts), so
+ * token is single-use and high-entropy (256 bits, session.service.ts), so
  * there is no per-token budget worth counting — this bounds a client working
  * through many tokens (or many malformed attempts), volume protection rather
  * than a security boundary. A factory, not a module-scope constant — see

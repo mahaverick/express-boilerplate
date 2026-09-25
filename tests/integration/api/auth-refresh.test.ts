@@ -21,7 +21,7 @@ import { REFRESH_REUSE_GRACE_MS, REFRESH_TOKEN_COOKIE_NAME } from '@/constants/a
 import type { User } from '@/database/models/user.model'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
-import { hashToken } from '@/utilities/token.utilities'
+import { hashToken } from '@/services/session.service'
 import { request } from '../../helpers/request'
 
 const app = createApp()

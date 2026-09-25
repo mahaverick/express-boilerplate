@@ -82,15 +82,15 @@ const EnvSchema = z.object({
   // round-trip's CSRF `state` parameter — so each field's own `.describe()`
   // below says what it actually does rather than carrying the placeholder
   // note. WEB_URL was the first of these to graduate —
-  // verification-link.utilities.ts reads `getEnv().WEB_URL` to build the
+  // verification.service.ts reads `getEnv().WEB_URL` to build the
   // link mailed to a user, and it now has a second reader:
   // origin.utilities.ts reads it to decide whether a browser's Origin
   // header may receive a CORS grant. JWT_ACCESS_SECRET graduated earlier still —
-  // token.utilities.ts (signAccessToken/verifyAccessToken) reads it to sign
+  // session.service.ts (signAccessToken/verifyAccessToken) reads it to sign
   // and verify every access token.
   //
   // There is no JWT_REFRESH_SECRET: refresh tokens are opaque random
-  // strings, not JWTs (token.utilities.ts's header comment), so nothing
+  // strings, not JWTs (session.service.ts's header comment), so nothing
   // signs one with a secret, ever — not "not yet". A field that can never
   // be read is not a placeholder, it is exactly the friction a boilerplate
   // should not ship: a cloner generating a 32-character secret for a
@@ -151,7 +151,7 @@ const EnvSchema = z.object({
     .string()
     .min(32)
     .describe(
-      'Signs and verifies access tokens (token.utilities.ts). Any 32+ character string works; use `openssl rand -hex 32`.'
+      'Signs and verifies access tokens (session.service.ts). Any 32+ character string works; use `openssl rand -hex 32`.'
     ),
   SESSION_SECRET: z
     .string()
@@ -537,7 +537,7 @@ const EnvSchema = z.object({
     .min(1)
     .default('Express Boilerplate')
     .describe(
-      'Product name in outbound email copy and notification text: verification, password reset, password changed and invitation messages (auth.controller.ts, verification-mail.utilities.ts, tenant-invitation.service.ts). Defaults to "Express Boilerplate".'
+      'Product name in outbound email copy and notification text: verification, password reset, password changed and invitation messages (auth.controller.ts, verification.service.ts, tenant-invitation.service.ts). Defaults to "Express Boilerplate".'
     ),
 
   // These three bound the stages of a send to an SMTP host that stops

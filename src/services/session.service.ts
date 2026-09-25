@@ -1,4 +1,4 @@
-// src/utilities/token.utilities.ts
+// src/services/session.service.ts
 //
 // Access tokens are signed JWTs (jsonwebtoken) — short-lived, stateless,
 // carrying the user id (`sub`) plus the session and token ids (`sid`,
@@ -24,6 +24,10 @@
 // and how that same primitive now also guards email-verification and
 // password-reset tokens, scoped so one purpose's token can never be
 // claimed as another's.
+//
+// Every revocation here also denies the revoked sessions' access tokens
+// (session-denylist.service.ts, best-effort). The repository only revokes
+// rows and reports which sessions it touched; it never writes Redis.
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import jwt from 'jsonwebtoken'
 import { getEnv } from '@/configs/env.config'
@@ -32,6 +36,7 @@ import type { TokenPurpose, UserToken } from '@/database/models/user-token.model
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
+import { denySession } from '@/services/session-denylist.service'
 import { MS_PER_SECOND, requireDurationMs } from '@/utilities/duration.utilities'
 
 // jsonwebtoken's `expiresIn` option is typed against `ms`'s own
@@ -51,6 +56,24 @@ import { MS_PER_SECOND, requireDurationMs } from '@/utilities/duration.utilities
 const RAW_TOKEN_BYTES = 32
 
 const userTokenRepository = new UserTokenRepository()
+
+/**
+ * Revoke every live token in one session, then deny its access tokens.
+ * Database first: that half ends the session; the denial is best-effort.
+ * @param sessionId - The session (rotation-chain) id.
+ */
+async function revokeAndDenySession(sessionId: string): Promise<void> {
+  await userTokenRepository.revokeAllForSession(sessionId)
+  await denySession(sessionId)
+}
+
+/**
+ * Deny each session a user-wide revocation reported, concurrently.
+ * @param sessionIds - Distinct session ids the revocation touched.
+ */
+async function denySessions(sessionIds: readonly string[]): Promise<void> {
+  await Promise.all(sessionIds.map((sessionId) => denySession(sessionId)))
+}
 
 /**
  * The claims this module signs into, and expects back out of, an access
@@ -359,7 +382,7 @@ async function continueSession(
   const sessionAgeMs = Date.now() - sessionStartedAt.getTime()
   if (sessionAgeMs >= requireDurationMs(env.SESSION_ABSOLUTE_TTL)) {
     // Every token in the session shares this start time, so all of them are past the ceiling.
-    await userTokenRepository.revokeAllForSession(sessionId)
+    await revokeAndDenySession(sessionId)
     // Same message as the expiry branch, so a caller can't tell which clock ran out.
     throw new HttpError('Refresh token expired', 401)
   }
@@ -407,7 +430,7 @@ export async function rotateRefreshToken(raw: string): Promise<IssuedRefreshToke
       return sibling.issued
     }
     if (existing && existing.sessionId !== null) {
-      await userTokenRepository.revokeAllForSession(existing.sessionId)
+      await revokeAndDenySession(existing.sessionId)
     }
     throw new HttpError('Invalid refresh token', 401)
   }
@@ -437,7 +460,7 @@ export async function rotateRefreshToken(raw: string): Promise<IssuedRefreshToke
  * @returns Resolves once every token in the session is revoked and its access tokens are denied, best-effort.
  */
 export async function revokeSession(sessionId: string): Promise<void> {
-  await userTokenRepository.revokeAllForSession(sessionId)
+  await revokeAndDenySession(sessionId)
 }
 
 /**
@@ -460,7 +483,7 @@ export async function revokeSession(sessionId: string): Promise<void> {
 export async function revokeRefreshToken(raw: string): Promise<void> {
   const existing = await userTokenRepository.findByHash(hashToken(raw))
   if (existing && existing.sessionId !== null) {
-    await userTokenRepository.revokeAllForSession(existing.sessionId)
+    await revokeAndDenySession(existing.sessionId)
   }
 }
 
@@ -473,7 +496,7 @@ export async function revokeRefreshToken(raw: string): Promise<void> {
  * @returns Resolves once every one of the user's tokens is revoked and each revoked session's access tokens are denied, best-effort.
  */
 export async function revokeAllSessions(userId: string): Promise<void> {
-  await userTokenRepository.revokeAllForUser(userId)
+  await denySessions(await userTokenRepository.revokeAllForUser(userId))
 }
 
 /**
@@ -491,5 +514,5 @@ export async function revokeAllSessionsExceptCurrent(
   userId: string,
   sessionId: string
 ): Promise<void> {
-  await userTokenRepository.revokeAllForUserExceptSession(userId, sessionId)
+  await denySessions(await userTokenRepository.revokeAllForUserExceptSession(userId, sessionId))
 }

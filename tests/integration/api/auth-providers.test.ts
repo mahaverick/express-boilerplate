@@ -24,8 +24,8 @@ import type { AuthProvider } from '@/constants/auth-provider.constants'
 import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
+import { signAccessToken } from '@/services/session.service'
 import { hashPassword } from '@/utilities/password.utilities'
-import { signAccessToken } from '@/utilities/token.utilities'
 import { request } from '../../helpers/request'
 
 const app = createApp()

@@ -27,15 +27,14 @@ const parse: (value: string) => number | undefined = ms as unknown as (
 ) => number | undefined
 
 /**
- * The one place this constant is defined. Both `token.utilities.ts` (to
+ * The one place this constant is defined. Both `session.service.ts` (to
  * convert `expiresIn` to whole seconds for `jsonwebtoken`) and
  * `session-denylist.service.ts` (to convert a Redis `EX` TTL to whole
  * seconds) needed it, and it lives here — rather than in either of
  * them — for the same reason `requireDurationMs` does: routing it through
- * `token.utilities.ts` would close an import cycle
- * (`user-token.repository` -> `session-denylist.service` ->
- * `token.utilities` -> `user-token.repository`), and this module has no
- * such dependency, so it stays a leaf.
+ * `session.service.ts` would close an import cycle
+ * (`session.service` -> `session-denylist.service` -> `session.service`),
+ * and this module has no such dependency, so it stays a leaf.
  */
 export const MS_PER_SECOND = 1000
 
@@ -66,14 +65,12 @@ export function parseDurationMs(value: string): number | undefined {
  * Resolve a validated TTL string to milliseconds, trusting the invariant
  * `env.config.ts`'s refinement already enforced at boot.
  *
- * Lives here, not in token.utilities.ts (which originally defined it),
- * because `session-denylist.service.ts` needs it too, and
- * `user-token.repository.ts` (Task 3) imports `denySession` from that
- * service — routing through token.utilities.ts, which itself imports
- * `UserTokenRepository`, would close an import cycle:
- * user-token.repository -> session-denylist.service -> token.utilities ->
- * user-token.repository. This module has no such dependency, so it stays a
- * leaf.
+ * Lives here, not in session.service.ts, because
+ * `session-denylist.service.ts` needs it too, and session.service.ts
+ * imports `denySession` from that service — routing it through
+ * session.service.ts would close an import cycle: session.service ->
+ * session-denylist.service -> session.service. This module has no such
+ * dependency, so it stays a leaf.
  * @param value - An `ACCESS_TOKEN_TTL`/`REFRESH_TOKEN_TTL`-shaped value already known to be `ms()`-parseable.
  * @returns The duration in milliseconds.
  * @throws {Error} Only if that boot-time invariant was somehow violated.

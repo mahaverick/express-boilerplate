@@ -87,7 +87,7 @@ describe('EmailLogRepository', () => {
     expect(recorded.providerMessageId).toBeNull()
   })
 
-  // Round-1 fix to this task: a raw token (token.utilities.ts) hex-encoded
+  // Round-1 fix to this task: a raw token (session.service.ts) hex-encoded
   // is EXACTLY 64 characters, so an earlier version of this repository —
   // which truncated an over-length errorCode to ERROR_CODE_MAX_LENGTH
   // rather than normalizing it — would have written a 32-character PREFIX

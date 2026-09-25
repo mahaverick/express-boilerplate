@@ -35,7 +35,7 @@ import { UserMembershipRepository } from '@/repositories/user-membership.reposit
 import { UserRepository } from '@/repositories/user.repository'
 import type { DbExecutor } from '@/services/database.service'
 import { sql } from '@/services/database.service'
-import { signAccessToken } from '@/utilities/token.utilities'
+import { signAccessToken } from '@/services/session.service'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { request } from '../../helpers/request'
 

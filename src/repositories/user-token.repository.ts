@@ -8,7 +8,7 @@
 //
 // `claimOnce` exists to close a race any single-use-token redemption would
 // otherwise have — originally written for `rotateRefreshToken`
-// (token.utilities.ts), and generalised here to every purpose
+// (session.service.ts), and generalised here to every purpose
 // (user-token.model.ts's `TokenPurpose`): a plain "read, check revokedAt,
 // then write" sequence lets two concurrent presentations of the same raw
 // token both observe `revokedAt IS NULL` and both proceed, defeating reuse
@@ -35,7 +35,6 @@ import {
   type Touched,
 } from '@/repositories/base.repository'
 import { db, type DbExecutor } from '@/services/database.service'
-import { denySession } from '@/services/session-denylist.service'
 
 /**
  * Query access to the `user_tokens` table: token issuance, lookup by hash,
@@ -84,7 +83,7 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    * revoke an entire session family for a legitimate user whose token
    * simply aged out (see the existing test `rejects an expired refresh
    * token without treating it as reuse of a live session`,
-   * token.utilities.test.ts). EVERY CALLER MUST CHECK `expiresAt` on the
+   * session.service.test.ts). EVERY CALLER MUST CHECK `expiresAt` on the
    * returned row itself, immediately after claiming, before treating the
    * claim as a valid redemption — `rotateRefreshToken` does this for
    * `'refresh'`; a future `email_verification`/`password_reset` redemption
@@ -168,13 +167,11 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
 
   /**
    * Revoke every still-live token sharing a session id — the whole rotation
-   * chain for one login — and deny that session's access tokens
-   * (best-effort — see `denySession`). Used both by an explicit
-   * single-session logout and by reuse detection to contain a compromised
-   * chain.
+   * chain for one login. Used by logout and by reuse detection;
+   * session.service.ts denies the session's access tokens afterwards.
    * @param sessionId - The session id shared by every token in the chain.
    * @param executor - Where to run the query. Defaults to the pool.
-   * @returns Resolves once every matching row is revoked and the session's access tokens are denied, best-effort.
+   * @returns Resolves once every matching row is revoked.
    */
   async revokeAllForSession(sessionId: string, executor: DbExecutor = db): Promise<void> {
     await executor
@@ -185,27 +182,22 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
           sql`${userTokenModel.sessionId} = ${sessionId} and ${userTokenModel.revokedAt} is null`
         )
       )
-    // Logout and refresh-token REUSE DETECTION both funnel through this
-    // method already (token.utilities.ts's revokeRefreshToken and
-    // rotateRefreshToken), so denying here covers both without a call site
-    // having to remember to.
-    await denySession(sessionId)
   }
 
   /**
    * Revoke every still-live token belonging to a user, across every
-   * session, and deny each revoked session's access tokens. Used where
-   * every session must end at once — e.g. a password reset — and is what
-   * makes that reset end an already-issued access token immediately,
-   * rather than leaving it usable until it naturally expires.
+   * session, and report each revoked session id so session.service.ts can
+   * deny its access tokens. Used where every session must end at once —
+   * e.g. a password reset. Its returned ids are what let a reset end an
+   * already-issued access token immediately.
    *
    * This method has no purpose predicate — it deliberately revokes
    * `password_reset`, `email_verification`, and every other purpose too,
    * not just `'refresh'` rows. `sessionId` is only ever set on a
    * `'refresh'` row (user-token.model.ts), so a revoked non-refresh row
-   * contributes `sessionId: null` and is filtered out before denying — it
-   * denies nothing on its own. An entire rotation chain shares one session
-   * id, so the surviving ids are deduplicated before denying each one.
+   * contributes `sessionId: null` and is filtered out of the returned ids.
+   * An entire rotation chain shares one session id, so the ids are
+   * deduplicated.
    *
    * KNOWN GAP, not fixed here: a session mid-rotation when this runs — the
    * old refresh row already claimed by `rotateRefreshToken`, the new one
@@ -216,9 +208,9 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    * close properly; not attempted here.
    * @param userId - The user whose tokens should all be revoked.
    * @param executor - Where to run the query. Defaults to the pool.
-   * @returns Resolves once every matching row is revoked and every revoked session's access tokens are denied.
+   * @returns The distinct session ids of the rows it revoked.
    */
-  async revokeAllForUser(userId: string, executor: DbExecutor = db): Promise<void> {
+  async revokeAllForUser(userId: string, executor: DbExecutor = db): Promise<string[]> {
     const revoked = await executor
       .update(userTokenModel)
       .set(this.touched({ revokedAt: sql`now()` }))
@@ -234,19 +226,19 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
         .map((row) => row.sessionId)
         .filter((sessionId): sessionId is string => sessionId !== null)
     )
-    await Promise.all([...sessionIds].map((sessionId) => denySession(sessionId)))
+    return [...sessionIds]
   }
 
   /**
    * Revoke every still-live token belonging to a user EXCEPT the ones
-   * sharing one given session id, and deny each revoked session's access
-   * tokens (best-effort — see `denySession`). Used by password change:
+   * sharing one given session id, and report each revoked session id so
+   * session.service.ts can deny it. Used by password change:
    * every OTHER session must end at once, while the session presenting the
    * request that triggered the change keeps working uninterrupted.
    *
    * Modelled directly on `revokeAllForUser` above, as it stands today: same
    * `RETURNING session_id`, same null-filtering `!== null` type guard, same
-   * de-duplicating `Set`, same `Promise.all` denial. The one addition is the
+   * de-duplicating `Set`. The one addition is the
    * spared-session predicate, and it MUST read `session_id IS DISTINCT FROM
    * $2`, not `session_id != $2`. SQL's `!=` evaluates to NULL — not true —
    * for a row whose `session_id` IS NULL, and NULL is not true, so a plain
@@ -270,13 +262,13 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    * @param userId - The user whose tokens should all be revoked, except one session's.
    * @param sessionId - The one session id to spare; every token sharing it is left untouched.
    * @param executor - Where to run the query. Defaults to the pool.
-   * @returns Resolves once every matching row is revoked and every revoked session's access tokens are denied, best-effort.
+   * @returns The distinct session ids of the rows it revoked, never the spared one.
    */
   async revokeAllForUserExceptSession(
     userId: string,
     sessionId: string,
     executor: DbExecutor = db
-  ): Promise<void> {
+  ): Promise<string[]> {
     const revoked = await executor
       .update(userTokenModel)
       .set(this.touched({ revokedAt: sql`now()` }))
@@ -292,7 +284,7 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
         .map((row) => row.sessionId)
         .filter((revokedSessionId): revokedSessionId is string => revokedSessionId !== null)
     )
-    await Promise.all([...sessionIds].map((revokedSessionId) => denySession(revokedSessionId)))
+    return [...sessionIds]
   }
 
   /**

@@ -33,7 +33,7 @@ import { db, type DbExecutor } from '@/services/database.service'
  *
  * NORMALIZE, do not truncate. An earlier version of this repository
  * truncated an over-length `errorCode` to `ERROR_CODE_MAX_LENGTH` — the
- * wrong remedy for this class of value: a raw token (token.utilities.ts)
+ * wrong remedy for this class of value: a raw token (session.service.ts)
  * hex-encoded is exactly 64 characters, and truncating it to
  * `ERROR_CODE_MAX_LENGTH` (32) still writes 128 bits of a live secret into
  * an audit table, just fewer of them. Checking the SHAPE first means a
@@ -88,7 +88,7 @@ function withErrorCodeNormalized(entry: NewEmailLog): NewEmailLog {
 // trade-off for that lookup, only for a human reading the row directly.
 //
 // This does NOT exclude a raw token from any of these three columns: a
-// 64-character hex-encoded token (token.utilities.ts) fits comfortably
+// 64-character hex-encoded token (session.service.ts) fits comfortably
 // inside 320 and 255 without ever triggering this normalization at all, and
 // a 32-character FRAGMENT of one fits `templateKey`'s own width exactly —
 // this normalization only stops an over-width value from vanishing the
