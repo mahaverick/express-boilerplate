@@ -74,8 +74,8 @@ export function createTenantRouter(): Router {
 
   // -- Member management -- (members join only by invitation, below)
   router.get('/:slug/members', resolveTenant(), listMembers)
-  // Owner only — see tenant.controller.ts's `canActorModifyTarget` for why
-  // a role CHANGE is gated tighter than a removal.
+  // Owner only: a role change is gated tighter than a removal. The matrix
+  // itself is `canActorModifyTarget` in policies/tenant.policy.ts.
   router.patch(
     '/:slug/members/:userId',
     requireJsonContentType,

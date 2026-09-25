@@ -364,4 +364,14 @@ describe('requireRole', () => {
     expect(next).toHaveBeenCalledTimes(1)
     expect((lastCallArgument() as HttpError).statusCode).toBe(403)
   })
+
+  it('treats each listed role as a floor, so a higher role passes too', () => {
+    const request = buildPrincipalRequest('owner')
+    const { next, lastCallArgument } = mockNext()
+
+    requireRole('admin')(request, noResponse, next)
+
+    expect(next).toHaveBeenCalledTimes(1)
+    expect(lastCallArgument()).toBeUndefined()
+  })
 })

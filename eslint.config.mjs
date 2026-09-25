@@ -125,7 +125,7 @@ export default tseslint.config(
       //
       // `prefer-ternary` wants a guard-clause ladder collapsed into a single
       // ternary. Its autofix turned `canActorModifyTarget`
-      // (tenant.controller.ts) — the three-branch owner/admin/member
+      // (policies/tenant.policy.ts) — the three-branch owner/admin/member
       // authorization matrix — into one hundred-character nested ternary, and
       // did the same to `canActorGrantRole`, leaving `... ? ... : false`.
       // A permissions matrix is the last place to trade a readable ladder for
@@ -245,6 +245,7 @@ export default tseslint.config(
           'src/templates/**/*.ts': '*.template',
           'src/jobs/**/*.ts': '*.job',
           'src/workers/**/*.ts': '*.worker',
+          'src/policies/**/*.ts': '*.policy',
         },
       ],
       'check-file/folder-naming-convention': ['error', { 'src/**/': 'KEBAB_CASE' }],

@@ -28,6 +28,7 @@
 import { type NextFunction, type Request, type Response } from 'express'
 import { TENANT_ID_HEADER, type MembershipRole } from '@/constants/tenant.constants'
 import { HttpError } from '@/errors/http-error'
+import { isRoleAtLeast } from '@/policies/tenant.policy'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { requestContextStore, type TenantContext } from '@/services/request-context.service'
@@ -191,22 +192,26 @@ export function resolveTenant(
 }
 
 /**
- * Require the caller's role in the current tenant to be one of
- * `allowedRoles`.
+ * Require the caller's role in the current tenant to rank at or above one
+ * of `allowedRoles` (`isRoleAtLeast`), so `requireRole('owner', 'admin')`
+ * admits owners and admins. An empty list admits nobody.
  *
  * Must run AFTER `resolveTenant` — reads `request.principal`, which only
  * `resolveTenant` sets. A route missing it ahead of this always answers 403
  * (a missing principal is treated as "no role granted", not specially
  * detected as a routing bug) — the same fail-safe direction `resolveTenant`
  * itself takes on a missing `request.user`.
- * @param allowedRoles - The roles permitted to proceed.
+ * @param allowedRoles - The roles whose rank, or higher, may proceed.
  * @returns An Express middleware.
  */
 export function requireRole(
   ...allowedRoles: MembershipRole[]
 ): (request: Request, response: Response, next: NextFunction) => void {
   return (request: Request, _response: Response, next: NextFunction): void => {
-    if (!request.principal || !allowedRoles.includes(request.principal.role)) {
+    const role = request.principal?.role
+    const isAdmitted =
+      role !== undefined && allowedRoles.some((allowed) => isRoleAtLeast(role, allowed))
+    if (!isAdmitted) {
       next(new HttpError('Insufficient permissions', 403))
       return
     }

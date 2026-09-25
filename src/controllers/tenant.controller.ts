@@ -13,23 +13,24 @@
 // with `request.principal.role` holding THAT tenant's role, before this
 // file's code ever runs.
 //
-// THE ACTOR->TARGET ROLE MATRIX (plan's spec correction #4) is enforced
-// here, in `canActorModifyTarget` below, and used by both
-// `updateMemberRole` and `removeMember` — the two endpoints that act on an
-// EXISTING member, as opposed to `inviteMember`, which offers an INITIAL
-// role to someone not yet a member (see `canActorGrantRole`'s own comment for
-// why that is a deliberately separate function, not a second call to this
-// one). Router-level `requireRole(...)` (tenant.routes.ts) already narrows
-// which ACTOR roles can reach each handler at all (only `'owner'` reaches
-// `updateMemberRole`; only `'owner'`/`'admin'` reach `removeMember`) — this
-// function is what additionally checks the ACTOR against the TARGET's
-// current role and self-ness, which no router-level check can express.
+// THE ACTOR->TARGET ROLE MATRIX is enforced by `canActorModifyTarget`
+// (policies/tenant.policy.ts), used by both `updateMemberRole` and
+// `removeMember` — the two endpoints that act on an EXISTING member, as
+// opposed to `inviteMember`, which offers an INITIAL role to someone not
+// yet a member (see `canActorGrantRole`'s own comment for why that is a
+// deliberately separate function, not a second call to this one).
+// Router-level `requireRole(...)` (tenant.routes.ts) already narrows which
+// ACTOR roles can reach each handler at all (only `'owner'` reaches
+// `updateMemberRole`; only `'owner'`/`'admin'` reach `removeMember`) — the
+// policy function is what additionally checks the ACTOR against the
+// TARGET's current role and self-ness, which no router-level check can
+// express.
 import { type NextFunction, type Request, type Response } from 'express'
-import { type MembershipRole } from '@/constants/tenant.constants'
 import { authenticatedUserId } from '@/controllers/helpers.controller'
 import type { NewTenant } from '@/database/models/tenant.model'
 import { HttpError } from '@/errors/http-error'
 import type { RequestPrincipal } from '@/middlewares/tenant.middleware'
+import { canActorGrantRole, canActorModifyTarget } from '@/policies/tenant.policy'
 import { TenantSettingsRepository } from '@/repositories/tenant-settings.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
@@ -91,69 +92,6 @@ function targetUserIdParameter(request: Request): string {
     throw new HttpError('Malformed member id', 400)
   }
   return userId
-}
-
-/**
- * Whether `actorRole` may change or remove an EXISTING member currently
- * holding `targetRole`. Encodes the plan's actor->target matrix exactly:
- *
- * | Actor \ Target | owner      | admin | manager/editor/viewer |
- * | -------------- | ---------- | ----- | ---------------------- |
- * | owner           | self-only | yes   | yes                    |
- * | admin           | no        | no    | yes                    |
- *
- * `manager`/`editor`/`viewer` actor rows are not represented — router-level
- * `requireRole` (tenant.routes.ts) never lets those roles reach either
- * caller of this function, so there is no case for this function to encode
- * on their behalf; a defensive `false` is still returned for them below,
- * so a future route that forgets its `requireRole` fails closed rather
- * than falling through to `undefined`.
- *
- * The "last owner" guard is NOT part of this function. It runs in
- * tenant-membership.service.ts, inside a transaction that locks the
- * tenant's owners, so two owners leaving at once cannot both pass it.
- * @param actorRole - The caller's role in this tenant.
- * @param targetRole - The target member's CURRENT role, as read under the owner lock.
- * @param isSelf - Whether the actor and the target are the same user.
- * @returns True when `actorRole` may act on a member currently holding `targetRole`.
- */
-export function canActorModifyTarget(
-  actorRole: MembershipRole,
-  targetRole: MembershipRole,
-  isSelf: boolean
-): boolean {
-  if (targetRole === 'owner') return actorRole === 'owner' && isSelf
-  if (targetRole === 'admin') return actorRole === 'owner'
-  return actorRole === 'owner' || actorRole === 'admin'
-}
-
-/**
- * Whether `actorRole` may GRANT `role` to a brand-new member via
- * `inviteMember`. Deliberately a SEPARATE function from
- * `canActorModifyTarget`, not a second call to it with some synthetic
- * `isSelf: false` — the plan's matrix describes acting on an EXISTING
- * member's CURRENT role, and adding someone has no "current role" to
- * plug into that shape; reusing it here would silently read `role` as if
- * it meant "the target's role before this action", which is backwards for
- * a grant.
- *
- * Beyond the plan's own text — the plan's per-endpoint bullets list the
- * matrix as a `PATCH`/`DELETE`-only rule, and router-level
- * `requireRole('owner', 'admin')` (tenant.routes.ts) already lets an admin
- * reach `POST /tenants/:slug/invitations` at all. Without this check, an admin
- * could invite a brand-new member with `role: 'admin'` (or `'owner'`) directly
- * — a strictly larger grant than the matrix lets that same admin apply to
- * an EXISTING admin/owner member, and the exact privilege-escalation seam
- * the matrix exists to close one call site over. Owners are unrestricted,
- * matching the matrix's own "owner: yes" for every non-self target role.
- * @param actorRole - The caller's role in this tenant.
- * @param role - The role `inviteMember`'s caller is trying to offer.
- * @returns True when `actorRole` may grant `role` to a new member.
- */
-export function canActorGrantRole(actorRole: MembershipRole, role: MembershipRole): boolean {
-  if (actorRole === 'owner') return true
-  if (actorRole === 'admin') return role !== 'owner' && role !== 'admin'
-  return false
 }
 
 /**
