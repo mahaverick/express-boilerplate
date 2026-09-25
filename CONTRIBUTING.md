@@ -86,6 +86,24 @@ Conventional Commits (`type(scope): subject`), enforced by
   `replacements` key, a specific line) rather than disabling the whole
   rule. A blanket disable in a boilerplate propagates into every project
   derived from it.
+- **Layer boundaries are lint-enforced, not just documented.**
+  `import-x/no-restricted-paths` (plus `@typescript-eslint/no-restricted-imports`
+  for controllers' type-only `database/models` access) turns
+  ARCHITECTURE.md's `## Layers` table into an `error`-level gate for six of
+  its boundaries. Adding a new cross-layer import one of those zones
+  refuses means either the import is wrong, or the table (and the zone
+  config beside it) needs updating in the same change — see STRUCTURE.md's
+  own closing section for the analogous rule about governed directories.
+- **A route handler is a `BaseController` method**, not a bare exported
+  function. New handlers go through `this.handle(handler)`
+  (`src/controllers/base.controller.ts`) unless they have a documented,
+  file-local reason not to (a redirect, an SSE stream) — see
+  ARCHITECTURE.md's `## Layers` section.
+- **A transaction that locks more than one tenant row set follows one lock
+  order:** the tenant's owner rows first, then memberships ordered by
+  `user_id` — see ARCHITECTURE.md's `## Layers` section. Postgres cannot
+  enforce this; a new multi-lock transaction that reverses it can deadlock
+  against one that follows the convention.
 
 ## Adding, renaming or removing an environment variable
 
@@ -219,3 +237,8 @@ instead) — either way, PR titles must be conventional commits.
 - Adding a non-obvious constraint a future contributor would otherwise
   rediscover by hitting it -> [CLAUDE.md](CLAUDE.md), not a code comment
   buried three files deep.
+- Adding, removing, or renaming a rate limiter -> update the `RATE_LIMITS`
+  table (`src/constants/rate-limit.constants.ts`) and its key-stability test
+  (`tests/unit/constants/rate-limit.constants.test.ts`) together — the
+  `name` field is a live Redis key prefix; changing one resets that
+  limiter's counters on the next deploy.

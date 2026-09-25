@@ -91,19 +91,83 @@ nothing here needs.
 **The repository layer** (`src/repositories/`) is a thin layer over
 `src/database/models/`: `BaseRepository` owns soft-delete filtering,
 `updatedAt` maintenance, and unique-violation-to-409 translation once,
-shared by `UserRepository` and `UserTokenRepository`, each of which
-supplies only the four concrete Drizzle queries `BaseRepository` cannot
-express generically (see `base.repository.ts`'s own header comment for
-why). See [DATABASE.md](DATABASE.md) for both models. `EmailLogRepository`
-is deliberately NOT one of them — it does not extend `BaseRepository` at
-all. The `email_logs` table it queries is append-only audit data: it has no
+shared by `UserRepository`, `UserTokenRepository` and `TenantRepository`,
+each of which supplies only the four concrete Drizzle queries
+`BaseRepository` cannot express generically (see `base.repository.ts`'s own
+header comment for why). Every public method it defines, including these
+inherited ones, takes a final optional `executor: DbExecutor = db`
+parameter, so any caller can run it inside its own transaction. See
+[DATABASE.md](DATABASE.md) for these models. The repository layer's other
+classes are deliberately NOT one of them — they do not extend
+`BaseRepository` at all. `EmailLogRepository` is the clearest case: the
+`email_logs` table it queries is append-only audit data, so it has no
 `updatedAt`/`deletedAt` columns for `BaseRepository` to require, nothing
 ever updates or soft-deletes a row once written, and there is no unique
 constraint on the table for a 23505-to-409 translation to have anything to
 translate. Sharing the base class here would mean inheriting `update()` and
 `softDelete()` methods whose very existence contradicts what an audit log
 is — see `email-log.model.ts` and `email-log.repository.ts`'s own header
-comments for the full reasoning.
+comments for the full reasoning. `AuthProviderRepository`,
+`NotificationRepository`, `NotificationPreferenceRepository`,
+`TenantSettingsRepository`, `TenantInvitationRepository` and
+`UserMembershipRepository` each give the same reasoning for their own
+table in their own header comment: no soft-delete concept on it, so
+nothing for `BaseRepository`'s policy to apply to.
+
+## Layers
+
+| Layer        | Directory           | Job                                                                                             | May import                                                                                                                                                                                                                                               |
+| ------------ | ------------------- | ----------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| routes       | `src/routes/`       | Wire middleware to controller methods.                                                          | controllers, middlewares, configs, constants                                                                                                                                                                                                             |
+| middlewares  | `src/middlewares/`  | Cross-cutting request handling (auth, tenant resolution, rate limits, errors).                  | services, repositories (read-only lookups in `resolveTenant`/`requireAuth`), policies, presenters (e.g. `auth.middleware.ts` builds `request.user` via `toAuthenticatedUser`, `src/presenters/user.presenter.ts`), errors, configs, utilities, constants |
+| configs      | `src/configs/`      | Env and library configuration.                                                                  | services, utilities, constants                                                                                                                                                                                                                           |
+| presenters   | `src/presenters/`   | Pure mappers from a database row to its wire shape.                                             | types from `database/models`, and constants (e.g. `AuthProvider`)                                                                                                                                                                                        |
+| controllers  | `src/controllers/`  | Parse and validate input, call service methods, shape the response.                             | services, presenters, validators, errors, configs, utilities/response.utilities, constants, types (database/models types only, via `import type`)                                                                                                        |
+| services     | `src/services/`     | Business rules, transactions, authorization, side effects.                                      | repositories, policies, other services, jobs, templates, errors, utilities, configs, constants, types, `database.service`, validator types (`import type`, for a validated-input shape a service signature needs)                                        |
+| policies     | `src/policies/`     | Pure, boolean-returning authorization functions. Never throw.                                   | constants and types only                                                                                                                                                                                                                                 |
+| repositories | `src/repositories/` | Queries only.                                                                                   | models, `database.service`, errors, constants                                                                                                                                                                                                            |
+| errors       | `src/errors/`       | Error classes and Postgres error handling (`HttpError`, `isUniqueViolation`, `redactedForLog`). | nothing under `src/`                                                                                                                                                                                                                                     |
+
+`eslint.config.mjs`'s `import-x/no-restricted-paths` (plus, for controllers'
+type-only `database/models` access, `@typescript-eslint/no-restricted-imports`)
+turns six of this table's boundaries into `error`-level lint gates:
+controllers may not import a repository or `database.service` directly;
+controllers may not import another controller, except `base.controller.ts`
+and `helpers.controller.ts`; services, repositories, policies, errors and
+presenters may not import controllers, routes or middlewares; repositories
+may not import a service other than `database.service`; policies may not
+import repositories, services or `database`; and configs may not import
+controllers. `tests/unit/lint-gates.test.ts` proves each zone actually
+fires, against a committed violating fixture under
+`tests/fixtures/lint-zones/`. `import-x/no-restricted-paths` is a
+blocklist, not an allowlist, so a "may import" cell above with no zone
+naming it — most of middlewares' own imports, services importing validator
+types, presenters importing constants — is simply unrestricted by lint,
+not separately enforced: the table states the intended shape, and only the
+six boundaries just listed are lint-enforced. Controllers never import a
+repository or `database.service` directly — every controller method calls
+a service method and shapes the response; the one exception is
+`handleGoogleCallback` and `streamNotifications`, which are plain,
+unwrapped handlers (see `BaseController.handle()` below) for reasons
+specific to a redirect and an SSE stream, not an exception to the
+layering.
+
+Every route handler is a `BaseController` (`src/controllers/base.controller.ts`)
+method, built as an arrow-function class field through `this.handle(handler)`,
+which forwards a thrown or rejected error to `next()`. `handle()` never
+sends a response itself. Once `response.headersSent`, it also logs a
+`warn` — without the error object, so it can never bypass `redactedForLog`
+— before calling `next(error)`; `errorHandler` (`error.middleware.ts`) then
+logs the error redacted and destroys the socket itself, rather than
+attempting a second write.
+
+**Lock order**, binding for every transaction that locks more than one row
+set: the tenant's owner rows first (`lockOwners`, ordered by `id`), then
+memberships ordered by `user_id` (`lockMemberships`) — written into
+`user-membership.repository.ts`'s JSDoc on both methods, and enforced only
+by convention plus a deadlock regression test
+(`tests/integration/services/tenant-membership.service.test.ts`), since
+Postgres itself has no way to enforce an application-level lock order.
 
 ## The B3 seam: email verification is wired up; password recovery is not
 
@@ -237,20 +301,30 @@ make a client parsing `errors` for field errors get something structurally
 different the one time `code` is also present.
 
 `HttpError` (in
-[`src/middlewares/error.middleware.ts`](src/middlewares/error.middleware.ts))
+[`src/errors/http-error.ts`](src/errors/http-error.ts))
 is the exception type any handler can throw or forward to `next()` to
 produce a specific status code. `errorHandler` is the terminal middleware:
 it masks the message on a 5xx (returning `"Internal server error"`) but
-**logs the original error** via `console.error` first — masking the
-message from the client without logging it anywhere would leave an
-operator with nothing to search and a bug report with nothing to point at.
-A 4xx is never logged; it isn't a server failure.
+**logs the original error**, redacted (`redactedForLog`,
+[`src/errors/postgres-errors.ts`](src/errors/postgres-errors.ts)), through
+the pino `logger` facade first — masking the message from the client
+without logging it anywhere would leave an operator with nothing to search
+and a bug report with nothing to point at. A 4xx is never logged; it isn't
+a server failure.
 
 `errorHandler` takes four parameters and is registered last, because
 Express identifies error-handling middleware by arity — a handler with
 fewer than four parameters is silently treated as ordinary middleware that
 never sees an error. The unused fourth parameter is prefixed `_next`
 accordingly.
+
+Every response that carries no payload — a 202/204-shaped success — uses
+`messageResponse(response, message, status?)`
+([`src/utilities/response.utilities.ts`](src/utilities/response.utilities.ts)),
+which always sends `data: null`. It is the one shape used by every
+no-content endpoint, across `auth.controller.ts`, `notification.controller.ts`,
+`tenant.controller.ts` and `verification.controller.ts` — never a bare `{}`
+and never `data` omitted.
 
 This envelope shape (`{ success, message, statusCode, code?, errors? }`) is not RFC
 9457 `problem+json`, which is the more modern standard and the better
@@ -367,7 +441,7 @@ itself (`src/observability/tracing.ts` starts a `NodeSDK` and exports
 traces and logs — see CLAUDE.md's "Observability" section). The rate
 limiters this list used to describe as
 covering only the four auth routes now also cover the tenant and invitation
-routes (`createCreateTenantRateLimiter` and
-`createInviteTenantMemberRateLimiter` on `tenant.routes.ts`,
-`createInvitationPreviewRateLimiter` and `createInvitationAcceptRateLimiter`
-on `invitation.routes.ts`).
+routes (`createRateLimiter(RATE_LIMITS.createTenant)` and
+`createRateLimiter(RATE_LIMITS.inviteTenantMember)` on `tenant.routes.ts`,
+`createRateLimiter(RATE_LIMITS.invitationPreview)` and
+`createRateLimiter(RATE_LIMITS.invitationAccept)` on `invitation.routes.ts`).

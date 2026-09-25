@@ -122,14 +122,17 @@ until you check.
 ## Job queue
 
 - **`addEmailJob()` from `@/jobs/email.job`, not `sendMail()` directly.**
-  Email sending goes through a BullMQ queue. The existing helpers
-  (`sendVerificationMail`, `sendRegistrationAttemptMail`,
-  `resendVerificationMail`) enqueue internally — controllers call the
-  same helpers with the same `.catch()` pattern they always did.
-  `sendVerificationMail` enqueues via `addNotificationJob()` (see
-  "Notifications" below), not `addEmailJob()` directly —
-  `sendRegistrationAttemptMail` is the one exception that still calls
-  `addEmailJob()` itself.
+  Email sending goes through a BullMQ queue. `auth.service.ts`'s `register`
+  and `requestPasswordReset`, and `verification.service.ts`'s
+  `prepareResendVerification`, each do the enqueuing — `register` and
+  `prepareResendVerification` return a closure the controller starts with
+  `void` after replying; `requestPasswordReset` does its own work
+  internally. Every one of them catches its own failure and logs it, so
+  none ever rejects. `sendVerificationMail` (`verification.service.ts`)
+  enqueues via `addNotificationJob()` (see "Notifications" below), not
+  `addEmailJob()` directly — `sendRegistrationAttemptMail`
+  (`auth.service.ts`) is the one exception that still calls `addEmailJob()`
+  itself.
 - **`WORKER_ENABLED` gates the in-process worker.** Default `true` (API +
   worker in one process). Set `false` for API-only pods; a separate worker
   deployment sets `true` and processes jobs from the shared Redis queue.
@@ -253,14 +256,25 @@ until you check.
 
 - **Opt-in seam.** Existing routes are unaffected. New routes compose
   `resolveTenant()` and `requireRole(...)` middleware as needed.
-- **`resolveTenant({ from: 'param' })`** (default) reads the tenant slug
-  from `request.params.slug`. `{ from: 'header' }` reads `X-Tenant-Id`.
-  Use the param form for `/tenants/:slug/*` routes; the header form for
-  future tenant-scoped resource routes (`/projects`, `/invoices`).
+- **`resolveTenant()`** reads the tenant slug from `request.params.slug` —
+  the only tenant selector this codebase has. There is deliberately no
+  header-based alternative: trusting a client-supplied header to name a
+  DIFFERENT tenant than the URL's own `:slug` would let a caller send one
+  tenant in the path and another in the header, with whichever a handler
+  forgets to re-check becoming a confused-deputy hole.
 - **Non-members get 404** (not 403). Ruling G — don't leak tenant existence.
 - **5-tier roles:** owner > admin > manager > editor > viewer. The
-  actor→target matrix gates who can modify/remove whom (see
-  `tenant.controller.ts`'s `canActorModifyTarget`).
+  actor→target matrix (`canActorModifyTarget`) is a pure function in
+  `src/policies/tenant.policy.ts`, applied inside
+  `src/services/tenant-membership.service.ts`'s `changeRole`/`removeMember`
+  — which re-read the actor's own membership under lock, inside the same
+  transaction, before evaluating it against the matrix. That re-read closes
+  the actor-side role race: a demotion that lands between the coarse
+  route-level `requireRole` gate and the write cannot slip through on a
+  stale role. See ARCHITECTURE.md's `## Layers` section for the lock order
+  (owner rows, then memberships by `user_id`). `requireRole(...roles)`
+  itself treats each listed role as a floor (`isRoleAtLeast`), not an exact
+  match.
 - **`request.principal`** carries `{ tenantId, tenantSlug, role }` after
   `resolveTenant` runs. Separate from `request.user` (which is the
   authenticated identity, not the authorization context).
@@ -289,10 +303,10 @@ until you check.
 - **Invite and resend share one 30-per-hour budget.** Under Redis they
   merge by the `rl:invite-tenant-member:` prefix and the user-id key. On the
   in-memory fallback each limiter instance counts alone, so
-  `createTenantRouter` builds `createInviteTenantMemberRateLimiter()` once
-  and mounts it on both (`tests/unit/routes/tenant.routes.test.ts` pins
-  this). Calling the factory per route would split the budget only while
-  Redis is down.
+  `createTenantRouter` builds `createRateLimiter(RATE_LIMITS.inviteTenantMember)`
+  once and mounts it on both (`tests/unit/routes/tenant.routes.test.ts` pins
+  this). Calling `createRateLimiter` again per route would split the budget
+  only while Redis is down.
 - **The raw token is never in an API URL.** Preview and accept both take
   `{ token }` in a JSON body (`POST /invitations/preview`,
   `POST /invitations/accept`). The only URL that carries the token is the
@@ -301,8 +315,13 @@ until you check.
   `GET ?token=` form: HTTP tracing (`url.query`) and proxy access logs
   record URLs, and OTel's default redaction list doesn't include `token`.
 - **Resend re-checks `canActorGrantRole`** against the invitation's role,
-  through the `authorize` callback, because resending re-issues that role.
-  Revoke doesn't re-check it.
+  because resending re-issues it. There is no `authorize` callback: resend
+  and invite each re-read the actor's own membership under lock inside
+  `src/services/tenant-invitation.service.ts`'s transaction, and evaluate
+  `canActorGrantRole` against that read — the same actor-side race fix
+  `changeRole`/`removeMember` use. Revoke re-reads the actor's membership
+  under lock too, closing the same race, but has no role being granted, so
+  it has nothing for `canActorGrantRole` to check.
 
 ### How to scope your own model by tenant
 
@@ -318,17 +337,15 @@ until you check.
    if (!tenantId) throw new Error('Tenant context required')
    // Add .where(eq(model.tenantId, tenantId)) to your queries
    ```
-3. Mount the route behind `resolveTenant()`. A `/tenants/:slug/*` route
-   uses the default (`{ from: 'param' }`); a resource route with no
-   `:slug` segment of its own, like `/projects`, needs the header form —
-   the default would read `request.params.slug`, find nothing, and 404
-   every request:
+3. Mount the route behind `resolveTenant()` on a `/tenants/:slug/*` route —
+   it reads the slug from `request.params.slug`, the only source this
+   middleware supports:
    ```typescript
-   router.get('/projects', requireAuth, resolveTenant({ from: 'header' }), listProjects)
+   router.get('/tenants/:slug/projects', requireAuth, resolveTenant(), listProjects)
    ```
-   The client sends the tenant's _slug_ in the `X-Tenant-Id` header
-   despite the name — `resolveTenant` looks it up with `findActiveBySlug`
-   for both sources, not a slug-or-id lookup.
+   A resource route with no `:slug` segment of its own has no tenant to
+   resolve — nest it under `/tenants/:slug/*` instead of inventing a second
+   selector.
 
 ## Observability
 
@@ -521,31 +538,37 @@ otel-collector`.** It is bind-mounted; `docker compose up -d` does not
     saved and restored around `run`. Reaches every existing instance,
     including a module-private singleton already constructed elsewhere
     (e.g. `UserTokenRepository.prototype.revokeAllForSession`, which reaches
-    the private instance `token.utilities.ts` builds at module scope) — no
+    the private instance `session.service.ts` builds at module scope) — no
     module reloading involved.
   - `withMutatedModule(dependencyPath, overrides, loadSubject, run)` —
     only when the export has no shared mutable object to reach, e.g. a
-    plain function captured BY VALUE at another module's load time
-    (`loginRateLimitKey`, passed as `keyGenerator: loginRateLimitKey` inside
-    `rate-limit.middleware.ts`'s factory). Uses `vi.doMock` +
-    `vi.resetModules()`, then a fresh `import()` of the subject so its own
-    imports resolve to the mutated dependency. `loadSubject` must be a
-    thunk whose body is a literal `import('...')` written at the call site
-    — never a path built from a variable — so the bundler can resolve this
-    repo's `@/` alias and infer the subject's type without a cast. This
-    variant is not free: `vi.resetModules()` discards the WHOLE worker
-    module cache, so every module between the subject and the mutated
-    dependency re-evaluates, including ones with real side effects —
-    `database.service.ts` opens a fresh postgres pool every time it is
-    re-evaluated, and nothing closes the previous one. A handful of calls
-    proving one mutation is fine; don't call it in a loop.
+    plain function captured BY VALUE at another module's load time.
+    `loginRateLimitKey` (`rate-limit.constants.ts`) is private to that
+    module and reached only through `RATE_LIMITS.login.keyBy`, so there is
+    no exported binding this helper could replace directly; the login
+    rate-limiter's own mutation proof instead wraps `rateLimit` itself
+    (the third-party `express-rate-limit` import in
+    `rate-limit.middleware.ts`) to force whatever `keyGenerator`
+    `createRateLimiter` passed down to an IP-only function, reproducing the
+    same observable bug a composite key collapsing to IP alone would cause.
+    Uses `vi.doMock` + `vi.resetModules()`, then a fresh `import()` of the
+    subject so its own imports resolve to the mutated dependency.
+    `loadSubject` must be a thunk whose body is a literal `import('...')`
+    written at the call site — never a path built from a variable — so the
+    bundler can resolve this repo's `@/` alias and infer the subject's type
+    without a cast. This variant is not free: `vi.resetModules()` discards
+    the WHOLE worker module cache, so every module between the subject and
+    the mutated dependency re-evaluates, including ones with real side
+    effects — `database.service.ts` opens a fresh postgres pool every time
+    it is re-evaluated, and nothing closes the previous one. A handful of
+    calls proving one mutation is fine; don't call it in a loop.
 - **Getting red/green evidence needs zero file edits.** Commit the
   demonstration once, gated behind an environment variable
   (`it.runIf(process.env.MUTATION_PROOF === '1')(...)`), reproducing the
   real test's own assertions against the mutated dependency. Running it
   twice — once with the variable set, once without — produces a red
   transcript and a green transcript with nothing changed on disk between
-  them; see `tests/integration/utilities/token-reuse-mutation.test.ts` for
+  them; see `tests/integration/services/token-reuse-mutation.test.ts` for
   the pattern proven against reuse detection.
 - **A rule without the reason gets bypassed the first time the harness is
   inconvenient.** If `withMutatedMethod`/`withMutatedModule` genuinely
@@ -630,7 +653,7 @@ instruction in any dispatch written here.
 - **`verifyAccessToken` returns a discriminated result, not a thrown
   error.** Its type is a union of `{ ok: true; payload }` and
   `{ ok: false; reason: 'expired' | 'invalid' }`
-  (`src/utilities/token.utilities.ts`) rather than throwing on rejection.
+  (`src/services/session.service.ts`) rather than throwing on rejection.
   This exists so `requireAuth` (`src/middlewares/auth.middleware.ts`) can
   tell a client "your token expired, try refreshing" apart from "this token
   is no good, log in again" using only a fact `jsonwebtoken` itself already
@@ -655,14 +678,17 @@ instruction in any dispatch written here.
   for `console.*`; `index.ts` also hands `process.env` to
   `assertEnvConsistent` for its removed-name check). Everything else reads
   `getEnv()`.
-- **`src/lint-fixtures/` is not application code.** It is a
-  deliberately-circular pair of modules importing each other through the
-  `@/` alias, so `tests/unit/lint-gates.test.ts` can prove
-  `import-x/no-cycle` actually fires on _aliased_ imports. It has to live
-  under `src/` because `tsconfig.json` maps `@/*` to `./src/*` and nothing
-  else. It is excluded from the build (`tsconfig.json`), from `pnpm lint`
-  (`eslint.config.mjs` `ignores`) and from coverage (`vitest.config.ts`).
-  Do not import it, and do not "fix" the cycle.
+- **`tests/fixtures/lint-cycle/` proves `import-x/no-cycle` fires on both a
+  relative AND an aliased (`@/`) import.** `a.ts`/`b.ts` is the relative
+  pair; `cycle-a.ts`/`cycle-b.ts` is the aliased pair, and carries its own
+  `tsconfig.json`, mapping `@/*` to `./*` — it does not sit under `src/`,
+  because `tests/unit/lint-gates.test.ts` lints it with a dedicated ESLint
+  instance whose resolver is pointed at that local tsconfig, not the
+  repo's root one. `tests/fixtures/lint-zones/` holds one committed
+  violating fixture per layer-boundary zone (`eslint.config.mjs`'s
+  `import-x/no-restricted-paths`) — see ARCHITECTURE.md's `## Layers`
+  section. Do not import any of these fixtures from real code, and do not
+  "fix" the cycles.
 - **No barrel files, anywhere, deliberately.** No `index.ts` re-export
   module in any directory. Imports are direct (`@/services/foo.service`).
   A barrel would fail `check-file`'s per-directory naming rule (an

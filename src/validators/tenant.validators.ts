@@ -209,10 +209,11 @@ export const invitationIdSchema = z.object({
 
 /**
  * `PATCH /api/v1/tenants/:slug/members/:userId` request body: the member's
- * new role. The actor->target safety matrix (this task's own plan, spec
- * correction #4) is enforced by the controller, not this schema — a schema
- * only knows the SHAPE of a valid role, never who is asking or who they are
- * asking about.
+ * new role. The actor->target safety matrix is enforced by
+ * `src/policies/tenant.policy.ts`'s `canActorModifyTarget`, applied inside
+ * `src/services/tenant-membership.service.ts`'s `changeRole` — not this
+ * schema, and not the controller. A schema only knows the SHAPE of a valid
+ * role, never who is asking or who they are asking about.
  */
 export const updateMemberRoleSchema = z.object({
   role: z.enum(MEMBERSHIP_ROLES),

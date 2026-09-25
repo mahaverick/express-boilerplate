@@ -30,13 +30,15 @@ a false "no" here silently removes a control from a real system.
 
 ### Authentication: JWT access tokens + opaque refresh tokens
 
-`src/utilities/token.utilities.ts` implements two token types that are
+`src/services/session.service.ts` implements two token types that are
 deliberately opposite on every axis:
 
 - **Access tokens** (`signAccessToken`/`verifyAccessToken`) are short-lived,
   signed JWTs (`jsonwebtoken`, HS256, pinned explicitly so a token cannot
-  switch algorithm), carrying only the user's id (`sub`). They are stateless
-  — verification never touches the database — and are sent as
+  switch algorithm), carrying the user's id (`sub`) plus the session id
+  (`sid`) and the token's own id (`jti`, unchecked — it exists so a token
+  accepted after a Redis flush can be identified in logs). They are
+  stateless — verification never touches the database — and are sent as
   `Authorization: Bearer <token>`, checked by `requireAuth`
   (`src/middlewares/auth.middleware.ts`) on every protected route.
   `requireAuth` also reloads the user by id on every request rather than
@@ -107,7 +109,7 @@ cookie: it stays valid until somebody happens to log out.
 `SESSION_ABSOLUTE_TTL` (default 30d) is the **ceiling**: measured from the
 login itself, never reset. `user_tokens.session_started_at` is written once
 when a session begins and copied forward unchanged by every rotation
-(`rotateRefreshToken`, `src/utilities/token.utilities.ts`), so it measures
+(`rotateRefreshToken`, `src/services/session.service.ts`), so it measures
 the age of the **login**, not of the token presented. Past it, rotation
 fails with 401 and the whole session family is revoked — the user signs in
 again, and a stolen cookie has a definite end date whether or not anyone
@@ -189,7 +191,7 @@ the cost of one accepted residual timing difference (below), not zero cost.
 
 #### `/login`: identical responses, identical timing
 
-`POST /api/v1/auth/login` (`src/controllers/auth.controller.ts`) answers an
+`POST /api/v1/auth/login` (`src/services/auth.service.ts`'s `login`) answers an
 unknown email and a wrong password for a real account with the same status
 (401), the same body (`"Invalid email or password"`), and the same cost.
 Returning the same body while skipping the bcrypt comparison for an unknown
@@ -240,7 +242,7 @@ that specific choice matters.
 
 **Residual timing, accepted.** Both branches already pay one full bcrypt
 hash — `hashPassword` runs before the `create` call regardless of whether
-the row is ultimately kept (`auth.controller.ts`) — so the two branches
+the row is ultimately kept (`src/services/auth.service.ts`) — so the two branches
 differ only by one extra token `INSERT` on the free branch, an indexed
 write on the order of a millisecond against a ~250ms bcrypt cost. That gap
 is dominated by ordinary network jitter, not a signal an attacker can use,
@@ -331,7 +333,9 @@ deployment with no existing users has nothing to backfill.
 
 ### Rate limiting: one limiter per auth route, one store prefix each
 
-`src/middlewares/rate-limit.middleware.ts` ships nineteen limiters.
+`RATE_LIMITS` (`src/constants/rate-limit.constants.ts`) lists nineteen
+rate-limiter specs, each built by `rate-limit.middleware.ts`'s single
+`createRateLimiter(spec)`.
 Fifteen guard the auth router, which is a standing rule for that router:
 every route on it except `GET /providers` has at least one, and `/login`
 (three), `/resend-verification` (two) and `/forgot-password` (two) carry
@@ -342,7 +346,7 @@ and invitation preview and accept. Each is backed by its **own**
 `REDIS_KEY_PREFIX` (so `<prefix>:rl:login:` in Redis). No endpoint can
 spend another's budget, and a 429 is only ever a statement about the
 endpoint that returned it. A new route takes its own prefix on the same
-pattern; `tests/unit/middlewares/rate-limit.middleware.test.ts` fails if two
+pattern; `tests/unit/constants/rate-limit.constants.test.ts` fails if two
 ever collide. `/verify-email` and `/resend-verification`'s
 own per-limiter reasoning — including why `/resend-verification`'s IP layer
 is the tight one and its email layer the generous one — lives in the
@@ -588,7 +592,7 @@ Everything below genuinely ships nothing today, in either direction:
 
 `JWT_ACCESS_SECRET` is required by the environment schema and **is** read —
 by `signAccessToken`/`verifyAccessToken`. `WEB_URL` is also read now, twice
-over: `verification-link.utilities.ts` builds the mailed link from it, and
+over: `verification.service.ts`'s `buildVerificationUrl` builds the mailed link from it, and
 `origin.utilities.ts` (see "CORS" below) decides from it whether a
 browser's `Origin` gets a grant. `APP_URL` and `SESSION_SECRET` remain
 required by the schema and read by nothing — they are forward declarations
