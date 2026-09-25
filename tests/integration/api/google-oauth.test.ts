@@ -491,8 +491,8 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
       expect(link?.userId).toBe(existing.id)
       // No second `'email'` row is created. `existing` is seeded directly
       // through `userRepository.create` above, bypassing `register()` —
-      // the only place an `'email'` row is written for a
-      // password account (auth.service.ts) — so this user genuinely has none, and linking
+      // the only place an `'email'` row is written for a password account
+      // (auth.service.ts) — so this user genuinely has none, and linking
       // must not fabricate one; it only adds the `'google'` row.
       const providers = await authProviderRepository.findByUser(existing.id)
       expect(providers.map((provider) => provider.provider)).toEqual(['google'])

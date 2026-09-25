@@ -26,8 +26,9 @@
 //
 // getEnv() is mocked as a vi.fn() (not a fixed-return factory):
 // configurePassport() calls getEnv() fresh on every invocation, so a
-// per-test mockReturnValue takes effect without needing vi.resetModules() (and the live postgres
-// pool leak that carries — tests/helpers/mutate.ts's own header comment).
+// per-test mockReturnValue takes effect without needing vi.resetModules()
+// (and the live postgres pool leak that carries — tests/helpers/mutate.ts's
+// own header comment).
 import passport from 'passport'
 import type { VerifyCallback } from 'passport-google-oauth20'
 import { describe, expect, it, vi } from 'vitest'

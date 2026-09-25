@@ -60,7 +60,7 @@
 // composite login uses. Both threats it bounds come from one caller varying
 // the email:
 //
-//   - Outbound mail amplification. `register` (auth.controller.ts) now
+//   - Outbound mail amplification. `register` (auth.service.ts) now
 //     sends exactly one mail per request regardless of which branch fires
 //     — a verification link to a free address, a "someone tried to
 //     register" notice to a taken one. An attacker probing addresses

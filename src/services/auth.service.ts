@@ -97,8 +97,9 @@ async function sendRegistrationAttemptMail(email: string): Promise<void> {
       variables: {
         // The STORED name, never the submitted one: the submitted value is
         // attacker-chosen text being delivered into the victim's inbox.
-        // `??` is defensive: the holder may have been deleted since the
-        // insert failed, leaving no visible row to read a name from.
+        // `??` is defensive: findByEmail ignores soft-deleted rows, and the
+        // holder may have been deleted since the insert failed, leaving no
+        // visible row to read a name from.
         firstName: existing?.firstName ?? MISSING_FIRST_NAME_FALLBACK,
         appName: getEnv().APP_NAME,
       },
@@ -175,7 +176,6 @@ export async function register(input: RegisterInput): Promise<() => Promise<void
     }
   }
 
-  // The index and findByEmail both ignore soft-deleted rows.
   return async () => {
     try {
       await sendRegistrationAttemptMail(input.email)

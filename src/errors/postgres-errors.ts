@@ -1,10 +1,7 @@
 // src/errors/postgres-errors.ts
 //
-// Unifies 5 identical copies of this check (base.repository.ts,
-// user-membership.repository.ts, tenant.repository.ts,
-// auth-provider.repository.ts, auth.controller.ts) plus
-// tenant-invitation.repository.ts's constraint-scoped isUniqueViolationOf
-// into one function with an optional constraintName.
+// One unique-violation check for every repository, optionally scoped to
+// one constraint name.
 import { DrizzleQueryError } from 'drizzle-orm'
 import postgres from 'postgres'
 

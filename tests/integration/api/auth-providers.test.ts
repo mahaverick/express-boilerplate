@@ -103,9 +103,10 @@ async function seedUser(options: {
       provider,
       // The real shapes: the `'email'` row's providerId IS the address,
       // Google's is its stable `sub`. Both are what the production paths
-      // write (auth.service.ts, google-auth.service.ts), so a test asserting the response never
-      // leaks `providerId` is asserting against realistic values rather
-      // than a placeholder that could not leak anything anyway.
+      // write (auth.service.ts, google-auth.service.ts), so a test
+      // asserting the response never leaks `providerId` is asserting
+      // against realistic values rather than a placeholder that could not
+      // leak anything anyway.
       providerId: provider === 'email' ? email : `google-sub-${randomUUID()}`,
     })
   }

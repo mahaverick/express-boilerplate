@@ -192,7 +192,7 @@ const REGISTER_RESPONSE_MESSAGE =
  * Register a new user with an email and password.
  *
  * A free and a taken address answer an identical 202 with `data: null`
- * (the old 201/409 split was an enumeration oracle). The reply goes out
+ * (a 201/409 split would be an enumeration oracle). The reply goes out
  * BEFORE the mail, so the branches do not differ by an SMTP round trip.
  * @param request - The incoming request, carrying the registration body.
  * @param response - The response.
