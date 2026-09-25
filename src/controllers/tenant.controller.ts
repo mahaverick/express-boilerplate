@@ -13,24 +13,15 @@
 // with `request.principal.role` holding THAT tenant's role, before this
 // file's code ever runs.
 //
-// THE ACTOR->TARGET ROLE MATRIX is enforced by `canActorModifyTarget`
-// (policies/tenant.policy.ts), used by both `updateMemberRole` and
-// `removeMember` — the two endpoints that act on an EXISTING member, as
-// opposed to `inviteMember`, which offers an INITIAL role to someone not
-// yet a member (see `canActorGrantRole`'s own comment for why that is a
-// deliberately separate function, not a second call to this one).
-// Router-level `requireRole(...)` (tenant.routes.ts) already narrows which
-// ACTOR roles can reach each handler at all (only `'owner'` reaches
-// `updateMemberRole`; only `'owner'`/`'admin'` reach `removeMember`) — the
-// policy function is what additionally checks the ACTOR against the
-// TARGET's current role and self-ness, which no router-level check can
-// express.
+// Member and invitation writes pass the actor, never `principal.role`: the
+// services re-read the actor's role under lock inside their transaction and
+// apply policies/tenant.policy.ts there. The router's `requireRole(...)` is
+// only the early gate.
 import { type NextFunction, type Request, type Response } from 'express'
-import { authenticatedUserId } from '@/controllers/helpers.controller'
+import { actorFrom, authenticatedUserId } from '@/controllers/helpers.controller'
 import type { NewTenant } from '@/database/models/tenant.model'
 import { HttpError } from '@/errors/http-error'
 import type { RequestPrincipal } from '@/middlewares/tenant.middleware'
-import { canActorGrantRole, canActorModifyTarget } from '@/policies/tenant.policy'
 import { TenantSettingsRepository } from '@/repositories/tenant-settings.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
@@ -244,13 +235,9 @@ export async function listMembers(
 }
 
 /**
- * Change an existing member's role. Owner only
- * (`requireRole('owner')`, tenant.routes.ts) — so `principal.role` is
- * always `'owner'` by the time this handler runs, and `canActorModifyTarget`
- * below therefore only ever evaluates its owner row. Kept as a real call
- * (not inlined as `target.role !== 'owner' ||
- * targetUserId === actorUserId`) so this handler and `removeMember` share
- * one definition of the matrix rather than two copies that could drift.
+ * Change an existing member's role. Owner only: `requireRole('owner')`
+ * (tenant.routes.ts), then `changeRole` re-checks the actor's current role
+ * and the actor→target matrix under lock.
  * @param request - The incoming request, resolved to a tenant by `resolveTenant`, carrying `{ role }`.
  * @param response - The response.
  * @param next - Forwards a rejection to the terminal error handler.
@@ -262,18 +249,11 @@ export async function updateMemberRole(
 ): Promise<void> {
   try {
     const principal = tenantPrincipal(request)
-    const actorUserId = authenticatedUserId(request)
+    const actor = actorFrom(request)
     const targetUserId = targetUserIdParameter(request)
     const input = parseBody(updateMemberRoleSchema, request.body)
-    const isSelf = targetUserId === actorUserId
 
-    // The matrix and the last-owner guard both run inside the service's
-    // transaction, on the target as read under the owner lock.
-    const updated = await changeRole(principal.tenantId, targetUserId, input.role, (target) => {
-      if (!canActorModifyTarget(principal.role, target.role, isSelf)) {
-        throw new HttpError("Insufficient permissions to change this member's role", 403)
-      }
-    })
+    const updated = await changeRole(actor, principal.tenantId, targetUserId, input.role)
     successResponse(response, updated, 'Member role updated.')
   } catch (error) {
     next(error)
@@ -281,12 +261,10 @@ export async function updateMemberRole(
 }
 
 /**
- * Remove a member from a tenant. Owner/admin only
- * (`requireRole('owner', 'admin')`, tenant.routes.ts) — `canActorModifyTarget`
- * then narrows further: an admin can never remove another admin or any
- * owner (including, per the matrix, THEMSELVES — an admin target is
- * `'no'` regardless of `isSelf`; see this task's own report for that
- * consequence).
+ * Remove a member from a tenant. Owner/admin only: `requireRole('owner',
+ * 'admin')` (tenant.routes.ts), then `removeMember` re-checks the actor's
+ * current role and the matrix under lock. Under the matrix an admin can
+ * never remove another admin or any owner, themselves included.
  * @param request - The incoming request, resolved to a tenant by `resolveTenant`.
  * @param response - The response.
  * @param next - Forwards a rejection to the terminal error handler.
@@ -298,16 +276,10 @@ export async function removeMember(
 ): Promise<void> {
   try {
     const principal = tenantPrincipal(request)
-    const actorUserId = authenticatedUserId(request)
+    const actor = actorFrom(request)
     const targetUserId = targetUserIdParameter(request)
-    const isSelf = targetUserId === actorUserId
 
-    // Matrix, last-owner guard and delete run atomically in the service.
-    await removeTenantMember(principal.tenantId, targetUserId, (target) => {
-      if (!canActorModifyTarget(principal.role, target.role, isSelf)) {
-        throw new HttpError('Insufficient permissions to remove this member', 403)
-      }
-    })
+    await removeTenantMember(actor, principal.tenantId, targetUserId)
     successResponse(response, undefined, 'Member removed.')
   } catch (error) {
     next(error)
@@ -359,8 +331,8 @@ export async function listInvitations(
 }
 
 /**
- * Invite an address to the tenant. Owner/admin only, and
- * `canActorGrantRole` limits which role an admin may offer. Answers 202
+ * Invite an address to the tenant. Owner/admin only; `invite` re-checks
+ * the actor's current role and `canActorGrantRole` under lock. Answers 202
  * with one fixed body whether or not the address has an account; only a
  * current member gets 409 `already_member`.
  * @param request - The incoming request, resolved to a tenant by `resolveTenant`, carrying `{ email, role }`.
@@ -374,12 +346,9 @@ export async function inviteMember(
 ): Promise<void> {
   try {
     const principal = tenantPrincipal(request)
-    const actorUserId = authenticatedUserId(request)
+    const actor = actorFrom(request)
     const input = parseBody(inviteMemberSchema, request.body)
-    if (!canActorGrantRole(principal.role, input.role)) {
-      throw new HttpError('Insufficient permissions to grant this role', 403)
-    }
-    await invite(principal.tenantId, actorUserId, input.email, input.role)
+    await invite(actor, principal.tenantId, input.email, input.role)
     respondInvitationSent(response)
   } catch (error) {
     next(error)
@@ -389,7 +358,7 @@ export async function inviteMember(
 /**
  * Mail a pending invitation again with a new link; the old link stops
  * working. Owner/admin only, it shares the invite endpoint's limiter, and
- * `canActorGrantRole` is re-checked against the invitation's role. Takes
+ * `resend` re-checks `canActorGrantRole` on the invitation's role. Takes
  * no body. A `:id` that is not a UUID answers 400 validation, not 404
  * `invitation_not_found`.
  * @param request - The incoming request, resolved to a tenant by `resolveTenant`, carrying `:id`.
@@ -403,14 +372,9 @@ export async function resendInvitation(
 ): Promise<void> {
   try {
     const principal = tenantPrincipal(request)
-    const actorUserId = authenticatedUserId(request)
+    const actor = actorFrom(request)
     const invitationId = invitationIdParameter(request)
-    // Resending re-issues the invitation's role, so the grant matrix applies again.
-    await resend(principal.tenantId, invitationId, actorUserId, (invitation) => {
-      if (!canActorGrantRole(principal.role, invitation.role)) {
-        throw new HttpError('Insufficient permissions to grant this role', 403)
-      }
-    })
+    await resend(actor, principal.tenantId, invitationId)
     respondInvitationSent(response)
   } catch (error) {
     next(error)
@@ -431,8 +395,9 @@ export async function revokeInvitation(
 ): Promise<void> {
   try {
     const principal = tenantPrincipal(request)
+    const actor = actorFrom(request)
     const invitationId = invitationIdParameter(request)
-    await revoke(principal.tenantId, invitationId)
+    await revoke(actor, principal.tenantId, invitationId)
     // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data", not undefined (which JSON.stringify omits entirely)
     successResponse(response, null, 'Invitation revoked.')
   } catch (error) {

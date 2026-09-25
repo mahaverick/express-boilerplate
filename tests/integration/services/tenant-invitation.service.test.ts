@@ -9,7 +9,6 @@ import type { MembershipRole } from '@/constants/tenant.constants'
 import type { TenantInvitation } from '@/database/models/tenant-invitation.model'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
-import { HttpError } from '@/errors/http-error'
 import type { NotificationJobData } from '@/jobs/notification.job'
 import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
@@ -62,15 +61,6 @@ function uniqueEmail(): string {
 }
 
 /**
- * A `resend` authorize callback that allows the resend, after checking that
- * the service handed it the pending row.
- * @param invitation - The pending invitation the service passes in.
- */
-function allowPendingInvitation(invitation: TenantInvitation): void {
-  expect(invitation.revokedAt).toBeNull()
-}
-
-/**
  * Write an invitation with a known raw token, bypassing `invite`.
  * @param tenant - The tenant.
  * @param invitedBy - The inviter.
@@ -100,15 +90,6 @@ async function seedInvitation(
     )
   )
   return { rawToken, invitation }
-}
-
-/**
- * A `resend` authorize callback that refuses, naming the role it was handed.
- * @param pending - The pending invitation the service passes in.
- * @throws {HttpError} Always, 403.
- */
-function refuseReissue(pending: TenantInvitation): void {
-  throw new HttpError(`May not re-issue the ${pending.role} role`, 403)
 }
 
 /**
@@ -200,7 +181,7 @@ describe('tenant-invitation.service', () => {
       const { owner, tenant } = await setup()
       const email = uniqueEmail()
 
-      await invite(tenant.id, owner.id, `  ${email.toUpperCase()}  `, 'editor')
+      await invite({ userId: owner.id }, tenant.id, `  ${email.toUpperCase()}  `, 'editor')
 
       const [pending] = await listPending(tenant.id)
       expect(pending).toMatchObject({ email, role: 'editor' })
@@ -229,7 +210,7 @@ describe('tenant-invitation.service', () => {
       })
 
       await expect(
-        invite(tenant.id, owner.id, member.email.toUpperCase(), 'editor')
+        invite({ userId: owner.id }, tenant.id, member.email.toUpperCase(), 'editor')
       ).rejects.toMatchObject({
         statusCode: 409,
         code: 'already_member',
@@ -242,7 +223,7 @@ describe('tenant-invitation.service', () => {
       const { owner, tenant } = await setup()
       const invitee = await createUser()
 
-      await invite(tenant.id, owner.id, invitee.email, 'manager')
+      await invite({ userId: owner.id }, tenant.id, invitee.email, 'manager')
 
       const queued = await waitForInvitationEmail(invitee.email)
       expect(queued.userId).toBe(invitee.id)
@@ -268,7 +249,7 @@ describe('tenant-invitation.service', () => {
         const unverified = kind === 'unverified' ? await createUser({ verified: false }) : undefined
         const email = unverified?.email ?? uniqueEmail()
 
-        await invite(tenant.id, owner.id, email, 'viewer')
+        await invite({ userId: owner.id }, tenant.id, email, 'viewer')
 
         await waitForInvitationEmail(email)
         const [pending] = await listPending(tenant.id)
@@ -282,10 +263,10 @@ describe('tenant-invitation.service', () => {
     it('kills the earlier link when the same address is invited again', async () => {
       const { owner, tenant } = await setup()
       const email = uniqueEmail()
-      await invite(tenant.id, owner.id, email, 'viewer')
+      await invite({ userId: owner.id }, tenant.id, email, 'viewer')
       const first = await waitForInvitationEmail(email)
 
-      await invite(tenant.id, owner.id, email, 'editor')
+      await invite({ userId: owner.id }, tenant.id, email, 'editor')
       const second = await waitForInvitationEmail(email, [first.token])
 
       await expect(preview(first.token)).rejects.toMatchObject(INVALID)
@@ -299,7 +280,7 @@ describe('tenant-invitation.service', () => {
       const { owner, tenant } = await setup()
       const invitee = await createUser({ active: false })
 
-      await invite(tenant.id, owner.id, invitee.email, 'viewer')
+      await invite({ userId: owner.id }, tenant.id, invitee.email, 'viewer')
 
       await waitForInvitationEmail(invitee.email)
       const [pending] = await listPending(tenant.id)
@@ -325,23 +306,56 @@ describe('tenant-invitation.service', () => {
             lookups.push(tenantId)
             return original(userId, tenantId, executor)
           },
-          () => invite(tenant.id, owner.id, email, 'viewer')
+          () => invite({ userId: owner.id }, tenant.id, email, 'viewer')
         )
 
         expect(lookups).toEqual([tenant.id])
       }
     )
+
+    it('refuses a grant the actor may not make before it reveals already_member', async () => {
+      const { tenant } = await setup()
+      const admin = await createUser()
+      const member = await createUser()
+      await userMembershipRepository.create({
+        userId: admin.id,
+        tenantId: tenant.id,
+        role: 'admin',
+      })
+      await userMembershipRepository.create({
+        userId: member.id,
+        tenantId: tenant.id,
+        role: 'viewer',
+      })
+
+      await expect(
+        invite({ userId: admin.id }, tenant.id, member.email, 'owner')
+      ).rejects.toMatchObject({
+        statusCode: 403,
+        message: 'Insufficient permissions to grant this role',
+      })
+    })
+
+    it('answers 404 Tenant not found to an actor who is not a member, and records nothing', async () => {
+      const { tenant } = await setup()
+      const outsider = await createUser()
+
+      await expect(
+        invite({ userId: outsider.id }, tenant.id, uniqueEmail(), 'viewer')
+      ).rejects.toMatchObject({ statusCode: 404, message: 'Tenant not found' })
+      expect(await listPending(tenant.id)).toEqual([])
+    })
   })
 
   describe('resend', () => {
     it('issues a new link and kills the old one', async () => {
       const { owner, tenant } = await setup()
       const email = uniqueEmail()
-      await invite(tenant.id, owner.id, email, 'viewer')
+      await invite({ userId: owner.id }, tenant.id, email, 'viewer')
       const first = await waitForInvitationEmail(email)
       const [pending] = await listPending(tenant.id)
 
-      await resend(tenant.id, pending?.id ?? '', owner.id, allowPendingInvitation)
+      await resend({ userId: owner.id }, tenant.id, pending?.id ?? '')
 
       const second = await waitForInvitationEmail(email, [first.token])
       await expect(preview(first.token)).rejects.toMatchObject(INVALID)
@@ -351,31 +365,36 @@ describe('tenant-invitation.service', () => {
 
     it('answers invitation_not_found for a revoked invitation, or for another tenant', async () => {
       const { owner, tenant } = await setup()
-      const { tenant: otherTenant } = await setup()
+      const { owner: otherOwner, tenant: otherTenant } = await setup()
       const { invitation } = await seedInvitation(tenant, owner, { email: uniqueEmail() })
       const notFound = { statusCode: 404, code: 'invitation_not_found' }
 
       await expect(
-        resend(otherTenant.id, invitation.id, owner.id, allowPendingInvitation)
+        resend({ userId: otherOwner.id }, otherTenant.id, invitation.id)
       ).rejects.toMatchObject(notFound)
-      await revoke(tenant.id, invitation.id)
-      await expect(
-        resend(tenant.id, invitation.id, owner.id, allowPendingInvitation)
-      ).rejects.toMatchObject(notFound)
+      await revoke({ userId: owner.id }, tenant.id, invitation.id)
+      await expect(resend({ userId: owner.id }, tenant.id, invitation.id)).rejects.toMatchObject(
+        notFound
+      )
     })
 
-    it('runs the caller’s check on the pending invitation first, and a refusal changes nothing', async () => {
+    it('re-checks the grant rule on the actor’s current role, and a refusal changes nothing', async () => {
       const { owner, tenant } = await setup()
+      const admin = await createUser()
+      await userMembershipRepository.create({
+        userId: admin.id,
+        tenantId: tenant.id,
+        role: 'admin',
+      })
       const { rawToken, invitation } = await seedInvitation(tenant, owner, {
         email: uniqueEmail(),
         role: 'owner',
       })
-      await expect(resend(tenant.id, invitation.id, owner.id, refuseReissue)).rejects.toMatchObject(
-        {
-          statusCode: 403,
-          message: 'May not re-issue the owner role',
-        }
-      )
+
+      await expect(resend({ userId: admin.id }, tenant.id, invitation.id)).rejects.toMatchObject({
+        statusCode: 403,
+        message: 'Insufficient permissions to grant this role',
+      })
       const unchanged = await preview(rawToken)
       expect(unchanged.role).toBe('owner')
     })
@@ -387,9 +406,9 @@ describe('tenant-invitation.service', () => {
       const { rawToken, invitation } = await seedInvitation(tenant, owner, { email: uniqueEmail() })
       await tenantRepository.softDelete(tenant.id)
 
-      await expect(
-        resend(tenant.id, invitation.id, owner.id, allowPendingInvitation)
-      ).rejects.toMatchObject({ statusCode: 404 })
+      await expect(resend({ userId: owner.id }, tenant.id, invitation.id)).rejects.toMatchObject({
+        statusCode: 404,
+      })
 
       const [row] = await sql<{ tokenHash: string }[]>`
         select token_hash as "tokenHash" from tenant_invitations where id = ${invitation.id}
@@ -403,13 +422,31 @@ describe('tenant-invitation.service', () => {
       const { owner, tenant } = await setup()
       const { rawToken, invitation } = await seedInvitation(tenant, owner, { email: uniqueEmail() })
 
-      await revoke(tenant.id, invitation.id)
+      await revoke({ userId: owner.id }, tenant.id, invitation.id)
 
       await expect(preview(rawToken)).rejects.toMatchObject(INVALID)
-      await expect(revoke(tenant.id, invitation.id)).rejects.toMatchObject({
+      await expect(revoke({ userId: owner.id }, tenant.id, invitation.id)).rejects.toMatchObject({
         statusCode: 404,
         code: 'invitation_not_found',
       })
+    })
+
+    it('refuses a revoke by a member below admin, and the invitation stays pending', async () => {
+      const { owner, tenant } = await setup()
+      const editor = await createUser()
+      await userMembershipRepository.create({
+        userId: editor.id,
+        tenantId: tenant.id,
+        role: 'editor',
+      })
+      const { rawToken, invitation } = await seedInvitation(tenant, owner, { email: uniqueEmail() })
+
+      await expect(revoke({ userId: editor.id }, tenant.id, invitation.id)).rejects.toMatchObject({
+        statusCode: 403,
+        message: 'Insufficient permissions',
+      })
+      const stillPending = await preview(rawToken)
+      expect(stillPending.email).toBe(invitation.email)
     })
   })
 
@@ -463,7 +500,7 @@ describe('tenant-invitation.service', () => {
       const { owner, tenant } = await setup()
       const invitee = await createUser()
 
-      await invite(tenant.id, owner.id, `  ${invitee.email.toUpperCase()}\t`, 'editor')
+      await invite({ userId: owner.id }, tenant.id, `  ${invitee.email.toUpperCase()}\t`, 'editor')
       const queued = await waitForInvitationEmail(invitee.email)
 
       const previewed = await preview(queued.token)
@@ -568,7 +605,7 @@ describe('tenant-invitation.service', () => {
       const { owner, tenant } = await setup()
       const invitee = await createUser()
       const revoked = await seedInvitation(tenant, owner, { email: invitee.email })
-      await revoke(tenant.id, revoked.invitation.id)
+      await revoke({ userId: owner.id }, tenant.id, revoked.invitation.id)
       await expect(accept(revoked.rawToken, invitee.id)).rejects.toMatchObject(INVALID)
 
       const { rawToken } = await seedInvitation(tenant, owner, { email: invitee.email })
@@ -631,7 +668,7 @@ describe('tenant-invitation.service', () => {
           email: invitee.email,
         })
         const stale = await invitationRepository.findValidByTokenHash(hashToken(rawToken))
-        await revoke(tenant.id, invitation.id)
+        await revoke({ userId: owner.id }, tenant.id, invitation.id)
 
         const claims = await withStaleRead(stale, async () => {
           await expect(accept(rawToken, invitee.id)).rejects.toMatchObject(INVALID)

@@ -12,6 +12,7 @@ import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
 import { addEmailJob } from '@/jobs/email.job'
 import { addNotificationJob } from '@/jobs/notification.job'
+import { canActorGrantRole } from '@/policies/tenant.policy'
 import {
   TenantInvitationRepository,
   type PendingInvitationSummary,
@@ -21,7 +22,9 @@ import { UserMembershipRepository } from '@/repositories/user-membership.reposit
 import { UserRepository } from '@/repositories/user.repository'
 import { db, type DbExecutor } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
+import { lockActorRole } from '@/services/tenant-membership.service'
 import { TENANT_INVITATION_TEMPLATE_KEY } from '@/templates/email/tenant-invitation.template'
+import type { Actor } from '@/types/actor'
 import { requireDurationMs } from '@/utilities/duration.utilities'
 import { hashToken } from '@/utilities/token.utilities'
 import { buildInvitationAcceptUrl } from '@/utilities/verification-link.utilities'
@@ -83,6 +86,7 @@ const INVITATION_NOT_FOUND_MESSAGE = 'Invitation not found'
 // Matches no membership: stands in for the invitee id when the address has no account.
 const NIL_UUID = '00000000-0000-0000-0000-000000000000'
 const INVITER_NAME_FALLBACK = 'A teammate'
+const GRANT_REFUSED_MESSAGE = 'Insufficient permissions to grant this role'
 const MS_PER_DAY = 24 * 60 * 60 * 1000
 
 /**
@@ -231,69 +235,75 @@ async function dispatchInvitationMessages(
 /**
  * The tenant's name and slug, for an invitation's messages.
  * @param tenantId - The tenant.
+ * @param executor - Where to run the query. Defaults to the pool.
  * @returns Its name and slug.
  * @throws {HttpError} 404, when the tenant is gone.
  */
-async function tenantForMessages(tenantId: string): Promise<{ name: string; slug: string }> {
-  const tenant = await tenantRepository.findById(tenantId)
+async function tenantForMessages(
+  tenantId: string,
+  executor: DbExecutor = db
+): Promise<{ name: string; slug: string }> {
+  const tenant = await tenantRepository.findById(tenantId, {}, executor)
   if (!tenant) throw new HttpError('Tenant not found', 404)
   return { name: tenant.name, slug: tenant.slug }
 }
 
 /**
  * Invite an address to a tenant. Answers the same way whether or not the
- * address has an account; only an existing member is refused.
+ * address has an account; only an existing member is refused. The actor's
+ * role is re-read under lock first, so the grant check runs before any
+ * lookup of the address and holds until the invitation is written.
+ * @param actor - The signed-in user sending the invitation.
  * @param tenantId - The tenant.
- * @param actorUserId - The owner or admin sending the invitation.
  * @param email - The address to invite, in any case.
- * @param role - The role offered. The caller has already checked it may grant it.
- * @throws {HttpError} 409 `already_member`, when the address belongs to a member; 409 `invitation_conflict` from a racing duplicate invite.
+ * @param role - The role offered.
+ * @throws {HttpError} 404 `Tenant not found` when the actor is no longer a member, or when the tenant is gone; 403 when the actor is now below admin or may not grant `role`; 409 `already_member` when the address belongs to a member; 409 `invitation_conflict` from a racing duplicate invite.
  */
 export async function invite(
+  actor: Actor,
   tenantId: string,
-  actorUserId: string,
   email: string,
   role: MembershipRole
 ): Promise<void> {
   const normalizedEmail = email.trim().toLowerCase()
-  const invitee = await userRepository.findByEmail(normalizedEmail)
-  // Always run the lookup, so a registered and an unregistered address take the same queries.
-  const membership = await userMembershipRepository.findByUserAndTenant(
-    invitee?.id ?? NIL_UUID,
-    tenantId
-  )
-  if (invitee && membership) {
-    throw new HttpError(ALREADY_MEMBER_MESSAGE, 409, ALREADY_MEMBER_CODE)
-  }
-  const tenant = await tenantForMessages(tenantId)
-  const inviter = await userRepository.findById(actorUserId)
   const rawToken = generateInvitationToken()
 
-  const invitation = await db.transaction((tx) =>
-    invitationRepository.createPending(
+  const context: InvitationMessageContext = await db.transaction(async (tx) => {
+    const actorRole = await lockActorRole(actor, tenantId, 'admin', tx)
+    if (!canActorGrantRole(actorRole, role)) throw new HttpError(GRANT_REFUSED_MESSAGE, 403)
+
+    const invitee = await userRepository.findByEmail(normalizedEmail, {}, tx)
+    // Always run the lookup, so a registered and an unregistered address take the same queries.
+    const membership = await userMembershipRepository.findByUserAndTenant(
+      invitee?.id ?? NIL_UUID,
+      tenantId,
+      tx
+    )
+    if (invitee && membership) {
+      throw new HttpError(ALREADY_MEMBER_MESSAGE, 409, ALREADY_MEMBER_CODE)
+    }
+    const tenant = await tenantForMessages(tenantId, tx)
+    const inviter = await userRepository.findById(actor.userId, {}, tx)
+
+    const invitation = await invitationRepository.createPending(
       {
         tenantId,
         email: normalizedEmail,
         role,
         tokenHash: hashToken(rawToken),
-        invitedBy: actorUserId,
+        invitedBy: actor.userId,
         expiresAt: invitationExpiry(),
       },
       tx
     )
-  )
+    return { invitation, rawToken, tenant, inviterName: inviterDisplayName(inviter), invitee }
+  })
 
-  const context = {
-    invitation,
-    rawToken,
-    tenant,
-    inviterName: inviterDisplayName(inviter),
-    invitee,
-  }
+  const { invitee } = context
   // eslint-disable-next-line unicorn/prefer-await -- fire-and-forget: the response must not wait on the queue
   dispatchInvitationMessages(context, isNotifiable(invitee) ? invitee : undefined).catch(
     (error: unknown) => {
-      logger.error('Invitation messages failed', { error, invitationId: invitation.id })
+      logger.error('Invitation messages failed', { error, invitationId: context.invitation.id })
     }
   )
 }
@@ -308,33 +318,26 @@ export async function listPending(tenantId: string): Promise<PendingInvitationSu
 }
 
 /**
- * The caller's permission check, run on the pending invitation inside the
- * transaction before anything is written. Throws (403) to refuse.
- */
-export type AuthorizeInvitation = (invitation: TenantInvitation) => void
-
-/**
  * Give a pending invitation a new link and a fresh lifetime, and mail it
- * again. The old link stops working at once.
+ * again. The old link stops working at once. Resending re-issues the
+ * invitation's role, so the grant rule runs again, on the actor's role as
+ * re-read under lock.
+ * @param actor - The signed-in user resending it, named in the email.
  * @param tenantId - The tenant it must belong to.
  * @param invitationId - The invitation.
- * @param actorUserId - The owner or admin resending it, named in the email.
- * @param authorize - The caller's check on the pending row; resending re-issues its role.
- * @throws {HttpError} 404 `invitation_not_found`, when it is not pending in this tenant; 404 when the tenant is gone, before anything is written; whatever `authorize` throws.
+ * @throws {HttpError} 404 when the tenant is gone, before anything is written; 404 `Tenant not found` when the actor is no longer a member; 403 when the actor is now below admin; 404 `invitation_not_found` when it is not pending in this tenant; 403 when the actor may not grant its role.
  */
-export async function resend(
-  tenantId: string,
-  invitationId: string,
-  actorUserId: string,
-  authorize: AuthorizeInvitation
-): Promise<void> {
+export async function resend(actor: Actor, tenantId: string, invitationId: string): Promise<void> {
   // Before the write, so a vanished tenant cannot leave the old link replaced and no email sent.
   const tenant = await tenantForMessages(tenantId)
   const rawToken = generateInvitationToken()
   const invitation = await db.transaction(async (tx) => {
+    const actorRole = await lockActorRole(actor, tenantId, 'admin', tx)
     const pending = await invitationRepository.findPendingById(tenantId, invitationId, tx)
     if (!pending) throw invitationNotFound()
-    authorize(pending)
+    if (!canActorGrantRole(actorRole, pending.role)) {
+      throw new HttpError(GRANT_REFUSED_MESSAGE, 403)
+    }
     const updated = await invitationRepository.replaceToken(
       pending.id,
       hashToken(rawToken),
@@ -344,7 +347,7 @@ export async function resend(
     if (!updated) throw invitationNotFound()
     return updated
   })
-  const inviter = await userRepository.findById(actorUserId)
+  const inviter = await userRepository.findById(actor.userId)
   const invitee = await userRepository.findByEmail(invitation.email)
 
   const context = {
@@ -361,14 +364,18 @@ export async function resend(
 }
 
 /**
- * Revoke a pending invitation.
+ * Revoke a pending invitation. The actor's role is re-read under lock.
+ * @param actor - The signed-in user revoking it.
  * @param tenantId - The tenant it must belong to.
  * @param invitationId - The invitation.
- * @throws {HttpError} 404 `invitation_not_found`, when it is not pending in this tenant.
+ * @throws {HttpError} 404 `Tenant not found` when the actor is no longer a member; 403 when the actor is now below admin; 404 `invitation_not_found` when it is not pending in this tenant.
  */
-export async function revoke(tenantId: string, invitationId: string): Promise<void> {
-  const wasRevoked = await invitationRepository.revoke(tenantId, invitationId)
-  if (!wasRevoked) throw invitationNotFound()
+export async function revoke(actor: Actor, tenantId: string, invitationId: string): Promise<void> {
+  await db.transaction(async (tx) => {
+    await lockActorRole(actor, tenantId, 'admin', tx)
+    const wasRevoked = await invitationRepository.revoke(tenantId, invitationId, tx)
+    if (!wasRevoked) throw invitationNotFound()
+  })
 }
 
 /**

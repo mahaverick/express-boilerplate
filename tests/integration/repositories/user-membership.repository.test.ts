@@ -348,14 +348,14 @@ describe('UserMembershipRepository', () => {
       const outsider = await createUser()
       const tenant = await createTenant(owner.id)
       await userMembershipRepository.create({
-        userId: first.id,
-        tenantId: tenant.id,
-        role: 'viewer',
-      })
-      await userMembershipRepository.create({
         userId: second.id,
         tenantId: tenant.id,
         role: 'editor',
+      })
+      await userMembershipRepository.create({
+        userId: first.id,
+        tenantId: tenant.id,
+        role: 'viewer',
       })
 
       const locked = await db.transaction((tx) =>
