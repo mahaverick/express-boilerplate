@@ -378,6 +378,25 @@ describe('invitations API', () => {
 
       expect(response.status).toBe(400)
     })
+
+    // Each passes z.email() but its domain is no hostname: a bad label, a
+    // label over 63 characters, a domain over 253.
+    it.each([
+      ['a label ending in a hyphen', 'invitee@foo-.com'],
+      ['a 64-character label', `invitee@${'a'.repeat(64)}.com`],
+      [
+        'a 259-character domain',
+        `invitee@${Array.from({ length: 4 }, () => 'a'.repeat(63)).join('.')}.com`,
+      ],
+    ])('400s an address whose domain is %s', async (_label, email) => {
+      const { ownerToken, tenant } = await setup()
+
+      const response = await inviteVia(tenant.slug, ownerToken, { email, role: 'viewer' })
+
+      expect(response.status).toBe(400)
+      const body = response.body as { errors?: Record<string, unknown> }
+      expect(body.errors).toHaveProperty('email')
+    })
   })
 
   describe('GET /api/v1/tenants/:slug/invitations', () => {

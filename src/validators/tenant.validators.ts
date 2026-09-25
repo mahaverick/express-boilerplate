@@ -20,6 +20,7 @@
 // for every field it caps.
 import { z } from 'zod'
 import { MEMBERSHIP_ROLES, RESERVED_SLUGS } from '@/constants/tenant.constants'
+import { hostnameDomain } from '@/utilities/email.utilities'
 import { emailSchema } from '@/validators/auth.validators'
 
 const MAX_TENANT_NAME_LENGTH = 255
@@ -188,10 +189,14 @@ export type UpdateTenantInput = z.infer<typeof updateTenantSchema>
  * `POST /api/v1/tenants/:slug/invitations` request body: the address to
  * invite and the role the invitee gets on accepting. `role` is required, not
  * defaulted: an owner or admin is consciously granting access, and a silent
- * default would hide the one field that matters.
+ * default would hide the one field that matters. The address's domain must
+ * also be a dotted hostname, the shape the audit log records; sign-up and
+ * sign-in keep the plain `emailSchema`.
  */
 export const inviteMemberSchema = z.object({
-  email: emailSchema,
+  email: emailSchema.refine((email) => hostnameDomain(email) !== undefined, {
+    message: 'Email must have a valid domain.',
+  }),
   role: z.enum(MEMBERSHIP_ROLES),
 })
 

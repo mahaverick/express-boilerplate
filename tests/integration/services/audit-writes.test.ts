@@ -300,10 +300,25 @@ describe('member.removed', () => {
     const rows = await rowsFor(tenant.id, 'member.removed')
     expect(rows).toHaveLength(1)
     expect(rows[0]).toMatchObject({
+      actor_user_id: owner.id,
+      access: 'member',
       target_type: 'membership',
       target_id: membership?.id,
       metadata: { userId: member.id, role: 'viewer', self: false },
     })
+  })
+
+  it('records platform access for a staff admin who is not a member', async () => {
+    const { tenant } = await seedTenant()
+    const member = await seedMember(tenant, 'viewer')
+    const staff = await seedUser()
+    await makeStaff(staff.id, 'admin')
+
+    await removeMember({ userId: staff.id }, tenant.id, member.id)
+
+    const rows = await rowsFor(tenant.id, 'member.removed')
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ actor_user_id: staff.id, access: 'platform' })
   })
 
   it('marks self true when an owner removes themself', async () => {
@@ -313,6 +328,7 @@ describe('member.removed', () => {
     await removeMember({ userId: owner.id }, tenant.id, owner.id)
 
     const rows = await rowsFor(tenant.id, 'member.removed')
+    expect(rows).toHaveLength(1)
     expect(rows[0]?.metadata).toEqual({ userId: owner.id, role: 'owner', self: true })
   })
 
@@ -368,7 +384,12 @@ describe('invitation.resent', () => {
 
     const rows = await rowsFor(tenant.id, 'invitation.resent')
     expect(rows).toHaveLength(1)
-    expect(rows[0]).toMatchObject({ target_type: 'invitation', target_id: invitation.id })
+    expect(rows[0]).toMatchObject({
+      actor_user_id: owner.id,
+      access: 'member',
+      target_type: 'invitation',
+      target_id: invitation.id,
+    })
     expect(rows[0]?.metadata).toEqual({ role: 'editor', emailDomain: 'example.test' })
   })
 
@@ -386,6 +407,37 @@ describe('invitation.resent', () => {
   })
 })
 
+// A stored address whose domain is no hostname (the invite validator now
+// refuses these, but older rows may hold one) must not block a resend or a
+// revoke: the audit entry records a null domain.
+describe('an invitation whose stored domain is no hostname', () => {
+  const badAddress = `invitee@${'a'.repeat(64)}.com`
+
+  it('resends, recording a null domain', async () => {
+    const { owner, tenant } = await seedTenant()
+    const { invitation } = await seedInvitation(tenant, owner, badAddress)
+
+    await resend({ userId: owner.id }, tenant.id, invitation.id)
+
+    const rows = await rowsFor(tenant.id, 'invitation.resent')
+    expect(rows).toHaveLength(1)
+    // eslint-disable-next-line unicorn/no-null -- the metadata stores JSON null
+    expect(rows[0]?.metadata).toEqual({ role: 'editor', emailDomain: null })
+  })
+
+  it('revokes, recording a null domain', async () => {
+    const { owner, tenant } = await seedTenant()
+    const { invitation } = await seedInvitation(tenant, owner, badAddress)
+
+    await revoke({ userId: owner.id }, tenant.id, invitation.id)
+
+    const rows = await rowsFor(tenant.id, 'invitation.revoked')
+    expect(rows).toHaveLength(1)
+    // eslint-disable-next-line unicorn/no-null -- the metadata stores JSON null
+    expect(rows[0]?.metadata).toEqual({ role: 'editor', emailDomain: null })
+  })
+})
+
 describe('invitation.revoked', () => {
   it('writes one row with the role and the address domain only', async () => {
     const { owner, tenant } = await seedTenant()
@@ -395,7 +447,12 @@ describe('invitation.revoked', () => {
 
     const rows = await rowsFor(tenant.id, 'invitation.revoked')
     expect(rows).toHaveLength(1)
-    expect(rows[0]).toMatchObject({ target_type: 'invitation', target_id: invitation.id })
+    expect(rows[0]).toMatchObject({
+      actor_user_id: owner.id,
+      access: 'member',
+      target_type: 'invitation',
+      target_id: invitation.id,
+    })
     expect(rows[0]?.metadata).toEqual({ role: 'editor', emailDomain: 'example.test' })
   })
 

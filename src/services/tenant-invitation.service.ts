@@ -30,7 +30,7 @@ import { buildInvitationAcceptUrl } from '@/services/verification.service'
 import { TENANT_INVITATION_TEMPLATE_KEY } from '@/templates/email/tenant-invitation.template'
 import type { Actor } from '@/types/actor'
 import { requireDurationMs } from '@/utilities/duration.utilities'
-import { emailDomain } from '@/utilities/email.utilities'
+import { hostnameDomain } from '@/utilities/email.utilities'
 
 const invitationRepository = new TenantInvitationRepository()
 const tenantRepository = new TenantRepository()
@@ -171,10 +171,11 @@ function isNotifiable(user: User | undefined): user is User {
 /**
  * The domain the audit log keeps for an invited address.
  * @param email - The invited address.
- * @returns Its lowercased domain; an empty string for an address with none, which the audit schema rejects.
+ * @returns Its lowercased domain, or null when it has none or it is not a dotted hostname.
  */
-function auditEmailDomain(email: string): string {
-  return emailDomain(email) ?? ''
+function auditEmailDomain(email: string): string | null {
+  // eslint-disable-next-line unicorn/no-null -- stored as JSON null in the audit metadata
+  return hostnameDomain(email) ?? null
 }
 
 /**

@@ -101,6 +101,22 @@ describe('emailDomain shape', () => {
     expect(schema.safeParse({ role: 'viewer', emailDomain: 'example.com' }).success).toBe(true)
   })
 
+  it.each(['invitation.created', 'invitation.resent', 'invitation.revoked'] as const)(
+    '%s accepts a null domain, for a stored address that has no hostname',
+    (action) => {
+      expect(
+        // eslint-disable-next-line unicorn/no-null -- the metadata records JSON null for "no domain"
+        AUDIT_ACTIONS[action].metadata.safeParse({ role: 'viewer', emailDomain: null }).success
+      ).toBe(true)
+    }
+  )
+
+  it('keeps the auto-join domain required', () => {
+    const autoJoined = AUDIT_ACTIONS['platform.member.auto_joined'].metadata
+    // eslint-disable-next-line unicorn/no-null -- proving null is refused here
+    expect(autoJoined.safeParse({ userId: 'user-1', emailDomain: null }).success).toBe(false)
+  })
+
   it.each([
     ['a hex token with no dot', 'a1b2c3d4'.repeat(8)],
     ['a full address', 'a@b.com'],

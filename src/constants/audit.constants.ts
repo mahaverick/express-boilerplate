@@ -4,6 +4,7 @@
 // and the metadata schema of every audited action.
 import { z } from 'zod'
 import { MEMBERSHIP_ROLES } from '@/constants/tenant.constants'
+import { EMAIL_DOMAIN_PATTERN } from '@/utilities/email.utilities'
 
 /**
  * Who performed an audited action: a signed-in user, or the system (a script).
@@ -45,9 +46,10 @@ const role = z.enum(MEMBERSHIP_ROLES)
 const id = z.string().min(1).max(36)
 // A lowercase hostname only: an address, a mixed-case value, or a token
 // (no dot) must never reach the log. The producer lowercases first.
-const emailDomain = z
-  .string()
-  .regex(/^(?=.{1,253}$)[a-z\d](?:[a-z\d-]{0,61}[a-z\d])?(?:\.[a-z\d](?:[a-z\d-]{0,61}[a-z\d])?)+$/)
+const emailDomain = z.string().regex(EMAIL_DOMAIN_PATTERN)
+// Null for a stored invitation address whose domain is no hostname, so the
+// entry is still written without it.
+const invitationEmailDomain = emailDomain.nullable()
 // Field names only, never their values.
 const changedFields = z.array(z.string().regex(/^[a-z][A-Za-z\d]{0,63}$/)).max(32)
 
@@ -73,9 +75,18 @@ export const AUDIT_ACTIONS = {
     target: 'membership',
     metadata: z.strictObject({ userId: id, role, self: z.boolean() }),
   },
-  'invitation.created': { target: 'invitation', metadata: z.strictObject({ role, emailDomain }) },
-  'invitation.resent': { target: 'invitation', metadata: z.strictObject({ role, emailDomain }) },
-  'invitation.revoked': { target: 'invitation', metadata: z.strictObject({ role, emailDomain }) },
+  'invitation.created': {
+    target: 'invitation',
+    metadata: z.strictObject({ role, emailDomain: invitationEmailDomain }),
+  },
+  'invitation.resent': {
+    target: 'invitation',
+    metadata: z.strictObject({ role, emailDomain: invitationEmailDomain }),
+  },
+  'invitation.revoked': {
+    target: 'invitation',
+    metadata: z.strictObject({ role, emailDomain: invitationEmailDomain }),
+  },
   'invitation.accepted': {
     target: 'membership',
     metadata: z.strictObject({ role, invitationId: id }),
