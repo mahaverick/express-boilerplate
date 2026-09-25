@@ -43,12 +43,11 @@ export type AuditTargetType = (typeof AUDIT_TARGET_TYPES)[number]
 
 const role = z.enum(MEMBERSHIP_ROLES)
 const id = z.string().min(1).max(36)
-// A domain only: a full address or a token must never reach the log.
+// A lowercase hostname only: an address, a mixed-case value, or a token
+// (no dot) must never reach the log. The producer lowercases first.
 const emailDomain = z
   .string()
-  .min(1)
-  .max(255)
-  .regex(/^[^\s@]+$/)
+  .regex(/^(?=.{1,253}$)[a-z\d](?:[a-z\d-]{0,61}[a-z\d])?(?:\.[a-z\d](?:[a-z\d-]{0,61}[a-z\d])?)+$/)
 // Field names only, never their values.
 const changedFields = z.array(z.string().regex(/^[a-z][A-Za-z\d]{0,63}$/)).max(32)
 

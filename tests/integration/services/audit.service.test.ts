@@ -129,6 +129,30 @@ describe('record', () => {
     expect(rows[0]?.user_agent).toBe('A'.repeat(512))
   })
 
+  it('truncates a long request id to 64 characters', async () => {
+    const { userId, tenantId } = await createOwnerAndTenant()
+    const longRequestId = 'r'.repeat(100)
+
+    await requestContextStore.run({ requestId: longRequestId }, () =>
+      withTransaction((tx) => record(tenantUpdated(userId, tenantId), tx))
+    )
+
+    const [row] = await auditRows(tenantId)
+    expect(row?.request_id).toBe('r'.repeat(64))
+  })
+
+  it('truncates a long ip to 45 characters', async () => {
+    const { userId, tenantId } = await createOwnerAndTenant()
+    const longIp = '1'.repeat(100)
+
+    await requestContextStore.run({ requestId: 'req-audit-ip', ip: longIp }, () =>
+      withTransaction((tx) => record(tenantUpdated(userId, tenantId), tx))
+    )
+
+    const [row] = await auditRows(tenantId)
+    expect(row?.ip).toBe('1'.repeat(45))
+  })
+
   it('writes a system entry with no actor and no request metadata outside a request', async () => {
     const { userId, tenantId } = await createOwnerAndTenant()
 
@@ -266,5 +290,26 @@ describe('recordPlatformAccess', () => {
     expect(await redis.exists(key)).toBe(0)
     await expect(recordPlatformAccess({ userId }, tenantId, 'viewer')).resolves.toBeDefined()
     expect(await auditRows(tenantId)).toHaveLength(1)
+  })
+
+  it('logs a warning and rethrows the original error when releasing the key also fails', async () => {
+    const { userId, tenantId } = await createOwnerAndTenant()
+    trackedDedupeKey(userId, tenantId)
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    const redis = await getRedis()
+    const failingDel = (() =>
+      Promise.reject(new Error('redis del unavailable'))) as typeof redis.del
+
+    await withMutatedMethod(redis, 'del', failingDel, async () => {
+      await withMutatedMethod(AuditLogRepository.prototype, 'insert', refuseInsert, async () => {
+        await expect(recordPlatformAccess({ userId }, tenantId, 'viewer')).rejects.toThrow(
+          'insert failed'
+        )
+      })
+    })
+
+    expect(warn).toHaveBeenCalledWith('Could not release the platform access dedupe key', {
+      error: 'redis del unavailable',
+    })
   })
 })

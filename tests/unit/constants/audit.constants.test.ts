@@ -94,6 +94,23 @@ describe('AUDIT_ACTIONS', () => {
   })
 })
 
+describe('emailDomain shape', () => {
+  const schema = AUDIT_ACTIONS['invitation.created'].metadata
+
+  it('accepts a lowercase hostname', () => {
+    expect(schema.safeParse({ role: 'viewer', emailDomain: 'example.com' }).success).toBe(true)
+  })
+
+  it.each([
+    ['a hex token with no dot', 'a1b2c3d4'.repeat(8)],
+    ['a full address', 'a@b.com'],
+    ['an upper-case domain', 'EXAMPLE.COM'],
+    ['a bare hostname with no TLD', 'localhost'],
+  ])('refuses %s', (_label, emailDomain) => {
+    expect(schema.safeParse({ role: 'viewer', emailDomain }).success).toBe(false)
+  })
+})
+
 describe('audit value sets', () => {
   it('match the audit_logs CHECK constraints', () => {
     expect(AUDIT_ACTOR_KINDS).toEqual(['user', 'system'])
