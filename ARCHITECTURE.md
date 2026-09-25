@@ -152,9 +152,9 @@ naming it — most of middlewares' own imports, services importing validator
 types, presenters importing constants — is simply unrestricted by lint,
 not separately enforced: the table states the intended shape, and only
 the six zones, the controllers' type-only models rule and the
-platform-tenant repository rule are lint-enforced. Controllers never import a repository or `database.service`
-directly — every controller method calls a service method and shapes the
-response.
+platform-tenant repository rule are lint-enforced. Controllers never
+import a repository or `database.service` directly — every controller
+method calls a service method and shapes the response.
 
 Every route handler is a `BaseController` (`src/controllers/base.controller.ts`)
 method. Nearly all are arrow-function class fields built through
@@ -177,23 +177,26 @@ set:
 1. the tenant's owner rows (`lockOwners`, ordered by `id`);
 2. memberships, ordered by `user_id` (`lockMemberships`);
 3. only when the actor has no membership in the tenant, the actor's
-   platform-tenant membership, `FOR SHARE` (`resolveActorAccess`,
-   `tenant-access.service.ts`).
+   platform-tenant membership, `FOR SHARE` (`lockTenantAccess`,
+   `tenant-access.service.ts`, via `lockPlatformRole`,
+   `user-membership.repository.ts`).
 
-It's written into the JSDoc of all three, and enforced only by convention
-plus a deadlock regression test
+It's written into the JSDoc of `lockOwners`, `lockMemberships` and
+`lockPlatformRole` (`user-membership.repository.ts`) and of
+`lockTenantAccess` (`tenant-access.service.ts`), and enforced only by
+convention plus a deadlock regression test
 (`tests/integration/services/tenant-membership.service.test.ts`), since
 Postgres itself has no way to enforce an application-level lock order.
 
 **Platform access.** Four services carry it. Their callers stay in the
 layers above.
 
-| Service                      | Job                                                                                                                                                                                         |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `tenant-access.service.ts`   | `resolveActorAccess(actor, tenantId, tx)`: the effective role and `access`, re-read under lock (step 3 above). Membership wins; the platform tenant is members-only.                        |
-| `platform.service.ts`        | `getPlatformMembership` (one indexed read, no cache), `autoJoin` (viewer only, verified addresses on `PLATFORM_EMAIL_DOMAINS`), `bootstrapGrant` (the `platform:grant` script only).        |
-| `platform-tenant.service.ts` | `searchAll`: every customer tenant, for staff. The only importer of `platform-tenant.repository.ts`.                                                                                        |
-| `audit.service.ts`           | `record(entry, tx)`, in the caller's transaction, with strict per-action metadata; `recordPlatformAccess` (hourly, deduplicated in Redis); `listForTenant` and `listPlatformWide` (keyset). |
+| Service                      | Job                                                                                                                                                                                                                                                                                                                                                                                              |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `tenant-access.service.ts`   | `lockTenantAccess(actor, tenantId, otherUserIds, tx)`: locks owners, memberships and, when the actor has no membership, the platform membership, in that order (step 3 above), returning the actor's access and the locked memberships. `resolveActorAccess(actor, tenantId, tx)` wraps it for a caller with no other memberships to lock. Membership wins; the platform tenant is members-only. |
+| `platform.service.ts`        | `getPlatformMembership` (one indexed read, no cache), `autoJoin` (viewer only, verified addresses on `PLATFORM_EMAIL_DOMAINS`), `bootstrapGrant` (the `platform:grant` script only).                                                                                                                                                                                                             |
+| `platform-tenant.service.ts` | `searchAll`: every customer tenant, for staff. The only importer of `platform-tenant.repository.ts`.                                                                                                                                                                                                                                                                                             |
+| `audit.service.ts`           | `record(entry, tx)`, in the caller's transaction, with strict per-action metadata; `recordPlatformAccess` (hourly, deduplicated in Redis); `listForTenant` and `listPlatformWide` (keyset).                                                                                                                                                                                                      |
 
 ## The B3 seam: email verification is wired up; password recovery is not
 
@@ -465,11 +468,10 @@ BullMQ job queue (`src/jobs/`, `src/workers/` — see CLAUDE.md's "Job queue"
 and "Notifications" sections), and OpenTelemetry SDK wiring in the app
 itself (`src/observability/tracing.ts` starts a `NodeSDK` and exports
 traces and logs — see CLAUDE.md's "Observability" section). The rate
-limiters this list used to describe as
-covering only the four auth routes now also cover the tenant and invitation
-routes (`createRateLimiter(RATE_LIMITS.createTenant)` and
+limiters also cover the tenant, invitation and staff-search routes
+(`createRateLimiter(RATE_LIMITS.createTenant)` and
 `createRateLimiter(RATE_LIMITS.inviteTenantMember)` on `tenant.routes.ts`,
 `createRateLimiter(RATE_LIMITS.invitationPreview)` and
-`createRateLimiter(RATE_LIMITS.invitationAccept)` on `invitation.routes.ts`),
-plus staff tenant search (`createRateLimiter(RATE_LIMITS.platformSearch)` on
+`createRateLimiter(RATE_LIMITS.invitationAccept)` on `invitation.routes.ts`,
+and `createRateLimiter(RATE_LIMITS.platformSearch)` on
 `platform.routes.ts`).

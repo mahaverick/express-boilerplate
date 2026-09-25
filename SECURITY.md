@@ -587,7 +587,7 @@ blob.
 - **What staff can do in a customer tenant.** In a tenant they don't belong
   to, `resolveTenant` makes the platform role the effective role
   (`access: 'platform'`). It must clear the route's own `requireRole` bar and
-  the unchanged service policies, and every write re-reads it under lock in
+  the service policies, and every write re-reads it under lock in
   its own transaction (`resolveActorAccess`,
   `src/services/tenant-access.service.ts`). A staff user demoted or removed
   mid-request can't finish on the old role. So:
@@ -596,9 +596,10 @@ blob.
   - only a platform owner can change an admin, or grant owner or admin.
 - **Membership wins.** Where a staff user is also a member, only the
   membership role counts.
-- **The platform tenant is members-only.** Staff who aren't its members get
-  404 on `/tenants/platform`, and it never appears in staff search. A CHECK
-  keeps it active and undeleted, and a partial unique index allows only one.
+- **The platform tenant is members-only.** Anyone who isn't a member of the
+  platform tenant gets 404 there, and it never appears in staff search. A
+  CHECK keeps it active and undeleted, and a partial unique index allows
+  only one.
 - **Joining.** A **verified** address whose domain is listed in
   `PLATFORM_EMAIL_DOMAINS` joins as `viewer`.
   - The domain is the exact part after the last `@`; subdomains don't match.
@@ -634,8 +635,9 @@ blob.
   A `BEFORE UPDATE OR DELETE` trigger makes the table append-only for every
   role. Its foreign keys are `ON DELETE RESTRICT`, so hard-deleting a user or
   tenant with history fails instead of erasing it. `TRUNCATE` is not blocked:
-  the table's owner can still empty it, and the test suite relies on that.
-  There is no retention job yet.
+  a role with `TRUNCATE` privilege on the table — its owner by default, or a
+  superuser — can still empty it, and the test suite relies on that. There
+  is no retention job.
 
 - **Who reads it.**
   - `GET /api/v1/tenants/:slug/audit-log`: effective owners and admins, so a
@@ -655,11 +657,11 @@ blob.
 
 Everything below genuinely ships nothing today, in either direction:
 
-| Control                       | Status              | What that means for you                                                                                                                                                    |
-| ----------------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| CSRF tokens                   | **Not implemented** | See "No CSRF middleware" below — reasoning, not an oversight. The forced-login direction IS defended, by a content-type gate on the auth router; see the section after it. |
-| MFA                           | **Not implemented** | No TOTP enrolment, no recovery codes. Owned by a later plan (B4).                                                                                                          |
-| General-purpose rate limiting | **Partial**         | Twenty per-route limiters (see "Rate limiting" above). There is no global limiter, and the profile, notification, tenant read and audit-log routes have none.              |
+| Control                       | Status              | What that means for you                                                                                                                                                                                                                                                                                                                                                             |
+| ----------------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CSRF tokens                   | **Not implemented** | See "No CSRF middleware" below — reasoning, not an oversight. The forced-login direction IS defended, by a content-type gate on the auth router; see the section after it.                                                                                                                                                                                                          |
+| MFA                           | **Not implemented** | No TOTP enrolment, no recovery codes. Owned by a later plan (B4).                                                                                                                                                                                                                                                                                                                   |
+| General-purpose rate limiting | **Partial**         | Twenty per-route limiters (see "Rate limiting" above). There is no global limiter; the profile, notification and audit-log routes have none, and every tenant route except create, invite and resend has none either — five tenant writes are unlimited: `PATCH /:slug`, `PATCH` and `DELETE /:slug/members/:userId`, `DELETE /:slug/invitations/:id`, and `PATCH /:slug/settings`. |
 
 `JWT_ACCESS_SECRET` is required by the environment schema and **is** read —
 by `signAccessToken`/`verifyAccessToken`. `WEB_URL` is also read now, twice

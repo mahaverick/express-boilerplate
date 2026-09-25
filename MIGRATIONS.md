@@ -9,14 +9,19 @@ file nobody reads by default.
 
 ## Upgrading to 3.1.0
 
-Nothing needs changing to upgrade. 3.1.0 adds a migration, one optional
-variable, a script and new response fields.
+3.1.0 adds a migration, one optional variable, a script, new response
+fields, and one stricter validation (see "One endpoint is stricter, not
+just additive" below). Two upgrade preconditions, both under Migration
+`0016` below: a live customer tenant already on the `platform` slug must be
+renamed first, and a migrating role that doesn't own the database needs
+`pg_trgm`'s `CREATE` privilege granted first.
 
 ### Migration `0016`
 
 `0016` is partly hand-written: drizzle generated the table, column and index
-statements, and two blocks were added by hand afterward — see the file's own
-comments for exactly which.
+statements, and four blocks were added by hand — `pg_trgm`, the slug guard,
+the seed, and the append-only function and trigger — each marked
+`-- Hand-added` in the file itself.
 
 - Adds `tenants.is_platform` (default `false`), with a partial unique
   index (at most one platform tenant) and a CHECK that keeps that tenant
@@ -73,17 +78,17 @@ pages.
 ### One endpoint is stricter, not just additive
 
 `POST /api/v1/tenants/:slug/invitations` rejects an address whose domain is
-not a lowercase dotted hostname (a bad label, a label over 63 characters, a
-domain over 253) with `400` and `errors.email` — the shape the audit log
-stores. This is not purely additive: a syntactically valid email address
+not a dotted hostname (a bad label, a label over 63 characters, a domain
+over 253) with `400` and `errors.email` — the shape the audit log stores. This is not purely additive: a syntactically valid email address
 whose domain isn't a real hostname is refused at invite time, rather than
 accepted and only losing its domain when it reaches the audit trail.
 
 ### The audit log has no retention
 
 Rows accumulate: every change, plus one row per staff user, tenant and
-hour of staff access. Nothing prunes them yet. Only the table's owner can
-remove rows, with `TRUNCATE`.
+hour of staff access. Nothing prunes them. Removing rows takes `TRUNCATE`
+privilege on the table — its owner has that by default, and so does any
+role explicitly granted it, or a superuser.
 
 ## Upgrading to 3.0.0
 
