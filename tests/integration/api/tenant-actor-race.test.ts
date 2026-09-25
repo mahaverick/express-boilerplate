@@ -35,7 +35,7 @@ const userRepository = new UserRepository()
 const HOUR_MS = 60 * 60 * 1000
 
 afterAll(async () => {
-  // On today's code (RED) the writes succeed and enqueue mail; clear it.
+  // Clear anything a regression lets these requests enqueue.
   await getEmailQueue().obliterate({ force: true })
   await getNotificationQueue().obliterate({ force: true })
   await closeQueue()

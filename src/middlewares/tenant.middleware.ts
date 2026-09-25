@@ -195,7 +195,7 @@ export function resolveTenant(
  * Require the caller's role in the current tenant to rank at or above one
  * of `allowedRoles` (`isRoleAtLeast`), so `requireRole('owner', 'admin')`
  * admits owners and admins. An empty list admits nobody.
- * Member and invitation services re-check the same bar on the role read
+ * Member and invitation writes re-check the same bar on the role read
  * inside their transaction; this is the early gate.
  *
  * Must run AFTER `resolveTenant` — reads `request.principal`, which only

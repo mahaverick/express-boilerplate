@@ -273,6 +273,39 @@ describe('tenant-invitation.service', () => {
       const secondPreview = await preview(second.token)
       expect(secondPreview.role).toBe('editor')
     })
+
+    it('refuses a grant the actor may not make before it reveals already_member', async () => {
+      const { tenant } = await setup()
+      const admin = await createUser()
+      const member = await createUser()
+      await userMembershipRepository.create({
+        userId: admin.id,
+        tenantId: tenant.id,
+        role: 'admin',
+      })
+      await userMembershipRepository.create({
+        userId: member.id,
+        tenantId: tenant.id,
+        role: 'viewer',
+      })
+
+      await expect(
+        invite({ userId: admin.id }, tenant.id, member.email, 'owner')
+      ).rejects.toMatchObject({
+        statusCode: 403,
+        message: 'Insufficient permissions to grant this role',
+      })
+    })
+
+    it('answers 404 Tenant not found to an actor who is not a member, and records nothing', async () => {
+      const { tenant } = await setup()
+      const outsider = await createUser()
+
+      await expect(
+        invite({ userId: outsider.id }, tenant.id, uniqueEmail(), 'viewer')
+      ).rejects.toMatchObject({ statusCode: 404, message: 'Tenant not found' })
+      expect(await listPending(tenant.id)).toEqual([])
+    })
   })
 
   describe('invite, account state', () => {
@@ -312,39 +345,6 @@ describe('tenant-invitation.service', () => {
         expect(lookups).toEqual([tenant.id])
       }
     )
-
-    it('refuses a grant the actor may not make before it reveals already_member', async () => {
-      const { tenant } = await setup()
-      const admin = await createUser()
-      const member = await createUser()
-      await userMembershipRepository.create({
-        userId: admin.id,
-        tenantId: tenant.id,
-        role: 'admin',
-      })
-      await userMembershipRepository.create({
-        userId: member.id,
-        tenantId: tenant.id,
-        role: 'viewer',
-      })
-
-      await expect(
-        invite({ userId: admin.id }, tenant.id, member.email, 'owner')
-      ).rejects.toMatchObject({
-        statusCode: 403,
-        message: 'Insufficient permissions to grant this role',
-      })
-    })
-
-    it('answers 404 Tenant not found to an actor who is not a member, and records nothing', async () => {
-      const { tenant } = await setup()
-      const outsider = await createUser()
-
-      await expect(
-        invite({ userId: outsider.id }, tenant.id, uniqueEmail(), 'viewer')
-      ).rejects.toMatchObject({ statusCode: 404, message: 'Tenant not found' })
-      expect(await listPending(tenant.id)).toEqual([])
-    })
   })
 
   describe('resend', () => {
@@ -398,6 +398,18 @@ describe('tenant-invitation.service', () => {
       const unchanged = await preview(rawToken)
       expect(unchanged.role).toBe('owner')
     })
+
+    it('answers 404 Tenant not found to an actor who is not a member, and the old link survives', async () => {
+      const { owner, tenant } = await setup()
+      const outsider = await createUser()
+      const { rawToken, invitation } = await seedInvitation(tenant, owner, { email: uniqueEmail() })
+
+      await expect(resend({ userId: outsider.id }, tenant.id, invitation.id)).rejects.toMatchObject(
+        { statusCode: 404, message: 'Tenant not found' }
+      )
+      const stillValid = await preview(rawToken)
+      expect(stillValid.email).toBe(invitation.email)
+    })
   })
 
   describe('resend, vanished tenant', () => {
@@ -445,6 +457,18 @@ describe('tenant-invitation.service', () => {
         statusCode: 403,
         message: 'Insufficient permissions',
       })
+      const stillPending = await preview(rawToken)
+      expect(stillPending.email).toBe(invitation.email)
+    })
+
+    it('answers 404 Tenant not found to an actor who is not a member, and the invitation stays pending', async () => {
+      const { owner, tenant } = await setup()
+      const outsider = await createUser()
+      const { rawToken, invitation } = await seedInvitation(tenant, owner, { email: uniqueEmail() })
+
+      await expect(revoke({ userId: outsider.id }, tenant.id, invitation.id)).rejects.toMatchObject(
+        { statusCode: 404, message: 'Tenant not found' }
+      )
       const stillPending = await preview(rawToken)
       expect(stillPending.email).toBe(invitation.email)
     })

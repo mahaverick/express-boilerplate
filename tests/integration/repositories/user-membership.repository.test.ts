@@ -345,30 +345,31 @@ describe('UserMembershipRepository', () => {
       const owner = await createUser()
       const first = await createUser()
       const second = await createUser()
+      const third = await createUser()
       const outsider = await createUser()
       const tenant = await createTenant(owner.id)
-      await userMembershipRepository.create({
-        userId: second.id,
-        tenantId: tenant.id,
-        role: 'editor',
-      })
-      await userMembershipRepository.create({
-        userId: first.id,
-        tenantId: tenant.id,
-        role: 'viewer',
-      })
+      // Insert in an order that is not user_id order, so the rows' physical
+      // order cannot pass for the sorted one.
+      const insertionOrder = [third, first, second]
+      for (const [index, member] of insertionOrder.entries()) {
+        await userMembershipRepository.create({
+          userId: member.id,
+          tenantId: tenant.id,
+          role: index === 0 ? 'editor' : 'viewer',
+        })
+      }
+      const sortedIds = [first.id, second.id, third.id].toSorted((a, b) => a.localeCompare(b))
+      expect(insertionOrder.map((member) => member.id)).not.toEqual(sortedIds)
 
       const locked = await db.transaction((tx) =>
         userMembershipRepository.lockMemberships(
           tenant.id,
-          [second.id, outsider.id, first.id, first.id],
+          [second.id, outsider.id, third.id, first.id, first.id],
           tx
         )
       )
 
-      expect(locked.map((membership) => membership.userId)).toEqual(
-        [first.id, second.id].toSorted((a, b) => a.localeCompare(b))
-      )
+      expect(locked.map((membership) => membership.userId)).toEqual(sortedIds)
     })
 
     it('returns nothing for an empty list', async () => {
