@@ -2,7 +2,8 @@
 //
 // Excluded from coverage (vitest.config.ts): this file is signal wiring —
 // process.exit, process.on(SIGTERM/SIGINT) — which is not meaningfully unit
-// testable, and it is exercised for real by the boot check in the task brief.
+// testable. tests/unit/index.test.ts spawns it to prove boot refuses a bad
+// environment.
 import { assertEnvConsistent } from '@/configs/env-consistency.config'
 import { getEnv } from '@/configs/env.config'
 // Static, unlike `@/server` below: constructing the logger is lazy, so this

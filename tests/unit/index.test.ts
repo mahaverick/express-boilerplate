@@ -4,7 +4,11 @@
 // one thing a unit test of assertEnvConsistent cannot: that boot runs it,
 // and exits 1 before anything starts. The child's database and Redis point
 // at port 1, so even a regression that let it boot reaches no shared service.
-// VITEST is inherited, so the child never loads a developer's .env.
+// Its otherwise-valid base env is this process's: the .env.test values that
+// tests/helpers/setup-global.ts loaded. VITEST is inherited too, so the child
+// never loads a developer's .env. APP_PORT=70000 makes listen() throw
+// ERR_SOCKET_BAD_PORT, which also exits 1, so the stderr check below is what
+// proves boot stopped before listening.
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
@@ -33,5 +37,6 @@ describe('index.ts boot checks', () => {
 
     expect(failure.code).toBe(1)
     expect(failure.stderr).toContain('QUEUE_PREFIX was renamed to REDIS_KEY_PREFIX')
+    expect(failure.stderr).not.toContain('ERR_SOCKET_BAD_PORT')
   })
 })
