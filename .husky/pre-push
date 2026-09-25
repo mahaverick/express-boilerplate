@@ -1,3 +1,5 @@
+# Lint, typecheck and unit tests; no Docker needed. Integration tests and the
+# coverage gate run in CI, which main's ruleset requires.
 set -e
 pnpm lint
-pnpm test:coverage
+pnpm test:unit

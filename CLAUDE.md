@@ -341,15 +341,17 @@ otel-collector`.** It is bind-mounted; `docker compose up -d` does not
   — the dominant real-bug class in async Express code. `eslint --cache`
   does **not** help here: `lint-staged` only ever passes the files you
   changed, so the cache never has a hit to give.
-- **Pre-commit deliberately excludes `tests/integration/**`.** Those need
-  the Docker compose stack up, and `vitest --changed HEAD` fans out along
-  the import graph — editing a widely-imported file (a service, a response
-  utility) pulls integration tests in even when Docker is down, which
-  measured at 20s+ hung on a health probe before failing the commit
-  outright. A hook that fails whenever Docker happens to be down gets
-  disabled with `--no-verify` permanently and never comes back — which
-  protects nothing. `pre-push` runs the full suite via `test:coverage`,
-  where Docker being up is a fair expectation. **The exclusion is by path
+- **Both hooks run unit tests only, via `vitest.unit.config.ts`, and
+  need no Docker.** That config drops `tests/integration/**` and the base
+  config's `globalSetup`, which creates and migrates the per-worker Postgres
+  databases and fails outright when Postgres is down, even on a unit-only
+  run. `vitest --changed HEAD` fans out along the import graph, so without
+  the exclusion, editing a widely-imported file (a service, a response
+  utility) pulls integration tests into pre-commit. A hook that fails
+  whenever Docker happens to be down gets disabled with `--no-verify`
+  permanently, and then it protects nothing. `pre-push` runs `pnpm lint`
+  (ESLint and typecheck) and `pnpm test:unit`. Integration tests and the
+  coverage gate run in CI, which main requires. **The exclusion is by path
   only, not by what a test actually touches** — so a test that hits the
   real database or Redis MUST live under `tests/integration/`, never
   `tests/unit/`, regardless of what else is colocated there. This bit
@@ -371,8 +373,17 @@ otel-collector`.** It is bind-mounted; `docker compose up -d` does not
   `"prepare": "husky"` actually installs hooks by re-running `pnpm install`
   in a checkout that's already installed — it proves nothing either way.
   Test it from a fresh clone.
-- **Renovate, not dependabot.** Weekly, grouped, 3-day minimum release age.
-  Renovate pins actions to SHAs (its first PR converts the tags). TypeScript
+- **Renovate, not dependabot.** Weekly, grouped, 3-day minimum release age;
+  pnpm enforces the same 3 days on install (`minimumReleaseAge` in
+  `pnpm-workspace.yaml`). Minor, patch and digest updates auto-merge once
+  the required checks pass; majors and the pinned toolchain (`node`,
+  `typescript`, the devcontainer image) wait for a human. Vulnerability
+  fixes open immediately, outside the schedule and release-age wait,
+  labelled `security`; Renovate adds the fixed version to
+  `minimumReleaseAgeExclude` in the same PR, so CI's frozen install accepts
+  it. Delete the Renovate-added version once it is 3 days old (Renovate
+  appends `|| <ver>` to an existing entry). Actions are pinned
+  to commit SHAs, and Renovate keeps those pins current. TypeScript
   is held `<6.1.0`, and every Node version pin — the docker `node` image,
   `.nvmrc`, `actions/setup-node`'s `node-version:`, and the devcontainer's
   `mcr.microsoft.com/devcontainers/typescript-node` image tag — is held
@@ -389,17 +400,21 @@ otel-collector`.** It is bind-mounted; `docker compose up -d` does not
   it via `workflow_call`, then builds and pushes `ghcr.io/<repo>:sha-<commit>`
   and `:main` with SBOM and provenance attestations, then runs a placeholder
   `deploy` job bound to the `production` environment. Keep CI's concurrency
-  group keyed on `github.event_name` — see the comment in `ci.yml`. A manual
+  group keyed on `github.event_name`, not `github.workflow`: when `deploy.yml`
+  calls `ci.yml`, `github.workflow` is the caller's name. Non-PR runs are
+  grouped per commit so a newer push never drops a pending one. A manual
   `workflow_dispatch` from a non-`main` branch still builds and pushes the
   sha-tagged image, but never moves the `:main` tag and never runs `deploy`
   — both are conditioned on running from `refs/heads/main`.
-- **Releases merge themselves.** `release.yml` merges release-please's PR
-  as soon as it is opened, using the `RELEASE_PLEASE_TOKEN` secret — not
-  `GITHUB_TOKEN`, whose merge would start no workflow and so would never be
-  tagged, released or deployed. The resulting `vX.Y.Z` tag re-runs
-  `deploy.yml`, which adds `:X.Y.Z`, `:X.Y` and `:X` image tags; the `deploy`
-  job skips tag runs. If that secret expires, releases silently stop at the
-  release PR — renew it, don't swap in `GITHUB_TOKEN`.
+- **Releases merge themselves.** `release.yml` queues release-please's PR
+  with `--auto`; it merges once required checks pass. It uses a GitHub App
+  token (variable `RELEASE_APP_CLIENT_ID`, secret `RELEASE_APP_PRIVATE_KEY`;
+  Contents and Pull requests read/write) — not `GITHUB_TOKEN`, whose PRs and
+  tags start no workflow. The `vX.Y.Z` tag runs `deploy.yml`'s `promote` job,
+  which builds nothing: it waits for `:sha-<commit>` from `main`'s run and adds
+  `:X.Y.Z`, `:X.Y` and `:X` to that same digest; tag runs skip `ci`, `image`
+  and `deploy`. If the App key is revoked, releases stop — fix it, don't use
+  `GITHUB_TOKEN`.
 
 ## Testing
 

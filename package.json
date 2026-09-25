@@ -33,6 +33,7 @@
     "db:migrate": "tsx src/database/migrate.ts",
     "db:migrate:prod": "node dist/database/migrate.js",
     "test": "vitest run",
+    "test:unit": "vitest run --config vitest.unit.config.ts",
     "test:watch": "vitest watch",
     "test:coverage": "vitest run --coverage",
     "commit": "cz",

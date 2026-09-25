@@ -727,11 +727,21 @@ Postgres's `22001` is not a unique violation and nothing translates it. A
 
 [`gitleaks`](https://github.com/gitleaks/gitleaks) runs as an optional local
 pre-commit hook (`.pre-commit-config.yaml`, `.gitleaks.toml`) and as a
-blocking check on every pull request
-(`.github/workflows/gitleaks.yml`). The local hook alone is not a gate — it
-is one `git commit --no-verify` away from being skipped — so the CI workflow
-is the actual enforcement layer; the pre-commit hook exists to catch a leak
-before it is even pushed.
+blocking check on every pull request (`.github/workflows/gitleaks.yml`),
+which also re-scans each push to `main`. That push run starts after the
+commits have landed, so it detects a leak but cannot block it. The local
+hook alone is not a gate — it is one `git commit --no-verify` away from
+being skipped — so the pull request check is the actual enforcement layer;
+the pre-commit hook exists to catch a leak before it is even pushed.
+
+### Dependency audit: a gate with one documented escape hatch
+
+The `test` job runs `pnpm audit --prod --audit-level high`, and `test` is a
+required check, so a high or critical advisory with no fixed version blocks
+every PR. To unblock, ignore that one advisory by its GHSA ID under
+`auditConfig.ignoreGhsas` in `pnpm-workspace.yaml` (`pnpm audit --ignore
+<GHSA>` writes the entry), with a comment giving the reason and a date to
+revisit, and record it in MIGRATIONS.md like any other change to that file.
 
 ### Domain-leak gate
 

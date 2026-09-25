@@ -3,6 +3,13 @@
   "extends": ["config:recommended", ":semanticCommits", "helpers:pinGitHubActionDigests"],
   "schedule": ["before 6am on monday"],
   "minimumReleaseAge": "3 days",
+  "internalChecksFilter": "strict",
+  "osvVulnerabilityAlerts": true,
+  "vulnerabilityAlerts": {
+    "labels": ["security"],
+    "minimumReleaseAge": null,
+    "schedule": ["at any time"]
+  },
   "lockFileMaintenance": {
     "enabled": true,
     "schedule": ["before 6am on the first day of the month"]
@@ -47,6 +54,22 @@
       ]
     },
     { "groupName": "opentelemetry", "matchPackageNames": ["@opentelemetry/*"] },
-    { "groupName": "types", "matchPackageNames": ["@types/*"] }
+    { "groupName": "types", "matchPackageNames": ["@types/*"] },
+    {
+      "description": "Minor, patch and digest updates merge themselves once the required checks pass.",
+      "matchUpdateTypes": ["minor", "patch", "digest", "pinDigest"],
+      "automerge": true,
+      "platformAutomerge": true
+    },
+    {
+      "description": "Majors always wait for a human.",
+      "matchUpdateTypes": ["major"],
+      "automerge": false
+    },
+    {
+      "description": "The pinned toolchain always waits for a human.",
+      "matchDepNames": ["node", "typescript", "mcr.microsoft.com/devcontainers/typescript-node"],
+      "automerge": false
+    }
   ]
 }

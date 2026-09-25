@@ -4,7 +4,9 @@
 
 Follow the README Quickstart first. You need the compose stack up and a
 working `.env` to run tests locally (`tests/integration/**` needs Postgres
-and Redis; `tests/unit/**` does not).
+and Redis). `tests/unit/**` needs neither, but only under `pnpm test:unit`:
+`pnpm test`'s default config provisions the test databases in its
+globalSetup before any test runs, so it needs the stack even for unit tests.
 
 ## Before you open a PR
 
@@ -38,23 +40,19 @@ existing.
 - **`pre-commit`** (~4.6s on a one-file change): checks the lockfile isn't
   stale, runs `lint-staged` (eslint --fix + prettier on staged files),
   regenerates `.env.example` if `env.config.ts` is staged, then runs
-  `vitest run --changed HEAD` **excluding** `tests/integration/**`. About
-  70% of the time is ESLint's type-aware cold start (building the
-  TypeScript program) — it is not worth removing; see CLAUDE.md for why.
-  Integration tests are excluded here specifically because
-  `--changed HEAD` fans out along the import graph: editing a
-  widely-imported file (a service, a response utility) pulls integration
-  tests in even when Docker is down, which hangs on a health probe and
-  then fails the commit outright. A hook that fails when Docker happens to
-  be down gets disabled with `--no-verify` permanently and protects
-  nothing from then on.
+  `vitest run --changed HEAD` against `vitest.unit.config.ts`, which
+  excludes `tests/integration/**` and skips the database setup, so it runs
+  with Docker down. About 70% of the time is ESLint's type-aware cold start
+  (building the TypeScript program). It is not worth removing; see CLAUDE.md
+  for why. A hook that fails when Docker happens to be down gets disabled
+  with `--no-verify` permanently, and then it protects nothing.
 - **`commit-msg`**: runs `commitlint` against
   [Conventional Commits](https://www.conventionalcommits.org/). Use
   `pnpm commit` for an interactive prompt if you don't want to remember the
   format by hand.
-- **`pre-push`**: runs the full `pnpm lint` and `pnpm test:coverage`,
-  including integration tests. This is where Docker being up is a fair
-  expectation to enforce.
+- **`pre-push`**: runs `pnpm lint` (ESLint and typecheck) and
+  `pnpm test:unit`, with no Docker needed. Integration tests and the
+  coverage gate run in CI, which main requires.
 
 ## Commit messages
 
@@ -111,7 +109,8 @@ missed:
   locally rather than let CI catch it. This used to be scoped to
   `src/**/*.{ts,json,md}` while being described here as repo-wide, so nothing
   formatted `tests/**` at all.
-- `pnpm audit --prod` — production dependencies only.
+- `pnpm audit --prod --audit-level high` — fails on high or critical
+  advisories in production dependencies.
 - `.env.example` matches what `pnpm env:example` generates from the current
   schema (see step 2 above).
 - The CI `env:` block mirrors `.env.test` key-for-key (see step 4 above).
@@ -154,11 +153,13 @@ missed:
   refuses to run on one. Put any explanation of a term's purpose here in
   this document, or in a commit message — never as a line in the terms
   file itself.
-- `gitleaks` (separate workflow, on every PR) — secret scanning. There is
-  also an optional local `pre-commit` hook for the same tool
-  (`pre-commit install`), which is defense in depth, not the enforcement
-  layer: a developer can skip it with `--no-verify`, but not the PR-level
-  check.
+- `gitleaks` (separate workflow, on every PR and every push to `main`) —
+  secret scanning. There is also an optional local `pre-commit` hook for
+  the same tool (`pre-commit install`), which is defense in depth, not the
+  enforcement layer: a developer can skip it with `--no-verify`, but not
+  the PR-level check.
+- `pr-title` — the PR title must be a conventional commit; it becomes the
+  squash commit release-please reads.
 
 ## Secrets
 
@@ -174,14 +175,15 @@ committed and readable, so it is its own example.)
 
 Releases are automatic. On every push to `main`, `release-please` opens a
 release pull request from the conventional commits since the last release, and
-`release.yml` merges it straight away; that merge tags `vX.Y.Z`, publishes the
-GitHub Release, and the tag push makes `deploy.yml` publish the image as
-`:X.Y.Z`, `:X.Y` and `:X`. Only `feat`/`fix`/breaking commits cut a release —
-`chore`, `docs`, `ci` and the like do not. This needs the
-`RELEASE_PLEASE_TOKEN` repo secret (a fine-grained PAT with Contents and Pull
-requests read/write): GitHub never starts workflows from events `GITHUB_TOKEN`
-creates, so without it the merge would never be tagged or deployed. The
-version bump follows the commit types:
+`release.yml` queues it with `--auto`, so it merges once required checks pass;
+the next run tags `vX.Y.Z` and publishes the GitHub Release, and the tag push
+makes `deploy.yml` add `:X.Y.Z`, `:X.Y` and `:X` to the image digest `main`
+already built and tested — a release rebuilds nothing. Only
+`feat`/`fix`/breaking commits cut a release — `chore`, `docs`, `ci` and the
+like do not. This uses a GitHub App token (variable `RELEASE_APP_CLIENT_ID`,
+secret `RELEASE_APP_PRIVATE_KEY`; Contents and Pull requests read/write): events
+`GITHUB_TOKEN` creates start no workflow, so its PR would get no CI and its tag
+no promotion. The version bump follows the commit types:
 
 - `feat` commits become a minor version bump
 - `fix` commits become a patch version bump

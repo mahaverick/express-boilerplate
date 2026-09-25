@@ -226,6 +226,7 @@ is unaffected. See the header comment in
 | `pnpm format` / `pnpm format:check` | Prettier over the whole repo (`.` minus `.prettierignore`), `tests/` included.                                                                                                                                                        |
 | `pnpm test`                         | `vitest run`.                                                                                                                                                                                                                         |
 | `pnpm test:watch`                   | `vitest watch`.                                                                                                                                                                                                                       |
+| `pnpm test:unit`                    | Every test except `tests/integration/**`, with no database setup, so it runs with Docker down. The git hooks run this config.                                                                                                         |
 | `pnpm test:coverage`                | `vitest run --coverage`, gated at 80% lines/functions/branches/statements.                                                                                                                                                            |
 | `pnpm env:example`                  | Regenerates `.env.example` from the Zod schema.                                                                                                                                                                                       |
 | `pnpm db:migration:generate`        | `drizzle-kit generate` — writes a new migration from the model files. See [DATABASE.md](DATABASE.md).                                                                                                                                 |
@@ -331,15 +332,28 @@ provenance attestation. The `deploy` job itself is a placeholder — no
 deployment target has been chosen yet. A manual `workflow_dispatch` from
 another branch only pushes the sha-tagged image — the `:main` tag and the
 `deploy` job both run only from `main`. Releases are automatic: every `feat`
-or `fix` merge is released as `vX.Y.Z` within minutes and the image gains
-`:X.Y.Z`, `:X.Y` and `:X` tags (see [CONTRIBUTING.md](CONTRIBUTING.md#releases)
-— it needs the `RELEASE_PLEASE_TOKEN` secret).
+or `fix` merge is released as `vX.Y.Z` once the release PR's checks pass,
+and the digest `main` already built gains `:X.Y.Z`, `:X.Y` and `:X` tags —
+nothing is rebuilt (see
+[CONTRIBUTING.md](CONTRIBUTING.md#releases) — it needs a release GitHub App).
 
-Two things need doing by hand, once, before any of this is live:
+Four things need doing by hand, once, before any of this is live:
 
 - **Install the [Renovate GitHub App](https://github.com/apps/renovate)**
   on this repository. `renovate.json` is inert without it — nothing
   schedules or opens Renovate PRs until the app is installed.
+- **Create and install a release GitHub App** on this repository, with
+  Contents and Pull requests read/write. Set its client ID as the repo
+  variable `RELEASE_APP_CLIENT_ID` and its private key as the secret
+  `RELEASE_APP_PRIVATE_KEY`; `release.yml` fails without them.
+- **Set the merge rules** (Settings → General, then Settings → Rules).
+  Enable "Allow auto-merge"; allow squash merging only, with the commit
+  title set to the PR title and the commit message left blank; and add a
+  ruleset on `main` requiring the checks `lint`, `test`, `docker`,
+  `gitleaks` and `pr-title`. Without the ruleset, `release.yml`'s fallback
+  merges the release PR without waiting for CI; without the blank squash
+  message, each squash body would carry the branch's commit list, which
+  release-please reads as extra conventional commits.
 - **Add protection rules to the `production` GitHub Environment**
   (Settings → Environments → `production`) — at minimum, required
   reviewers — before replacing the placeholder `deploy` step with a real

@@ -1,16 +1,18 @@
 allowBuilds:
-  # bcrypt's "install" script runs node-gyp-build: fetches a prebuilt native
-  # binding for the host platform, or compiles one from source via node-gyp
-  # if no prebuild matches. Required for bcrypt to work at all — it is a
-  # native addon, not a pure-JS package — and it is the password-hashing
-  # library this plan's Task 2 adds. See MIGRATIONS.md.
+  # bcrypt's "install" script runs node-gyp-build: it tests the prebuilt
+  # native binding bundled in the package's prebuilds/ for the host
+  # platform, or compiles one from source via node-gyp if that fails.
+  # Required for bcrypt to work at all — it is a native addon, not a
+  # pure-JS package — and it is the password-hashing library this plan's
+  # Task 2 adds. See MIGRATIONS.md.
   bcrypt: true
   esbuild: true
   # msgpackr-extract: transitive dependency of bullmq (via msgpackr, which
-  # BullMQ uses to encode job data for Redis). Same profile as bcrypt/
-  # unrs-resolver above — its install script only fetches a prebuilt native
-  # binding for the host platform, or falls back to msgpackr's pure-JS
-  # encoder when none matches; no arbitrary script.
+  # BullMQ uses to encode job data for Redis). Its install script
+  # (node-gyp-build-optional-packages) tests the prebuilt binding from an
+  # optional per-platform package, or compiles one from source via node-gyp
+  # if that fails. If no binding loads, msgpackr falls back to its pure-JS
+  # encoder at runtime.
   msgpackr-extract: true
   # protobufjs: transitive dependency of @opentelemetry/exporter-trace-otlp-http
   # (via @opentelemetry/otlp-transformer). Its postinstall only reads
@@ -23,6 +25,8 @@ allowBuilds:
   # directly for module/TS-path resolution. Its postinstall only fetches a
   # prebuilt binary for the host platform; no arbitrary script.
   unrs-resolver: true
+# Minutes (3 days). Matches renovate.json; the excludes below are exceptions to it.
+minimumReleaseAge: 4320
 minimumReleaseAgeExclude:
-  - zod@4.6.5
-  - eslint-plugin-jsdoc@64.4.0
+  - dotenv@18.0.3
+  - supertest@7.3.0

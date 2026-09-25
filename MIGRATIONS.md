@@ -154,28 +154,53 @@ pnpm writes these bypasses into a generated file that nobody opens by
 default — recorded here so a silent supply-chain decision doesn't stay
 invisible for a year. **Rule: every future addition to
 `pnpm-workspace.yaml` gets a line here too, in the same change that adds
-it.**
+it.** Renovate adds `# Renovate security update:` entries to
+`minimumReleaseAgeExclude` itself; they need no line here and can be deleted
+once the version is 3 days old.
 
 Current contents, verbatim:
 
 ```yaml
 allowBuilds:
+  # bcrypt's "install" script runs node-gyp-build: it tests the prebuilt
+  # native binding bundled in the package's prebuilds/ for the host
+  # platform, or compiles one from source via node-gyp if that fails.
+  # Required for bcrypt to work at all — it is a native addon, not a
+  # pure-JS package — and it is the password-hashing library this plan's
+  # Task 2 adds. See MIGRATIONS.md.
   bcrypt: true
   esbuild: true
+  # msgpackr-extract: transitive dependency of bullmq (via msgpackr, which
+  # BullMQ uses to encode job data for Redis). Its install script
+  # (node-gyp-build-optional-packages) tests the prebuilt binding from an
+  # optional per-platform package, or compiles one from source via node-gyp
+  # if that fails. If no binding loads, msgpackr falls back to its pure-JS
+  # encoder at runtime.
+  msgpackr-extract: true
+  # protobufjs: transitive dependency of @opentelemetry/exporter-trace-otlp-http
+  # (via @opentelemetry/otlp-transformer). Its postinstall only reads
+  # package.json files to print a stderr warning if a *dependent* pins an
+  # incompatible version scheme for protobufjs itself — verified by reading
+  # scripts/postinstall.js; no network access, no compilation, no arbitrary
+  # code.
+  protobufjs: true
   # unrs-resolver: native binary that eslint-plugin-import-x depends on
   # directly for module/TS-path resolution. Its postinstall only fetches a
   # prebuilt binary for the host platform; no arbitrary script.
   unrs-resolver: true
+# Minutes (3 days). Matches renovate.json; the excludes below are exceptions to it.
+minimumReleaseAge: 4320
 minimumReleaseAgeExclude:
-  - zod@4.6.5
-  - eslint-plugin-jsdoc@64.4.0
+  - dotenv@18.0.3
+  - supertest@7.3.0
 ```
 
 Line-by-line:
 
 - **`allowBuilds.bcrypt: true`** — `bcrypt`'s `install` script runs
-  `node-gyp-build`: fetches a prebuilt native binding for the host platform,
-  or compiles one from source via `node-gyp` if no prebuild matches. Native
+  `node-gyp-build`: it tests the prebuilt native binding bundled in the
+  package's `prebuilds/` for the host platform, or compiles one from source
+  via `node-gyp` if that fails. Native
   addon, not pure JS — the build step is required for the package to work
   at all, not optional tooling. Added centrally, ahead of Tasks 2/3/4/7, to
   keep every later task's `pnpm add` from racing another task's over
@@ -193,13 +218,27 @@ Line-by-line:
   `eslint.config.mjs`). Its postinstall only fetches a prebuilt binary for
   the host platform, not arbitrary script execution. Dev-only; never
   reaches the runtime image.
-- **`minimumReleaseAgeExclude: [zod@4.6.5, eslint-plugin-jsdoc@64.4.0]`** —
-  pnpm 12's minimum-release-age gate rejected these two specifically
-  because pinning "latest everything" at the start of this plan landed on
-  versions published too recently to clear it. Bypassing is consistent
-  with that "all majors and minors, latest" decision, but it means this
-  repo is trusting two very recent publishes; pinning either back one
-  patch would remove the need for its bypass entry.
+- **`allowBuilds.msgpackr-extract: true`** — transitive dependency of
+  `bullmq` (via `msgpackr`). Its install script
+  (`node-gyp-build-optional-packages`) tests the prebuilt binding from an
+  optional per-platform package, or compiles one from source via `node-gyp`
+  if that fails. If no binding loads, `msgpackr` falls back to its pure-JS
+  encoder at runtime.
+- **`allowBuilds.protobufjs: true`** — transitive dependency of
+  `@opentelemetry/exporter-trace-otlp-http`. Its postinstall only reads
+  `package.json` files to print a version-scheme warning; no network
+  access, no compilation.
+- **`minimumReleaseAge: 4320`** — pnpm refuses to install any version
+  published less than 3 days (4320 minutes) ago, the same window
+  `renovate.json` waits before proposing an update. A frozen install
+  (`pnpm install --frozen-lockfile`) checks every lockfile entry against
+  it, so a lockfile holding a younger version fails the install until that
+  version ages or is listed below.
+- **`minimumReleaseAgeExclude: [dotenv@18.0.3, supertest@7.3.0]`** —
+  both were published on 2026-09-22, less than 3 days before the release-age
+  gate above was set, and the lockfile already held them. Each entry is
+  needed only until its version is 3 days old; delete it after that, as
+  the earlier `zod` and `eslint-plugin-jsdoc` entries were.
 
 If this list has grown since the paragraph above was written, the file
 itself is still the source of truth — this document may be behind it by
