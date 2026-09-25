@@ -19,6 +19,13 @@ Also exported: `isDatabaseReachable()` (used by `/health/ready`) and
 There is deliberately no second client anywhere — `postgres` pools
 internally, so a second client means a second pool and a second connection
 budget, which only shows up as "too many connections" under load.
+The pool holds at most `DB_POOL_MAX` connections (default 10; `.env.test`
+sets 2, because every vitest worker opens its own). Each connection runs
+with `statement_timeout` = `DB_STATEMENT_TIMEOUT_MS` (default 30000). `0`
+sends none, leaving the server's own setting, and a `statement_timeout` in
+`DATABASE_URL`'s query string overrides it. `migrate.ts` and the test global
+setup open their own single-connection clients and are not affected by
+either.
 
 ## Models directory
 

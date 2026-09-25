@@ -3,7 +3,7 @@
 // ONE transporter per process, created LAZILY on first use — not at module
 // scope, unlike database.service.ts's postgres pool. Two reasons this one
 // must differ from that precedent: (1) mailer.service.ts's `sendMail`
-// (Ruling G, task-2-brief.md's controller addendum) must never let a mail
+// (Ruling G, that file's header comment) must never let a mail
 // failure propagate to an HTTP response, and a module-scope
 // `nodemailer.createTransport(...)` that read `getEnv()` eagerly would force
 // SMTP_* to resolve merely by importing this module's graph — including from
@@ -35,12 +35,12 @@ import { getEnv, requiresSmtpTls, type Env } from '@/configs/env.config'
  * `{ host, port }` with no `auth` key at all — nodemailer treats a
  * present-but-incomplete `auth` object (e.g. a `user` with `pass: undefined`)
  * as a real authentication attempt, which fails at the first send as an
- * opaque SMTP error rather than at boot as a configuration one. There is
- * deliberately no schema-level "both or neither" validation for this pair —
- * see env.config.ts's own comment on `SMTP_PASSWORD` for why: `EnvSchema`
- * cannot carry a whole-object `.refine()` without breaking
- * `EnvSchema.pick({ DATABASE_URL: true })`, which `getDatabaseUrl()` (also
- * env.config.ts) needs for drizzle-kit.
+ * opaque SMTP error rather than at boot as a configuration one. The schema
+ * has no "both or neither" rule for this pair, because `EnvSchema` cannot
+ * carry a whole-object `.refine()` without breaking
+ * `EnvSchema.pick({ DATABASE_URL: true })`, which `getDatabaseUrl()` needs
+ * for drizzle-kit. `assertEnvConsistent` (env-consistency.config.ts) refuses
+ * a half-set pair at boot instead, so here both are set or neither is.
  *
  * `connectionTimeout`/`greetingTimeout`/`socketTimeout` are always set, never
  * left to nodemailer's own defaults (2 minutes / 30 seconds / 10 minutes).

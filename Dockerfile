@@ -37,6 +37,8 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
     pnpm prune --prod --ignore-scripts
 
 FROM base AS runner
+# NODE_ENV is what Express reads. APP_ENV (dev/qa/prod) is required and set
+# by the deployment, never here: a missing APP_ENV must fail boot.
 ENV NODE_ENV=production
 COPY --from=build --chown=10001:10001 /app/node_modules ./node_modules
 COPY --from=build --chown=10001:10001 /app/dist ./dist

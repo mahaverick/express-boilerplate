@@ -62,8 +62,9 @@ pnpm build
 ```
 
 All four must exit 0 (`pnpm format` fixes a `format:check` failure). `pnpm
-dev` reads `.env` automatically (via `dotenv`, inside `env.config.ts`) —
-copy `.env.example` to `.env` and fill in the required secrets first, and
+dev` reads `.env` automatically (see README's Quickstart) —
+copy `.env.example` to `.env` and fill in the required secrets first (it
+already sets `APP_ENV=local`), and
 `pnpm dev` will fail fast with a named list if any are still missing.
 
 ## Gotchas

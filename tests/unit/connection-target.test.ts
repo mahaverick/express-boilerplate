@@ -9,8 +9,8 @@
 //
 // WHAT THIS GUARDS, AND WHY IT IS NOT A RUNTIME CHECK. An earlier version
 // asserted `getEnv().DATABASE_URL`'s port at runtime. That is the wrong
-// invariant: GitHub Actions `services:` cannot remap container ports, so CI
-// necessarily runs against 5432/6379 and real process env wins over
+// invariant: CI's `services:` publish the container-default ports, so CI
+// runs against 5432/6379 and real process env wins over
 // .env.test (see tests/helpers/setup-global.ts) — the assertion failed in
 // CI with `expected '6379' to be '6380'` while passing locally, i.e. it was
 // guaranteed to be red on the first pull request.

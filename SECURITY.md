@@ -337,8 +337,8 @@ every route on the auth router, `/verify-email` included, and
 for that router rather than seven separate decisions. Each is backed by its
 **own** `SharedRateLimitStore`, with its own key prefix (`rl:register:`,
 `rl:login:`, `rl:refresh:`, `rl:logout:`, `rl:verify-email:`,
-`rl:resend-verification-ip:`, `rl:resend-verification-email:`), so no
-endpoint can spend another's budget and a 429 is only ever a statement
+`rl:resend-verification-ip:`, `rl:resend-verification-email:`), each under
+`REDIS_KEY_PREFIX` (so `<prefix>:rl:login:` in Redis), so no endpoint can spend another's budget and a 429 is only ever a statement
 about the endpoint that returned it. A new auth route — B3's
 `/forgot-password` and `/reset-password` (Task 6) are next — takes its own
 prefix on the same pattern; `tests/unit/middlewares/rate-limit.middleware.test.ts`
@@ -460,6 +460,14 @@ position from which `X-Forwarded-For` can be forged. `createApp()` applies
 the value at boot and a malformed one throws there, so a typo stops the
 process rather than quietly disabling the limiters.
 
+**`TRUST_PROXY` also decides whether the OAuth session cookie is sent.**
+express-session only emits a `Secure` cookie when `req.secure` is true, and
+behind TLS termination that needs `TRUST_PROXY` plus the proxy's
+`X-Forwarded-Proto: https`. Otherwise `oauth.sid` is silently never set, and
+the Google OAuth `state` check fails. Boot logs a warning when
+`COOKIE_SECURE` resolves to `true` and `GOOGLE_CLIENT_ID` is set while
+`TRUST_PROXY=false`. The refresh cookie has no such dependency.
+
 ### Cookies: httpOnly, environment-derived `secure`, `sameSite: 'strict'`
 
 The refresh token travels only in a cookie (`REFRESH_TOKEN_COOKIE_NAME`,
@@ -468,12 +476,19 @@ ever receives it), set with:
 
 - `httpOnly: true` — no script on the frontend origin can ever read the raw
   value.
-- `secure: isSecureCookieEnvironment()` — exactly `NODE_ENV === 'production'`,
-  not a hardcoded literal in either direction. A hardcoded `true` would make
+- `secure: isCookieSecure(env)` — `COOKIE_SECURE` when it is set, otherwise
+  `APP_ENV !== 'local'`. The rule lives only in `env.config.ts`, and the
+  refresh cookie and the OAuth session cookie both use it. It is not a
+  hardcoded literal in either direction. A hardcoded `true` would make
   cookie-based login impossible over plain HTTP in local development
-  (browsers refuse a `Secure` cookie set over `http://`); a hardcoded
-  `false` would ship a refresh token over an unencrypted connection in
-  production.
+  (browsers refuse a `Secure` cookie set over `http://`). A hardcoded `false`
+  would ship a refresh token over an unencrypted connection in every other
+  environment. `X-Forwarded-Proto` has no effect on this flag.
+- `domain: COOKIE_DOMAIN` — omitted when unset, so the cookie is host-only.
+  When it is set, the same domain goes on the set, the clear (a clear with a
+  different domain leaves the old cookie in the browser), and the OAuth
+  session cookie. Changing or unsetting it strands cookies set under the old
+  domain, since logout's clear no longer matches them.
 - `sameSite: 'strict'` — the cookie half of this API's CSRF position (see
   below).
 

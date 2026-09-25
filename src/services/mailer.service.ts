@@ -1,7 +1,6 @@
 // src/services/mailer.service.ts
 //
-// Ruling G (task-2-brief.md, "Controller addendum"): a mail-send failure
-// must NEVER propagate to the caller. `sendMail` below is structured so
+// Ruling G: a mail-send failure must NEVER propagate to the caller. `sendMail` below is structured so
 // that holds for every failure mode nodemailer itself produces — read this
 // comment before touching the control flow. (Not an absolute "cannot ever
 // reject" guarantee: both catch BODIES run unguarded code —
@@ -12,18 +11,17 @@
 // so that is not reachable through any error this transport actually
 // produces; the claim is scoped to that, not to arbitrary JavaScript.)
 //
-// WHY. Tasks 5/6 require `POST /auth/register`,
-// `POST /auth/resend-verification`, and `POST /auth/forgot-password` to
-// return byte-identical responses whether or not the address exists — the
-// entire point of those tasks, closing the enumeration oracle B2 could only
-// bound. `forgot-password` sends only when the user actually exists, so if
-// a send failure propagated as a rejection here, an SMTP outage would
-// become a perfect account-enumeration oracle the moment anyone is
-// listening during one: a registered address throws, an unregistered one
+// WHY. `POST /auth/register`, `POST /auth/resend-verification`, and
+// `POST /auth/forgot-password` return byte-identical responses whether or
+// not the address exists, so they cannot be used to enumerate accounts.
+// `forgot-password` sends only when the user actually exists, so if a send
+// failure propagated as a rejection here, an SMTP outage would become a
+// perfect account-enumeration oracle the moment anyone is listening during
+// one: a registered address throws, an unregistered one
 // doesn't. The cost accepted for this ruling: when mail is down, a user
 // gets no email and no error — mitigated by this function recording every
 // attempt in the delivery log (below) and by `POST /auth/resend-verification`
-// (Task 5) letting them retry once mail is back.
+// letting them retry once mail is back.
 //
 // RENDERING HAPPENS INSIDE THE SAME TRY THAT GUARDS THE TRANSPORT CALL.
 // Three channels could each defeat Ruling G. The STATUS channel is closed by
@@ -55,7 +53,7 @@
 // produced by `renderForMessage` below, from that key and those variables,
 // and nothing else. This closes a THIRD thing as a side effect, worth
 // stating deliberately rather than leaving implicit: "no token may appear
-// in a subject line" (task-3-brief.md) used to be a convention a caller
+// in a subject line" used to be a convention a caller
 // could violate by constructing its own subject string. It is now
 // structural for the message FIELDS: there is no caller-suppliable
 // `subject`/`text`/`html` left to put a token into. It is NOT yet total, and
@@ -63,9 +61,8 @@
 // plain `string` and is interpolated into one template's subject
 // (registration-attempt.template.ts), so a caller that put content there would
 // still reach a Subject header. Closing that properly means sourcing `appName`
-// from config instead of accepting it per-message — see the plan's "Execution
-// status" section. Re-exposing a caller-suppliable `subject` (or `text`/
-// `html`) on this interface would silently reopen both of these; don't, no
+// from config instead of accepting it per-message. Re-exposing a
+// caller-suppliable `subject` (or `text`/`html`) on this interface would silently reopen both of these; don't, no
 // matter how convenient it looks for a one-off caller.
 //
 // TWO INDEPENDENT catches, not one wrapping both halves, on purpose:
@@ -73,7 +70,7 @@
 //   1. Rendering AND the transport call (getMailTransporter().sendMail(...))
 //      are the only things the first try/catch guards. Its catch never
 //      re-throws — it just decides which `NewEmailLog` to build.
-//   2. `recordDelivery` has its OWN try/catch (Ruling E, task-4-brief.md: a
+//   2. `recordDelivery` has its OWN try/catch (Ruling E: a
 //      failed delivery-log write must not fail the send either — by the
 //      time that write is attempted, the mail has already gone out one way
 //      or the other, and a propagated error here would turn an operation
@@ -230,8 +227,8 @@ function renderForMessage(message: MailMessage): RenderedEmail {
  *
  * Reads ONLY `.code` — never `.message` or `.response`. Both of those
  * routinely echo content back from the SMTP server (a rejecting server can
- * quote the message body it refused), and once Task 3's templates put a
- * reset/verification URL in that body, either field can carry it straight
+ * quote the message body it refused), and the templates put a
+ * reset/verification URL in that body, so either field can carry it straight
  * back. `error_code` (email-log.model.ts) is `varchar(32)` with a database
  * CHECK (`^[A-Z][A-Z0-9_]*$`) specifically so a wrong-shaped value can never
  * reach that column even if this function mis-extracted one — but this
@@ -335,8 +332,7 @@ export function redactedMailErrorForLog(error: unknown): unknown {
  * unredacted `console.error` would put it straight into the log stream —
  * PII, not a secret (no token reaches this path; `withErrorCodeNormalized`,
  * email-log.repository.ts, already guarantees that), but exactly the class
- * of leak B2's `fix: never log bound query parameters` built this
- * redaction to close everywhere else.
+ * of leak this redaction closes everywhere else.
  * @param entry - The row to insert.
  */
 async function recordDelivery(entry: NewEmailLog): Promise<void> {
@@ -364,7 +360,7 @@ async function recordDelivery(entry: NewEmailLog): Promise<void> {
  * logged key always names the template that was really invoked, whether it
  * succeeded or not.
  * @param message - The email to render and send.
- * @returns `'sent'` or `'failed'`, reflecting the recorded `email_logs` status — resolves once the send has been attempted and the outcome recorded, regardless of whether rendering, sending, or recording actually succeeded. Callers that need to decide whether to retry (e.g. `email.worker.ts`) read this; callers that don't (every caller before Task 2) can keep ignoring it.
+ * @returns `'sent'` or `'failed'`, reflecting the recorded `email_logs` status — resolves once the send has been attempted and the outcome recorded, regardless of whether rendering, sending, or recording actually succeeded. Callers that need to decide whether to retry (e.g. `email.worker.ts`) read this; callers that don't can ignore it.
  */
 export async function sendMail(message: MailMessage): Promise<'sent' | 'failed'> {
   let entry: NewEmailLog

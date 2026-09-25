@@ -66,7 +66,12 @@ const EnvSchema = z.object({
       'Node runtime mode: development, test or production. Required. Express reads it directly, and only production hides stack traces in its built-in error handler, so every APP_ENV but local must run production. test is for the test suite.'
     )
     .meta({ example: 'development' }),
-  APP_PORT: z.coerce.number().int().positive().default(4040),
+  APP_PORT: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(4040)
+    .describe('Port the HTTP server listens on. Defaults to 4040.'),
 
   // FORMER PLACEHOLDERS. APP_URL and SESSION_SECRET used to be forward
   // declarations for the CORS/session plans (see SECURITY.md, "Intended
@@ -112,8 +117,16 @@ const EnvSchema = z.object({
       'Public origin of the frontend. Email verification links are built from it — the link points at your frontend, which POSTs the token to this API. http://localhost:5173 locally.'
     ),
 
-  DATABASE_URL: z.url(),
-  REDIS_URL: z.url(),
+  DATABASE_URL: z
+    .url()
+    .describe(
+      'Postgres connection URL. The compose stack publishes Postgres on localhost:5433: postgres://boilerplate:boilerplate@localhost:5433/boilerplate.'
+    ),
+  REDIS_URL: z
+    .url()
+    .describe(
+      'Redis connection URL. The compose stack publishes Redis on localhost:6380: redis://localhost:6380.'
+    ),
 
   DB_POOL_MAX: z.coerce
     .number()
@@ -123,15 +136,15 @@ const EnvSchema = z.object({
     .describe(
       "Most open connections in the Postgres pool, per process. Defaults to 10. The test suite sets 2, so its parallel workers stay under Postgres's default 100 connections."
     ),
-  // 0 is allowed and means "no timeout", which is Postgres's own meaning for
-  // statement_timeout = 0.
+  // 0 is allowed: databaseClientOptions() then sends no statement_timeout,
+  // so the server's own setting (by default none) applies.
   DB_STATEMENT_TIMEOUT_MS: z.coerce
     .number()
     .int()
     .nonnegative()
     .default(30_000)
     .describe(
-      'Milliseconds a single SQL statement may run before Postgres cancels it (statement_timeout). 0 turns the limit off. Defaults to 30000 (30s).'
+      "Milliseconds a single SQL statement may run before Postgres cancels it (statement_timeout). Defaults to 30000 (30s). 0 sends no limit, leaving the server's own setting. A statement_timeout in DATABASE_URL's query string overrides it. Behind PgBouncer in transaction mode, which refuses unknown startup parameters, set 0."
     ),
 
   JWT_ACCESS_SECRET: z
@@ -342,7 +355,7 @@ const EnvSchema = z.object({
     })
     .optional()
     .describe(
-      'Domain attribute for the refresh-token and OAuth session cookies, e.g. "example.com" to share them with subdomains. Unset means host-only cookies, the narrowest scope.'
+      'Domain attribute for the refresh-token and OAuth session cookies, e.g. "example.com" to share them with subdomains. Unset means host-only cookies, the narrowest scope. Changing or unsetting it strands cookies set under the old scope: logout cannot clear them.'
     ),
 
   // Extra browser origins allowed to call this API, comma-separated, e.g.
@@ -435,7 +448,7 @@ const EnvSchema = z.object({
     .refine((value) => !value.endsWith(':'), 'No trailing colon: keys are joined with ":"')
     .default('express-boilerplate')
     .describe(
-      'Namespace for every Redis key and channel this app uses: BullMQ queues (<prefix>:bull), rate-limit counters (<prefix>:rl), the session denylist (<prefix>:denylist), OAuth sessions (<prefix>:sess) and the notification channel (<prefix>:notifications). Lowercase letters, digits, ":", "_" and "-", with no trailing colon. Give each app or environment sharing one Redis its own value; changing it abandons every existing key.'
+      'Namespace for every Redis key and channel this app uses: BullMQ queues (`<prefix>:bull`), rate-limit counters (`<prefix>:rl`), the session denylist (`<prefix>:denylist`), OAuth sessions (`<prefix>:sess`) and the notification channel (`<prefix>:notifications`). Lowercase letters, digits, ":", "_" and "-", with no trailing colon. Give each app or environment sharing one Redis its own value; changing it abandons every existing key.'
     ),
 
   // How often notification-stream.controller.ts writes a `:ping\n\n` comment
@@ -494,16 +507,20 @@ const EnvSchema = z.object({
     .string()
     .optional()
     .describe(
-      'SMTP username. Absent means no authentication is attempted, which is correct for Mailpit and wrong for most real providers — set this alongside SMTP_PASSWORD.'
+      'SMTP username. Absent means no authentication is attempted, which is correct for Mailpit and wrong for most real providers. Set it together with SMTP_PASSWORD: boot refuses one without the other.'
     ),
-  SMTP_PASSWORD: z.string().optional().describe('SMTP password. See SMTP_USERNAME.'),
-  // Not cross-validated against SMTP_USERNAME/SMTP_PASSWORD with a schema-level
-  // .refine(): EnvSchema.pick({ DATABASE_URL: true }) (getDatabaseUrl, below)
-  // throws "cannot be used on object schemas containing refinements" the
-  // moment ANY .refine() sits on the object itself — verified empirically —
-  // which would break drizzle-kit's one entry point into this file.
-  // mailer.config.ts's own comment covers what happens when only one of the
-  // two is set (auth is not attempted, same as neither being set).
+  SMTP_PASSWORD: z
+    .string()
+    .optional()
+    .describe(
+      'SMTP password. Set it together with SMTP_USERNAME: boot refuses one without the other.'
+    ),
+  // The pair is not cross-validated here with a schema-level .refine():
+  // EnvSchema.pick({ DATABASE_URL: true }) (getDatabaseUrl, below) throws
+  // "cannot be used on object schemas containing refinements" the moment ANY
+  // .refine() sits on the object itself, which would break drizzle-kit's one
+  // entry point into this file. assertEnvConsistent (env-consistency.config.ts)
+  // refuses a half-set pair at boot instead.
   MAIL_FROM: z
     .email()
     .default('no-reply@example.com')
