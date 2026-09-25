@@ -22,12 +22,13 @@ import type { MembershipRole } from '@/constants/tenant.constants'
 import { errorHandler } from '@/middlewares/error.middleware'
 import { requestContext } from '@/middlewares/request-context.middleware'
 import { requestId } from '@/middlewares/request-id.middleware'
-import { requireRole, resolveTenant, type RequestPrincipal } from '@/middlewares/tenant.middleware'
+import { requireRole, resolveTenant } from '@/middlewares/tenant.middleware'
 import { TenantRepository, type CreateTenantInput } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { requestContextStore, type TenantContext } from '@/services/request-context.service'
+import type { RequestPrincipal } from '@/types/actor'
 import { request } from '../../helpers/request'
 
 /**
@@ -122,11 +123,10 @@ function probe(thisRequest: Request, response: Response): void {
 /**
  * Build a standalone app wiring `requestId` -> `requestContext` ->
  * `stubAuthenticatedUser` (when `userId` is given) -> `resolveTenant` ->
- * (optionally) `requireRole` -> `probe`, on two routes: `/tenants/:slug/probe`
- * (the `'param'` source every real `/tenants/:slug/*` route uses) and
- * `/resources/probe` (the `'header'` source, for the header-only cases).
+ * (optionally) `requireRole` -> `probe`, on `/tenants/:slug/probe`, the
+ * same shape every real `/tenants/:slug/*` route uses.
  * @param userId - The user id `resolveTenant` should see as `request.user.id`, or undefined to simulate a route missing `requireAuth`.
- * @param roles - When given, `requireRole(...roles)` is composed after `resolveTenant` on both routes.
+ * @param roles - When given, `requireRole(...roles)` is composed after `resolveTenant`.
  * @returns A configured Express app, not listening.
  */
 function buildApp(userId: string | undefined, roles?: MembershipRole[]): Express {
@@ -136,12 +136,8 @@ function buildApp(userId: string | undefined, roles?: MembershipRole[]): Express
   if (userId) app.use(stubAuthenticatedUser(userId))
 
   const chain = roles ? [resolveTenant(), requireRole(...roles)] : [resolveTenant()]
-  const headerChain = roles
-    ? [resolveTenant({ from: 'header' }), requireRole(...roles)]
-    : [resolveTenant({ from: 'header' })]
 
   app.get('/tenants/:slug/probe', ...chain, probe)
-  app.get('/resources/probe', ...headerChain, probe)
   app.use(errorHandler)
   return app
 }
@@ -190,7 +186,7 @@ describe('resolveTenant + requireRole (integration)', () => {
     return tenant
   }
 
-  it("resolves a tenant via the 'param' source and attaches request.principal + the ALS tenant context", async () => {
+  it('resolves a tenant from the :slug param and attaches request.principal + the ALS tenant context', async () => {
     const ownerId = await createUser()
     const tenant = await createTenant(ownerId)
     const app = buildApp(ownerId)
@@ -201,22 +197,6 @@ describe('resolveTenant + requireRole (integration)', () => {
     expect(response.body).toEqual({
       principal: { tenantId: tenant.id, tenantSlug: tenant.slug, role: 'owner' },
       contextTenant: { tenantId: tenant.id, tenantSlug: tenant.slug, role: 'owner' },
-    })
-  })
-
-  it("resolves a tenant via the 'header' source, ignoring any :slug param on the route", async () => {
-    const ownerId = await createUser()
-    const tenant = await createTenant(ownerId)
-    const app = buildApp(ownerId)
-
-    const response = await request(app).get('/resources/probe').set('X-Tenant-Id', tenant.slug)
-    const body = response.body as ProbeBody
-
-    expect(response.status).toBe(200)
-    expect(body.principal).toEqual({
-      tenantId: tenant.id,
-      tenantSlug: tenant.slug,
-      role: 'owner',
     })
   })
 

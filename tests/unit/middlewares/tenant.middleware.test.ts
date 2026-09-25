@@ -1,8 +1,8 @@
 // tests/unit/middlewares/tenant.middleware.test.ts
 //
 // Pure-logic coverage of resolveTenant's branching (found+member, not-found,
-// found-but-not-member, missing identifier, missing request.user, param vs.
-// header source) and requireRole's role check — both repositories' prototype
+// found-but-not-member, missing identifier, missing request.user, reading
+// the slug param) and requireRole's role check — both repositories' prototype
 // methods spied on, no Docker/Postgres touched. Database-backed proof that
 // `enterWith` survives Express's own `next()` dispatch through a real router
 // lives in tests/integration/middlewares/tenant.middleware.test.ts, per this
@@ -20,7 +20,6 @@
 // query, and no test here ever lets the real implementation run.
 import { type NextFunction, type Request, type Response } from 'express'
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
-import { TENANT_ID_HEADER } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { UserMembership } from '@/database/models/user-membership.model'
 import { HttpError } from '@/errors/http-error'
@@ -78,21 +77,17 @@ const mockUser: AuthenticatedUser = {
 
 /**
  * Build a minimal mock request. `resolveTenant` only ever reads
- * `.params.slug`, `.get()`, `.user`, `.id`, and assigns `.principal` — same
+ * `.params.slug`, `.user`, `.id`, and assigns `.principal` — same
  * minimal-mock approach as auth.middleware.test.ts's own `buildRequest`.
- * @param overrides - Which of `slug`/`header`/`user` to populate.
+ * @param overrides - Which of `slug`/`user` to populate.
  * @param overrides.slug - The value `request.params.slug` should carry, or undefined to omit it.
- * @param overrides.header - The value `request.get(TENANT_ID_HEADER)` should return, or undefined to omit it.
  * @param overrides.user - The value `request.user` should carry, or undefined to simulate a route missing `requireAuth`.
  * @returns A mock request, mutable enough for `resolveTenant` to set `.principal` on it.
  */
-function buildRequest(
-  overrides: { slug?: string; header?: string; user?: AuthenticatedUser } = {}
-): Request {
+function buildRequest(overrides: { slug?: string; user?: AuthenticatedUser } = {}): Request {
   return {
     id: 'req-1',
     params: overrides.slug === undefined ? {} : { slug: overrides.slug },
-    get: (name: string) => (name === TENANT_ID_HEADER ? overrides.header : undefined),
     user: overrides.user,
   } as unknown as Request
 }
@@ -264,26 +259,14 @@ describe('resolveTenant', () => {
     expect(findByUserAndTenantSpy).not.toHaveBeenCalled()
   })
 
-  it("defaults to { from: 'param' } — reads request.params.slug, ignores the header", async () => {
+  it('reads request.params.slug', async () => {
     findActiveBySlugSpy.mockResolvedValue(mockTenant)
     findByUserAndTenantSpy.mockResolvedValue(mockMembership('admin'))
 
-    const request = buildRequest({ slug: 'acme', header: 'a-different-tenant', user: mockUser })
+    const request = buildRequest({ slug: 'acme', user: mockUser })
     const { next } = mockNext()
 
     await resolveTenant()(request, noResponse, next)
-
-    expect(findActiveBySlugSpy).toHaveBeenCalledWith('acme')
-  })
-
-  it("{ from: 'header' } reads TENANT_ID_HEADER, ignores request.params.slug", async () => {
-    findActiveBySlugSpy.mockResolvedValue(mockTenant)
-    findByUserAndTenantSpy.mockResolvedValue(mockMembership('admin'))
-
-    const request = buildRequest({ slug: 'ignored-param', header: 'acme', user: mockUser })
-    const { next } = mockNext()
-
-    await resolveTenant({ from: 'header' })(request, noResponse, next)
 
     expect(findActiveBySlugSpy).toHaveBeenCalledWith('acme')
   })

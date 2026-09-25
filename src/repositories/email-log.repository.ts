@@ -224,7 +224,7 @@ export class EmailLogRepository {
    * itself is still responsible for the other half of Ruling E: catching
    * whatever this rejects with (a genuine infrastructure failure, not this
    * normalization) and logging it at `console.error` — redacted the same
-   * way `error.middleware.ts`'s `redactedForLog` already redacts every
+   * way `redactedForLog` (postgres-errors.ts) already redacts every
    * other failed write in this codebase (driver error code kept, bound
    * parameter values dropped; this table's own `recipient` is PII, not a
    * secret, but the same redaction applies to it for the identical reason)

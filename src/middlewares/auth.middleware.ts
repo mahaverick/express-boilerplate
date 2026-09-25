@@ -62,6 +62,7 @@
 // false`) denies nothing either — step 3's `findById` read below is what
 // catches that, on the next request.
 import { type NextFunction, type Request, type Response } from 'express'
+import { ACCESS_TOKEN_EXPIRED_CODE } from '@/constants/auth.constants'
 import { HttpError } from '@/errors/http-error'
 import { toAuthenticatedUser, type AuthenticatedUser } from '@/presenters/user.presenter'
 import { UserRepository } from '@/repositories/user.repository'
@@ -75,40 +76,6 @@ const userRepository = new UserRepository()
 // `"Bearer "` or `"Bearer    "` — without needing a separate `.trim()` and
 // without the backtracking risk a greedy `.+` next to `\s+` would invite.
 const BEARER_PATTERN = /^Bearer\s+(\S+)$/
-
-/**
- * Machine-readable code identifying a STALE-BUT-OTHERWISE-VALID credential,
- * carried in the error envelope's `code` field (`errors/http-error.ts` /
- * `HttpError`).
- *
- * This is the distinction a client needs to act correctly: a 401 carrying
- * this code means "refresh and retry" is a silent, automatic recovery;
- * every other 401 means the credential itself is no good and the user must
- * sign in again. A client cannot tell those apart safely by matching on
- * `message` — that string is for a human reading logs and is free to
- * change wording.
- *
- * THREE emitters share this code, not one, and all three mean the same
- * thing — the credential is not forged or malformed, it is simply no
- * longer honoured, and a refresh (which mints a token against the user's
- * current, live session) is the correct and sufficient response:
- *
- *   1. An EXPIRED access token — `verifyAccessToken`'s `reason: 'expired'`,
- *      thrown inside this file's own `verifyBearerToken` (:181 below). Every
- *      route, including `/stream`, sits behind `requireAuth` now, so this is
- *      the only place an expired token is ever rejected.
- *   2. A token whose session has been explicitly DENIED — the
- *      `isSessionDenied` check inside `requireAuth` itself, at :272 below.
- *   3. A token that verifies, is not denied, but carries no `sid` claim at
- *      all — rejected not here but in `notification-stream.controller.ts`'s
- *      `requireSessionId`, the one place in this codebase that refuses
- *      such a token outright rather than tolerating it. This middleware's
- *      own `payload.sid &&` guard just below (see item 2's line) is what
- *      tolerates it everywhere else; see that guard's comment for why, and
- *      `request.sessionId`'s own comment (express.d.ts) for how the stream
- *      handler reads the fact without re-verifying the token a second time.
- */
-export const ACCESS_TOKEN_EXPIRED_CODE = 'ACCESS_TOKEN_EXPIRED'
 
 /**
  * Read the bearer token out of the Authorization header.

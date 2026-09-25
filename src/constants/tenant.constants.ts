@@ -50,20 +50,6 @@ export const MEMBERSHIP_ROLES = ['owner', 'admin', 'manager', 'editor', 'viewer'
 export type MembershipRole = (typeof MEMBERSHIP_ROLES)[number]
 
 /**
- * The header a future tenant-scoped RESOURCE route reads the current tenant
- * from, via `resolveTenant({ from: 'header' })` (a later task). NOT used by
- * `/tenants/:slug/*` routes themselves — those resolve the tenant from
- * `request.params.slug` (the default `resolveTenant({ from: 'param' })`),
- * deliberately: trusting a client-supplied header to select a tenant on a
- * route whose URL already names one would let a caller send a slug in the
- * path and a different tenant id in this header, and whichever one a
- * handler forgets to re-check becomes a confused-deputy hole. Exported now,
- * ahead of any route that reads it, purely so the header's exact spelling
- * has one definition before a second one has a chance to disagree with it.
- */
-export const TENANT_ID_HEADER = 'X-Tenant-Id'
-
-/**
  * Slugs no tenant may register — reserved because they either collide with
  * a real or plausible future route segment under `/tenants/:slug/...`
  * (`new`, `settings`, `members`), a term that would be actively misleading

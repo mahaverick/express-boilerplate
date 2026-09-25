@@ -72,7 +72,6 @@ function sourceFiles(): string[] {
     .readdirSync(SRC, { recursive: true, encoding: 'utf8' })
     .filter((file) => file.endsWith('.ts'))
     .map((file) => file.split(path.sep).join('/'))
-    .filter((file) => !file.startsWith('lint-fixtures/'))
 }
 
 describe('users.email_verified_at has one writer', () => {

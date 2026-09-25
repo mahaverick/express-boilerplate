@@ -19,16 +19,16 @@ import tseslint from 'typescript-eslint'
 
 export default tseslint.config(
   {
-    // tests/fixtures/** and src/lint-fixtures/** are deliberately-broken
-    // fixtures (two committed import cycles — one relative, one through the
-    // "@/" alias) that lint-gates.test.ts lints on purpose via
-    // `ignore: false`. `pnpm lint` must not also trip over them.
+    // tests/fixtures/** holds deliberately-broken fixtures (two committed
+    // import cycles — one relative, one through the "@/" alias — and one
+    // layer-boundary violation per zone below) that lint-gates.test.ts lints
+    // on purpose via `ignore: false`. `pnpm lint` must not also trip over
+    // them.
     ignores: [
       'dist/**',
       'coverage/**',
       'node_modules/**',
       'tests/fixtures/**',
-      'src/lint-fixtures/**',
       '.worktrees/**',
       '.claude/**',
     ],
@@ -168,6 +168,60 @@ export default tseslint.config(
       'import-x/no-useless-path-segments': 'error',
       'import-x/no-duplicates': 'error',
 
+      // Layer boundaries — see ARCHITECTURE.md's layers table. Each zone is
+      // 'error'. tests/unit/lint-gates.test.ts proves every one fires,
+      // against a committed violating fixture per zone under
+      // tests/fixtures/lint-zones/.
+      'import-x/no-restricted-paths': [
+        'error',
+        {
+          zones: [
+            {
+              target: './src/controllers',
+              from: ['./src/repositories', './src/services/database.service.ts'],
+              message:
+                'Controllers call services only, never a repository or the database client directly.',
+            },
+            {
+              target: './src/controllers',
+              from: './src/controllers',
+              except: ['./base.controller.ts', './helpers.controller.ts'],
+              message:
+                'Controllers must not import other controllers (base.controller and helpers.controller excepted). Shared response shaping belongs in src/presenters/.',
+            },
+            {
+              target: [
+                './src/services',
+                './src/repositories',
+                './src/policies',
+                './src/errors',
+                './src/presenters',
+              ],
+              from: ['./src/controllers', './src/routes', './src/middlewares'],
+              message:
+                'The HTTP layer (controllers/routes/middlewares) must not be imported from below it. See ARCHITECTURE.md’s layers table.',
+            },
+            {
+              target: './src/repositories',
+              from: './src/services',
+              except: ['./database.service.ts'],
+              message:
+                'Repositories may only import services/database.service, for the db client and its types.',
+            },
+            {
+              target: './src/policies',
+              from: ['./src/repositories', './src/services', './src/database'],
+              message: 'Policies are pure and boolean-returning: constants and types only.',
+            },
+            {
+              target: './src/configs',
+              from: './src/controllers',
+              message: 'Configs must not import controllers.',
+            },
+          ],
+        },
+      ],
+
       // Types live in TypeScript. Repeating them in the comment creates a
       // second source of truth that drifts, so descriptions are required and
       // types are not.
@@ -246,6 +300,7 @@ export default tseslint.config(
           'src/jobs/**/*.ts': '*.job',
           'src/workers/**/*.ts': '*.worker',
           'src/policies/**/*.ts': '*.policy',
+          'src/presenters/**/*.ts': '*.presenter',
         },
       ],
       'check-file/folder-naming-convention': ['error', { 'src/**/': 'KEBAB_CASE' }],
@@ -271,8 +326,28 @@ export default tseslint.config(
     // Handlers are arrow fields passed through `this.handle(...)` so routes
     // can mount them unbound; unicorn/consistent-function-scoping would
     // otherwise hoist each arrow out of its class.
+    //
+    // Controllers may reference database/models/** for response TYPES only
+    // (User, Notification). import-x/no-restricted-paths (above) has no
+    // type-import allowance, so this one ban uses
+    // @typescript-eslint/no-restricted-imports, whose allowTypeImports does.
     files: ['src/controllers/**/*.ts'],
-    rules: { 'unicorn/consistent-function-scoping': ['error', { checkArrowFunctions: false }] },
+    rules: {
+      'unicorn/consistent-function-scoping': ['error', { checkArrowFunctions: false }],
+      '@typescript-eslint/no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['@/database/models/*', '../database/models/*'],
+              allowTypeImports: true,
+              message:
+                'Controllers may import database/models/** for TYPES only — use `import type`.',
+            },
+          ],
+        },
+      ],
+    },
   },
   {
     // env.config.ts is the one module allowed to read process.env — it is the

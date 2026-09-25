@@ -32,8 +32,8 @@
 // property, and its type is exactly `AuthenticatedUser` because `User`
 // extends it — so there is no second, conflicting declaration left for
 // `skipLibCheck` to silently arbitrate between.
-import type { RequestPrincipal } from '@/middlewares/tenant.middleware'
 import type { AuthenticatedUser } from '@/presenters/user.presenter'
+import type { RequestPrincipal } from '@/types/actor'
 
 declare global {
   namespace Express {
@@ -88,7 +88,7 @@ declare global {
        * `notification-stream.controller.ts`'s `streamNotifications` — can
        * read the verified session id without re-verifying the token a
        * second time, which is how two copies of the same check would drift.
-       * See `ACCESS_TOKEN_EXPIRED_CODE`'s own JSDoc (auth.middleware.ts) for
+       * See `ACCESS_TOKEN_EXPIRED_CODE`'s own JSDoc (auth.constants.ts) for
        * why that one handler has no tolerance for this being absent, unlike
        * `requireAuth` itself.
        */

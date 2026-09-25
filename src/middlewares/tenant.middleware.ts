@@ -26,7 +26,7 @@
 // `tenantContextStore` the original design doc sketched (spec correction
 // #3).
 import { type NextFunction, type Request, type Response } from 'express'
-import { TENANT_ID_HEADER, type MembershipRole } from '@/constants/tenant.constants'
+import { type MembershipRole } from '@/constants/tenant.constants'
 import { HttpError } from '@/errors/http-error'
 import { isRoleAtLeast } from '@/policies/tenant.policy'
 import { TenantRepository } from '@/repositories/tenant.repository'
@@ -37,56 +37,11 @@ const tenantRepository = new TenantRepository()
 const userMembershipRepository = new UserMembershipRepository()
 
 /**
- * The tenant-scoped identity `resolveTenant` attaches to `request.principal`
- * once a caller is confirmed to belong to the tenant the route names.
- *
- * A type alias of `TenantContext` (request-context.middleware.ts), not an
- * independently hand-written interface with the same three fields — the
- * same "one definition, not two copies that can drift" reasoning
- * `AuthenticatedUser`/`PublicUser` already establishes in this codebase
- * (auth.middleware.ts's own header comment). Deliberately a SEPARATE
- * property from `request.user` rather than folded into it: `request.user`
- * is the CLIENT-VISIBLE projection (`GET /api/v1/profile` returns it
- * verbatim) and must never gain server-only principal data — see
- * `AuthenticatedUser`'s own comment for exactly this warning, written
- * before this middleware existed to heed it.
- */
-export type RequestPrincipal = TenantContext
-
-/**
- * Where `resolveTenant` reads the tenant identifier from.
- */
-export interface ResolveTenantOptions {
-  /**
-   * `'param'` (default) — `request.params.slug`, for every
-   * `/tenants/:slug/*` route. The tenant is already named by the URL;
-   * trusting a client-supplied header to select a DIFFERENT tenant on the
-   * same route would let a caller send one tenant in the path and another
-   * in the header, and whichever one a handler forgets to re-check becomes
-   * a confused-deputy hole — this is the plan's spec correction #1,
-   * overriding the original design doc's header-only sketch.
-   *
-   * `'header'` — `request.get(TENANT_ID_HEADER)`, reserved for a future
-   * tenant-scoped RESOURCE route with no `:slug` segment of its own (e.g. a
-   * `/projects/:id` scoped by the caller's CURRENT tenant). No route in
-   * this codebase uses this source yet; it exists so this option's shape is
-   * settled before the first caller needs it. Whichever source is used, the
-   * value is looked up the same way — see `resolveIdentifier` below for why
-   * that is `findActiveBySlug` in both cases, not a slug-or-id lookup.
-   */
-  from?: 'param' | 'header'
-}
-
-/**
- * Read the tenant identifier this request names, from whichever source
- * `options.from` selects.
+ * Read `request.params.slug` — every tenant-scoped route names its tenant.
  * @param request - The incoming request.
- * @param from - `'param'` or `'header'` — see `ResolveTenantOptions`.
- * @returns The identifier as supplied, or undefined when the request supplies none.
+ * @returns The slug as supplied, or undefined when the request supplies none.
  */
-function tenantIdentifierFrom(request: Request, from: 'param' | 'header'): string | undefined {
-  if (from === 'header') return request.get(TENANT_ID_HEADER)
-
+function tenantIdentifierFrom(request: Request): string | undefined {
   // `request.params.slug` types as `string | string[] | undefined`
   // (`ParamsDictionary`'s index signature allows an array value for a
   // repeated/splat param pattern) even though a plain `:slug` segment can
@@ -100,95 +55,109 @@ function tenantIdentifierFrom(request: Request, from: 'param' | 'header'): strin
 }
 
 /**
+ * The middleware `resolveTenant` returns — see its JSDoc.
+ * @param request - The incoming request.
+ * @param _response - Unused.
+ * @param next - Continues the chain, or forwards the 404.
+ */
+async function scopeRequestToTenant(
+  request: Request,
+  _response: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const identifier = tenantIdentifierFrom(request)
+
+    // `findActiveBySlug` already combines "not soft-deleted" and
+    // "lifecycleState = 'active'" in one lookup (tenant.repository.ts),
+    // which is exactly the gate a suspended/archived tenant must fail the
+    // same way a nonexistent one does.
+    const tenant = identifier ? await tenantRepository.findActiveBySlug(identifier) : undefined
+    const membership =
+      tenant && request.user
+        ? await userMembershipRepository.findByUserAndTenant(request.user.id, tenant.id)
+        : undefined
+
+    // Ruling G: identical 404 whether the tenant does not exist or the
+    // caller is simply not a member of it — see this file's header
+    // comment.
+    if (!tenant || !membership) {
+      throw new HttpError('Tenant not found', 404)
+    }
+
+    const tenantContext: TenantContext = {
+      tenantId: tenant.id,
+      tenantSlug: tenant.slug,
+      role: membership.role,
+    }
+    request.principal = tenantContext
+
+    // Extend the EXISTING store in place, not a new `.run()` — this
+    // middleware does not own the rest of the request's control flow the
+    // way `requestContext` itself does (it is composed into an
+    // already-running chain), and spreading the current store rather than
+    // hand-listing `requestId` keeps this from silently dropping any
+    // field a later change adds to `RequestContext` alongside `tenant`.
+    //
+    // WHAT `enterWith` DOES AND DOES NOT MAKE VISIBLE, precisely — this
+    // matters for anyone composing `resolveTenant` outside a normal
+    // Express dispatch (a job worker, a test harness): the mutated store
+    // is visible to whatever `next()` calls SYNCHRONOUSLY, and to
+    // anything THAT code schedules afterward (an async handler it calls,
+    // a repository query it awaits) — which is exactly how Express
+    // itself dispatches to the next middleware/handler, so this is
+    // correct for every real route with no special handling needed. It
+    // is NOT visible in the continuation of a caller that instead
+    // `await`s this whole `resolveTenant()(...)` call from OUTSIDE and
+    // only then reads `requestContextStore.getStore()` — that caller's
+    // own promise continuation was already linked to the PRE-`enterWith`
+    // store at the moment the call was made, so it observes a stale
+    // snapshot. This is standard, working-as-designed AsyncLocalStorage
+    // behaviour (`enterWith` documents itself as affecting "the current
+    // synchronous execution ... and then persists ... through any
+    // following asynchronous calls" — not calls that were already
+    // in flight beforehand) — not a bug here — and is exactly what
+    // tests/unit/middlewares/tenant.middleware.test.ts's own tests
+    // capture `next`'s SYNCHRONOUS invocation to read the store, not an
+    // outer `await`, having hit this exact trap while writing them.
+    requestContextStore.enterWith({
+      ...(requestContextStore.getStore() ?? { requestId: request.id }),
+      tenant: tenantContext,
+    })
+
+    next()
+  } catch (error) {
+    next(error)
+  }
+}
+
+/**
  * Resolve the tenant a request is scoped to, and confirm the authenticated
  * caller belongs to it. On success, attaches `request.principal` and
  * extends the request's `RequestContext` ALS store with `.tenant` — see
  * this file's header comment for both.
  *
+ * Reads `request.params.slug` — the only tenant selector this codebase has,
+ * by design. There is deliberately no header-based selector: one would let
+ * a caller send one tenant in the URL and another in a header, with
+ * whichever a handler forgets to re-check becoming a confused-deputy hole.
+ *
  * Must run AFTER `requireAuth` — reads `request.user.id`. A route that
  * omits `requireAuth` ahead of this is a routing bug this middleware does
  * not itself defend against beyond failing safe: with no `request.user`,
- * the membership lookup below is skipped and the request 404s exactly like
+ * the membership lookup is skipped and the request 404s exactly like
  * a real non-member would, rather than throwing on a missing id. That is
  * the safe direction for the mistake to fail in, but it also means such a
  * misconfigured route never surfaces as anything louder than a 404 in
- * testing — see this task's report for why that is flagged as a concern
- * rather than fixed here.
- * @param options - Where to read the tenant identifier from — see `ResolveTenantOptions`. Defaults to `{ from: 'param' }`.
+ * testing.
  * @returns An Express middleware.
  */
-export function resolveTenant(
-  options: ResolveTenantOptions = {}
-): (request: Request, response: Response, next: NextFunction) => Promise<void> {
-  const from = options.from ?? 'param'
-
-  return async (request: Request, _response: Response, next: NextFunction): Promise<void> => {
-    try {
-      const identifier = tenantIdentifierFrom(request, from)
-
-      // `findActiveBySlug`, for BOTH sources — see `ResolveTenantOptions`'s
-      // own comment on `from`. It already combines "not soft-deleted" and
-      // "lifecycleState = 'active'" in one lookup (tenant.repository.ts),
-      // which is exactly the gate a suspended/archived tenant must fail the
-      // same way a nonexistent one does.
-      const tenant = identifier ? await tenantRepository.findActiveBySlug(identifier) : undefined
-      const membership =
-        tenant && request.user
-          ? await userMembershipRepository.findByUserAndTenant(request.user.id, tenant.id)
-          : undefined
-
-      // Ruling G: identical 404 whether the tenant does not exist or the
-      // caller is simply not a member of it — see this file's header
-      // comment.
-      if (!tenant || !membership) {
-        throw new HttpError('Tenant not found', 404)
-      }
-
-      const tenantContext: TenantContext = {
-        tenantId: tenant.id,
-        tenantSlug: tenant.slug,
-        role: membership.role,
-      }
-      request.principal = tenantContext
-
-      // Extend the EXISTING store in place, not a new `.run()` — this
-      // middleware does not own the rest of the request's control flow the
-      // way `requestContext` itself does (it is composed into an
-      // already-running chain), and spreading the current store rather than
-      // hand-listing `requestId` keeps this from silently dropping any
-      // field a later change adds to `RequestContext` alongside `tenant`.
-      //
-      // WHAT `enterWith` DOES AND DOES NOT MAKE VISIBLE, precisely — this
-      // matters for anyone composing `resolveTenant` outside a normal
-      // Express dispatch (a job worker, a test harness): the mutated store
-      // is visible to whatever `next()` calls SYNCHRONOUSLY, and to
-      // anything THAT code schedules afterward (an async handler it calls,
-      // a repository query it awaits) — which is exactly how Express
-      // itself dispatches to the next middleware/handler, so this is
-      // correct for every real route with no special handling needed. It
-      // is NOT visible in the continuation of a caller that instead
-      // `await`s this whole `resolveTenant(...)(...)` call from OUTSIDE and
-      // only then reads `requestContextStore.getStore()` — that caller's
-      // own promise continuation was already linked to the PRE-`enterWith`
-      // store at the moment the call was made, so it observes a stale
-      // snapshot. This is standard, working-as-designed AsyncLocalStorage
-      // behaviour (`enterWith` documents itself as affecting "the current
-      // synchronous execution ... and then persists ... through any
-      // following asynchronous calls" — not calls that were already
-      // in flight beforehand) — not a bug here — and is exactly what
-      // tests/unit/middlewares/tenant.middleware.test.ts's own tests
-      // capture `next`'s SYNCHRONOUS invocation to read the store, not an
-      // outer `await`, having hit this exact trap while writing them.
-      requestContextStore.enterWith({
-        ...(requestContextStore.getStore() ?? { requestId: request.id }),
-        tenant: tenantContext,
-      })
-
-      next()
-    } catch (error) {
-      next(error)
-    }
-  }
+export function resolveTenant(): (
+  request: Request,
+  response: Response,
+  next: NextFunction
+) => Promise<void> {
+  return scopeRequestToTenant
 }
 
 /**

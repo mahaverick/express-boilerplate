@@ -10,7 +10,7 @@
 // This handler has no tolerance for a token that verifies but carries no
 // `sid` claim, unlike `requireAuth` itself — see `requireSessionId`'s own
 // comment below for why, and `ACCESS_TOKEN_EXPIRED_CODE`'s JSDoc
-// (auth.middleware.ts) for the three-way split of who emits THAT CODE
+// (auth.constants.ts) for the three-way split of who emits THAT CODE
 // specifically. It is not the full split of what can 401 on this route —
 // this route reaches six distinct 401s in total: a missing or malformed
 // Authorization header and an invalid token (both `requireAuth`, no `code`),
@@ -27,12 +27,12 @@
 // envelope — not an event-stream response that immediately closes.
 import type { NextFunction, Request, Response } from 'express'
 import { getEnv } from '@/configs/env.config'
+import { ACCESS_TOKEN_EXPIRED_CODE } from '@/constants/auth.constants'
 import { SSE_MAX_BUFFERED_BYTES } from '@/constants/notification.constants'
 import { BaseController } from '@/controllers/base.controller'
 import { authenticatedUserId } from '@/controllers/helpers.controller'
 import type { Notification } from '@/database/models/notification.model'
 import { HttpError } from '@/errors/http-error'
-import { ACCESS_TOKEN_EXPIRED_CODE } from '@/middlewares/auth.middleware'
 import { countStreams, isShuttingDown, registerStream } from '@/services/lifecycle.service'
 import { logger } from '@/services/logger.service'
 import { offNotification, onNotification } from '@/services/notification-emitter.service'

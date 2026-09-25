@@ -35,7 +35,7 @@ async function boot(): Promise<void> {
   // avoid. getEnv() is memoised, so the second call this triggers is free.
   const { startServer, gracefulShutdown } = await import('@/server')
   const { createShutdownHandler, isShuttingDown } = await import('@/services/lifecycle.service')
-  const { redactedForLog } = await import('@/middlewares/error.middleware')
+  const { redactedForLog } = await import('@/errors/postgres-errors')
 
   // Filled in once the workers start; shutdown reads it only when it runs.
   const workers: { supervised?: SupervisedWorkers } = {}

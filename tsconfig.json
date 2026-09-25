@@ -20,10 +20,5 @@
     "noEmitOnError": true
   },
   "include": ["src/**/*"],
-  // src/lint-fixtures/** is a deliberately-circular pair of modules that
-  // exists only so tests/unit/lint-gates.test.ts can prove import-x/no-cycle
-  // fires on an ALIASED ("@/") import. It must sit under src/ because
-  // tsconfig's paths map "@/*" to "./src/*" only — so it is excluded here
-  // instead, and never reaches dist/.
-  "exclude": ["node_modules", "dist", "src/lint-fixtures/**"]
+  "exclude": ["node_modules", "dist"]
 }

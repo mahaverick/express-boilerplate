@@ -88,7 +88,7 @@
 // can be read, tested, and broken independently of the other.
 import { getMailTransporter } from '@/configs/mailer.config'
 import { UNKNOWN_ERROR_CODE, type NewEmailLog } from '@/database/models/email-log.model'
-import { redactedForLog } from '@/middlewares/error.middleware'
+import { redactedForLog } from '@/errors/postgres-errors'
 import { EmailLogRepository } from '@/repositories/email-log.repository'
 import { logger } from '@/services/logger.service'
 import {
@@ -248,7 +248,7 @@ export function extractErrorCode(error: unknown): string {
 
 /**
  * The `at ...` call frames of an object-shaped error's stack, with its
- * message line removed — mirrors `stackFramesOf` in error.middleware.ts
+ * message line removed — mirrors `stackFramesOf` in postgres-errors.ts
  * exactly, for the identical reason: `error.stack` embeds the message
  * verbatim on its first line, and the message is precisely what
  * `redactedMailErrorForLog` below must not log. The frames themselves are
@@ -327,8 +327,8 @@ export function redactedMailErrorForLog(error: unknown): unknown {
  * independent try/catch rather than sharing one with the send itself.
  *
  * A failed `record()` is a Drizzle query error — the same shape
- * `error.middleware.ts` already redacts for every other failed write in
- * this codebase — so this reuses `redactedForLog` from there rather than
+ * `redactedForLog` (postgres-errors.ts) already redacts for every other
+ * failed write in this codebase — so this logs it through that rather than
  * logging the raw error. That matters here specifically: the insert's bound
  * parameters include `entry.recipient`, an email address, and an
  * unredacted `console.error` would put it straight into the log stream —

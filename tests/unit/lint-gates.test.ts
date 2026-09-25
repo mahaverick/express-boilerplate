@@ -4,7 +4,10 @@
 // certain keys. A gate that is configured but inert lints green while enforcing
 // nothing, which is worse than having no gate — it happened three times while
 // Task 2 was being written.
+import fs from 'node:fs'
+import path from 'node:path'
 import { ESLint, type Linter } from 'eslint'
+import importX from 'eslint-plugin-import-x'
 import tseslint from 'typescript-eslint'
 import { describe, expect, it } from 'vitest'
 
@@ -21,9 +24,9 @@ const eslint = new ESLint({ cwd: process.cwd(), ignore: false })
 // typescript-eslint resolves included files through a real tsconfig watch
 // program rather than the projectService's "any open file" model, so a path
 // that isn't really on disk is "not included in any tsconfig" and lint
-// fatals before any rule runs. None of the five rules exercised via
-// lintText need type information, so this second instance disables the
-// type-checked rule set to get a clean, non-fatal parse instead.
+// fatals before any rule runs. None of the rules exercised via lintText
+// need type information, so this second instance disables the type-checked
+// rule set to get a clean, non-fatal parse instead.
 const eslintText = new ESLint({
   cwd: process.cwd(),
   ignore: false,
@@ -31,6 +34,36 @@ const eslintText = new ESLint({
   // Array.isArray is false), not an array — pass it as-is rather than
   // casting to Linter.Config[], which would misrepresent its actual shape.
   overrideConfig: tseslint.configs.disableTypeChecked as Linter.Config,
+})
+
+// The aliased lint-cycle fixture (tests/fixtures/lint-cycle/cycle-a.ts)
+// imports "@/cycle-b", which the repo's default project and resolver (root
+// tsconfig.json, "@/*" -> "./src/*") cannot see. That fixture's own
+// tsconfig.json maps "@/*" to "./*" instead, and this instance points BOTH
+// the type-aware parser's project AND the resolver's tsconfig at it.
+// Overriding only one of the two either fatals (the parser finds the file in
+// no project) or leaves no-cycle silently unable to resolve the aliased
+// import.
+const aliasedCycleTsconfig = path.join(process.cwd(), 'tests/fixtures/lint-cycle/tsconfig.json')
+const eslintAliasedCycle = new ESLint({
+  cwd: process.cwd(),
+  ignore: false,
+  overrideConfig: {
+    languageOptions: {
+      parserOptions: {
+        project: ['./tests/fixtures/lint-cycle/tsconfig.json'],
+        tsconfigRootDir: process.cwd(),
+      },
+    },
+    settings: {
+      'import-x/resolver-next': [
+        importX.createNodeResolver({
+          extensions: ['.ts', '.tsx', '.js', '.mjs', '.cjs', '.json', '.node'],
+          tsconfig: { configFile: aliasedCycleTsconfig },
+        }),
+      ],
+    },
+  },
 })
 
 const messagesFor = async (filePath: string, source: string): Promise<Linter.LintMessage[]> => {
@@ -238,10 +271,158 @@ describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS }, () => {
     expect(cycleMessage?.severity).toBe(2)
   })
 
-  it('rejects a circular import between real files (aliased "@/" import)', async () => {
-    const results = await eslint.lintFiles(['src/lint-fixtures/cycle-a.ts'])
+  it('rejects a circular import between real files (aliased "@/" import, own local tsconfig)', async () => {
+    const results = await eslintAliasedCycle.lintFiles(['tests/fixtures/lint-cycle/cycle-a.ts'])
     const messages = results[0]?.messages ?? []
     const cycleMessage = messages.find((message) => message.ruleId === 'import-x/no-cycle')
     expect(cycleMessage?.severity).toBe(2)
+  })
+
+  // Each zone is linted through lintText at a SYNTHETIC path inside the
+  // zone's target directory: import-x/no-restricted-paths matches a zone on
+  // the linted file's own path, so a fixture linted where it physically
+  // lives (tests/fixtures/) would never match a src/ target. The imported
+  // module is resolved for real, so every fixture imports a file that
+  // exists.
+  describe('import-x/no-restricted-paths zones', () => {
+    const zoneCases = [
+      {
+        label: 'controllers must not import repositories',
+        fixture: 'tests/fixtures/lint-zones/controller-imports-repository.ts',
+        syntheticPath: 'src/controllers/probe.controller.ts',
+      },
+      {
+        label: 'controllers must not import other controllers',
+        fixture: 'tests/fixtures/lint-zones/controller-imports-controller.ts',
+        syntheticPath: 'src/controllers/probe.controller.ts',
+      },
+      {
+        label: 'services must not import middlewares',
+        fixture: 'tests/fixtures/lint-zones/service-imports-middleware.ts',
+        syntheticPath: 'src/services/probe.service.ts',
+      },
+      {
+        label: 'repositories must not import services (except database.service)',
+        fixture: 'tests/fixtures/lint-zones/repository-imports-service.ts',
+        syntheticPath: 'src/repositories/probe.repository.ts',
+      },
+      {
+        label: 'policies must not import repositories',
+        fixture: 'tests/fixtures/lint-zones/policy-imports-repository.ts',
+        syntheticPath: 'src/policies/probe.policy.ts',
+      },
+      {
+        label: 'configs must not import controllers',
+        fixture: 'tests/fixtures/lint-zones/config-imports-controller.ts',
+        syntheticPath: 'src/configs/probe.config.ts',
+      },
+    ]
+
+    it.each(zoneCases)('rejects: $label', async ({ fixture, syntheticPath }) => {
+      const source = fs.readFileSync(path.resolve(process.cwd(), fixture), 'utf8')
+      const messages = await messagesFor(syntheticPath, source)
+      const zoneMessage = messages.find(
+        (message) => message.ruleId === 'import-x/no-restricted-paths'
+      )
+      expect(zoneMessage?.severity).toBe(2)
+    })
+
+    // The controllers zone has two `from` paths (repositories, and
+    // services/database.service); the fixture above exercises only the
+    // first. This exercises the second, inline since it is one line.
+    it('rejects: controllers must not import services/database.service', async () => {
+      const source =
+        "import { db } from '@/services/database.service'\n\nexport const client = db\n"
+      const messages = await messagesFor('src/controllers/probe.controller.ts', source)
+      const zoneMessage = messages.find(
+        (message) => message.ruleId === 'import-x/no-restricted-paths'
+      )
+      expect(zoneMessage?.severity).toBe(2)
+    })
+
+    // The controllers-to-controllers zone excepts the two shared modules
+    // every controller builds on. Without the exception every real
+    // controller would fail the zone.
+    it('allows a controller to import base.controller and helpers.controller', async () => {
+      const source =
+        "import { BaseController } from '@/controllers/base.controller'\n" +
+        "import { authenticatedUserId } from '@/controllers/helpers.controller'\n\n" +
+        'export const shared = [BaseController, authenticatedUserId]\n'
+      const ids = await ruleIdsFor('src/controllers/probe.controller.ts', source)
+      expect(ids).not.toContain('import-x/no-restricted-paths')
+    })
+
+    // Negative control: the same import that fires from src/controllers/
+    // must not fire from an unrelated layer, or the zone would be matching
+    // on the import alone rather than on the (target, from) pair.
+    it('does not fire the controllers zone for a file outside src/controllers/', async () => {
+      const source = fs.readFileSync(
+        path.resolve(process.cwd(), 'tests/fixtures/lint-zones/controller-imports-repository.ts'),
+        'utf8'
+      )
+      const ids = await ruleIdsFor('src/services/probe.service.ts', source)
+      expect(ids).not.toContain('import-x/no-restricted-paths')
+    })
+  })
+
+  describe('check-file/filename-naming-convention: policies and presenters', () => {
+    const newGovernedDirectoryCases = [
+      {
+        label: 'src/policies/',
+        validPath: 'src/policies/tenant.policy.ts',
+        invalidPath: 'src/policies/tenant.ts',
+      },
+      {
+        label: 'src/presenters/',
+        validPath: 'src/presenters/user.presenter.ts',
+        invalidPath: 'src/presenters/user.ts',
+      },
+    ]
+
+    it.each(newGovernedDirectoryCases)(
+      'accepts a correctly named file in $label',
+      async ({ validPath }) => {
+        const ids = await ruleIdsFor(
+          validPath,
+          '/**\n * P.\n * @returns text\n */\nexport function p(): string { return "x" }\n'
+        )
+        expect(ids).not.toContain('check-file/filename-naming-convention')
+      }
+    )
+
+    it.each(newGovernedDirectoryCases)(
+      'rejects a wrongly named file in $label',
+      async ({ invalidPath }) => {
+        const messages = await messagesFor(
+          invalidPath,
+          '/**\n * P.\n * @returns text\n */\nexport function p(): string { return "x" }\n'
+        )
+        const checkFileMessage = messages.find(
+          (message) => message.ruleId === 'check-file/filename-naming-convention'
+        )
+        expect(checkFileMessage?.severity).toBe(2)
+      }
+    )
+  })
+
+  describe('controllers: @typescript-eslint/no-restricted-imports (database/models, type-only)', () => {
+    it('rejects a VALUE import from database/models', async () => {
+      const source = fs.readFileSync(
+        path.resolve(process.cwd(), 'tests/fixtures/lint-zones/controller-value-imports-model.ts'),
+        'utf8'
+      )
+      const messages = await messagesFor('src/controllers/probe.controller.ts', source)
+      const restrictedImportMessage = messages.find(
+        (message) => message.ruleId === '@typescript-eslint/no-restricted-imports'
+      )
+      expect(restrictedImportMessage?.severity).toBe(2)
+    })
+
+    it('allows a TYPE-ONLY import of the same module', async () => {
+      const source =
+        "import type { User } from '@/database/models/user.model'\n\nexport type Probe = User\n"
+      const ids = await ruleIdsFor('src/controllers/probe.controller.ts', source)
+      expect(ids).not.toContain('@typescript-eslint/no-restricted-imports')
+    })
   })
 })

@@ -21,7 +21,6 @@ import type { Request } from 'express'
 import { BaseController } from '@/controllers/base.controller'
 import { actorFrom, authenticatedUserId } from '@/controllers/helpers.controller'
 import { HttpError } from '@/errors/http-error'
-import type { RequestPrincipal } from '@/middlewares/tenant.middleware'
 import { invite, listPending, resend, revoke } from '@/services/tenant-invitation.service'
 import { changeRole, removeMember } from '@/services/tenant-membership.service'
 import {
@@ -33,6 +32,7 @@ import {
   updateSettings,
   updateTenant,
 } from '@/services/tenant.service'
+import type { RequestPrincipal } from '@/types/actor'
 import { messageResponse, successResponse } from '@/utilities/response.utilities'
 import { parseBody } from '@/validators/parse.validators'
 import {

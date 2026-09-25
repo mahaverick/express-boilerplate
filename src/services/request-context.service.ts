@@ -11,7 +11,7 @@ import type { MembershipRole } from '@/constants/tenant.constants'
 /**
  * The tenant a request is scoped to, once `resolveTenant` has resolved one
  * — the same three fields `resolveTenant` also attaches to `request` as
- * `request.principal` (tenant.middleware.ts's `RequestPrincipal`).
+ * `request.principal` (`RequestPrincipal`, types/actor.ts).
  */
 export interface TenantContext {
   tenantId: string
