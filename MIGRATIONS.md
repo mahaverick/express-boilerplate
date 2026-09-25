@@ -62,9 +62,14 @@ These are new, and nothing needs setting unless you want a different value:
 
 `COOKIE_SECURE` now defaults to `true` everywhere except `local`, and SMTP
 requires TLS everywhere except `local`. Before 3.0, both followed
-`NODE_ENV === 'production'`. If you set `COOKIE_DOMAIN`, pick it once:
-changing or unsetting it later strands cookies set under the old domain,
-and logout cannot clear them.
+`NODE_ENV === 'production'`.
+
+Setting `COOKIE_DOMAIN` at upgrade, where users hold host-only refresh
+cookies, heals itself: every response that sets or clears the refresh
+cookie also clears the host-only one. Changing or unsetting it later leaves
+the old domain's refresh cookie in browsers. The API ignores it, because it
+reads the newest `refreshToken` cookie, and it expires within
+`REFRESH_TOKEN_TTL`.
 
 ### Redis state under the old prefixes is abandoned
 

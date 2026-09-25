@@ -69,9 +69,16 @@ function appWith(overrides: Partial<Env>): ReturnType<typeof createApp> {
   return createApp()
 }
 
-function cookieLine(response: Response, name: string): string | undefined {
+function cookieLines(response: Response, name: string): string[] {
   const lines = response.headers['set-cookie'] as string[] | undefined
-  return lines?.find((line) => line.startsWith(`${name}=`))
+  return lines?.filter((line) => line.startsWith(`${name}=`)) ?? []
+}
+
+// The first line for `name` that carries Domain when COOKIE_DOMAIN is set:
+// with it set, the refresh cookie also gets a host-only clearing line.
+function cookieLine(response: Response, name: string): string | undefined {
+  const lines = cookieLines(response, name)
+  return lines.find((line) => SCOPED_DOMAIN.test(line)) ?? lines[0]
 }
 
 function cookiePair(line: string | undefined): string {
@@ -157,6 +164,66 @@ describe('refresh cookie: login, refresh and logout', () => {
     // The clear must repeat Domain, or the browser keeps the scoped cookie.
     expect(cleared).toMatch(SECURE)
     expect(cleared).toMatch(SCOPED_DOMAIN)
+  })
+
+  // Clears a host-only refreshToken left from before COOKIE_DOMAIN was set,
+  // which the browser would otherwise keep sending alongside the new one.
+  it('also clears the host-only cookie on login, refresh and logout when COOKIE_DOMAIN is set', async () => {
+    const app = appWith(SECURE_SCOPED)
+    const email = await createVerifiedUser()
+    const isHostOnlyClear = (line: string): boolean =>
+      EPOCH_EXPIRY.test(line) && !ANY_DOMAIN.test(line) && SECURE.test(line)
+
+    const login = await request(app)
+      .post('/api/v1/auth/login')
+      .set('X-Forwarded-Proto', 'https')
+      .send({ email, password: PASSWORD })
+    expect(login.status).toBe(200)
+    const loginLines = cookieLines(login, REFRESH_TOKEN_COOKIE_NAME)
+    expect(loginLines).toHaveLength(2)
+    // The clear comes first, so a browser that treats the two scopes as one
+    // cookie ends up with the new one.
+    expect(isHostOnlyClear(loginLines[0] ?? '')).toBe(true)
+    expect(loginLines[1]).toMatch(SCOPED_DOMAIN)
+    expect(loginLines[1]).not.toMatch(EPOCH_EXPIRY)
+
+    const refreshed = await request(app)
+      .post('/api/v1/auth/refresh')
+      .set('X-Forwarded-Proto', 'https')
+      .set('Cookie', cookiePair(loginLines[1]))
+    expect(refreshed.status).toBe(200)
+    const refreshLines = cookieLines(refreshed, REFRESH_TOKEN_COOKIE_NAME)
+    expect(refreshLines).toHaveLength(2)
+    expect(isHostOnlyClear(refreshLines[0] ?? '')).toBe(true)
+    expect(refreshLines[1]).toMatch(SCOPED_DOMAIN)
+    expect(refreshLines[1]).not.toMatch(EPOCH_EXPIRY)
+
+    const loggedOut = await request(app)
+      .post('/api/v1/auth/logout')
+      .set('X-Forwarded-Proto', 'https')
+      .set('Cookie', cookiePair(refreshLines[1]))
+    expect(loggedOut.status).toBe(200)
+    const logoutLines = cookieLines(loggedOut, REFRESH_TOKEN_COOKIE_NAME)
+    expect(logoutLines).toHaveLength(2)
+    expect(logoutLines.every((line) => EPOCH_EXPIRY.test(line))).toBe(true)
+    expect(logoutLines.filter((line) => SCOPED_DOMAIN.test(line))).toHaveLength(1)
+    expect(logoutLines.filter((line) => isHostOnlyClear(line))).toHaveLength(1)
+  })
+
+  it('sends exactly one refreshToken Set-Cookie per response when COOKIE_DOMAIN is unset', async () => {
+    const app = appWith(PLAIN_HOST_ONLY)
+    const email = await createVerifiedUser()
+
+    const login = await request(app).post('/api/v1/auth/login').send({ email, password: PASSWORD })
+    expect(cookieLines(login, REFRESH_TOKEN_COOKIE_NAME)).toHaveLength(1)
+    const refreshed = await request(app)
+      .post('/api/v1/auth/refresh')
+      .set('Cookie', cookiePair(cookieLine(login, REFRESH_TOKEN_COOKIE_NAME)))
+    expect(cookieLines(refreshed, REFRESH_TOKEN_COOKIE_NAME)).toHaveLength(1)
+    const loggedOut = await request(app)
+      .post('/api/v1/auth/logout')
+      .set('Cookie', cookiePair(cookieLine(refreshed, REFRESH_TOKEN_COOKIE_NAME)))
+    expect(cookieLines(loggedOut, REFRESH_TOKEN_COOKIE_NAME)).toHaveLength(1)
   })
 
   it('has neither Secure nor Domain when COOKIE_SECURE=false and COOKIE_DOMAIN is unset, even over forwarded https', async () => {

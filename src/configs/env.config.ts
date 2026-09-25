@@ -355,7 +355,7 @@ const EnvSchema = z.object({
     })
     .optional()
     .describe(
-      'Domain attribute for the refresh-token and OAuth session cookies, e.g. "example.com" to share them with subdomains. Unset means host-only cookies, the narrowest scope. Changing or unsetting it strands cookies set under the old scope: logout cannot clear them.'
+      'Domain attribute for the refresh-token and OAuth session cookies, e.g. "example.com" to share them with subdomains. Unset means host-only cookies, the narrowest scope. Setting it on a deployment with live sessions heals itself: every response that sets or clears the refresh cookie also clears the host-only one. Changing or unsetting it leaves the old domain\'s refresh cookie in browsers. The API ignores it, because it reads the newest refreshToken cookie, and it expires within REFRESH_TOKEN_TTL.'
     ),
 
   // Extra browser origins allowed to call this API, comma-separated, e.g.

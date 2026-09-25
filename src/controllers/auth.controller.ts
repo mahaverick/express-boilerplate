@@ -24,7 +24,7 @@ import { type NextFunction, type Request, type RequestHandler, type Response } f
 import passport from 'passport'
 import type { Profile as GoogleProfile } from 'passport-google-oauth20'
 import postgres from 'postgres'
-import { getEnv, isCookieSecure } from '@/configs/env.config'
+import { getEnv, isCookieSecure, type Env } from '@/configs/env.config'
 import type { AuthProvider } from '@/constants/auth-provider.constants'
 import {
   GOOGLE_STRATEGY_NAME,
@@ -112,7 +112,7 @@ export function toPublicUser(user: User): PublicUser {
 
 /**
  * Attach a freshly issued refresh token to the response as an httpOnly
- * cookie, scoped to the auth routes that read it (refresh/logout, Task 7).
+ * cookie, scoped to the auth routes that read it (refresh and logout).
  *
  * `sameSite: 'strict'` is the cookie half of this API's stated CSRF
  * position (SECURITY.md: Bearer access tokens plus `SameSite` cookies, no
@@ -127,7 +127,9 @@ export function toPublicUser(user: User): PublicUser {
  * request, not a reason to weaken every other caller's default.
  *
  * `Secure` and `Domain` come from `COOKIE_SECURE` (via `isCookieSecure`) and
- * `COOKIE_DOMAIN`; `clearRefreshTokenCookie` must repeat both.
+ * `COOKIE_DOMAIN`; `clearRefreshTokenCookie` must repeat both. With
+ * `COOKIE_DOMAIN` set, `clearHostOnlyRefreshTokenCookie` runs first, so a
+ * browser holding a host-only cookie from before the domain was set drops it.
  * @param response - The response to set the cookie on.
  * @param rawToken - The raw refresh token.
  * @param expiresAt - When the token expires.
@@ -140,6 +142,7 @@ function setRefreshTokenCookie(
   sameSite: 'strict' | 'lax' = 'strict'
 ): void {
   const env = getEnv()
+  clearHostOnlyRefreshTokenCookie(response, env)
   response.cookie(REFRESH_TOKEN_COOKIE_NAME, rawToken, {
     httpOnly: true,
     secure: isCookieSecure(env),
@@ -177,12 +180,35 @@ function setOAuthRefreshTokenCookie(response: Response, rawToken: string, expire
 }
 
 /**
+ * When `COOKIE_DOMAIN` is set, clear the host-only refresh-token cookie, the
+ * one set before `COOKIE_DOMAIN` was. The browser keys a cookie on name,
+ * domain and path, so a `Domain=` cookie does not replace it, and the
+ * browser would keep sending both. Does nothing when `COOKIE_DOMAIN` is unset:
+ * the host-only cookie is then the live one.
+ *
+ * `setRefreshTokenCookie` calls this before it sets the new cookie, so a
+ * browser that treats the two scopes as one cookie keeps the new one.
+ * @param response - The response to add the clearing Set-Cookie to.
+ * @param env - The validated environment.
+ */
+function clearHostOnlyRefreshTokenCookie(response: Response, env: Env): void {
+  if (env.COOKIE_DOMAIN === undefined) return
+  response.clearCookie(REFRESH_TOKEN_COOKIE_NAME, {
+    httpOnly: true,
+    secure: isCookieSecure(env),
+    sameSite: 'strict',
+    path: REFRESH_TOKEN_COOKIE_PATH,
+  })
+}
+
+/**
  * Clear the refresh-token cookie on logout.
  *
  * The options passed to `clearCookie` must agree with the ones
  * `setRefreshTokenCookie` set it with — `path` and `domain` in particular —
  * or the browser treats this as clearing a DIFFERENT cookie and the
- * original one survives.
+ * original one survives. With `COOKIE_DOMAIN` set, the host-only cookie is
+ * cleared too (`clearHostOnlyRefreshTokenCookie`).
  * @param response - The response to clear the cookie on.
  */
 function clearRefreshTokenCookie(response: Response): void {
@@ -194,6 +220,7 @@ function clearRefreshTokenCookie(response: Response): void {
     path: REFRESH_TOKEN_COOKIE_PATH,
     ...(env.COOKIE_DOMAIN !== undefined && { domain: env.COOKIE_DOMAIN }),
   })
+  clearHostOnlyRefreshTokenCookie(response, env)
 }
 
 /**
@@ -205,6 +232,13 @@ function clearRefreshTokenCookie(response: Response): void {
  * (or hand-rolling more of RFC 6265 than a single named value needs) buys
  * nothing here. Decodes the value the same way Express's `response.cookie`
  * encoded it (`encodeURIComponent`, by default).
+ *
+ * Takes the LAST `refreshToken` value. A browser can hold two, one per
+ * domain scope, after `COOKIE_DOMAIN` is changed or unset. It sends
+ * same-path cookies oldest first (RFC 6265 §5.4, by creation time), so the
+ * last is the most recently created one, the one this API set under its
+ * current scope. The first would be a stale token, whose reuse detection
+ * revokes the live session.
  * @param request - The incoming request.
  * @returns The raw refresh token, or undefined when the cookie is absent.
  */
@@ -216,7 +250,7 @@ function readRefreshTokenCookie(request: Request): string | undefined {
   const match = header
     .split(';')
     .map((part) => part.trim())
-    .find((part) => part.startsWith(prefix))
+    .findLast((part) => part.startsWith(prefix))
   if (!match) return undefined
 
   const rawValue = match.slice(prefix.length)
