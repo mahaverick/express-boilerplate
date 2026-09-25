@@ -29,6 +29,19 @@ export function successResponse<T>(
 }
 
 /**
+ * Send a successful response that carries no payload. The envelope's
+ * `data` is always JSON `null`, never omitted, so every no-content
+ * endpoint has one shape.
+ * @param response - The Express response.
+ * @param message - Human-readable summary.
+ * @param status - HTTP status. Defaults to 200.
+ */
+export function messageResponse(response: Response, message: string, status = 200): void {
+  // eslint-disable-next-line unicorn/no-null -- the envelope uses JSON null for "no data"; undefined would drop the key from the JSON
+  successResponse(response, null, message, status)
+}
+
+/**
  * Send an error response with a consistent envelope.
  *
  * Unlike `successResponse`, `status` is required, not defaulted — an error

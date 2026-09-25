@@ -264,6 +264,17 @@ export default tseslint.config(
     rules: { 'check-file/filename-naming-convention': 'off' },
   },
   {
+    // Rules specific to src/controllers/**. Keep every controller-scoped
+    // rule in this one block rather than adding a second files: [...] entry
+    // for the same directory.
+    //
+    // Handlers are arrow fields passed through `this.handle(...)` so routes
+    // can mount them unbound; unicorn/consistent-function-scoping would
+    // otherwise hoist each arrow out of its class.
+    files: ['src/controllers/**/*.ts'],
+    rules: { 'unicorn/consistent-function-scoping': ['error', { checkArrowFunctions: false }] },
+  },
+  {
     // env.config.ts is the one module allowed to read process.env — it is the
     // module whose whole job is to parse it.
     files: ['src/configs/env.config.ts'],

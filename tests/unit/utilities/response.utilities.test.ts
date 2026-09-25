@@ -2,7 +2,7 @@
 import { type Response } from 'express'
 import { describe, expect, it, vi, type Mock } from 'vitest'
 import { REQUEST_ID_HEADER } from '@/middlewares/request-id.middleware'
-import { errorResponse, successResponse } from '@/utilities/response.utilities'
+import { errorResponse, messageResponse, successResponse } from '@/utilities/response.utilities'
 
 /**
  * Build a minimal mock Express response, enough to assert on `.status()`,
@@ -50,6 +50,36 @@ describe('successResponse', () => {
 
     expect(status).toHaveBeenCalledWith(201)
     expect(body()).toMatchObject({ message: 'Created', statusCode: 201 })
+  })
+})
+
+describe('messageResponse', () => {
+  it('sends data: null, never an omitted data key', () => {
+    const { response, body, status } = mockResponse()
+    messageResponse(response, 'Logged out.')
+
+    expect(status).toHaveBeenCalledWith(200)
+    expect(body()).toStrictEqual({
+      success: true,
+      message: 'Logged out.',
+      statusCode: 200,
+      // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data"
+      data: null,
+    })
+  })
+
+  it('accepts a status', () => {
+    const { response, body, status } = mockResponse()
+    messageResponse(response, 'Accepted.', 202)
+
+    expect(status).toHaveBeenCalledWith(202)
+    expect(body()).toStrictEqual({
+      success: true,
+      message: 'Accepted.',
+      statusCode: 202,
+      // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data"
+      data: null,
+    })
   })
 })
 
