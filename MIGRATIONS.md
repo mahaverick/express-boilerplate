@@ -42,8 +42,10 @@ one message. Outside local, boot refuses:
   5-second HTTP drain plus 5 seconds of headroom). On local this is a
   warning.
 
-Everywhere, boot refuses any old name from the table above, and setting
-only one of `SMTP_USERNAME`/`SMTP_PASSWORD`, which used to be a warning.
+Everywhere, boot refuses any old name from the table above, setting
+only one of `SMTP_USERNAME`/`SMTP_PASSWORD`, which used to be a warning, and
+a `COOKIE_DOMAIN` that `APP_URL`'s host is neither equal to nor a subdomain
+of, since browsers would reject every auth cookie.
 Boot warns when `COOKIE_SECURE` resolves to `true` and `GOOGLE_CLIENT_ID` is
 set while `TRUST_PROXY=false`, because the OAuth session cookie is then
 never sent behind a TLS-terminating proxy.

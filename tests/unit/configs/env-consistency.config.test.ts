@@ -197,6 +197,38 @@ describe('assertEnvConsistent', () => {
     })
   })
 
+  describe('COOKIE_DOMAIN against APP_URL', () => {
+    const api = { APP_URL: 'https://api.example.com' }
+
+    it.each([
+      { name: 'a parent domain', domain: 'example.com' },
+      { name: 'a parent domain with a leading dot', domain: '.example.com' },
+      { name: 'the exact host', domain: 'api.example.com' },
+      { name: 'a parent domain in another case', domain: 'Example.COM' },
+    ])('passes $name', ({ domain }) => {
+      expect(runChecks({ ...deployed, ...api, COOKIE_DOMAIN: domain }).error).toBeUndefined()
+    })
+
+    it('passes when COOKIE_DOMAIN is unset', () => {
+      expect(runChecks({ ...deployed, ...api }).error).toBeUndefined()
+    })
+
+    it.each([
+      { name: 'another domain', domain: 'example.org' },
+      { name: 'a domain that only shares a suffix', domain: 'le.com' },
+      { name: 'a subdomain of the host', domain: 'eu.api.example.com' },
+    ])('refuses $name on every APP_ENV', ({ domain }) => {
+      for (const source of [
+        { ...local, ...api, COOKIE_DOMAIN: domain },
+        { ...deployed, ...api, COOKIE_DOMAIN: domain },
+      ]) {
+        expect(runChecks(source).error).toContain(
+          `COOKIE_DOMAIN is ${domain}, but APP_URL's host api.example.com is not within it`
+        )
+      }
+    })
+  })
+
   it('lists every problem in one message', () => {
     const { error } = runChecks(
       { ...deployed, NODE_ENV: 'development', SMTP_HOST: 'localhost', SMTP_USERNAME: 'apikey' },

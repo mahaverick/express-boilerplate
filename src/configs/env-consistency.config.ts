@@ -69,6 +69,22 @@ function mailpitDefaultProblems(env: Env): string[] {
 }
 
 /**
+ * A `COOKIE_DOMAIN` that `APP_URL`'s host is not within. Browsers reject a
+ * Set-Cookie whose Domain does not domain-match the responding host, so every
+ * auth cookie would be dropped in silence.
+ * @param env - The validated environment.
+ * @returns A message when the domain cannot apply to `APP_URL`, else undefined.
+ */
+function cookieDomainProblem(env: Env): string | undefined {
+  if (env.COOKIE_DOMAIN === undefined) return undefined
+  // Browsers strip one leading dot (RFC 6265 §5.2.3).
+  const domain = env.COOKIE_DOMAIN.replace(/^\./, '').toLowerCase()
+  const host = new URL(env.APP_URL).hostname.toLowerCase()
+  if (host === domain || host.endsWith(`.${domain}`)) return undefined
+  return `COOKIE_DOMAIN is ${env.COOKIE_DOMAIN}, but APP_URL's host ${host} is not within it, so browsers reject every auth cookie. Set COOKIE_DOMAIN to ${host} or a parent domain of it, or unset it.`
+}
+
+/**
  * Refuses unsafe or stale configuration at boot; throws Error with one actionable message.
  *
  * Every problem found goes into that one message, so an operator fixes them
@@ -92,6 +108,9 @@ export function assertEnvConsistent(
     )
   }
   if (!isLocal) problems.push(...mailpitDefaultProblems(env))
+
+  const domainProblem = cookieDomainProblem(env)
+  if (domainProblem !== undefined) problems.push(domainProblem)
 
   // Half a credential pair means no auth is attempted at all, so every send
   // to a provider that needs it fails, silently (Ruling G, mailer.service.ts).
