@@ -20,6 +20,7 @@
 // query, and no test here ever lets the real implementation run.
 import { type NextFunction, type Request, type Response } from 'express'
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
+import type { MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { UserMembership } from '@/database/models/user-membership.model'
 import { HttpError } from '@/errors/http-error'
@@ -27,7 +28,10 @@ import { requireRole, resolveTenant } from '@/middlewares/tenant.middleware'
 import type { AuthenticatedUser } from '@/presenters/user.presenter'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
+import * as auditService from '@/services/audit.service'
+import { logger } from '@/services/logger.service'
 import { requestContextStore } from '@/services/request-context.service'
+import type { RequestPrincipal } from '@/types/actor'
 
 /**
  * A fixed tenant row — only `id`/`slug` are read by `resolveTenant`, but the
@@ -66,6 +70,35 @@ function mockMembership(role: UserMembership['role']): UserMembership {
     role,
     createdAt: new Date('2026-01-01T00:00:00Z'),
     updatedAt: new Date('2026-01-01T00:00:00Z'),
+  }
+}
+
+/**
+ * The seeded platform tenant's row, as `findActiveBySlug` would return it.
+ */
+const mockPlatformTenant: Tenant = {
+  ...mockTenant,
+  id: 'platform-tenant',
+  name: 'Platform',
+  slug: 'platform',
+  isPlatform: true,
+}
+
+/**
+ * The principal `resolveTenant` attaches for a member of `mockTenant`.
+ * @param role - The member's role.
+ * @returns The expected principal.
+ */
+function memberPrincipal(role: MembershipRole): RequestPrincipal {
+  return {
+    tenantId: 'tenant-1',
+    tenantSlug: 'acme',
+    isPlatformTenant: false,
+    role,
+    memberRole: role,
+    // eslint-disable-next-line unicorn/no-null -- a member's principal carries no platform role
+    platformRole: null,
+    access: 'member',
   }
 }
 
@@ -123,10 +156,19 @@ describe('resolveTenant', () => {
   let findByUserAndTenantSpy: MockInstance<
     typeof UserMembershipRepository.prototype.findByUserAndTenant
   >
+  let findPlatformRoleSpy: MockInstance<typeof UserMembershipRepository.prototype.findPlatformRole>
+  let recordPlatformAccessSpy: MockInstance<typeof auditService.recordPlatformAccess>
 
   beforeEach(() => {
     findActiveBySlugSpy = vi.spyOn(TenantRepository.prototype, 'findActiveBySlug')
     findByUserAndTenantSpy = vi.spyOn(UserMembershipRepository.prototype, 'findByUserAndTenant')
+    findPlatformRoleSpy = vi
+      .spyOn(UserMembershipRepository.prototype, 'findPlatformRole')
+      // eslint-disable-next-line unicorn/no-null -- not staff
+      .mockResolvedValue(null)
+    recordPlatformAccessSpy = vi
+      .spyOn(auditService, 'recordPlatformAccess')
+      .mockResolvedValue(undefined)
   })
 
   afterEach(() => {
@@ -161,7 +203,7 @@ describe('resolveTenant', () => {
     )
 
     expect(nextCallCount).toBe(1)
-    expect(request.principal).toEqual({ tenantId: 'tenant-1', tenantSlug: 'acme', role: 'owner' })
+    expect(request.principal).toEqual(memberPrincipal('owner'))
     expect(capturedTenant).toEqual({ tenantId: 'tenant-1', tenantSlug: 'acme', role: 'owner' })
     expect(findActiveBySlugSpy).toHaveBeenCalledWith('acme')
     expect(findByUserAndTenantSpy).toHaveBeenCalledWith('user-1', 'tenant-1')
@@ -229,6 +271,8 @@ describe('resolveTenant', () => {
     // be able to distinguish the two by response shape (spec correction #2).
     expect((error as HttpError).message).toBe('Tenant not found')
     expect(request.principal).toBeUndefined()
+    expect(findPlatformRoleSpy).toHaveBeenCalledWith('user-1')
+    expect(recordPlatformAccessSpy).not.toHaveBeenCalled()
   })
 
   it('404s without crashing when request.user is missing (route misconfigured, missing requireAuth)', async () => {
@@ -301,6 +345,90 @@ describe('resolveTenant', () => {
 
     expect(sawTenantInFrameA).toEqual({ tenantId: 'tenant-1', tenantSlug: 'acme', role: 'owner' })
     expect(sawTenantInOtherFrame).toBeUndefined()
+  })
+
+  it('gives staff with no membership their platform role as the effective role, and records the visit', async () => {
+    findActiveBySlugSpy.mockResolvedValue(mockTenant)
+    findByUserAndTenantSpy.mockResolvedValue(undefined)
+    findPlatformRoleSpy.mockResolvedValue('admin')
+
+    const request = buildRequest({ slug: 'acme', user: mockUser })
+    let capturedTenant: unknown
+    const next = vi.fn<(error?: unknown) => void>(() => {
+      capturedTenant = requestContextStore.getStore()?.tenant
+    })
+
+    await requestContextStore.run({ requestId: 'req-1' }, () =>
+      resolveTenant()(request, noResponse, next)
+    )
+
+    expect(next).toHaveBeenCalledWith()
+    expect(request.principal).toEqual({
+      tenantId: 'tenant-1',
+      tenantSlug: 'acme',
+      isPlatformTenant: false,
+      role: 'admin',
+      // eslint-disable-next-line unicorn/no-null -- staff reach this tenant with no membership
+      memberRole: null,
+      platformRole: 'admin',
+      access: 'platform',
+    })
+    expect(capturedTenant).toEqual({ tenantId: 'tenant-1', tenantSlug: 'acme', role: 'admin' })
+    expect(recordPlatformAccessSpy).toHaveBeenCalledWith({ userId: 'user-1' }, 'tenant-1', 'admin')
+  })
+
+  it('lets membership win for staff who are members, without reading the platform role', async () => {
+    findActiveBySlugSpy.mockResolvedValue(mockTenant)
+    findByUserAndTenantSpy.mockResolvedValue(mockMembership('viewer'))
+    findPlatformRoleSpy.mockResolvedValue('owner')
+
+    const request = buildRequest({ slug: 'acme', user: mockUser })
+    const { next } = mockNext()
+
+    await resolveTenant()(request, noResponse, next)
+
+    expect(request.principal).toEqual(memberPrincipal('viewer'))
+    expect(findPlatformRoleSpy).not.toHaveBeenCalled()
+    expect(recordPlatformAccessSpy).not.toHaveBeenCalled()
+  })
+
+  it('404s on the platform tenant for a non-member without consulting the platform role', async () => {
+    findActiveBySlugSpy.mockResolvedValue(mockPlatformTenant)
+    findByUserAndTenantSpy.mockResolvedValue(undefined)
+    findPlatformRoleSpy.mockResolvedValue('owner')
+
+    const request = buildRequest({ slug: 'platform', user: mockUser })
+    const { next, lastCallArgument } = mockNext()
+
+    await resolveTenant()(request, noResponse, next)
+
+    const error = lastCallArgument()
+    expect(error).toBeInstanceOf(HttpError)
+    expect((error as HttpError).statusCode).toBe(404)
+    expect((error as HttpError).message).toBe('Tenant not found')
+    expect(findPlatformRoleSpy).not.toHaveBeenCalled()
+    expect(request.principal).toBeUndefined()
+  })
+
+  it('still admits staff when the visit cannot be recorded, and logs a warning', async () => {
+    findActiveBySlugSpy.mockResolvedValue(mockTenant)
+    findByUserAndTenantSpy.mockResolvedValue(undefined)
+    findPlatformRoleSpy.mockResolvedValue('viewer')
+    recordPlatformAccessSpy.mockRejectedValue(new Error('audit insert failed'))
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+
+    const request = buildRequest({ slug: 'acme', user: mockUser })
+    const { next, lastCallArgument } = mockNext()
+
+    await resolveTenant()(request, noResponse, next)
+
+    expect(next).toHaveBeenCalledTimes(1)
+    expect(lastCallArgument()).toBeUndefined()
+    expect(request.principal?.access).toBe('platform')
+    expect(warn).toHaveBeenCalledWith(
+      'Platform access audit failed',
+      expect.objectContaining({ tenantId: 'tenant-1' })
+    )
   })
 })
 

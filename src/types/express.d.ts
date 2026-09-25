@@ -48,9 +48,10 @@ declare global {
 
       /**
        * The caller's tenant-scoped identity, set by `resolveTenant`
-       * (tenant.middleware.ts) once it confirms the caller belongs to the
-       * tenant the route names. Absent on every request that does not pass
-       * through `resolveTenant` — most of them.
+       * (tenant.middleware.ts) once it confirms the caller has access to the
+       * tenant the route names, as a member or through their platform role.
+       * Absent on every request that does not pass through `resolveTenant` —
+       * most of them.
        *
        * A SEPARATE property from `user`, not folded into it: `user` is
        * `AuthenticatedUser`, and that interface's own header comment already

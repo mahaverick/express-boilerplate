@@ -9,9 +9,10 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import type { MembershipRole } from '@/constants/tenant.constants'
 
 /**
- * The tenant a request is scoped to, once `resolveTenant` has resolved one
- * — the same three fields `resolveTenant` also attaches to `request` as
- * `request.principal` (`RequestPrincipal`, types/actor.ts).
+ * The tenant a request is scoped to, and the caller's effective role in it,
+ * once `resolveTenant` has resolved one. `request.principal`
+ * (`RequestPrincipal`, types/actor.ts) carries the same three fields plus
+ * how the caller reached the tenant.
  */
 export interface TenantContext {
   tenantId: string

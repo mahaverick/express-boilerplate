@@ -9,9 +9,9 @@
 // `/tenants/:slug/...` route additionally assumes `resolveTenant` has
 // already run (populating `request.principal`) — see
 // `tenant.middleware.ts`'s own header comment for what that guarantees:
-// the caller is confirmed to be a member of the tenant the route names,
-// with `request.principal.role` holding THAT tenant's role, before this
-// file's code ever runs.
+// the caller is confirmed to have access to the tenant the route names, as
+// a member or through their platform role, with `request.principal.role`
+// holding their effective role there, before this file's code ever runs.
 //
 // Member and invitation writes pass the actor, never `principal.role`: the
 // services re-read the actor's role under lock inside their transaction and
@@ -120,9 +120,8 @@ class TenantController extends BaseController {
   })
 
   /**
-   * `GET /tenants/:slug`: one tenant's details. Any member may call this —
-   * `resolveTenant` (composed ahead of this handler on the route) already
-   * confirmed membership; there is no further role check.
+   * `GET /tenants/:slug`: one tenant's details. Anyone `resolveTenant`
+   * admits may call this; there is no further role check.
    */
   getTenant = this.handle(async (request, response) => {
     const tenant = await getTenant(tenantPrincipal(request).tenantId)
@@ -145,7 +144,8 @@ class TenantController extends BaseController {
   /**
    * `GET /tenants/:slug/members`: a tenant's members, each with their safe
    * user info (`UserMembershipRepository.listByTenant` never joins
-   * `passwordHash` — see that method's own comment). Any member may call this.
+   * `passwordHash` — see that method's own comment). Anyone `resolveTenant`
+   * admits may call this.
    */
   listMembers = this.handle(async (request, response) => {
     const members = await listMembers(tenantPrincipal(request).tenantId)
@@ -238,7 +238,8 @@ class TenantController extends BaseController {
   })
 
   /**
-   * `GET /tenants/:slug/settings`: a tenant's settings. Any member may call this.
+   * `GET /tenants/:slug/settings`: a tenant's settings. Anyone `resolveTenant` admits
+   * may call this.
    */
   getSettings = this.handle(async (request, response) => {
     const settings = await getSettings(tenantPrincipal(request).tenantId)

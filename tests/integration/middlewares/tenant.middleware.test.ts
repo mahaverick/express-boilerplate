@@ -197,7 +197,16 @@ describe('resolveTenant + requireRole (integration)', () => {
 
     expect(response.status).toBe(200)
     expect(response.body).toEqual({
-      principal: { tenantId: tenant.id, tenantSlug: tenant.slug, role: 'owner' },
+      principal: {
+        tenantId: tenant.id,
+        tenantSlug: tenant.slug,
+        isPlatformTenant: false,
+        role: 'owner',
+        memberRole: 'owner',
+        // eslint-disable-next-line unicorn/no-null -- a member's principal carries no platform role
+        platformRole: null,
+        access: 'member',
+      },
       contextTenant: { tenantId: tenant.id, tenantSlug: tenant.slug, role: 'owner' },
     })
   })
