@@ -414,13 +414,13 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
   // budget every other integration file running in parallel shares — the
   // exact cross-test coupling tests/helpers/global-setup.ts's Redis flush
   // exists to keep out of this suite. The 429 behaviour itself is proven
-  // against the same factories, with small `limit` overrides, in
-  // tests/unit/middlewares/rate-limit.middleware.test.ts.
+  // against the same `createRateLimiter` calls, with small `limit`
+  // overrides, in tests/unit/middlewares/rate-limit.middleware.test.ts.
   //
   // `RateLimit-*` headers are set by express-rate-limit on EVERY response it
   // lets through, not only on a 429 (standardHeaders: true, verified
   // empirically), so their presence on an ordinary response is exactly the
-  // evidence that a limiter ran. Red proof: delete `createRegisterRateLimiter()`
+  // evidence that a limiter ran. Red proof: delete `createRateLimiter(RATE_LIMITS.register)`
   // from auth.routes.ts and this goes from green to red.
   describe('every auth route is behind a limiter (wiring, not thresholds)', () => {
     it('runs a limiter on /register — proven by the RateLimit-* headers on an ordinary response', async () => {

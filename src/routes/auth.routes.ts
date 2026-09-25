@@ -10,21 +10,21 @@
 // unicorn/no-top-level-side-effects exists to catch, and createApp()
 // (app.ts) already establishes "build inside a function, return the
 // result" as this codebase's convention for assembling Express objects.
-// The `create*RateLimiter` factories follow the identical pattern for the
-// same reason — see rate-limit.middleware.ts's header comment.
+// `createRateLimiter` follows the identical pattern for the same reason —
+// see rate-limit.middleware.ts's header comment.
 //
 // EVERY route on this router carries a limiter, each with its own store
 // prefix. That is the standing rule for this file, not nine independent
 // decisions: an unlimited auth route is either an enumeration oracle, a
 // bcrypt/email amplifier, a password oracle, or some combination.
-// rate-limit.middleware.ts's header
-// comment holds the per-endpoint reasoning. verify-email and reset-password
-// each carry their own single `rl:verify-email:` / `rl:reset-password:`
-// prefix; resend-verification and forgot-password each carry TWO limiters
-// in series, with their own prefixes (`rl:resend-verification-ip:` /
-// `rl:resend-verification-email:`, `rl:forgot-password-ip:` /
-// `rl:forgot-password-email:`) — see rate-limit.middleware.ts for why one
-// composite key is not enough for either pair of threats.
+// ARCHITECTURE.md/SECURITY.md hold the per-endpoint reasoning.
+// verify-email and reset-password each carry their own single
+// `rl:verify-email:` / `rl:reset-password:` prefix; resend-verification
+// and forgot-password each carry TWO limiters in series, with their own
+// prefixes (`rl:resend-verification-ip:` / `rl:resend-verification-email:`,
+// `rl:forgot-password-ip:` / `rl:forgot-password-email:`) — see
+// ARCHITECTURE.md/SECURITY.md for why one composite key is not enough for
+// either pair of threats.
 import { Router, type RequestHandler } from 'express'
 import passport from 'passport'
 import {
@@ -33,27 +33,12 @@ import {
   GOOGLE_STRATEGY_NAME,
   isGoogleOAuthEnabled,
 } from '@/configs/passport.config'
+import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { authController } from '@/controllers/auth.controller'
 import { verificationController } from '@/controllers/verification.controller'
 import { requireAuth } from '@/middlewares/auth.middleware'
 import { requireJsonContentType } from '@/middlewares/content-type.middleware'
-import {
-  createChangePasswordRateLimiter,
-  createForgotPasswordEmailRateLimiter,
-  createForgotPasswordIpRateLimiter,
-  createGoogleOAuthCallbackRateLimiter,
-  createGoogleOAuthRateLimiter,
-  createLoginAccountRateLimiter,
-  createLoginIpRateLimiter,
-  createLoginRateLimiter,
-  createLogoutRateLimiter,
-  createRefreshRateLimiter,
-  createRegisterRateLimiter,
-  createResendVerificationEmailRateLimiter,
-  createResendVerificationIpRateLimiter,
-  createResetPasswordRateLimiter,
-  createVerifyEmailRateLimiter,
-} from '@/middlewares/rate-limit.middleware'
+import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
 
 /**
  * Build the auth routes.
@@ -70,57 +55,66 @@ export function createAuthRouter(): Router {
   // per-route so every route on this router inherits it by default
   // instead of having to remember. See content-type.middleware.ts.
   router.use(requireJsonContentType)
-  router.post('/register', createRegisterRateLimiter(), authController.register)
+  router.post('/register', createRateLimiter(RATE_LIMITS.register), authController.register)
   // Three limiters in series, tightest first, so an attempt it rejects
   // never spends the per-IP or per-account budget. See
-  // rate-limit.middleware.ts's header comment.
+  // ARCHITECTURE.md/SECURITY.md.
   router.post(
     '/login',
-    createLoginRateLimiter(),
-    createLoginIpRateLimiter(),
-    createLoginAccountRateLimiter(),
+    createRateLimiter(RATE_LIMITS.login),
+    createRateLimiter(RATE_LIMITS.loginIp),
+    createRateLimiter(RATE_LIMITS.loginAccount),
     authController.login
   )
-  router.post('/refresh', createRefreshRateLimiter(), authController.refresh)
-  router.post('/logout', createLogoutRateLimiter(), authController.logout)
-  router.post('/verify-email', createVerifyEmailRateLimiter(), verificationController.verifyEmail)
+  router.post('/refresh', createRateLimiter(RATE_LIMITS.refresh), authController.refresh)
+  router.post('/logout', createRateLimiter(RATE_LIMITS.logout), authController.logout)
+  router.post(
+    '/verify-email',
+    createRateLimiter(RATE_LIMITS.verifyEmail),
+    verificationController.verifyEmail
+  )
   // Two limiters in series, not a composite key — each bounds its own
   // threat, and either firing alone must be enough. See
-  // rate-limit.middleware.ts's header comment.
+  // ARCHITECTURE.md/SECURITY.md.
   router.post(
     '/resend-verification',
-    createResendVerificationIpRateLimiter(),
-    createResendVerificationEmailRateLimiter(),
+    createRateLimiter(RATE_LIMITS.resendVerificationIp),
+    createRateLimiter(RATE_LIMITS.resendVerificationEmail),
     verificationController.resendVerification
   )
   // Same two-limiters-in-series shape as resend-verification, for the
-  // identical reason (rate-limit.middleware.ts's header comment): Ruling G
+  // identical reason (see ARCHITECTURE.md/SECURITY.md): Ruling G
   // already makes forgot-password's RESPONSE identical for a known and an
   // unknown address, but that alone does not bound how much outbound mail
   // one IP — or one victim address — can trigger.
   router.post(
     '/forgot-password',
-    createForgotPasswordIpRateLimiter(),
-    createForgotPasswordEmailRateLimiter(),
+    createRateLimiter(RATE_LIMITS.forgotPasswordIp),
+    createRateLimiter(RATE_LIMITS.forgotPasswordEmail),
     authController.forgotPassword
   )
-  router.post('/reset-password', createResetPasswordRateLimiter(), authController.resetPassword)
+  router.post(
+    '/reset-password',
+    createRateLimiter(RATE_LIMITS.resetPassword),
+    authController.resetPassword
+  )
   // The two routes on this router that are NOT public: siblings of
   // forgot-password/reset-password (same "what this account signs in with"
   // family), not of /profile (name/avatar) — so they live here, not on
   // profile.routes.ts. This router has no router-wide `requireAuth` the way
   // profile.routes.ts does, so it is attached PER-ROUTE, here. On
-  // change-password it goes ahead of the rate limiter — deliberately in that order: `createChangePasswordRateLimiter`
-  // keys on `request.user.id` (rate-limit.middleware.ts's own comment on
-  // that limiter), which does not exist until `requireAuth` has populated
-  // it. Every other limiter on this router runs first, ahead of its
+  // change-password it goes ahead of the rate limiter — deliberately in that
+  // order: `RATE_LIMITS.changePassword` keys on `request.user.id`
+  // (rate-limit.constants.ts's own comment on `authenticatedUserRateLimitKey`),
+  // which does not exist until `requireAuth` has populated it. Every other
+  // limiter on this router runs first, ahead of its
   // handler, because every other route is unauthenticated; this is the one
   // exception, for the identical reason its limiter is keyed on the user
   // rather than IP.
   router.post(
     '/change-password',
     requireAuth,
-    createChangePasswordRateLimiter(),
+    createRateLimiter(RATE_LIMITS.changePassword),
     authController.changePassword
   )
 
@@ -150,20 +144,19 @@ export function createAuthRouter(): Router {
   // every `createAuthRouter()` invocation (idempotent registration) rather
   // than needing a separate boot-time hook.
   //
-  // `createGoogleOAuthRateLimiter()` is listed FIRST in the chain, ahead of
-  // `oauthSession` — same ordering every other route on this router uses
-  // (the limiter runs before the handler it protects), and load-bearing
-  // here specifically: it must reject an over-budget caller with a 429
-  // BEFORE `oauthSession` ever writes a session to Redis, or the limiter
-  // would still let an attacker spend the exact resource
-  // (rate-limit.middleware.ts's own comment on this limiter) it exists to
-  // bound.
+  // `createRateLimiter(RATE_LIMITS.googleOAuth)` is listed FIRST in the
+  // chain, ahead of `oauthSession` — same ordering every other route on
+  // this router uses (the limiter runs before the handler it protects),
+  // and load-bearing here specifically: it must reject an over-budget
+  // caller with a 429 BEFORE `oauthSession` ever writes a session to
+  // Redis, or the limiter would still let an attacker spend the exact
+  // resource it exists to bound.
   if (isGoogleOAuthEnabled()) {
     configurePassport()
     const oauthSession = createOAuthSessionMiddleware()
     router.get(
       '/google',
-      createGoogleOAuthRateLimiter(),
+      createRateLimiter(RATE_LIMITS.googleOAuth),
       oauthSession,
       passport.initialize(),
       // `as RequestHandler`: `@types/passport`'s `Authenticator.authenticate`
@@ -178,7 +171,7 @@ export function createAuthRouter(): Router {
       }) as RequestHandler
     )
     // The callback route: Google redirects here after the user completes (or
-    // abandons) its consent screen. `createGoogleOAuthCallbackRateLimiter()`
+    // abandons) its consent screen. `createRateLimiter(RATE_LIMITS.googleOAuthCallback)`
     // runs first, ahead of `oauthSession`, for the same ordering reason as
     // `/google` above — a 429 must land before `oauthSession` (or
     // `authController.handleGoogleCallback`'s own database work) spends
@@ -195,7 +188,7 @@ export function createAuthRouter(): Router {
     // reaches through `completeGoogleSignIn`.
     router.get(
       '/google/callback',
-      createGoogleOAuthCallbackRateLimiter(),
+      createRateLimiter(RATE_LIMITS.googleOAuthCallback),
       oauthSession,
       passport.initialize(),
       authController.handleGoogleCallback

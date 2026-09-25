@@ -17,7 +17,7 @@
 //
 // RATE LIMITING here is "wiring, not thresholds" — `auth-refresh.test.ts`'s
 // own header comment states the reasoning this file borrows verbatim:
-// exhausting `createCreateTenantRateLimiter`'s real 20-per-hour budget
+// exhausting `RATE_LIMITS.createTenant`'s real 20-per-hour budget
 // would spend a budget every other
 // integration file running in parallel shares. The 429 behaviour itself,
 // including the user-keyed discriminator, is proven with small overrides in

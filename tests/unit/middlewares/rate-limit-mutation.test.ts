@@ -35,8 +35,9 @@
 import express, { type Express } from 'express'
 import type { Test } from 'supertest'
 import { describe, expect, it, vi } from 'vitest'
+import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { errorHandler } from '@/middlewares/error.middleware'
-import type { createLoginRateLimiter as CreateLoginRateLimiter } from '@/middlewares/rate-limit.middleware'
+import type { createRateLimiter as CreateRateLimiter } from '@/middlewares/rate-limit.middleware'
 import { withMutatedModule } from '../../helpers/mutate'
 import { request } from '../../helpers/request'
 
@@ -51,12 +52,12 @@ vi.mock('@/services/redis.service', async (importOriginal) => ({
  * @param createLoginRateLimiter - The factory to build the limiter from.
  * @returns The app.
  */
-function buildApp(createLoginRateLimiter: typeof CreateLoginRateLimiter): Express {
+function buildApp(createLoginRateLimiter: typeof CreateRateLimiter): Express {
   const app = express()
   app.use(express.json())
   app.post(
     '/login',
-    createLoginRateLimiter({ limit: 2, windowMs: 60_000 }),
+    createLoginRateLimiter(RATE_LIMITS.login, { limit: 2, windowMs: 60_000 }),
     (_request, response) => {
       response.status(401).json({ success: false, message: 'Invalid email or password' })
     }
@@ -82,7 +83,7 @@ function attempt(app: Express, email: string): Test {
  * @returns The status code of the request from the different email.
  */
 async function bystanderStatusAfterExhaustingVictim(
-  createLoginRateLimiter: typeof CreateLoginRateLimiter
+  createLoginRateLimiter: typeof CreateRateLimiter
 ): Promise<number> {
   const app = buildApp(createLoginRateLimiter)
   await attempt(app, 'victim@example.com')
@@ -116,19 +117,19 @@ describe('withMutatedModule, proven on the login rate limiter’s real key gener
           }),
       },
       () => import('@/middlewares/rate-limit.middleware'),
-      async ({ createLoginRateLimiter }) => {
+      async ({ createRateLimiter }) => {
         // MUTATED: with the key collapsed to IP-only, a bystander sharing
         // the victim's IP is blocked too — exactly the lockout the
         // composite key exists to prevent (rate-limit.middleware.test.ts's
         // "keys on IP AND email" test asserts the opposite: 401, not 429).
-        const status = await bystanderStatusAfterExhaustingVictim(createLoginRateLimiter)
+        const status = await bystanderStatusAfterExhaustingVictim(createRateLimiter)
         expect(status).toBe(429)
       }
     )
 
     // RESTORED: a fresh import gets the real loginRateLimitKey back.
-    const { createLoginRateLimiter } = await import('@/middlewares/rate-limit.middleware')
-    const status = await bystanderStatusAfterExhaustingVictim(createLoginRateLimiter)
+    const { createRateLimiter } = await import('@/middlewares/rate-limit.middleware')
+    const status = await bystanderStatusAfterExhaustingVictim(createRateLimiter)
     expect(status).toBe(401)
   })
 
@@ -160,8 +161,8 @@ describe('withMutatedModule, proven on the login rate limiter’s real key gener
             }),
         },
         () => import('@/middlewares/rate-limit.middleware'),
-        async ({ createLoginRateLimiter }) => {
-          const app = buildApp(createLoginRateLimiter)
+        async ({ createRateLimiter }) => {
+          const app = buildApp(createRateLimiter)
 
           await attempt(app, 'victim@example.com')
           await attempt(app, 'victim@example.com')

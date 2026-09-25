@@ -22,20 +22,19 @@
 // rather than router-wide because half this router's routes are GETs that
 // must not reject an unset/absent content type.
 //
-// THE RATE LIMITERS (`createCreateTenantRateLimiter`,
-// `createInviteTenantMemberRateLimiter`) run BEFORE `resolveTenant()`, so
-// an over-budget caller gets its 429 before `resolveTenant()`'s two
-// database reads. Invite and resend share the `rl:invite-tenant-member:`
-// budget: Redis merges them by prefix, and building the limiter ONCE keeps
-// them merged on the in-memory fallback too, where each instance counts alone.
+// THE RATE LIMITERS (`createRateLimiter(RATE_LIMITS.createTenant)`,
+// `createRateLimiter(RATE_LIMITS.inviteTenantMember)`) run BEFORE
+// `resolveTenant()`, so an over-budget caller gets its 429 before
+// `resolveTenant()`'s two database reads. Invite and resend share the
+// `rl:invite-tenant-member:` budget: Redis merges them by prefix, and
+// building the limiter ONCE keeps them merged on the in-memory fallback
+// too, where each instance counts alone.
 import { Router } from 'express'
+import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { tenantController } from '@/controllers/tenant.controller'
 import { requireAuth } from '@/middlewares/auth.middleware'
 import { requireJsonContentType } from '@/middlewares/content-type.middleware'
-import {
-  createCreateTenantRateLimiter,
-  createInviteTenantMemberRateLimiter,
-} from '@/middlewares/rate-limit.middleware'
+import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
 import { requireRole, resolveTenant } from '@/middlewares/tenant.middleware'
 
 /**
@@ -50,7 +49,7 @@ export function createTenantRouter(): Router {
   router.post(
     '/',
     requireJsonContentType,
-    createCreateTenantRateLimiter(),
+    createRateLimiter(RATE_LIMITS.createTenant),
     tenantController.createTenant
   )
   router.get('/', tenantController.listTenants)
@@ -83,7 +82,7 @@ export function createTenantRouter(): Router {
   )
 
   // -- Invitations --
-  const inviteRateLimiter = createInviteTenantMemberRateLimiter()
+  const inviteRateLimiter = createRateLimiter(RATE_LIMITS.inviteTenantMember)
   router.get(
     '/:slug/invitations',
     resolveTenant(),

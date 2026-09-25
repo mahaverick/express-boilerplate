@@ -17,22 +17,9 @@ import path from 'node:path'
 import express, { type Express, type RequestHandler } from 'express'
 import type { Test } from 'supertest'
 import { describe, expect, it, vi } from 'vitest'
+import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { errorHandler } from '@/middlewares/error.middleware'
-import {
-  createCreateTenantRateLimiter,
-  createForgotPasswordEmailRateLimiter,
-  createForgotPasswordIpRateLimiter,
-  createInvitationAcceptRateLimiter,
-  createInvitationPreviewRateLimiter,
-  createInviteTenantMemberRateLimiter,
-  createLoginAccountRateLimiter,
-  createLoginIpRateLimiter,
-  createLoginRateLimiter,
-  createLogoutRateLimiter,
-  createRegisterRateLimiter,
-  createResetPasswordRateLimiter,
-  RATE_LIMITED_CODE,
-} from '@/middlewares/rate-limit.middleware'
+import { createRateLimiter, RATE_LIMITED_CODE } from '@/middlewares/rate-limit.middleware'
 import { request } from '../../helpers/request'
 
 vi.mock('@/services/redis.service', async (importOriginal) => ({
@@ -50,9 +37,13 @@ vi.mock('@/services/redis.service', async (importOriginal) => ({
 function buildApp(limit: number): Express {
   const app = express()
   app.use(express.json())
-  app.post('/login', createLoginRateLimiter({ limit, windowMs: 60_000 }), (_request, response) => {
-    response.status(401).json({ success: false, message: 'Invalid email or password' })
-  })
+  app.post(
+    '/login',
+    createRateLimiter(RATE_LIMITS.login, { limit, windowMs: 60_000 }),
+    (_request, response) => {
+      response.status(401).json({ success: false, message: 'Invalid email or password' })
+    }
+  )
   app.use(errorHandler)
   return app
 }
@@ -200,7 +191,9 @@ describe('createLoginRateLimiter', () => {
 
 describe('createLoginIpRateLimiter', () => {
   it('returns 429 once one IP spends its budget, even with a different email every time', async () => {
-    const app = buildAppBehind(createLoginIpRateLimiter({ limit: 3, windowMs: 60_000 }))
+    const app = buildAppBehind(
+      createRateLimiter(RATE_LIMITS.loginIp, { limit: 3, windowMs: 60_000 })
+    )
 
     for (let index = 0; index < 3; index += 1) {
       const allowed = await request(app)
@@ -224,7 +217,9 @@ describe('createLoginIpRateLimiter', () => {
  * @returns The app.
  */
 function buildAccountLimitedApp(limit: number): Express {
-  const app = buildAppBehind(createLoginAccountRateLimiter({ limit, windowMs: 60_000 }))
+  const app = buildAppBehind(
+    createRateLimiter(RATE_LIMITS.loginAccount, { limit, windowMs: 60_000 })
+  )
   app.set('trust proxy', 'loopback')
   return app
 }
@@ -264,14 +259,16 @@ describe('POST /login wiring', () => {
     // which limiter factories produced its middleware.
     const routes = fs.readFileSync(path.resolve(process.cwd(), 'src/routes/auth.routes.ts'), 'utf8')
     expect(routes).toMatch(
-      /router\.post\(\s*'\/login',\s*createLoginRateLimiter\(\),\s*createLoginIpRateLimiter\(\),\s*createLoginAccountRateLimiter\(\),\s*authController\.login\s*\)/
+      /router\.post\(\s*'\/login',\s*createRateLimiter\(RATE_LIMITS\.login\),\s*createRateLimiter\(RATE_LIMITS\.loginIp\),\s*createRateLimiter\(RATE_LIMITS\.loginAccount\),\s*authController\.login\s*\)/
     )
   })
 })
 
 describe('createRegisterRateLimiter', () => {
   it('returns 429 with standardized RateLimit-* headers once the limit is exceeded', async () => {
-    const app = buildAppBehind(createRegisterRateLimiter({ limit: 2, windowMs: 60_000 }))
+    const app = buildAppBehind(
+      createRateLimiter(RATE_LIMITS.register, { limit: 2, windowMs: 60_000 })
+    )
 
     const first = await request(app).post('/endpoint').send({ email: 'a@example.com' })
     const second = await request(app).post('/endpoint').send({ email: 'b@example.com' })
@@ -294,7 +291,9 @@ describe('createRegisterRateLimiter', () => {
   // limiter is given loginRateLimitKey (or any email-aware key): each of
   // these three emails would get its own budget and none would be limited.
   it('keys on IP alone: a different email on every request shares one counter', async () => {
-    const app = buildAppBehind(createRegisterRateLimiter({ limit: 2, windowMs: 60_000 }))
+    const app = buildAppBehind(
+      createRateLimiter(RATE_LIMITS.register, { limit: 2, windowMs: 60_000 })
+    )
 
     await request(app).post('/endpoint').send({ email: 'first@example.com' })
     await request(app).post('/endpoint').send({ email: 'second@example.com' })
@@ -304,7 +303,9 @@ describe('createRegisterRateLimiter', () => {
   })
 
   it('counts a request carrying no email at all against the same IP counter', async () => {
-    const app = buildAppBehind(createRegisterRateLimiter({ limit: 1, windowMs: 60_000 }))
+    const app = buildAppBehind(
+      createRateLimiter(RATE_LIMITS.register, { limit: 1, windowMs: 60_000 })
+    )
 
     await request(app).post('/endpoint').send({ email: 'someone@example.com' })
     const bodyless = await request(app).post('/endpoint')
@@ -315,7 +316,9 @@ describe('createRegisterRateLimiter', () => {
 
 describe('createLogoutRateLimiter', () => {
   it('returns 429 once the limit is exceeded, keyed on IP alone', async () => {
-    const app = buildAppBehind(createLogoutRateLimiter({ limit: 1, windowMs: 60_000 }))
+    const app = buildAppBehind(
+      createRateLimiter(RATE_LIMITS.logout, { limit: 1, windowMs: 60_000 })
+    )
 
     const allowed = await request(app).post('/endpoint')
     const limited = await request(app).post('/endpoint')
@@ -328,7 +331,9 @@ describe('createLogoutRateLimiter', () => {
 
 describe('createForgotPasswordIpRateLimiter', () => {
   it('returns 429 once the limit is exceeded, keyed on IP alone', async () => {
-    const app = buildAppBehind(createForgotPasswordIpRateLimiter({ limit: 2, windowMs: 60_000 }))
+    const app = buildAppBehind(
+      createRateLimiter(RATE_LIMITS.forgotPasswordIp, { limit: 2, windowMs: 60_000 })
+    )
 
     const first = await request(app).post('/endpoint').send({ email: 'first@example.com' })
     const second = await request(app).post('/endpoint').send({ email: 'second@example.com' })
@@ -343,7 +348,9 @@ describe('createForgotPasswordIpRateLimiter', () => {
 
 describe('createForgotPasswordEmailRateLimiter', () => {
   it('keys on the submitted address alone: a different address is unaffected by the victim’s counter', async () => {
-    const app = buildAppBehind(createForgotPasswordEmailRateLimiter({ limit: 2, windowMs: 60_000 }))
+    const app = buildAppBehind(
+      createRateLimiter(RATE_LIMITS.forgotPasswordEmail, { limit: 2, windowMs: 60_000 })
+    )
 
     await request(app).post('/endpoint').send({ email: 'victim@example.com' })
     await request(app).post('/endpoint').send({ email: 'victim@example.com' })
@@ -363,7 +370,9 @@ describe('createForgotPasswordEmailRateLimiter', () => {
 
 describe('createResetPasswordRateLimiter', () => {
   it('returns 429 once the limit is exceeded, keyed on IP alone', async () => {
-    const app = buildAppBehind(createResetPasswordRateLimiter({ limit: 1, windowMs: 60_000 }))
+    const app = buildAppBehind(
+      createRateLimiter(RATE_LIMITS.resetPassword, { limit: 1, windowMs: 60_000 })
+    )
 
     const allowed = await request(app).post('/endpoint')
     const limited = await request(app).post('/endpoint')
@@ -376,7 +385,9 @@ describe('createResetPasswordRateLimiter', () => {
 
 describe('createCreateTenantRateLimiter', () => {
   it('returns 429 with standardized RateLimit-* headers once the limit is exceeded', async () => {
-    const app = buildAppBehindAsUser(createCreateTenantRateLimiter({ limit: 2, windowMs: 60_000 }))
+    const app = buildAppBehindAsUser(
+      createRateLimiter(RATE_LIMITS.createTenant, { limit: 2, windowMs: 60_000 })
+    )
     const userId = randomUUID()
 
     const first = await request(app).post('/endpoint').set('x-test-user-id', userId)
@@ -404,7 +415,9 @@ describe('createCreateTenantRateLimiter', () => {
   // land in the same bucket regardless of `x-test-user-id`, and `bystander`
   // below would come back 429 instead of 201.
   it('keys on the authenticated user id, not IP: a different user is unaffected by another user’s counter', async () => {
-    const app = buildAppBehindAsUser(createCreateTenantRateLimiter({ limit: 1, windowMs: 60_000 }))
+    const app = buildAppBehindAsUser(
+      createRateLimiter(RATE_LIMITS.createTenant, { limit: 1, windowMs: 60_000 })
+    )
     const victim = randomUUID()
     const other = randomUUID()
 
@@ -423,7 +436,9 @@ describe('createCreateTenantRateLimiter', () => {
   // than the key generator throwing — the fail-SAFE direction its own
   // comment describes (more restrictive, never less), not a crash.
   it('falls back to one shared bucket when request.user is unset, rather than throwing', async () => {
-    const app = buildAppBehindAsUser(createCreateTenantRateLimiter({ limit: 1, windowMs: 60_000 }))
+    const app = buildAppBehindAsUser(
+      createRateLimiter(RATE_LIMITS.createTenant, { limit: 1, windowMs: 60_000 })
+    )
 
     const first = await request(app).post('/endpoint')
     const second = await request(app).post('/endpoint')
@@ -436,7 +451,7 @@ describe('createCreateTenantRateLimiter', () => {
 describe('createInviteTenantMemberRateLimiter', () => {
   it('returns 429 with standardized RateLimit-* headers once the limit is exceeded', async () => {
     const app = buildAppBehindAsUser(
-      createInviteTenantMemberRateLimiter({ limit: 2, windowMs: 60_000 })
+      createRateLimiter(RATE_LIMITS.inviteTenantMember, { limit: 2, windowMs: 60_000 })
     )
     const userId = randomUUID()
 
@@ -456,7 +471,7 @@ describe('createInviteTenantMemberRateLimiter', () => {
   // so each is proven independently rather than one standing in for both.
   it('keys on the authenticated user id, not IP: a different user is unaffected by another user’s counter', async () => {
     const app = buildAppBehindAsUser(
-      createInviteTenantMemberRateLimiter({ limit: 1, windowMs: 60_000 })
+      createRateLimiter(RATE_LIMITS.inviteTenantMember, { limit: 1, windowMs: 60_000 })
     )
     const victim = randomUUID()
     const other = randomUUID()
@@ -473,7 +488,9 @@ describe('createInviteTenantMemberRateLimiter', () => {
 
 describe('createInvitationPreviewRateLimiter', () => {
   it('returns 429 once the limit is exceeded, keyed on IP alone', async () => {
-    const app = buildAppBehind(createInvitationPreviewRateLimiter({ limit: 1, windowMs: 60_000 }))
+    const app = buildAppBehind(
+      createRateLimiter(RATE_LIMITS.invitationPreview, { limit: 1, windowMs: 60_000 })
+    )
 
     const allowed = await request(app).post('/endpoint')
     const limited = await request(app).post('/endpoint')
@@ -489,7 +506,7 @@ describe('createInvitationAcceptRateLimiter', () => {
   // IP share the bucket, because the limiter runs before requireAuth.
   it('returns 429 once the limit is exceeded, whoever the caller claims to be', async () => {
     const app = buildAppBehindAsUser(
-      createInvitationAcceptRateLimiter({ limit: 1, windowMs: 60_000 })
+      createRateLimiter(RATE_LIMITS.invitationAccept, { limit: 1, windowMs: 60_000 })
     )
 
     const allowed = await request(app).post('/endpoint').set('x-test-user-id', randomUUID())
@@ -501,51 +518,23 @@ describe('createInvitationAcceptRateLimiter', () => {
   })
 })
 
-describe('store prefixes', () => {
-  // The convention rate-limit.middleware.ts's header comment establishes,
-  // pinned as a test rather than only as prose: every limiter carries its
-  // own SharedRateLimitStore prefix, so no two endpoints can ever spend each
-  // other's budget once the store latches onto Redis. B3 adds
-  // forgot-password and resend-verification, and this is the assertion that
-  // fails if either copies an existing prefix.
-  //
-  // Asserted against the committed source, the same way
-  // tests/unit/connection-target.test.ts guards the compose ports and
-  // password.utilities.test.ts guards SECURITY.md's stated bcrypt cost: a
-  // built limiter exposes only `resetKey`/`getKey` (verified — no `store`
-  // property), so the invariant simply is not observable at runtime. The
-  // file that declares the prefixes is the thing worth guarding.
-  const source = fs.readFileSync(
-    path.resolve(process.cwd(), 'src/middlewares/rate-limit.middleware.ts'),
-    'utf8'
-  )
-  const prefixes = Array.from(source.matchAll(/limiterStore\('([a-z-]+)'\)/g), (match) => match[1])
-
-  it('builds one store per limiter, each under its own rl:<name> keyspace', () => {
-    expect(prefixes).toEqual([
-      'register',
-      'login',
-      'login-ip',
-      'login-account',
-      'refresh',
-      'logout',
-      'verify-email',
-      'resend-verification-ip',
-      'resend-verification-email',
-      'forgot-password-ip',
-      'forgot-password-email',
-      'reset-password',
-      'google-oauth',
-      'google-oauth-callback',
-      'create-tenant',
-      'invite-tenant-member',
-      'change-password',
-      'invitation-preview',
-      'invitation-accept',
-    ])
-  })
-
-  it('never reuses a prefix across two limiters', () => {
-    expect(new Set(prefixes).size).toBe(prefixes.length)
+describe('store prefix derivation', () => {
+  // The 19-name list and order now live in
+  // tests/unit/constants/rate-limit.constants.test.ts, asserted directly
+  // against the real RATE_LIMITS object. What that test alone cannot prove
+  // is that createRateLimiter actually THREADS spec.name into
+  // limiterStore(...) rather than a hardcoded literal — a hardcoded
+  // 'rl' prefix would pass every RATE_LIMITS assertion while merging every
+  // limiter's Redis counter into one bucket. Asserted against the committed
+  // source, the same way tests/unit/connection-target.test.ts guards the
+  // compose ports and password.utilities.test.ts guards SECURITY.md's
+  // stated bcrypt cost: a built limiter exposes only `resetKey`/`getKey`
+  // (verified — no `store` property), so this is not observable at runtime.
+  it("derives every limiter's store prefix from spec.name, not a hardcoded string", () => {
+    const source = fs.readFileSync(
+      path.resolve(process.cwd(), 'src/middlewares/rate-limit.middleware.ts'),
+      'utf8'
+    )
+    expect(source).toMatch(/store:\s*limiterStore\(spec\.name\)/)
   })
 })
