@@ -124,15 +124,24 @@ until you check.
 - **`addEmailJob()` from `@/jobs/email.job`, not `sendMail()` directly.**
   Email sending goes through a BullMQ queue. `auth.service.ts`'s `register`
   and `requestPasswordReset`, and `verification.service.ts`'s
-  `prepareResendVerification`, each do the enqueuing — `register` and
+  `prepareResendVerification`, each do the enqueuing. `register` and
   `prepareResendVerification` return a closure the controller starts with
   `void` after replying; `requestPasswordReset` does its own work
-  internally. Every one of them catches its own failure and logs it, so
-  none ever rejects. `sendVerificationMail` (`verification.service.ts`)
+  internally, also started with `void` after the reply. Once one of these
+  is running post-reply — the returned closures, and all of
+  `requestPasswordReset` — it never rejects: each wraps its own work in
+  `try`/`catch` and logs a failure rather than throwing it. `register`
+  and `prepareResendVerification` themselves can still reject, but only
+  BEFORE that point: `register` rethrows any database error that isn't the
+  expected 409 (`auth.service.ts`), and `prepareResendVerification` awaits
+  an unguarded `findByEmail` (`verification.service.ts`) — both calls are
+  awaited by the controller ahead of the reply, so a rejection there is an
+  ordinary pre-reply error `BaseController.handle()` forwards to `next()`,
+  not a post-reply one. `sendVerificationMail` (`verification.service.ts`)
   enqueues via `addNotificationJob()` (see "Notifications" below), not
-  `addEmailJob()` directly — `sendRegistrationAttemptMail`
-  (`auth.service.ts`) is the one exception that still calls `addEmailJob()`
-  itself.
+  `addEmailJob()` directly. `sendRegistrationAttemptMail`
+  (`auth.service.ts`) and `tenant-invitation.service.ts`'s
+  `dispatchInvitationMessages` both call `addEmailJob()` directly instead.
 - **`WORKER_ENABLED` gates the in-process worker.** Default `true` (API +
   worker in one process). Set `false` for API-only pods; a separate worker
   deployment sets `true` and processes jobs from the shared Redis queue.
@@ -274,7 +283,14 @@ until you check.
   stale role. See ARCHITECTURE.md's `## Layers` section for the lock order
   (owner rows, then memberships by `user_id`). `requireRole(...roles)`
   itself treats each listed role as a floor (`isRoleAtLeast`), not an exact
-  match.
+  match. Every member and invitation write re-applies the route's own bar
+  on the role it just re-read: `changeRole` requires owner; `removeMember`,
+  `invite`, `resend` and `revoke` all require admin (`lockActorRole`/
+  `lockActorAndTarget`, `tenant-membership.service.ts`). The two statuses
+  this can produce are both races, not routine errors: an actor removed
+  from the tenant mid-request gets 404 `Tenant not found` (the same
+  not-a-member answer `resolveTenant` gives), and one demoted below the
+  bar mid-request gets 403 `Insufficient permissions`.
 - **`request.principal`** carries `{ tenantId, tenantSlug, role }` after
   `resolveTenant` runs. Separate from `request.user` (which is the
   authenticated identity, not the authorization context).
@@ -317,11 +333,12 @@ until you check.
 - **Resend re-checks `canActorGrantRole`** against the invitation's role,
   because resending re-issues it. There is no `authorize` callback: resend
   and invite each re-read the actor's own membership under lock inside
-  `src/services/tenant-invitation.service.ts`'s transaction, and evaluate
+  `src/services/tenant-invitation.service.ts`'s transaction — requiring at
+  least admin, the same bar the route itself gates on — and evaluate
   `canActorGrantRole` against that read — the same actor-side race fix
   `changeRole`/`removeMember` use. Revoke re-reads the actor's membership
-  under lock too, closing the same race, but has no role being granted, so
-  it has nothing for `canActorGrantRole` to check.
+  under lock too, at the same admin bar, closing the same race, but has no
+  role being granted, so it has nothing for `canActorGrantRole` to check.
 
 ### How to scope your own model by tenant
 

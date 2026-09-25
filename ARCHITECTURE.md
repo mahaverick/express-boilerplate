@@ -123,43 +123,49 @@ nothing for `BaseRepository`'s policy to apply to.
 | configs      | `src/configs/`      | Env and library configuration.                                                                  | services, utilities, constants                                                                                                                                                                                                                           |
 | presenters   | `src/presenters/`   | Pure mappers from a database row to its wire shape.                                             | types from `database/models`, and constants (e.g. `AuthProvider`)                                                                                                                                                                                        |
 | controllers  | `src/controllers/`  | Parse and validate input, call service methods, shape the response.                             | services, presenters, validators, errors, configs, utilities/response.utilities, constants, types, and `database/models` types via `import type` only                                                                                                    |
-| services     | `src/services/`     | Business rules, transactions, authorization, side effects.                                      | repositories, policies, other services, jobs, templates, errors, utilities, configs, constants, types, `database.service`, validator types (`import type`, for a validated-input shape a service signature needs)                                        |
+| services     | `src/services/`     | Business rules, transactions, authorization, side effects.                                      | repositories, policies, other services, workers, jobs, templates, errors, utilities, configs, constants, types, `database/models`, `database.service`, validator types (`import type`, for a validated-input shape a service signature needs)            |
 | policies     | `src/policies/`     | Pure, boolean-returning authorization functions. Never throw.                                   | constants and types only                                                                                                                                                                                                                                 |
 | repositories | `src/repositories/` | Queries only.                                                                                   | models, `database.service`, errors, constants                                                                                                                                                                                                            |
 | errors       | `src/errors/`       | Error classes and Postgres error handling (`HttpError`, `isUniqueViolation`, `redactedForLog`). | nothing under `src/`                                                                                                                                                                                                                                     |
 
-`eslint.config.mjs`'s `import-x/no-restricted-paths` (plus, for controllers'
-type-only `database/models` access, `@typescript-eslint/no-restricted-imports`)
-turns six of this table's boundaries into `error`-level lint gates:
-controllers may not import a repository or `database.service` directly;
-controllers may not import another controller, except `base.controller.ts`
-and `helpers.controller.ts`; services, repositories, policies, errors and
+`eslint.config.mjs`'s `import-x/no-restricted-paths` turns six of this
+table's boundaries into `error`-level lint gates: controllers may not
+import a repository or `database.service` directly; controllers may not
+import another controller, except `base.controller.ts` and
+`helpers.controller.ts`; services, repositories, policies, errors and
 presenters may not import controllers, routes or middlewares; repositories
 may not import a service other than `database.service`; policies may not
 import repositories, services or `database`; and configs may not import
-controllers. `tests/unit/lint-gates.test.ts` proves each zone actually
-fires, against a committed violating fixture under
+controllers. A seventh boundary is enforced separately, by
+`@typescript-eslint/no-restricted-imports`: controllers may import
+`database/models` for TYPES only, never a value, so a controller reads a
+model's shape (`User`, `Notification`) through `import type` and never its
+runtime export. `tests/unit/lint-gates.test.ts` proves each of the seven
+actually fires, against a committed violating fixture under
 `tests/fixtures/lint-zones/`. `import-x/no-restricted-paths` is a
 blocklist, not an allowlist, so a "may import" cell above with no zone
 naming it — most of middlewares' own imports, services importing validator
 types, presenters importing constants — is simply unrestricted by lint,
-not separately enforced: the table states the intended shape, and only the
-six boundaries just listed are lint-enforced. Controllers never import a
-repository or `database.service` directly — every controller method calls
-a service method and shapes the response; the one exception is
-`handleGoogleCallback` and `streamNotifications`, which are plain,
-unwrapped handlers (see `BaseController.handle()` below) for reasons
-specific to a redirect and an SSE stream, not an exception to the
-layering.
+not separately enforced: the table states the intended shape, and only
+the six zones plus the controllers' type-only models rule are
+lint-enforced. Controllers never import a repository or `database.service`
+directly — every controller method calls a service method and shapes the
+response.
 
 Every route handler is a `BaseController` (`src/controllers/base.controller.ts`)
-method, built as an arrow-function class field through `this.handle(handler)`,
-which forwards a thrown or rejected error to `next()`. `handle()` never
+method. Nearly all are arrow-function class fields built through
+`this.handle(handler)`, which forwards a thrown or rejected error to
+`next()`. `handle()` never
 sends a response itself. Once `response.headersSent`, it also logs a
 `warn` — without the error object, so it can never bypass `redactedForLog`
 — before calling `next(error)`; `errorHandler` (`error.middleware.ts`) then
 logs the error redacted and destroys the socket itself, rather than
-attempting a second write.
+attempting a second write. The one exception is `handleGoogleCallback`
+(`auth.controller.ts`) and `streamNotifications`
+(`notification-stream.controller.ts`), which are plain, unwrapped arrow
+fields — not routed through `handle()` — for reasons specific to a
+redirect and an SSE stream; both still call a service, so this is an
+exception to `handle()`, not to the layering above.
 
 **Lock order**, binding for every transaction that locks more than one row
 set: the tenant's owner rows first (`lockOwners`, ordered by `id`), then
@@ -318,7 +324,7 @@ fewer than four parameters is silently treated as ordinary middleware that
 never sees an error. The unused fourth parameter is prefixed `_next`
 accordingly.
 
-Every response that carries no payload — a 202/204-shaped success — uses
+Every response that carries no payload — a 200/202 success with no payload — uses
 `messageResponse(response, message, status?)`
 ([`src/utilities/response.utilities.ts`](src/utilities/response.utilities.ts)),
 which always sends `data: null`. It is the one shape used by every

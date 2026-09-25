@@ -87,13 +87,14 @@ Conventional Commits (`type(scope): subject`), enforced by
   rule. A blanket disable in a boilerplate propagates into every project
   derived from it.
 - **Layer boundaries are lint-enforced, not just documented.**
-  `import-x/no-restricted-paths` (plus `@typescript-eslint/no-restricted-imports`
-  for controllers' type-only `database/models` access) turns
-  ARCHITECTURE.md's `## Layers` table into an `error`-level gate for six of
-  its boundaries. Adding a new cross-layer import one of those zones
-  refuses means either the import is wrong, or the table (and the zone
-  config beside it) needs updating in the same change — see STRUCTURE.md's
-  own closing section for the analogous rule about governed directories.
+  `import-x/no-restricted-paths` turns ARCHITECTURE.md's `## Layers` table
+  into an `error`-level gate for six zones, plus a seventh boundary
+  enforced separately by `@typescript-eslint/no-restricted-imports`:
+  controllers may import `database/models` for types only, never a value.
+  Adding a new cross-layer import one of those rules refuses means either
+  the import is wrong, or the table (and the zone config beside it) needs
+  updating in the same change — see STRUCTURE.md's own closing section for
+  the analogous rule about governed directories.
 - **A route handler is a `BaseController` method**, not a bare exported
   function. New handlers go through `this.handle(handler)`
   (`src/controllers/base.controller.ts`) unless they have a documented,
