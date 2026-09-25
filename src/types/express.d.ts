@@ -88,9 +88,9 @@ declare global {
        * `notification-stream.controller.ts`'s `streamNotifications` — can
        * read the verified session id without re-verifying the token a
        * second time, which is how two copies of the same check would drift.
-       * See `ACCESS_TOKEN_EXPIRED_CODE`'s own JSDoc (auth.constants.ts) for
-       * why that one handler has no tolerance for this being absent, unlike
-       * `requireAuth` itself.
+       * See `requireSessionId`'s own comment (notification-stream.controller.ts)
+       * for why that one handler has no tolerance for this being absent,
+       * unlike `requireAuth` itself.
        */
       sessionId?: string
 

@@ -147,24 +147,10 @@ export const REFRESH_REUSE_GRACE_MS = 10_000
  * distinguish "try refreshing" from "log in again" without matching on
  * `message`.
  *
- * THREE emitters share this code, and all three mean the same thing: the
- * credential is not forged or malformed, it is simply no longer honoured,
- * and a refresh (which mints a token against the user's current, live
- * session) is the correct and sufficient response:
- *
- *   1. An EXPIRED access token — `verifyAccessToken`'s `reason: 'expired'`,
- *      thrown inside `verifyBearerToken` (auth.middleware.ts). Every route,
- *      including `/stream`, sits behind `requireAuth`, so this is the only
- *      place an expired token is ever rejected.
- *   2. A token whose session has been explicitly DENIED — the
- *      `isSessionDenied` check inside `requireAuth` itself.
- *   3. A token that verifies, is not denied, but carries no `sid` claim at
- *      all — rejected in `notification-stream.controller.ts`'s
- *      `requireSessionId`, the one place in this codebase that refuses such
- *      a token outright rather than tolerating it. `requireAuth`'s own
- *      `payload.sid &&` guard is what tolerates it everywhere else; see that
- *      guard's comment for why, and `request.sessionId`'s own comment
- *      (express.d.ts) for how the stream handler reads the fact without
- *      re-verifying the token a second time.
+ * Three emitters, all meaning "no longer honoured, refresh":
+ *   1. an expired token — `verifyBearerToken` (auth.middleware.ts);
+ *   2. a denied session — `requireAuth`'s `isSessionDenied` check;
+ *   3. a token with no `sid` claim — `requireSessionId`
+ *      (notification-stream.controller.ts), the only place that refuses one.
  */
 export const ACCESS_TOKEN_EXPIRED_CODE = 'ACCESS_TOKEN_EXPIRED'

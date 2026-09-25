@@ -199,7 +199,7 @@ export default tseslint.config(
               ],
               from: ['./src/controllers', './src/routes', './src/middlewares'],
               message:
-                'The HTTP layer (controllers/routes/middlewares) must not be imported from below it. See ARCHITECTURE.md’s layers table.',
+                "The HTTP layer (controllers/routes/middlewares) must not be imported from below it. See ARCHITECTURE.md's layers table.",
             },
             {
               target: './src/repositories',

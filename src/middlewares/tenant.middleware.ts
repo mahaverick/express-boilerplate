@@ -157,6 +157,8 @@ export function resolveTenant(): (
   response: Response,
   next: NextFunction
 ) => Promise<void> {
+  // A factory returning a fixed handler, so every route keeps calling
+  // `resolveTenant()` like the other parameterised middleware.
   return scopeRequestToTenant
 }
 

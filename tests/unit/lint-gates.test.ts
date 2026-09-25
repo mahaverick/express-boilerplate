@@ -250,20 +250,22 @@ describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS }, () => {
     expect(unusedVariablesMessage?.severity).toBe(2)
   })
 
-  // no-cycle CANNOT be tested through lintText. import-x builds its ExportMap by
-  // reading real files with fs.readFileSync, and the rule bails out when the
-  // filename is the synthetic `<text>`. It needs files that exist on disk, which
-  // is why these fixtures are committed rather than generated inline.
+  // no-cycle follows imports through real files on disk (import-x reads
+  // them with fs.readFileSync), so every case below starts from, or leads
+  // back to, a file that really exists. Three cases, each guarding one
+  // thing:
   //
-  // TWO fixtures, not one, and the second is the one that matters. The bug
-  // documented in eslint.config.mjs's `import-x/resolver-next` comment — a
-  // cwd-relative tsconfig `configFile` — breaks no-cycle for ALIASED ("@/")
-  // imports only: the resolver hands back a relative path, which never ===
-  // the absolute `physicalFilename` the rule compares against. Plain
-  // relative "./b" imports resolve absolutely either way and keep firing.
-  // So a regression test built solely on the relative fixture stays green in
-  // exactly the state it exists to prevent — verified by reverting the fix
-  // and watching the relative case still pass. Both cases are pinned.
+  // - relative fixture (a.ts/b.ts): the rule fires at all.
+  // - aliased fixture (cycle-a.ts/cycle-b.ts): the rule follows a "@/"
+  //   alias. It runs under its own resolver and tsconfig, so it does NOT
+  //   guard eslint.config.mjs's resolver settings.
+  // - real src/ edge through the REAL config: the one that guards
+  //   eslint.config.mjs's `import-x/resolver-next`. A cwd-relative
+  //   tsconfig `configFile` there makes "@/*" imports resolve to relative
+  //   paths, which never === the absolute `physicalFilename` no-cycle
+  //   compares against, so no-cycle stops firing on aliased imports while
+  //   still firing on relative ones. Only this case goes red when that
+  //   happens.
   it('rejects a circular import between real files (relative import)', async () => {
     const results = await eslint.lintFiles(['tests/fixtures/lint-cycle/a.ts'])
     const messages = results[0]?.messages ?? []
@@ -274,6 +276,17 @@ describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS }, () => {
   it('rejects a circular import between real files (aliased "@/" import, own local tsconfig)', async () => {
     const results = await eslintAliasedCycle.lintFiles(['tests/fixtures/lint-cycle/cycle-a.ts'])
     const messages = results[0]?.messages ?? []
+    const cycleMessage = messages.find((message) => message.ruleId === 'import-x/no-cycle')
+    expect(cycleMessage?.severity).toBe(2)
+  })
+
+  // auth.middleware.ts imports auth.constants.ts, so linting auth.constants.ts
+  // with an import of auth.middleware closes a real cycle through the "@/"
+  // alias, resolved by eslint.config.mjs's own resolver.
+  it('rejects a circular "@/" import resolved by the real config', async () => {
+    const source =
+      "import { requireAuth } from '@/middlewares/auth.middleware'\n\nexport const x = requireAuth\n"
+    const messages = await messagesFor('src/constants/auth.constants.ts', source)
     const cycleMessage = messages.find((message) => message.ruleId === 'import-x/no-cycle')
     expect(cycleMessage?.severity).toBe(2)
   })
@@ -300,6 +313,16 @@ describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS }, () => {
         label: 'services must not import middlewares',
         fixture: 'tests/fixtures/lint-zones/service-imports-middleware.ts',
         syntheticPath: 'src/services/probe.service.ts',
+      },
+      {
+        label: 'errors must not import middlewares',
+        fixture: 'tests/fixtures/lint-zones/error-imports-middleware.ts',
+        syntheticPath: 'src/errors/probe-errors.ts',
+      },
+      {
+        label: 'presenters must not import controllers',
+        fixture: 'tests/fixtures/lint-zones/presenter-imports-controller.ts',
+        syntheticPath: 'src/presenters/probe.presenter.ts',
       },
       {
         label: 'repositories must not import services (except database.service)',

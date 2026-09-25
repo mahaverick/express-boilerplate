@@ -70,8 +70,7 @@ function driverCodeOf(cause: unknown): string | undefined {
  * `redactedForLog`), and `error.stack` embeds it verbatim on the first
  * line, so logging the stack whole would leak the parameters straight back
  * through the channel the redaction closed. The frames themselves name the
- * repository and controller the query came from, which is the genuinely
- * useful half.
+ * call site the query came from, which is the genuinely useful half.
  *
  * Matches `/^\s+at /` — a real frame, NOT `line.trimStart().startsWith('at
  * ')`. V8 always indents a genuine call frame with at least four spaces;
@@ -99,21 +98,21 @@ function stackFramesOf(error: QueryErrorShape): string | undefined {
  * ${params}` `` — the BOUND PARAMETER VALUES are part of the string. For a
  * failed `insert into users`, those parameters are the registrant's email
  * address and their bcrypt hash, and `console.error(error)` prints the
- * message (via the stack) in full. Every write that fails for any reason
- * other than the unique violation `BaseRepository` already translates to a
- * 409 therefore used to put credentials into the log — the one place a
- * masked 500 is supposed to make an error safely recoverable, not the place
- * to write the data the masking exists to protect.
+ * message (via the stack) in full. Logged raw, every write that fails for
+ * any reason other than the unique violation `BaseRepository` translates to
+ * a 409 would put credentials into the log — the one place a masked 500 is
+ * supposed to make an error safely recoverable, not the place to write the
+ * data the masking exists to protect.
  *
  * What survives is the SQL TEXT (parameterised, so it names columns and
  * tables and contains no values), the driver's `SQLSTATE` code, and the
  * call frames. That is enough to identify the failing statement and look
  * the failure up in
  * https://www.postgresql.org/docs/current/errcodes-appendix.html — which is
- * what makes a 500 diagnosable. Truncating the message instead was
- * considered and rejected: a shorter leak is still a leak, and where the
- * truncation lands would depend on the length of the query text, so the same
- * bug would leak on one table and not another.
+ * what makes a 500 diagnosable. The message is dropped, not truncated: a
+ * shorter leak is still a leak, and where a truncation lands depends on the
+ * length of the query text, so the same bug would leak on one table and not
+ * another.
  *
  * The driver error's own message is deliberately NOT carried over either,
  * for the same reason at one remove: Postgres embeds offending values in
@@ -121,11 +120,11 @@ function stackFramesOf(error: QueryErrorShape): string | undefined {
  * `detail` field does so routinely (`Key (lower(email))=(...) already
  * exists.`). The code says the same thing without the value.
  *
- * The one redaction every error log in this codebase goes through:
- * `errorHandler` (error.middleware.ts), `mailer.service.ts`'s
- * `recordDelivery` (a failed `EmailLogRepository.record()` write, whose
- * bound parameters include a recipient email address), the notification
- * worker, and the process-level handlers in `index.ts`.
+ * The redaction every failed-query log goes through: `errorHandler`
+ * (error.middleware.ts), `mailer.service.ts`'s `recordDelivery` (a failed
+ * `EmailLogRepository.record()` write, whose bound parameters include a
+ * recipient email address), the notification worker, and the process-level
+ * handlers in `index.ts`.
  * @param error - The thrown or forwarded error.
  * @returns The error itself when it is not a query error; a redacted, parameter-free record when it is.
  */
