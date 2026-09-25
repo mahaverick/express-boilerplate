@@ -64,12 +64,8 @@ import { GOOGLE_STRATEGY_NAME } from '@/constants/auth.constants'
 import { logger } from '@/services/logger.service'
 import { getRedis } from '@/services/redis.service'
 
-// `GOOGLE_STRATEGY_NAME` itself now lives in constants/auth.constants.ts —
-// see that constant's own header comment for why it moved (breaking a
-// cycle with auth.controller.ts, this file's own Task 3 consumer of it).
-// Re-exported from here too, via `export…from`, so `auth.routes.ts`'s
-// existing `import { ..., GOOGLE_STRATEGY_NAME, ... } from
-// '@/configs/passport.config'` needs no change.
+// Defined in constants/auth.constants.ts (see its JSDoc); re-exported for
+// auth.routes.ts.
 export { GOOGLE_STRATEGY_NAME } from '@/constants/auth.constants'
 
 /**

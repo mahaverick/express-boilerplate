@@ -4,8 +4,8 @@
 // `logger` singleton's own destination — the singleton is memoised off
 // `getEnv()`, so a test that wants a specific format builds its own logger
 // with a capture `destination`. The singleton tests spy on
-// `process.stdout.write`, which is where both the production JSON stream and
-// the development pino-pretty stream write.
+// `process.stdout.write`, which is where both the JSON stream and the
+// pino-pretty stream write.
 import { Writable } from 'node:stream'
 import { context, trace, TraceFlags } from '@opentelemetry/api'
 import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks'
@@ -15,6 +15,7 @@ import {
   createPinoLogger,
   getCallerSource,
   logger,
+  loggerOptionsFromEnv,
   pinoPrettyLoader,
 } from '@/services/logger.service'
 import { withMutatedMethod } from '../../helpers/mutate'
@@ -74,11 +75,11 @@ afterEach(() => {
 })
 
 describe('createPinoLogger', () => {
-  describe('production format (JSON)', () => {
+  describe('json format', () => {
     it('outputs valid JSON with level, message, timestamp, and source', () =>
       new Promise<void>((resolve) => {
         const { destination, output } = captureDestination()
-        const log = createPinoLogger({ level: 'info', isProduction: true, destination })
+        const log = createPinoLogger({ level: 'info', format: 'json', destination })
 
         log.info({ source: 'test.ts:1' }, 'test message')
 
@@ -96,7 +97,7 @@ describe('createPinoLogger', () => {
     it('serializes Error instances in meta to { name, message, stack }', () =>
       new Promise<void>((resolve) => {
         const { destination, output } = captureDestination()
-        const log = createPinoLogger({ level: 'error', isProduction: true, destination })
+        const log = createPinoLogger({ level: 'error', format: 'json', destination })
 
         const testError = new Error('test failure')
         log.error({ error: testError, source: 'test.ts:1' }, 'something broke')
@@ -114,7 +115,7 @@ describe('createPinoLogger', () => {
     it('includes requestId when called inside an ALS context', () =>
       new Promise<void>((resolve) => {
         const { destination, output } = captureDestination()
-        const log = createPinoLogger({ level: 'info', isProduction: true, destination })
+        const log = createPinoLogger({ level: 'info', format: 'json', destination })
 
         requestContextStore.run({ requestId: 'abc-123' }, () => {
           log.info({ source: 'test.ts:1' }, 'inside request')
@@ -135,7 +136,7 @@ describe('createPinoLogger', () => {
     it('the real request context requestId wins over a caller-supplied requestId in meta', () =>
       new Promise<void>((resolve) => {
         const { destination, output } = captureDestination()
-        const log = createPinoLogger({ level: 'info', isProduction: true, destination })
+        const log = createPinoLogger({ level: 'info', format: 'json', destination })
 
         requestContextStore.run({ requestId: 'real-id' }, () => {
           log.info({ requestId: 'spoofed', source: 'test.ts:1' }, 'x')
@@ -151,7 +152,7 @@ describe('createPinoLogger', () => {
     it('omits requestId when called outside an ALS context', () =>
       new Promise<void>((resolve) => {
         const { destination, output } = captureDestination()
-        const log = createPinoLogger({ level: 'info', isProduction: true, destination })
+        const log = createPinoLogger({ level: 'info', format: 'json', destination })
 
         log.info({ source: 'test.ts:1' }, 'no request')
 
@@ -165,7 +166,7 @@ describe('createPinoLogger', () => {
     it('includes tenantId when the ALS context carries a tenant', () =>
       new Promise<void>((resolve) => {
         const { destination, output } = captureDestination()
-        const log = createPinoLogger({ level: 'info', isProduction: true, destination })
+        const log = createPinoLogger({ level: 'info', format: 'json', destination })
 
         requestContextStore.run(
           {
@@ -187,7 +188,7 @@ describe('createPinoLogger', () => {
     it('omits tenantId when the ALS context carries no tenant', () =>
       new Promise<void>((resolve) => {
         const { destination, output } = captureDestination()
-        const log = createPinoLogger({ level: 'info', isProduction: true, destination })
+        const log = createPinoLogger({ level: 'info', format: 'json', destination })
 
         requestContextStore.run({ requestId: 'abc-123' }, () => {
           log.info({ source: 'test.ts:1' }, 'request with no tenant')
@@ -211,7 +212,7 @@ describe('createPinoLogger', () => {
     it('does not re-serialize err through pino default serializer, and carries no type key', () =>
       new Promise<void>((resolve) => {
         const { destination, output } = captureDestination()
-        const log = createPinoLogger({ level: 'error', isProduction: true, destination })
+        const log = createPinoLogger({ level: 'error', format: 'json', destination })
 
         log.error({ err: new Error('boom'), source: 'test.ts:1' }, 'x')
 
@@ -228,11 +229,11 @@ describe('createPinoLogger', () => {
       }))
   })
 
-  describe('development format (human-readable)', () => {
+  describe('pretty format (human-readable)', () => {
     it('includes time, level, source, and message', () =>
       new Promise<void>((resolve) => {
         const { destination, output } = captureDestination()
-        const log = createPinoLogger({ level: 'info', isProduction: false, destination })
+        const log = createPinoLogger({ level: 'info', format: 'pretty', destination })
 
         log.info({ source: 'server.ts:23' }, 'boot complete')
 
@@ -247,7 +248,7 @@ describe('createPinoLogger', () => {
       }))
   })
 
-  describe('pino-pretty unavailable (pruned production image, non-production NODE_ENV)', () => {
+  describe('pino-pretty unavailable (pruned image, pretty format)', () => {
     it('falls back to raw JSON output instead of throwing', async () => {
       const { destination, output } = captureDestination()
 
@@ -261,7 +262,7 @@ describe('createPinoLogger', () => {
         },
         () =>
           new Promise<void>((resolve) => {
-            const log = createPinoLogger({ level: 'info', isProduction: false, destination })
+            const log = createPinoLogger({ level: 'info', format: 'pretty', destination })
 
             log.info({ source: 'test.ts:1' }, 'pruned image fallback')
 
@@ -284,7 +285,7 @@ describe('createPinoLogger', () => {
             throw new Error('some other failure')
           },
           () => {
-            createPinoLogger({ level: 'info', isProduction: false, destination: process.stdout })
+            createPinoLogger({ level: 'info', format: 'pretty', destination: process.stdout })
           }
         )
       ).rejects.toThrow('some other failure')
@@ -295,7 +296,7 @@ describe('createPinoLogger', () => {
     it('does not output debug when level is info', () =>
       new Promise<void>((resolve) => {
         const { destination, output } = captureDestination()
-        const log = createPinoLogger({ level: 'info', isProduction: false, destination })
+        const log = createPinoLogger({ level: 'info', format: 'pretty', destination })
 
         log.debug({ source: 'test.ts:1' }, 'should not appear')
 
@@ -310,7 +311,7 @@ describe('createPinoLogger', () => {
     it('emits level as a label, an ISO timestamp, and no pid/hostname', () =>
       new Promise<void>((resolve) => {
         const { destination, output } = captureDestination()
-        const log = createPinoLogger({ level: 'info', isProduction: true, destination })
+        const log = createPinoLogger({ level: 'info', format: 'json', destination })
 
         log.info({ source: 'test.ts:1' }, 'shape check')
 
@@ -335,7 +336,7 @@ describe('createPinoLogger', () => {
         const { destination, output } = captureDestination()
         const log = createPinoLogger({
           level: 'debug',
-          isProduction: true,
+          format: 'json',
           slackWebhookUrl: 'https://hooks.slack.com/services/T/B/X',
           slackLogLevel: 'error',
           destination,
@@ -349,6 +350,40 @@ describe('createPinoLogger', () => {
           resolve()
         })
       }))
+  })
+})
+
+describe('loggerOptionsFromEnv', () => {
+  const base: Parameters<typeof loggerOptionsFromEnv>[0] = {
+    LOG_LEVEL: 'info',
+    APP_ENV: 'local',
+    SLACK_LOG_LEVEL: 'error',
+  }
+
+  it('writes pretty text on local and JSON on every other APP_ENV when LOG_FORMAT is unset', () => {
+    expect(loggerOptionsFromEnv(base).format).toBe('pretty')
+    for (const appEnv of ['dev', 'qa', 'prod'] as const) {
+      expect(loggerOptionsFromEnv({ ...base, APP_ENV: appEnv }).format).toBe('json')
+    }
+  })
+
+  it('lets LOG_FORMAT override the APP_ENV default in both directions', () => {
+    expect(loggerOptionsFromEnv({ ...base, APP_ENV: 'prod', LOG_FORMAT: 'pretty' }).format).toBe(
+      'pretty'
+    )
+    expect(loggerOptionsFromEnv({ ...base, LOG_FORMAT: 'json' }).format).toBe('json')
+  })
+
+  it('passes the level and Slack settings through, and omits an unset webhook', () => {
+    expect(loggerOptionsFromEnv({ ...base, LOG_LEVEL: 'debug' })).toEqual({
+      level: 'debug',
+      format: 'pretty',
+      slackLogLevel: 'error',
+    })
+    expect(
+      loggerOptionsFromEnv({ ...base, SLACK_WEBHOOK_URL: 'https://hooks.slack.com/services/T/B/X' })
+        .slackWebhookUrl
+    ).toBe('https://hooks.slack.com/services/T/B/X')
   })
 })
 
@@ -426,7 +461,7 @@ describe('trace-id correlation', () => {
   it('omits traceId/spanId from log output when no span is active', () =>
     new Promise<void>((resolve) => {
       const { destination, output } = captureDestination()
-      const log = createPinoLogger({ level: 'info', isProduction: true, destination })
+      const log = createPinoLogger({ level: 'info', format: 'json', destination })
 
       log.info({ source: 'test.ts:1' }, 'no active span')
 
@@ -441,7 +476,7 @@ describe('trace-id correlation', () => {
   it('includes traceId/spanId matching the active span when one is active', () =>
     new Promise<void>((resolve) => {
       const { destination, output } = captureDestination()
-      const log = createPinoLogger({ level: 'info', isProduction: true, destination })
+      const log = createPinoLogger({ level: 'info', format: 'json', destination })
 
       // trace.wrapSpanContext gives a real, minimal Span backed by exactly
       // the ids chosen here, so the assertion below is exact-string equality
@@ -470,7 +505,7 @@ describe('caller location extraction', () => {
   it('source field names the calling file, not logger.service.ts', () =>
     new Promise<void>((resolve) => {
       const { destination, output } = captureDestination()
-      const log = createPinoLogger({ level: 'info', isProduction: true, destination })
+      const log = createPinoLogger({ level: 'info', format: 'json', destination })
 
       log.info({ source: getCallerSource() }, 'from test')
 

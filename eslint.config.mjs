@@ -284,7 +284,7 @@ export default tseslint.config(
     // tracing.ts loads via `--import` before env.config.ts's own
     // `getEnv()` has ever run (before `src/index.ts` itself, in fact), so it
     // cannot go through `getEnv()` the way every other module must — it reads
-    // `process.env.OTEL_EXPORTER_OTLP_ENDPOINT`/`NODE_ENV`/`OTEL_SERVICE_NAME`
+    // `process.env.OTEL_EXPORTER_OTLP_ENDPOINT`/`APP_ENV`/`OTEL_SERVICE_NAME`
     // directly. For the same load-order reason it cannot use the pino
     // logger (not loaded yet, and must not depend on the library it
     // instruments) — it uses `console.info`/`console.error` for its own

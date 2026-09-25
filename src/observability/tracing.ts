@@ -14,6 +14,8 @@
 // This file reads `process.env` directly instead — the one deliberate
 // exception to this repo's own `no-restricted-properties` rule outside
 // `env.config.ts`/`logger.service.ts`/`index.ts` (see eslint.config.mjs).
+// Values from `.env` reach it only because `dev` and `start` pass Node's
+// `--env-file-if-exists=.env` before `--import`.
 // `console.info`/`console.error` are used for the same reason: the app's
 // own logger (`@/services/logger.service`) is not loaded yet, and even once
 // it is, this instrumentation must not depend on the very library it patches.
@@ -53,6 +55,22 @@ if (process.env.OTEL_EXPORTER_OTLP_ENDPOINT) {
 const IGNORED_INCOMING_PATHS = new Set(['/health', '/health/ready'])
 
 /**
+ * Resource attributes for this process's traces and logs.
+ * @param source - The raw environment, normally `process.env`.
+ * @returns `service.name`, plus `deployment.environment.name` when `APP_ENV` is set.
+ */
+export function tracingResourceAttributes(
+  source: Readonly<Record<string, string | undefined>>
+): Record<string, string> {
+  return {
+    [ATTR_SERVICE_NAME]: source.OTEL_SERVICE_NAME || 'express-boilerplate',
+    // Incubating semconv key, spelled out to keep to the stable package.
+    // Omitted when unset: this runs before env validation.
+    ...(source.APP_ENV && { 'deployment.environment.name': source.APP_ENV }),
+  }
+}
+
+/**
  * Build (but do not start) the NodeSDK instance for a given OTLP endpoint.
  * Split out from the module-scope no-op check below purely so that check can
  * stay a `const` rather than a top-level `let` reassigned conditionally.
@@ -61,19 +79,10 @@ const IGNORED_INCOMING_PATHS = new Set(['/health', '/health/ready'])
  * @returns A configured, not-yet-started `NodeSDK`.
  */
 function buildSdk(endpoint: string): NodeSDK {
-  const serviceName = process.env.OTEL_SERVICE_NAME || 'express-boilerplate'
-  const deploymentEnvironment = process.env.NODE_ENV || 'development'
   const baseUrl = endpoint.replace(/\/$/, '')
 
   return new NodeSDK({
-    resource: resourceFromAttributes({
-      [ATTR_SERVICE_NAME]: serviceName,
-      // 'deployment.environment.name' is the (incubating) semconv attribute
-      // key — spelled as a literal rather than imported from
-      // '@opentelemetry/semantic-conventions/incubating' to keep this file's
-      // dependency surface to the stable package only.
-      'deployment.environment.name': deploymentEnvironment,
-    }),
+    resource: resourceFromAttributes(tracingResourceAttributes(process.env)),
     traceExporter: new OTLPTraceExporter({ url: `${baseUrl}/v1/traces` }),
     // @opentelemetry/sdk-logs@0.222.0's `BatchLogRecordProcessor` takes a
     // single options object (`{ exporter, ... }`), not `(exporter, config)`

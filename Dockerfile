@@ -49,6 +49,7 @@ HEALTHCHECK NONE
 
 USER appuser
 EXPOSE 4040
-# Same as `pnpm start`: tracing.js must load via --import, before the app, or
-# OpenTelemetry (traces AND logs) never starts in the container.
+# Same as `pnpm start`, minus --env-file-if-exists: tracing.js must load via
+# --import, before the app, or OpenTelemetry (traces AND logs) never starts.
+# The image has no .env (see .dockerignore); the orchestrator supplies the environment.
 CMD ["node", "--import", "./dist/observability/tracing.js", "dist/index.js"]

@@ -21,9 +21,9 @@
   },
   "packageManager": "pnpm@12.4.1",
   "scripts": {
-    "dev": "tsx watch --import ./src/observability/tracing.ts src/index.ts",
+    "dev": "tsx watch --env-file-if-exists=.env --import ./src/observability/tracing.ts src/index.ts",
     "build": "rm -rf dist && tsc && tsc-alias --resolve-full-paths && cp -r src/database/migrations dist/database/",
-    "start": "node --import ./dist/observability/tracing.js dist/index.js",
+    "start": "node --env-file-if-exists=.env --import ./dist/observability/tracing.js dist/index.js",
     "lint": "eslint . && tsc -p tsconfig.typecheck.json --noEmit",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",

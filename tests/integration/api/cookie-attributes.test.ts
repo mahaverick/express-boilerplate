@@ -187,6 +187,7 @@ describe('refresh cookie: login, refresh and logout', () => {
       .post('/api/v1/auth/logout')
       .set('X-Forwarded-Proto', 'https')
       .set('Cookie', cookiePair(rotatedCookie))
+    expect(loggedOut.status).toBe(200)
     const cleared = cookieLine(loggedOut, REFRESH_TOKEN_COOKIE_NAME)
     expect(cleared).toMatch(EPOCH_EXPIRY)
     expect(cleared).not.toMatch(SECURE)
