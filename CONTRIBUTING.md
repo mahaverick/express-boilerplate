@@ -100,34 +100,12 @@ These move together, or a gate below will catch the one you missed:
    this when `env.config.ts` is staged, and CI fails if the committed file
    differs from what the schema generates.
 3. Regenerate README's environment table from the schema, never by hand.
-   Save the script below as `src/scripts/print-env-table.ts`, run
-   `pnpm exec tsx src/scripts/print-env-table.ts`, paste its output over the
-   table, run `pnpm exec prettier --write README.md`, and delete the script.
-   `tests/unit/readme-env-table.test.ts` fails when a variable has no row.
-
-   ```ts
-   import { z } from 'zod'
-   import { EnvSchemaShape } from '@/configs/env.config'
-
-   const entries = Object.entries(EnvSchemaShape)
-   const rows = entries.map(([key, schema]) => {
-     const json = z.toJSONSchema(schema, { target: 'openapi-3.0', io: 'input' })
-     const text = typeof json.description === 'string' ? json.description : ''
-     if (text === '') console.error(`no describe: ${key}`)
-     const unset = schema.safeParse(undefined)
-     const required = unset.success ? 'no' : '**yes**'
-     const fallback = unset.success && unset.data !== undefined ? `\`${String(unset.data)}\`` : '—'
-     return `| \`${key}\` | ${required} | ${fallback} | ${text.replaceAll('|', String.raw`\|`)} |`
-   })
-   console.error(`fields: ${entries.length}`)
-   console.info(
-     [
-       '| Variable | Required | Default | What it does |',
-       '| --- | --- | --- | --- |',
-       ...rows,
-     ].join('\n')
-   )
-   ```
+   `pnpm --silent env:table` prints it (`renderEnvTable()` in
+   `src/scripts/generate-env-example.ts`). Paste its output over the table
+   in README.md, then run `pnpm exec prettier --write README.md`.
+   `tests/unit/readme-env-table.test.ts` compares the committed table with
+   that output row for row, ignoring column padding, and fails on any
+   difference.
 
 4. If the tests need a value, add it to `.env.test`.
 5. Mirror `.env.test` in `ci.yml`, in the `env:` block of the step named

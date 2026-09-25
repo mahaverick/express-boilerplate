@@ -139,8 +139,9 @@ default carry it. Optional keys with no default are commented out, including
 
 The table is generated from the same schema: each row's text is that
 variable's `.describe()`. To change a row, change the schema and regenerate
-the table (see CONTRIBUTING.md). `tests/unit/readme-env-table.test.ts` fails
-when a variable has no row.
+the table with `pnpm env:table` (see CONTRIBUTING.md).
+`tests/unit/readme-env-table.test.ts` fails when the table differs from what
+it prints.
 
 | Variable                      | Required | Default                | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | ----------------------------- | -------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -279,6 +280,7 @@ is unaffected. See the header comment in
 | `pnpm test:unit`                    | Every test except `tests/integration/**`, with no database setup, so it runs with Docker down. The git hooks run this config.                                                                                |
 | `pnpm test:coverage`                | `vitest run --coverage`, gated at 80% lines/functions/branches/statements.                                                                                                                                   |
 | `pnpm env:example`                  | Regenerates `.env.example` from the Zod schema.                                                                                                                                                              |
+| `pnpm env:table`                    | Prints README's environment table from the Zod schema.                                                                                                                                                       |
 | `pnpm db:migration:generate`        | `drizzle-kit generate` — writes a new migration from the model files. See [DATABASE.md](DATABASE.md).                                                                                                        |
 | `pnpm db:migrate`                   | Applies pending migrations (`tsx src/database/migrate.ts`) against `DATABASE_URL`. See [DATABASE.md](DATABASE.md).                                                                                           |
 | `pnpm db:migrate:prod`              | Same as `pnpm db:migrate`, against the built output (`node dist/database/migrate.js`) — what the production image and CI run.                                                                                |

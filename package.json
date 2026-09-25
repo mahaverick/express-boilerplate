@@ -29,6 +29,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "env:example": "tsx src/scripts/generate-env-example.ts",
+    "env:table": "tsx src/scripts/generate-env-example.ts --table",
     "db:migration:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/database/migrate.ts",
     "db:migrate:prod": "node dist/database/migrate.js",
