@@ -9,6 +9,7 @@ import {
   trustProxySetting,
   type AppEnv,
 } from '@/configs/env.config'
+import { SERVER_DRAIN_TIMEOUT_MS } from '@/constants/global.constants'
 
 const valid = {
   APP_ENV: 'local',
@@ -243,19 +244,23 @@ describe('SMTP configuration', () => {
     expect(() => parseEnv({ ...valid, MAIL_FROM: 'not-an-address' })).toThrow(/MAIL_FROM/)
   })
 
-  // These bound a timing oracle and how long one hung send holds shutdown
-  // (env.config.ts's comment on the SMTP timeout group). The defaults sum to
-  // 20s, under the default SHUTDOWN_TIMEOUT_MS minus its 5s drain.
-  it('defaults the SMTP_*_TIMEOUT_MS variables to 5000/5000/10000', () => {
+  // These bound how long an SMTP host that stops responding holds an
+  // email-worker slot, and so how long a send in flight can delay graceful
+  // shutdown (env.config.ts's comment on the SMTP timeout group). After the
+  // HTTP drain and a worst-case send, SHUTDOWN_TIMEOUT_MS must keep 5s for
+  // closing the database, Redis and queues and flushing traces.
+  it('defaults the SMTP_*_TIMEOUT_MS variables to 3000/5000/7000, inside the shutdown budget', () => {
     const parsed = parseEnv(valid)
-    expect(parsed.SMTP_CONNECTION_TIMEOUT_MS).toBe(5000)
+    expect(parsed.SMTP_CONNECTION_TIMEOUT_MS).toBe(3000)
     expect(parsed.SMTP_GREETING_TIMEOUT_MS).toBe(5000)
-    expect(parsed.SMTP_SOCKET_TIMEOUT_MS).toBe(10_000)
-    expect(
+    expect(parsed.SMTP_SOCKET_TIMEOUT_MS).toBe(7000)
+    const worstCaseSend =
       parsed.SMTP_CONNECTION_TIMEOUT_MS +
-        parsed.SMTP_GREETING_TIMEOUT_MS +
-        parsed.SMTP_SOCKET_TIMEOUT_MS
-    ).toBeLessThanOrEqual(parsed.SHUTDOWN_TIMEOUT_MS - 5000)
+      parsed.SMTP_GREETING_TIMEOUT_MS +
+      parsed.SMTP_SOCKET_TIMEOUT_MS
+    expect(worstCaseSend + SERVER_DRAIN_TIMEOUT_MS + 5000).toBeLessThanOrEqual(
+      parsed.SHUTDOWN_TIMEOUT_MS
+    )
   })
 
   it('coerces the SMTP timeout variables from strings to numbers', () => {

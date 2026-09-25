@@ -520,26 +520,21 @@ const EnvSchema = z.object({
       'Product name in outbound email copy and notification text: verification, password reset, password changed and invitation messages (auth.controller.ts, verification-mail.utilities.ts, tenant-invitation.service.ts). Defaults to "Express Boilerplate".'
     ),
 
-  // THESE THREE BOUND A TIMING ORACLE, NOT MERELY A RESOURCE LEAK — read
-  // this before raising any of them to "fix" a flaky provider.
+  // These three bound how long an SMTP host that stops responding can hold
+  // a send open. nodemailer's own defaults (smtp-connection) are 2 minutes
+  // (connectionTimeout), 30 seconds (greetingTimeout) and 10 minutes
+  // (socketTimeout, an inactivity timer).
   //
-  // nodemailer's own defaults (smtp-connection) are 2 minutes
-  // (connectionTimeout), 30 seconds (greetingTimeout), and 10 minutes
-  // (socketTimeout) — all far longer than an HTTP request should ever
-  // legitimately take. Left at those defaults, a HUNG (not merely refused)
-  // SMTP host makes `sendMail` (mailer.service.ts) block for minutes on
-  // whichever branch actually attempts a send. Ruling G (that file's own
-  // header comment) already closed the STATUS-CODE version of this leak —
-  // a registered address and an unregistered one must answer identically —
-  // but forgot-password only sends when the address exists, so an unbounded
-  // hang reopens the identical enumeration oracle through LATENCY instead:
-  // a registered address blocks for minutes, an unregistered one returns
-  // instantly. An attacker does not need to cause the outage, only to
-  // measure during one. These defaults bound the worst case to 20 seconds
-  // instead of minutes.
-  //
-  // A job mid-send also holds the email worker's close during shutdown for
-  // up to their sum, so keep that sum well under SHUTDOWN_TIMEOUT_MS.
+  // No HTTP response waits on SMTP: every send runs in email.worker.ts off
+  // the queue, and forgot-password answers 202 before it even looks the user
+  // up, so latency cannot reveal whether an address is registered. What the
+  // timeouts bound is (1) how long a hung send holds an email-worker slot,
+  // and (2) how long it delays graceful shutdown: gracefulShutdown
+  // (server.ts) drains HTTP for up to SERVER_DRAIN_TIMEOUT_MS, then waits
+  // for the in-flight job before closing the database, Redis and queues and
+  // flushing traces. With these defaults, a worst-case send (15s) plus the
+  // drain (5s) leaves 5s of the default SHUTDOWN_TIMEOUT_MS (25s) for that
+  // last step. Keep that headroom if you change any of them.
   //
   // The compose Mailpit sends its greeting in 8–16 ms (3 raw-socket runs),
   // so 5000 ms leaves ample margin. If the real-Mailpit integration tests
@@ -549,9 +544,9 @@ const EnvSchema = z.object({
     .number()
     .int()
     .positive()
-    .default(5000)
+    .default(3000)
     .describe(
-      "Milliseconds to wait for the SMTP connection to establish before failing. Bounds a timing side-channel (see this schema field group's own comment), not just a resource leak — do not raise this to accommodate a slow provider without reading that comment first. nodemailer's own default is 2 minutes."
+      "Milliseconds to wait for the SMTP connection to establish before failing. With SMTP_GREETING_TIMEOUT_MS and SMTP_SOCKET_TIMEOUT_MS, bounds how long a host that stops responding holds an email-worker slot and delays graceful shutdown — keep their sum plus the 5s HTTP drain at least 5s under SHUTDOWN_TIMEOUT_MS. nodemailer's own default is 2 minutes."
     ),
   SMTP_GREETING_TIMEOUT_MS: z.coerce
     .number()
@@ -559,15 +554,15 @@ const EnvSchema = z.object({
     .positive()
     .default(5000)
     .describe(
-      "Milliseconds to wait for the SMTP server's greeting after connecting. Bounds a timing side-channel — see SMTP_CONNECTION_TIMEOUT_MS. nodemailer's own default is 30 seconds."
+      "Milliseconds to wait for the SMTP server's greeting after connecting. Counts toward the shutdown budget — see SMTP_CONNECTION_TIMEOUT_MS. nodemailer's own default is 30 seconds."
     ),
   SMTP_SOCKET_TIMEOUT_MS: z.coerce
     .number()
     .int()
     .positive()
-    .default(10_000)
+    .default(7000)
     .describe(
-      "Milliseconds of inactivity before an open SMTP connection is closed. Bounds a timing side-channel — see SMTP_CONNECTION_TIMEOUT_MS. nodemailer's own default is 10 minutes."
+      "Milliseconds of inactivity before an open SMTP connection is closed. Counts toward the shutdown budget — see SMTP_CONNECTION_TIMEOUT_MS. nodemailer's own default is 10 minutes."
     ),
 
   SHUTDOWN_TIMEOUT_MS: z.coerce

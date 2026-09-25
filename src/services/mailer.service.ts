@@ -31,7 +31,7 @@
 // subject/text/html in), which left rendering exceptions outside Ruling G's
 // catch entirely — three independent channels ended up able to defeat the
 // same ruling: the STATUS channel (closed by Ruling G itself), the LATENCY
-// channel (bounded by Task 2's SMTP_*_TIMEOUT settings), and this one, the
+// channel (bounded by the SMTP_*_TIMEOUT_MS settings), and this one, the
 // EXCEPTION channel — a variable present only on one branch of an
 // enumeration-sensitive caller (say, a name that exists only for a
 // registered user) would throw during rendering, before any catch ever ran,

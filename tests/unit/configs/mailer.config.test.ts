@@ -58,7 +58,8 @@ describe('mailTransportOptions', () => {
     expect(options.auth).toBeUndefined()
   })
 
-  // These bound a timing oracle (env.config.ts's comment on the SMTP timeout
+  // These bound how long a host that stops responding holds an email-worker
+  // slot and delays shutdown (env.config.ts's comment on the SMTP timeout
   // group), so they must always reach nodemailer, never its own defaults.
   it('always sets connectionTimeout/greetingTimeout/socketTimeout from the _MS variables', () => {
     const options = mailTransportOptions({
