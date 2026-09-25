@@ -1,7 +1,6 @@
 // src/errors/http-error.ts
 //
-// Moved verbatim from middlewares/error.middleware.ts — see
-// 2026-09-25-stream-4a-structure-design.md §2: error classes live outside
+// Moved out of middlewares/error.middleware.ts: error classes live outside
 // every layer so any layer can throw one without a banned import.
 
 /**

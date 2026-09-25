@@ -3,11 +3,9 @@
 // Six handlers, every one reached only through notification.routes.ts's
 // router-wide `requireAuth` (auth.middleware.ts) — the same "authenticated
 // routes assume request.user is already populated" contract
-// profile.controller.ts establishes. `authenticatedUserId` below is copied
-// from that file rather than imported: it is a three-line defensive check
-// against a routing mistake, not shared business logic, and importing a
-// controller-internal helper from another controller module would be a
-// stranger dependency than just repeating it.
+// profile.controller.ts establishes. `authenticatedUserId`
+// (helpers.controller.ts) is a shared defensive check against a routing
+// mistake, not business logic specific to this controller.
 //
 // Every notification lookup/mutation goes through the repository's own
 // `userId`-scoped methods (`findByIdAndUser`, `markRead`, `deleteOne`) —

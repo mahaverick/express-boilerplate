@@ -2,12 +2,10 @@
 //
 // Two related projections of a `users` row, in one file so the narrower
 // (`AuthenticatedUser`) and the wider (`PublicUser`) can never drift the
-// way two independent hand-maintained copies used to (see git history:
-// auth.controller.ts and auth.middleware.ts each held one before this
-// move). AuthenticatedUser moved here from auth.middleware.ts (not left
-// there) because presenters may not import middlewares (spec §1) and
-// PublicUser must still be built by extending it, not by re-declaring its
-// field list a second time.
+// way two independent hand-maintained copies would. AuthenticatedUser
+// lives here rather than in a middleware because presenters may not import
+// middlewares, and PublicUser must still be built by extending it, not by
+// re-declaring its field list a second time.
 import type { User } from '@/database/models/user.model'
 
 /**

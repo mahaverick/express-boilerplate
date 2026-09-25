@@ -66,7 +66,7 @@ const ACCEPTED_MEDIA_TYPES = new Set(['', 'application/json'])
 
 /**
  * Machine-readable code identifying a rejected request body encoding,
- * carried in the error envelope's `code` field (error.middleware.ts /
+ * carried in the error envelope's `code` field (errors/http-error.ts /
  * `HttpError`) — the same pattern `ACCESS_TOKEN_EXPIRED` and
  * `RATE_LIMITED` use, so a client can branch on this without matching on
  * `message`.
