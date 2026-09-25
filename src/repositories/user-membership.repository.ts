@@ -22,7 +22,7 @@ import {
 import { userModel, type User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
 import { isUniqueViolation } from '@/errors/postgres-errors'
-import { db, type DbExecutor } from '@/services/database.service'
+import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
 
 /**
  * One `user_memberships` row for `listByTenant`, joined with the subset of
@@ -122,13 +122,11 @@ export class UserMembershipRepository {
    * transaction ends. Lock order: after the tenant's owner rows
    * (`lockOwners`) and memberships (`lockMemberships`).
    * @param userId - The user to look up.
-   * @param executor - The transaction to hold the lock in.
+   * @param executor - The transaction to hold the lock in. Required: on the
+   *   pool, the lock would release as soon as the statement finished.
    * @returns The platform role, or null when the user is not staff.
    */
-  async lockPlatformRole(
-    userId: string,
-    executor: DbExecutor = db
-  ): Promise<MembershipRole | null> {
+  async lockPlatformRole(userId: string, executor: DbTransaction): Promise<MembershipRole | null> {
     const [row] = await platformRoleQuery(userId, executor).for('share', {
       of: userMembershipModel,
     })

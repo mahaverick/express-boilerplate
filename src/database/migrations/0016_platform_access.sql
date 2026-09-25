@@ -41,8 +41,7 @@ CREATE UNIQUE INDEX "tenants_single_platform" ON "tenants" USING btree ((true)) 
 CREATE INDEX "tenants_name_trgm_idx" ON "tenants" USING gin (lower("name") gin_trgm_ops) WHERE "tenants"."deleted_at" is null;--> statement-breakpoint
 CREATE INDEX "tenants_slug_trgm_idx" ON "tenants" USING gin ("slug" gin_trgm_ops) WHERE "tenants"."deleted_at" is null;--> statement-breakpoint
 ALTER TABLE "tenants" ADD CONSTRAINT "tenants_platform_active" CHECK (not "tenants"."is_platform" or ("tenants"."lifecycle_state" = 'active' and "tenants"."deleted_at" is null));--> statement-breakpoint
--- Hand-added: the platform tenant and its settings row. It has no members
--- until `pnpm platform:grant` runs.
+-- Hand-added: the platform tenant and its settings row. It starts with no members.
 INSERT INTO "tenants" ("name", "slug", "is_platform") VALUES ('Platform', 'platform', true);--> statement-breakpoint
 INSERT INTO "tenant_settings" ("tenant_id") SELECT "id" FROM "tenants" WHERE "is_platform";--> statement-breakpoint
 -- Hand-added: audit_logs is append-only. Every UPDATE and DELETE raises, with

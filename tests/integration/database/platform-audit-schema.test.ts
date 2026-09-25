@@ -253,7 +253,7 @@ describe('migration 0016: audit_logs is append-only', () => {
     const tenantId = await insertTenant()
     await insertAuditRow(tenantId, userId)
 
-    // ON DELETE RESTRICT raises restrict_violation (23001), not 23503.
+    // On PostgreSQL 18, RESTRICT raises restrict_violation (23001), not 23503.
     await expect(sql`delete from tenants where id = ${tenantId}`).rejects.toMatchObject({
       code: '23001',
       constraint_name: 'audit_logs_tenant_id_tenants_id_fk',
