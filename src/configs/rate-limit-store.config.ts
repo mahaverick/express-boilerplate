@@ -1,10 +1,10 @@
 // src/configs/rate-limit-store.config.ts
 //
-// A rate limiter is built by `createLoginRateLimiter()`/
-// `createRefreshRateLimiter()` (rate-limit.middleware.ts) the moment
-// `createAuthRouter()` assembles the auth routes — which happens before the
-// startup sequence has connected anything. Nothing in this codebase connects
-// Redis eagerly: `redis.service.ts`'s own header comment says connection is
+// A rate limiter is built by `createRateLimiter(...)`
+// (rate-limit.middleware.ts) the moment `createAuthRouter()` assembles the
+// auth routes — which happens before the startup sequence has connected
+// anything. Nothing in this codebase connects Redis eagerly:
+// `redis.service.ts`'s own header comment says connection is
 // lazy, created on first use, precisely so importing a module that
 // transitively reaches it never opens a socket. A rate-limit Store that
 // resolved its backend at CONSTRUCTION time would therefore be pinned to the

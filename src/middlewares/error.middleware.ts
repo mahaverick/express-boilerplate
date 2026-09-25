@@ -18,29 +18,10 @@
 // response that also sets `code` would collide with it.
 import { STATUS_CODES } from 'node:http'
 import { type NextFunction, type Request, type Response } from 'express'
+import { HttpError } from '@/errors/http-error'
+import { redactedForLog } from '@/errors/postgres-errors'
 import { logger } from '@/services/logger.service'
 import { errorResponse } from '@/utilities/response.utilities'
-
-/**
- * An error carrying the HTTP status the client should receive.
- */
-export class HttpError extends Error {
-  /**
-   * @param message - Message safe to return to the client.
-   * @param statusCode - HTTP status. Defaults to 500.
-   * @param code - Optional stable, machine-readable token a client can branch on (e.g. `ACCESS_TOKEN_EXPIRED`), independent of `message` or `errors`.
-   * @param errors - Optional field-level detail, e.g. from a validator.
-   */
-  constructor(
-    message: string,
-    public readonly statusCode = 500,
-    public readonly code?: string,
-    public readonly errors?: unknown
-  ) {
-    super(message)
-    this.name = 'HttpError'
-  }
-}
 
 // Express's own body parser does not throw HttpError. `express.json()` and
 // `express.urlencoded()` raise `http-errors` instances, which carry the
@@ -87,124 +68,6 @@ function clientMessageOf(error: unknown, statusCode: number): string {
   const candidate = error as { expose?: unknown; message?: unknown }
   const isExposed = candidate.expose === true && typeof candidate.message === 'string'
   return isExposed ? (candidate.message as string) : (STATUS_CODES[statusCode] ?? 'Error')
-}
-
-/**
- * The shape of a failed database query as the ORM reports it: the SQL text
- * and the bound parameter values. Matched structurally rather than with
- * `instanceof DrizzleQueryError`, so this module — the error contract —
- * does not take a runtime dependency on the ORM. The fallback is the safe
- * direction anyway: a foreign error that merely looks like this is logged
- * redacted, which costs nothing.
- */
-interface QueryErrorShape {
-  query: string
-  params: unknown[]
-  cause?: unknown
-}
-
-/**
- * Whether an error carries a SQL query and its bound parameters.
- * @param error - The thrown or forwarded error.
- * @returns True when the error exposes both `query` and `params`.
- */
-function isQueryError(error: unknown): error is QueryErrorShape {
-  if (typeof error !== 'object' || error === null) return false
-  const candidate = error as { query?: unknown; params?: unknown }
-  return typeof candidate.query === 'string' && Array.isArray(candidate.params)
-}
-
-/**
- * The Postgres `SQLSTATE` code a driver error carries, if any — e.g.
- * `22001` (string too long for its column) or `23505` (unique violation).
- * @param cause - The driver error a query error wraps.
- * @returns The five-character code, or undefined when the cause carries none.
- */
-function driverCodeOf(cause: unknown): string | undefined {
-  if (typeof cause !== 'object' || cause === null) return undefined
-  const code = (cause as { code?: unknown }).code
-  return typeof code === 'string' ? code : undefined
-}
-
-/**
- * The stack of a query error with its message line removed — call frames
- * only.
- *
- * The message line is exactly what must not be logged (see
- * `redactedForLog`), and `error.stack` embeds it verbatim on the first
- * line, so logging the stack whole would leak the parameters straight back
- * through the channel the redaction closed. The frames themselves name the
- * repository and controller the query came from, which is the genuinely
- * useful half.
- *
- * Matches `/^\s+at /` — a real frame, NOT `line.trimStart().startsWith('at
- * ')`. V8 always indents a genuine call frame with at least four spaces;
- * requiring leading whitespace before `at ` is what makes an UNINDENTED
- * line that merely happens to begin with those two characters fail to
- * match, which matters because the message this strips can itself be
- * multi-line (a query error's message embeds the SQL text).
- * @param error - The query error.
- * @returns The `at ...` frames, or undefined when there is no usable stack.
- */
-function stackFramesOf(error: QueryErrorShape): string | undefined {
-  const { stack } = error as { stack?: unknown }
-  if (typeof stack !== 'string') return undefined
-  const frames = stack
-    .split('\n')
-    .filter((line) => /^\s+at /.test(line))
-    .join('\n')
-  return frames === '' ? undefined : frames
-}
-
-/**
- * What a failed database query may be logged as.
- *
- * A query error's `message` is built as `` `Failed query: ${query}\nparams:
- * ${params}` `` — the BOUND PARAMETER VALUES are part of the string. For a
- * failed `insert into users`, those parameters are the registrant's email
- * address and their bcrypt hash, and `console.error(error)` prints the
- * message (via the stack) in full. Every write that fails for any reason
- * other than the unique violation `BaseRepository` already translates to a
- * 409 therefore used to put credentials into the log — the one place a
- * masked 500 is supposed to make an error safely recoverable, not the place
- * to write the data the masking exists to protect.
- *
- * What survives is the SQL TEXT (parameterised, so it names columns and
- * tables and contains no values), the driver's `SQLSTATE` code, and the
- * call frames. That is enough to identify the failing statement and look
- * the failure up in
- * https://www.postgresql.org/docs/current/errcodes-appendix.html — which is
- * what makes a 500 diagnosable. Truncating the message instead was
- * considered and rejected: a shorter leak is still a leak, and where the
- * truncation lands would depend on the length of the query text, so the same
- * bug would leak on one table and not another.
- *
- * The driver error's own message is deliberately NOT carried over either,
- * for the same reason at one remove: Postgres embeds offending values in
- * some of them (`invalid input syntax for type uuid: "..."`), and its
- * `detail` field does so routinely (`Key (lower(email))=(...) already
- * exists.`). The code says the same thing without the value.
- *
- * Exported (not module-private) so `mailer.service.ts`'s `recordDelivery`
- * can reuse it verbatim for a failed `EmailLogRepository.record()` write —
- * that failure is the identical shape (a `DrizzleQueryError` wrapping a
- * `postgres.PostgresError` in `.cause`, same as here), and its bound
- * parameters include a recipient email address, which is PII. Building a
- * second, parallel redaction for that one call site would be exactly the
- * duplicated-logic-block this codebase treats as a defect; this is the one
- * definition both places use.
- * @param error - The thrown or forwarded error.
- * @returns The error itself when it is not a query error; a redacted, parameter-free record when it is.
- */
-export function redactedForLog(error: unknown): unknown {
-  if (!isQueryError(error)) return error
-  return {
-    name: (error as { name?: unknown }).name ?? 'QueryError',
-    query: error.query,
-    driverCode: driverCodeOf(error.cause),
-    paramCount: error.params.length,
-    stack: stackFramesOf(error),
-  }
 }
 
 /**

@@ -30,13 +30,12 @@ import jwt from 'jsonwebtoken'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createApp } from '@/app'
 import { getEnv } from '@/configs/env.config'
+import { ACCESS_TOKEN_EXPIRED_CODE } from '@/constants/auth.constants'
 import { SSE_MAX_BUFFERED_BYTES } from '@/constants/notification.constants'
 import type { Notification } from '@/database/models/notification.model'
 import type { User } from '@/database/models/user.model'
-import { ACCESS_TOKEN_EXPIRED_CODE } from '@/middlewares/auth.middleware'
 import { NotificationRepository } from '@/repositories/notification.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
-import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import {
@@ -54,7 +53,7 @@ import {
 import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
 import { getRedis } from '@/services/redis.service'
 import { denySession } from '@/services/session-denylist.service'
-import { signAccessToken } from '@/utilities/token.utilities'
+import { revokeSession, signAccessToken } from '@/services/session.service'
 import { startNotificationWorker } from '@/workers/notification.worker'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { waitForNotificationSubscriber } from '../../helpers/notification-subscriber'
@@ -62,7 +61,6 @@ import { waitForNotificationSubscriber } from '../../helpers/notification-subscr
 const userRepository = new UserRepository()
 const notificationRepository = new NotificationRepository()
 const tenantRepository = new TenantRepository()
-const userTokenRepository = new UserTokenRepository()
 
 /**
  * One parsed SSE event — the fields `notification-stream.controller.ts`'s
@@ -888,7 +886,7 @@ describe('GET /api/v1/notifications/stream', () => {
     // this just proves the connection is live before revoking it.
     await expect(stream.nextFrame()).resolves.toBeDefined()
 
-    await userTokenRepository.revokeAllForSession(sessionId)
+    await revokeSession(sessionId)
 
     // Within one heartbeat, not immediately: the check rides the existing
     // interval rather than adding a second timer.
@@ -916,9 +914,9 @@ describe('GET /api/v1/notifications/stream', () => {
     const sessionId = randomUUID()
     const token = signAccessToken(user, sessionId)
 
-    // denySession directly, not revokeAllForSession — this test is about
+    // denySession directly, not revokeSession — this test is about
     // requireAuth's own denylist read, not about revocation writing that
-    // entry (already covered by user-token.repository.test.ts and the
+    // entry (already covered by session.service.test.ts and the
     // "closes an open stream" test above).
     await denySession(sessionId)
 

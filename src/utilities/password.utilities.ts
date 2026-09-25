@@ -101,9 +101,9 @@ export async function isPasswordValid(plain: string, hash: string): Promise<bool
  * top-level module variable, mirroring env.config.ts's `getEnv` — satisfying
  * unicorn/no-top-level-assignment-in-function without disabling it.
  *
- * Used by auth.controller.ts's `login` so an unknown email still pays a
+ * Used by auth.service.ts's `login` so an unknown email still pays a
  * real bcrypt compare — see login's own header comment for why that
- * matters. Lives here, not in auth.controller.ts, so any other caller
+ * matters. Lives here, not in auth.service.ts, so any other caller
  * needing the same constant-time handling can reuse it without paying a
  * second bcrypt cost to keep in step with BCRYPT_COST.
  * @returns A memoised promise of a bcrypt hash of a fixed, non-secret plaintext.

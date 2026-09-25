@@ -7,8 +7,9 @@
 import { randomUUID } from 'node:crypto'
 import express from 'express'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { errorHandler } from '@/middlewares/error.middleware'
-import { createLoginRateLimiter } from '@/middlewares/rate-limit.middleware'
+import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
 import {
   addJob,
   closeQueue,
@@ -133,7 +134,7 @@ describe('Redis clients survive an outage', () => {
     const app = express()
     app.use(express.json())
     // Stands in for the login handler: every attempt is a wrong password.
-    app.post('/login', createLoginRateLimiter({ limit: 2 }), (_request, response) => {
+    app.post('/login', createRateLimiter(RATE_LIMITS.login, { limit: 2 }), (_request, response) => {
       response.status(401).json({ success: false })
     })
     app.use(errorHandler)

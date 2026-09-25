@@ -9,7 +9,7 @@
 // (which cannot observe a TOCTOU race at all: see CLAUDE.md's "Proving a
 // security behaviour is real" section).
 //
-// Two tests, same shape as tests/integration/utilities/token-reuse-mutation.test.ts:
+// Two tests, same shape as tests/integration/services/token-reuse-mutation.test.ts:
 //
 //   1. Always on: CONCURRENT_CLAIMS real, truly-parallel `claimOnce` calls
 //      (matching the test-mode connection pool's own `max: 2`, so both

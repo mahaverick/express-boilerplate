@@ -3,36 +3,30 @@
 // Six handlers, every one reached only through notification.routes.ts's
 // router-wide `requireAuth` (auth.middleware.ts) — the same "authenticated
 // routes assume request.user is already populated" contract
-// profile.controller.ts establishes. `authenticatedUserId` below is copied
-// from that file rather than imported: it is a three-line defensive check
-// against a routing mistake, not shared business logic, and importing a
-// controller-internal helper from another controller module would be a
-// stranger dependency than just repeating it.
+// profile.controller.ts establishes. `authenticatedUserId`
+// (helpers.controller.ts) is a shared defensive check against a routing
+// mistake, not business logic specific to this controller.
 //
-// Every notification lookup/mutation goes through the repository's own
-// `userId`-scoped methods (`findByIdAndUser`, `markRead`, `deleteOne`) —
-// never a lookup by `id` alone — so a caller can never act on, or learn the
-// existence of, another user's notification by guessing its id. This
-// controller adds no ownership check of its own; it relies entirely on the
-// repository already having one, per method, on every call.
-import { type NextFunction, type Request, type Response } from 'express'
+// Ownership scoping lives in notification.service.ts: every call there goes
+// through the repository's userId-scoped methods.
+import { BaseController } from '@/controllers/base.controller'
+import { authenticatedUserId } from '@/controllers/helpers.controller'
 import type { Notification } from '@/database/models/notification.model'
-import { HttpError } from '@/middlewares/error.middleware'
-import { NotificationPreferenceRepository } from '@/repositories/notification-preference.repository'
 import {
-  decodeNotificationCursor,
-  NotificationRepository,
-} from '@/repositories/notification.repository'
-import { successResponse } from '@/utilities/response.utilities'
-import { parseBody } from '@/validators/auth.validators'
+  deleteNotification,
+  getPreferences,
+  listNotifications,
+  markAllRead,
+  markRead,
+  updatePreferences,
+} from '@/services/notification.service'
+import { messageResponse, successResponse } from '@/utilities/response.utilities'
 import {
   listNotificationsSchema,
   notificationIdSchema,
   updatePreferencesSchema,
 } from '@/validators/notification.validators'
-
-const notificationRepository = new NotificationRepository()
-const notificationPreferenceRepository = new NotificationPreferenceRepository()
+import { parseBody } from '@/validators/parse.validators'
 
 /**
  * A notification as the REST API returns it.
@@ -59,212 +53,98 @@ function toNotificationResponse(notification: Notification): NotificationRespons
 }
 
 /**
- * The authenticated principal's id, guarding against a route reaching this
- * controller without `requireAuth` ahead of it. Mirrors
- * `profile.controller.ts`'s helper of the same name and purpose — see its
- * own comment for why this is a runtime check rather than a `request.user!`
- * assertion.
- * @param request - The incoming request.
- * @returns The authenticated user's id.
- * @throws {HttpError} 401, when `request.user` was never populated.
+ * Handlers for `/api/v1/notifications`, except the SSE stream.
  */
-function authenticatedUserId(request: Request): string {
-  if (!request.user) {
-    throw new HttpError('Authentication required', 401)
-  }
-  return request.user.id
-}
-
-/**
- * List the authenticated user's notifications, newest first, one page at a
- * time.
- *
- * An invalid or stale `cursor` is never a 400 here: `decodeNotificationCursor`
- * (notification.repository.ts) resolves it to `undefined`, which
- * `NotificationRepository.list` treats as "no cursor" and answers with the
- * first page — the same "malformed input fails as no cursor, not as an
- * error" contract that decoder's own header comment establishes for exactly
- * this call site.
- * @param request - The incoming request, carrying `limit`/`cursor` as query parameters.
- * @param response - The response.
- * @param next - Forwards a rejection to the terminal error handler.
- */
-export async function listNotifications(
-  request: Request,
-  response: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
+class NotificationController extends BaseController {
+  /**
+   * `GET /notifications`: the authenticated user's notifications, newest
+   * first, one page at a time.
+   *
+   * An invalid or stale `cursor` is never a 400 here: `listNotifications`
+   * (notification.service.ts) decodes it via `decodeNotificationCursor`
+   * (notification.repository.ts), which resolves a malformed value to
+   * `undefined` rather than throwing, so this handler always calls the
+   * service — no separate no-cursor branch is needed here.
+   */
+  listNotifications = this.handle(async (request, response) => {
     const userId = authenticatedUserId(request)
     const { limit, cursor } = parseBody(listNotificationsSchema, request.query)
-    const decodedCursor = cursor === undefined ? undefined : decodeNotificationCursor(cursor)
-    const page = await notificationRepository.list(
-      userId,
-      decodedCursor === undefined ? { limit } : { limit, cursor: decodedCursor }
-    )
+    const page = await listNotifications(userId, { limit, cursor })
     successResponse(
       response,
       { ...page, notifications: page.notifications.map((row) => toNotificationResponse(row)) },
       'Notifications retrieved.'
     )
-  } catch (error) {
-    next(error)
-  }
-}
+  })
 
-/**
- * Mark one notification read.
- *
- * `NotificationRepository.markRead` is a no-op — returns `undefined` — both
- * when the notification does not exist (or belongs to someone else) AND
- * when it was already read (see that method's own comment). Those are
- * different outcomes for a client: the first is a 404, the second is a
- * successful, idempotent no-op that should still return the notification.
- * A second, ownership-scoped lookup disambiguates them, but only on the
- * no-op path — the common case (an unread notification, actually marked
- * read by this call) costs exactly one query, same as before.
- * @param request - The incoming request, carrying the notification id as `:id`.
- * @param response - The response.
- * @param next - Forwards a rejection to the terminal error handler.
- */
-export async function markRead(
-  request: Request,
-  response: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
+  /**
+   * `PATCH /notifications/:id/read`: mark one notification read.
+   *
+   * See `notification.service.ts`'s `markRead` for how a not-found
+   * notification is told apart from one that was already read.
+   */
+  markRead = this.handle(async (request, response) => {
     const userId = authenticatedUserId(request)
     const { id } = parseBody(notificationIdSchema, request.params)
+    const notification = await markRead(userId, id)
+    successResponse(response, toNotificationResponse(notification), 'Notification marked as read.')
+  })
 
-    const updated = await notificationRepository.markRead(id, userId)
-    if (updated) {
-      successResponse(response, toNotificationResponse(updated), 'Notification marked as read.')
-      return
-    }
-
-    const existing = await notificationRepository.findByIdAndUser(id, userId)
-    if (!existing) {
-      throw new HttpError('Notification not found', 404)
-    }
-    successResponse(response, toNotificationResponse(existing), 'Notification marked as read.')
-  } catch (error) {
-    next(error)
-  }
-}
-
-/**
- * Mark every one of the authenticated user's currently-unread notifications
- * read, in a single statement.
- * @param request - The incoming request.
- * @param response - The response.
- * @param next - Forwards a rejection to the terminal error handler.
- */
-export async function markAllRead(
-  request: Request,
-  response: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const userId = authenticatedUserId(request)
-    const count = await notificationRepository.markAllRead(userId)
+  /**
+   * `PATCH /notifications/read-all`: mark every one of the authenticated
+   * user's currently-unread notifications read, in a single statement.
+   */
+  markAllRead = this.handle(async (request, response) => {
+    const count = await markAllRead(authenticatedUserId(request))
     successResponse(response, { count }, 'Notifications marked as read.')
-  } catch (error) {
-    next(error)
-  }
-}
+  })
 
-/**
- * Delete one notification.
- *
- * Unlike `markRead`, `NotificationRepository.deleteOne` needs no
- * disambiguating second lookup: it is a one-shot operation with only two
- * outcomes — a row owned by this user existed and is now gone (`true`), or
- * no such row existed for this user (`false`), which is unambiguously a
- * 404.
- * @param request - The incoming request, carrying the notification id as `:id`.
- * @param response - The response.
- * @param next - Forwards a rejection to the terminal error handler.
- */
-export async function deleteNotification(
-  request: Request,
-  response: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
+  /**
+   * `DELETE /notifications/:id`: delete one notification.
+   *
+   * Unlike `markRead`, `NotificationRepository.deleteOne` needs no
+   * disambiguating second lookup: it is a one-shot operation with only two
+   * outcomes — a row owned by this user existed and is now gone (`true`), or
+   * no such row existed for this user (`false`), which is unambiguously a
+   * 404.
+   */
+  deleteNotification = this.handle(async (request, response) => {
     const userId = authenticatedUserId(request)
     const { id } = parseBody(notificationIdSchema, request.params)
+    await deleteNotification(userId, id)
+    messageResponse(response, 'Notification deleted.')
+  })
 
-    const wasDeleted = await notificationRepository.deleteOne(id, userId)
-    if (!wasDeleted) {
-      throw new HttpError('Notification not found', 404)
-    }
-    // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data", not undefined (which JSON.stringify omits entirely)
-    successResponse(response, null, 'Notification deleted.')
-  } catch (error) {
-    next(error)
-  }
-}
-
-/**
- * Get the authenticated user's full notification preference matrix — every
- * known notification type, with defaults already resolved for any type the
- * user has never explicitly set.
- * @param request - The incoming request.
- * @param response - The response.
- * @param next - Forwards a rejection to the terminal error handler.
- */
-export async function getPreferences(
-  request: Request,
-  response: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
-    const userId = authenticatedUserId(request)
-    const preferences = await notificationPreferenceRepository.getFullMatrix(userId)
+  /**
+   * `GET /notifications/preferences`: the authenticated user's full
+   * notification preference matrix — every known notification type, with
+   * defaults already resolved for any type the user has never explicitly set.
+   */
+  getPreferences = this.handle(async (request, response) => {
+    const preferences = await getPreferences(authenticatedUserId(request))
     successResponse(response, { preferences }, 'Notification preferences retrieved.')
-  } catch (error) {
-    next(error)
-  }
-}
+  })
 
-/**
- * Upsert one or more of the authenticated user's notification preferences.
- *
- * `updatePreferencesSchema` (notification.validators.ts) is the only gate
- * on which `notificationType` values reach `upsert` — a type outside
- * `CONFIGURABLE_NOTIFICATION_TYPES` (today, that is every type: see that
- * constant's own comment) fails validation with a per-field 400 before this
- * handler's body runs at all, so there is no second check to duplicate
- * here.
- * @param request - The incoming request, carrying `{ preferences: [...] }`.
- * @param response - The response.
- * @param next - Forwards a rejection to the terminal error handler.
- */
-export async function updatePreferences(
-  request: Request,
-  response: Response,
-  next: NextFunction
-): Promise<void> {
-  try {
+  /**
+   * `PUT /notifications/preferences`: upsert one or more of the
+   * authenticated user's notification preferences.
+   *
+   * `updatePreferencesSchema` (notification.validators.ts) is the only gate
+   * on which `notificationType` values reach `upsert` — a type outside
+   * `CONFIGURABLE_NOTIFICATION_TYPES` (today, that is every type: see that
+   * constant's own comment) fails validation with a per-field 400 before this
+   * handler's body runs at all, so there is no second check to duplicate
+   * here.
+   */
+  updatePreferences = this.handle(async (request, response) => {
     const userId = authenticatedUserId(request)
     const { preferences } = parseBody(updatePreferencesSchema, request.body)
-
-    // Not transactional: a failure partway through `Promise.all` leaves
-    // earlier upserts committed. Moot today — `preferences` can only ever
-    // contain configurable types, and there are currently none, so this
-    // array is always empty in practice — but worth flagging for whoever
-    // adds the second configurable type: a multi-entry request that fails
-    // on entry 2 will have already written entry 1.
-    const updated = await Promise.all(
-      preferences.map((entry) =>
-        notificationPreferenceRepository.upsert(userId, entry.notificationType, {
-          emailEnabled: entry.emailEnabled,
-          inAppEnabled: entry.inAppEnabled,
-        })
-      )
-    )
+    const updated = await updatePreferences(userId, preferences)
     successResponse(response, { preferences: updated }, 'Notification preferences updated.')
-  } catch (error) {
-    next(error)
-  }
+  })
 }
+
+/**
+ * The notification controller the notification routes mount.
+ */
+export const notificationController = new NotificationController()

@@ -24,11 +24,11 @@
 //     request can retry, per this file's own header comment on why a failed
 //     attempt must never poison one after it.
 //
-// getEnv() is mocked as a vi.fn() (not a fixed-return factory), same
-// technique and reasoning as auth.controller.test.ts: configurePassport()
-// calls getEnv() fresh on every invocation, so a per-test mockReturnValue
-// takes effect without needing vi.resetModules() (and the live postgres
-// pool leak that carries — tests/helpers/mutate.ts's own header comment).
+// getEnv() is mocked as a vi.fn() (not a fixed-return factory):
+// configurePassport() calls getEnv() fresh on every invocation, so a
+// per-test mockReturnValue takes effect without needing vi.resetModules()
+// (and the live postgres pool leak that carries — tests/helpers/mutate.ts's
+// own header comment).
 import passport from 'passport'
 import type { VerifyCallback } from 'passport-google-oauth20'
 import { describe, expect, it, vi } from 'vitest'

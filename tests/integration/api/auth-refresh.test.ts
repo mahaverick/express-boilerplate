@@ -21,7 +21,7 @@ import { REFRESH_REUSE_GRACE_MS, REFRESH_TOKEN_COOKIE_NAME } from '@/constants/a
 import type { User } from '@/database/models/user.model'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
-import { hashToken } from '@/utilities/token.utilities'
+import { hashToken } from '@/services/session.service'
 import { request } from '../../helpers/request'
 
 const app = createApp()
@@ -377,6 +377,18 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
       expect(response.status).toBe(200)
     })
 
+    it('answers the no-content envelope, with data: null', async () => {
+      const response = await request(app).post('/api/v1/auth/logout')
+
+      expect(response.body).toEqual({
+        success: true,
+        message: 'Logged out.',
+        statusCode: 200,
+        // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data"
+        data: null,
+      })
+    })
+
     it('answers identically for an already-revoked token as for one that never existed', async () => {
       const { response: loginResponse } = await registerAndLogin(createdIds)
       const cookie = refreshCookiePair(loginResponse) as string
@@ -402,13 +414,13 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
   // budget every other integration file running in parallel shares — the
   // exact cross-test coupling tests/helpers/global-setup.ts's Redis flush
   // exists to keep out of this suite. The 429 behaviour itself is proven
-  // against the same factories, with small `limit` overrides, in
-  // tests/unit/middlewares/rate-limit.middleware.test.ts.
+  // against the same `createRateLimiter` calls, with small `limit`
+  // overrides, in tests/unit/middlewares/rate-limit.middleware.test.ts.
   //
   // `RateLimit-*` headers are set by express-rate-limit on EVERY response it
   // lets through, not only on a 429 (standardHeaders: true, verified
   // empirically), so their presence on an ordinary response is exactly the
-  // evidence that a limiter ran. Red proof: delete `createRegisterRateLimiter()`
+  // evidence that a limiter ran. Red proof: delete `createRateLimiter(RATE_LIMITS.register)`
   // from auth.routes.ts and this goes from green to red.
   describe('every auth route is behind a limiter (wiring, not thresholds)', () => {
     it('runs a limiter on /register — proven by the RateLimit-* headers on an ordinary response', async () => {

@@ -21,8 +21,8 @@ import { createApp } from '@/app'
 import type { User } from '@/database/models/user.model'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
+import { signAccessToken } from '@/services/session.service'
 import { hashPassword } from '@/utilities/password.utilities'
-import { signAccessToken } from '@/utilities/token.utilities'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { request } from '../../helpers/request'
 
@@ -52,7 +52,7 @@ interface ApiEnvelope<TData> {
 }
 
 /**
- * The public projection of a user row (auth.controller.ts's `PublicUser`,
+ * The public projection of a user row (user.presenter.ts's `PublicUser`,
  * reused by profile.controller.ts).
  */
 interface PublicUserBody {

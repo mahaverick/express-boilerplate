@@ -11,7 +11,7 @@
 // (not just the database's) is what makes an insert missing `purpose` a
 // compile error instead of a silent `'refresh'` — the highest-privilege
 // purpose, the one that can mint a session. "Only one call site
-// (`createTokenRow`, token.utilities.ts) ever calls `create()`" is a
+// (`createTokenRow`, session.service.ts) ever calls `create()`" is a
 // convention; a convention is exactly what erodes first in a project
 // derived from this boilerplate. This file is the gate that survives that
 // erosion: if a future edit re-adds `.default(...)` to `purpose` for a

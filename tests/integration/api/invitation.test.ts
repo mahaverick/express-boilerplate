@@ -25,7 +25,7 @@ import { UserRepository } from '@/repositories/user.repository'
 import { db, sql } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
 import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
-import { hashToken, signAccessToken } from '@/utilities/token.utilities'
+import { hashToken, signAccessToken } from '@/services/session.service'
 import {
   expectNoJob,
   waitForInvitationEmail,

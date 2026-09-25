@@ -21,7 +21,7 @@
 // caller could never produce.
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
-import { HttpError } from '@/middlewares/error.middleware'
+import { HttpError } from '@/errors/http-error'
 import { TenantSettingsRepository } from '@/repositories/tenant-settings.repository'
 import { TenantRepository, type CreateTenantInput } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
@@ -213,26 +213,6 @@ describe('TenantRepository', () => {
       expect(
         await tenantRepository.findBySlug(tenant.slug, { includeDeleted: true })
       ).toMatchObject({ id: tenant.id })
-    })
-  })
-
-  describe('findBySlugOrId', () => {
-    it('finds a tenant by slug', async () => {
-      const ownerId = await createUser()
-      const tenant = await createTenant(ownerId)
-
-      expect(await tenantRepository.findBySlugOrId(tenant.slug)).toMatchObject({ id: tenant.id })
-    })
-
-    it('finds a tenant by id', async () => {
-      const ownerId = await createUser()
-      const tenant = await createTenant(ownerId)
-
-      expect(await tenantRepository.findBySlugOrId(tenant.id)).toMatchObject({ id: tenant.id })
-    })
-
-    it('returns undefined when neither a slug nor an id matches', async () => {
-      expect(await tenantRepository.findBySlugOrId(randomUUID())).toBeUndefined()
     })
   })
 

@@ -25,9 +25,9 @@
 // the email was already sent can send it again.
 import { Worker, type Job } from 'bullmq'
 import { getEnv } from '@/configs/env.config'
+import { redactedForLog } from '@/errors/postgres-errors'
 import { addEmailJob } from '@/jobs/email.job'
 import type { NotificationJobData } from '@/jobs/notification.job'
-import { redactedForLog } from '@/middlewares/error.middleware'
 import { NotificationPreferenceRepository } from '@/repositories/notification-preference.repository'
 import { NotificationRepository } from '@/repositories/notification.repository'
 import { logger } from '@/services/logger.service'

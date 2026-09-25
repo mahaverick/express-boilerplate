@@ -19,7 +19,7 @@ import {
   resetLifecycleForTests,
 } from '@/services/lifecycle.service'
 import { logger } from '@/services/logger.service'
-import { signAccessToken } from '@/utilities/token.utilities'
+import { signAccessToken } from '@/services/session.service'
 import { withMutatedModule } from '../helpers/mutate'
 import { request } from '../helpers/request'
 

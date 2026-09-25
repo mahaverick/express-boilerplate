@@ -10,7 +10,7 @@ import { MAX_EMAIL_LENGTH, MAX_NAME_LENGTH } from '@/constants/auth.constants'
  * The `users` table. `emailVerifiedAt` and `lastLoggedInAt` are both live
  * columns, not reserved ones: `UserRepository.markEmailVerified`
  * (`user.repository.ts`) sets `emailVerifiedAt` when a verification token
- * is redeemed, and `login` (`auth.controller.ts`) sets `lastLoggedInAt` on
+ * is redeemed, and `login` (`auth.service.ts`) sets `lastLoggedInAt` on
  * every successful login — see ARCHITECTURE.md's "B3 seam" for the full
  * picture of what B3 wired up.
  */

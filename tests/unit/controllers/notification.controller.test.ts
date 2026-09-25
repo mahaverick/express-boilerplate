@@ -1,24 +1,21 @@
 // tests/unit/controllers/notification.controller.test.ts
 //
 // Covers `authenticatedUserId`'s own defensive 401 branch, and the three
-// handlers whose `catch` block nothing else in this suite exercises —
+// handlers whose error path nothing else in this suite exercises —
 // `listNotifications`, `markAllRead`, `getPreferences`. Same reasoning as
 // tests/unit/controllers/profile.controller.test.ts: notification.routes.ts
 // mounts `requireAuth` router-wide, so `request.user` is always populated by
 // the time any of these run through a real route; reaching the guard at all
 // needs a direct call with no `request.user` set, bypassing routing
 // entirely. `markRead`/`deleteNotification`/`updatePreferences` each already
-// have their own catch block covered by a real error scenario in
+// have their error path covered by a real error scenario in
 // tests/integration/api/notification.test.ts (a 404 for a nonexistent
 // notification, an invalid preferences body), so they are not repeated here.
 import type { NextFunction, Request, Response } from 'express'
 import { describe, expect, it, vi } from 'vitest'
-import {
-  getPreferences,
-  listNotifications,
-  markAllRead,
-} from '@/controllers/notification.controller'
-import { HttpError } from '@/middlewares/error.middleware'
+import type { Handler } from '@/controllers/base.controller'
+import { notificationController } from '@/controllers/notification.controller'
+import { HttpError } from '@/errors/http-error'
 
 const unauthenticatedRequest = { user: undefined } as unknown as Request
 const unusedResponse = {} as Response
@@ -39,9 +36,7 @@ function mockNext(): { next: NextFunction; lastCallArgument: () => unknown } {
  * `HttpError` to `next()`.
  * @param handler - The controller handler under test.
  */
-async function expectAuthenticationRequired(
-  handler: (request: Request, response: Response, next: NextFunction) => Promise<void>
-): Promise<void> {
+async function expectAuthenticationRequired(handler: Handler): Promise<void> {
   const { next, lastCallArgument } = mockNext()
 
   await handler(unauthenticatedRequest, unusedResponse, next)
@@ -55,14 +50,14 @@ async function expectAuthenticationRequired(
 
 describe('authenticatedUserId (via each handler that reaches it first)', () => {
   it('listNotifications forwards a 401 HttpError to next() when request.user is unset', async () => {
-    await expectAuthenticationRequired(listNotifications)
+    await expectAuthenticationRequired(notificationController.listNotifications)
   })
 
   it('markAllRead forwards a 401 HttpError to next() when request.user is unset', async () => {
-    await expectAuthenticationRequired(markAllRead)
+    await expectAuthenticationRequired(notificationController.markAllRead)
   })
 
   it('getPreferences forwards a 401 HttpError to next() when request.user is unset', async () => {
-    await expectAuthenticationRequired(getPreferences)
+    await expectAuthenticationRequired(notificationController.getPreferences)
   })
 })

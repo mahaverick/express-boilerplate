@@ -22,8 +22,8 @@ import {
   notificationPreferenceModel,
   type NotificationPreference,
 } from '@/database/models/notification.model'
-import { HttpError } from '@/middlewares/error.middleware'
-import { db } from '@/services/database.service'
+import { HttpError } from '@/errors/http-error'
+import { db, type DbExecutor } from '@/services/database.service'
 
 /**
  * Which channel a notification can be delivered on. Matches
@@ -122,10 +122,11 @@ export class NotificationPreferenceRepository {
    * every channel is, in effect, enabled for them; use `getFullMatrix` for
    * "every type, with defaults filled in".
    * @param userId - The user whose preference rows to fetch.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns Every row this user has explicitly set, in no particular guaranteed order.
    */
-  async findByUser(userId: string): Promise<NotificationPreference[]> {
-    return db
+  async findByUser(userId: string, executor: DbExecutor = db): Promise<NotificationPreference[]> {
+    return executor
       .select()
       .from(notificationPreferenceModel)
       .where(eq(notificationPreferenceModel.userId, userId))
@@ -142,14 +143,16 @@ export class NotificationPreferenceRepository {
    * @param data - The two channel toggles to set.
    * @param data.emailEnabled - Whether the email channel should be enabled for this type.
    * @param data.inAppEnabled - Whether the in-app channel should be enabled for this type.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns The resulting row, whether newly inserted or updated in place.
    */
   async upsert(
     userId: string,
     notificationType: NotificationType,
-    data: { emailEnabled: boolean; inAppEnabled: boolean }
+    data: { emailEnabled: boolean; inAppEnabled: boolean },
+    executor: DbExecutor = db
   ): Promise<NotificationPreference> {
-    const [row] = await db
+    const [row] = await executor
       .insert(notificationPreferenceModel)
       .values({ userId, notificationType, ...data })
       .onConflictDoUpdate({
@@ -157,7 +160,7 @@ export class NotificationPreferenceRepository {
         set: data,
       })
       .returning()
-    // db.insert(...).values(one object).returning() always returns exactly
+    // insert(...).values(one object).returning() always returns exactly
     // one row when the write does not throw, upsert included — same
     // reasoning as NotificationRepository.create.
     if (row === undefined) throw new HttpError('Upsert returned no row', 500)
@@ -184,16 +187,18 @@ export class NotificationPreferenceRepository {
    * @param userId - The user to check.
    * @param type - The notification type to check.
    * @param channel - Which channel to check.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns Whether this user currently receives this notification type on this channel.
    */
   async isChannelEnabled(
     userId: string,
     type: NotificationType,
-    channel: NotificationChannel
+    channel: NotificationChannel,
+    executor: DbExecutor = db
   ): Promise<boolean> {
     if (channel === 'email' && NON_DISABLEABLE_EMAIL_TYPES.has(type)) return true
 
-    const [row] = await db
+    const [row] = await executor
       .select()
       .from(notificationPreferenceModel)
       .where(
@@ -215,10 +220,11 @@ export class NotificationPreferenceRepository {
    * from a real row versus a default, because both are already resolved
    * into the same shape.
    * @param userId - The user to resolve the matrix for.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns One entry per known notification type, each with `emailEnabled`/`inAppEnabled` resolved from this user's row when one exists, or `true`/`true` (the opt-out default) when it does not.
    */
-  async getFullMatrix(userId: string): Promise<PreferenceMatrix> {
-    const rows = await this.findByUser(userId)
+  async getFullMatrix(userId: string, executor: DbExecutor = db): Promise<PreferenceMatrix> {
+    const rows = await this.findByUser(userId, executor)
     const byType = new Map(rows.map((row) => [row.notificationType, row]))
 
     return NOTIFICATION_TYPES.map((type) => {

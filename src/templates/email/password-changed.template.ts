@@ -56,7 +56,7 @@ const REQUIRED_VARIABLE_NAMES: ReadonlyArray<keyof PasswordChangedVariables> = [
  * both carrying the same three things — what changed, that it just
  * happened, and what to do if it was not the recipient. Deliberately tells
  * the reader every OTHER session has already been signed out: that is true
- * (`changePassword`, auth.controller.ts, revokes them before this mail is
+ * (`changePassword`, auth.service.ts, revokes them before this mail is
  * even enqueued) and is the reassuring half of the message — a caller who
  * did not make this change needs to know their other sessions are already
  * dead, not merely that something happened.

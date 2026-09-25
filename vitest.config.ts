@@ -73,11 +73,6 @@ export default defineConfig({
         '**/*.test.ts',
         '**/migrations/**',
         '**/seeders/**',
-        // A deliberately-circular fixture pair, not shippable source — see
-        // src/lint-fixtures/cycle-a.ts. Excluded from the build too
-        // (tsconfig.json), so counting it here would permanently drag the
-        // gate down for code that never runs.
-        'src/lint-fixtures/**',
         // Drizzle table/relation definitions and their InferSelectModel/
         // InferInsertModel type exports — schema metadata, not branching
         // logic. `pgTable(...)`'s column builders and `relations(...)`'s

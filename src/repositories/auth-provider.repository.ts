@@ -7,14 +7,8 @@
 // (`SoftDeletableTableConfig`, base.repository.ts, requires both), and this
 // table has no soft-delete concept to justify adding one — an unlinked
 // provider (were that ever built) would be a hard delete, same as
-// email-log.repository.ts's audit rows. `isUniqueViolation` below is a
-// deliberate copy of base.repository.ts's private helper of the same name,
-// not an import: that function is module-private there by design (its own
-// comment: "the driver-level detail this file exists to keep out of every
-// caller"), so a table that cannot extend the class it belongs to
-// re-implements the three-line check rather than exporting an internal.
-import { and, DrizzleQueryError, eq, inArray, isNotNull, ne } from 'drizzle-orm'
-import postgres from 'postgres'
+// email-log.repository.ts's audit rows.
+import { and, eq, inArray, isNotNull, ne } from 'drizzle-orm'
 import type { AuthProvider } from '@/constants/auth-provider.constants'
 import {
   authProviderModel,
@@ -22,32 +16,9 @@ import {
   type NewAuthProvider,
 } from '@/database/models/auth-provider.model'
 import { userModel } from '@/database/models/user.model'
-import { HttpError } from '@/middlewares/error.middleware'
+import { HttpError } from '@/errors/http-error'
+import { isUniqueViolation } from '@/errors/postgres-errors'
 import { db, type DbExecutor } from '@/services/database.service'
-
-// Postgres error code for a unique-constraint violation. Same source and
-// same value as base.repository.ts's own — see that file's comment for the
-// PostgreSQL docs reference.
-const UNIQUE_VIOLATION_CODE = '23505'
-
-/**
- * Whether an error thrown by `create` is a Postgres unique-constraint
- * violation — i.e. `auth_providers_provider_provider_id_unique`
- * (auth-provider.model.ts) already has a row for this `(provider,
- * providerId)` pair. A real race, not a theoretical one: Task 3's Google
- * callback does `findByProviderAndId` then `create` with no lock between
- * them, so two requests for the same not-yet-linked Google account (e.g. a
- * double-submitted callback) can both pass the lookup and race the insert.
- * See this file's header comment for why this duplicates
- * base.repository.ts's identically-named private function instead of
- * importing it.
- * @param error - The error thrown by the insert.
- * @returns True when the error is (or wraps) a 23505 unique violation.
- */
-function isUniqueViolation(error: unknown): boolean {
-  const cause = error instanceof DrizzleQueryError ? error.cause : error
-  return cause instanceof postgres.PostgresError && cause.code === UNIQUE_VIOLATION_CODE
-}
 
 /**
  * Query access to the `auth_providers` table: look up the one row for a
@@ -57,17 +28,19 @@ function isUniqueViolation(error: unknown): boolean {
 export class AuthProviderRepository {
   /**
    * Find the row for one external identity within one provider's
-   * namespace — the lookup Task 3's Google callback makes first, before
-   * deciding whether to create a new link or a new user.
+   * namespace — the lookup google-auth.service's findOrCreateByGoogle makes
+   * first, before deciding whether to create a new link or a new user.
    * @param provider - Which auth method to look up.
    * @param providerId - The external identity within that provider's namespace (an email address for `'email'`, Google's profile id for `'google'`).
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns The matching row, or undefined when no user has linked this identity yet.
    */
   async findByProviderAndId(
     provider: AuthProvider,
-    providerId: string
+    providerId: string,
+    executor: DbExecutor = db
   ): Promise<AuthProviderRecord | undefined> {
-    const [row] = await db
+    const [row] = await executor
       .select()
       .from(authProviderModel)
       .where(
@@ -80,10 +53,11 @@ export class AuthProviderRepository {
    * Every auth method one user has — e.g. an `'email'` row and a `'google'`
    * row for an account that has linked both.
    * @param userId - The user whose provider rows to fetch.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns All matching rows, in no particular guaranteed order.
    */
-  async findByUser(userId: string): Promise<AuthProviderRecord[]> {
-    return db.select().from(authProviderModel).where(eq(authProviderModel.userId, userId))
+  async findByUser(userId: string, executor: DbExecutor = db): Promise<AuthProviderRecord[]> {
+    return executor.select().from(authProviderModel).where(eq(authProviderModel.userId, userId))
   }
 
   /**
@@ -93,16 +67,18 @@ export class AuthProviderRepository {
    * rather than letting the raw driver error escape — the same translation
    * `BaseRepository.create` gives every table that extends it, applied by
    * hand here since this table cannot (see this file's header comment). A
-   * caller that hits this (e.g. Task 3's callback losing the race described
-   * on `isUniqueViolation`) should treat it as "already linked" and
-   * re-fetch via `findByProviderAndId`, not as an unexpected failure.
+   * caller that hits this (e.g. google-auth.service's findOrCreateByGoogle
+   * losing a race between `findByProviderAndId` and this insert for the
+   * same not-yet-linked Google account) should treat it as "already linked"
+   * and re-fetch via `findByProviderAndId`, not as an unexpected failure.
    * @param data - The row's initial column values.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns The inserted row, including its generated `id` and timestamps.
    */
-  async create(data: NewAuthProvider): Promise<AuthProviderRecord> {
+  async create(data: NewAuthProvider, executor: DbExecutor = db): Promise<AuthProviderRecord> {
     try {
-      const [row] = await db.insert(authProviderModel).values(data).returning()
-      // db.insert(...).values(one object).returning() always returns exactly
+      const [row] = await executor.insert(authProviderModel).values(data).returning()
+      // insert(...).values(one object).returning() always returns exactly
       // one row when the insert does not throw; the driver's own types just
       // cannot express "same length as input" for a single-row insert —
       // same reasoning as UserRepository.insertOne (user.repository.ts).
@@ -148,11 +124,45 @@ export class AuthProviderRepository {
    * keeping the `'email'` row — the invariant every live user has one relies on
    * (auth-provider.model.ts's own header comment).
    * @param userId - The user whose federated provider rows are deleted.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns Resolves once the rows are gone.
    */
-  async deleteFederatedForUser(userId: string): Promise<void> {
-    await db
+  async deleteFederatedForUser(userId: string, executor: DbExecutor = db): Promise<void> {
+    await executor
       .delete(authProviderModel)
       .where(and(eq(authProviderModel.userId, userId), ne(authProviderModel.provider, 'email')))
+  }
+
+  /**
+   * Delete a user's Google links other than one, keeping every non-Google row.
+   * @param userId - The user whose Google links are pruned.
+   * @param googleId - The one Google profile id to keep.
+   * @param executor - The pool or a caller's transaction.
+   * @returns Resolves once the other links are gone.
+   */
+  async deleteGoogleLinksExcept(
+    userId: string,
+    googleId: string,
+    executor: DbExecutor = db
+  ): Promise<void> {
+    await executor
+      .delete(authProviderModel)
+      .where(
+        and(
+          eq(authProviderModel.userId, userId),
+          eq(authProviderModel.provider, 'google'),
+          ne(authProviderModel.providerId, googleId)
+        )
+      )
+  }
+
+  /**
+   * Link one auth method unless `(provider, providerId)` is already linked.
+   * @param data - The row's column values.
+   * @param executor - The pool or a caller's transaction.
+   * @returns Resolves once the row exists, inserted now or earlier.
+   */
+  async createIfAbsent(data: NewAuthProvider, executor: DbExecutor = db): Promise<void> {
+    await executor.insert(authProviderModel).values(data).onConflictDoNothing()
   }
 }

@@ -17,7 +17,7 @@
 //
 // RATE LIMITING here is "wiring, not thresholds" — `auth-refresh.test.ts`'s
 // own header comment states the reasoning this file borrows verbatim:
-// exhausting `createCreateTenantRateLimiter`'s real 20-per-hour budget
+// exhausting `RATE_LIMITS.createTenant`'s real 20-per-hour budget
 // would spend a budget every other
 // integration file running in parallel shares. The 429 behaviour itself,
 // including the user-keyed discriminator, is proven with small overrides in
@@ -35,7 +35,7 @@ import { UserMembershipRepository } from '@/repositories/user-membership.reposit
 import { UserRepository } from '@/repositories/user.repository'
 import type { DbExecutor } from '@/services/database.service'
 import { sql } from '@/services/database.service'
-import { signAccessToken } from '@/utilities/token.utilities'
+import { signAccessToken } from '@/services/session.service'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { request } from '../../helpers/request'
 
@@ -719,6 +719,25 @@ describe('/api/v1/tenants', () => {
         expect(membership).toBeUndefined()
       }
     )
+
+    it('answers the no-content envelope, with data: null', async () => {
+      const { user: ownerUser, token: ownerToken } = await createAuthenticatedUser()
+      const { user: targetUser } = await createAuthenticatedUser()
+      const tenant = await createTenant(ownerUser.id)
+      await addMembership(targetUser.id, tenant.id, 'viewer')
+
+      const response = await request(app)
+        .delete(`/api/v1/tenants/${tenant.slug}/members/${targetUser.id}`)
+        .set('Authorization', `Bearer ${ownerToken}`)
+
+      expect(response.body).toEqual({
+        success: true,
+        message: 'Member removed.',
+        statusCode: 200,
+        // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data"
+        data: null,
+      })
+    })
 
     it('blocks an owner from removing ANOTHER owner (not self)', async () => {
       const { user: ownerUser, token: ownerToken } = await createAuthenticatedUser()

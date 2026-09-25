@@ -3,9 +3,7 @@
 // Covers the branches tests/integration/api/tenant.test.ts cannot reach
 // through the HTTP layer — every one of them a defensive check the file's
 // own header comment (and each function's own comment) describes as
-// unreachable through a correctly-wired route, plus the one pure function
-// (`canActorGrantRole`) whose full domain router-level `requireRole` never
-// lets a real request exercise:
+// unreachable through a correctly-wired route:
 //
 //   - `authenticatedUserId`'s 401 (mirrors profile.controller.test.ts's own
 //     version): `tenant.routes.ts` mounts `requireAuth` router-wide, so
@@ -18,26 +16,17 @@
 //     `ParamsDictionary` typing allows it only for a route pattern this
 //     codebase does not use. Reaching it needs a param object Express
 //     itself would never build.
-//   - `canActorGrantRole`'s final `return false`: router-level
-//     `requireRole('owner', 'admin')` (tenant.routes.ts) never lets a
-//     manager/editor/viewer actor reach `inviteMember` at all, so no real
-//     request can ever supply the `actorRole` this branch handles.
 //
-// Every case below calls the exported handler/function directly, the same
+// Every case below calls a `tenantController` handler directly, the same
 // technique tests/unit/controllers/profile.controller.test.ts already
 // establishes, rather than routing through `createApp()` — no database
 // import is reached by doing this: every branch here throws (or returns)
-// before any repository call.
+// before any service call.
 import type { NextFunction, Request, Response } from 'express'
 import { describe, expect, it, vi } from 'vitest'
-import {
-  canActorGrantRole,
-  listMembers,
-  listTenants,
-  updateMemberRole,
-} from '@/controllers/tenant.controller'
-import { HttpError } from '@/middlewares/error.middleware'
-import type { RequestPrincipal } from '@/middlewares/tenant.middleware'
+import { tenantController } from '@/controllers/tenant.controller'
+import { HttpError } from '@/errors/http-error'
+import type { RequestPrincipal } from '@/types/actor'
 
 const unusedResponse = {} as Response
 
@@ -58,21 +47,12 @@ const authenticatedPrincipal: RequestPrincipal = {
   role: 'owner',
 }
 
-describe('canActorGrantRole', () => {
-  it.each(['manager', 'editor', 'viewer'] as const)(
-    'refuses a %s actor — router-level requireRole never lets one reach inviteMember, but this must fail closed anyway',
-    (actorRole) => {
-      expect(canActorGrantRole(actorRole, 'viewer')).toBe(false)
-    }
-  )
-})
-
 describe('authenticatedUserId (via listTenants)', () => {
   it('forwards a 401 HttpError to next() when request.user is unset', async () => {
     const { next, lastCallArgument } = mockNext()
     const request = { user: undefined } as unknown as Request
 
-    await listTenants(request, unusedResponse, next)
+    await tenantController.listTenants(request, unusedResponse, next)
 
     expect(next).toHaveBeenCalledTimes(1)
     const error = lastCallArgument()
@@ -87,7 +67,7 @@ describe('tenantPrincipal (via listMembers)', () => {
     const { next, lastCallArgument } = mockNext()
     const request = { principal: undefined } as unknown as Request
 
-    await listMembers(request, unusedResponse, next)
+    await tenantController.listMembers(request, unusedResponse, next)
 
     expect(next).toHaveBeenCalledTimes(1)
     const error = lastCallArgument()
@@ -112,7 +92,7 @@ describe('targetUserIdParameter (via updateMemberRole)', () => {
       body: {},
     } as unknown as Request
 
-    await updateMemberRole(request, unusedResponse, next)
+    await tenantController.updateMemberRole(request, unusedResponse, next)
 
     expect(next).toHaveBeenCalledTimes(1)
     const error = lastCallArgument()

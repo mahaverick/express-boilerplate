@@ -18,7 +18,7 @@
 //     failure routinely echoes message content back in its server
 //     response), and an earlier version of this table tried to close that
 //     off with width alone (`varchar(64)`) — which was wrong:
-//     `RAW_TOKEN_BYTES` (token.utilities.ts) is 32, and hex-encoded that is
+//     `RAW_TOKEN_BYTES` (session.service.ts) is 32, and hex-encoded that is
 //     EXACTLY 64 characters, so a raw token fit an over-generous width
 //     perfectly rather than overflowing it. The actual guarantee is
 //     `ERROR_CODE_PATTERN`/`email_logs_error_code_check` below: an
@@ -128,7 +128,7 @@ export const ERROR_CODE_MAX_LENGTH = 32
 // followed by any number of uppercase letters, digits, or underscores:
 // matches every real nodemailer code (`ECONNECTION`, `EAUTH`, `EENVELOPE`,
 // ...) and `UNKNOWN_ERROR_CODE`, and categorically cannot match a raw
-// token — `generateRawToken` (token.utilities.ts) hex-encodes
+// token — `generateRawToken` (session.service.ts) hex-encodes
 // `crypto.randomBytes`, which is lowercase hex digits only, so a raw token
 // can never contain an uppercase letter at all, anywhere in it.
 const ERROR_CODE_PATTERN_SOURCE = '^[A-Z][A-Z0-9_]*$'

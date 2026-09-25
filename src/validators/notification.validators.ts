@@ -2,7 +2,7 @@
 //
 // Three request shapes for notification.routes.ts: a list query
 // (pagination), a path `:id` (mark-read/delete), and a preferences update
-// body. `parseBody` (auth.validators.ts) is reused for all three — it takes
+// body. `parseBody` (parse.validators.ts) is reused for all three — it takes
 // `unknown` and only cares that its argument is a plain object a zod schema
 // can walk, so it works identically for `request.query`/`request.params` as
 // it does for `request.body`, and this file does not need a second,
@@ -16,7 +16,7 @@
 // comment argues for at the exact boundary this validator sits on (a client-
 // supplied query parameter). This file's `listNotificationsSchema` therefore
 // only checks that `cursor`, if present, is a string — reusing that decoder
-// in the controller is what keeps cursor-format knowledge in the one place
+// in notification.service.ts is what keeps cursor-format knowledge in the one place
 // that already has it, instead of a second implementation here that could
 // disagree with it about what counts as a valid cursor.
 import { z } from 'zod'

@@ -34,7 +34,7 @@ import type { User } from '@/database/models/user.model'
 import { NotificationRepository } from '@/repositories/notification.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
-import { signAccessToken } from '@/utilities/token.utilities'
+import { signAccessToken } from '@/services/session.service'
 import { request } from '../../helpers/request'
 
 const app = createApp()
@@ -385,6 +385,23 @@ describe('/api/v1/notifications', () => {
 
       const rows = await sql`select id from notifications where id = ${notification.id}`
       expect(rows).toHaveLength(0)
+    })
+
+    it('answers the no-content envelope, with data: null', async () => {
+      const { user, token } = await createAuthenticatedUser()
+      const notification = await seedNotification(user.id)
+
+      const response = await request(app)
+        .delete(`/api/v1/notifications/${notification.id}`)
+        .set('Authorization', `Bearer ${token}`)
+
+      expect(response.body).toEqual({
+        success: true,
+        message: 'Notification deleted.',
+        statusCode: 200,
+        // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data"
+        data: null,
+      })
     })
 
     it('returns 404 for another user’s notification and leaves it intact', async () => {

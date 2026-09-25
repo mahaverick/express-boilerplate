@@ -24,7 +24,7 @@ import { createApp } from '@/app'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { closeNotificationSubscriber } from '@/services/notification-emitter.service'
-import { signAccessToken } from '@/utilities/token.utilities'
+import { signAccessToken } from '@/services/session.service'
 import { request } from '../../helpers/request'
 
 const app = createApp()

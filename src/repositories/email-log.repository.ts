@@ -23,8 +23,8 @@ import {
   type EmailLog,
   type NewEmailLog,
 } from '@/database/models/email-log.model'
-import { HttpError } from '@/middlewares/error.middleware'
-import { db } from '@/services/database.service'
+import { HttpError } from '@/errors/http-error'
+import { db, type DbExecutor } from '@/services/database.service'
 
 /**
  * Replace `entry.errorCode` with `UNKNOWN_ERROR_CODE` unless it already
@@ -33,7 +33,7 @@ import { db } from '@/services/database.service'
  *
  * NORMALIZE, do not truncate. An earlier version of this repository
  * truncated an over-length `errorCode` to `ERROR_CODE_MAX_LENGTH` — the
- * wrong remedy for this class of value: a raw token (token.utilities.ts)
+ * wrong remedy for this class of value: a raw token (session.service.ts)
  * hex-encoded is exactly 64 characters, and truncating it to
  * `ERROR_CODE_MAX_LENGTH` (32) still writes 128 bits of a live secret into
  * an audit table, just fewer of them. Checking the SHAPE first means a
@@ -88,7 +88,7 @@ function withErrorCodeNormalized(entry: NewEmailLog): NewEmailLog {
 // trade-off for that lookup, only for a human reading the row directly.
 //
 // This does NOT exclude a raw token from any of these three columns: a
-// 64-character hex-encoded token (token.utilities.ts) fits comfortably
+// 64-character hex-encoded token (session.service.ts) fits comfortably
 // inside 320 and 255 without ever triggering this normalization at all, and
 // a 32-character FRAGMENT of one fits `templateKey`'s own width exactly —
 // this normalization only stops an over-width value from vanishing the
@@ -224,17 +224,21 @@ export class EmailLogRepository {
    * itself is still responsible for the other half of Ruling E: catching
    * whatever this rejects with (a genuine infrastructure failure, not this
    * normalization) and logging it at `console.error` — redacted the same
-   * way `error.middleware.ts`'s `redactedForLog` already redacts every
+   * way `redactedForLog` (postgres-errors.ts) already redacts every
    * other failed write in this codebase (driver error code kept, bound
    * parameter values dropped; this table's own `recipient` is PII, not a
    * secret, but the same redaction applies to it for the identical reason)
    * — rather than failing the request.
    * @param entry - The row to insert: recipient, templateKey, status, and whichever of providerMessageId/errorCode applies to that status.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns The inserted row, including its generated `id` and `createdAt`.
    */
-  async record(entry: NewEmailLog): Promise<EmailLog> {
-    const [row] = await db.insert(emailLogModel).values(normalizedForInsert(entry)).returning()
-    // db.insert(...).values(one object).returning() always returns exactly
+  async record(entry: NewEmailLog, executor: DbExecutor = db): Promise<EmailLog> {
+    const [row] = await executor
+      .insert(emailLogModel)
+      .values(normalizedForInsert(entry))
+      .returning()
+    // insert(...).values(one object).returning() always returns exactly
     // one row when the insert does not throw; the driver's own types just
     // cannot express "same length as input" for a single-row insert.
     if (row === undefined) throw new HttpError('Insert returned no row', 500)
@@ -253,10 +257,11 @@ export class EmailLogRepository {
    * relative order to whatever Postgres happens to return (round-2 review
    * finding 7).
    * @param recipient - The recipient address to look up.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns Every matching row, ordered by `createdAt` ascending, `id` ascending as a tiebreaker.
    */
-  async findByRecipient(recipient: string): Promise<EmailLog[]> {
-    return db
+  async findByRecipient(recipient: string, executor: DbExecutor = db): Promise<EmailLog[]> {
+    return executor
       .select()
       .from(emailLogModel)
       .where(eq(emailLogModel.recipient, recipient))

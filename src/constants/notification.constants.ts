@@ -25,7 +25,7 @@
  * `'password_changed'` is past tense, and that is correct here rather than
  * a violation of the rule above: it does not fire when a link is sent for
  * the user to act on — there is no link at all — it fires from
- * `changePassword` (auth.controller.ts) AFTER the password has already been
+ * `changePassword` (auth.service.ts) AFTER the password has already been
  * hashed, stored, and every other session already revoked. The event this
  * name describes has, at the point it fires, actually happened.
  */

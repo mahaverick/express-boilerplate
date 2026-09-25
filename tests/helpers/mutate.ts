@@ -28,7 +28,7 @@
 //     reached for first. Most security-relevant behaviour in this codebase
 //     is a method called through a module-private instance of an exported
 //     repository class (e.g. `const userTokenRepository = new
-//     UserTokenRepository()` in token.utilities.ts): overriding
+//     UserTokenRepository()` in session.service.ts): overriding
 //     `UserTokenRepository.prototype.revokeAllForSession` reaches every
 //     existing instance, including one already constructed, with a single
 //     property assignment. No module reloading, no dynamic import, no risk
@@ -99,7 +99,7 @@ export async function withMutatedMethod<TTarget extends object, TMethod extends 
  *
  * `loadSubject` must be a thunk whose body is a literal `import('...')`
  * expression written at the CALL SITE — `() =>
- * import('@/utilities/token.utilities')`, never a path built from a
+ * import('@/services/session.service')`, never a path built from a
  * variable and handed to this function as a string. A literal import
  * specifier is what lets the bundler resolve this project's `@/` alias and
  * infer `TSubject` without an unsafe cast; this function only calls the

@@ -1,9 +1,9 @@
-// tests/integration/utilities/token-reuse-mutation.test.ts
+// tests/integration/services/token-reuse-mutation.test.ts
 //
 // B3 Task 0, Step 3: prove the mutation-test harness (tests/helpers/mutate.ts)
 // on a REAL security behaviour, against the real per-worker Postgres
 // database — not a toy. The candidate is reuse detection
-// (rotateRefreshToken, token.utilities.ts): presenting an already-rotated
+// (rotateRefreshToken, session.service.ts): presenting an already-rotated
 // refresh token must revoke every token in its session family, containing a
 // stolen token the instant its holder tries to use it. The single call that
 // makes this true is `UserTokenRepository.prototype.revokeAllForSession`
@@ -22,14 +22,14 @@
 //
 //   2. `it.runIf(process.env.MUTATION_PROOF === '1')`, DELIBERATELY red
 //      under that flag: it reproduces, assertion for assertion, the real
-//      "detects reuse" test (tests/integration/utilities/token.utilities.test.ts)
+//      "detects reuse" test (tests/integration/services/session.service.test.ts)
 //      against the same mutated guard, so the failure shown is the actual
 //      regression test failing — not a hand-written stand-in for it.
 //      Skipped by default, so the file is green under `pnpm test`/CI without
 //      anyone editing anything:
 //
-//        MUTATION_PROOF=1 pnpm exec vitest run tests/integration/utilities/token-reuse-mutation.test.ts   # red
-//        pnpm exec vitest run tests/integration/utilities/token-reuse-mutation.test.ts                    # green
+//        MUTATION_PROOF=1 pnpm exec vitest run tests/integration/services/token-reuse-mutation.test.ts   # red
+//        pnpm exec vitest run tests/integration/services/token-reuse-mutation.test.ts                    # green
 //
 //      No file changes between the two runs — only the environment variable
 //      differs — and `git status --porcelain` stays empty throughout.
@@ -39,7 +39,7 @@ import type { User } from '@/database/models/user.model'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
-import { issueRefreshToken, rotateRefreshToken } from '@/utilities/token.utilities'
+import { issueRefreshToken, rotateRefreshToken } from '@/services/session.service'
 import { withMutatedMethod } from '../../helpers/mutate'
 
 const userRepository = new UserRepository()
@@ -64,7 +64,7 @@ async function ageConsumedTokensPastGrace(userId: string): Promise<void> {
 }
 
 describe('mutation-test harness, proven on reuse detection', () => {
-  // Same pattern as token.utilities.test.ts: track every created user id and
+  // Same pattern as session.service.test.ts: track every created user id and
   // delete them in afterEach. Deleting the user cascades (ON DELETE CASCADE
   // on user_tokens.user_id) to every token row it owns, so nothing from this
   // file's mutation proofs is left behind in the shared per-worker database.

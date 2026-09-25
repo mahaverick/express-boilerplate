@@ -7,7 +7,7 @@
 // whole request to fail. Two things drove that choice over the stricter
 // alternative:
 //
-// 1. At the time this schema was written, `parseBody` (auth.validators.ts,
+// 1. At the time this schema was written, `parseBody` (parse.validators.ts,
 //    reused as-is here) only forwarded a zod error's per-FIELD messages
 //    (`fieldErrors`) into the client-facing `errors` envelope. A `.strict()`
 //    violation is a root-level "unrecognized keys" error (`formErrors`),
@@ -27,7 +27,7 @@
 //    those fields are IGNORED, not rejected.
 //
 // This is the same "explicit allow-list" philosophy as `toPublicUser`
-// (auth.controller.ts): the schema names exactly the fields a caller may
+// (user.presenter.ts): the schema names exactly the fields a caller may
 // set, and everything else — however it got there — never reaches the
 // database. `email` is deliberately not one of them: it is a verified
 // identity here (`emailVerifiedAt` exists on the user row), so letting it
@@ -42,7 +42,7 @@ import { MAX_NAME_LENGTH } from '@/constants/auth.constants'
 // `.nullable().optional()` gives each field three distinguishable states in
 // the parsed result, which is exactly the distinction PATCH semantics need:
 //   - key absent from the request body -> parsed value is `undefined` ->
-//     leave the column unchanged (see profile.controller.ts's `toUpdateValues`,
+//     leave the column unchanged (see profile.service.ts's `toUpdateValues`,
 //     which checks presence with `Object.hasOwn` rather than truthiness).
 //   - key present, set to `null` -> parsed value is `null` -> clear the
 //     column (both `first_name`/`last_name` are nullable columns; `null` is

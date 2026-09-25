@@ -2,7 +2,7 @@
 //
 // Pure unit tests for the mutation-test harness itself (tests/helpers/mutate.ts)
 // — no Postgres, no Redis. The harness's proof against a REAL security
-// behaviour (reuse detection, token.utilities.ts) lives under
+// behaviour (reuse detection, session.service.ts) lives under
 // tests/integration/ instead, because that proof exercises the real
 // per-worker database — see CLAUDE.md's "Git hooks and CI" section on why a
 // test's dependencies, not where its assertions live, decide its directory.

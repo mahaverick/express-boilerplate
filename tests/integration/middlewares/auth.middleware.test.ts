@@ -21,12 +21,13 @@ import { type NextFunction, type Request, type Response } from 'express'
 import jwt from 'jsonwebtoken'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { getEnv } from '@/configs/env.config'
-import { ACCESS_TOKEN_EXPIRED_CODE, requireAuth } from '@/middlewares/auth.middleware'
-import { HttpError } from '@/middlewares/error.middleware'
+import { ACCESS_TOKEN_EXPIRED_CODE } from '@/constants/auth.constants'
+import { HttpError } from '@/errors/http-error'
+import { requireAuth } from '@/middlewares/auth.middleware'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { denySession } from '@/services/session-denylist.service'
-import { signAccessToken } from '@/utilities/token.utilities'
+import { signAccessToken } from '@/services/session.service'
 import { withMutatedModule } from '../../helpers/mutate'
 
 const userRepository = new UserRepository()
@@ -272,7 +273,7 @@ describe('requireAuth', () => {
     const token = jwt.sign({ sub: randomUUID() }, getEnv().JWT_ACCESS_SECRET, {
       algorithm: 'HS256',
       // Already expired the moment it's signed — mirrors
-      // tests/unit/utilities/token.utilities.test.ts's own approach.
+      // tests/unit/services/session.service.test.ts's own approach.
       expiresIn: -10,
     })
     const { next, lastCallArgument } = mockNext()

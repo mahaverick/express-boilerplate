@@ -58,7 +58,7 @@
 // and the handler answers 400 for the missing fields. There is nothing an
 // attacker can smuggle through this gap that a validator will read.
 import { type NextFunction, type Request, type Response } from 'express'
-import { HttpError } from '@/middlewares/error.middleware'
+import { HttpError } from '@/errors/http-error'
 
 // A request declaring no content type at all normalises to '' — see this
 // file's header comment for why that is allowed rather than refused.
@@ -66,7 +66,7 @@ const ACCEPTED_MEDIA_TYPES = new Set(['', 'application/json'])
 
 /**
  * Machine-readable code identifying a rejected request body encoding,
- * carried in the error envelope's `code` field (error.middleware.ts /
+ * carried in the error envelope's `code` field (errors/http-error.ts /
  * `HttpError`) — the same pattern `ACCESS_TOKEN_EXPIRED` and
  * `RATE_LIMITED` use, so a client can branch on this without matching on
  * `message`.

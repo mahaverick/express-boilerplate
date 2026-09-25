@@ -1,44 +1,93 @@
 // src/services/tenant-membership.service.ts
 //
 // Membership changes that must keep a tenant owned. Each runs in one
-// transaction: lock the tenant's owners, re-read the target, authorize the
-// actor against that fresh row, check the last-owner rule, write.
+// transaction: lock the tenant's owners, then the actor's and the target's
+// memberships; authorize the actor's current role against the target's
+// current role; check the last-owner rule; write.
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { UserMembership } from '@/database/models/user-membership.model'
-import { HttpError } from '@/middlewares/error.middleware'
+import { HttpError } from '@/errors/http-error'
+import { canActorModifyTarget, isRoleAtLeast } from '@/policies/tenant.policy'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
-import { db, type DbExecutor } from '@/services/database.service'
+import { db, type DbTransaction } from '@/services/database.service'
+import type { Actor } from '@/types/actor'
 
 const userMembershipRepository = new UserMembershipRepository()
 
 /**
- * The caller's permission check, run on the target as read inside the
- * transaction. Throws (403) to refuse. The target's owner status cannot
- * change under it: every owner transition takes the owner lock first.
+ * The actor's current role, checked against the route's `requireRole` bar.
+ * @param membership - The actor's membership as locked in this transaction, if any.
+ * @param minimum - The lowest role the route admits.
+ * @returns The actor's current role.
+ * @throws {HttpError} 404 `Tenant not found` when the actor is no longer a member, as `resolveTenant` answers a non-member; 403 `Insufficient permissions`, `requireRole`'s answer, when their role is now below `minimum`.
  */
-export type AuthorizeTarget = (target: UserMembership) => void
+function currentActorRole(
+  membership: UserMembership | undefined,
+  minimum: MembershipRole
+): MembershipRole {
+  if (!membership) throw new HttpError('Tenant not found', 404)
+  if (!isRoleAtLeast(membership.role, minimum)) {
+    throw new HttpError('Insufficient permissions', 403)
+  }
+  return membership.role
+}
 
 /**
- * The target's membership, read inside the transaction after the owner lock
- * (the row itself is not locked unless it is an owner's).
+ * Lock the tenant's owners, then the actor's membership, and return the
+ * actor's role as it is now. The route's `requireRole` saw an earlier read.
+ * @param actor - The signed-in user acting on the tenant.
  * @param tenantId - The tenant.
- * @param targetUserId - The member being changed or removed.
- * @param executor - The transaction.
- * @returns The membership row.
- * @throws {HttpError} 404, when the user is not a member of this tenant.
+ * @param minimum - The lowest role the route admits.
+ * @param executor - The transaction to hold the locks in.
+ * @returns The actor's current role, at least `minimum`.
+ * @throws {HttpError} 404 `Tenant not found` when the actor is no longer a member; 403 `Insufficient permissions` when their role is now below `minimum`.
  */
-async function currentTarget(
+export async function lockActorRole(
+  actor: Actor,
   tenantId: string,
-  targetUserId: string,
-  executor: DbExecutor
-): Promise<UserMembership> {
-  const target = await userMembershipRepository.findByUserAndTenant(
-    targetUserId,
+  minimum: MembershipRole,
+  executor: DbTransaction
+): Promise<MembershipRole> {
+  await userMembershipRepository.lockOwners(tenantId, executor)
+  const [membership] = await userMembershipRepository.lockMemberships(
     tenantId,
+    [actor.userId],
     executor
   )
+  return currentActorRole(membership, minimum)
+}
+
+/**
+ * Lock the tenant's owners, then the actor's and the target's memberships
+ * in one statement, and return both as they are now.
+ * @param actor - The signed-in user acting on the tenant.
+ * @param tenantId - The tenant.
+ * @param targetUserId - The member being changed or removed.
+ * @param minimum - The lowest role the route admits.
+ * @param executor - The transaction to hold the locks in.
+ * @returns The actor's current role and the target's membership.
+ * @throws {HttpError} 404 `Tenant not found` when the actor is no longer a member; 403 `Insufficient permissions` when their role is now below `minimum`; 404 `Member not found` when the target is not a member.
+ */
+async function lockActorAndTarget(
+  actor: Actor,
+  tenantId: string,
+  targetUserId: string,
+  minimum: MembershipRole,
+  executor: DbTransaction
+): Promise<{ actorRole: MembershipRole; target: UserMembership }> {
+  await userMembershipRepository.lockOwners(tenantId, executor)
+  const locked = await userMembershipRepository.lockMemberships(
+    tenantId,
+    [actor.userId, targetUserId],
+    executor
+  )
+  const actorRole = currentActorRole(
+    locked.find((membership) => membership.userId === actor.userId),
+    minimum
+  )
+  const target = locked.find((membership) => membership.userId === targetUserId)
   if (!target) throw new HttpError('Member not found', 404)
-  return target
+  return { actorRole, target }
 }
 
 /**
@@ -50,7 +99,7 @@ async function currentTarget(
  */
 async function assertAnotherOwnerRemains(
   tenantId: string,
-  executor: DbExecutor,
+  executor: DbTransaction,
   message: string
 ): Promise<void> {
   const ownerCount = await userMembershipRepository.countOwners(tenantId, executor)
@@ -58,25 +107,34 @@ async function assertAnotherOwnerRemains(
 }
 
 /**
- * Change a member's role; demoting the last live owner is refused. Atomic
- * against a concurrent role change or removal of an owner.
+ * Change a member's role; demoting the last live owner is refused. The
+ * actor's role is re-read under lock, so a demotion that lands after
+ * `resolveTenant` still counts. Atomic against a concurrent role change or
+ * removal of an owner.
+ * @param actor - The signed-in user making the change.
  * @param tenantId - The tenant.
  * @param targetUserId - The member whose role changes.
  * @param role - The new role.
- * @param authorize - The caller's permission check, run on the fresh target.
  * @returns The updated membership.
- * @throws {HttpError} 404 when the target is not a member, whatever `authorize` throws, 409 when it is the last live owner and `role` is not owner.
+ * @throws {HttpError} 404 `Tenant not found` when the actor is no longer a member; 403 when the actor is no longer an owner or the matrix refuses; 404 `Member not found` when the target is not a member; 409 when the target is the last live owner and `role` is not owner.
  */
 export async function changeRole(
+  actor: Actor,
   tenantId: string,
   targetUserId: string,
-  role: MembershipRole,
-  authorize: AuthorizeTarget
+  role: MembershipRole
 ): Promise<UserMembership> {
   return db.transaction(async (tx) => {
-    await userMembershipRepository.lockOwners(tenantId, tx)
-    const target = await currentTarget(tenantId, targetUserId, tx)
-    authorize(target)
+    const { actorRole, target } = await lockActorAndTarget(
+      actor,
+      tenantId,
+      targetUserId,
+      'owner',
+      tx
+    )
+    if (!canActorModifyTarget(actorRole, target.role, targetUserId === actor.userId)) {
+      throw new HttpError("Insufficient permissions to change this member's role", 403)
+    }
     if (role !== 'owner' && target.role === 'owner') {
       await assertAnotherOwnerRemains(tenantId, tx, 'Cannot change role: you are the last owner')
     }
@@ -87,22 +145,30 @@ export async function changeRole(
 }
 
 /**
- * Remove a member; removing the last live owner is refused. Atomic against
- * a concurrent role change or removal of an owner.
+ * Remove a member; removing the last live owner is refused. The actor's
+ * role is re-read under lock. Atomic against a concurrent role change or
+ * removal of an owner.
+ * @param actor - The signed-in user removing the member.
  * @param tenantId - The tenant.
  * @param targetUserId - The member to remove.
- * @param authorize - The caller's permission check, run on the fresh target.
- * @throws {HttpError} 404 when the target is not a member, whatever `authorize` throws, 409 when it is the last live owner.
+ * @throws {HttpError} 404 `Tenant not found` when the actor is no longer a member; 403 when the actor is now below admin or the matrix refuses; 404 `Member not found` when the target is not a member; 409 when the target is the last live owner.
  */
 export async function removeMember(
+  actor: Actor,
   tenantId: string,
-  targetUserId: string,
-  authorize: AuthorizeTarget
+  targetUserId: string
 ): Promise<void> {
   await db.transaction(async (tx) => {
-    await userMembershipRepository.lockOwners(tenantId, tx)
-    const target = await currentTarget(tenantId, targetUserId, tx)
-    authorize(target)
+    const { actorRole, target } = await lockActorAndTarget(
+      actor,
+      tenantId,
+      targetUserId,
+      'admin',
+      tx
+    )
+    if (!canActorModifyTarget(actorRole, target.role, targetUserId === actor.userId)) {
+      throw new HttpError('Insufficient permissions to remove this member', 403)
+    }
     if (target.role === 'owner') {
       await assertAnotherOwnerRemains(tenantId, tx, 'Cannot remove the last owner')
     }

@@ -1,9 +1,9 @@
-// tests/integration/utilities/claim-token-mutation.test.ts
+// tests/integration/services/claim-token-mutation.test.ts
 //
 // Task 5, Step 5: prove claimToken's own expiry check — the one line this
 // task exists to add — is load-bearing. `claimOnce` (user-token.repository.ts)
 // deliberately does NOT check expiry; its own doc comment says so in
-// capitals. `claimToken` (token.utilities.ts) is the only thing standing
+// capitals. `claimToken` (session.service.ts) is the only thing standing
 // between a merely-expired verification/reset link and one that is
 // redeemable forever.
 //
@@ -52,14 +52,14 @@
 //   2. `it.runIf(process.env.MUTATION_PROOF === '1')`, DELIBERATELY red
 //      under that flag: it reproduces, assertion for assertion, the real
 //      "refuses an EXPIRED token" test
-//      (tests/integration/utilities/token.utilities.test.ts) against the
+//      (tests/integration/services/session.service.test.ts) against the
 //      same mutated clock, so the failure shown is the actual regression
 //      test failing — not a hand-written stand-in for it. Skipped by
 //      default, so the file is green under `pnpm test`/CI without anyone
 //      editing anything:
 //
-//        MUTATION_PROOF=1 pnpm exec vitest run tests/integration/utilities/claim-token-mutation.test.ts   # red
-//        pnpm exec vitest run tests/integration/utilities/claim-token-mutation.test.ts                    # green
+//        MUTATION_PROOF=1 pnpm exec vitest run tests/integration/services/claim-token-mutation.test.ts   # red
+//        pnpm exec vitest run tests/integration/services/claim-token-mutation.test.ts                    # green
 //
 //      No file changes between the two runs — only the environment
 //      variable differs — and `git status --porcelain` stays empty
@@ -69,7 +69,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import type { User } from '@/database/models/user.model'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
-import { claimToken, issueToken } from '@/utilities/token.utilities'
+import { claimToken, issueToken } from '@/services/session.service'
 import { withMutatedMethod } from '../../helpers/mutate'
 
 const userRepository = new UserRepository()
@@ -124,7 +124,7 @@ describe("mutation-test harness, proven on claimToken's expiry check", () => {
     // RESTORED: a fresh expired token proves the check is back, using the
     // exact same sequence of calls. (Re-presenting `issued.raw` here would
     // only prove single-use claiming, which the claimToken describe block
-    // in token.utilities.test.ts already covers — a fresh token isolates
+    // in session.service.test.ts already covers — a fresh token isolates
     // this assertion to the expiry check alone.)
     const issuedAfterRestore = await issueToken(userId, 'email_verification', -1000)
     expect(await claimToken(issuedAfterRestore.raw, 'email_verification')).toBeUndefined()

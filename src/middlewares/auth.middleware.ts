@@ -9,7 +9,7 @@
 // there is no seam worth exporting yet:
 //
 //   1. Verify the bearer token's signature — delegated entirely to
-//      `verifyAccessToken` (token.utilities.ts), the one place that knows
+//      `verifyAccessToken` (session.service.ts), the one place that knows
 //      the signing secret and the pinned algorithm, and returns a
 //      discriminated result naming why a rejected token was rejected. This
 //      module never re-implements that check, and never re-derives WHY a
@@ -51,10 +51,10 @@
 // built here; this paragraph is what makes that a chosen trade-off rather
 // than an oversight for the next person to rediscover.
 //
-// Every session-revocation path inside `UserTokenRepository` —
-// `revokeAllForSession` (logout, refresh-token reuse detection) and
-// `revokeAllForUser` (password reset) — denies every session it revokes, so
-// within this middleware revocation does imply denial. Two things stay
+// Every session-revocation function in session.service.ts — logout,
+// refresh-token reuse detection, password reset and change — denies every
+// session it revokes, so within this middleware revocation does imply
+// denial. Two things stay
 // outside that on purpose:
 // `revokeAllForUserAndPurpose` denies nothing, correctly, since it is used
 // for purpose-scoped cleanups (stale verification links) that are not
@@ -62,11 +62,12 @@
 // false`) denies nothing either — step 3's `findById` read below is what
 // catches that, on the next request.
 import { type NextFunction, type Request, type Response } from 'express'
-import type { User } from '@/database/models/user.model'
-import { HttpError } from '@/middlewares/error.middleware'
+import { ACCESS_TOKEN_EXPIRED_CODE } from '@/constants/auth.constants'
+import { HttpError } from '@/errors/http-error'
+import { toAuthenticatedUser, type AuthenticatedUser } from '@/presenters/user.presenter'
 import { UserRepository } from '@/repositories/user.repository'
 import { isSessionDenied } from '@/services/session-denylist.service'
-import { verifyAccessToken } from '@/utilities/token.utilities'
+import { verifyAccessToken } from '@/services/session.service'
 
 const userRepository = new UserRepository()
 
@@ -75,83 +76,6 @@ const userRepository = new UserRepository()
 // `"Bearer "` or `"Bearer    "` — without needing a separate `.trim()` and
 // without the backtracking risk a greedy `.+` next to `\s+` would invite.
 const BEARER_PATTERN = /^Bearer\s+(\S+)$/
-
-/**
- * Machine-readable code identifying a STALE-BUT-OTHERWISE-VALID credential,
- * carried in the error envelope's `code` field (`error.middleware.ts` /
- * `HttpError`).
- *
- * This is the distinction a client needs to act correctly: a 401 carrying
- * this code means "refresh and retry" is a silent, automatic recovery;
- * every other 401 means the credential itself is no good and the user must
- * sign in again. A client cannot tell those apart safely by matching on
- * `message` — that string is for a human reading logs and is free to
- * change wording.
- *
- * THREE emitters share this code, not one, and all three mean the same
- * thing — the credential is not forged or malformed, it is simply no
- * longer honoured, and a refresh (which mints a token against the user's
- * current, live session) is the correct and sufficient response:
- *
- *   1. An EXPIRED access token — `verifyAccessToken`'s `reason: 'expired'`,
- *      thrown inside this file's own `verifyBearerToken` (:181 below). Every
- *      route, including `/stream`, sits behind `requireAuth` now, so this is
- *      the only place an expired token is ever rejected.
- *   2. A token whose session has been explicitly DENIED — the
- *      `isSessionDenied` check inside `requireAuth` itself, at :272 below.
- *   3. A token that verifies, is not denied, but carries no `sid` claim at
- *      all — rejected not here but in `notification-stream.controller.ts`'s
- *      `requireSessionId`, the one place in this codebase that refuses
- *      such a token outright rather than tolerating it. This middleware's
- *      own `payload.sid &&` guard just below (see item 2's line) is what
- *      tolerates it everywhere else; see that guard's comment for why, and
- *      `request.sessionId`'s own comment (express.d.ts) for how the stream
- *      handler reads the fact without re-verifying the token a second time.
- */
-export const ACCESS_TOKEN_EXPIRED_CODE = 'ACCESS_TOKEN_EXPIRED'
-
-/**
- * The subset of a user row it is safe to attach to `request.user`.
- * Deliberately excludes `passwordHash` — and everything else a route
- * handler has no business reading off the authenticated principal.
- *
- * This is the NARROWER of this codebase's two user projections, and the one
- * the other is built from: `PublicUser` (auth.controller.ts) extends this
- * interface with `createdAt`, and `toPublicUser` calls
- * `toAuthenticatedUser` below rather than repeating its field list. Before
- * that, the two were independent hand-maintained copies differing only in
- * `createdAt` — exactly the duplicate-definition drift auth.controller.ts's
- * own header comment argues against. The dependency runs in this direction
- * (controller -> middleware) because that is the direction imports already
- * run here; the reverse would be a new layering inversion.
- *
- * WHAT THAT MAKES TRUE, for whoever adds a field next: everything on
- * `request.user` is CLIENT-VISIBLE by construction, because `PublicUser`
- * inherits it and `GET /api/v1/profile` returns that. A later plan adding
- * server-only principal data — a role, a tenant id, an impersonation flag —
- * must not add it here expecting it to stay internal. Put that on its own
- * request property (`request.principal`, say) and leave this one meaning
- * "the user, as the user may see themselves".
- */
-export interface AuthenticatedUser {
-  id: string
-  email: string
-  firstName: string | null
-  lastName: string | null
-}
-
-/**
- * Narrow a full user row to the fields `request.user` exposes.
- *
- * Exported because `toPublicUser` (auth.controller.ts) builds on it — see
- * `AuthenticatedUser` above for why the two projections are related this
- * way round rather than duplicated.
- * @param user - The loaded, already-validated user row.
- * @returns The fields safe to attach to a request.
- */
-export function toAuthenticatedUser(user: User): AuthenticatedUser {
-  return { id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName }
-}
 
 /**
  * Read the bearer token out of the Authorization header.

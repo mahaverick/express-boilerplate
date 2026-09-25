@@ -13,7 +13,12 @@ import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { db, sql } from '@/services/database.service'
 import { isSessionDenied } from '@/services/session-denylist.service'
-import { issueRefreshToken, issueToken, rotateRefreshToken } from '@/utilities/token.utilities'
+import {
+  hashToken,
+  issueRefreshToken,
+  issueToken,
+  rotateRefreshToken,
+} from '@/services/session.service'
 
 const userRepository = new UserRepository()
 const userTokenRepository = new UserTokenRepository()
@@ -33,6 +38,16 @@ function uniqueEmail(): string {
  */
 function uniqueHash(): string {
   return randomBytes(32).toString('hex')
+}
+
+/**
+ * Order two ids for a sort, so an unordered result can be compared.
+ * @param left - One id.
+ * @param right - The other id.
+ * @returns A negative, zero or positive number, as `localeCompare` does.
+ */
+function byId(left: string, right: string): number {
+  return left.localeCompare(right)
 }
 
 describe('UserTokenRepository', () => {
@@ -163,7 +178,7 @@ describe('UserTokenRepository', () => {
   // which would revoke an entire session family for a legitimate user
   // whose token simply aged out (see "rejects an expired refresh token
   // without treating it as reuse of a live session",
-  // token.utilities.test.ts). This is why every caller of claimOnce must
+  // session.service.test.ts). This is why every caller of claimOnce must
   // check `expiresAt` on the row it gets back, itself, after claiming.
   it("claimOnce claims an expired-but-unrevoked row — expiry is the caller's job, not the predicate's", async () => {
     const userId = await createUser()
@@ -306,31 +321,23 @@ describe('UserTokenRepository', () => {
     expect(otherUsersRow?.revokedAt).toBeNull()
   })
 
-  it('revokeAllForUser denies every session it revoked, and only those', async () => {
+  it('revokeAllForUser returns each revoked session id once, and never another user’s', async () => {
     const userId = await createUser()
     const otherUserId = await createUser()
-
     const sessionIdOne = randomUUID()
     const sessionIdTwo = randomUUID()
-    const otherUsersSessionId = randomUUID()
 
-    await userTokenRepository.create({
-      userId,
-      purpose: 'refresh',
-      sessionId: sessionIdOne,
-      tokenHash: uniqueHash(),
-      expiresAt: new Date(Date.now() + 60_000),
-    })
-    await userTokenRepository.create({
-      userId,
-      purpose: 'refresh',
-      sessionId: sessionIdTwo,
-      tokenHash: uniqueHash(),
-      expiresAt: new Date(Date.now() + 60_000),
-    })
-    // No sessionId: proves the null filter neither crashes nor denies a
-    // bogus key built from `null` — this row contributes nothing to either
-    // assertion below.
+    // Two rows in one session: the returned ids are de-duplicated.
+    for (const sessionId of [sessionIdOne, sessionIdOne, sessionIdTwo]) {
+      await userTokenRepository.create({
+        userId,
+        purpose: 'refresh',
+        sessionId,
+        tokenHash: uniqueHash(),
+        expiresAt: new Date(Date.now() + 60_000),
+      })
+    }
+    // No sessionId: contributes nothing to the returned list.
     await userTokenRepository.create({
       userId,
       purpose: 'password_reset',
@@ -340,16 +347,37 @@ describe('UserTokenRepository', () => {
     await userTokenRepository.create({
       userId: otherUserId,
       purpose: 'refresh',
-      sessionId: otherUsersSessionId,
+      sessionId: randomUUID(),
       tokenHash: uniqueHash(),
       expiresAt: new Date(Date.now() + 60_000),
     })
 
-    await userTokenRepository.revokeAllForUser(userId)
+    const revoked = await userTokenRepository.revokeAllForUser(userId)
 
-    expect(await isSessionDenied(sessionIdOne)).toBe(true)
-    expect(await isSessionDenied(sessionIdTwo)).toBe(true)
-    expect(await isSessionDenied(otherUsersSessionId)).toBe(false)
+    expect(revoked.toSorted(byId)).toEqual([sessionIdOne, sessionIdTwo].toSorted(byId))
+  })
+
+  // A fresh user and live row per method, so each one revokes something.
+  it.each([
+    [
+      'revokeAllForSession',
+      (_userId: string, sessionId: string) => userTokenRepository.revokeAllForSession(sessionId),
+    ],
+    ['revokeAllForUser', (userId: string) => userTokenRepository.revokeAllForUser(userId)],
+    [
+      'revokeAllForUserExceptSession',
+      (userId: string) => userTokenRepository.revokeAllForUserExceptSession(userId, randomUUID()),
+    ],
+  ] as const)('%s revokes the row but never writes the denylist', async (_name, revoke) => {
+    const userId = await createUser()
+    const sessionId = randomUUID()
+    const issued = await issueRefreshToken(userId, sessionId)
+
+    await revoke(userId, sessionId)
+
+    const row = await userTokenRepository.findByHash(hashToken(issued.raw))
+    expect(row?.revokedAt).not.toBeNull()
+    expect(await isSessionDenied(sessionId)).toBe(false)
   })
 
   describe('revokeAllForUserExceptSession', () => {
@@ -413,12 +441,11 @@ describe('UserTokenRepository', () => {
       expect(row?.revokedAt).not.toBeNull()
     })
 
-    it('denies every revoked session except the spared one, and never another user’s', async () => {
+    it('returns every revoked session id except the spared one, and never another user’s', async () => {
       const userId = await createUser()
       const otherUserId = await createUser()
       const sparedSessionId = randomUUID()
       const revokedSessionId = randomUUID()
-      const otherUsersSessionId = randomUUID()
 
       await userTokenRepository.create({
         userId,
@@ -437,16 +464,17 @@ describe('UserTokenRepository', () => {
       await userTokenRepository.create({
         userId: otherUserId,
         purpose: 'refresh',
-        sessionId: otherUsersSessionId,
+        sessionId: randomUUID(),
         tokenHash: uniqueHash(),
         expiresAt: new Date(Date.now() + 60_000),
       })
 
-      await userTokenRepository.revokeAllForUserExceptSession(userId, sparedSessionId)
+      const revoked = await userTokenRepository.revokeAllForUserExceptSession(
+        userId,
+        sparedSessionId
+      )
 
-      expect(await isSessionDenied(sparedSessionId)).toBe(false)
-      expect(await isSessionDenied(revokedSessionId)).toBe(true)
-      expect(await isSessionDenied(otherUsersSessionId)).toBe(false)
+      expect(revoked).toEqual([revokedSessionId])
     })
 
     it('does not touch another user’s rows, even one sharing no session with the spared id', async () => {
@@ -532,9 +560,8 @@ describe('UserTokenRepository', () => {
       // asking for a verification mail.
       expect(await rotateRefreshToken(refresh.raw)).toBeDefined()
 
-      // IssuedToken (token.utilities.ts) carries no row id, and hashToken
-      // is not exported, so the verification row is identified by
-      // userId + purpose rather than by hash or id.
+      // IssuedToken (session.service.ts) carries no row id, so the
+      // verification row is identified by userId + purpose.
       const [remaining] = await db
         .select()
         .from(userTokenModel)

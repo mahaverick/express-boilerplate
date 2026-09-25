@@ -28,7 +28,7 @@
  *
  * BEFORE YOU RAISE IT, read this. That last sentence has a consequence for
  * the login timing defence, and this is the place it will actually be seen.
- * `login` (auth.controller.ts) answers an unknown email by verifying
+ * `login` (auth.service.ts) answers an unknown email by verifying
  * against a dummy hash, so both paths pay one real bcrypt comparison and
  * the response time cannot say whether an address is registered. The dummy
  * is hashed at the CURRENT value of this constant; every stored hash
@@ -140,3 +140,17 @@ export const GOOGLE_STRATEGY_NAME = 'google'
  * Accepted trade-off: concurrent tabs stop logging each other out; a token stolen and replayed within the window also gets a sibling.
  */
 export const REFRESH_REUSE_GRACE_MS = 10_000
+
+/**
+ * Machine-readable code identifying an expired (not merely invalid) access
+ * token, carried in the error envelope's `code` field — lets a client
+ * distinguish "try refreshing" from "log in again" without matching on
+ * `message`.
+ *
+ * Three emitters, all meaning "no longer honoured, refresh":
+ *   1. an expired token — `verifyBearerToken` (auth.middleware.ts);
+ *   2. a denied session — `requireAuth`'s `isSessionDenied` check;
+ *   3. a token with no `sid` claim — `requireSessionId`
+ *      (notification-stream.controller.ts), the only place that refuses one.
+ */
+export const ACCESS_TOKEN_EXPIRED_CODE = 'ACCESS_TOKEN_EXPIRED'

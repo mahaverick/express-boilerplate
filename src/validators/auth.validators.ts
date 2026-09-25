@@ -5,10 +5,10 @@
 // length floor as a weak-password guard, and a byte ceiling — see below).
 // Login's does not: a login attempt with a too-short or too-long password
 // must fail with the exact same "invalid credentials" response as a wrong
-// password for a real account (auth.controller.ts's identical-error
+// password for a real account (auth.service.ts's identical-error
 // property), and routing it through a DIFFERENT validation error first
-// would leak that distinction back to an unauthenticated caller before the
-// controller ever gets a chance to make the two paths agree.
+// would leak that distinction back to an unauthenticated caller before
+// login ever gets a chance to make the two paths agree.
 //
 // The byte ceiling on registration matters for a reason that has nothing to
 // do with password strength: `hashPassword` (password.utilities.ts) throws
@@ -41,7 +41,6 @@ import {
   MAX_PASSWORD_BYTES,
   MIN_PASSWORD_LENGTH,
 } from '@/constants/auth.constants'
-import { HttpError } from '@/middlewares/error.middleware'
 
 // z.email() validates the email FORMAT before any transform chained after
 // it runs — verified empirically: z.email().trim().toLowerCase() still
@@ -170,43 +169,3 @@ export const changePasswordSchema = z.object({
  * The validated shape of a change-password request body.
  */
 export type ChangePasswordInput = z.infer<typeof changePasswordSchema>
-
-/**
- * Parse a request body against a schema, translating a failure into the
- * envelope's field-level `errors` (error.middleware.ts / HttpError) rather
- * than a caller having to know to look for a zod-shaped error some other
- * way.
- *
- * Surfaces both halves of zod's flattened error: `fieldErrors` (keyed by
- * field name — unchanged from before this comment was written; every
- * existing caller reads `errors.<field>` directly and that keeps working
- * exactly as it did) and, additively, `formErrors` under `errors.formErrors`
- * whenever there is at least one. `formErrors` holds issues that name no
- * single field — a `.strict()` schema's "unrecognized key" being the
- * motivating case. Before this, that case reached the client as `errors:
- * {}`: a 400 that looks like a validation bug rather than what actually
- * happened, because the one issue that existed had nowhere to attach and was
- * silently dropped. `.strict()` is unusable without this fix — its entire
- * rejection IS a formErrors issue — even though no schema in this codebase
- * currently uses `.strict()` (see profile.validators.ts for why the
- * alternative was chosen there; this fix is what makes `.strict()` a real
- * option for whoever needs it next).
- * @param schema - The schema to validate against.
- * @param input - The raw, untrusted request body.
- * @returns The parsed, typed input.
- * @throws {HttpError} 400, with `errors` set to one message array per invalid field, plus `errors.formErrors` for any schema-level issue that names no single field.
- */
-export function parseBody<TSchema extends z.ZodType>(
-  schema: TSchema,
-  input: unknown
-): z.infer<TSchema> {
-  const result = schema.safeParse(input)
-  if (!result.success) {
-    const { fieldErrors, formErrors } = z.flattenError(result.error)
-    throw new HttpError('Validation failed', 400, undefined, {
-      ...fieldErrors,
-      ...(formErrors.length > 0 && { formErrors }),
-    })
-  }
-  return result.data
-}

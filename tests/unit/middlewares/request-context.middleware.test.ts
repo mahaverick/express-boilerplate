@@ -6,7 +6,8 @@
 // Docker-dependent test must never live under tests/unit/).
 import { type Request } from 'express'
 import { describe, expect, it } from 'vitest'
-import { requestContext, requestContextStore } from '@/middlewares/request-context.middleware'
+import { requestContext } from '@/middlewares/request-context.middleware'
+import { requestContextStore } from '@/services/request-context.service'
 
 describe('requestContext middleware', () => {
   it('sets requestId in the store from request.id', () => {

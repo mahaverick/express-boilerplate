@@ -11,8 +11,7 @@
 // would select every `users` column, `passwordHash` included, into the
 // response a later task's "list members" endpoint serializes straight to
 // JSON).
-import { and, count, DrizzleQueryError, eq, isNull, sql } from 'drizzle-orm'
-import postgres from 'postgres'
+import { and, count, eq, inArray, isNull, sql } from 'drizzle-orm'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import { tenantModel, type Tenant } from '@/database/models/tenant.model'
 import {
@@ -21,30 +20,9 @@ import {
   type UserMembership,
 } from '@/database/models/user-membership.model'
 import { userModel, type User } from '@/database/models/user.model'
-import { HttpError } from '@/middlewares/error.middleware'
+import { HttpError } from '@/errors/http-error'
+import { isUniqueViolation } from '@/errors/postgres-errors'
 import { db, type DbExecutor } from '@/services/database.service'
-
-// Postgres error code for a unique-constraint violation. Same source and
-// same value as base.repository.ts's own — see that file's comment for the
-// PostgreSQL docs reference.
-const UNIQUE_VIOLATION_CODE = '23505'
-
-/**
- * Whether an error thrown by `create` is a Postgres unique-constraint
- * violation — i.e. `user_memberships_user_id_tenant_id_unique`
- * (user-membership.model.ts) already has a row for this `(userId,
- * tenantId)` pair. A deliberate copy of `BaseRepository`'s
- * identically-named private helper, not an import — see
- * `auth-provider.repository.ts`'s own header comment for why a table that
- * cannot extend `BaseRepository` re-implements this three-line check
- * rather than exporting an internal.
- * @param error - The error thrown by the insert.
- * @returns True when the error is (or wraps) a 23505 unique violation.
- */
-function isUniqueViolation(error: unknown): boolean {
-  const cause = error instanceof DrizzleQueryError ? error.cause : error
-  return cause instanceof postgres.PostgresError && cause.code === UNIQUE_VIOLATION_CODE
-}
 
 /**
  * One `user_memberships` row for `listByTenant`, joined with the subset of
@@ -117,10 +95,11 @@ export class UserMembershipRepository {
    * user is soft-deleted, so this filter is what keeps a "deleted" account
    * from still appearing in a member list.
    * @param tenantId - The tenant whose members to list.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns One entry per member, in no particular guaranteed order.
    */
-  async listByTenant(tenantId: string): Promise<MembershipWithUser[]> {
-    return db
+  async listByTenant(tenantId: string, executor: DbExecutor = db): Promise<MembershipWithUser[]> {
+    return executor
       .select({
         membership: userMembershipModel,
         user: {
@@ -145,10 +124,11 @@ export class UserMembershipRepository {
    * the role. A soft-deleted tenant is excluded, same as
    * `TenantRepository.listForUser`.
    * @param userId - The user whose memberships to list.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns One entry per (still visible) tenant this user belongs to, in no particular guaranteed order.
    */
-  async listByUser(userId: string): Promise<MembershipWithTenant[]> {
-    return db
+  async listByUser(userId: string, executor: DbExecutor = db): Promise<MembershipWithTenant[]> {
+    return executor
       .select({ membership: userMembershipModel, tenant: tenantModel })
       .from(userMembershipModel)
       .innerJoin(tenantModel, eq(userMembershipModel.tenantId, tenantModel.id))
@@ -169,12 +149,13 @@ export class UserMembershipRepository {
    * caller that hits this should treat it as "already a member", not as an
    * unexpected failure.
    * @param data - The row's initial column values.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns The inserted row.
    */
-  async create(data: NewUserMembership): Promise<UserMembership> {
+  async create(data: NewUserMembership, executor: DbExecutor = db): Promise<UserMembership> {
     try {
-      const [row] = await db.insert(userMembershipModel).values(data).returning()
-      // db.insert(...).values(one object).returning() always returns
+      const [row] = await executor.insert(userMembershipModel).values(data).returning()
+      // insert(...).values(one object).returning() always returns
       // exactly one row when the insert does not throw — same reasoning as
       // UserRepository.insertOne (user.repository.ts).
       if (row === undefined) throw new HttpError('Insert returned no row', 500)
@@ -273,7 +254,7 @@ export class UserMembershipRepository {
    * (`SELECT … FOR UPDATE`, in id order so two lockers never deadlock). A
    * concurrent demotion or removal of an owner waits here, which is what
    * makes the last-owner check atomic. Only meaningful inside a
-   * transaction.
+   * transaction. Lock order: this first, then `lockMemberships`.
    * @param tenantId - The tenant whose owners to lock.
    * @param executor - The transaction to hold the lock in.
    * @returns The locked owner memberships.
@@ -284,6 +265,36 @@ export class UserMembershipRepository {
       .from(userMembershipModel)
       .where(and(eq(userMembershipModel.tenantId, tenantId), eq(userMembershipModel.role, 'owner')))
       .orderBy(userMembershipModel.id)
+      .for('update')
+  }
+
+  /**
+   * Lock and return the memberships of `userIds` in a tenant until the
+   * transaction ends (`SELECT … FOR UPDATE`, in `user_id` order).
+   *
+   * Lock order within one transaction: the tenant's owner rows first
+   * (`lockOwners`), then this. Every service that locks memberships follows
+   * it, so two transactions never wait on each other in a cycle.
+   * @param tenantId - The tenant.
+   * @param userIds - The users whose memberships to lock. Duplicates and non-members are ignored.
+   * @param executor - The transaction to hold the locks in.
+   * @returns The locked memberships that exist, in `user_id` order.
+   */
+  async lockMemberships(
+    tenantId: string,
+    userIds: readonly string[],
+    executor: DbExecutor = db
+  ): Promise<UserMembership[]> {
+    return executor
+      .select()
+      .from(userMembershipModel)
+      .where(
+        and(
+          eq(userMembershipModel.tenantId, tenantId),
+          inArray(userMembershipModel.userId, userIds)
+        )
+      )
+      .orderBy(userMembershipModel.userId)
       .for('update')
   }
 }

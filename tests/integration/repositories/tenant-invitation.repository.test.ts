@@ -12,7 +12,7 @@ import {
 } from '@/database/models/tenant-invitation.model'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
-import { HttpError } from '@/middlewares/error.middleware'
+import { HttpError } from '@/errors/http-error'
 import {
   TenantInvitationRepository,
   type NewPendingInvitation,

@@ -5,15 +5,9 @@
 // HTTP API on 8025) — never mocked. See CLAUDE.md on why a test like this
 // must live under tests/integration/, never tests/unit/.
 //
-// The gate this task's controller addendum requires (task-2-brief.md,
-// "Controller addendum", "The test this ruling requires") lives here:
-// "resolves identically for a recipient regardless of transport failure".
-// `auth.controller.ts` does not call `sendMail` anywhere yet — there is no
-// endpoint to wire it to at this point in the plan's execution order
-// (Ruling C, progress.md: 0, 1, 4, 2, 3, 5, 6, 7, 8) — so this asserts the
-// addendum's own named fallback: the equivalent property at the service
-// boundary. The end-to-end, byte-identical-HTTP-response assertion belongs
-// to Task 6.
+// "Resolves identically for a recipient regardless of transport failure"
+// is asserted here, at the service boundary: no request handler calls
+// `sendMail` directly; mail reaches it through the queue (email.worker.ts).
 //
 // Task 3, fix round 1: `sendMail` now RENDERS internally (`MailMessage` is
 // `{ to, templateKey, variables }`, not pre-rendered subject/text/html) —
@@ -32,7 +26,7 @@ import {
   type EmailLog,
   type NewEmailLog,
 } from '@/database/models/email-log.model'
-import { HttpError } from '@/middlewares/error.middleware'
+import { HttpError } from '@/errors/http-error'
 import { EmailLogRepository } from '@/repositories/email-log.repository'
 import { db, sql } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
