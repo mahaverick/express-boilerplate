@@ -34,7 +34,7 @@ import {
   type SoftDeleteOptions,
   type Touched,
 } from '@/repositories/base.repository'
-import { db } from '@/services/database.service'
+import { db, type DbExecutor } from '@/services/database.service'
 import { denySession } from '@/services/session-denylist.service'
 
 /**
@@ -56,10 +56,15 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    * Find a token row by its hash, regardless of purpose.
    * @param tokenHash - The SHA-256 hash of the raw token, hex-encoded.
    * @param options - Soft-delete visibility options.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns The matching row, or undefined when none exists.
    */
-  findByHash(tokenHash: string, options: SoftDeleteOptions = {}): Promise<UserToken | undefined> {
-    return this.selectOne(this.scope(eq(userTokenModel.tokenHash, tokenHash), options))
+  findByHash(
+    tokenHash: string,
+    options: SoftDeleteOptions = {},
+    executor: DbExecutor = db
+  ): Promise<UserToken | undefined> {
+    return this.selectOne(this.scope(eq(userTokenModel.tokenHash, tokenHash), options), executor)
   }
 
   /**
@@ -96,10 +101,15 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    * `revokedAt` alone.
    * @param tokenHash - The SHA-256 hash of the raw token, hex-encoded.
    * @param purpose - The purpose the token must have been issued for; a row that exists but for a different purpose is left untouched and this resolves undefined, exactly as if no row matched at all.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns The now-claimed row, EXPIRY NOT CHECKED — its `expiresAt` is still the pre-claim value the caller must validate (its `userId`/`sessionId` are likewise still the values to act on) — or undefined when no not-yet-revoked row of that purpose matched.
    */
-  async claimOnce(tokenHash: string, purpose: TokenPurpose): Promise<UserToken | undefined> {
-    const [row] = await db
+  async claimOnce(
+    tokenHash: string,
+    purpose: TokenPurpose,
+    executor: DbExecutor = db
+  ): Promise<UserToken | undefined> {
+    const [row] = await executor
       .update(userTokenModel)
       .set(this.touched({ revokedAt: sql`now()`, consumedAt: sql`now()` }))
       .where(
@@ -115,10 +125,15 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    * Whether a token row was consumed within the last `ms` milliseconds, judged by Postgres's own clock — never the app's — so the window can't drift with clock skew between the two.
    * @param tokenHash - The SHA-256 hash of the raw token, hex-encoded.
    * @param ms - The window's length, in milliseconds.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns True when the row exists and its `consumedAt` is within the window; false when it doesn't exist, or was never consumed, or the window has passed.
    */
-  async wasConsumedWithin(tokenHash: string, ms: number): Promise<boolean> {
-    const [row] = await db
+  async wasConsumedWithin(
+    tokenHash: string,
+    ms: number,
+    executor: DbExecutor = db
+  ): Promise<boolean> {
+    const [row] = await executor
       .select({
         withinWindow: sql<
           boolean | null
@@ -134,11 +149,12 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
   /**
    * Whether a session was explicitly revoked: a row revoked without being consumed (logout, reuse, reset).
    * @param sessionId - The session (rotation-chain) id.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns True when any row in the session carries that kill marker.
    */
-  async isSessionKilled(sessionId: string): Promise<boolean> {
+  async isSessionKilled(sessionId: string, executor: DbExecutor = db): Promise<boolean> {
     // claimOnce sets revokedAt AND consumedAt; only explicit revocation sets revokedAt alone.
-    const [row] = await db
+    const [row] = await executor
       .select({ id: userTokenModel.id })
       .from(userTokenModel)
       .where(
@@ -157,10 +173,11 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    * single-session logout and by reuse detection to contain a compromised
    * chain.
    * @param sessionId - The session id shared by every token in the chain.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns Resolves once every matching row is revoked and the session's access tokens are denied, best-effort.
    */
-  async revokeAllForSession(sessionId: string): Promise<void> {
-    await db
+  async revokeAllForSession(sessionId: string, executor: DbExecutor = db): Promise<void> {
+    await executor
       .update(userTokenModel)
       .set(this.touched({ revokedAt: sql`now()` }))
       .where(
@@ -198,10 +215,11 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    * and needs the rotation and this revocation to share a transaction to
    * close properly; not attempted here.
    * @param userId - The user whose tokens should all be revoked.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns Resolves once every matching row is revoked and every revoked session's access tokens are denied.
    */
-  async revokeAllForUser(userId: string): Promise<void> {
-    const revoked = await db
+  async revokeAllForUser(userId: string, executor: DbExecutor = db): Promise<void> {
+    const revoked = await executor
       .update(userTokenModel)
       .set(this.touched({ revokedAt: sql`now()` }))
       .where(
@@ -251,10 +269,15 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    * revocation and denial side.
    * @param userId - The user whose tokens should all be revoked, except one session's.
    * @param sessionId - The one session id to spare; every token sharing it is left untouched.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns Resolves once every matching row is revoked and every revoked session's access tokens are denied, best-effort.
    */
-  async revokeAllForUserExceptSession(userId: string, sessionId: string): Promise<void> {
-    const revoked = await db
+  async revokeAllForUserExceptSession(
+    userId: string,
+    sessionId: string,
+    executor: DbExecutor = db
+  ): Promise<void> {
+    const revoked = await executor
       .update(userTokenModel)
       .set(this.touched({ revokedAt: sql`now()` }))
       .where(
@@ -280,10 +303,15 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    * device as a side effect of requesting an email.
    * @param userId - The user whose tokens should be revoked.
    * @param purpose - The only purpose to revoke; every other purpose is untouched.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns Resolves once every matching row is revoked.
    */
-  async revokeAllForUserAndPurpose(userId: string, purpose: TokenPurpose): Promise<void> {
-    await db
+  async revokeAllForUserAndPurpose(
+    userId: string,
+    purpose: TokenPurpose,
+    executor: DbExecutor = db
+  ): Promise<void> {
+    await executor
       .update(userTokenModel)
       .set(this.touched({ revokedAt: sql`now()` }))
       .where(
@@ -296,20 +324,25 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
   /**
    * Select the single token row matching a condition.
    * @param where - The condition to match, or undefined to match every row.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns The matching row, or undefined when none exists.
    */
-  protected async selectOne(where: SQL | undefined): Promise<UserToken | undefined> {
-    const [row] = await db.select().from(userTokenModel).where(where).limit(1)
+  protected async selectOne(
+    where: SQL | undefined,
+    executor: DbExecutor = db
+  ): Promise<UserToken | undefined> {
+    const [row] = await executor.select().from(userTokenModel).where(where).limit(1)
     return row
   }
 
   /**
    * Insert a single token row.
    * @param values - The row's initial column values.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns The inserted row.
    */
-  protected async insertOne(values: NewUserToken): Promise<UserToken> {
-    const [row] = await db.insert(userTokenModel).values(values).returning()
+  protected async insertOne(values: NewUserToken, executor: DbExecutor = db): Promise<UserToken> {
+    const [row] = await executor.insert(userTokenModel).values(values).returning()
     // db.insert(...).values(one object).returning() always returns exactly
     // one row when the insert does not throw; the driver's own types just
     // cannot express "same length as input" for a single-row insert.
@@ -321,23 +354,29 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    * Update the single token row matching a condition.
    * @param where - The condition to match, already scoped for soft-delete visibility.
    * @param values - The columns to change, already carrying `updatedAt`.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns The updated row, or undefined when no matching row exists.
    */
   protected async updateOne(
     where: SQL | undefined,
-    values: Touched<Partial<Omit<NewUserToken, 'id' | 'createdAt' | 'updatedAt'>>>
+    values: Touched<Partial<Omit<NewUserToken, 'id' | 'createdAt' | 'updatedAt'>>>,
+    executor: DbExecutor = db
   ): Promise<UserToken | undefined> {
-    const [row] = await db.update(userTokenModel).set(values).where(where).returning()
+    const [row] = await executor.update(userTokenModel).set(values).where(where).returning()
     return row
   }
 
   /**
    * Set `deletedAt` on the single token row matching a condition.
    * @param where - The condition to match, already scoped to not-yet-deleted rows.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns The updated row, or undefined when no matching row exists.
    */
-  protected async markDeleted(where: SQL | undefined): Promise<UserToken | undefined> {
-    const [row] = await db
+  protected async markDeleted(
+    where: SQL | undefined,
+    executor: DbExecutor = db
+  ): Promise<UserToken | undefined> {
+    const [row] = await executor
       .update(userTokenModel)
       .set(this.touched({ deletedAt: sql`now()` }))
       .where(where)

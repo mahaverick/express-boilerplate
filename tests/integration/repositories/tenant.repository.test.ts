@@ -216,26 +216,6 @@ describe('TenantRepository', () => {
     })
   })
 
-  describe('findBySlugOrId', () => {
-    it('finds a tenant by slug', async () => {
-      const ownerId = await createUser()
-      const tenant = await createTenant(ownerId)
-
-      expect(await tenantRepository.findBySlugOrId(tenant.slug)).toMatchObject({ id: tenant.id })
-    })
-
-    it('finds a tenant by id', async () => {
-      const ownerId = await createUser()
-      const tenant = await createTenant(ownerId)
-
-      expect(await tenantRepository.findBySlugOrId(tenant.id)).toMatchObject({ id: tenant.id })
-    })
-
-    it('returns undefined when neither a slug nor an id matches', async () => {
-      expect(await tenantRepository.findBySlugOrId(randomUUID())).toBeUndefined()
-    })
-  })
-
   describe('findActiveBySlug', () => {
     it('finds a tenant that is visible and active', async () => {
       const ownerId = await createUser()

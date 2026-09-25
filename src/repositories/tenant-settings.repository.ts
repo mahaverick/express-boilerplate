@@ -13,7 +13,7 @@ import {
   type NewTenantSettings,
   type TenantSettings,
 } from '@/database/models/tenant.model'
-import { db } from '@/services/database.service'
+import { db, type DbExecutor } from '@/services/database.service'
 
 /**
  * The columns `TenantSettingsRepository.update` may change. Excludes
@@ -34,10 +34,14 @@ export class TenantSettingsRepository {
   /**
    * Find the settings row for one tenant.
    * @param tenantId - The tenant whose settings to fetch.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns The matching row, or undefined when no such tenant exists (every tenant that does exist has exactly one settings row, created atomically alongside it).
    */
-  async findByTenantId(tenantId: string): Promise<TenantSettings | undefined> {
-    const [row] = await db
+  async findByTenantId(
+    tenantId: string,
+    executor: DbExecutor = db
+  ): Promise<TenantSettings | undefined> {
+    const [row] = await executor
       .select()
       .from(tenantSettingsModel)
       .where(eq(tenantSettingsModel.tenantId, tenantId))
@@ -48,16 +52,18 @@ export class TenantSettingsRepository {
    * Update one tenant's settings.
    * @param tenantId - The tenant whose settings to update.
    * @param values - The columns to change.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns The updated row, or undefined when no settings row exists for this tenant id.
    */
   async update(
     tenantId: string,
-    values: UpdateTenantSettingsInput
+    values: UpdateTenantSettingsInput,
+    executor: DbExecutor = db
   ): Promise<TenantSettings | undefined> {
     // `sql\`now()\`` — evaluated by Postgres, not read from the
     // application's clock — same reasoning as `BaseRepository.touched`
     // (base.repository.ts).
-    const [row] = await db
+    const [row] = await executor
       .update(tenantSettingsModel)
       .set({ ...values, updatedAt: sql`now()` })
       .where(eq(tenantSettingsModel.tenantId, tenantId))

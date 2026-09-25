@@ -18,7 +18,7 @@ import {
   type Notification,
 } from '@/database/models/notification.model'
 import { HttpError } from '@/errors/http-error'
-import { db } from '@/services/database.service'
+import { db, type DbExecutor } from '@/services/database.service'
 
 /**
  * The two fields a keyset pagination cursor for `NotificationRepository
@@ -104,10 +104,11 @@ export class NotificationRepository {
   /**
    * Insert one notification.
    * @param data - The row's initial column values.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns The inserted row, including its generated `id` and `createdAt`.
    */
-  async create(data: NewNotification): Promise<Notification> {
-    const [row] = await db.insert(notificationModel).values(data).returning()
+  async create(data: NewNotification, executor: DbExecutor = db): Promise<Notification> {
+    const [row] = await executor.insert(notificationModel).values(data).returning()
     // db.insert(...).values(one object).returning() always returns exactly
     // one row when the insert does not throw; the driver's own types just
     // cannot express "same length as input" for a single-row insert — same
@@ -121,12 +122,14 @@ export class NotificationRepository {
    * (`ON CONFLICT (dedupe_key) DO NOTHING`). A retried producer calls this
    * safely.
    * @param data - The row's column values, including the idempotency key.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns The inserted row, or undefined when the key was already used.
    */
   async createOnce(
-    data: NewNotification & { dedupeKey: string }
+    data: NewNotification & { dedupeKey: string },
+    executor: DbExecutor = db
   ): Promise<Notification | undefined> {
-    const [row] = await db
+    const [row] = await executor
       .insert(notificationModel)
       .values(data)
       .onConflictDoNothing({ target: notificationModel.dedupeKey })
@@ -144,11 +147,13 @@ export class NotificationRepository {
    * @param options - `limit` (page size) and an optional `cursor` — the last row of the previous page, to resume after.
    * @param options.limit - How many notifications to return on this page.
    * @param options.cursor - The last row of the previous page, or undefined to fetch the first page.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns Up to `limit` notifications, and `nextCursor` (present only when more rows remain) to fetch the next page.
    */
   async list(
     userId: string,
-    options: { limit: number; cursor?: NotificationCursor }
+    options: { limit: number; cursor?: NotificationCursor },
+    executor: DbExecutor = db
   ): Promise<{ notifications: Notification[]; nextCursor?: string }> {
     const conditions = [eq(notificationModel.userId, userId)]
 
@@ -172,7 +177,7 @@ export class NotificationRepository {
       )
     }
 
-    const notifications = await db
+    const notifications = await executor
       .select()
       .from(notificationModel)
       .where(and(...conditions))
@@ -205,10 +210,15 @@ export class NotificationRepository {
    * the contents of) any user's notification given its id alone.
    * @param id - The notification's id.
    * @param userId - The user who must own it.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns The matching row, or undefined when no such notification exists for this user (including when it exists but belongs to someone else).
    */
-  async findByIdAndUser(id: string, userId: string): Promise<Notification | undefined> {
-    const [row] = await db
+  async findByIdAndUser(
+    id: string,
+    userId: string,
+    executor: DbExecutor = db
+  ): Promise<Notification | undefined> {
+    const [row] = await executor
       .select()
       .from(notificationModel)
       .where(and(eq(notificationModel.id, id), eq(notificationModel.userId, userId)))
@@ -223,10 +233,15 @@ export class NotificationRepository {
    * itself rather than a read-then-write race in the caller.
    * @param id - The notification's id.
    * @param userId - The user who must own it.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns The updated row, or undefined when no matching, not-yet-read row owned by this user exists.
    */
-  async markRead(id: string, userId: string): Promise<Notification | undefined> {
-    const [row] = await db
+  async markRead(
+    id: string,
+    userId: string,
+    executor: DbExecutor = db
+  ): Promise<Notification | undefined> {
+    const [row] = await executor
       .update(notificationModel)
       .set({ readAt: sql`now()` })
       .where(
@@ -244,10 +259,11 @@ export class NotificationRepository {
    * Mark every currently-unread notification for one user read, in a
    * single statement.
    * @param userId - The user whose unread notifications should be marked read.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns How many rows were updated (0 when the user had none unread).
    */
-  async markAllRead(userId: string): Promise<number> {
-    const result = await db
+  async markAllRead(userId: string, executor: DbExecutor = db): Promise<number> {
+    const result = await executor
       .update(notificationModel)
       .set({ readAt: sql`now()` })
       .where(and(eq(notificationModel.userId, userId), isNull(notificationModel.readAt)))
@@ -265,10 +281,11 @@ export class NotificationRepository {
    * Delete one notification, scoped to its owner.
    * @param id - The notification's id.
    * @param userId - The user who must own it.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns True when a row was deleted; false when no matching row owned by this user existed.
    */
-  async deleteOne(id: string, userId: string): Promise<boolean> {
-    const result = await db
+  async deleteOne(id: string, userId: string, executor: DbExecutor = db): Promise<boolean> {
+    const result = await executor
       .delete(notificationModel)
       .where(and(eq(notificationModel.id, id), eq(notificationModel.userId, userId)))
     // See markAllRead's own comment: `.count`, not `.rowCount`.

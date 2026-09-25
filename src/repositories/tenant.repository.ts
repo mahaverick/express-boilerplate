@@ -1,9 +1,9 @@
 // src/repositories/tenant.repository.ts
 //
-// `findBySlug`/`findBySlugOrId`/`findActiveBySlug` build their own
-// conditions and go through `this.selectOne` — the same
-// `BaseRepository.scope`-based shape `UserRepository.findByEmail` uses —
-// so none of them can drift from `findById`'s soft-delete behaviour.
+// `findBySlug`/`findActiveBySlug` build their own conditions and go
+// through `this.selectOne` — the same `BaseRepository.scope`-based shape
+// `UserRepository.findByEmail` uses — so neither can drift from
+// `findById`'s soft-delete behaviour.
 //
 // `create` is the one method that is NOT a thin wrapper over
 // `BaseRepository`'s inherited flow: creating a tenant also creates its
@@ -12,8 +12,8 @@
 // tenant with no settings or no owner. It therefore does not call
 // `BaseRepository.create` (nor `TenantSettingsRepository`/
 // `UserMembershipRepository` — see this method's own comment for why) and
-// instead writes all three rows directly against a `db.transaction()`'s
-// `tx` handle, mirroring `register()`'s user+auth_provider transaction in
+// instead writes all three rows directly against a `withTransaction`
+// handle, mirroring `register()`'s user+auth_provider transaction in
 // auth.controller.ts.
 //
 // Overriding `create` still has to satisfy `BaseRepository`'s own
@@ -39,7 +39,7 @@ import {
   type SoftDeleteOptions,
   type Touched,
 } from '@/repositories/base.repository'
-import { db } from '@/services/database.service'
+import { db, withTransaction, type DbExecutor } from '@/services/database.service'
 
 /**
  * The columns `TenantRepository.create` accepts for the tenant row itself,
@@ -80,38 +80,15 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
    * Find a tenant by its slug.
    * @param slug - The slug to search for.
    * @param options - Soft-delete visibility options.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns The matching tenant, or undefined when none exists — including when it exists but is soft-deleted and `includeDeleted` was not set.
    */
-  findBySlug(slug: string, options: SoftDeleteOptions = {}): Promise<Tenant | undefined> {
-    return this.selectOne(this.scope(eq(tenantModel.slug, slug), options))
-  }
-
-  /**
-   * Find a tenant by either its slug or its id — a single lookup for a
-   * caller that may have been handed either form (a route param that could
-   * be a human-chosen slug or a raw id).
-   * @param slugOrId - The slug or id to search for.
-   * @param options - Soft-delete visibility options.
-   * @returns The matching tenant, or undefined when none exists — including when it exists but is soft-deleted and `includeDeleted` was not set.
-   */
-  findBySlugOrId(slugOrId: string, options: SoftDeleteOptions = {}): Promise<Tenant | undefined> {
-    // Built with `sql` directly, not the `or()` helper: `or()`'s return
-    // type is `SQL | undefined` (it can receive zero conditions, even
-    // though this call site always passes two), which `scope`'s
-    // `condition: SQL` parameter does not accept — same reasoning
-    // `UserRepository.findByEmail` (user.repository.ts) already gives for
-    // building its own condition this way. The parentheses are explicit
-    // and load-bearing: `scope` combines this with `and(..., isNull(
-    // deletedAt))`, and an un-parenthesized `slug = x or id = x` there
-    // would bind as `slug = x or (id = x and deleted_at is null)` —
-    // SQL's `and` binds tighter than `or` — silently letting a
-    // soft-deleted row match by slug alone.
-    return this.selectOne(
-      this.scope(
-        sql`(${tenantModel.slug} = ${slugOrId} or ${tenantModel.id} = ${slugOrId})`,
-        options
-      )
-    )
+  findBySlug(
+    slug: string,
+    options: SoftDeleteOptions = {},
+    executor: DbExecutor = db
+  ): Promise<Tenant | undefined> {
+    return this.selectOne(this.scope(eq(tenantModel.slug, slug), options), executor)
   }
 
   /**
@@ -121,23 +98,27 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
    * tenant-scoped route even has a tenant to attach — a `suspended` tenant
    * must 404 here exactly like a nonexistent one, even though its row (and
    * `findBySlug`'s view of it) is otherwise perfectly intact. Unlike
-   * `findBySlug`/`findBySlugOrId`, this method takes no `SoftDeleteOptions`
-   * — "active" is not something a caller should ever be able to opt out
-   * of; a caller that needs a suspended/archived tenant's row wants
+   * `findBySlug`, this method takes no `SoftDeleteOptions` — "active" is
+   * not something a caller should ever be able to opt out of; a caller
+   * that needs a suspended/archived tenant's row wants
    * `findBySlug(slug, { includeDeleted: true })` or a plain `findBySlug`,
    * not this method with a bypass flag bolted on.
    * @param slug - The slug to search for.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns The matching tenant, or undefined when no tenant with this slug is both visible and active.
    */
-  findActiveBySlug(slug: string): Promise<Tenant | undefined> {
-    // `sql` directly, not `and()` — see `findBySlugOrId`'s own comment for
-    // why `and()`'s `SQL | undefined` return type does not satisfy
-    // `scope`'s `condition: SQL` parameter. Plain `and` associativity means
-    // no extra parentheses are needed for correctness here (unlike
-    // `findBySlugOrId`'s `or`), but this file still combines every
-    // multi-condition lookup through `sql` for one consistent shape.
+  findActiveBySlug(slug: string, executor: DbExecutor = db): Promise<Tenant | undefined> {
+    // `sql` directly, not `and()`: `and()`'s return type is `SQL |
+    // undefined` (it can receive zero conditions), which `scope`'s
+    // `condition: SQL` parameter does not accept — same reasoning
+    // `UserRepository.findByEmail` (user.repository.ts) already gives for
+    // building its own condition this way. Plain `and` associativity means
+    // no extra parentheses are needed for correctness here, but this file
+    // still combines every multi-condition lookup through `sql` for one
+    // consistent shape.
     return this.selectOne(
-      this.scope(sql`${tenantModel.slug} = ${slug} and ${tenantModel.lifecycleState} = 'active'`)
+      this.scope(sql`${tenantModel.slug} = ${slug} and ${tenantModel.lifecycleState} = 'active'`),
+      executor
     )
   }
 
@@ -149,10 +130,14 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
    * when its tenant is archived) — the same soft-delete visibility every
    * other lookup on this table gives.
    * @param userId - The user whose tenant memberships to list.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns One entry per tenant this user is (still visibly) a member of, in no particular guaranteed order.
    */
-  async listForUser(userId: string): Promise<Array<{ tenant: Tenant; role: MembershipRole }>> {
-    return db
+  async listForUser(
+    userId: string,
+    executor: DbExecutor = db
+  ): Promise<Array<{ tenant: Tenant; role: MembershipRole }>> {
+    return executor
       .select({ tenant: tenantModel, role: userMembershipModel.role })
       .from(userMembershipModel)
       .innerJoin(tenantModel, eq(userMembershipModel.tenantId, tenantModel.id))
@@ -168,13 +153,16 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
    * point (most commonly, `input.slug` colliding with
    * `tenants_slug_unique`) rolls back all three; nothing this method
    * returns can exist without its settings row and owner membership also
-   * existing.
+   * existing. Delegates to `withTransaction`, which reuses a passed-in
+   * transaction instead of opening a nested one — so a caller composing
+   * this inside its own transaction still gets one atomic unit, not two.
    * @param input - The tenant's initial columns, plus `ownerId` — the user whose owner membership is created alongside it.
+   * @param executor - An existing transaction to compose into, or the pool (default) to open a new transaction in.
    * @returns The newly created tenant row (not the settings or membership rows — fetch those separately via `TenantSettingsRepository.findByTenantId`/`UserMembershipRepository.findByUserAndTenant` if needed).
    */
-  async create(input: CreateTenantInput): Promise<Tenant> {
+  async create(input: CreateTenantInput, executor: DbExecutor = db): Promise<Tenant> {
     try {
-      return await db.transaction(async (tx) => {
+      return await withTransaction(async (tx) => {
         const [tenant] = await tx
           .insert(tenantModel)
           .values({
@@ -201,7 +189,7 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
         })
 
         return tenant
-      })
+      }, executor)
     } catch (error) {
       if (isUniqueViolation(error)) {
         throw new HttpError('A tenant with this slug already exists', 409)
@@ -213,10 +201,14 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
   /**
    * Select the single tenant matching a condition.
    * @param where - The condition to match, or undefined to match every row.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns The matching tenant, or undefined when none exists.
    */
-  protected async selectOne(where: SQL | undefined): Promise<Tenant | undefined> {
-    const [row] = await db.select().from(tenantModel).where(where).limit(1)
+  protected async selectOne(
+    where: SQL | undefined,
+    executor: DbExecutor = db
+  ): Promise<Tenant | undefined> {
+    const [row] = await executor.select().from(tenantModel).where(where).limit(1)
     return row
   }
 
@@ -227,10 +219,11 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
    * `BaseRepository`, so a concrete subclass must implement it regardless
    * of whether anything calls it today.
    * @param values - The row's initial column values.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns The inserted tenant.
    */
-  protected async insertOne(values: NewTenant): Promise<Tenant> {
-    const [row] = await db.insert(tenantModel).values(values).returning()
+  protected async insertOne(values: NewTenant, executor: DbExecutor = db): Promise<Tenant> {
+    const [row] = await executor.insert(tenantModel).values(values).returning()
     if (row === undefined) throw new HttpError('Insert returned no row', 500)
     return row
   }
@@ -239,23 +232,29 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
    * Update the single tenant matching a condition.
    * @param where - The condition to match, already scoped for soft-delete visibility.
    * @param values - The columns to change, already carrying `updatedAt`.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns The updated tenant, or undefined when no matching row exists.
    */
   protected async updateOne(
     where: SQL | undefined,
-    values: Touched<Partial<Omit<NewTenant, 'id' | 'createdAt' | 'updatedAt'>>>
+    values: Touched<Partial<Omit<NewTenant, 'id' | 'createdAt' | 'updatedAt'>>>,
+    executor: DbExecutor = db
   ): Promise<Tenant | undefined> {
-    const [row] = await db.update(tenantModel).set(values).where(where).returning()
+    const [row] = await executor.update(tenantModel).set(values).where(where).returning()
     return row
   }
 
   /**
    * Set `deletedAt` on the single tenant matching a condition.
    * @param where - The condition to match, already scoped to not-yet-deleted rows.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns The updated tenant, or undefined when no matching row exists.
    */
-  protected async markDeleted(where: SQL | undefined): Promise<Tenant | undefined> {
-    const [row] = await db
+  protected async markDeleted(
+    where: SQL | undefined,
+    executor: DbExecutor = db
+  ): Promise<Tenant | undefined> {
+    const [row] = await executor
       .update(tenantModel)
       .set(this.touched({ deletedAt: sql`now()` }))
       .where(where)

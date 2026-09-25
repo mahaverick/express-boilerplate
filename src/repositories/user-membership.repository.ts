@@ -95,10 +95,11 @@ export class UserMembershipRepository {
    * user is soft-deleted, so this filter is what keeps a "deleted" account
    * from still appearing in a member list.
    * @param tenantId - The tenant whose members to list.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns One entry per member, in no particular guaranteed order.
    */
-  async listByTenant(tenantId: string): Promise<MembershipWithUser[]> {
-    return db
+  async listByTenant(tenantId: string, executor: DbExecutor = db): Promise<MembershipWithUser[]> {
+    return executor
       .select({
         membership: userMembershipModel,
         user: {
@@ -123,10 +124,11 @@ export class UserMembershipRepository {
    * the role. A soft-deleted tenant is excluded, same as
    * `TenantRepository.listForUser`.
    * @param userId - The user whose memberships to list.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns One entry per (still visible) tenant this user belongs to, in no particular guaranteed order.
    */
-  async listByUser(userId: string): Promise<MembershipWithTenant[]> {
-    return db
+  async listByUser(userId: string, executor: DbExecutor = db): Promise<MembershipWithTenant[]> {
+    return executor
       .select({ membership: userMembershipModel, tenant: tenantModel })
       .from(userMembershipModel)
       .innerJoin(tenantModel, eq(userMembershipModel.tenantId, tenantModel.id))
@@ -147,11 +149,12 @@ export class UserMembershipRepository {
    * caller that hits this should treat it as "already a member", not as an
    * unexpected failure.
    * @param data - The row's initial column values.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns The inserted row.
    */
-  async create(data: NewUserMembership): Promise<UserMembership> {
+  async create(data: NewUserMembership, executor: DbExecutor = db): Promise<UserMembership> {
     try {
-      const [row] = await db.insert(userMembershipModel).values(data).returning()
+      const [row] = await executor.insert(userMembershipModel).values(data).returning()
       // db.insert(...).values(one object).returning() always returns
       // exactly one row when the insert does not throw — same reasoning as
       // UserRepository.insertOne (user.repository.ts).

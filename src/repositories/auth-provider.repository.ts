@@ -32,13 +32,15 @@ export class AuthProviderRepository {
    * deciding whether to create a new link or a new user.
    * @param provider - Which auth method to look up.
    * @param providerId - The external identity within that provider's namespace (an email address for `'email'`, Google's profile id for `'google'`).
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns The matching row, or undefined when no user has linked this identity yet.
    */
   async findByProviderAndId(
     provider: AuthProvider,
-    providerId: string
+    providerId: string,
+    executor: DbExecutor = db
   ): Promise<AuthProviderRecord | undefined> {
-    const [row] = await db
+    const [row] = await executor
       .select()
       .from(authProviderModel)
       .where(
@@ -51,10 +53,11 @@ export class AuthProviderRepository {
    * Every auth method one user has — e.g. an `'email'` row and a `'google'`
    * row for an account that has linked both.
    * @param userId - The user whose provider rows to fetch.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns All matching rows, in no particular guaranteed order.
    */
-  async findByUser(userId: string): Promise<AuthProviderRecord[]> {
-    return db.select().from(authProviderModel).where(eq(authProviderModel.userId, userId))
+  async findByUser(userId: string, executor: DbExecutor = db): Promise<AuthProviderRecord[]> {
+    return executor.select().from(authProviderModel).where(eq(authProviderModel.userId, userId))
   }
 
   /**
@@ -69,11 +72,12 @@ export class AuthProviderRepository {
    * Google account) should treat it as "already linked" and re-fetch via
    * `findByProviderAndId`, not as an unexpected failure.
    * @param data - The row's initial column values.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns The inserted row, including its generated `id` and timestamps.
    */
-  async create(data: NewAuthProvider): Promise<AuthProviderRecord> {
+  async create(data: NewAuthProvider, executor: DbExecutor = db): Promise<AuthProviderRecord> {
     try {
-      const [row] = await db.insert(authProviderModel).values(data).returning()
+      const [row] = await executor.insert(authProviderModel).values(data).returning()
       // db.insert(...).values(one object).returning() always returns exactly
       // one row when the insert does not throw; the driver's own types just
       // cannot express "same length as input" for a single-row insert —
@@ -120,10 +124,11 @@ export class AuthProviderRepository {
    * keeping the `'email'` row — the invariant every live user has one relies on
    * (auth-provider.model.ts's own header comment).
    * @param userId - The user whose federated provider rows are deleted.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns Resolves once the rows are gone.
    */
-  async deleteFederatedForUser(userId: string): Promise<void> {
-    await db
+  async deleteFederatedForUser(userId: string, executor: DbExecutor = db): Promise<void> {
+    await executor
       .delete(authProviderModel)
       .where(and(eq(authProviderModel.userId, userId), ne(authProviderModel.provider, 'email')))
   }

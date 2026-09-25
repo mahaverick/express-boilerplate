@@ -37,6 +37,7 @@ import {
 import type { PgColumn, PgTableWithColumns, TableConfig } from 'drizzle-orm/pg-core'
 import { HttpError } from '@/errors/http-error'
 import { isUniqueViolation } from '@/errors/postgres-errors'
+import { db, type DbExecutor } from '@/services/database.service'
 
 /**
  * The minimum column shape a table must have for `BaseRepository` to manage
@@ -149,24 +150,28 @@ export abstract class BaseRepository<TConfig extends SoftDeletableTableConfig> {
    * Find a row by its primary key.
    * @param id - The row's id.
    * @param options - Soft-delete visibility options.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns The matching row, or undefined when none exists — including when it exists but is soft-deleted and `includeDeleted` was not set.
    */
   findById(
     id: string,
-    options: SoftDeleteOptions = {}
+    options: SoftDeleteOptions = {},
+    executor: DbExecutor = db
   ): Promise<InferSelectModel<PgTableWithColumns<TConfig>> | undefined> {
-    return this.selectOne(this.scope(eq(this.table.id, id), options))
+    return this.selectOne(this.scope(eq(this.table.id, id), options), executor)
   }
 
   /**
    * Insert a new row.
    * @param values - The row's initial column values.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns The inserted row, including database-generated defaults (e.g. `id`, `createdAt`).
    */
   create(
-    values: InferInsertModel<PgTableWithColumns<TConfig>>
+    values: InferInsertModel<PgTableWithColumns<TConfig>>,
+    executor: DbExecutor = db
   ): Promise<InferSelectModel<PgTableWithColumns<TConfig>>> {
-    return this.translatingUniqueViolation(() => this.insertOne(values))
+    return this.translatingUniqueViolation(() => this.insertOne(values, executor))
   }
 
   /**
@@ -174,6 +179,7 @@ export abstract class BaseRepository<TConfig extends SoftDeletableTableConfig> {
    * @param id - The row's id.
    * @param values - The columns to change. `id`, `createdAt` and `updatedAt` are excluded even if passed — none is meant to change by hand.
    * @param options - Soft-delete visibility options.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns The updated row, or undefined when no matching row exists.
    */
   update(
@@ -181,10 +187,11 @@ export abstract class BaseRepository<TConfig extends SoftDeletableTableConfig> {
     values: Partial<
       Omit<InferInsertModel<PgTableWithColumns<TConfig>>, 'id' | 'createdAt' | 'updatedAt'>
     >,
-    options: SoftDeleteOptions = {}
+    options: SoftDeleteOptions = {},
+    executor: DbExecutor = db
   ): Promise<InferSelectModel<PgTableWithColumns<TConfig>> | undefined> {
     return this.translatingUniqueViolation(() =>
-      this.updateOne(this.scope(eq(this.table.id, id), options), this.touched(values))
+      this.updateOne(this.scope(eq(this.table.id, id), options), this.touched(values), executor)
     )
   }
 
@@ -194,30 +201,38 @@ export abstract class BaseRepository<TConfig extends SoftDeletableTableConfig> {
    * the row does not exist or is already soft-deleted, so callers do not
    * need to check existence first.
    * @param id - The row's id.
+   * @param executor - Where to run the query. Defaults to the pool.
    * @returns The updated row, or undefined when no matching, not-yet-deleted row exists.
    */
-  softDelete(id: string): Promise<InferSelectModel<PgTableWithColumns<TConfig>> | undefined> {
-    return this.markDeleted(this.scope(eq(this.table.id, id)))
+  softDelete(
+    id: string,
+    executor: DbExecutor = db
+  ): Promise<InferSelectModel<PgTableWithColumns<TConfig>> | undefined> {
+    return this.markDeleted(this.scope(eq(this.table.id, id)), executor)
   }
 
   /**
    * Select the single row matching a condition. Implemented by a subclass
    * against its own concrete table.
    * @param where - The condition to match, or undefined to match every row.
+   * @param executor - Where to run the query.
    * @returns The matching row, or undefined when none exists.
    */
   protected abstract selectOne(
-    where: SQL | undefined
+    where: SQL | undefined,
+    executor?: DbExecutor
   ): Promise<InferSelectModel<PgTableWithColumns<TConfig>> | undefined>
 
   /**
    * Insert a single row. Implemented by a subclass against its own concrete
    * table.
    * @param values - The row's initial column values.
+   * @param executor - Where to run the query.
    * @returns The inserted row.
    */
   protected abstract insertOne(
-    values: InferInsertModel<PgTableWithColumns<TConfig>>
+    values: InferInsertModel<PgTableWithColumns<TConfig>>,
+    executor?: DbExecutor
   ): Promise<InferSelectModel<PgTableWithColumns<TConfig>>>
 
   /**
@@ -225,22 +240,26 @@ export abstract class BaseRepository<TConfig extends SoftDeletableTableConfig> {
    * against its own concrete table.
    * @param where - The condition to match, already scoped for soft-delete visibility.
    * @param values - The columns to change, already carrying `updatedAt`.
+   * @param executor - Where to run the query.
    * @returns The updated row, or undefined when no matching row exists.
    */
   protected abstract updateOne(
     where: SQL | undefined,
     values: Touched<
       Partial<Omit<InferInsertModel<PgTableWithColumns<TConfig>>, 'id' | 'createdAt' | 'updatedAt'>>
-    >
+    >,
+    executor?: DbExecutor
   ): Promise<InferSelectModel<PgTableWithColumns<TConfig>> | undefined>
 
   /**
    * Set `deletedAt` on the single row matching a condition. Implemented by a
    * subclass against its own concrete table.
    * @param where - The condition to match, already scoped to not-yet-deleted rows.
+   * @param executor - Where to run the query.
    * @returns The updated row, or undefined when no matching row exists.
    */
   protected abstract markDeleted(
-    where: SQL | undefined
+    where: SQL | undefined,
+    executor?: DbExecutor
   ): Promise<InferSelectModel<PgTableWithColumns<TConfig>> | undefined>
 }

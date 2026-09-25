@@ -3,6 +3,7 @@
 // One postgres client for the process. `postgres` pools internally, so a
 // second client means a second pool and double the configured connection
 // budget — which only shows up under load, as "too many connections".
+import { PgTransaction } from 'drizzle-orm/pg-core'
 import { drizzle } from 'drizzle-orm/postgres-js'
 import postgres from 'postgres'
 import { databaseClientOptions } from '@/configs/database.config'
@@ -53,3 +54,19 @@ export type DbTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0]
  * defaulting to `db`, so a service can compose several calls atomically.
  */
 export type DbExecutor = typeof db | DbTransaction
+
+/**
+ * Run function_ in a transaction. A nested call passed an already-open
+ * transaction reuses it directly — no savepoint — so an outer rollback
+ * always takes an inner write with it.
+ * @param function_ - The work to run against a transaction handle.
+ * @param executor - An existing transaction to reuse, or the pool (default) to open a new transaction in.
+ * @returns Whatever function_ resolves to.
+ */
+export function withTransaction<T>(
+  function_: (tx: DbTransaction) => Promise<T>,
+  executor: DbExecutor = db
+): Promise<T> {
+  if (executor instanceof PgTransaction) return function_(executor)
+  return db.transaction(function_)
+}
