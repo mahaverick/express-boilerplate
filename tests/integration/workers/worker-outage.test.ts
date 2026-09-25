@@ -116,7 +116,7 @@ describe('Queue Workers through a Redis outage', () => {
     for (const name of ['email', 'notification']) {
       const cleanup = new Queue(name, {
         connection: { url: target.realUrl },
-        prefix: target.prefix,
+        prefix: `${target.prefix}:bull`,
       })
       await cleanup.obliterate({ force: true })
       await cleanup.close()

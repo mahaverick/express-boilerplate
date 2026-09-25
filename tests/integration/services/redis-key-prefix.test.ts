@@ -133,11 +133,12 @@ beforeAll(async () => {
   emitNotification(notifiedUserId, fakeNotification({ userId: notifiedUserId }))
 
   // Registration enqueues fire-and-forget, and the publish is async: wait for both.
-  await isEventuallyTrue(
+  const hasSettled = await isEventuallyTrue(
     async () =>
       observed.channels.length > 0 && hasEveryKeyspace(await scanKeys(reader, `${scope.prefix}:*`)),
     SETTLE_TIMEOUT_MS
   )
+  expect(hasSettled, 'every keyspace and a notification within the settle timeout').toBe(true)
   observed.after = await scanKeys(reader)
 })
 
