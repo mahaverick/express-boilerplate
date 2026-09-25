@@ -43,10 +43,10 @@ import { getEnv, requiresSmtpTls, type Env } from '@/configs/env.config'
  * a half-set pair at boot instead, so here both are set or neither is.
  *
  * `connectionTimeout`/`greetingTimeout`/`socketTimeout` are always set, never
- * left to nodemailer's own defaults (2 minutes / 30 seconds / 10 minutes).
- * They bound how long an SMTP host that stops responding holds an
- * email-worker slot and delays graceful shutdown — see the SMTP timeout
- * group's comment (env.config.ts).
+ * left to nodemailer's own defaults (2 minutes / 30 seconds / 10 minutes),
+ * and `dnsTimeout` (nodemailer's default: 30 seconds) reuses
+ * `SMTP_CONNECTION_TIMEOUT_MS`. Each bounds one stage of a send, not the
+ * send as a whole — see the SMTP timeout group's comment (env.config.ts).
  * @param env - The SMTP slice of the validated environment.
  * @returns Options for `nodemailer.createTransport`.
  */
@@ -66,6 +66,7 @@ export function mailTransportOptions(
     host: env.SMTP_HOST,
     port: env.SMTP_PORT,
     connectionTimeout: env.SMTP_CONNECTION_TIMEOUT_MS,
+    dnsTimeout: env.SMTP_CONNECTION_TIMEOUT_MS,
     greetingTimeout: env.SMTP_GREETING_TIMEOUT_MS,
     socketTimeout: env.SMTP_SOCKET_TIMEOUT_MS,
     ...(env.SMTP_USERNAME !== undefined &&

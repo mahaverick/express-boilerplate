@@ -58,9 +58,9 @@ describe('mailTransportOptions', () => {
     expect(options.auth).toBeUndefined()
   })
 
-  // These bound how long a host that stops responding holds an email-worker
-  // slot and delays shutdown (env.config.ts's comment on the SMTP timeout
-  // group), so they must always reach nodemailer, never its own defaults.
+  // These bound each stage of a send to a host that stops responding
+  // (env.config.ts's comment on the SMTP timeout group), so they must always
+  // reach nodemailer, never its own defaults.
   it('always sets connectionTimeout/greetingTimeout/socketTimeout from the _MS variables', () => {
     const options = mailTransportOptions({
       ...baseEnv,
@@ -71,6 +71,13 @@ describe('mailTransportOptions', () => {
     expect(options.connectionTimeout).toBe(1234)
     expect(options.greetingTimeout).toBe(2345)
     expect(options.socketTimeout).toBe(3456)
+  })
+
+  // nodemailer's own DNS query timeout is 30 seconds, longer than the whole
+  // default shutdown budget.
+  it('sets dnsTimeout from SMTP_CONNECTION_TIMEOUT_MS', () => {
+    const options = mailTransportOptions({ ...baseEnv, SMTP_CONNECTION_TIMEOUT_MS: 1234 })
+    expect(options.dnsTimeout).toBe(1234)
   })
 })
 

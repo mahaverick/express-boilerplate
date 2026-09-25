@@ -540,21 +540,30 @@ const EnvSchema = z.object({
       'Product name in outbound email copy and notification text: verification, password reset, password changed and invitation messages (auth.controller.ts, verification-mail.utilities.ts, tenant-invitation.service.ts). Defaults to "Express Boilerplate".'
     ),
 
-  // These three bound how long an SMTP host that stops responding can hold
-  // a send open. nodemailer's own defaults (smtp-connection) are 2 minutes
-  // (connectionTimeout), 30 seconds (greetingTimeout) and 10 minutes
-  // (socketTimeout, an inactivity timer).
+  // These three bound the stages of a send to an SMTP host that stops
+  // responding. SMTP_CONNECTION_TIMEOUT_MS also bounds each DNS query
+  // (nodemailer's dnsTimeout). nodemailer's own defaults (smtp-connection)
+  // are 2 minutes (connectionTimeout), 30 seconds (greetingTimeout and
+  // dnsTimeout) and 10 minutes (socketTimeout, an inactivity timer).
   //
   // No HTTP response waits on SMTP: every send runs in email.worker.ts off
   // the queue, and forgot-password answers 202 before it even looks the user
   // up, so latency cannot reveal whether an address is registered. What the
-  // timeouts bound is (1) how long a hung send holds an email-worker slot,
+  // timeouts shorten is (1) how long a hung send holds an email-worker slot,
   // and (2) how long it delays graceful shutdown: gracefulShutdown
   // (server.ts) drains HTTP for up to SERVER_DRAIN_TIMEOUT_MS, then waits
   // for the in-flight job before closing the database, Redis and queues and
-  // flushing traces. With these defaults, a worst-case send (15s) plus the
-  // drain (5s) leaves 5s of the default SHUTDOWN_TIMEOUT_MS (25s) for that
-  // last step. Keep that headroom if you change any of them.
+  // flushing traces.
+  //
+  // They are per-stage bounds, not a per-send deadline. The resolver retries
+  // a DNS query that times out, and when it finds no address nodemailer
+  // falls back to the OS resolver, which has no timeout. A host that resolves
+  // to several addresses can take the connection timeout once per address.
+  // A server that keeps sending bytes resets the inactivity timer. The boot
+  // check in env-consistency.config.ts sums connect, greeting and inactivity
+  // for one address against SHUTDOWN_TIMEOUT_MS: a sanity check, not a
+  // guarantee. With the defaults that sum is 15s, which with the 5s drain
+  // leaves 5s of the default 25s budget.
   //
   // The compose Mailpit sends its greeting in 8–16 ms (3 raw-socket runs),
   // so 5000 ms leaves ample margin. If the real-Mailpit integration tests
@@ -566,7 +575,7 @@ const EnvSchema = z.object({
     .positive()
     .default(3000)
     .describe(
-      "Milliseconds to wait for the SMTP connection to establish before failing. With SMTP_GREETING_TIMEOUT_MS and SMTP_SOCKET_TIMEOUT_MS, bounds how long a host that stops responding holds an email-worker slot and delays graceful shutdown — keep their sum plus the 5s HTTP drain at least 5s under SHUTDOWN_TIMEOUT_MS. nodemailer's own default is 2 minutes."
+      "Milliseconds to wait for each SMTP connection attempt to establish, and for each DNS query, before failing. A host that resolves to several addresses can take it once per address. Boot checks that it plus SMTP_GREETING_TIMEOUT_MS, SMTP_SOCKET_TIMEOUT_MS and the 5s HTTP drain stays at least 5s under SHUTDOWN_TIMEOUT_MS; that assumes one address and is a sanity check, not a per-send deadline. nodemailer's own defaults are 2 minutes to connect and 30 seconds per DNS query."
     ),
   SMTP_GREETING_TIMEOUT_MS: z.coerce
     .number()

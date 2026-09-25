@@ -107,12 +107,13 @@ export function assertEnvConsistent(
 
   // gracefulShutdown drains HTTP first, then waits for the in-flight send,
   // so the SMTP timeouts get what SHUTDOWN_TIMEOUT_MS leaves after the drain
-  // and the headroom.
+  // and the headroom. The sum covers one address and no DNS time, so it is a
+  // sanity check, not a bound on a send.
   const smtpChainMs =
     env.SMTP_CONNECTION_TIMEOUT_MS + env.SMTP_GREETING_TIMEOUT_MS + env.SMTP_SOCKET_TIMEOUT_MS
   const smtpBudgetMs = env.SHUTDOWN_TIMEOUT_MS - SERVER_DRAIN_TIMEOUT_MS - SHUTDOWN_HEADROOM_MS
   if (smtpChainMs > smtpBudgetMs) {
-    const message = `SMTP_CONNECTION_TIMEOUT_MS + SMTP_GREETING_TIMEOUT_MS + SMTP_SOCKET_TIMEOUT_MS is ${String(smtpChainMs)} ms, more than the ${String(smtpBudgetMs)} ms that SHUTDOWN_TIMEOUT_MS (${String(env.SHUTDOWN_TIMEOUT_MS)} ms) leaves after the ${String(SERVER_DRAIN_TIMEOUT_MS)} ms HTTP drain and ${String(SHUTDOWN_HEADROOM_MS)} ms of headroom, so a hung send can outlast graceful shutdown and the process exits 1 before closing its connections. Lower the SMTP timeouts, or raise SHUTDOWN_TIMEOUT_MS together with the orchestrator's termination grace period.`
+    const message = `SMTP_CONNECTION_TIMEOUT_MS + SMTP_GREETING_TIMEOUT_MS + SMTP_SOCKET_TIMEOUT_MS is ${String(smtpChainMs)} ms, more than the ${String(smtpBudgetMs)} ms that SHUTDOWN_TIMEOUT_MS (${String(env.SHUTDOWN_TIMEOUT_MS)} ms) leaves after the ${String(SERVER_DRAIN_TIMEOUT_MS)} ms HTTP drain and ${String(SHUTDOWN_HEADROOM_MS)} ms of headroom, so a send that hangs at each stage, even against a single address, outlasts graceful shutdown and the process exits 1 before closing its connections. Lower the SMTP timeouts, or raise SHUTDOWN_TIMEOUT_MS together with the orchestrator's termination grace period.`
     if (isLocal) warn(message)
     else problems.push(message)
   }

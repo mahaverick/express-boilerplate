@@ -245,21 +245,21 @@ describe('SMTP configuration', () => {
     expect(() => parseEnv({ ...valid, MAIL_FROM: 'not-an-address' })).toThrow(/MAIL_FROM/)
   })
 
-  // These bound how long an SMTP host that stops responding holds an
-  // email-worker slot, and so how long a send in flight can delay graceful
-  // shutdown (env.config.ts's comment on the SMTP timeout group). After the
-  // HTTP drain and a worst-case send, SHUTDOWN_TIMEOUT_MS must keep 5s for
-  // closing the database, Redis and queues and flushing traces.
+  // These bound the stages of a send to an SMTP host that stops responding
+  // (env.config.ts's comment on the SMTP timeout group). After the HTTP drain
+  // and one send that hangs at each stage against one address,
+  // SHUTDOWN_TIMEOUT_MS must keep 5s for closing the database, Redis and
+  // queues and flushing traces.
   it('defaults the SMTP_*_TIMEOUT_MS variables to 3000/5000/7000, inside the shutdown budget', () => {
     const parsed = parseEnv(valid)
     expect(parsed.SMTP_CONNECTION_TIMEOUT_MS).toBe(3000)
     expect(parsed.SMTP_GREETING_TIMEOUT_MS).toBe(5000)
     expect(parsed.SMTP_SOCKET_TIMEOUT_MS).toBe(7000)
-    const worstCaseSend =
+    const singleAddressSend =
       parsed.SMTP_CONNECTION_TIMEOUT_MS +
       parsed.SMTP_GREETING_TIMEOUT_MS +
       parsed.SMTP_SOCKET_TIMEOUT_MS
-    expect(worstCaseSend + SERVER_DRAIN_TIMEOUT_MS + 5000).toBeLessThanOrEqual(
+    expect(singleAddressSend + SERVER_DRAIN_TIMEOUT_MS + 5000).toBeLessThanOrEqual(
       parsed.SHUTDOWN_TIMEOUT_MS
     )
   })
