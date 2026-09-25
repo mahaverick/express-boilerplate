@@ -24,7 +24,7 @@ import { type NextFunction, type Request, type RequestHandler, type Response } f
 import passport from 'passport'
 import type { Profile as GoogleProfile } from 'passport-google-oauth20'
 import postgres from 'postgres'
-import { getEnv } from '@/configs/env.config'
+import { getEnv, isCookieSecure } from '@/configs/env.config'
 import type { AuthProvider } from '@/constants/auth-provider.constants'
 import {
   GOOGLE_STRATEGY_NAME,
@@ -111,21 +111,6 @@ export function toPublicUser(user: User): PublicUser {
 }
 
 /**
- * Whether the current environment should mark cookies `Secure`
- * (HTTPS-only).
- *
- * Keyed on `NODE_ENV === 'production'` rather than hard-coded: a hard-coded
- * `true` would make cookie-based login impossible over plain HTTP in local
- * development (browsers refuse a `Secure` cookie set over `http://`), and a
- * hard-coded `false` would ship a refresh token over an unencrypted
- * connection in production.
- * @returns True outside local development and test.
- */
-export function isSecureCookieEnvironment(): boolean {
-  return getEnv().NODE_ENV === 'production'
-}
-
-/**
  * Attach a freshly issued refresh token to the response as an httpOnly
  * cookie, scoped to the auth routes that read it (refresh/logout, Task 7).
  *
@@ -140,6 +125,9 @@ export function isSecureCookieEnvironment(): boolean {
  * copy of this function — `setOAuthRefreshTokenCookie` below is the one
  * caller that passes `'lax'` explicitly, for a reason specific to ITS
  * request, not a reason to weaken every other caller's default.
+ *
+ * `Secure` and `Domain` come from `COOKIE_SECURE` (via `isCookieSecure`) and
+ * `COOKIE_DOMAIN`; `clearRefreshTokenCookie` must repeat both.
  * @param response - The response to set the cookie on.
  * @param rawToken - The raw refresh token.
  * @param expiresAt - When the token expires.
@@ -151,11 +139,13 @@ function setRefreshTokenCookie(
   expiresAt: Date,
   sameSite: 'strict' | 'lax' = 'strict'
 ): void {
+  const env = getEnv()
   response.cookie(REFRESH_TOKEN_COOKIE_NAME, rawToken, {
     httpOnly: true,
-    secure: isSecureCookieEnvironment(),
+    secure: isCookieSecure(env),
     sameSite,
     path: REFRESH_TOKEN_COOKIE_PATH,
+    ...(env.COOKIE_DOMAIN !== undefined && { domain: env.COOKIE_DOMAIN }),
     expires: expiresAt,
   })
 }
@@ -190,17 +180,19 @@ function setOAuthRefreshTokenCookie(response: Response, rawToken: string, expire
  * Clear the refresh-token cookie on logout.
  *
  * The options passed to `clearCookie` must agree with the ones
- * `setRefreshTokenCookie` set it with — `path` in particular — or the
- * browser treats this as clearing a DIFFERENT cookie and the original one
- * survives.
+ * `setRefreshTokenCookie` set it with — `path` and `domain` in particular —
+ * or the browser treats this as clearing a DIFFERENT cookie and the
+ * original one survives.
  * @param response - The response to clear the cookie on.
  */
 function clearRefreshTokenCookie(response: Response): void {
+  const env = getEnv()
   response.clearCookie(REFRESH_TOKEN_COOKIE_NAME, {
     httpOnly: true,
-    secure: isSecureCookieEnvironment(),
+    secure: isCookieSecure(env),
     sameSite: 'strict',
     path: REFRESH_TOKEN_COOKIE_PATH,
+    ...(env.COOKIE_DOMAIN !== undefined && { domain: env.COOKIE_DOMAIN }),
   })
 }
 

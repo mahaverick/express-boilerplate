@@ -87,11 +87,7 @@ export function mailTransportOptions(
  * host-name check would then require TLS against a Mailpit that cannot
  * speak it — Ruling G (mailer.service.ts) makes that failure SILENT to
  * every caller, so this would be a footgun with no error message pointing
- * at its own cause. `NODE_ENV` is what `isSecureCookieEnvironment`
- * (auth.controller.ts) already uses for the identical shape of decision
- * (HTTPS-only behaviour that must not accidentally engage in local
- * development or test), so this follows that precedent rather than
- * inventing a second way to ask the same question. Outside production,
+ * at its own cause. Outside production,
  * nodemailer still negotiates STARTTLS opportunistically when a real
  * provider offers it — this flag only forces the requirement, it does not
  * forbid TLS.

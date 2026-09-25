@@ -79,8 +79,7 @@ describe('mailTransportOptions', () => {
 describe('requiresTls', () => {
   // Keyed on NODE_ENV, not SMTP_HOST — see this function's own comment
   // (mailer.config.ts) for why a host-name check is the wrong footgun here.
-  // Mirrors isSecureCookieEnvironment's identical NODE_ENV-keyed decision
-  // (auth.controller.ts). Unit-tested directly, with a hand-built env slice,
+  // Unit-tested directly, with a hand-built env slice,
   // for the same reason mailTransportOptions is: getMailTransporter reads
   // the memoised getEnv() exactly once per worker, so this decision cannot
   // otherwise be exercised for both branches in one test run.

@@ -606,11 +606,10 @@ describe('POST /api/v1/auth/register and /login', () => {
       expect(refreshCookie).toMatch(/HttpOnly/i)
       expect(refreshCookie).toMatch(/SameSite=Strict/i)
       expect(refreshCookie).toContain(`Path=${REFRESH_TOKEN_COOKIE_PATH}`)
-      // Not Secure under NODE_ENV=test — see
-      // tests/unit/controllers/auth.controller.test.ts for the production
-      // branch, which cannot be exercised here: getEnv() is memoised for
-      // the life of the process once any module has called it.
+      // Neither Secure nor Domain under APP_ENV=local with no COOKIE_*
+      // overrides; cookie-attributes.test.ts covers the other settings.
       expect(refreshCookie).not.toMatch(/Secure/i)
+      expect(refreshCookie).not.toMatch(/Domain=/i)
     })
 
     it('gives the SAME error for an unknown email and a wrong password', async () => {
