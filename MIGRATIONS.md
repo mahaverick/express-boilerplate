@@ -7,6 +7,74 @@ elsewhere with the reasoning intact instead of rediscovered. Also: every
 supply-chain bypass currently sitting in `pnpm-workspace.yaml`, a generated
 file nobody reads by default.
 
+## Upgrading to 3.1.0
+
+Nothing needs changing to upgrade. 3.1.0 adds a migration, one optional
+variable, a script and new response fields.
+
+### Migration `0016`
+
+`0016` is partly hand-written: drizzle generated the table, column and index
+statements, and two blocks were added by hand afterward — see the file's own
+comments for exactly which.
+
+- Adds `tenants.is_platform` (default `false`), with a partial unique
+  index (at most one platform tenant) and a CHECK that keeps that tenant
+  active and undeleted.
+- A hand-written guard stops the migration, before the seed insert runs, if
+  a live customer tenant already holds the now-reserved slug `platform`:
+  it raises its own exception naming the slug, rather than letting the seed
+  fail on `tenants_slug_unique`. Rename that tenant before upgrading.
+- Seeds the platform tenant (name `Platform`, slug `platform`) and its
+  settings row, by hand. It has no members until you run the bootstrap
+  script below.
+- Creates `audit_logs`. It's append-only (a trigger refuses UPDATE and
+  DELETE for every role), and its foreign keys to `users` and `tenants` are
+  `ON DELETE RESTRICT`. After this, a hard `DELETE` of a user or tenant with
+  history fails. The code only ever soft-deletes both.
+- Runs `CREATE EXTENSION IF NOT EXISTS pg_trgm` (also hand-written) and
+  builds two trigram indexes on `tenants` for staff search. `pg_trgm` needs
+  `CREATE` on the database, which a non-superuser role does not have by
+  default: as a superuser, run `CREATE EXTENSION pg_trgm;` yourself before
+  the migration, or `GRANT CREATE ON DATABASE <name> TO <migrating role>;`
+  so the migration's own statement succeeds. On a managed Postgres, check
+  that `pg_trgm` is on the allow-list first.
+
+### New optional variable
+
+- `PLATFORM_EMAIL_DOMAINS`: a comma-separated list of lowercase domains.
+  A **verified** address on one of them joins the platform tenant as
+  `viewer`, at verification and on each sign-in. It's empty by default, so
+  nobody joins. Only an exact domain matches, not its subdomains. See
+  SECURITY.md, "Platform staff access and the audit log".
+
+### Bootstrap the first platform owner
+
+With `DATABASE_URL` pointing at the upgraded database:
+
+    pnpm platform:grant -- owner@yourcompany.com owner
+
+The user must already exist and be verified. The grant is audited as
+`platform.member.granted`, with a system actor. From then on, that owner
+manages staff through the platform tenant's own Members and Invitations
+pages.
+
+### API additions (all additive)
+
+- `GET /api/v1/profile`, `PATCH /api/v1/profile`, and the `user` in `POST /api/v1/auth/login`'s response add `platformRole`.
+- `GET /api/v1/tenants` rows add `isPlatform`.
+- `GET /api/v1/tenants/:slug` adds `role` (effective), `access` and
+  `isPlatform`.
+- New: `GET /api/v1/platform/tenants`, `GET /api/v1/tenants/:slug/audit-log`
+  and `GET /api/v1/platform/audit-log`.
+- New limiter prefix `rl:platform-search:`. No existing prefix changed.
+
+### The audit log has no retention
+
+Rows accumulate: every change, plus one row per staff user, tenant and
+hour of staff access. Nothing prunes them yet. Only the table's owner can
+remove rows, with `TRUNCATE`.
+
 ## Upgrading to 3.0.0
 
 ### Renamed variables
@@ -300,6 +368,13 @@ add a real row:
   ```
   Then edit the not-yet-applied `0014` file: delete its `DROP INDEX "users_email_unique";--> statement-breakpoint` line, and change the remaining statement to `CREATE UNIQUE INDEX IF NOT EXISTS "users_email_unique" ...`. Without that edit, `pnpm db:migrate` drops the index you just built and rebuilds it under the lock. With it, the migration only records `0014` as applied.
 - **`0015` creates the new `tenant_invitations` table and needs no manual step.** Its three `FOREIGN KEY` constraints take a `SHARE ROW EXCLUSIVE` lock on `users` and `tenants`, which blocks writes to them (not reads) until the migration batch commits. That is brief, but the lock waits for any open transaction that has written to either table, and new writes queue behind it meanwhile, so apply it when no long write transaction is running.
+- **`0016` blocks every read and write on `tenants` until the migration batch commits.** Its `ALTER TABLE tenants` takes an `ACCESS EXCLUSIVE` lock, and drizzle's migrator applies all pending migrations in one transaction. So that lock is held while the two trigram indexes build (no `CONCURRENTLY`), and every tenant-scoped request waits. A tenants table is usually small enough that this is brief. On a large one, build the indexes by hand first, each as a statement on its own and outside any transaction:
+  ```sql
+  CREATE EXTENSION IF NOT EXISTS pg_trgm;
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS tenants_name_trgm_idx ON tenants USING gin (lower(name) gin_trgm_ops) WHERE deleted_at IS NULL;
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS tenants_slug_trgm_idx ON tenants USING gin (slug gin_trgm_ops) WHERE deleted_at IS NULL;
+  ```
+  Then add `IF NOT EXISTS` to both `CREATE INDEX` statements in the not-yet-applied `0016` file. A failed `CONCURRENTLY` build leaves an INVALID index: check `pg_index.indisvalid`, and drop and rebuild it if it's false.
 
 ## Supply-chain bypasses in `pnpm-workspace.yaml`
 

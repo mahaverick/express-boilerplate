@@ -112,8 +112,11 @@ restricting it to the three `TokenPurpose` values at the database level —
 `$type<TokenPurpose>()` is compile-time only, so this is what stops a raw
 SQL insert from writing anything else), plus `meta/_journal.json` recording
 all six in order. Everything under this directory is **generated**
-by `drizzle-kit generate`; nothing here is hand-written, and nothing here
-should be hand-edited.
+by `drizzle-kit generate`, with one documented exception: `0016` (see
+[MIGRATIONS.md](MIGRATIONS.md), "Upgrading to 3.1.0") carries hand-added
+statements on top of its generated ones, called out in the file's own
+comments. Don't hand-edit a migration outside a documented exception like
+that one.
 
 Generated does not mean disposable. Migrations are the ordered, immutable
 record of how the schema got to its current state — `drizzle-kit migrate`
