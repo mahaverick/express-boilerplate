@@ -25,33 +25,32 @@
 // attempt in the delivery log (below) and by `POST /auth/resend-verification`
 // (Task 5) letting them retry once mail is back.
 //
-// RENDERING HAPPENS INSIDE THE SAME TRY THAT GUARDS THE TRANSPORT CALL —
-// this is a Task 3 fix-round correction, not the original design. Templates
-// used to render OUTSIDE this function (a caller passed already-rendered
-// subject/text/html in), which left rendering exceptions outside Ruling G's
-// catch entirely — three independent channels ended up able to defeat the
-// same ruling: the STATUS channel (closed by Ruling G itself), the LATENCY
-// channel (bounded by the SMTP_*_TIMEOUT_MS settings), and this one, the
-// EXCEPTION channel — a variable present only on one branch of an
+// RENDERING HAPPENS INSIDE THE SAME TRY THAT GUARDS THE TRANSPORT CALL.
+// Three channels could each defeat Ruling G. The STATUS channel is closed by
+// Ruling G itself. The LATENCY channel is closed upstream, not here: no HTTP
+// response waits on SMTP, because every send runs from the queue in
+// email.worker.ts, and forgotPassword (auth.controller.ts) answers 202
+// before it even looks the user up. The EXCEPTION channel is this
+// one: a template variable present only on one branch of an
 // enumeration-sensitive caller (say, a name that exists only for a
-// registered user) would throw during rendering, before any catch ever ran,
-// turning "does this address have an account?" back into a 500-vs-200
-// question. Rendering now happens where the transport call does, inside the
-// identical try/catch, so a `requireEmailVariables` throw (a plain `Error`,
-// no `.code`) is handled EXACTLY like a transport rejection: caught,
-// recorded as a 'failed' delivery with `errorCode: UNKNOWN_ERROR_CODE`, and
-// never propagated. See tests/integration/services/mailer.service.test.ts
-// for the direct-equality proof this holds across both branches of an
-// enumeration-sensitive call, mirroring the transport-failure proof already
-// there.
+// registered user) would throw during rendering, turning "does this address
+// have an account?" into a 500-vs-200 question if rendering ran outside the
+// catch. Rendering therefore happens where the transport call does, inside
+// the identical try/catch, so a `requireEmailVariables` throw (a plain
+// `Error`, no `.code`) is handled EXACTLY like a transport rejection:
+// caught, recorded as a 'failed' delivery with `errorCode:
+// UNKNOWN_ERROR_CODE`, and never propagated. See
+// tests/integration/services/mailer.service.test.ts for the direct-equality
+// proof this holds across both branches of an enumeration-sensitive call,
+// mirroring the transport-failure proof already there.
 //
-// `MailMessage` NO LONGER CARRIES subject/text/html — a second, independent
-// fix in the same round. The old shape let a caller pass `templateKey:
-// 'password_reset'` alongside body text that was actually something else
-// entirely; nothing tied the logged key to the content that was actually
-// sent, which makes `email_logs` unable to answer the one question an audit
-// table exists for ("what did this row actually record?"). `MailMessage` is
-// now a discriminated union keyed on `templateKey`, where `variables` is
+// `MailMessage` DOES NOT CARRY subject/text/html. An earlier shape let a
+// caller pass `templateKey: 'password_reset'` alongside body text that was
+// actually something else entirely; nothing tied the logged key to the
+// content that was actually sent, which left `email_logs` unable to answer
+// the one question an audit table exists for ("what did this row actually
+// record?"). `MailMessage` is now a discriminated union keyed on
+// `templateKey`, where `variables` is
 // typed to match ONLY that key's own template — subject/text/html are
 // produced by `renderForMessage` below, from that key and those variables,
 // and nothing else. This closes a THIRD thing as a side effect, worth
