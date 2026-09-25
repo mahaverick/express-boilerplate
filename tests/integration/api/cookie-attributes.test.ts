@@ -78,7 +78,7 @@ function cookieLines(response: Response, name: string): string[] {
 // with it set, the refresh cookie also gets a host-only clearing line.
 function cookieLine(response: Response, name: string): string | undefined {
   const lines = cookieLines(response, name)
-  return lines.find((line) => SCOPED_DOMAIN.test(line)) ?? lines[0]
+  return lines.find((line) => ANY_DOMAIN.test(line)) ?? lines[0]
 }
 
 function cookiePair(line: string | undefined): string {
