@@ -18,7 +18,7 @@ import { parseDurationMs } from '@/utilities/duration.utilities'
 // Populate process.env from .env before anything below ever reads it.
 // `pnpm dev` and `pnpm start` already load it with Node's --env-file-if-exists
 // (tracing.ts needs it first), and dotenv never overrides a set key, so there
-// this changes nothing; tsx scripts rely on it.
+// it only fills keys Node's parser left unset; tsx scripts rely on it.
 // Skipped under Vitest: tests/helpers/setup-global.ts already assembles the
 // test environment (process env > .env.test.local > .env.test) before any
 // test file is imported, and loading a developer's own .env on top of that

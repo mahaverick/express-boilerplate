@@ -11,7 +11,7 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it } from 'vitest'
 
 const ENV_FLAG = '--env-file-if-exists=.env'
 const repoRoot = process.cwd()
@@ -29,6 +29,19 @@ function dockerCommand(): string[] {
   const line = dockerfile.split('\n').find((candidate) => candidate.startsWith('CMD '))
   if (!line) throw new Error('Dockerfile has no CMD line')
   return JSON.parse(line.slice('CMD '.length)) as string[]
+}
+
+// Only PATH is passed, so neither this shell's OTEL_SERVICE_NAME nor
+// Vitest's own variables reach the child. The timeout fails a hung child
+// instead of blocking the worker.
+function run(directory: string, commandArguments: string[]): string {
+  return execFileSync(process.execPath, commandArguments, {
+    cwd: directory,
+    env: { PATH: process.env.PATH ?? '' },
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: 10_000,
+  })
 }
 
 // Swaps the tracing module for the probe and the app entry for an empty file.
@@ -67,38 +80,32 @@ describe('launch commands name .env before the tracing --import', () => {
 })
 
 describe('those flags, run for real, load .env before the --import module', () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'env-load-order-'))
+  const directories: string[] = []
 
-  beforeAll(() => {
-    fs.writeFileSync(path.join(directory, '.env'), 'OTEL_SERVICE_NAME=from-dot-env\n')
+  // A fresh directory per test: the probe, an empty entry and, optionally, a .env.
+  function fixture(dotEnv?: string): string {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'env-load-order-'))
+    directories.push(directory)
     fs.writeFileSync(
       path.join(directory, 'probe.mjs'),
       "process.stdout.write(process.env.OTEL_SERVICE_NAME ?? 'unset')\n"
     )
     fs.writeFileSync(path.join(directory, 'entry.mjs'), '')
-  })
+    if (dotEnv !== undefined) fs.writeFileSync(path.join(directory, '.env'), dotEnv)
+    return directory
+  }
 
   afterAll(() => {
-    fs.rmSync(directory, { recursive: true, force: true })
+    for (const directory of directories) fs.rmSync(directory, { recursive: true, force: true })
   })
-
-  // Only PATH is passed, so neither this shell's OTEL_SERVICE_NAME nor
-  // Vitest's own variables reach the child.
-  function run(commandArguments: string[]): string {
-    return execFileSync(process.execPath, commandArguments, {
-      cwd: directory,
-      env: { PATH: process.env.PATH ?? '' },
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    })
-  }
 
   it('pnpm start', () => {
     const [bin, ...rest] = words(scripts.start)
     expect(bin).toBe('node')
-    expect(run(withProbe(rest, './dist/observability/tracing.js', 'dist/index.js'))).toBe(
-      'from-dot-env'
-    )
+    const directory = fixture('OTEL_SERVICE_NAME=from-dot-env\n')
+    expect(
+      run(directory, withProbe(rest, './dist/observability/tracing.js', 'dist/index.js'))
+    ).toBe('from-dot-env')
   })
 
   // tsx without `watch`: watch strips only its own flags and forwards the
@@ -106,14 +113,17 @@ describe('those flags, run for real, load .env before the --import module', () =
   it('pnpm dev, through tsx', () => {
     const rest = words(scripts.dev).slice(2)
     const tsxCli = path.join(repoRoot, 'node_modules/tsx/dist/cli.mjs')
+    const directory = fixture('OTEL_SERVICE_NAME=from-dot-env\n')
     expect(
-      run([tsxCli, ...withProbe(rest, './src/observability/tracing.ts', 'src/index.ts')])
+      run(directory, [tsxCli, ...withProbe(rest, './src/observability/tracing.ts', 'src/index.ts')])
     ).toBe('from-dot-env')
   })
 
   it('pnpm start with no .env still starts, reading nothing', () => {
-    fs.rmSync(path.join(directory, '.env'))
     const [, ...rest] = words(scripts.start)
-    expect(run(withProbe(rest, './dist/observability/tracing.js', 'dist/index.js'))).toBe('unset')
+    const directory = fixture()
+    expect(
+      run(directory, withProbe(rest, './dist/observability/tracing.js', 'dist/index.js'))
+    ).toBe('unset')
   })
 })
