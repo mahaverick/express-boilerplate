@@ -16,7 +16,7 @@
 // comment argues for at the exact boundary this validator sits on (a client-
 // supplied query parameter). This file's `listNotificationsSchema` therefore
 // only checks that `cursor`, if present, is a string — reusing that decoder
-// in the controller is what keeps cursor-format knowledge in the one place
+// in notification.service.ts is what keeps cursor-format knowledge in the one place
 // that already has it, instead of a second implementation here that could
 // disagree with it about what counts as a valid cursor.
 import { z } from 'zod'

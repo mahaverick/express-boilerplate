@@ -27,21 +27,16 @@
 // envelope — not an event-stream response that immediately closes.
 import { type NextFunction, type Request, type Response } from 'express'
 import { getEnv } from '@/configs/env.config'
-import {
-  MAX_NOTIFICATION_PAGE_SIZE,
-  SSE_MAX_BUFFERED_BYTES,
-} from '@/constants/notification.constants'
+import { SSE_MAX_BUFFERED_BYTES } from '@/constants/notification.constants'
 import { authenticatedUserId } from '@/controllers/helpers.controller'
 import type { Notification } from '@/database/models/notification.model'
 import { HttpError } from '@/errors/http-error'
 import { ACCESS_TOKEN_EXPIRED_CODE } from '@/middlewares/auth.middleware'
-import { NotificationRepository } from '@/repositories/notification.repository'
 import { countStreams, isShuttingDown, registerStream } from '@/services/lifecycle.service'
 import { logger } from '@/services/logger.service'
 import { offNotification, onNotification } from '@/services/notification-emitter.service'
+import { fetchMissedNotifications } from '@/services/notification.service'
 import { isSessionDenied } from '@/services/session-denylist.service'
-
-const notificationRepository = new NotificationRepository()
 
 // Sent once, in the `retry:` field of the initial response — SSE's own
 // reconnect-delay hint, honoured natively by `EventSource`. No current
@@ -157,77 +152,14 @@ function writeNotificationEvent(response: Response, notification: Notification):
 }
 
 /**
- * Whether `candidate` was created strictly after `cursor`, under the same
- * `(createdAt, id)` ordering `notifications_user_created_idx`
- * (notification.model.ts) and `NotificationRepository.list`'s own keyset
- * cursor already use: `createdAt` decides it, and for two rows created in
- * the same millisecond the larger `id` wins — uuidv7 is time-ordered, and
- * `list`'s own `ORDER BY created_at DESC, id DESC` already treats a larger
- * id as "newer" for a tie, so this matches that one existing definition of
- * "newer" rather than inventing a second.
- * @param candidate - The notification being tested.
- * @param cursor - The last notification the client already has, from `Last-Event-ID`.
- * @returns True when `candidate` is newer than `cursor`.
- */
-function isNewerThan(candidate: Notification, cursor: Notification): boolean {
-  const candidateTime = candidate.createdAt.getTime()
-  const cursorTime = cursor.createdAt.getTime()
-  if (candidateTime !== cursorTime) return candidateTime > cursorTime
-  return candidate.id > cursor.id
-}
-
-/**
- * Fetch every notification the client missed while disconnected — the pure
- * query half of the `Last-Event-ID` replay.
- *
- * Deliberately split from writing the frames out (that happens in
- * `streamNotifications` itself, not here): this function performs the ONLY
- * `await` in the reconnect path, and `streamNotifications` needs its live
- * listener, heartbeat, and close handler already registered before that
- * await starts — see its own comment for why a version that awaited this
- * query before registering them was a real bug, not a hypothetical one.
- *
- * Bounded to the single most-recent page `NotificationRepository.list`
- * returns (`MAX_NOTIFICATION_PAGE_SIZE` — the same cap
- * `notification.validators.ts`'s own `listNotificationsSchema` already
- * enforces for `GET /api/v1/notifications`): a client that missed more
- * notifications than that in one disconnect still gets caught up on the
- * most recent ones, and can page through the rest via the ordinary REST
- * endpoint, rather than this issuing an unbounded number of `list()` calls
- * before the live stream can even start.
- *
- * Resolves to an empty array — not a 400/404 — when `lastEventId` does not
- * resolve to a notification this user still owns: it may have been deleted
- * (`DELETE /api/v1/notifications/:id`) since the client last saw it, and a
- * reconnect is exactly the moment that should recover gracefully.
- * @param userId - The authenticated connection's owner.
- * @param lastEventId - The `Last-Event-ID` header value the client sent on reconnect.
- * @returns The missed notifications, oldest first — the order they should be replayed in, matching the order the live stream itself delivers in.
- */
-async function fetchMissedNotifications(
-  userId: string,
-  lastEventId: string
-): Promise<Notification[]> {
-  const cursor = await notificationRepository.findByIdAndUser(lastEventId, userId)
-  if (!cursor) return []
-
-  const { notifications } = await notificationRepository.list(userId, {
-    limit: MAX_NOTIFICATION_PAGE_SIZE,
-  })
-
-  // list() returns newest-first; the caller replays oldest-first.
-  return notifications.filter((notification) => isNewerThan(notification, cursor)).toReversed()
-}
-
-/**
  * `GET /api/v1/notifications/stream` — open a Server-Sent Events connection
  * for the authenticated user's notifications.
  *
  * EVERYTHING SYNCHRONOUS-UP-FRONT, THE REPLAY QUERY LAST — not the more
  * obvious "replay, then subscribe" order. `fetchMissedNotifications`
- * (above) awaits the database twice; if the live listener, heartbeat, and
- * close handler were registered only after that awaits resolved, two things
- * could go wrong in that window:
+ * (notification.service.ts) awaits the database twice; if the live
+ * listener, heartbeat, and close handler were registered only after that
+ * awaits resolved, two things could go wrong in that window:
  *
  *   - A notification emitted while the query was in flight would be in
  *     neither the replay burst (already queried) nor the live stream (not

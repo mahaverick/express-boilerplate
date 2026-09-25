@@ -7,21 +7,19 @@
 // (helpers.controller.ts) is a shared defensive check against a routing
 // mistake, not business logic specific to this controller.
 //
-// Every notification lookup/mutation goes through the repository's own
-// `userId`-scoped methods (`findByIdAndUser`, `markRead`, `deleteOne`) —
-// never a lookup by `id` alone — so a caller can never act on, or learn the
-// existence of, another user's notification by guessing its id. This
-// controller adds no ownership check of its own; it relies entirely on the
-// repository already having one, per method, on every call.
+// Ownership scoping lives in notification.service.ts: every call there goes
+// through the repository's userId-scoped methods.
 import { type NextFunction, type Request, type Response } from 'express'
 import { authenticatedUserId } from '@/controllers/helpers.controller'
 import type { Notification } from '@/database/models/notification.model'
-import { HttpError } from '@/errors/http-error'
-import { NotificationPreferenceRepository } from '@/repositories/notification-preference.repository'
 import {
-  decodeNotificationCursor,
-  NotificationRepository,
-} from '@/repositories/notification.repository'
+  deleteNotification as deleteNotificationRecord,
+  getPreferences as getPreferenceMatrix,
+  listNotifications as listNotificationPage,
+  markAllRead as markAllNotificationsRead,
+  markRead as markNotificationRead,
+  updatePreferences as upsertPreferences,
+} from '@/services/notification.service'
 import { successResponse } from '@/utilities/response.utilities'
 import {
   listNotificationsSchema,
@@ -29,9 +27,6 @@ import {
   updatePreferencesSchema,
 } from '@/validators/notification.validators'
 import { parseBody } from '@/validators/parse.validators'
-
-const notificationRepository = new NotificationRepository()
-const notificationPreferenceRepository = new NotificationPreferenceRepository()
 
 /**
  * A notification as the REST API returns it.
@@ -61,12 +56,11 @@ function toNotificationResponse(notification: Notification): NotificationRespons
  * List the authenticated user's notifications, newest first, one page at a
  * time.
  *
- * An invalid or stale `cursor` is never a 400 here: `decodeNotificationCursor`
- * (notification.repository.ts) resolves it to `undefined`, which
- * `NotificationRepository.list` treats as "no cursor" and answers with the
- * first page — the same "malformed input fails as no cursor, not as an
- * error" contract that decoder's own header comment establishes for exactly
- * this call site.
+ * An invalid or stale `cursor` is never a 400 here: `listNotificationPage`
+ * (notification.service.ts) decodes it via `decodeNotificationCursor`
+ * (notification.repository.ts), which resolves a malformed value to
+ * `undefined` rather than throwing, so this handler always calls the
+ * service — no separate no-cursor branch is needed here.
  * @param request - The incoming request, carrying `limit`/`cursor` as query parameters.
  * @param response - The response.
  * @param next - Forwards a rejection to the terminal error handler.
@@ -79,11 +73,7 @@ export async function listNotifications(
   try {
     const userId = authenticatedUserId(request)
     const { limit, cursor } = parseBody(listNotificationsSchema, request.query)
-    const decodedCursor = cursor === undefined ? undefined : decodeNotificationCursor(cursor)
-    const page = await notificationRepository.list(
-      userId,
-      decodedCursor === undefined ? { limit } : { limit, cursor: decodedCursor }
-    )
+    const page = await listNotificationPage(userId, { limit, cursor })
     successResponse(
       response,
       { ...page, notifications: page.notifications.map((row) => toNotificationResponse(row)) },
@@ -117,18 +107,8 @@ export async function markRead(
   try {
     const userId = authenticatedUserId(request)
     const { id } = parseBody(notificationIdSchema, request.params)
-
-    const updated = await notificationRepository.markRead(id, userId)
-    if (updated) {
-      successResponse(response, toNotificationResponse(updated), 'Notification marked as read.')
-      return
-    }
-
-    const existing = await notificationRepository.findByIdAndUser(id, userId)
-    if (!existing) {
-      throw new HttpError('Notification not found', 404)
-    }
-    successResponse(response, toNotificationResponse(existing), 'Notification marked as read.')
+    const notification = await markNotificationRead(userId, id)
+    successResponse(response, toNotificationResponse(notification), 'Notification marked as read.')
   } catch (error) {
     next(error)
   }
@@ -147,8 +127,7 @@ export async function markAllRead(
   next: NextFunction
 ): Promise<void> {
   try {
-    const userId = authenticatedUserId(request)
-    const count = await notificationRepository.markAllRead(userId)
+    const count = await markAllNotificationsRead(authenticatedUserId(request))
     successResponse(response, { count }, 'Notifications marked as read.')
   } catch (error) {
     next(error)
@@ -175,11 +154,7 @@ export async function deleteNotification(
   try {
     const userId = authenticatedUserId(request)
     const { id } = parseBody(notificationIdSchema, request.params)
-
-    const wasDeleted = await notificationRepository.deleteOne(id, userId)
-    if (!wasDeleted) {
-      throw new HttpError('Notification not found', 404)
-    }
+    await deleteNotificationRecord(userId, id)
     // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data", not undefined (which JSON.stringify omits entirely)
     successResponse(response, null, 'Notification deleted.')
   } catch (error) {
@@ -201,8 +176,7 @@ export async function getPreferences(
   next: NextFunction
 ): Promise<void> {
   try {
-    const userId = authenticatedUserId(request)
-    const preferences = await notificationPreferenceRepository.getFullMatrix(userId)
+    const preferences = await getPreferenceMatrix(authenticatedUserId(request))
     successResponse(response, { preferences }, 'Notification preferences retrieved.')
   } catch (error) {
     next(error)
@@ -230,21 +204,7 @@ export async function updatePreferences(
   try {
     const userId = authenticatedUserId(request)
     const { preferences } = parseBody(updatePreferencesSchema, request.body)
-
-    // Not transactional: a failure partway through `Promise.all` leaves
-    // earlier upserts committed. Moot today — `preferences` can only ever
-    // contain configurable types, and there are currently none, so this
-    // array is always empty in practice — but worth flagging for whoever
-    // adds the second configurable type: a multi-entry request that fails
-    // on entry 2 will have already written entry 1.
-    const updated = await Promise.all(
-      preferences.map((entry) =>
-        notificationPreferenceRepository.upsert(userId, entry.notificationType, {
-          emailEnabled: entry.emailEnabled,
-          inAppEnabled: entry.inAppEnabled,
-        })
-      )
-    )
+    const updated = await upsertPreferences(userId, preferences)
     successResponse(response, { preferences: updated }, 'Notification preferences updated.')
   } catch (error) {
     next(error)

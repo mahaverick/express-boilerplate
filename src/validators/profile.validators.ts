@@ -42,7 +42,7 @@ import { MAX_NAME_LENGTH } from '@/constants/auth.constants'
 // `.nullable().optional()` gives each field three distinguishable states in
 // the parsed result, which is exactly the distinction PATCH semantics need:
 //   - key absent from the request body -> parsed value is `undefined` ->
-//     leave the column unchanged (see profile.controller.ts's `toUpdateValues`,
+//     leave the column unchanged (see profile.service.ts's `toUpdateValues`,
 //     which checks presence with `Object.hasOwn` rather than truthiness).
 //   - key present, set to `null` -> parsed value is `null` -> clear the
 //     column (both `first_name`/`last_name` are nullable columns; `null` is

@@ -17,46 +17,21 @@
 //
 // `updateProfile`'s mass-assignment defence is `updateProfileSchema`
 // (profile.validators.ts) alone: it is the only allow-list of writable
-// fields, and `toUpdateValues` below only ever reads the two keys that
-// schema can produce. There is deliberately no second check here (e.g.
-// re-validating that `email`/`active` were not requested) — a second,
+// fields, and `toUpdateValues` (profile.service.ts) only ever reads the two
+// keys that schema can produce. There is deliberately no second check here
+// (e.g. re-validating that `email`/`active` were not requested) — a second,
 // independent allow-list is exactly the kind of duplicate definition that
 // drifts from the first one over time.
 import { type NextFunction, type Request, type Response } from 'express'
 import { authenticatedUserId } from '@/controllers/helpers.controller'
-import type { NewUser } from '@/database/models/user.model'
-import { HttpError } from '@/errors/http-error'
 import { toPublicUser } from '@/presenters/user.presenter'
-import { UserRepository } from '@/repositories/user.repository'
+import {
+  getProfile as getProfileRecord,
+  updateProfile as updateProfileRecord,
+} from '@/services/profile.service'
 import { successResponse } from '@/utilities/response.utilities'
 import { parseBody } from '@/validators/parse.validators'
-import { updateProfileSchema, type UpdateProfileInput } from '@/validators/profile.validators'
-
-const userRepository = new UserRepository()
-
-/**
- * The row columns a validated `PATCH /api/v1/profile` body should write,
- * built from `input` rather than from the raw request body.
- *
- * `Object.hasOwn` — not `input.firstName !== undefined` — is what
- * distinguishes "the client omitted this field" (leave the column alone,
- * so the key is never added to `values`) from "the client sent an explicit
- * `null`" (clear the column, so the key IS added, holding `null`). Reading
- * `input.firstName` directly for a key that passed `hasOwn` also means no
- * `null` literal needs to appear in this file: the only `null` that can
- * flow into `values` is the one the client actually sent, carried through
- * from `updateProfileSchema`'s own parsed output.
- * @param input - The already-validated request body.
- * @returns Only the columns the caller actually supplied, ready for `UserRepository.update`.
- */
-function toUpdateValues(
-  input: UpdateProfileInput
-): Partial<Pick<NewUser, 'firstName' | 'lastName'>> {
-  const values: Partial<Pick<NewUser, 'firstName' | 'lastName'>> = {}
-  if (Object.hasOwn(input, 'firstName')) values.firstName = input.firstName
-  if (Object.hasOwn(input, 'lastName')) values.lastName = input.lastName
-  return values
-}
+import { updateProfileSchema } from '@/validators/profile.validators'
 
 /**
  * Get the authenticated user's own profile.
@@ -70,11 +45,7 @@ export async function getProfile(
   next: NextFunction
 ): Promise<void> {
   try {
-    const userId = authenticatedUserId(request)
-    const user = await userRepository.findById(userId)
-    if (!user) {
-      throw new HttpError('User not found', 404)
-    }
+    const user = await getProfileRecord(authenticatedUserId(request))
     successResponse(response, toPublicUser(user), 'Profile retrieved.')
   } catch (error) {
     next(error)
@@ -104,14 +75,7 @@ export async function updateProfile(
   try {
     const userId = authenticatedUserId(request)
     const input = parseBody(updateProfileSchema, request.body)
-    const values = toUpdateValues(input)
-    const hasChanges = Object.keys(values).length > 0
-    const user = hasChanges
-      ? await userRepository.update(userId, values)
-      : await userRepository.findById(userId)
-    if (!user) {
-      throw new HttpError('User not found', 404)
-    }
+    const user = await updateProfileRecord(userId, input)
     successResponse(response, toPublicUser(user), 'Profile updated.')
   } catch (error) {
     next(error)

@@ -19,17 +19,22 @@
 // only the early gate.
 import { type NextFunction, type Request, type Response } from 'express'
 import { actorFrom, authenticatedUserId } from '@/controllers/helpers.controller'
-import type { NewTenant } from '@/database/models/tenant.model'
 import { HttpError } from '@/errors/http-error'
 import type { RequestPrincipal } from '@/middlewares/tenant.middleware'
-import { TenantSettingsRepository } from '@/repositories/tenant-settings.repository'
-import { TenantRepository } from '@/repositories/tenant.repository'
-import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { invite, listPending, resend, revoke } from '@/services/tenant-invitation.service'
 import {
   changeRole,
   removeMember as removeTenantMember,
 } from '@/services/tenant-membership.service'
+import {
+  createTenant as createTenantRecord,
+  getTenant as getTenantRecord,
+  getSettings as getTenantSettings,
+  listForUser,
+  listMembers as listTenantMembers,
+  updateTenant as updateTenantRecord,
+  updateSettings as updateTenantSettings,
+} from '@/services/tenant.service'
 import { successResponse } from '@/utilities/response.utilities'
 import { parseBody } from '@/validators/parse.validators'
 import {
@@ -39,13 +44,7 @@ import {
   updateMemberRoleSchema,
   updateTenantSchema,
   updateTenantSettingsSchema,
-  type UpdateTenantInput,
-  type UpdateTenantSettingsInput,
 } from '@/validators/tenant.validators'
-
-const tenantRepository = new TenantRepository()
-const tenantSettingsRepository = new TenantSettingsRepository()
-const userMembershipRepository = new UserMembershipRepository()
 
 /**
  * The caller's tenant-scoped principal, guarding against a route reaching
@@ -99,9 +98,9 @@ export async function createTenant(
   next: NextFunction
 ): Promise<void> {
   try {
-    const userId = authenticatedUserId(request)
+    const actor = actorFrom(request)
     const input = parseBody(newTenantSchema, request.body)
-    const tenant = await tenantRepository.create({ ...input, ownerId: userId })
+    const tenant = await createTenantRecord(actor, input)
     successResponse(response, tenant, 'Tenant created.', 201)
   } catch (error) {
     next(error)
@@ -120,8 +119,7 @@ export async function listTenants(
   next: NextFunction
 ): Promise<void> {
   try {
-    const userId = authenticatedUserId(request)
-    const tenants = await tenantRepository.listForUser(userId)
+    const tenants = await listForUser(authenticatedUserId(request))
     successResponse(response, tenants, 'Tenants retrieved.')
   } catch (error) {
     next(error)
@@ -142,43 +140,11 @@ export async function getTenant(
   next: NextFunction
 ): Promise<void> {
   try {
-    const principal = tenantPrincipal(request)
-    const tenant = await tenantRepository.findById(principal.tenantId)
-    if (!tenant) {
-      // Unreachable in practice — `resolveTenant` already looked this
-      // tenant up moments earlier via `findActiveBySlug` — but a defensive
-      // 404 rather than trusting that fact costs nothing. See
-      // `TenantRepository.insertOne`'s own comment for this codebase's
-      // general stance on guarding "cannot happen" cases anyway.
-      throw new HttpError('Tenant not found', 404)
-    }
+    const tenant = await getTenantRecord(tenantPrincipal(request).tenantId)
     successResponse(response, tenant, 'Tenant retrieved.')
   } catch (error) {
     next(error)
   }
-}
-
-/**
- * The row columns a validated `PATCH /api/v1/tenants/:slug` body should
- * write, built from `input` with `Object.hasOwn` — not
- * `input.field !== undefined` — the same PATCH-presence distinction
- * `profile.controller.ts`'s `toUpdateValues` already establishes: an
- * omitted key leaves the column alone; an explicit `null` (on the three
- * nullable columns) clears it. `name` never carries `null` — the schema
- * itself does not allow it (`updateTenantSchema`'s own comment) — so
- * `Object.hasOwn(input, 'name')` implies a real string.
- * @param input - The already-validated request body.
- * @returns Only the columns the caller actually supplied.
- */
-function toTenantUpdateValues(
-  input: UpdateTenantInput
-): Partial<Pick<NewTenant, 'name' | 'description' | 'logo' | 'website'>> {
-  const values: Partial<Pick<NewTenant, 'name' | 'description' | 'logo' | 'website'>> = {}
-  if (Object.hasOwn(input, 'name') && input.name !== undefined) values.name = input.name
-  if (Object.hasOwn(input, 'description')) values.description = input.description
-  if (Object.hasOwn(input, 'logo')) values.logo = input.logo
-  if (Object.hasOwn(input, 'website')) values.website = input.website
-  return values
 }
 
 /**
@@ -198,14 +164,7 @@ export async function updateTenant(
   try {
     const principal = tenantPrincipal(request)
     const input = parseBody(updateTenantSchema, request.body)
-    const values = toTenantUpdateValues(input)
-    const hasChanges = Object.keys(values).length > 0
-    const tenant = hasChanges
-      ? await tenantRepository.update(principal.tenantId, values)
-      : await tenantRepository.findById(principal.tenantId)
-    if (!tenant) {
-      throw new HttpError('Tenant not found', 404)
-    }
+    const tenant = await updateTenantRecord(principal.tenantId, input)
     successResponse(response, tenant, 'Tenant updated.')
   } catch (error) {
     next(error)
@@ -226,8 +185,7 @@ export async function listMembers(
   next: NextFunction
 ): Promise<void> {
   try {
-    const principal = tenantPrincipal(request)
-    const members = await userMembershipRepository.listByTenant(principal.tenantId)
+    const members = await listTenantMembers(tenantPrincipal(request).tenantId)
     successResponse(response, members, 'Members retrieved.')
   } catch (error) {
     next(error)
@@ -417,46 +375,11 @@ export async function getSettings(
   next: NextFunction
 ): Promise<void> {
   try {
-    const principal = tenantPrincipal(request)
-    const settings = await tenantSettingsRepository.findByTenantId(principal.tenantId)
-    if (!settings) {
-      // Unreachable in practice — `TenantRepository.create` writes the
-      // settings row atomically alongside the tenant itself
-      // (tenant.repository.ts), so a visible, resolvable tenant always has
-      // one. Guarded anyway, same reasoning as `getTenant` above.
-      throw new HttpError('Tenant settings not found', 404)
-    }
+    const settings = await getTenantSettings(tenantPrincipal(request).tenantId)
     successResponse(response, settings, 'Settings retrieved.')
   } catch (error) {
     next(error)
   }
-}
-
-/**
- * The row columns a validated `PATCH /api/v1/tenants/:slug/settings` body
- * should write. Same `Object.hasOwn`-based presence check as
- * `toTenantUpdateValues` above — see that function's own comment.
- * @param input - The already-validated request body.
- * @returns Only the columns the caller actually supplied.
- */
-function toSettingsUpdateValues(
-  input: UpdateTenantSettingsInput
-): Partial<{ timezone: string; locale: string; metadata: Record<string, unknown> | null }> {
-  const values: Partial<{
-    timezone: string
-    locale: string
-    metadata: Record<string, unknown> | null
-  }> = {}
-  if (Object.hasOwn(input, 'timezone') && input.timezone !== undefined) {
-    values.timezone = input.timezone
-  }
-  if (Object.hasOwn(input, 'locale') && input.locale !== undefined) {
-    values.locale = input.locale
-  }
-  if (Object.hasOwn(input, 'metadata') && input.metadata !== undefined) {
-    values.metadata = input.metadata
-  }
-  return values
 }
 
 /**
@@ -474,14 +397,7 @@ export async function updateSettings(
   try {
     const principal = tenantPrincipal(request)
     const input = parseBody(updateTenantSettingsSchema, request.body)
-    const values = toSettingsUpdateValues(input)
-    const hasChanges = Object.keys(values).length > 0
-    const settings = hasChanges
-      ? await tenantSettingsRepository.update(principal.tenantId, values)
-      : await tenantSettingsRepository.findByTenantId(principal.tenantId)
-    if (!settings) {
-      throw new HttpError('Tenant settings not found', 404)
-    }
+    const settings = await updateTenantSettings(principal.tenantId, input)
     successResponse(response, settings, 'Settings updated.')
   } catch (error) {
     next(error)
