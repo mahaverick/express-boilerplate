@@ -160,10 +160,11 @@ export async function processNotificationJob(job: Job<NotificationJobData>): Pro
  * @returns The running Worker instance (for graceful shutdown).
  */
 export function startNotificationWorker(): Worker<NotificationJobData> {
+  const env = getEnv()
   const worker = new Worker<NotificationJobData>('notification', processNotificationJob, {
     connection: getQueueConnection(),
-    prefix: getEnv().QUEUE_PREFIX,
-    concurrency: 5,
+    prefix: env.QUEUE_PREFIX,
+    concurrency: env.WORKER_CONCURRENCY,
     lockDuration: 30_000,
   })
 

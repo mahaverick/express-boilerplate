@@ -5,6 +5,7 @@
 // budget — which only shows up under load, as "too many connections".
 import { drizzle } from 'drizzle-orm/postgres-js'
 import postgres from 'postgres'
+import { databaseClientOptions } from '@/configs/database.config'
 import { getEnv } from '@/configs/env.config'
 
 const env = getEnv()
@@ -12,13 +13,7 @@ const env = getEnv()
 /**
  * Raw SQL client. Prefer `db` unless you need untyped SQL.
  */
-export const sql = postgres(env.DATABASE_URL, {
-  max: env.NODE_ENV === 'test' ? 2 : 10,
-  idle_timeout: 20,
-  connect_timeout: 10,
-  // Transaction pooling breaks prepared statements; off is the portable default.
-  prepare: false,
-})
+export const sql = postgres(env.DATABASE_URL, databaseClientOptions(env))
 
 /**
  * Drizzle client. The query interface every repository uses.

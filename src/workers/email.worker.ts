@@ -36,10 +36,11 @@ export async function processEmailJob(job: Job<EmailJobData>): Promise<void> {
  * @returns The running Worker instance (for graceful shutdown).
  */
 export function startEmailWorker(): Worker<EmailJobData> {
+  const env = getEnv()
   const worker = new Worker<EmailJobData>('email', processEmailJob, {
     connection: getQueueConnection(),
-    prefix: getEnv().QUEUE_PREFIX,
-    concurrency: 5,
+    prefix: env.QUEUE_PREFIX,
+    concurrency: env.WORKER_CONCURRENCY,
     lockDuration: 30_000,
   })
 

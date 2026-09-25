@@ -28,13 +28,13 @@ export default defineConfig({
     ],
     pool: 'forks',
     // Pinned rather than left to default to (availableParallelism() - 1):
-    // database.service.ts opens a real postgres pool (max: 2 in test mode)
+    // database.service.ts opens a real postgres pool (max: DB_POOL_MAX, 2 in .env.test)
     // at module scope in every forked worker that imports it, so the
     // connection ceiling is workers x pool.max. Left unpinned, that ceiling
     // tracks whichever machine happens to run the suite — a CI runner with
     // more cores than expected could push it past Postgres's default
     // max_connections (100) in a way that looks like a random, intermittent
-    // failure rather than a sizing bug. 8 workers x 2 connections = 16,
+    // failure rather than a sizing bug. 8 workers x DB_POOL_MAX 2 = 16,
     // comfortably under 100 regardless of host core count.
     //
     // `maxWorkers`, not `poolOptions.forks.maxForks`: this Vitest release
