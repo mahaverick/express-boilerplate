@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  EnvSchemaShape,
   getDatabaseUrl,
   getEnv,
   isCookieSecure,
@@ -321,22 +322,30 @@ describe('WORKER_ENABLED', () => {
   })
 })
 
-describe('QUEUE_PREFIX', () => {
-  it('defaults to "bull" when unset', () => {
-    expect(parseEnv(valid).QUEUE_PREFIX).toBe('bull')
+describe('REDIS_KEY_PREFIX', () => {
+  it('defaults to "express-boilerplate" when unset', () => {
+    expect(parseEnv(valid).REDIS_KEY_PREFIX).toBe('express-boilerplate')
   })
 
-  it('accepts a custom prefix — tests override this per vitest worker', () => {
-    expect(parseEnv({ ...valid, QUEUE_PREFIX: 'bull:test-w3' }).QUEUE_PREFIX).toBe('bull:test-w3')
+  it.each(['test-w3', 'acme:prod', 'a_b-c9', '9lives'])('accepts %s', (value) => {
+    expect(parseEnv({ ...valid, REDIS_KEY_PREFIX: value }).REDIS_KEY_PREFIX).toBe(value)
   })
 
-  it('rejects an empty QUEUE_PREFIX', () => {
-    expect(() => parseEnv({ ...valid, QUEUE_PREFIX: '' })).not.toThrow()
-    // An empty string is dropped as "absent" (same treatment as every other
-    // optional/defaulted field — see the "empty-string optional value"
-    // test above), so it falls back to the default rather than failing
-    // min(1) directly. Confirms the two rules AGREE rather than fighting.
-    expect(parseEnv({ ...valid, QUEUE_PREFIX: '' }).QUEUE_PREFIX).toBe('bull')
+  it.each(['Acme', ':acme', '-acme', '_acme', 'acme prod', 'acme/prod', 'acme:'])(
+    'rejects %s',
+    (value) => {
+      expect(() => parseEnv({ ...valid, REDIS_KEY_PREFIX: value })).toThrow()
+    }
+  )
+
+  it('treats an empty value as unset, so the default applies', () => {
+    expect(parseEnv({ ...valid, REDIS_KEY_PREFIX: '' }).REDIS_KEY_PREFIX).toBe(
+      'express-boilerplate'
+    )
+  })
+
+  it('no longer defines QUEUE_PREFIX', () => {
+    expect(Object.keys(EnvSchemaShape)).not.toContain('QUEUE_PREFIX')
   })
 })
 

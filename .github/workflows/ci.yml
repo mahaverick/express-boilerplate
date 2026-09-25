@@ -184,6 +184,7 @@ jobs:
           SSE_HEARTBEAT_INTERVAL_MS: 1000
           SSE_MAX_STREAMS_PER_USER: 5
           LOG_LEVEL: silent
+          REDIS_KEY_PREFIX: test
       # The env block above must mirror committed .env.test. When they drift, a
       # test passes locally and fails in CI (or worse, the reverse) for reasons
       # that look nothing like the cause. This asserts every key in .env.test is

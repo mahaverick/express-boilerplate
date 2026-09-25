@@ -33,6 +33,7 @@ import { NotificationRepository } from '@/repositories/notification.repository'
 import { logger } from '@/services/logger.service'
 import { emitNotification } from '@/services/notification-emitter.service'
 import { getQueueConnection } from '@/services/queue.service'
+import { redisKey } from '@/services/redis.service'
 
 const notificationRepository = new NotificationRepository()
 const preferenceRepository = new NotificationPreferenceRepository()
@@ -163,7 +164,7 @@ export function startNotificationWorker(): Worker<NotificationJobData> {
   const env = getEnv()
   const worker = new Worker<NotificationJobData>('notification', processNotificationJob, {
     connection: getQueueConnection(),
-    prefix: env.QUEUE_PREFIX,
+    prefix: redisKey('bull'),
     concurrency: env.WORKER_CONCURRENCY,
     lockDuration: 30_000,
   })

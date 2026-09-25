@@ -7,7 +7,13 @@ const redis = {
   exists: vi.fn<(key: string) => Promise<number>>(),
 }
 
-vi.mock('@/services/redis.service', () => ({ getRedis: () => Promise.resolve(redis) }))
+// Written out rather than built with redisKey, so the test pins the key shape itself.
+const deniedKey = (): string => `${getEnv().REDIS_KEY_PREFIX}:denylist:session:session-abc`
+
+vi.mock('@/services/redis.service', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/services/redis.service')>()),
+  getRedis: () => Promise.resolve(redis),
+}))
 vi.mock('@/services/logger.service', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }))
@@ -29,7 +35,7 @@ describe('session denylist', () => {
     // `> 0`, which an `EX` of 1 would also satisfy while defeating that
     // design entirely.
     const expectedSeconds = Math.ceil(requireDurationMs(getEnv().ACCESS_TOKEN_TTL) / MS_PER_SECOND)
-    expect(redis.set).toHaveBeenCalledWith('denylist:session:session-abc', '1', {
+    expect(redis.set).toHaveBeenCalledWith(deniedKey(), '1', {
       expiration: { type: 'EX', value: expectedSeconds },
     })
   })
@@ -38,6 +44,7 @@ describe('session denylist', () => {
     redis.exists.mockResolvedValue(1)
     const { isSessionDenied } = await import('@/services/session-denylist.service')
     expect(await isSessionDenied('session-abc')).toBe(true)
+    expect(redis.exists).toHaveBeenCalledWith(deniedKey())
   })
 
   it('ALLOWS when Redis is unreachable, rather than locking everyone out', async () => {

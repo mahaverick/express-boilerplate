@@ -6,8 +6,8 @@
 // until this process's subscriber provably receives.
 import { randomUUID } from 'node:crypto'
 import type { RedisClientType } from 'redis'
-import { getEnv } from '@/configs/env.config'
 import type { Notification } from '@/database/models/notification.model'
+import { redisKey } from '@/services/redis.service'
 import { sleep } from './redis-proxy'
 
 type EmitterModule = typeof import('@/services/notification-emitter.service')
@@ -37,10 +37,10 @@ export function fakeNotification(overrides: Partial<Notification> = {}): Notific
 
 /**
  * The channel this worker's notifications travel on.
- * @returns `${QUEUE_PREFIX}:notifications`.
+ * @returns `<REDIS_KEY_PREFIX>:notifications`.
  */
 export function notificationChannel(): string {
-  return `${getEnv().QUEUE_PREFIX}:notifications`
+  return redisKey('notifications')
 }
 
 /**

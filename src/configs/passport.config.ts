@@ -62,7 +62,7 @@ import {
 import { getEnv, isCookieSecure } from '@/configs/env.config'
 import { GOOGLE_STRATEGY_NAME } from '@/constants/auth.constants'
 import { logger } from '@/services/logger.service'
-import { getRedis } from '@/services/redis.service'
+import { getRedis, redisKey } from '@/services/redis.service'
 
 // Defined in constants/auth.constants.ts (see its JSDoc); re-exported for
 // auth.routes.ts.
@@ -184,7 +184,8 @@ const OAUTH_SESSION_MAX_AGE_MS = 5 * 60 * 1000
 function buildOAuthSessionOptions(client: Awaited<ReturnType<typeof getRedis>>): SessionOptions {
   const env = getEnv()
   return {
-    store: new RedisStore({ client }),
+    // connect-redis's own default prefix, `sess:`, would sit outside REDIS_KEY_PREFIX.
+    store: new RedisStore({ client, prefix: `${redisKey('sess')}:` }),
     secret: env.SESSION_SECRET,
     resave: false,
     saveUninitialized: false,

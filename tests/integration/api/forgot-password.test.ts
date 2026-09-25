@@ -24,7 +24,7 @@ import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
-import { getRedis } from '@/services/redis.service'
+import { getRedis, redisKey } from '@/services/redis.service'
 import { hashPassword } from '@/utilities/password.utilities'
 import { issueToken } from '@/utilities/token.utilities'
 import { startEmailWorker } from '@/workers/email.worker'
@@ -237,8 +237,8 @@ async function clearRateLimiterKeys(pattern: string): Promise<void> {
 // a fresh, unique address (`uniqueEmail`), so it never shares a bucket with
 // another test regardless.
 beforeEach(async () => {
-  await clearRateLimiterKeys('rl:forgot-password-ip:*')
-  await clearRateLimiterKeys('rl:reset-password:*')
+  await clearRateLimiterKeys(`${redisKey('rl', 'forgot-password-ip')}:*`)
+  await clearRateLimiterKeys(`${redisKey('rl', 'reset-password')}:*`)
 })
 
 const FORGOT_PASSWORD_RESPONSE_BODY = {
@@ -325,8 +325,8 @@ describe('POST /api/v1/auth/forgot-password', () => {
     // only way to prove both fired.
     await forgotPassword(uniqueEmail())
 
-    const ipKeys = await redisKeysMatching('rl:forgot-password-ip:*')
-    const emailKeys = await redisKeysMatching('rl:forgot-password-email:*')
+    const ipKeys = await redisKeysMatching(`${redisKey('rl', 'forgot-password-ip')}:*`)
+    const emailKeys = await redisKeysMatching(`${redisKey('rl', 'forgot-password-email')}:*`)
     expect(ipKeys.length).toBeGreaterThan(0)
     expect(emailKeys.length).toBeGreaterThan(0)
   })

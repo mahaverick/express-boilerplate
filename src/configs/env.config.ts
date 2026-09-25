@@ -427,12 +427,15 @@ const EnvSchema = z.object({
     .describe(
       'Jobs each BullMQ worker (email, notification) processes at once, per process. Defaults to 5.'
     ),
-  QUEUE_PREFIX: z
+  // Every Redis key and channel goes through redisKey() (redis.service.ts),
+  // which joins this and its parts with ':'. A trailing colon would double it.
+  REDIS_KEY_PREFIX: z
     .string()
-    .min(1)
-    .default('bull')
+    .regex(/^[a-z0-9][a-z0-9:_-]*$/, 'Use lowercase letters, digits, ":", "_" and "-"')
+    .refine((value) => !value.endsWith(':'), 'No trailing colon: keys are joined with ":"')
+    .default('express-boilerplate')
     .describe(
-      'BullMQ Redis key prefix. Tests override this per vitest worker to prevent cross-worker job leaks.'
+      'Namespace for every Redis key and channel this app uses: BullMQ queues (<prefix>:bull), rate-limit counters (<prefix>:rl), the session denylist (<prefix>:denylist), OAuth sessions (<prefix>:sess) and the notification channel (<prefix>:notifications). Lowercase letters, digits, ":", "_" and "-", with no trailing colon. Give each app or environment sharing one Redis its own value; changing it abandons every existing key.'
     ),
 
   // How often notification-stream.controller.ts writes a `:ping\n\n` comment

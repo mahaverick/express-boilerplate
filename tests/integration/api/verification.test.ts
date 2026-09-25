@@ -21,7 +21,7 @@ import type { EmailJobData } from '@/jobs/email.job'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
-import { getRedis } from '@/services/redis.service'
+import { getRedis, redisKey } from '@/services/redis.service'
 import { hashPassword } from '@/utilities/password.utilities'
 import { issueToken } from '@/utilities/token.utilities'
 import { startEmailWorker } from '@/workers/email.worker'
@@ -318,8 +318,8 @@ function refreshCookiePair(response: Response): string | undefined {
   return line?.split(';', 1)[0]
 }
 
-const RESEND_VERIFICATION_IP_KEY_PATTERN = 'rl:resend-verification-ip:*'
-const RESEND_VERIFICATION_EMAIL_KEY_PATTERN = 'rl:resend-verification-email:*'
+const RESEND_VERIFICATION_IP_KEY_PATTERN = `${redisKey('rl', 'resend-verification-ip')}:*`
+const RESEND_VERIFICATION_EMAIL_KEY_PATTERN = `${redisKey('rl', 'resend-verification-email')}:*`
 
 /**
  * Every Redis key matching a pattern, via SCAN rather than KEYS — the same

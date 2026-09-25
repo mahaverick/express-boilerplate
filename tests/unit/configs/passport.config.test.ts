@@ -74,7 +74,7 @@ const baseEnv: Env = {
   SLACK_LOG_LEVEL: 'error',
   WORKER_ENABLED: true,
   WORKER_CONCURRENCY: 5,
-  QUEUE_PREFIX: 'bull',
+  REDIS_KEY_PREFIX: 'express-boilerplate',
   SSE_HEARTBEAT_INTERVAL_MS: 30_000,
   SSE_MAX_STREAMS_PER_USER: 5,
   SMTP_HOST: 'localhost',

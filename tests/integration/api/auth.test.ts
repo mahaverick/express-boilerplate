@@ -62,7 +62,7 @@ const notificationWorker = startNotificationWorker()
 afterAll(async () => {
   // Same ordering as tests/integration/workers/email.worker.test.ts: workers
   // first (drains anything in flight), then obliterate so no job this file
-  // enqueued lingers under this vitest worker's shared QUEUE_PREFIX for the
+  // enqueued lingers under this vitest worker's shared REDIS_KEY_PREFIX for the
   // next test file to trip over, then the shared connection.
   await worker.close()
   await notificationWorker.close()

@@ -1,9 +1,17 @@
 import { getEnv } from '@/configs/env.config'
 import { logger } from '@/services/logger.service'
-import { getRedis } from '@/services/redis.service'
+import { getRedis, redisKey } from '@/services/redis.service'
 import { MS_PER_SECOND, requireDurationMs } from '@/utilities/duration.utilities'
 
-const KEY_PREFIX = 'denylist:session:'
+/**
+ * The key one session's denial is stored under. Built per call, because
+ * getEnv() must not run at module scope.
+ * @param sessionId - The denied session.
+ * @returns The namespaced key.
+ */
+function denylistKey(sessionId: string): string {
+  return redisKey('denylist', 'session', sessionId)
+}
 
 /**
  * Mark a session's access tokens as no longer honoured.
@@ -32,7 +40,7 @@ export async function denySession(sessionId: string): Promise<void> {
     const redis = await getRedis()
     // `{ EX: seconds }` is `@deprecated` on this pinned `@redis/client@6.2.1`
     // in favour of this `expiration` form — same effect, current API.
-    await redis.set(`${KEY_PREFIX}${sessionId}`, '1', {
+    await redis.set(denylistKey(sessionId), '1', {
       expiration: { type: 'EX', value: seconds },
     })
   } catch (error) {
@@ -56,7 +64,7 @@ export async function denySession(sessionId: string): Promise<void> {
 export async function isSessionDenied(sessionId: string): Promise<boolean> {
   try {
     const redis = await getRedis()
-    return (await redis.exists(`${KEY_PREFIX}${sessionId}`)) === 1
+    return (await redis.exists(denylistKey(sessionId))) === 1
   } catch (error) {
     // FAIL OPEN. Failing closed would make every authenticated request fail
     // whenever Redis hiccups — a far larger outage than the window this

@@ -1,7 +1,7 @@
 // src/services/notification-emitter.service.ts
 //
 // Live notification fanout across every replica. `emitNotification`
-// publishes to one Redis channel, `${QUEUE_PREFIX}:notifications`. Each
+// publishes to one Redis channel, `<REDIS_KEY_PREFIX>:notifications`. Each
 // process with an SSE listener runs one subscriber connection and hands every
 // message to its local EventEmitter, keyed per user, so the publishing process
 // receives its own copy exactly once, like every other replica. The one
@@ -16,12 +16,11 @@
 import { EventEmitter } from 'node:events'
 import type { RedisClientType } from 'redis'
 import { z } from 'zod'
-import { getEnv } from '@/configs/env.config'
 import { NOTIFICATION_TYPES } from '@/constants/notification.constants'
 import type { Notification } from '@/database/models/notification.model'
 import { closeAllStreams } from '@/services/lifecycle.service'
 import { logger } from '@/services/logger.service'
-import { createRedisClient, getRedis } from '@/services/redis.service'
+import { createRedisClient, getRedis, redisKey } from '@/services/redis.service'
 
 /**
  * The event name one user's notifications are delivered under locally.
@@ -34,10 +33,10 @@ function eventNameFor(userId: string): string {
 
 /**
  * The Redis channel every replica publishes and subscribes on.
- * @returns The channel name, namespaced by `QUEUE_PREFIX`.
+ * @returns The channel name, namespaced by `REDIS_KEY_PREFIX`.
  */
 function channelName(): string {
-  return `${getEnv().QUEUE_PREFIX}:notifications`
+  return redisKey('notifications')
 }
 
 // Dates cross the wire as ISO strings (`Date#toJSON`) and are revived here.

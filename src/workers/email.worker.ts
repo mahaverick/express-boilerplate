@@ -8,6 +8,7 @@ import type { EmailJobData } from '@/jobs/email.job'
 import { logger } from '@/services/logger.service'
 import { sendMail } from '@/services/mailer.service'
 import { getQueueConnection } from '@/services/queue.service'
+import { redisKey } from '@/services/redis.service'
 
 /**
  * Process one email job. Exported for unit testing.
@@ -39,7 +40,7 @@ export function startEmailWorker(): Worker<EmailJobData> {
   const env = getEnv()
   const worker = new Worker<EmailJobData>('email', processEmailJob, {
     connection: getQueueConnection(),
-    prefix: env.QUEUE_PREFIX,
+    prefix: redisKey('bull'),
     concurrency: env.WORKER_CONCURRENCY,
     lockDuration: 30_000,
   })

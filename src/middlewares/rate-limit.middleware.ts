@@ -21,9 +21,11 @@
 // function where the router is assembled.
 //
 // ONE STORE PREFIX PER ENDPOINT — the convention every limiter added here
-// must follow. Each factory below constructs its own
-// `SharedRateLimitStore('rl:<endpoint>:')`; no two limiters ever share a
-// prefix. Three separate reasons, none of which a shared bucket satisfies:
+// must follow. Each factory below builds its own store with
+// `limiterStore(<endpoint>)`, keyed `<REDIS_KEY_PREFIX>:rl:<endpoint>:`;
+// no two limiters ever share a prefix. Every `rl:<endpoint>:` named in this
+// file's comments is relative to REDIS_KEY_PREFIX. Three separate reasons,
+// none of which a shared bucket satisfies:
 //
 //   1. A shared bucket lets traffic on one endpoint spend another's budget.
 //      Registration and login would then throttle each other: a burst of
@@ -157,6 +159,7 @@ import {
 } from 'express-rate-limit'
 import { SharedRateLimitStore } from '@/configs/rate-limit-store.config'
 import { HttpError } from '@/middlewares/error.middleware'
+import { redisKey } from '@/services/redis.service'
 
 // Deliberately a RATE, not a tight cap — see this file's header comment on
 // why registration is keyed on IP alone and why the limit is therefore what
@@ -168,8 +171,8 @@ import { HttpError } from '@/middlewares/error.middleware'
 // threadpool time per hour.
 // It is also comfortably above what this repo's own integration suite
 // spends from one IP per run (~20 registrations); a suite re-run does not
-// accumulate against it, because tests/helpers/global-setup.ts clears the
-// `rl:` keyspace before each run — see that file.
+// accumulate against it, because tests/helpers/global-setup.ts clears every
+// test worker's `rl:` keyspace before each run — see that file.
 const REGISTER_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000
 const REGISTER_RATE_LIMIT_MAX_ATTEMPTS = 100
 
@@ -262,6 +265,15 @@ function sendRateLimitedResponse(_request: Request, _response: Response, next: N
 }
 
 /**
+ * Build one limiter's store under its own `rl:<name>` keyspace.
+ * @param name - The limiter's endpoint name, unique within this file.
+ * @returns A store whose Redis keys start with `<REDIS_KEY_PREFIX>:rl:<name>:`.
+ */
+function limiterStore(name: string): SharedRateLimitStore {
+  return new SharedRateLimitStore(`${redisKey('rl', name)}:`)
+}
+
+/**
  * Build a registration rate limiter: `limit` attempts per `windowMs`, keyed
  * on the client's IP alone (express-rate-limit's own default key generator,
  * which normalises IPv6 to a /56 subnet).
@@ -283,7 +295,7 @@ export function createRegisterRateLimiter(
     limit: REGISTER_RATE_LIMIT_MAX_ATTEMPTS,
     standardHeaders: true,
     legacyHeaders: false,
-    store: new SharedRateLimitStore('rl:register:'),
+    store: limiterStore('register'),
     handler: sendRateLimitedResponse,
     ...overrides,
   })
@@ -303,7 +315,7 @@ export function createLoginRateLimiter(overrides: Partial<Options> = {}): RateLi
     limit: LOGIN_RATE_LIMIT_MAX_ATTEMPTS,
     standardHeaders: true,
     legacyHeaders: false,
-    store: new SharedRateLimitStore('rl:login:'),
+    store: limiterStore('login'),
     keyGenerator: loginRateLimitKey,
     handler: sendRateLimitedResponse,
     ...overrides,
@@ -326,7 +338,7 @@ export function createLoginIpRateLimiter(
     limit: LOGIN_IP_RATE_LIMIT_MAX_ATTEMPTS,
     standardHeaders: true,
     legacyHeaders: false,
-    store: new SharedRateLimitStore('rl:login-ip:'),
+    store: limiterStore('login-ip'),
     handler: sendRateLimitedResponse,
     ...overrides,
   })
@@ -349,7 +361,7 @@ export function createLoginAccountRateLimiter(
     limit: LOGIN_ACCOUNT_RATE_LIMIT_MAX_ATTEMPTS,
     standardHeaders: true,
     legacyHeaders: false,
-    store: new SharedRateLimitStore('rl:login-account:'),
+    store: limiterStore('login-account'),
     keyGenerator: submittedEmailRateLimitKey,
     handler: sendRateLimitedResponse,
     ...overrides,
@@ -372,7 +384,7 @@ export function createRefreshRateLimiter(
     limit: REFRESH_RATE_LIMIT_MAX_ATTEMPTS,
     standardHeaders: true,
     legacyHeaders: false,
-    store: new SharedRateLimitStore('rl:refresh:'),
+    store: limiterStore('refresh'),
     handler: sendRateLimitedResponse,
     ...overrides,
   })
@@ -393,7 +405,7 @@ export function createLogoutRateLimiter(overrides: Partial<Options> = {}): RateL
     limit: LOGOUT_RATE_LIMIT_MAX_ATTEMPTS,
     standardHeaders: true,
     legacyHeaders: false,
-    store: new SharedRateLimitStore('rl:logout:'),
+    store: limiterStore('logout'),
     handler: sendRateLimitedResponse,
     ...overrides,
   })
@@ -419,7 +431,7 @@ export function createVerifyEmailRateLimiter(
     limit: VERIFY_EMAIL_RATE_LIMIT_MAX_ATTEMPTS,
     standardHeaders: true,
     legacyHeaders: false,
-    store: new SharedRateLimitStore('rl:verify-email:'),
+    store: limiterStore('verify-email'),
     handler: sendRateLimitedResponse,
     ...overrides,
   })
@@ -454,7 +466,7 @@ export function createResendVerificationIpRateLimiter(
     limit: RESEND_VERIFICATION_IP_RATE_LIMIT_MAX_ATTEMPTS,
     standardHeaders: true,
     legacyHeaders: false,
-    store: new SharedRateLimitStore('rl:resend-verification-ip:'),
+    store: limiterStore('resend-verification-ip'),
     handler: sendRateLimitedResponse,
     ...overrides,
   })
@@ -477,7 +489,7 @@ export function createResendVerificationEmailRateLimiter(
     limit: RESEND_VERIFICATION_EMAIL_RATE_LIMIT_MAX_ATTEMPTS,
     standardHeaders: true,
     legacyHeaders: false,
-    store: new SharedRateLimitStore('rl:resend-verification-email:'),
+    store: limiterStore('resend-verification-email'),
     keyGenerator: submittedEmailRateLimitKey,
     handler: sendRateLimitedResponse,
     ...overrides,
@@ -519,7 +531,7 @@ export function createForgotPasswordIpRateLimiter(
     limit: FORGOT_PASSWORD_IP_RATE_LIMIT_MAX_ATTEMPTS,
     standardHeaders: true,
     legacyHeaders: false,
-    store: new SharedRateLimitStore('rl:forgot-password-ip:'),
+    store: limiterStore('forgot-password-ip'),
     handler: sendRateLimitedResponse,
     ...overrides,
   })
@@ -542,7 +554,7 @@ export function createForgotPasswordEmailRateLimiter(
     limit: FORGOT_PASSWORD_EMAIL_RATE_LIMIT_MAX_ATTEMPTS,
     standardHeaders: true,
     legacyHeaders: false,
-    store: new SharedRateLimitStore('rl:forgot-password-email:'),
+    store: limiterStore('forgot-password-email'),
     keyGenerator: submittedEmailRateLimitKey,
     handler: sendRateLimitedResponse,
     ...overrides,
@@ -571,7 +583,7 @@ export function createResetPasswordRateLimiter(
     limit: RESET_PASSWORD_RATE_LIMIT_MAX_ATTEMPTS,
     standardHeaders: true,
     legacyHeaders: false,
-    store: new SharedRateLimitStore('rl:reset-password:'),
+    store: limiterStore('reset-password'),
     handler: sendRateLimitedResponse,
     ...overrides,
   })
@@ -608,7 +620,7 @@ export function createGoogleOAuthRateLimiter(
     limit: GOOGLE_OAUTH_RATE_LIMIT_MAX_ATTEMPTS,
     standardHeaders: true,
     legacyHeaders: false,
-    store: new SharedRateLimitStore('rl:google-oauth:'),
+    store: limiterStore('google-oauth'),
     handler: sendRateLimitedResponse,
     ...overrides,
   })
@@ -648,7 +660,7 @@ export function createGoogleOAuthCallbackRateLimiter(
     limit: GOOGLE_OAUTH_CALLBACK_RATE_LIMIT_MAX_ATTEMPTS,
     standardHeaders: true,
     legacyHeaders: false,
-    store: new SharedRateLimitStore('rl:google-oauth-callback:'),
+    store: limiterStore('google-oauth-callback'),
     handler: sendRateLimitedResponse,
     ...overrides,
   })
@@ -721,7 +733,7 @@ export function createCreateTenantRateLimiter(
     limit: CREATE_TENANT_RATE_LIMIT_MAX_ATTEMPTS,
     standardHeaders: true,
     legacyHeaders: false,
-    store: new SharedRateLimitStore('rl:create-tenant:'),
+    store: limiterStore('create-tenant'),
     keyGenerator: authenticatedUserRateLimitKey,
     handler: sendRateLimitedResponse,
     ...overrides,
@@ -744,7 +756,7 @@ export function createInviteTenantMemberRateLimiter(
     limit: INVITE_TENANT_MEMBER_RATE_LIMIT_MAX_ATTEMPTS,
     standardHeaders: true,
     legacyHeaders: false,
-    store: new SharedRateLimitStore('rl:invite-tenant-member:'),
+    store: limiterStore('invite-tenant-member'),
     keyGenerator: authenticatedUserRateLimitKey,
     handler: sendRateLimitedResponse,
     ...overrides,
@@ -804,7 +816,7 @@ export function createChangePasswordRateLimiter(
     limit: CHANGE_PASSWORD_RATE_LIMIT_MAX_ATTEMPTS,
     standardHeaders: true,
     legacyHeaders: false,
-    store: new SharedRateLimitStore('rl:change-password:'),
+    store: limiterStore('change-password'),
     keyGenerator: authenticatedUserRateLimitKey,
     handler: sendRateLimitedResponse,
     ...overrides,
@@ -836,7 +848,7 @@ export function createInvitationPreviewRateLimiter(
     limit: INVITATION_PREVIEW_RATE_LIMIT_MAX_ATTEMPTS,
     standardHeaders: true,
     legacyHeaders: false,
-    store: new SharedRateLimitStore('rl:invitation-preview:'),
+    store: limiterStore('invitation-preview'),
     handler: sendRateLimitedResponse,
     ...overrides,
   })
@@ -857,7 +869,7 @@ export function createInvitationAcceptRateLimiter(
     limit: INVITATION_ACCEPT_RATE_LIMIT_MAX_ATTEMPTS,
     standardHeaders: true,
     legacyHeaders: false,
-    store: new SharedRateLimitStore('rl:invitation-accept:'),
+    store: limiterStore('invitation-accept'),
     handler: sendRateLimitedResponse,
     ...overrides,
   })

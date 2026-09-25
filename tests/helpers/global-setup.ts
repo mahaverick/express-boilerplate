@@ -24,11 +24,8 @@ import postgres from 'postgres'
 import { createClient } from 'redis'
 import { runMigrations } from '@/database/migrate'
 import { loadTestEnv } from './env'
+import { WORKER_RATE_LIMIT_KEY_PATTERN } from './redis-prefix'
 import { testDatabaseUrlForWorker, WORKER_COUNT } from './worker-database'
-
-// Every key SharedRateLimitStore writes starts with this (see each
-// `new SharedRateLimitStore('rl:<endpoint>:')` in rate-limit.middleware.ts).
-const RATE_LIMIT_KEY_PATTERN = 'rl:*'
 
 /**
  * Delete every rate-limit counter left in Redis before the run starts.
@@ -45,7 +42,8 @@ const RATE_LIMIT_KEY_PATTERN = 'rl:*'
  *
  * SCAN, not KEYS: KEYS blocks the server for the whole keyspace, and this
  * may be a developer's own Redis with other data in it. Deletion is scoped
- * to the `rl:` prefix for the same reason — never FLUSHDB.
+ * to the test workers' `rl:` keyspaces (./redis-prefix) for the same reason:
+ * a dev server's keys on this Redis are never touched, and never FLUSHDB.
  *
  * Non-fatal: if Redis is unreachable, `SharedRateLimitStore` falls back to
  * a per-process in-memory store that cannot accumulate across runs anyway,
@@ -77,7 +75,7 @@ async function clearRateLimitCounters(): Promise<void> {
 
   try {
     await client.connect()
-    const batches = client.scanIterator({ MATCH: RATE_LIMIT_KEY_PATTERN, COUNT: 500 })
+    const batches = client.scanIterator({ MATCH: WORKER_RATE_LIMIT_KEY_PATTERN, COUNT: 500 })
     for await (const keys of batches) {
       if (keys.length > 0) await client.del(keys)
     }

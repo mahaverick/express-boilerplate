@@ -143,3 +143,12 @@ export async function closeRedis(): Promise<void> {
   state.client = undefined
   await current.close()
 }
+
+/**
+ * Build a Redis key or channel name inside this deployment's namespace.
+ * @param parts - The segments after the prefix, e.g. `'denylist', 'session', sid`.
+ * @returns REDIS_KEY_PREFIX and the parts, joined with ':'.
+ */
+export function redisKey(...parts: string[]): string {
+  return [getEnv().REDIS_KEY_PREFIX, ...parts].join(':')
+}
