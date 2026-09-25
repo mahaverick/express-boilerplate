@@ -29,8 +29,8 @@ it, so if they ever disagree, the config wins and this file is stale.
 
 (`src/errors/` has no filename suffix rule — `http-error.ts`/`postgres-errors.ts`
 are two of a kind, not a governed-directory pattern the way `*.service.ts`
-is; note this explicitly rather than leaving it implied, matching how
-`src/observability/` is already called out below the table.)
+is — called out here, as `src/observability/` is in the next table, rather
+than left implied.)
 
 Mind the asymmetry: the norm is a **singular** suffix regardless of the
 directory's own name — `controller`, `repository`, `service`,
