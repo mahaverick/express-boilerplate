@@ -3,7 +3,7 @@
 // Insert and list only: `audit_logs` is append-only, and its trigger rejects
 // any UPDATE or DELETE, so this class has no method that could issue one.
 import { and, desc, eq, sql, type SQL } from 'drizzle-orm'
-import type { AuditAccess } from '@/constants/audit.constants'
+import type { AuditAccess, AuditAction } from '@/constants/audit.constants'
 import { auditLogModel, type AuditLog, type NewAuditLog } from '@/database/models/audit-log.model'
 import { tenantModel } from '@/database/models/tenant.model'
 import { userModel } from '@/database/models/user.model'
@@ -49,7 +49,7 @@ export interface PlatformAuditLogListRow extends AuditLogListRow {
 export interface AuditLogListOptions {
   limit: number
   cursor?: AuditLogCursor | undefined
-  action?: string | undefined
+  action?: AuditAction | undefined
   actorUserId?: string | undefined
 }
 

@@ -9,6 +9,7 @@ import {
   AUDIT_ACTOR_KINDS,
   AUDIT_TARGET_TYPES,
   type AuditAccess,
+  type AuditAction,
   type AuditActorKind,
   type AuditTargetType,
 } from '@/constants/audit.constants'
@@ -45,7 +46,7 @@ export const auditLogModel = pgTable(
     tenantId: varchar('tenant_id', { length: 36 })
       .notNull()
       .references(() => tenantModel.id, { onDelete: 'restrict' }),
-    action: varchar('action', { length: 64 }).notNull(),
+    action: varchar('action', { length: 64 }).$type<AuditAction>().notNull(),
     targetType: varchar('target_type', { length: 32 }).$type<AuditTargetType>(),
     targetId: varchar('target_id', { length: 36 }),
     metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default({}),

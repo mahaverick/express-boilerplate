@@ -26,6 +26,14 @@ export interface TenantContext {
  */
 export interface RequestContext {
   requestId: string
+  /**
+   * The client address as Express resolves it under `trust proxy`.
+   */
+  ip?: string
+  /**
+   * The raw `User-Agent` header.
+   */
+  userAgent?: string
   tenant?: TenantContext
 }
 
