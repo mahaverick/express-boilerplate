@@ -1,8 +1,9 @@
 // src/services/tenant-invitation.service.ts
 //
 // Invitations to join a tenant: invite, list, resend, revoke, preview,
-// accept. HTTP-free. Multi-step writes run in one transaction, and every
-// query inside one goes through its `tx`. Mail and the in-app notification
+// accept. HTTP-free. Multi-step writes run in one transaction with their
+// audit entry, and every query inside one goes through its `tx`. The audit
+// metadata carries the address's domain only. Mail and the in-app notification
 // are enqueued after the write commits, fire-and-forget.
 import { randomBytes } from 'node:crypto'
 import { getEnv } from '@/configs/env.config'
@@ -20,6 +21,7 @@ import {
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
+import { record } from '@/services/audit.service'
 import { db, type DbExecutor } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
 import { hashToken } from '@/services/session.service'
@@ -28,6 +30,7 @@ import { buildInvitationAcceptUrl } from '@/services/verification.service'
 import { TENANT_INVITATION_TEMPLATE_KEY } from '@/templates/email/tenant-invitation.template'
 import type { Actor } from '@/types/actor'
 import { requireDurationMs } from '@/utilities/duration.utilities'
+import { emailDomain } from '@/utilities/email.utilities'
 
 const invitationRepository = new TenantInvitationRepository()
 const tenantRepository = new TenantRepository()
@@ -166,6 +169,15 @@ function isNotifiable(user: User | undefined): user is User {
 }
 
 /**
+ * The domain the audit log keeps for an invited address.
+ * @param email - The invited address.
+ * @returns Its lowercased domain; an empty string for an address with none, which the audit schema rejects.
+ */
+function auditEmailDomain(email: string): string {
+  return emailDomain(email) ?? ''
+}
+
+/**
  * The 404 for a resend or revoke of an invitation that is not pending here.
  * @returns The error to throw.
  */
@@ -269,7 +281,7 @@ export async function invite(
   const rawToken = generateInvitationToken()
 
   const context: InvitationMessageContext = await db.transaction(async (tx) => {
-    const { role: actorRole } = await lockActorRole(actor, tenantId, 'admin', tx)
+    const { role: actorRole, access } = await lockActorRole(actor, tenantId, 'admin', tx)
     if (!canActorGrantRole(actorRole, role)) throw new HttpError(GRANT_REFUSED_MESSAGE, 403)
 
     const invitee = await userRepository.findByEmail(normalizedEmail, {}, tx)
@@ -293,6 +305,17 @@ export async function invite(
         tokenHash: hashToken(rawToken),
         invitedBy: actor.userId,
         expiresAt: invitationExpiry(),
+      },
+      tx
+    )
+    await record(
+      {
+        action: 'invitation.created',
+        actor,
+        access,
+        tenantId,
+        targetId: invitation.id,
+        metadata: { role, emailDomain: auditEmailDomain(normalizedEmail) },
       },
       tx
     )
@@ -332,7 +355,7 @@ export async function resend(actor: Actor, tenantId: string, invitationId: strin
   const tenant = await tenantForMessages(tenantId)
   const rawToken = generateInvitationToken()
   const invitation = await db.transaction(async (tx) => {
-    const { role: actorRole } = await lockActorRole(actor, tenantId, 'admin', tx)
+    const { role: actorRole, access } = await lockActorRole(actor, tenantId, 'admin', tx)
     const pending = await invitationRepository.findPendingById(tenantId, invitationId, tx)
     if (!pending) throw invitationNotFound()
     if (!canActorGrantRole(actorRole, pending.role)) {
@@ -345,6 +368,17 @@ export async function resend(actor: Actor, tenantId: string, invitationId: strin
       tx
     )
     if (!updated) throw invitationNotFound()
+    await record(
+      {
+        action: 'invitation.resent',
+        actor,
+        access,
+        tenantId,
+        targetId: updated.id,
+        metadata: { role: updated.role, emailDomain: auditEmailDomain(updated.email) },
+      },
+      tx
+    )
     return updated
   })
   const inviter = await userRepository.findById(actor.userId)
@@ -372,9 +406,23 @@ export async function resend(actor: Actor, tenantId: string, invitationId: strin
  */
 export async function revoke(actor: Actor, tenantId: string, invitationId: string): Promise<void> {
   await db.transaction(async (tx) => {
-    await lockActorRole(actor, tenantId, 'admin', tx)
+    const { access } = await lockActorRole(actor, tenantId, 'admin', tx)
+    // Read first: the audit entry needs the role and address the revoke doesn't return.
+    const pending = await invitationRepository.findPendingById(tenantId, invitationId, tx)
+    if (!pending) throw invitationNotFound()
     const wasRevoked = await invitationRepository.revoke(tenantId, invitationId, tx)
     if (!wasRevoked) throw invitationNotFound()
+    await record(
+      {
+        action: 'invitation.revoked',
+        actor,
+        access,
+        tenantId,
+        targetId: pending.id,
+        metadata: { role: pending.role, emailDomain: auditEmailDomain(pending.email) },
+      },
+      tx
+    )
   })
 }
 
@@ -464,6 +512,18 @@ export async function accept(rawToken: string, userId: string): Promise<Accepted
 
     const membership = await userMembershipRepository.createIfAbsent(
       { userId: user.id, tenantId: claimed.tenantId, role: claimed.role },
+      tx
+    )
+    // The role now held: an existing member keeps theirs.
+    await record(
+      {
+        action: 'invitation.accepted',
+        actor: { userId: user.id },
+        access: 'member',
+        tenantId: claimed.tenantId,
+        targetId: membership.id,
+        metadata: { role: membership.role, invitationId: claimed.id },
+      },
       tx
     )
     return {

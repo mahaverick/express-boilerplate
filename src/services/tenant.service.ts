@@ -2,9 +2,10 @@
 //
 // Tenant reads and writes behind the `/tenants` routes, other than
 // membership changes (tenant-membership.service.ts) and invitations
-// (tenant-invitation.service.ts). Every function below except `createTenant`
-// and `listForUser` assumes `resolveTenant` has already confirmed the caller
-// has access to `tenantId`; the two writes re-read that access under lock.
+// (tenant-invitation.service.ts). Every read below except `listForUser`
+// assumes `resolveTenant` has already admitted the caller to `tenantId`; the
+// two updates re-read that access under lock. Every write records its audit
+// entry in the same transaction.
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { NewTenant, Tenant, TenantSettings } from '@/database/models/tenant.model'
 import { HttpError } from '@/errors/http-error'
@@ -14,6 +15,7 @@ import {
   UserMembershipRepository,
   type MembershipWithUser,
 } from '@/repositories/user-membership.repository'
+import { record } from '@/services/audit.service'
 import { withTransaction } from '@/services/database.service'
 import { lockActorRole } from '@/services/tenant-membership.service'
 import type { Actor } from '@/types/actor'
@@ -71,15 +73,40 @@ function toSettingsUpdateValues(input: UpdateTenantSettingsInput): SettingsUpdat
 }
 
 /**
- * Create a tenant with its settings row and the actor as sole owner, in one
- * transaction.
+ * The names of the columns a write sets, sorted, for the audit entry. Never
+ * the values.
+ * @param values - The columns being written.
+ * @returns Their names in a stable order.
+ */
+function changedFields(values: object): string[] {
+  return Object.keys(values).toSorted((a, b) => a.localeCompare(b))
+}
+
+/**
+ * Create a tenant with its settings row and the actor as sole owner, and
+ * audit it, in one transaction.
  * @param actor - The creating user, who becomes the owner.
  * @param input - The validated create body.
  * @returns The new tenant row.
  * @throws {HttpError} 409, when the slug is taken.
  */
 export async function createTenant(actor: Actor, input: CreateTenantInput): Promise<Tenant> {
-  return withTransaction((tx) => tenantRepository.create({ ...input, ownerId: actor.userId }, tx))
+  return withTransaction(async (tx) => {
+    const tenant = await tenantRepository.create({ ...input, ownerId: actor.userId }, tx)
+    // The creator is the owner from this write on, so they act as a member.
+    await record(
+      {
+        action: 'tenant.created',
+        actor,
+        access: 'member',
+        tenantId: tenant.id,
+        targetId: tenant.id,
+        metadata: { name: tenant.name, slug: tenant.slug },
+      },
+      tx
+    )
+    return tenant
+  })
 }
 
 /**
@@ -106,10 +133,10 @@ export async function getTenant(tenantId: string): Promise<Tenant> {
 }
 
 /**
- * Update a tenant's name, description, logo or website. The actor's access
- * is re-read under lock first, so a demotion after `resolveTenant` still
- * counts. A body with no recognised field skips the write and returns the
- * current row.
+ * Update a tenant's name, description, logo or website, and audit it in the
+ * same transaction. The actor's access is re-read under lock first, so a
+ * demotion after `resolveTenant` still counts. A body with no recognised
+ * field skips the write and the audit entry, and returns the current row.
  * @param actor - The signed-in user making the change.
  * @param tenantId - The tenant.
  * @param input - The validated PATCH body.
@@ -122,15 +149,29 @@ export async function updateTenant(
   input: UpdateTenantInput
 ): Promise<Tenant> {
   const values = toTenantUpdateValues(input)
-  const hasChanges = Object.keys(values).length > 0
-  const tenant = await withTransaction(async (tx) => {
-    await lockActorRole(actor, tenantId, 'admin', tx)
-    return hasChanges
-      ? tenantRepository.update(tenantId, values, {}, tx)
-      : tenantRepository.findById(tenantId, {}, tx)
+  const changed = changedFields(values)
+  return withTransaction(async (tx) => {
+    const { access } = await lockActorRole(actor, tenantId, 'admin', tx)
+    if (changed.length === 0) {
+      const current = await tenantRepository.findById(tenantId, {}, tx)
+      if (!current) throw new HttpError('Tenant not found', 404)
+      return current
+    }
+    const tenant = await tenantRepository.update(tenantId, values, {}, tx)
+    if (!tenant) throw new HttpError('Tenant not found', 404)
+    await record(
+      {
+        action: 'tenant.updated',
+        actor,
+        access,
+        tenantId,
+        targetId: tenantId,
+        metadata: { changed },
+      },
+      tx
+    )
+    return tenant
   })
-  if (!tenant) throw new HttpError('Tenant not found', 404)
-  return tenant
 }
 
 /**
@@ -155,9 +196,9 @@ export async function getSettings(tenantId: string): Promise<TenantSettings> {
 }
 
 /**
- * Update a tenant's settings. The actor's access is re-read under lock
- * first. A body with no recognised field skips the write and returns the
- * current row.
+ * Update a tenant's settings, and audit it in the same transaction. The
+ * actor's access is re-read under lock first. A body with no recognised
+ * field skips the write and the audit entry, and returns the current row.
  * @param actor - The signed-in user making the change.
  * @param tenantId - The tenant.
  * @param input - The validated PATCH body.
@@ -170,13 +211,28 @@ export async function updateSettings(
   input: UpdateTenantSettingsInput
 ): Promise<TenantSettings> {
   const values = toSettingsUpdateValues(input)
-  const hasChanges = Object.keys(values).length > 0
-  const settings = await withTransaction(async (tx) => {
-    await lockActorRole(actor, tenantId, 'admin', tx)
-    return hasChanges
-      ? tenantSettingsRepository.update(tenantId, values, tx)
-      : tenantSettingsRepository.findByTenantId(tenantId, tx)
+  const changed = changedFields(values)
+  return withTransaction(async (tx) => {
+    const { access } = await lockActorRole(actor, tenantId, 'admin', tx)
+    if (changed.length === 0) {
+      const current = await tenantSettingsRepository.findByTenantId(tenantId, tx)
+      if (!current) throw new HttpError('Tenant settings not found', 404)
+      return current
+    }
+    const settings = await tenantSettingsRepository.update(tenantId, values, tx)
+    if (!settings) throw new HttpError('Tenant settings not found', 404)
+    // The settings row's key is the tenant id.
+    await record(
+      {
+        action: 'tenant.settings_updated',
+        actor,
+        access,
+        tenantId,
+        targetId: tenantId,
+        metadata: { changed },
+      },
+      tx
+    )
+    return settings
   })
-  if (!settings) throw new HttpError('Tenant settings not found', 404)
-  return settings
 }

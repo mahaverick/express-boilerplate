@@ -4,12 +4,13 @@
 // transaction: lock the tenant's owners, then the actor's and the target's
 // memberships, then (for staff) the actor's platform membership; authorize
 // the actor's current effective role against the target's current role;
-// check the last-owner rule; write.
+// check the last-owner rule; write; record the audit entry.
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { UserMembership } from '@/database/models/user-membership.model'
 import { HttpError } from '@/errors/http-error'
 import { canActorModifyTarget, isRoleAtLeast } from '@/policies/tenant.policy'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
+import { record } from '@/services/audit.service'
 import { db, type DbTransaction } from '@/services/database.service'
 import {
   lockTenantAccess,
@@ -114,7 +115,7 @@ export async function changeRole(
   role: MembershipRole
 ): Promise<UserMembership> {
   return db.transaction(async (tx) => {
-    const { actorRole, target } = await lockActorAndTarget(
+    const { actorRole, access, target } = await lockActorAndTarget(
       actor,
       tenantId,
       targetUserId,
@@ -129,6 +130,17 @@ export async function changeRole(
     }
     const updated = await userMembershipRepository.updateRole(target.id, role, tx)
     if (!updated) throw new HttpError('Member not found', 404)
+    await record(
+      {
+        action: 'member.role_changed',
+        actor,
+        access,
+        tenantId,
+        targetId: updated.id,
+        metadata: { userId: targetUserId, from: target.role, to: role },
+      },
+      tx
+    )
     return updated
   })
 }
@@ -148,7 +160,7 @@ export async function removeMember(
   targetUserId: string
 ): Promise<void> {
   await db.transaction(async (tx) => {
-    const { actorRole, target } = await lockActorAndTarget(
+    const { actorRole, access, target } = await lockActorAndTarget(
       actor,
       tenantId,
       targetUserId,
@@ -163,5 +175,16 @@ export async function removeMember(
     }
     const wasDeleted = await userMembershipRepository.delete(target.id, tx)
     if (!wasDeleted) throw new HttpError('Member not found', 404)
+    await record(
+      {
+        action: 'member.removed',
+        actor,
+        access,
+        tenantId,
+        targetId: target.id,
+        metadata: { userId: targetUserId, role: target.role, self: targetUserId === actor.userId },
+      },
+      tx
+    )
   })
 }
