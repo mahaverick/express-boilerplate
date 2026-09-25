@@ -11,6 +11,7 @@ import { HttpError } from '@/errors/http-error'
 import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { withTransaction } from '@/services/database.service'
+import { autoJoinSafely } from '@/services/platform.service'
 import {
   issueRefreshToken,
   revokeAllSessions,
@@ -175,6 +176,7 @@ export async function findOrCreateByGoogle(profile: GoogleProfile): Promise<User
 /**
  * Complete a Google Sign-In: resolve the user, refuse an inactive one, stamp
  * `lastLoggedInAt`, and issue a refresh token for a fresh session.
+ * An address on PLATFORM_EMAIL_DOMAINS joins the platform tenant as viewer if it has not already.
  *
  * The active check comes first, so a deactivated account never gets a
  * `user_tokens` row or a success redirect.
@@ -190,6 +192,8 @@ export async function completeGoogleSignIn(profile: GoogleProfile): Promise<Issu
   }
 
   await userRepository.update(user.id, { lastLoggedInAt: new Date() })
+  // Covers users verified before their domain was listed; it never throws.
+  await autoJoinSafely(user)
 
   return issueRefreshToken(user.id, randomUUID())
 }

@@ -23,6 +23,7 @@ import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { withTransaction } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
+import { autoJoinSafely } from '@/services/platform.service'
 import {
   claimToken,
   issueRefreshToken,
@@ -208,6 +209,8 @@ export async function login(input: LoginInput): Promise<LoginResult> {
   // After the guard, so a failed attempt leaves no trace; before tokens, so
   // a failed UPDATE answers 500 without a refresh cookie already set.
   await userRepository.update(user.id, { lastLoggedInAt: new Date() })
+  // After the guard, so a failed attempt never reaches it; it never throws.
+  await autoJoinSafely(user)
 
   const sessionId = randomUUID()
   const accessToken = signAccessToken(user, sessionId)
