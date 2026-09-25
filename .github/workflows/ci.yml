@@ -164,9 +164,10 @@ jobs:
       - name: Test with coverage gate
         run: pnpm test:coverage
         env:
-          # services: cannot remap ports, so DATABASE_URL/REDIS_URL here use
-          # the container-default 5432/6379, not the compose stack's
-          # deliberately-nonstandard 5433/6380 (see docker-compose.yml).
+          # The services: above publish the container-default ports 5432/6379,
+          # so DATABASE_URL/REDIS_URL here differ from .env.test (the compose
+          # stack's deliberately-nonstandard 5433/6380, see docker-compose.yml)
+          # in the port only.
           # Every other value mirrors .env.test verbatim, and the key sets
           # match both ways: the "Assert the CI env block mirrors .env.test"
           # step below compares this block with that file.
@@ -212,19 +213,37 @@ jobs:
               print key "=" value
             }
           ' "$ci" | sort)
-          env_test=$(grep -E '^[A-Z][A-Z0-9_]*=' .env.test | sort)
+          env_test=$(grep -E '^[A-Z][A-Z0-9_]*=' .env.test | sort || true)
+          if [ -z "$env_test" ]; then
+            echo "::error::No KEY=value lines found in .env.test"
+            exit 1
+          fi
           if [ -z "$ci_env" ]; then
             echo "::error::No env: block found under the \"Test with coverage gate\" step in $ci"
             exit 1
           fi
-          # GitHub services: cannot remap ports, so these two differ from .env.test
-          # in the port only. Blank the port in both before comparing.
+          # The CI services publish the container-default ports 5432/6379, so these
+          # two differ from .env.test (5433/6380) in the port only. Blank the port
+          # in both before comparing.
           normalise() {
             sed -E '/^(DATABASE_URL|REDIS_URL)=/ s#:[0-9]+(/|$)#:<port>\1#' \
               | sed -E -e "s/^([A-Z0-9_]+)=\"(.*)\"\$/\\1=\\2/" -e "s/^([A-Z0-9_]+)='(.*)'\$/\\1=\\2/"
           }
-          diff_out=$(diff <(printf '%s\n' "$env_test" | normalise) <(printf '%s\n' "$ci_env" | normalise) || true)
-          if [ -n "$diff_out" ]; then
+          # Normalise outside <(...): a failure inside a process substitution is
+          # invisible to -e and pipefail, and would let real drift pass.
+          want=$(printf '%s\n' "$env_test" | normalise)
+          got=$(printf '%s\n' "$ci_env" | normalise)
+          if [ -z "$want" ] || [ -z "$got" ]; then
+            echo "::error::normalise produced no output"
+            exit 1
+          fi
+          rc=0
+          diff_out=$(diff <(printf '%s\n' "$want") <(printf '%s\n' "$got")) || rc=$?
+          if [ "$rc" -gt 1 ]; then
+            echo "::error::diff failed ($rc)"
+            exit 1
+          fi
+          if [ "$rc" -eq 1 ]; then
             printf '%s\n' "$diff_out" | sed -n 's/^< /::error::only in .env.test (or a different value): /p; s/^> /::error::only in the CI test env (or a different value): /p'
             exit 1
           fi
