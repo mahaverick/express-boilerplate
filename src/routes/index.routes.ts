@@ -16,6 +16,7 @@ import { Router } from 'express'
 import { createAuthRouter } from '@/routes/auth.routes'
 import { createInvitationRouter } from '@/routes/invitation.routes'
 import { createNotificationRouter } from '@/routes/notification.routes'
+import { createPlatformRouter } from '@/routes/platform.routes'
 import { createProfileRouter } from '@/routes/profile.routes'
 import { createTenantRouter } from '@/routes/tenant.routes'
 
@@ -31,5 +32,6 @@ export function createApiRouter(): Router {
   router.use('/notifications', createNotificationRouter())
   router.use('/tenants', createTenantRouter())
   router.use('/invitations', createInvitationRouter())
+  router.use('/platform', createPlatformRouter())
   return router
 }
