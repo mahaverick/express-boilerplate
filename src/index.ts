@@ -3,7 +3,11 @@
 // Excluded from coverage (vitest.config.ts): this file is signal wiring —
 // process.exit, process.on(SIGTERM/SIGINT) — which is not meaningfully unit
 // testable, and it is exercised for real by the boot check in the task brief.
+import { assertEnvConsistent } from '@/configs/env-consistency.config'
 import { getEnv } from '@/configs/env.config'
+// Static, unlike `@/server` below: constructing the logger is lazy, so this
+// import reads no environment. main() needs it for boot-check warnings.
+import { logger } from '@/services/logger.service'
 import type { SupervisedWorkers } from '@/services/worker-supervisor.service'
 
 /**
@@ -28,9 +32,6 @@ async function boot(): Promise<void> {
   // trace from inside database.service.ts — exactly what `main()` exists to
   // avoid. getEnv() is memoised, so the second call this triggers is free.
   const { startServer, gracefulShutdown } = await import('@/server')
-  // Loaded before the server starts: the fatal handlers need the logger, and
-  // no await may sit between startServer() and its 'error' listener.
-  const { logger } = await import('@/services/logger.service')
   const { createShutdownHandler, isShuttingDown } = await import('@/services/lifecycle.service')
   const { redactedForLog } = await import('@/middlewares/error.middleware')
 
@@ -85,11 +86,13 @@ async function boot(): Promise<void> {
 }
 
 /**
- * Validate the environment, then hand off to `boot()`.
+ * Validate the environment and its cross-field rules, then hand off to `boot()`.
  */
 function main(): void {
   try {
-    getEnv()
+    assertEnvConsistent(getEnv(), process.env, (message) => {
+      logger.warn(message)
+    })
   } catch (error) {
     // One readable list, then exit. Not a stack trace from inside a dependency.
     console.error((error as Error).message)
