@@ -580,7 +580,7 @@ address directly and answered 404 for an unregistered one.
 ### Platform staff access and the audit log
 
 Staff are the members of one seeded tenant, the row with `tenants.is_platform = true`
-(slug `platform`, now a reserved slug). Their role there is their **platform
+(slug `platform`, a reserved slug). Their role there is their **platform
 role**. There is no separate staff table and no per-membership permission
 blob.
 

@@ -22,7 +22,7 @@ comments for exactly which.
   index (at most one platform tenant) and a CHECK that keeps that tenant
   active and undeleted.
 - A hand-written guard stops the migration, before the seed insert runs, if
-  a live customer tenant already holds the now-reserved slug `platform`:
+  a live customer tenant already holds the reserved slug `platform`:
   it raises its own exception naming the slug, rather than letting the seed
   fail on `tenants_slug_unique`. Rename that tenant before upgrading.
 - Seeds the platform tenant (name `Platform`, slug `platform`) and its
@@ -34,11 +34,12 @@ comments for exactly which.
   history fails. The code only ever soft-deletes both.
 - Runs `CREATE EXTENSION IF NOT EXISTS pg_trgm` (also hand-written) and
   builds two trigram indexes on `tenants` for staff search. `pg_trgm` needs
-  `CREATE` on the database, which a non-superuser role does not have by
-  default: as a superuser, run `CREATE EXTENSION pg_trgm;` yourself before
-  the migration, or `GRANT CREATE ON DATABASE <name> TO <migrating role>;`
-  so the migration's own statement succeeds. On a managed Postgres, check
-  that `pg_trgm` is on the allow-list first.
+  `CREATE` on the database: the database's owner already has it, so the
+  migration's own statement succeeds when the migrating role owns the
+  database. When it doesn't, either run `CREATE EXTENSION pg_trgm;` yourself
+  as a superuser before the migration, or
+  `GRANT CREATE ON DATABASE <name> TO <migrating role>;` first. On a managed
+  Postgres, check that `pg_trgm` is on the allow-list first.
 
 ### New optional variable
 
@@ -68,6 +69,15 @@ pages.
 - New: `GET /api/v1/platform/tenants`, `GET /api/v1/tenants/:slug/audit-log`
   and `GET /api/v1/platform/audit-log`.
 - New limiter prefix `rl:platform-search:`. No existing prefix changed.
+
+### One endpoint is stricter, not just additive
+
+`POST /api/v1/tenants/:slug/invitations` rejects an address whose domain is
+not a lowercase dotted hostname (a bad label, a label over 63 characters, a
+domain over 253) with `400` and `errors.email` — the shape the audit log
+stores. This is not purely additive: a syntactically valid email address
+whose domain isn't a real hostname is refused at invite time, rather than
+accepted and only losing its domain when it reaches the audit trail.
 
 ### The audit log has no retention
 

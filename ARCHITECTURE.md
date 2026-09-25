@@ -470,4 +470,6 @@ covering only the four auth routes now also cover the tenant and invitation
 routes (`createRateLimiter(RATE_LIMITS.createTenant)` and
 `createRateLimiter(RATE_LIMITS.inviteTenantMember)` on `tenant.routes.ts`,
 `createRateLimiter(RATE_LIMITS.invitationPreview)` and
-`createRateLimiter(RATE_LIMITS.invitationAccept)` on `invitation.routes.ts`).
+`createRateLimiter(RATE_LIMITS.invitationAccept)` on `invitation.routes.ts`),
+plus staff tenant search (`createRateLimiter(RATE_LIMITS.platformSearch)` on
+`platform.routes.ts`).
