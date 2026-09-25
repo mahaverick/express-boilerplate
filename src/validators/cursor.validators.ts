@@ -1,11 +1,14 @@
 // src/validators/cursor.validators.ts
 //
-// The cursor query field for keyset-paginated endpoints. A malformed cursor is
-// a 400 through parseBody, not a silent first page.
+// The cursor query field for keyset endpoints that reject a bad cursor. A
+// malformed cursor is a 400 through parseBody, not a silent first page.
 import { z } from 'zod'
 import { decodeCursor } from '@/utilities/cursor.utilities'
 
-const MAX_CURSOR_LENGTH = 512
+// Room for any cursor the server issues. A 255-character value is at most
+// 1,530 bytes of JSON (a control character escapes to six); with a uuid
+// beside it that encodes to 2,119 base64url characters.
+const MAX_CURSOR_LENGTH = 4096
 
 /**
  * A `cursor` query field that decodes against `schema`, or fails validation

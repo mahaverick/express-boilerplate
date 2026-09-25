@@ -15,6 +15,7 @@ import { UserMembershipRepository } from '@/repositories/user-membership.reposit
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { signAccessToken } from '@/services/session.service'
+import { encodeCursor } from '@/utilities/cursor.utilities'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { makeStaff, platformTenant } from '../../helpers/platform-staff'
 import { request } from '../../helpers/request'
@@ -149,10 +150,19 @@ describe('GET /api/v1/platform/tenants', () => {
       const token = await createStaff()
       const platform = await platformTenant()
 
-      const page = pageOf(await search(token, { q: 'platform', limit: '50' }))
+      // Every page, so a crowd of other "platform" matches can't hide it.
+      const seen: PlatformTenantRowBody[] = []
+      let cursor: string | undefined
+      do {
+        const query: Record<string, string> = { q: platform.slug, limit: '50' }
+        if (cursor !== undefined) query.cursor = cursor
+        const page = pageOf(await search(token, query))
+        seen.push(...page.tenants)
+        cursor = page.nextCursor ?? undefined
+      } while (cursor !== undefined)
 
-      expect(page.tenants.map((tenant) => tenant.id)).not.toContain(platform.id)
-      expect(page.tenants.map((tenant) => tenant.slug)).not.toContain('platform')
+      expect(seen.map((tenant) => tenant.id)).not.toContain(platform.id)
+      expect(seen.map((tenant) => tenant.slug)).not.toContain(platform.slug)
     })
 
     it('leaves out soft-deleted tenants and keeps suspended ones, with their state', async () => {
@@ -257,6 +267,7 @@ describe('GET /api/v1/platform/tenants', () => {
     it.each([
       ['whitespace only', ' '.repeat(3)],
       ['longer than 100 characters', 'x'.repeat(101)],
+      ['carrying a NUL byte', 'a\0b'],
     ])('answers 400 for a q that is %s', async (_label, q) => {
       const response = await search(await createStaff(), { q })
 
@@ -310,9 +321,34 @@ describe('GET /api/v1/platform/tenants', () => {
       expect(cursor).toBeNull()
     })
 
+    // A 255-character name is the column's limit. Emoji are 4 UTF-8 bytes
+    // each; a control character is 6 once JSON escapes it as \u00XX.
+    it.each([
+      ['emoji', '\u{1F600}'],
+      ['control characters', '\u{1}'],
+    ])('pages past a 255-character name made of %s', async (_label, character) => {
+      const tag = newTag()
+      const name = `${tag} ${character.repeat(255 - tag.length - 1)}`
+      const created = [await createNamedTenant(name), await createNamedTenant(name)]
+      const token = await createStaff()
+
+      const first = pageOf(await search(token, { q: tag, limit: '1' }))
+      if (first.nextCursor === null) throw new Error('expected a second page')
+      const second = await search(token, { q: tag, limit: '1', cursor: first.nextCursor })
+
+      expect(second.status).toBe(200)
+      const walked = [...first.tenants, ...pageOf(second).tenants].map((row) => row.id)
+      expect(new Set(walked)).toEqual(new Set(created.map((tenant) => tenant.id)))
+    })
+
     it.each([
       ['not base64 JSON', '!!!'],
       ['the wrong shape', Buffer.from('{"sortName":1,"id":"x"}').toString('base64url')],
+      ['carrying a NUL in sortName', encodeCursor({ sortName: 'a\0b', id: randomUUID() })],
+      [
+        'carrying a NUL in id',
+        encodeCursor({ sortName: 'a', id: `${randomUUID().slice(0, 35)}\0` }),
+      ],
     ])('answers 400 for a cursor that is %s', async (_label, cursorValue) => {
       const response = await search(await createStaff(), { cursor: cursorValue })
 

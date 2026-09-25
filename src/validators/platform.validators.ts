@@ -10,10 +10,19 @@ const MAX_SEARCH_PAGE_SIZE = 50
 const MAX_SEARCH_QUERY_LENGTH = 100
 
 /**
+ * Postgres text can't hold NUL, so a value carrying one would fail in the query.
+ * @param value - The string to check.
+ * @returns Whether `value` has no NUL character.
+ */
+function hasNoNul(value: string): boolean {
+  return !value.includes('\0')
+}
+
+/**
  * The search cursor's decoded shape: the last row's `lower(name)` and id.
  */
 export const platformTenantCursorSchema = z
-  .object({ sortName: z.string().max(255), id: z.string().min(1).max(36) })
+  .object({ sortName: z.string().refine(hasNoNul), id: z.uuid() })
   .strict()
 
 /**
@@ -25,6 +34,7 @@ export const platformTenantSearchSchema = z.object({
     .trim()
     .min(1, 'q must not be empty.')
     .max(MAX_SEARCH_QUERY_LENGTH, `q must be at most ${MAX_SEARCH_QUERY_LENGTH} characters.`)
+    .refine(hasNoNul, 'q must not contain a NUL character.')
     .optional(),
   cursor: cursorField(platformTenantCursorSchema).optional(),
   limit: z.coerce
