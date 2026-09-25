@@ -1,5 +1,21 @@
 # Changelog
 
+## [2.0.0](https://github.com/mahaverick/express-boilerplate/compare/v1.1.1...v2.0.0) (2026-09-25)
+
+
+### ⚠ BREAKING CHANGES
+
+* POST /api/v1/tenants/:slug/members is removed. Invite members with POST /api/v1/tenants/:slug/invitations; the invitee accepts with POST /api/v1/invitations/accept.
+
+### Features
+
+* tenant invitations and notification pub/sub (stream 1b, express) ([#46](https://github.com/mahaverick/express-boilerplate/issues/46)) ([a5e5628](https://github.com/mahaverick/express-boilerplate/commit/a5e56284368fff45d527ee6800ac3d04eb0bd6d9))
+
+
+### Bug Fixes
+
+* stream 1a security and correctness fixes (express) ([#45](https://github.com/mahaverick/express-boilerplate/issues/45)) ([cdb2ebb](https://github.com/mahaverick/express-boilerplate/commit/cdb2ebb7ff5fa44dbece9f69d968e42dc0446a29))
+
 ## [1.1.1](https://github.com/mahaverick/express-boilerplate/compare/v1.1.0...v1.1.1) (2026-09-24)
 
 
