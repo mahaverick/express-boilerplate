@@ -102,7 +102,7 @@ export class UserRepository extends BaseRepository<(typeof userModel)['_']['conf
     executor: DbExecutor = db
   ): Promise<User> {
     const [row] = await executor.insert(userModel).values(values).returning()
-    // db.insert(...).values(one object).returning() always returns exactly
+    // insert(...).values(one object).returning() always returns exactly
     // one row when the insert does not throw; the driver's own types just
     // cannot express "same length as input" for a single-row insert.
     if (row === undefined) throw new HttpError('Insert returned no row', 500)

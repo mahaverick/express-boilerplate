@@ -1,9 +1,7 @@
 // src/controllers/helpers.controller.ts
 //
-// Unifies 6 identical private authenticatedUserId copies (auth,
-// invitation, notification, notification-stream, profile, tenant
-// controllers) plus actorFrom, which builds the Actor a service call
-// takes instead of a Request.
+// One authenticatedUserId for every controller, plus actorFrom, which
+// builds the Actor a service call takes instead of a Request.
 import type { Request } from 'express'
 import { HttpError } from '@/errors/http-error'
 import type { Actor } from '@/types/actor'

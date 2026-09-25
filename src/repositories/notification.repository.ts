@@ -109,7 +109,7 @@ export class NotificationRepository {
    */
   async create(data: NewNotification, executor: DbExecutor = db): Promise<Notification> {
     const [row] = await executor.insert(notificationModel).values(data).returning()
-    // db.insert(...).values(one object).returning() always returns exactly
+    // insert(...).values(one object).returning() always returns exactly
     // one row when the insert does not throw; the driver's own types just
     // cannot express "same length as input" for a single-row insert — same
     // reasoning as UserRepository.insertOne (user.repository.ts).

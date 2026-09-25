@@ -84,11 +84,11 @@ export function createAuthRouter(): Router {
     verificationController.resendVerification
   )
   // Same two-limiters-in-series shape as resend-verification, for the
-  // identical reason (see the forgotPasswordIp/forgotPasswordEmail
-  // entries in `RATE_LIMITS`): Ruling G already makes forgot-password's
-  // RESPONSE identical for a known and an
-  // unknown address, but that alone does not bound how much outbound mail
-  // one IP — or one victim address — can trigger.
+  // identical reason (see the forgotPasswordIp/forgotPasswordEmail entries
+  // in `RATE_LIMITS`): forgot-password already answers identically for a
+  // known and an unknown address, so it leaks no account, but that alone
+  // does not bound how much outbound mail one IP — or one victim address —
+  // can trigger.
   router.post(
     '/forgot-password',
     createRateLimiter(RATE_LIMITS.forgotPasswordIp),

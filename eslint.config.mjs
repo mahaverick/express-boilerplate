@@ -325,7 +325,7 @@ export default tseslint.config(
     //
     // Handlers are arrow fields passed through `this.handle(...)` so routes
     // can mount them unbound; unicorn/consistent-function-scoping would
-    // otherwise hoist each arrow out of its class.
+    // otherwise report each arrow as movable out of its class.
     //
     // Controllers may reference database/models/** for response TYPES only
     // (User, Notification). import-x/no-restricted-paths (above) has no
@@ -435,7 +435,7 @@ export default tseslint.config(
       // Fixture credentials in tests are not real secrets — they exist so
       // the test can assert against a known value, never to guard anything.
       // Both rules below are the same false-positive class:
-      // hardcoded-secret-signatures is tripped by token.utilities.test.ts
+      // hardcoded-secret-signatures is tripped by session.service.test.ts
       // signing a JWT with a deliberately-wrong secret to prove rejection.
       'sonarjs/no-hardcoded-passwords': 'off',
       'sonarjs/hardcoded-secret-signatures': 'off',

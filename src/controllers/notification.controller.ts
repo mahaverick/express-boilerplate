@@ -80,14 +80,8 @@ class NotificationController extends BaseController {
   /**
    * `PATCH /notifications/:id/read`: mark one notification read.
    *
-   * `NotificationRepository.markRead` is a no-op — returns `undefined` — both
-   * when the notification does not exist (or belongs to someone else) AND
-   * when it was already read (see that method's own comment). Those are
-   * different outcomes for a client: the first is a 404, the second is a
-   * successful, idempotent no-op that should still return the notification.
-   * A second, ownership-scoped lookup disambiguates them, but only on the
-   * no-op path — the common case (an unread notification, actually marked
-   * read by this call) costs exactly one query, same as before.
+   * See `notification.service.ts`'s `markRead` for how a not-found
+   * notification is told apart from one that was already read.
    */
   markRead = this.handle(async (request, response) => {
     const userId = authenticatedUserId(request)

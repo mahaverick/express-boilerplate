@@ -446,8 +446,8 @@ async function acceptedEarlierBy(
  */
 export async function accept(rawToken: string, userId: string): Promise<AcceptedInvitation> {
   const tokenHash = hashToken(rawToken)
-  // Read before the transaction: UserRepository takes no executor, and a pool
-  // query from inside a transaction can starve the pool.
+  // Read before the transaction: this row needs no lock, and a pool query
+  // from inside a transaction can starve the pool.
   const user = await userRepository.findById(userId)
   if (!user?.active) throw new HttpError('Authentication required', 401)
 

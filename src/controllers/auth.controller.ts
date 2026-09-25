@@ -347,7 +347,8 @@ class AuthController extends BaseController {
    * `processing_failed`; Google reporting an error or no profile is
    * `google_auth_failed`.
    *
-   * Not wrapped in `handle()`: every failure redirects to the frontend, and a JSON error envelope would reach a browser mid-navigation.
+   * Not wrapped in `handle()`: every failure redirects to the frontend, and
+   * a JSON error envelope would reach a browser mid-navigation.
    * @param request - The incoming callback request, carrying Google's `code`/`state` query parameters.
    * @param response - The response.
    * @param next - Forwards a synchronous failure from `passport.authenticate` itself; every failure from the async body redirects instead.

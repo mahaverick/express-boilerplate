@@ -155,7 +155,7 @@ export class UserMembershipRepository {
   async create(data: NewUserMembership, executor: DbExecutor = db): Promise<UserMembership> {
     try {
       const [row] = await executor.insert(userMembershipModel).values(data).returning()
-      // db.insert(...).values(one object).returning() always returns
+      // insert(...).values(one object).returning() always returns
       // exactly one row when the insert does not throw — same reasoning as
       // UserRepository.insertOne (user.repository.ts).
       if (row === undefined) throw new HttpError('Insert returned no row', 500)

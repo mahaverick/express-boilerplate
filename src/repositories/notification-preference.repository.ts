@@ -160,7 +160,7 @@ export class NotificationPreferenceRepository {
         set: data,
       })
       .returning()
-    // db.insert(...).values(one object).returning() always returns exactly
+    // insert(...).values(one object).returning() always returns exactly
     // one row when the write does not throw, upsert included — same
     // reasoning as NotificationRepository.create.
     if (row === undefined) throw new HttpError('Upsert returned no row', 500)

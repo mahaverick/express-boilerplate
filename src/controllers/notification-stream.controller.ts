@@ -184,7 +184,8 @@ class NotificationStreamController extends BaseController {
    * against ids the burst already covered (the two windows can legitimately
    * overlap by one notification).
    *
-   * Not wrapped in `handle()`: its own `catch` sits beside the `writeHead` it guards, and every rejection still reaches `next`.
+   * Not wrapped in `handle()`: its own `catch` sits beside the `writeHead`
+   * it guards, and every rejection still reaches `next`.
    * @param request - The incoming request, already authenticated by `requireAuth`, and, on reconnect, carrying a `Last-Event-ID` header.
    * @param response - The response, upgraded to an SSE stream once authenticated.
    * @param next - Forwards an authentication failure to the terminal error handler.

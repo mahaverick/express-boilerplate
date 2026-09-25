@@ -2,9 +2,9 @@
 //
 // The AsyncLocalStorage store request-context.middleware.ts's
 // requestContext function opens with .run(), and resolveTenant
-// (tenant.middleware.ts) extends in place via .enterWith(). Moved out of
-// the middleware so logger.service.ts (and any other non-middleware code)
-// can read it without importing middlewares/** — see spec §1.
+// (tenant.middleware.ts) extends in place via .enterWith(). Kept here,
+// rather than in the middleware, so logger.service.ts (and any other
+// non-middleware code) can read it without importing middlewares/**.
 import { AsyncLocalStorage } from 'node:async_hooks'
 import type { MembershipRole } from '@/constants/tenant.constants'
 

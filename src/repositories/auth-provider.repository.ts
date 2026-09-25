@@ -28,8 +28,8 @@ import { db, type DbExecutor } from '@/services/database.service'
 export class AuthProviderRepository {
   /**
    * Find the row for one external identity within one provider's
-   * namespace — the lookup Task 3's Google callback makes first, before
-   * deciding whether to create a new link or a new user.
+   * namespace — the lookup google-auth.service's findOrCreateByGoogle makes
+   * first, before deciding whether to create a new link or a new user.
    * @param provider - Which auth method to look up.
    * @param providerId - The external identity within that provider's namespace (an email address for `'email'`, Google's profile id for `'google'`).
    * @param executor - Where to run the query. Defaults to the pool.
@@ -67,10 +67,10 @@ export class AuthProviderRepository {
    * rather than letting the raw driver error escape — the same translation
    * `BaseRepository.create` gives every table that extends it, applied by
    * hand here since this table cannot (see this file's header comment). A
-   * caller that hits this (e.g. Task 3's callback losing a race between
-   * `findByProviderAndId` and this insert for the same not-yet-linked
-   * Google account) should treat it as "already linked" and re-fetch via
-   * `findByProviderAndId`, not as an unexpected failure.
+   * caller that hits this (e.g. google-auth.service's findOrCreateByGoogle
+   * losing a race between `findByProviderAndId` and this insert for the
+   * same not-yet-linked Google account) should treat it as "already linked"
+   * and re-fetch via `findByProviderAndId`, not as an unexpected failure.
    * @param data - The row's initial column values.
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns The inserted row, including its generated `id` and timestamps.
@@ -78,7 +78,7 @@ export class AuthProviderRepository {
   async create(data: NewAuthProvider, executor: DbExecutor = db): Promise<AuthProviderRecord> {
     try {
       const [row] = await executor.insert(authProviderModel).values(data).returning()
-      // db.insert(...).values(one object).returning() always returns exactly
+      // insert(...).values(one object).returning() always returns exactly
       // one row when the insert does not throw; the driver's own types just
       // cannot express "same length as input" for a single-row insert —
       // same reasoning as UserRepository.insertOne (user.repository.ts).

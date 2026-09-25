@@ -9,7 +9,7 @@ import type { UserMembership } from '@/database/models/user-membership.model'
 import { HttpError } from '@/errors/http-error'
 import { canActorModifyTarget, isRoleAtLeast } from '@/policies/tenant.policy'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
-import { db, type DbExecutor } from '@/services/database.service'
+import { db, type DbTransaction } from '@/services/database.service'
 import type { Actor } from '@/types/actor'
 
 const userMembershipRepository = new UserMembershipRepository()
@@ -46,7 +46,7 @@ export async function lockActorRole(
   actor: Actor,
   tenantId: string,
   minimum: MembershipRole,
-  executor: DbExecutor
+  executor: DbTransaction
 ): Promise<MembershipRole> {
   await userMembershipRepository.lockOwners(tenantId, executor)
   const [membership] = await userMembershipRepository.lockMemberships(
@@ -73,7 +73,7 @@ async function lockActorAndTarget(
   tenantId: string,
   targetUserId: string,
   minimum: MembershipRole,
-  executor: DbExecutor
+  executor: DbTransaction
 ): Promise<{ actorRole: MembershipRole; target: UserMembership }> {
   await userMembershipRepository.lockOwners(tenantId, executor)
   const locked = await userMembershipRepository.lockMemberships(
@@ -99,7 +99,7 @@ async function lockActorAndTarget(
  */
 async function assertAnotherOwnerRemains(
   tenantId: string,
-  executor: DbExecutor,
+  executor: DbTransaction,
   message: string
 ): Promise<void> {
   const ownerCount = await userMembershipRepository.countOwners(tenantId, executor)
