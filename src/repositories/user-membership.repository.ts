@@ -11,7 +11,7 @@
 // would select every `users` column, `passwordHash` included, into the
 // response a later task's "list members" endpoint serializes straight to
 // JSON).
-import { and, count, eq, isNull, sql } from 'drizzle-orm'
+import { and, count, eq, inArray, isNull, sql } from 'drizzle-orm'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import { tenantModel, type Tenant } from '@/database/models/tenant.model'
 import {
@@ -254,7 +254,7 @@ export class UserMembershipRepository {
    * (`SELECT … FOR UPDATE`, in id order so two lockers never deadlock). A
    * concurrent demotion or removal of an owner waits here, which is what
    * makes the last-owner check atomic. Only meaningful inside a
-   * transaction.
+   * transaction. Lock order: this first, then `lockMemberships`.
    * @param tenantId - The tenant whose owners to lock.
    * @param executor - The transaction to hold the lock in.
    * @returns The locked owner memberships.
@@ -265,6 +265,36 @@ export class UserMembershipRepository {
       .from(userMembershipModel)
       .where(and(eq(userMembershipModel.tenantId, tenantId), eq(userMembershipModel.role, 'owner')))
       .orderBy(userMembershipModel.id)
+      .for('update')
+  }
+
+  /**
+   * Lock and return the memberships of `userIds` in a tenant until the
+   * transaction ends (`SELECT … FOR UPDATE`, in `user_id` order).
+   *
+   * Lock order within one transaction: the tenant's owner rows first
+   * (`lockOwners`), then this. Every service that locks memberships follows
+   * it, so two transactions never wait on each other in a cycle.
+   * @param tenantId - The tenant.
+   * @param userIds - The users whose memberships to lock. Duplicates and non-members are ignored.
+   * @param executor - The transaction to hold the locks in.
+   * @returns The locked memberships that exist, in `user_id` order.
+   */
+  async lockMemberships(
+    tenantId: string,
+    userIds: readonly string[],
+    executor: DbExecutor = db
+  ): Promise<UserMembership[]> {
+    return executor
+      .select()
+      .from(userMembershipModel)
+      .where(
+        and(
+          eq(userMembershipModel.tenantId, tenantId),
+          inArray(userMembershipModel.userId, userIds)
+        )
+      )
+      .orderBy(userMembershipModel.userId)
       .for('update')
   }
 }

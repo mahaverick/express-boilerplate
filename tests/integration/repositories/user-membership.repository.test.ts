@@ -22,7 +22,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
-import { sql } from '@/services/database.service'
+import { db, sql } from '@/services/database.service'
 
 const tenantRepository = new TenantRepository()
 const userMembershipRepository = new UserMembershipRepository()
@@ -337,6 +337,73 @@ describe('UserMembershipRepository', () => {
       })
 
       expect(await userMembershipRepository.countOwners(tenant.id)).toBe(1)
+    })
+  })
+
+  describe('lockMemberships', () => {
+    it('returns only the listed members of this tenant, in user_id order', async () => {
+      const owner = await createUser()
+      const first = await createUser()
+      const second = await createUser()
+      const outsider = await createUser()
+      const tenant = await createTenant(owner.id)
+      await userMembershipRepository.create({
+        userId: first.id,
+        tenantId: tenant.id,
+        role: 'viewer',
+      })
+      await userMembershipRepository.create({
+        userId: second.id,
+        tenantId: tenant.id,
+        role: 'editor',
+      })
+
+      const locked = await db.transaction((tx) =>
+        userMembershipRepository.lockMemberships(
+          tenant.id,
+          [second.id, outsider.id, first.id, first.id],
+          tx
+        )
+      )
+
+      expect(locked.map((membership) => membership.userId)).toEqual(
+        [first.id, second.id].toSorted((a, b) => a.localeCompare(b))
+      )
+    })
+
+    it('returns nothing for an empty list', async () => {
+      const owner = await createUser()
+      const tenant = await createTenant(owner.id)
+
+      const locked = await db.transaction((tx) =>
+        userMembershipRepository.lockMemberships(tenant.id, [], tx)
+      )
+
+      expect(locked).toEqual([])
+    })
+
+    it('holds a row lock until the transaction ends', async () => {
+      const owner = await createUser()
+      const member = await createUser()
+      const tenant = await createTenant(owner.id)
+      const membership = await userMembershipRepository.create({
+        userId: member.id,
+        tenantId: tenant.id,
+        role: 'viewer',
+      })
+
+      // Pool note: test mode has max 2 connections; the transaction holds one, the probe uses the other.
+      await db.transaction(async (tx) => {
+        await userMembershipRepository.lockMemberships(tenant.id, [member.id], tx)
+        await expect(
+          sql`select id from user_memberships where id = ${membership.id} for update nowait`
+        ).rejects.toMatchObject({ code: '55P03' })
+      })
+
+      const [row] = await sql<{ id: string }[]>`
+        select id from user_memberships where id = ${membership.id} for update nowait
+      `
+      expect(row?.id).toBe(membership.id)
     })
   })
 
