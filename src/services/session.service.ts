@@ -31,9 +31,11 @@
 // rows and reports which sessions it touched; it never writes Redis.
 //
 // A rotation runs in one transaction that first takes the user row FOR
-// SHARE. A password change or reset locks that row FOR NO KEY UPDATE before
-// it revokes, so a rotation either commits first and its new token is
-// revoked by it, or waits and then finds the presented token revoked.
+// SHARE. Logout, the kills a reused or over-age token triggers, the Google
+// account claim and password writes lock that row FOR NO KEY UPDATE before
+// their in-transaction revoke (revokeSession and revokeAllSessions' unlocked
+// pass excepted), so a rotation either commits first and its new token is
+// revoked, or waits and then finds the presented token revoked.
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import jwt from 'jsonwebtoken'
 import { getEnv } from '@/configs/env.config'
@@ -73,20 +75,29 @@ const userTokenRepository = new UserTokenRepository()
 const userRepository = new UserRepository()
 
 /**
- * Revoke every live token in one session, then deny its access tokens.
- * Database first: that half ends the session; the denial is best-effort.
+ * Revoke every live token in one session under the user row lock, then deny
+ * the session. FOR NO KEY UPDATE waits for any rotation holding the row FOR
+ * SHARE, so this revoke starts after that rotation's next token has
+ * committed, and a rotation arriving later finds its token revoked.
+ * @param userId - The session's user.
  * @param sessionId - The session (rotation-chain) id.
  */
-async function revokeAndDenySession(sessionId: string): Promise<void> {
-  await userTokenRepository.revokeAllForSession(sessionId)
+async function revokeSessionUnderUserLock(userId: string, sessionId: string): Promise<void> {
+  await withTransaction(async (tx) => {
+    await userRepository.lockById(userId, 'no key update', tx)
+    await userTokenRepository.revokeAllForSession(sessionId, tx)
+  })
   await denySession(sessionId)
 }
 
 /**
- * Deny each session a user-wide revocation reported, concurrently.
+ * Deny each session a revocation reported, concurrently. Best-effort and
+ * never rejects: a session that cannot be denied is logged at warn by
+ * `denySession`, and its access tokens stay valid until they expire.
  * @param sessionIds - Distinct session ids the revocation touched.
+ * @returns Resolves once every denial is written or its failure logged.
  */
-async function denySessions(sessionIds: readonly string[]): Promise<void> {
+export async function denySessions(sessionIds: readonly string[]): Promise<void> {
   await Promise.all(sessionIds.map((sessionId) => denySession(sessionId)))
 }
 
@@ -374,12 +385,13 @@ interface RotationIssued {
 
 /**
  * A rotation that was refused. It is thrown as a 401 only after the
- * transaction commits, so its claim and any revocation it made stand.
+ * transaction commits, so its claim stands; `killSessionId` is then
+ * revoked under the user row lock and denied.
  */
 interface RotationRefused {
   ok: false
   message: string
-  deniedSessionId?: string
+  killSessionId?: string
 }
 
 /**
@@ -390,7 +402,7 @@ type RotationOutcome = RotationIssued | RotationRefused
 /**
  * Concurrent-refresh grace: a token replayed within REFRESH_REUSE_GRACE_MS of its rotation gets a sibling (accepted trade-off); later reuse revokes the session.
  *
- * Known gap: a logout that commits between the isSessionKilled check here and the sibling's INSERT still leaves that sibling live. A password change or reset cannot, because the rotation holds the user row FOR SHARE.
+ * A kill that races this check (logout, reuse, a password write, an account claim) takes the user row FOR NO KEY UPDATE, which waits for this rotation's FOR SHARE, so it revokes the sibling this check lets through.
  * @param existing - The already-claimed row the presented token hashes to.
  * @param tx - The rotation's transaction.
  * @returns The session to continue when every grace condition holds and the session was not killed, otherwise undefined.
@@ -420,7 +432,7 @@ async function findGraceSession(
  * @param sessionId - The session (rotation-chain) id.
  * @param sessionStartedAt - When the session began; copied forward so the absolute TTL never resets.
  * @param tx - The rotation's transaction.
- * @returns The new row's id and token; or, past `SESSION_ABSOLUTE_TTL`, a refusal naming the session it revoked.
+ * @returns The new row's id and token; or, past `SESSION_ABSOLUTE_TTL`, a refusal naming the session to kill.
  */
 async function continueSession(
   userId: string,
@@ -432,9 +444,8 @@ async function continueSession(
   const sessionAgeMs = Date.now() - sessionStartedAt.getTime()
   if (sessionAgeMs >= requireDurationMs(env.SESSION_ABSOLUTE_TTL)) {
     // Every token in the session shares this start time, so all of them are past the ceiling.
-    await userTokenRepository.revokeAllForSession(sessionId, tx)
     // Same message as the expiry branch, so a caller can't tell which clock ran out.
-    return { ok: false, message: 'Refresh token expired', deniedSessionId: sessionId }
+    return { ok: false, message: 'Refresh token expired', killSessionId: sessionId }
   }
 
   const { id, raw, expiresAt } = await createTokenRow(
@@ -450,7 +461,9 @@ async function continueSession(
 
 /**
  * One rotation attempt under the user row lock. Every refusal is returned,
- * not thrown, so the transaction still commits the claim and any revocation.
+ * not thrown, so the transaction still commits the claim. A session to kill
+ * is revoked after commit, under FOR NO KEY UPDATE, never in this FOR SHARE
+ * transaction: upgrading here would deadlock two concurrent reuses.
  * @param userId - The presented token's user.
  * @param tokenHash - The presented token's hash.
  * @param tx - The rotation's transaction.
@@ -480,8 +493,7 @@ async function rotateUnderUserLock(
       )
     }
     if (existing && existing.sessionId !== null) {
-      await userTokenRepository.revokeAllForSession(existing.sessionId, tx)
-      return { ok: false, message: 'Invalid refresh token', deniedSessionId: existing.sessionId }
+      return { ok: false, message: 'Invalid refresh token', killSessionId: existing.sessionId }
     }
     return { ok: false, message: 'Invalid refresh token' }
   }
@@ -517,7 +529,8 @@ async function rotateUnderUserLock(
  *
  * The claim, the checks and the next token's insert share one transaction
  * that holds the user row FOR SHARE, so a password change or reset cannot
- * revoke in between. A revoked session is denied after that commit.
+ * revoke in between. A session killed by reuse or by its absolute lifetime
+ * is revoked after that commit, under the user row lock, then denied.
  * @param raw - The raw refresh token presented by the client.
  * @returns The new raw token to hand to the client, and its metadata.
  * @throws {HttpError} 401, when the token is unknown, already used outside the grace window, expired, or belongs to a session past its absolute lifetime.
@@ -532,24 +545,30 @@ export async function rotateRefreshToken(raw: string): Promise<IssuedRefreshToke
     rotateUnderUserLock(presented.userId, tokenHash, tx)
   )
   if (outcome.ok) return outcome.issued
-  if (outcome.deniedSessionId !== undefined) await denySession(outcome.deniedSessionId)
+  if (outcome.killSessionId !== undefined) {
+    await revokeSessionUnderUserLock(presented.userId, outcome.killSessionId)
+  }
   throw new HttpError(outcome.message, 401)
 }
 
 /**
- * Revoke every live refresh token in one session — every token descended
- * from one login, on one device — and deny that session's access tokens
- * (best-effort — see `denySession`).
+ * Revoke every live refresh token in one session and deny its access
+ * tokens (best-effort — see `denySession`), given only the session id.
+ * It takes no user row lock, so a rotation of that session in flight can
+ * outlive it. The application's own paths (logout, reuse and the absolute
+ * lifetime) go through the locked `revokeSessionUnderUserLock`.
  * @param sessionId - The session (rotation-chain) id to revoke.
  * @returns Resolves once every token in the session is revoked and its access tokens are denied, best-effort.
  */
 export async function revokeSession(sessionId: string): Promise<void> {
-  await revokeAndDenySession(sessionId)
+  await userTokenRepository.revokeAllForSession(sessionId)
+  await denySession(sessionId)
 }
 
 /**
- * Revoke the session a raw refresh token belongs to, and deny its access
- * tokens (best-effort — see `denySession`) — logout's primitive.
+ * Revoke the session a raw refresh token belongs to, under the user row
+ * lock, and deny its access tokens (best-effort — see `denySession`) —
+ * logout's primitive.
  *
  * Resolves quietly for a token that is missing, forged, already revoked, or
  * issued for a different purpose entirely (a password-reset or
@@ -566,7 +585,7 @@ export async function revokeSession(sessionId: string): Promise<void> {
 export async function revokeRefreshToken(raw: string): Promise<void> {
   const existing = await userTokenRepository.findByHash(hashToken(raw))
   if (existing && existing.sessionId !== null) {
-    await revokeAndDenySession(existing.sessionId)
+    await revokeSessionUnderUserLock(existing.userId, existing.sessionId)
   }
 }
 
@@ -614,9 +633,9 @@ export async function denySessionsAfterCommit(userId: string, sessionIds: string
 /**
  * Revoke every live token belonging to a user, across every session, and
  * deny each revoked session's access tokens (best-effort — see
- * `denySession`). Used where every session must end at once, such as a
- * verified Google identity claiming an account, and ahead of a reset's
- * transaction.
+ * `denySession`). It takes no user row lock, so a rotation in flight can
+ * outlive it; its callers (reset and the Google account claim) follow it
+ * with a pass under the lock.
  * @param userId - The user whose sessions should all end.
  * @returns Resolves once every token is revoked and each revoked session is denied, best-effort.
  */

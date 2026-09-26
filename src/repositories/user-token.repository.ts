@@ -170,7 +170,8 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    * chain for one login. Used by logout and by reuse detection;
    * session.service.ts denies the session's access tokens afterwards. A
    * caller that runs this inside its own transaction must deny the session
-   * only after that transaction commits.
+   * only after that transaction commits. Lock the user row FOR NO KEY UPDATE
+   * first, for the reason `revokeAllForUser` gives.
    * @param sessionId - The session id shared by every token in the chain.
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns Resolves once every matching row is revoked.
@@ -206,9 +207,10 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    * A session mid-rotation when this runs (old row claimed, next row not yet
    * committed) survives it: the next row is not in this statement's snapshot.
    * Lock the user row FOR NO KEY UPDATE first (`UserRepository.lockById`),
-   * as password change and reset do. Rotation holds it FOR SHARE from before
-   * its claim until its next row commits, so this statement then starts
-   * after that commit.
+   * as password writes and the Google account claim do before their
+   * in-transaction revoke. Rotation holds it FOR SHARE from before its claim
+   * until its next row commits, so this statement then starts after that
+   * commit.
    * @param userId - The user whose tokens should all be revoked.
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns The distinct session ids of the rows it revoked.

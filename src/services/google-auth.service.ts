@@ -13,8 +13,10 @@ import { UserRepository } from '@/repositories/user.repository'
 import { withTransaction } from '@/services/database.service'
 import { autoJoinSafely } from '@/services/platform.service'
 import {
+  denySessions,
   issueRefreshToken,
   revokeAllSessions,
+  revokeSessionRows,
   type IssuedRefreshToken,
 } from '@/services/session.service'
 import { markEmailVerified } from '@/services/verification.service'
@@ -60,16 +62,22 @@ async function linkGoogleProvider(userId: string, googleId: string): Promise<voi
  * A verified Google identity takes over a never-verified account: a
  * squatter's password and any OTHER Google link are removed, the email is
  * marked verified, and every session revoked.
+ *
+ * Sessions are revoked first on their own, so a failed write leaves no
+ * squatter session alive, then again in the claim's transaction, under the
+ * user row lock: a refresh rotation in flight either commits before the lock
+ * and is revoked there, or waits and finds its token revoked.
  * @param userId - The unverified account's id.
  * @param googleId - Google's stable profile id of the claiming identity.
  * @returns The account, now verified, federated-only and linked.
  * @throws {HttpError} 500 when the account vanished mid-claim.
  */
 export async function claimUnverifiedAccount(userId: string, googleId: string): Promise<User> {
-  // Revoke first: a failed write then leaves no squatter session alive.
   await revokeAllSessions(userId)
 
-  return withTransaction(async (tx) => {
+  const { claimed, revokedSessionIds } = await withTransaction(async (tx) => {
+    await userRepository.lockById(userId, 'no key update', tx)
+
     // Cleared before linking the claimer's: findOrCreateByGoogle's first
     // lookup would otherwise still resolve that other Google id here.
     await authProviderRepository.deleteGoogleLinksExcept(userId, googleId, tx)
@@ -82,10 +90,12 @@ export async function claimUnverifiedAccount(userId: string, googleId: string): 
     await markEmailVerified(userId, tx)
 
     // eslint-disable-next-line unicorn/no-null -- a null hash is the federated-only state (user.model.ts)
-    const claimed = await userRepository.update(userId, { passwordHash: null }, {}, tx)
-    if (!claimed) throw new HttpError('Update returned no row', 500)
-    return claimed
+    const updated = await userRepository.update(userId, { passwordHash: null }, {}, tx)
+    if (!updated) throw new HttpError('Update returned no row', 500)
+    return { claimed: updated, revokedSessionIds: await revokeSessionRows(userId, {}, tx) }
   })
+  await denySessions(revokedSessionIds)
+  return claimed
 }
 
 /**
