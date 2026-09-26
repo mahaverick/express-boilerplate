@@ -16,7 +16,6 @@ import type { Profile as GoogleProfile } from 'passport-google-oauth20'
 import type { Response } from 'supertest'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { createApp as CreateApp } from '@/app'
-import { REFRESH_TOKEN_COOKIE_NAME } from '@/constants/auth.constants'
 import type { User } from '@/database/models/user.model'
 import type { AuthProviderRepository as AuthProviderRepositoryClass } from '@/repositories/auth-provider.repository'
 import type { UserMembershipRepository as UserMembershipRepositoryClass } from '@/repositories/user-membership.repository'
@@ -28,6 +27,7 @@ import type { markEmailVerified as MarkEmailVerifiedType } from '@/services/veri
 import type { hashPassword as HashPasswordType } from '@/utilities/password.utilities'
 import type { truncateAuditLogs as TruncateAuditLogsType } from '../../helpers/audit-log'
 import { withMutatedMethod } from '../../helpers/mutate'
+import { testRefreshCookie } from '../../helpers/refresh-cookie'
 import { request } from '../../helpers/request'
 
 const STAFF_DOMAIN = 'staff.example.test'
@@ -261,9 +261,9 @@ describe('platform auto-join (PLATFORM_EMAIL_DOMAINS set)', () => {
 
           expect(response.status).toBe(200)
           const cookies = response.headers['set-cookie'] as unknown as string[] | undefined
-          expect(
-            cookies?.some((cookie) => cookie.startsWith(`${REFRESH_TOKEN_COOKIE_NAME}=`))
-          ).toBe(true)
+          expect(cookies?.some((cookie) => cookie.startsWith(`${testRefreshCookie().name}=`))).toBe(
+            true
+          )
         }
       )
 

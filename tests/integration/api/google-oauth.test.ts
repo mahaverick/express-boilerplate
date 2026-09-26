@@ -62,7 +62,7 @@ import passport from 'passport'
 import type { Profile as GoogleProfile } from 'passport-google-oauth20'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { createApp as CreateApp } from '@/app'
-import { GOOGLE_STRATEGY_NAME, REFRESH_TOKEN_COOKIE_NAME } from '@/constants/auth.constants'
+import { GOOGLE_STRATEGY_NAME } from '@/constants/auth.constants'
 import type { AuthProviderRepository as AuthProviderRepositoryClass } from '@/repositories/auth-provider.repository'
 import type { UserRepository as UserRepositoryClass } from '@/repositories/user.repository'
 import type { sql as SqlType } from '@/services/database.service'
@@ -70,6 +70,7 @@ import type { findOrCreateByGoogle as FindOrCreateByGoogleType } from '@/service
 import type { issueRefreshToken as IssueRefreshTokenType } from '@/services/session.service'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { fakeQueryError, LEAKED_PARAM, loggedText } from '../../helpers/query-error'
+import { testRefreshCookie } from '../../helpers/refresh-cookie'
 import { request } from '../../helpers/request'
 
 /**
@@ -548,7 +549,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
 
       const refreshResponse = await request(app)
         .post('/api/v1/auth/refresh')
-        .set('Cookie', `${REFRESH_TOKEN_COOKIE_NAME}=${squatterSession.raw}`)
+        .set('Cookie', `${testRefreshCookie().name}=${squatterSession.raw}`)
       expect(refreshResponse.status).toBe(401)
     })
 

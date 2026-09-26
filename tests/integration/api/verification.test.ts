@@ -15,7 +15,6 @@ import type { Worker } from 'bullmq'
 import type { Response } from 'supertest'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
-import { REFRESH_TOKEN_COOKIE_NAME } from '@/constants/auth.constants'
 import type { User } from '@/database/models/user.model'
 import type { EmailJobData } from '@/jobs/email.job'
 import { UserRepository } from '@/repositories/user.repository'
@@ -32,10 +31,12 @@ import {
   findMailpitMessages,
   getMailpitMessage,
 } from '../../helpers/mailpit'
+import { testRefreshCookie } from '../../helpers/refresh-cookie'
 import { request } from '../../helpers/request'
 
 const app = createApp()
 const userRepository = new UserRepository()
+const REFRESH_TOKEN_COOKIE_NAME = testRefreshCookie().name
 
 // verifyEmail/resendVerification/register now enqueue via BullMQ
 // (addNotificationJob for verification mail, addEmailJob directly for the

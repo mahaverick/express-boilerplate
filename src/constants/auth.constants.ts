@@ -112,17 +112,48 @@ export const MAX_EMAIL_LENGTH = 320
 export const MAX_NAME_LENGTH = 100
 
 /**
- * Name of the httpOnly cookie the refresh token travels in.
+ * The refresh cookie's unprefixed name: the current name without
+ * COOKIE_SECURE, and still read everywhere else so a browser holding it
+ * keeps its session.
  */
-export const REFRESH_TOKEN_COOKIE_NAME = 'refreshToken'
+export const LEGACY_REFRESH_TOKEN_COOKIE_NAME = 'refreshToken'
+
+// The auth routes, so no other endpoint receives the cookie. __Host-
+// forbids any path but '/'.
+const REFRESH_TOKEN_COOKIE_PATH = '/api/v1/auth'
 
 /**
- * The only path the refresh-token cookie is sent to. Scoping it to the
- * auth routes — rather than the whole API — means a request to any other
- * endpoint never carries this cookie at all, which is one less place a
- * stolen-cookie attack surface has to be reasoned about.
+ * Where the refresh cookie lives: the name, path and domain a set, a read
+ * and a clear must all agree on.
  */
-export const REFRESH_TOKEN_COOKIE_PATH = '/api/v1/auth'
+export interface RefreshCookieSpec {
+  name: string
+  path: string
+  domain?: string
+}
+
+/**
+ * The strongest refresh-cookie form the deployment allows. `__Host-` pins
+ * the cookie to this exact host over HTTPS but requires `Path=/` and no
+ * Domain; `__Secure-` allows a Domain; a plain name needs no HTTPS.
+ * @param env - Whether cookies are Secure and the configured COOKIE_DOMAIN.
+ * @param env.COOKIE_SECURE - Whether cookies are Secure, resolved through `isCookieSecure`.
+ * @param env.COOKIE_DOMAIN - The configured COOKIE_DOMAIN, if any.
+ * @returns The cookie's name, path and domain.
+ */
+export function refreshCookieSpec(env: {
+  COOKIE_SECURE: boolean
+  COOKIE_DOMAIN?: string | undefined
+}): RefreshCookieSpec {
+  const domain = env.COOKIE_DOMAIN
+  if (!env.COOKIE_SECURE) {
+    return domain === undefined
+      ? { name: LEGACY_REFRESH_TOKEN_COOKIE_NAME, path: REFRESH_TOKEN_COOKIE_PATH }
+      : { name: LEGACY_REFRESH_TOKEN_COOKIE_NAME, path: REFRESH_TOKEN_COOKIE_PATH, domain }
+  }
+  if (domain === undefined) return { name: '__Host-refreshToken', path: '/' }
+  return { name: '__Secure-refreshToken', path: REFRESH_TOKEN_COOKIE_PATH, domain }
+}
 
 /**
  * The strategy name every `passport.use`/`passport.authenticate` call in
