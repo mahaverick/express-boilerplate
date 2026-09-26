@@ -17,7 +17,7 @@
 // TypeScript target does not support, so a copy of the string has
 // `\n`/`\t` stripped before the control-character test instead.
 const FORBIDDEN_CONTROL = /\p{Cc}/u
-const BIDI_OVERRIDE = /[‪-‮⁦-⁩]/u
+const BIDI_OVERRIDE = /[\u{202A}-\u{202E}\u{2066}-\u{2069}]/u
 const MULTILINE_ALLOWED = /[\n\t]/g
 
 /**

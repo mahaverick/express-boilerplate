@@ -15,7 +15,7 @@ describe('slugSchema', () => {
 })
 
 describe('newTenantSchema free-text fields reject control characters and bidi overrides', () => {
-  const REJECTED = ['\u{0}', '\u{1B}', '\u{85}', '‮']
+  const REJECTED = ['\u{0}', '\u{1B}', '\u{85}', '\u{202E}']
 
   it.each(REJECTED)('rejects %j in name', (char) => {
     const result = newTenantSchema.safeParse({ name: `Acme${char}Inc`, slug: 'acme' })
