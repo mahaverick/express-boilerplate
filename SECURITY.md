@@ -125,8 +125,9 @@ The ceiling is enforced on the rotation path only — the check runs when a
 refresh token is presented, not by a background sweep. An access token
 already issued stays valid for the remainder of its own (15-minute) life
 after the ceiling passes. Note also that `user_tokens` accumulates a row per
-rotation and nothing prunes it; see
-[DATABASE.md](DATABASE.md#user_tokens-grows-without-bound-and-nothing-prunes-it).
+rotation. The daily retention purge deletes a rotated-away row only once it
+has expired, so reuse detection keeps every row a client could still
+present; see [DATABASE.md](DATABASE.md#user_tokens-retention).
 
 ### Password hashing: bcrypt at cost 12
 
@@ -180,6 +181,60 @@ attempt with a too-short or too-long password fails with the exact same
 distinct validation error first would leak that distinction to an
 unauthenticated caller before the controller ever gets a chance to make the
 two paths agree.
+
+### Password change and reset against a concurrent login
+
+A login that checked the old password can't keep a session once a password
+change or reset commits. Both writes run in one transaction that locks the
+user row `FOR NO KEY UPDATE`, writes the new hash, and revokes the user's
+`user_tokens` rows: every session for a reset, every session but the
+caller's for a change. A reset also revokes every token once before that
+transaction, without the lock, so a failed write still leaves no session
+alive. Login still checks the password outside any transaction. It then
+opens a short one that locks the same row `FOR SHARE` and re-reads the
+hash. If the hash changed, it answers the same `401 Invalid email or
+password`; otherwise it issues the refresh token inside that transaction.
+So either the login commits first and the password write revokes its
+session, or the login sees the new hash and fails. There is no third
+ordering.
+
+Refresh rotation also locks the user row `FOR SHARE`, so a refresh racing a
+password write either has its new token revoked or gets 401.
+
+Every path that locks the user row:
+
+| Path                                                    | User row lock       | Why                                                               |
+| ------------------------------------------------------- | ------------------- | ----------------------------------------------------------------- |
+| Password change, password reset                         | `FOR NO KEY UPDATE` | Writes the hash and revokes sessions atomically                   |
+| Google account claim, logout, reuse kill, lifetime kill | `FOR NO KEY UPDATE` | Revokes sessions so no rotation in flight survives                |
+| Login (after the password compare), refresh rotation    | `FOR SHARE`         | Issues a token only against the hash and session state it checked |
+
+Logins and rotations take `FOR SHARE`, and their `FOR SHARE` locks never
+conflict with each other. A concurrent login's `last_logged_in_at` update
+does wait for the `FOR SHARE` transactions open on the row; each holds it
+for one token insert (a login) or one rotation (a refresh). The reuse and
+lifetime kills run after the rotation's transaction commits, in a
+transaction of their own; taking `FOR NO KEY UPDATE` inside a `FOR SHARE`
+transaction would deadlock two concurrent reuses. Two revocations take no
+user row lock: `revokeSession`, which no application path calls, and the
+unlocked pass of `revokeAllSessions` that a reset and a Google account
+claim run before their locked transaction.
+
+Two effects are accepted:
+
+- A correct password still updates `last_logged_in_at` and still runs the
+  platform auto-join, even when the re-read then answers 401. Both run
+  after the password check and before the transaction. Running the auto-join
+  inside it would nest its owners → memberships lock chain under the user
+  row's lock.
+- The session denylist (Redis) is written after the transaction commits. If
+  that write fails, the request still succeeds: the password is changed and
+  the refresh tokens are revoked. One `error` line
+  (`session denylist write failed after password change`, for a reset too)
+  records the user id and the number of sessions not denied. The revoked
+  sessions' access tokens then stay valid until they expire
+  (`ACCESS_TOKEN_TTL`, 15 minutes by default). That is the same exposure as
+  the denylist failing open during a Redis outage.
 
 ### User enumeration: closed on `/login` and `/register`
 
@@ -333,19 +388,22 @@ deployment with no existing users has nothing to backfill.
 
 ### Rate limiting: one limiter per auth route, one store prefix each
 
-`RATE_LIMITS` (`src/constants/rate-limit.constants.ts`) lists twenty
+`RATE_LIMITS` (`src/constants/rate-limit.constants.ts`) lists twenty-one
 rate-limiter specs, each built by `rate-limit.middleware.ts`'s single
 `createRateLimiter(spec)`.
 Fifteen guard the auth router, which is a standing rule for that router:
 every route on it except `GET /providers` has at least one, and `/login`
 (three), `/resend-verification` (two) and `/forgot-password` (two) carry
-several in series. The other five guard tenant creation, member invitation,
-invitation preview and accept, and staff tenant search. Each is backed by its **own**
-`SharedRateLimitStore`, with its own key prefix `rl:<name>:` (for example
-`rl:register:`, `rl:login-ip:`, `rl:forgot-password-email:`), under
-`REDIS_KEY_PREFIX` (so `<prefix>:rl:login:` in Redis). No endpoint can
-spend another's budget, and a 429 is only ever a statement about the
-endpoint that returned it. A new route takes its own prefix on the same
+several in series. Five guard tenant creation, member invitation,
+invitation preview and accept, and staff tenant search. The last,
+`authenticatedWrite`, covers every other authenticated write (below). Each
+spec is backed by its **own** `SharedRateLimitStore`, with its own key
+prefix `rl:<name>:` (for example `rl:register:`, `rl:login-ip:`,
+`rl:forgot-password-email:`), under `REDIS_KEY_PREFIX` (so
+`<prefix>:rl:login:` in Redis). No limiter can spend another's budget. A
+429 from any limiter but `authenticatedWrite` is a statement about the
+endpoint that returned it; `authenticatedWrite` is one budget shared by
+every route it guards. A new spec takes its own prefix on the same
 pattern; `tests/unit/constants/rate-limit.constants.test.ts` fails if two
 ever collide. `/verify-email` and `/resend-verification`'s
 own per-limiter reasoning — including why `/resend-verification`'s IP layer
@@ -424,8 +482,25 @@ a client can make up to N× the limit.
   runs, so it would leave the refresh cookie uncleared. This limiter must
   never plausibly be the reason a real user cannot log out.
 
-There is no general-purpose rate limiter: each limiter guards only the
-route it is mounted on.
+- **Every other authenticated write** (`rl:authenticated-write:`): 60
+  requests a minute per user, on each authenticated `POST`, `PUT`, `PATCH`
+  or `DELETE` that has no limiter of its own. Those are the tenant `PATCH`,
+  the member `PATCH` and `DELETE`, the invitation `DELETE` and the settings
+  `PATCH`, the four notification writes, and `PATCH /api/v1/profile`. It
+  runs after `requireAuth`, so it keys on the user, and it answers `429`
+  with its own message, `Too many requests, please slow down`. A route with
+  its own limiter keeps only that one. Each of the three routers builds one
+  instance and mounts it on each of its write routes. With Redis up, every
+  instance counts under the same prefix and user key, so a client gets 60
+  such writes a minute in total, not 60 per route. During a Redis outage
+  each instance counts in its own memory, so the budget is per router and
+  per process. `tests/unit/routes/route-limiters.test.ts` walks the app's
+  router and fails on any write route that has no limiter and is not on its
+  allowlist, where each entry states its reason. It also fails if a `GET`
+  route carries `authenticatedWrite`.
+
+There is no global limiter: a read is limited only where a route mounts
+one, and most reads mount none.
 
 ### Deploying behind a proxy: `TRUST_PROXY` is a required decision
 
@@ -476,9 +551,40 @@ the Google OAuth `state` check fails. Boot logs a warning when
 
 ### Cookies: httpOnly, environment-derived `secure`, `sameSite: 'strict'`
 
-The refresh token travels only in a cookie (`REFRESH_TOKEN_COOKIE_NAME`,
-scoped to `REFRESH_TOKEN_COOKIE_PATH` = `/api/v1/auth` so no other route
-ever receives it), set with:
+The refresh token travels only in a cookie. Its name, path and domain come
+from one function, `refreshCookieSpec` (`src/constants/auth.constants.ts`),
+so every set, read and clear agrees. The auth controller gets the current
+cookie only through its `currentRefreshCookie(env)`:
+
+| Deployment                                | Name                    | Path           | Domain                   |
+| ----------------------------------------- | ----------------------- | -------------- | ------------------------ |
+| `COOKIE_SECURE` false (local http)        | `refreshToken`          | `/api/v1/auth` | `COOKIE_DOMAIN` when set |
+| `COOKIE_SECURE` true, no `COOKIE_DOMAIN`  | `__Host-refreshToken`   | `/`            | none                     |
+| `COOKIE_SECURE` true, `COOKIE_DOMAIN` set | `__Secure-refreshToken` | `/api/v1/auth` | `COOKIE_DOMAIN`          |
+
+The browser enforces the prefixes, not this API. It refuses a `__Host-`
+cookie unless it is `Secure`, host-only and on `Path=/`, and a `__Secure-`
+one unless it is `Secure`. So neither can be planted over plain HTTP, and a
+`__Host-` cookie can't be planted by a sibling subdomain either. A plain
+`refreshToken` could be. The cost of `__Host-` is `Path=/`: the browser
+sends the cookie on every request to the origin, not only to
+`/api/v1/auth`. It is still `HttpOnly`, `Secure` and `SameSite=Strict`
+(`Lax` only from the OAuth callback), so no script reads it and no
+cross-site request carries it. A deployment that wants it scoped to the auth
+routes sets `COOKIE_DOMAIN`, which selects the `__Secure-` row.
+
+**The prefixed names log no one out.** With `COOKIE_SECURE` on, the API
+still accepts the unprefixed `refreshToken`
+(`LEGACY_REFRESH_TOKEN_COOKIE_NAME`). Refresh reads the current name first
+and falls back to `refreshToken`; logout revokes the session of every
+distinct token the request carries under either name. Within one name the
+API takes the most recently created value. When a request carried a
+`refreshToken` cookie, the response clears it at `/api/v1/auth`: the
+host-only form, and the `COOKIE_DOMAIN` form when that is set, skipping
+whichever form is the current cookie itself. The fallback is removed at the
+next major release.
+
+Every form is set with:
 
 - `httpOnly: true` — no script on the frontend origin can ever read the raw
   value.
@@ -493,11 +599,12 @@ ever receives it), set with:
 - `domain: COOKIE_DOMAIN` — omitted when unset, so the cookie is host-only.
   When it is set, the same domain goes on the set, the clear (a clear with a
   different domain leaves the old cookie in the browser), and the OAuth
-  session cookie. With it set, every response that sets or clears the refresh
-  cookie also clears the host-only one, so setting it on a live deployment
-  heals itself. Changing or unsetting it leaves the old domain's cookie in
-  the browser, which then sends two `refreshToken` values, oldest first
-  (RFC 6265 §5.4). The API reads the last, most recently created one, so the
+  session cookie. On a secure deployment, turning `COOKIE_DOMAIN` on or off
+  switches the cookie between `__Host-` and `__Secure-`, which signs every
+  user in once. A request that still presents `refreshToken` has that
+  cookie cleared. Changing it from one domain to another (or, on local
+  http, unsetting it) leaves the old domain's cookie in the browser, which
+  then sends two values under the same name, oldest first (RFC 6265 §5.4). The API reads the last, most recently created one, so the
   stale token never reaches reuse detection, and the old cookie expires
   within `REFRESH_TOKEN_TTL`. Reverting `COOKIE_DOMAIN` to an earlier value
   is the exception: an overwritten cookie keeps its original creation time
@@ -531,6 +638,20 @@ against this repo: `PATCH` with `{"firstName":"Alicia","active":false,
 "email":"attacker@example.com","passwordHash":"x","id":"deadbeef"}` against
 a real session updated only `firstName`; every other field was silently
 dropped.
+
+### Free text rejects control and bidi characters
+
+`safeText` (`src/validators/safe-text.validators.ts`) refines every
+free-text field: the tenant `name`, `logo`, `website` and `description`,
+and `firstName` and `lastName` on register and profile. It rejects Unicode
+control characters (U+0000–U+001F and U+007F–U+009F) and the bidirectional
+overrides and isolates (U+202A–U+202E and U+2066–U+2069). These can make a
+stored name render as something else in an email, a log line or the UI.
+`description` is multiline. It accepts `\n` and `\t`, stores `\r\n` as
+`\n`, and rejects a lone `\r`. A rejected field answers `400` in the usual
+validation envelope, with `<Field> contains characters that are not
+allowed` (on the profile route, which shares one rule for both names,
+`This field contains characters that are not allowed`).
 
 ### Tenant invitations: consent, and no address enumeration
 
@@ -633,11 +754,24 @@ blob.
   the role and the address's domain, never the address or the token.
 
   A `BEFORE UPDATE OR DELETE` trigger makes the table append-only for every
-  role. Its foreign keys are `ON DELETE RESTRICT`, so hard-deleting a user or
-  tenant with history fails instead of erasing it. `TRUNCATE` is not blocked:
-  a role with `TRUNCATE` privilege on the table — its owner by default, or a
-  superuser — can still empty it, and the test suite relies on that. There
-  is no retention job.
+  role, with the one retention exception below. Its foreign keys are
+  `ON DELETE RESTRICT`, so hard-deleting a user or tenant with history fails
+  instead of erasing it. `TRUNCATE` is not blocked: a role with `TRUNCATE`
+  privilege on the table — its owner by default, or a superuser — can still
+  empty it, and the test suite relies on that.
+
+  Retention is opt-in. `RETENTION_AUDIT_LOGS_DAYS` defaults to `0`, which
+  keeps every row forever. Above 0, the daily purge deletes rows whose
+  `occurred_at` is older than that many days. The trigger raises on every
+  UPDATE. It lets a DELETE through only in a transaction that set
+  `app.audit_purge` to `on` and `app.audit_purge_before` to a cutoff after
+  the row's `occurred_at`. The purge sets both with `set_config(..., true)`,
+  so they end with its transaction. Only `retention.service.ts` names them,
+  and `tests/unit/audit-purge-setting.test.ts` fails if any other file under
+  `src/` does. This guards against a stray `DELETE` in application code. It
+  is not a privilege boundary: any role that can run arbitrary SQL can set
+  the same two settings. Revoke `DELETE` on `audit_logs` from every role
+  except the one the app runs as.
 
 - **Who reads it.**
   - `GET /api/v1/tenants/:slug/audit-log`: effective owners and admins, so a
@@ -657,11 +791,11 @@ blob.
 
 Everything below genuinely ships nothing today, in either direction:
 
-| Control                       | Status              | What that means for you                                                                                                                                                                                                                                                                                                                                                             |
-| ----------------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| CSRF tokens                   | **Not implemented** | See "No CSRF middleware" below — reasoning, not an oversight. The forced-login direction IS defended, by a content-type gate on the auth router; see the section after it.                                                                                                                                                                                                          |
-| MFA                           | **Not implemented** | No TOTP enrolment, no recovery codes. Owned by a later plan (B4).                                                                                                                                                                                                                                                                                                                   |
-| General-purpose rate limiting | **Partial**         | Twenty per-route limiters (see "Rate limiting" above). There is no global limiter; the profile, notification and audit-log routes have none, and every tenant route except create, invite and resend has none either — five tenant writes are unlimited: `PATCH /:slug`, `PATCH` and `DELETE /:slug/members/:userId`, `DELETE /:slug/invitations/:id`, and `PATCH /:slug/settings`. |
+| Control                       | Status              | What that means for you                                                                                                                                                                                                                            |
+| ----------------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CSRF tokens                   | **Not implemented** | See "No CSRF middleware" below — reasoning, not an oversight. The forced-login direction IS defended, by a content-type gate on the auth router; see the section after it.                                                                         |
+| MFA                           | **Not implemented** | No TOTP enrolment, no recovery codes. Owned by a later plan (B4).                                                                                                                                                                                  |
+| General-purpose rate limiting | **Partial**         | Twenty-one limiters (see "Rate limiting" above). Every authenticated write has one, at least the shared `authenticatedWrite`. There is no global limiter, and authenticated reads (profile, notifications, tenant reads, the audit log) have none. |
 
 `JWT_ACCESS_SECRET` is required by the environment schema and **is** read —
 by `signAccessToken`/`verifyAccessToken`. `WEB_URL` is also read now, twice
@@ -805,6 +939,15 @@ redacted first: a failed database query is recorded as its **SQL text**
 (parameterised, so it names tables and columns and holds no values), the
 driver's `SQLSTATE` code, and the call frames — never its bound parameters.
 
+The logger also redacts on its own, so a call site can't forget to.
+`serializeErrors` (`src/services/logger.service.ts`) walks each logged error
+and its `cause` chain, five errors deep. It replaces any error that carries
+a query and its parameters with `redactedForLog(error)`. An error logged
+under a top-level key such as `{ error }`, including one wrapped as another
+error's `cause`, keeps its SQL text and `SQLSTATE` code and loses its
+parameters. Other errors serialize as their name, message, stack and
+`cause`.
+
 This is not a theoretical precaution. `drizzle-orm` builds
 `DrizzleQueryError`'s message as `` `Failed query: ${query}\nparams:
 ${params}` `` (`node_modules/drizzle-orm/errors.js`), so logging the error
@@ -824,6 +967,21 @@ to (`MAX_EMAIL_LENGTH`/`MAX_NAME_LENGTH`, `src/constants/auth.constants.ts`
 looser than its column does not just fail; it fails as a **500**, because
 Postgres's `22001` is not a unique violation and nothing translates it. A
 400-character email address did exactly that.
+
+### A failed job keeps no live link
+
+Verification, reset and invitation emails carry their token inside a link
+in the job's payload (`verificationUrl`, `resetUrl`, `acceptUrl`). Failed
+jobs stay in Redis so an operator can read `failedReason`: 7 days for
+email, 3 for notifications. A job fails for the last time when its attempts
+are used up or it threw BullMQ's `UnrecoverableError`. The worker then
+rewrites the job's stored data, replacing every key ending in `Url` or
+`Token`, at any depth, with `[redacted]`. It then logs one `error` line,
+`job failed permanently`, with the queue, job id and name, user id,
+attempt count and reason, and the email template when the job names one.
+An earlier attempt logs a `warn` and keeps the link, because the retry has
+to send it. So a token sits in Redis only while a retry is pending, unless
+the rewrite itself fails, which logs its own `error` line.
 
 ### Secret scanning at two layers
 

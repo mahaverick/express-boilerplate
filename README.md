@@ -105,7 +105,9 @@ cross-site form that logs a victim into the attacker's account — see
 [SECURITY.md](SECURITY.md).
 
 Login also sets an httpOnly `refreshToken` cookie, scoped to
-`/api/v1/auth`. `data.accessToken` above is a JWT — send it as
+`/api/v1/auth`. With `COOKIE_SECURE` on it is `__Host-refreshToken` at `/`
+instead, or `__Secure-refreshToken` at `/api/v1/auth` when `COOKIE_DOMAIN`
+is set; see [SECURITY.md](SECURITY.md), "Cookies". `data.accessToken` above is a JWT — send it as
 `Authorization: Bearer <accessToken>` to reach an authenticated route, e.g.
 `GET /api/v1/profile`. There is no `password` minimum beyond 8 characters
 and no composition rule (uppercase/digit/symbol) — see
@@ -276,7 +278,9 @@ case (`role "boilerplate" does not exist`), but **Redis fails silently** —
 any Redis instance answers `PING`, so the app would appear to work while
 writing into an unrelated database. Container-internal ports stay
 5432/6379, so a container-to-container URL like `postgres://…@postgres:5432/…`
-is unaffected. See the header comment in
+is unaffected. Every port is published on `127.0.0.1` only, so no other
+machine on your network can reach the stack's services (Postgres, Redis,
+Grafana, Mailpit). See the header comment in
 [`docker-compose.yml`](docker-compose.yml) and
 [ARCHITECTURE.md](ARCHITECTURE.md) for the full reasoning.
 
@@ -390,6 +394,9 @@ shell, `curl`, or TypeScript compiler in it (`pnpm prune --prod
 from the pnpm virtual store — verified: no `typescript` under
 `/app/node_modules` in the built image). See the comments in
 [`Dockerfile`](Dockerfile) for why each stage exists.
+
+Its `CMD` runs Node with `--enable-source-maps`, so logged stack traces
+name the original `.ts` lines rather than compiled `dist/*.js` ones.
 
 ## Deploying
 

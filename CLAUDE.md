@@ -118,6 +118,14 @@ until you check.
   `createPinoLogger` keeps the winston-era shape (`level` label, ISO
   `timestamp`, `message`). Direct pino calls are `(meta, message)`;
   application code uses the `logger` facade, which keeps `(message, meta)`.
+- **Log errors as objects; the serializer redacts them.** `serializeErrors`
+  (`logger.service.ts`) replaces any logged error that carries a query and
+  its parameters with `redactedForLog(error)`. That covers each top-level
+  Error-valued key and its `cause` chain, five errors deep. A string gets
+  none of that: a Drizzle error's `message` embeds the bound parameters, so
+  `{ error: error.message }` logs them. Calling `redactedForLog` at a call
+  site is idempotent and still fine, and a query-shaped value that isn't an
+  `Error` still needs it.
 
 ## Job queue
 
@@ -142,10 +150,33 @@ until you check.
   `addEmailJob()` directly. `sendRegistrationAttemptMail`
   (`auth.service.ts`) and `tenant-invitation.service.ts`'s
   `dispatchInvitationMessages` both call `addEmailJob()` directly instead.
-- **`WORKER_ENABLED` gates the in-process worker.** Default `true` (API +
-  worker in one process). Set `false` for API-only pods; a separate worker
-  deployment sets `true` and processes jobs from the shared Redis queue.
-  `WORKER_CONCURRENCY` (default 5) sets both workers' concurrency.
+- **`WORKER_ENABLED` gates the in-process workers.** Default `true` (API +
+  workers in one process). Set `false` for API-only pods; a separate worker
+  deployment sets `true` and processes jobs from the shared Redis queues.
+  `WORKER_CONCURRENCY` (default 5) sets the email and notification workers'
+  concurrency; the maintenance worker always runs one job at a time.
+- **A job's final failure is its only `error` line.** Each worker's
+  `failed` handler logs a retryable attempt at `warn`. On the last attempt
+  (attempts used up, or `UnrecoverableError`) it calls
+  `recordPermanentFailure` (`src/jobs/job-failure.job.ts`), which scrubs
+  every `…Url`/`…Token` key in the stored data, then logs
+  `job failed permanently` once. BullMQ counts the attempt before it emits
+  `failed`, so the terminal test is `attemptsMade >= attempts`, not `+ 1`.
+  The handler must never reject, because an unhandled rejection exits the
+  process; `recordPermanentFailure` catches its own errors. A test that
+  reads the scrubbed data waits for the log line (`waitForLoggedCall`,
+  `tests/helpers/queue-jobs.ts`), not for the `failed` event, since the
+  scrub runs after it.
+- **The retention purge runs on the `maintenance` queue.**
+  `ensureRetentionSchedule()` (`src/jobs/maintenance.job.ts`) upserts one
+  scheduler. The worker supervisor calls it each time it starts a worker
+  generation (boot is the first); a failure logs `warn` and is retried with
+  the next generation, which starts only after a worker connection gives up
+  before its first ready. It is idempotent, so every replica calls it. To
+  test a rule, call `runRetentionPurge(now, days)` directly, with `now`
+  years in the past and explicit `days`. `getEnv()` is memoised, and a past
+  `now` keeps every other file's rows out of every predicate. See
+  `tests/integration/services/retention.service.test.ts`.
 - **Every Redis key and channel goes through `redisKey()`**
   (redis.service.ts): `REDIS_KEY_PREFIX` + `:` + parts, covering BullMQ
   (`bull`), rate limits (`rl:<name>`), the denylist, OAuth sessions (`sess`)
@@ -251,12 +282,23 @@ until you check.
   request, so behind TLS termination set `TRUST_PROXY` and forward
   `X-Forwarded-Proto`. Boot warns when Google login is on and
   `TRUST_PROXY=false`.
+- **The refresh cookie's name, path and domain come only from
+  `refreshCookieSpec`** (`auth.constants.ts`). The controller gets the
+  current cookie only through its `currentRefreshCookie(env)`, and calls
+  `refreshCookieSpec` directly only for the legacy forms it clears. It gives `__Host-refreshToken`
+  at `/` when secure with no `COOKIE_DOMAIN`, `__Secure-refreshToken` at
+  `/api/v1/auth` with it, and plain `refreshToken` on local http. Don't
+  write the name or path anywhere else. A browser silently drops a
+  `__Host-` cookie set with a `Domain` or a path other than `/`, and that
+  looks like a logout, not an error. Refresh and logout also read the
+  legacy `refreshToken` (`LEGACY_REFRESH_TOKEN_COOKIE_NAME`), and a
+  response clears it when the request presented it. The fallback goes at
+  the next major.
 - **`COOKIE_DOMAIN` goes on the refresh-cookie set, its clear, and the OAuth
   session cookie.** A clear with a different domain leaves the cookie behind.
-  With it set, the refresh-cookie set and clear also clear the host-only
-  cookie, before the set. After a domain change the browser sends two
-  `refreshToken` values, oldest first, and `readRefreshTokenCookie` takes the
-  last, the most recently created. Reading the first would hand a stale token
+  After a domain change the browser sends two cookies of the same name,
+  oldest first, and `readCookie` (`auth.controller.ts`) takes the last, the
+  most recently created. Reading the first would hand a stale token
   to reuse detection, which revokes the live session. Reverting to an earlier
   domain is the one case last-wins misses: an overwritten cookie keeps its
   original creation time.
@@ -367,8 +409,14 @@ until you check.
   lowercase dotted hostname (or null, on the invitation actions), and
   `emailDomain` can return a value they reject.
 - **`audit_logs` is append-only, and that bites test cleanup.** A trigger
-  refuses UPDATE and DELETE, and its foreign keys to `users` and `tenants`
-  are RESTRICT. So an `afterEach` that deletes a tenant or user that has
+  refuses every UPDATE. It refuses DELETE too, except in a retention purge
+  transaction that set `app.audit_purge` to `on` and
+  `app.audit_purge_before` past the row's `occurred_at` (off by default:
+  `RETENTION_AUDIT_LOGS_DAYS=0`). It reads each through `coalesce`: an unset
+  `current_setting(…, true)` is NULL, and a plpgsql `IF` on NULL does not
+  raise. Only `retention.service.ts` may set them
+  (`tests/unit/audit-purge-setting.test.ts`). Its foreign keys to `users`
+  and `tenants` are RESTRICT. So an `afterEach` that deletes a tenant or user that has
   audit rows fails. Call `truncateAuditLogs()`
   (`tests/helpers/audit-log.ts`) first. TRUNCATE fires no row trigger;
   don't add a `BEFORE TRUNCATE` trigger, or only a superuser can clean up.
@@ -446,8 +494,8 @@ until you check.
   Grafana.
 - **`tracing.ts` registers OTel's ESM loader hook** — without it the
   CommonJS pino imported from ESM is never patched (proved 2026-09-24).
-- **The Docker image loads tracing via `--import`** (the Dockerfile CMD is
-  `pnpm start` minus `--env-file-if-exists`).
+- **The Docker image loads tracing via `--import`.** The Dockerfile CMD is
+  `node --enable-source-maps --import ./dist/observability/tracing.js dist/index.js`.
 - **Editing `otel-collector.yaml` needs `docker compose restart
 otel-collector`.** It is bind-mounted; `docker compose up -d` does not
   pick up content changes to an already-running container's bind mount.
@@ -732,6 +780,20 @@ instruction in any dispatch written here.
   `sub`) is `'invalid'`, and that's a closed set of two — don't add a third
   case based on an error message, since only `verifyAccessToken` ever calls
   `jwt.verify` and sees what it actually threw.
+- **Password change and reset hold the user row; login re-reads under
+  it.** The writes lock the user `FOR NO KEY UPDATE`, write the hash and
+  revoke the `user_tokens` rows in one transaction. Login compares outside
+  any transaction, then locks `FOR SHARE`, re-reads the hash and issues the
+  refresh token in one. Keep `lastLoggedInAt` and `autoJoinSafely` outside
+  that transaction: `autoJoinSafely` takes the owners → memberships lock
+  chain, and nesting it under the user-row lock adds a lock-order case. The
+  Redis denylist is written after commit and never fails the request
+  (`denySessionsAfterCommit`); a failure there is one `error` line. The
+  Google claim, logout and both kills take the user row `FOR NO KEY UPDATE`
+  through `revokeSessionUnderUserLock` or a locked `revokeSessionRows`;
+  rotation takes it `FOR SHARE`. The kills run after the rotation's
+  transaction commits, never inside it. SECURITY.md, "Password change and
+  reset against a concurrent login", has the full table.
 
 ## Code conventions
 
@@ -788,3 +850,24 @@ instruction in any dispatch written here.
   [MIGRATIONS.md](MIGRATIONS.md) for the full spike and the exact unblock
   condition. Don't bump `typescript` on its own without checking that
   peer range has moved.
+- **Every authenticated write needs a limiter.** Mount
+  `createRateLimiter(RATE_LIMITS.authenticatedWrite)` after `requireAuth` on
+  a new `POST`/`PUT`/`PATCH`/`DELETE` route, or give the route its own spec.
+  Reuse the router's one `writeLimiter` instance, so the in-memory fallback
+  keeps one budget per router. `route-limiters.test.ts` walks the router and
+  fails otherwise. It finds a limiter by the `RATE_LIMITER_MARK` symbol that
+  `createRateLimiter` sets, so a hand-rolled `rateLimit()` doesn't count.
+  Its allowlist is for routes that can't carry a limiter, each entry with
+  its reason.
+- **Row locks default to `FOR NO KEY UPDATE`.** `FOR UPDATE` conflicts with
+  the `FOR KEY SHARE` lock every foreign-key insert takes, so holding it on
+  a tenant blocks that tenant's audit inserts and invitation accepts until
+  commit. Pass `'update'` (`RowLockMode`, `src/types/lock-mode.ts`) only in
+  a transaction that deletes the locked row or changes a key column.
+- **Bind a timestamp in raw `sql` as `${date.toISOString()}::timestamptz`.**
+  drizzle's postgres-js driver installs identity serializers for timestamp
+  types, so a `Date` inside a `sql` template reaches the driver
+  unserialised and the query fails. Column comparisons built with
+  `lt(column, date)` are fine; `sql` templates and test seeds are not.
+- **Free-text fields use `safeText`.** A new free-text field in a validator
+  gets it too: single-line by default, `{ multiline: true }` for prose.
