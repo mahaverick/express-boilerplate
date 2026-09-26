@@ -40,8 +40,9 @@
 //   pnpm exec vitest run tests/integration/services/password-login-race.test.ts                    # green
 //
 // Pool note: test mode has max 2 connections and each race holds both. A
-// repository call inside a raced transaction that skipped `tx` would hang
-// until the lock probe gives up.
+// repository call inside a raced transaction that skipped `tx` would wait for
+// a pool connection that never frees, so the race hangs until a lock probe
+// or the test itself times out.
 import { randomUUID } from 'node:crypto'
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import type { User } from '@/database/models/user.model'

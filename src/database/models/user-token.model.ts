@@ -173,8 +173,8 @@ export const userTokenModel = pgTable(
     // a new column. Two reasons: the derived form makes the cap depend on
     // the oldest row still present, so the retention purge (see this file's
     // header comment) would silently EXTEND every live session the first
-    // time it purged one — a data
-    // cleanup task quietly becoming a security regression. And it is read
+    // time it purged one — a data cleanup task quietly becoming a security
+    // regression. And it is read
     // on the rotation path, where a copied column costs nothing and an
     // extra aggregate query per refresh costs a round trip.
     //

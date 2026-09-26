@@ -17,10 +17,10 @@
 # No app service: the app runs on the host with APP_ENV=local (.env.example),
 # which is what lets it use Mailpit and the defaults below.
 #
-# Every host-side port binds 127.0.0.1 explicitly, not the Docker default
-# wildcard bind — on a machine with any other service listening on all
-# interfaces, a wildcard bind is reachable from the rest of the local
-# network, not just this machine.
+# Every host-side port binds 127.0.0.1 explicitly. By default Docker
+# publishes a port on every interface, and on Linux its own iptables rules
+# bypass a host firewall such as ufw, so a default-bound port is reachable
+# from the rest of the network even where the firewall would block it.
 services:
   postgres:
     image: postgres:18

@@ -140,7 +140,7 @@ function auditInsert(tenant: Tenant, actor: User, tx: DbTransaction): Promise<un
 }
 
 /**
- * `TenantRepository.lockById` as it was: FOR UPDATE.
+ * A `TenantRepository.lockById` stand-in that takes FOR UPDATE.
  * @param id - The tenant's id.
  * @param executor - The transaction to hold the lock in.
  * @returns The locked tenant, or undefined.
@@ -159,7 +159,7 @@ async function lockTenantForUpdate(
 }
 
 /**
- * `TenantSettingsRepository.lockByTenantId` as it was: FOR UPDATE.
+ * A `TenantSettingsRepository.lockByTenantId` stand-in that takes FOR UPDATE.
  * @param tenantId - The tenant whose settings to lock.
  * @param executor - The transaction to hold the lock in.
  * @returns The locked row, or undefined.
@@ -177,7 +177,7 @@ async function lockSettingsForUpdate(
 }
 
 /**
- * `UserMembershipRepository.lockOwners` as it was: FOR UPDATE whatever the mode.
+ * A `UserMembershipRepository.lockOwners` stand-in that takes FOR UPDATE whatever the mode.
  * @param tenantId - The tenant whose owners to lock.
  * @param _mode - Ignored.
  * @param executor - The transaction to hold the lock in.
@@ -197,7 +197,8 @@ async function lockOwnersForUpdate(
 }
 
 /**
- * `UserMembershipRepository.lockMemberships` as it was: FOR UPDATE whatever the mode.
+ * A `UserMembershipRepository.lockMemberships` stand-in that takes FOR UPDATE whatever the
+ * mode.
  * @param tenantId - The tenant.
  * @param userIds - The users whose memberships to lock.
  * @param _mode - Ignored.

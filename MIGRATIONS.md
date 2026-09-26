@@ -135,10 +135,15 @@ With `COOKIE_SECURE` on, the refresh cookie is now:
 - or `__Secure-refreshToken` at path `/api/v1/auth`, when `COOKIE_DOMAIN`
   is set.
 
-Local http keeps `refreshToken`. Nobody is logged out: refresh and logout
-still accept the old `refreshToken` cookie. A login, a successful refresh,
-a Google sign-in or a logout that sees it clears it; a failed refresh
-leaves it.
+Local http keeps `refreshToken`. Refresh and logout still accept the old
+`refreshToken` cookie, so a finished upgrade logs nobody out. A login, a
+successful refresh, a Google sign-in or a logout that sees it clears it; a
+failed refresh leaves it.
+
+3.1.0 reads only `refreshToken`. During a rolling deploy, a client that
+signed in or refreshed on a 3.2.0 replica holds only the new cookie and
+gets a 401 from a 3.1.0 replica; after a rollback to 3.1.0, every user who
+signed in or refreshed on 3.2.0 is signed out.
 That fallback is removed at the next major release. Until then, a client,
 proxy or WAF rule that names the cookie must accept both names. A
 `__Host-` cookie is sent on every request to the API's origin, not only

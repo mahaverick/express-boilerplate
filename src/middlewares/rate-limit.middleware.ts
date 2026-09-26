@@ -21,6 +21,10 @@
 // limiters must never share a `name` — a shared bucket lets traffic on one
 // endpoint spend another's budget. `RATE_LIMITS`'s own test
 // (tests/unit/constants/rate-limit.constants.test.ts) pins uniqueness.
+// One deliberate exception: `authenticatedWrite` is built once per router
+// (tenant, notification, profile), and all three share its name, so on
+// Redis they spend one per-user budget. On the in-memory fallback each
+// router's instance counts on its own, so the budget splits per router.
 import { type NextFunction, type Request, type RequestHandler, type Response } from 'express'
 import { rateLimit } from 'express-rate-limit'
 import { SharedRateLimitStore } from '@/configs/rate-limit-store.config'

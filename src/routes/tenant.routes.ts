@@ -49,7 +49,9 @@ export function createTenantRouter(): Router {
   // One instance, reused at every call site below with no route-specific
   // limiter of its own — matching inviteRateLimiter's own reasoning: on
   // the in-memory fallback, separate createRateLimiter(...) calls would
-  // count separately, splitting one 60/minute budget into five.
+  // count separately, splitting this router's 60/minute budget into five.
+  // The notification and profile routers build their own instance under
+  // the same name (rate-limit.middleware.ts's header comment).
   const writeLimiter = createRateLimiter(RATE_LIMITS.authenticatedWrite)
 
   // -- Tenant CRUD --

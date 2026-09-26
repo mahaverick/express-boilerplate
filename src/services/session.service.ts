@@ -33,9 +33,10 @@
 // A rotation runs in one transaction that first takes the user row FOR
 // SHARE. Logout, the kills a reused or over-age token triggers, the Google
 // account claim and password writes lock that row FOR NO KEY UPDATE before
-// their in-transaction revoke (revokeSession and revokeAllSessions' unlocked
-// pass excepted), so a rotation either commits first and its new token is
-// revoked, or waits and then finds the presented token revoked.
+// their in-transaction revoke (revokeSession, revokeAllSessionsExceptCurrent
+// and revokeAllSessions' unlocked pass excepted), so a rotation either
+// commits first and its new token is revoked, or waits and then finds the
+// presented token revoked.
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import jwt from 'jsonwebtoken'
 import { getEnv } from '@/configs/env.config'
@@ -574,8 +575,9 @@ export async function revokeSession(sessionId: string): Promise<void> {
  * issued for a different purpose entirely (a password-reset or
  * email-verification token's raw value presented here has no session to
  * revoke, and `findByHash` is purpose-agnostic so it would still be found);
- * it never distinguishes any of those from a live one in what it returns or
- * how long it takes. Logout must feel like unconditional success to
+ * it never distinguishes any of those from a live one in what it returns. A
+ * matched token opens a locked transaction and a miss returns at once, so
+ * the time it takes is not uniform. Logout must feel like unconditional success to
  * whoever calls it, not a way to test whether a given token string is
  * still live — exactly the same reasoning `rotateRefreshToken` (this
  * module) and login (auth.service.ts) already apply to their own callers.

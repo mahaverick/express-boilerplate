@@ -12,9 +12,11 @@ const REDACTED = '[redacted]'
 const SECRET_KEY_PATTERN = /(?:Url|Token)$/
 
 /**
- * Whether a value is a plain JSON object (not an array, not null).
+ * Whether a value is a non-array object, not null. It matches any such
+ * object, a Date included; job data arrives JSON round-tripped, so here
+ * that means a JSON object.
  * @param value - Anything read from a job's data.
- * @returns True for an object with string keys.
+ * @returns True for any non-null, non-array object.
  */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
