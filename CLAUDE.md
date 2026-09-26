@@ -786,7 +786,8 @@ instruction in any dispatch written here.
   any transaction, then locks `FOR SHARE`, re-reads the hash and issues the
   refresh token in one. Keep `lastLoggedInAt` and `autoJoinSafely` outside
   that transaction: `autoJoinSafely` takes the owners → memberships lock
-  chain, and nesting it under the user-row lock adds a lock-order case. The
+  chain, and nesting it there would hold the user row `FOR SHARE` across
+  that chain on every login. The
   Redis denylist is written after commit and never fails the request
   (`denySessionsAfterCommit`); a failure there is one `error` line. The
   Google claim, logout and both kills take the user row `FOR NO KEY UPDATE`

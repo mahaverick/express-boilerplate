@@ -215,9 +215,10 @@ does wait for the `FOR SHARE` transactions open on the row; each holds it
 for one token insert (a login) or one rotation (a refresh). The reuse and
 lifetime kills run after the rotation's transaction commits, in a
 transaction of their own; taking `FOR NO KEY UPDATE` inside a `FOR SHARE`
-transaction would deadlock two concurrent reuses. Two revocations take no
-user row lock: `revokeSession`, which no application path calls, and the
-unlocked pass of `revokeAllSessions` that a reset and a Google account
+transaction would deadlock two concurrent reuses. The revocations that
+take no user row lock are `revokeSession` and
+`revokeAllSessionsExceptCurrent`, which no application path calls, and
+`revokeAllSessions`, the unlocked pass that a reset and a Google account
 claim run before their locked transaction.
 
 Two effects are accepted:
