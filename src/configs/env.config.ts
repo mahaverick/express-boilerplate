@@ -468,52 +468,61 @@ const EnvSchema = z.object({
       'Jobs the email and notification workers each process at once, per process. Defaults to 5. The maintenance worker always runs one job at a time.'
     ),
   // Retention windows for the daily purge (retention.service.ts), in whole
-  // days. 0 turns a rule off. Only a process with WORKER_ENABLED runs it.
+  // days, at most 36500 (about 100 years). 0 turns a rule off. Only a process
+  // with WORKER_ENABLED runs it.
   RETENTION_TOKENS_DAYS: z.coerce
     .number()
     .int()
     .nonnegative()
+    .max(36_500)
     .default(7)
     .describe(
-      'Days to keep a user_tokens row once it has expired, or once it was revoked without ever being used (logout, reuse, password change). A token rotated away is kept until it expires, because reuse detection needs it. 0 never purges. Defaults to 7.'
+      'Days to keep a user_tokens row once it has expired, or once it was revoked without ever being used (logout, reuse, password change). A token rotated away is kept until it expires, because reuse detection needs it. 0 never purges; at most 36500. Defaults to 7.'
     ),
   RETENTION_INVITATIONS_DAYS: z.coerce
     .number()
     .int()
     .nonnegative()
+    .max(36_500)
     .default(30)
     .describe(
-      'Days to keep a tenant invitation after the latest of its expiry, acceptance and revocation. 0 never purges. Defaults to 30.'
+      'Days to keep a tenant invitation after the latest of its expiry, acceptance and revocation. 0 never purges; at most 36500. Defaults to 30.'
     ),
   RETENTION_EMAIL_LOGS_DAYS: z.coerce
     .number()
     .int()
     .nonnegative()
+    .max(36_500)
     .default(90)
     .describe(
-      'Days to keep an email_logs row (one per email sent or failed). 0 never purges. Defaults to 90.'
+      'Days to keep an email_logs row (one per email sent or failed). 0 never purges; at most 36500. Defaults to 90.'
     ),
   RETENTION_NOTIFICATIONS_READ_DAYS: z.coerce
     .number()
     .int()
     .nonnegative()
+    .max(36_500)
     .default(90)
-    .describe('Days to keep a notification after it was read. 0 never purges. Defaults to 90.'),
+    .describe(
+      'Days to keep a notification after it was read. 0 never purges; at most 36500. Defaults to 90.'
+    ),
   RETENTION_NOTIFICATIONS_UNREAD_DAYS: z.coerce
     .number()
     .int()
     .nonnegative()
+    .max(36_500)
     .default(365)
     .describe(
-      'Days to keep a notification nobody read, counted from when it was created. 0 never purges. Defaults to 365.'
+      'Days to keep a notification nobody read, counted from when it was created. 0 never purges; at most 36500. Defaults to 365.'
     ),
   RETENTION_AUDIT_LOGS_DAYS: z.coerce
     .number()
     .int()
     .nonnegative()
+    .max(36_500)
     .default(0)
     .describe(
-      'Days to keep an audit_logs row. Defaults to 0, which keeps the audit log forever. Set a number of days only where your compliance rules allow deleting audit history.'
+      'Days to keep an audit_logs row. Defaults to 0, which keeps the audit log forever. Set a number of days, at most 36500, only where your compliance rules allow deleting audit history.'
     ),
   // Every Redis key and channel goes through redisKey() (redis.service.ts),
   // which joins this and its parts with ':'. A trailing colon would double it.

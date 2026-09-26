@@ -385,6 +385,20 @@ describe('RETENTION_* days', () => {
     expect(env.RETENTION_TOKENS_DAYS).toBe(0)
   })
 
+  const RETENTION_VARIABLES = [
+    'RETENTION_TOKENS_DAYS',
+    'RETENTION_INVITATIONS_DAYS',
+    'RETENTION_EMAIL_LOGS_DAYS',
+    'RETENTION_NOTIFICATIONS_READ_DAYS',
+    'RETENTION_NOTIFICATIONS_UNREAD_DAYS',
+    'RETENTION_AUDIT_LOGS_DAYS',
+  ] as const
+
+  it.each(RETENTION_VARIABLES)('%s accepts 36500 and rejects 36501', (name) => {
+    expect(parseEnv({ ...valid, [name]: '36500' })[name]).toBe(36_500)
+    expect(() => parseEnv({ ...valid, [name]: '36501' })).toThrow(name)
+  })
+
   it.each(['-1', '1.5', 'seven'])('rejects %s, naming the variable', (value) => {
     expect(() => parseEnv({ ...valid, RETENTION_EMAIL_LOGS_DAYS: value })).toThrow(
       'RETENTION_EMAIL_LOGS_DAYS'
