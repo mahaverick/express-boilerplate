@@ -21,7 +21,12 @@ describe('ensureRetentionSchedule', () => {
     expect(await queue.getJobSchedulersCount()).toBe(1)
     const scheduler = await queue.getJobScheduler(RETENTION_PURGE_JOB)
     expect(scheduler).toMatchObject({ name: RETENTION_PURGE_JOB, pattern: '0 3 * * *', tz: 'UTC' })
-    expect(scheduler?.template?.opts).toMatchObject({ attempts: 3 })
+    expect(scheduler?.template?.opts).toMatchObject({
+      attempts: 3,
+      backoff: { type: 'exponential', delay: 60_000 },
+      removeOnComplete: true,
+      removeOnFail: { age: 604_800 },
+    })
     expect(await queue.getDelayedCount()).toBe(1)
   })
 })
