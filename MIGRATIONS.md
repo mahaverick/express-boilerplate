@@ -22,8 +22,8 @@ was added by hand, marked `-- Hand-added` in the file.
 
 - `user_tokens.replaced_by_id`'s self-referencing foreign key is dropped
   and re-added as `ON DELETE SET NULL`. When the retention purge deletes a
-  row, the database nulls the pointer of the row that was rotated into it,
-  so a whole rotation chain clears in one run.
+  row, the database nulls its predecessor's `replaced_by_id`, so a whole
+  rotation chain clears in one run.
 - Indexes for the retention purge:
   - `user_tokens(replaced_by_id)`;
   - `user_tokens(expires_at)`;
@@ -51,7 +51,8 @@ database" below.
 
 A daily purge at 03:00 UTC, on the new `maintenance` queue, deletes rows
 past their retention window. Each variable is a non-negative whole number
-of days; `0`, or an empty value, turns that rule off.
+of days; `0` turns that rule off. An empty value counts as unset and takes
+the default.
 
 | Variable                              | Default | Deletes                                                                                                                                                                                                                                                          |
 | ------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -78,11 +79,11 @@ The purge runs where `WORKER_ENABLED=true`:
   gives up before its first ready, so a registration that fails while the
   Workers stay healthy waits for the next restart. Check for that line
   after the first deploy.
-- **Logging.** Each rule logs one `info` line, `retention purge`, with the
+- **Logging.** Each enabled rule logs one `info` line, `retention purge`, with the
   table and the count. The two notification rules report as
   `notifications.read` and `notifications.unread`.
-- **Failure.** A failing rule logs `retention purge failed` and the others
-  still run. The job then fails, and BullMQ retries it, 3 attempts in all,
+- **Failure.** A failing rule logs `retention purge failed` at `error`, on
+  every attempt, and the others still run. The job then fails, and BullMQ retries it, 3 attempts in all,
   with exponential backoff from 60 seconds.
 
 ### A third queue
@@ -98,7 +99,9 @@ stored data replaced with `[redacted]`, and logs one `error` line, `job
 failed permanently`. Earlier attempts now log at `warn`, not `error`, as
 `Email job failed` and `Notification job failed` (the new maintenance
 worker's are `Maintenance job failed`). If you alert on those messages at
-`error`, alert on `job failed permanently` instead.
+`error`, alert on `job failed permanently` instead. Two other lines stay at
+`error`: `retention purge failed`, on every attempt, and
+`Scrubbing a failed job's data failed`, when the rewrite itself fails.
 
 ### Stricter than 3.1.0
 
@@ -133,7 +136,9 @@ With `COOKIE_SECURE` on, the refresh cookie is now:
   is set.
 
 Local http keeps `refreshToken`. Nobody is logged out: refresh and logout
-still accept the old `refreshToken` cookie, and clear it when they see it.
+still accept the old `refreshToken` cookie. A login, a successful refresh,
+a Google sign-in or a logout that sees it clears it; a failed refresh
+leaves it.
 That fallback is removed at the next major release. Until then, a client,
 proxy or WAF rule that names the cookie must accept both names. A
 `__Host-` cookie is sent on every request to the API's origin, not only

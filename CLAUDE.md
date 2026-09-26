@@ -155,15 +155,19 @@ until you check.
   deployment sets `true` and processes jobs from the shared Redis queues.
   `WORKER_CONCURRENCY` (default 5) sets the email and notification workers'
   concurrency; the maintenance worker always runs one job at a time.
-- **A job's final failure is its only `error` line.** Each worker's
-  `failed` handler logs a retryable attempt at `warn`. On the last attempt
+- **A retryable attempt logs `warn`; the final failure logs `error` once.**
+  Each worker's `failed` handler logs a retryable attempt at `warn`. On the
+  last attempt
   (attempts used up, or `UnrecoverableError`) it calls
   `recordPermanentFailure` (`src/jobs/job-failure.job.ts`), which scrubs
   every `…Url`/`…Token` key in the stored data, then logs
   `job failed permanently` once. BullMQ counts the attempt before it emits
   `failed`, so the terminal test is `attemptsMade >= attempts`, not `+ 1`.
   The handler must never reject, because an unhandled rejection exits the
-  process; `recordPermanentFailure` catches its own errors. A test that
+  process; `recordPermanentFailure` catches its own errors. Two other
+  `error` lines exist: `retention purge failed`, per failed rule on every
+  attempt (`retention.service.ts`), and `Scrubbing a failed job's data
+failed` when the scrub itself fails. A test that
   reads the scrubbed data waits for the log line (`waitForLoggedCall`,
   `tests/helpers/queue-jobs.ts`), not for the `failed` event, since the
   scrub runs after it.
@@ -291,13 +295,16 @@ until you check.
   write the name or path anywhere else. A browser silently drops a
   `__Host-` cookie set with a `Domain` or a path other than `/`, and that
   looks like a logout, not an error. Refresh and logout also read the
-  legacy `refreshToken` (`LEGACY_REFRESH_TOKEN_COOKIE_NAME`), and a
-  response clears it when the request presented it. The fallback goes at
+  legacy `refreshToken` (`LEGACY_REFRESH_TOKEN_COOKIE_NAME`). A login, a
+  successful refresh, a Google sign-in or a logout clears it when the
+  request presented it; a failed refresh does not. The fallback goes at
   the next major.
 - **`COOKIE_DOMAIN` goes on the refresh-cookie set, its clear, and the OAuth
   session cookie.** A clear with a different domain leaves the cookie behind.
-  After a domain change the browser sends two cookies of the same name,
-  oldest first, and `readCookie` (`auth.controller.ts`) takes the last, the
+  On a secure deployment, turning it on or off switches the cookie between
+  `__Host-` and `__Secure-`, which signs every user in once. Changing it
+  from one domain to another (or, on local http, unsetting it) leaves the
+  browser sending two cookies of the same name, oldest first, and `readCookie` (`auth.controller.ts`) takes the last, the
   most recently created. Reading the first would hand a stale token
   to reuse detection, which revokes the live session. Reverting to an earlier
   domain is the one case last-wins misses: an overwritten cookie keeps its
@@ -854,8 +861,9 @@ instruction in any dispatch written here.
 - **Every authenticated write needs a limiter.** Mount
   `createRateLimiter(RATE_LIMITS.authenticatedWrite)` after `requireAuth` on
   a new `POST`/`PUT`/`PATCH`/`DELETE` route, or give the route its own spec.
-  Reuse the router's one `writeLimiter` instance, so the in-memory fallback
-  keeps one budget per router. `route-limiters.test.ts` walks the router and
+  Build it once per router and reuse that instance on each of the router's
+  write routes (`profile.routes.ts`, with one write route, builds it
+  inline), so the in-memory fallback keeps one budget per router. `route-limiters.test.ts` walks the router and
   fails otherwise. It finds a limiter by the `RATE_LIMITER_MARK` symbol that
   `createRateLimiter` sets, so a hand-rolled `rateLimit()` doesn't count.
   Its allowlist is for routes that can't carry a limiter, each entry with

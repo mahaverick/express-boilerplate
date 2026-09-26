@@ -510,5 +510,7 @@ limiters also cover the tenant, invitation and staff-search routes
 `createRateLimiter(RATE_LIMITS.invitationPreview)` and
 `createRateLimiter(RATE_LIMITS.invitationAccept)` on `invitation.routes.ts`,
 and `createRateLimiter(RATE_LIMITS.platformSearch)` on
-`platform.routes.ts`). Every other authenticated write shares
-`createRateLimiter(RATE_LIMITS.authenticatedWrite)`.
+`platform.routes.ts`). Every other authenticated write is limited by
+`createRateLimiter(RATE_LIMITS.authenticatedWrite)`, one instance per
+router (tenant, notification and profile), all counting under one Redis
+prefix per user.

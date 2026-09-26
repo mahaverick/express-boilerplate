@@ -53,8 +53,9 @@
 // see which row replaced which. Useful in an incident review, load-bearing
 // for nothing at runtime. Its foreign key is ON DELETE SET NULL, so when the
 // retention purge deletes a row's successor the database nulls the pointer,
-// and a chain read back after a purge may have gaps. A plan that wants to build on it should build on
-// that description, not on the mechanism claim it used to carry.
+// and a chain read back after a purge may have gaps. A plan that wants to
+// build on it should build on that description, not on the mechanism claim
+// it used to carry.
 import { sql, type InferInsertModel, type InferSelectModel } from 'drizzle-orm'
 import {
   check,
@@ -197,9 +198,9 @@ export const userTokenModel = pgTable(
     // killed without ever being used" (e.g. a stolen refresh token's family
     // on reuse detection, or a superseded reset request): both leave
     // `revokedAt` set, but only the former also sets `consumedAt`.
-    // Read by `findGraceSession` (session.service.ts), which lets only a
-    // consumed row mint a grace sibling, and by the retention purge, which
-    // keeps a consumed row until it expires.
+    // Read by reuse detection's grace check and kill check
+    // (user-token.repository.ts) and by the retention purge, which keeps a
+    // consumed row until it expires.
     consumedAt: timestamp('consumed_at', { withTimezone: true }),
     // Self-referencing: the row this one was rotated into. Written by
     // `rotateRefreshToken` and read by nothing — forensic metadata, not a
@@ -217,8 +218,8 @@ export const userTokenModel = pgTable(
     // Required only so this table satisfies BaseRepository's
     // SoftDeletableTableConfig bound (base.repository.ts) — a refresh token
     // is retired via `revokedAt`, above, never via soft delete. No
-    // application path sets this column. The retention purge ignores it: it hard-deletes by
-    // expiry and revocation, soft-deleted rows included.
+    // application path sets this column. The retention purge ignores it: it
+    // hard-deletes by expiry and revocation, soft-deleted rows included.
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

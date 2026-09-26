@@ -188,7 +188,8 @@ A login that checked the old password can't keep a session once a password
 change or reset commits. Both writes run in one transaction that locks the
 user row `FOR NO KEY UPDATE`, writes the new hash, and revokes the user's
 `user_tokens` rows: every session for a reset, every session but the
-caller's for a change. A reset also revokes every token once before that
+caller's for a change (every session, the caller's included, when the
+caller's access token carries no session id). A reset also revokes every token once before that
 transaction, without the lock, so a failed write still leaves no session
 alive. Login still checks the password outside any transaction. It then
 opens a short one that locks the same row `FOR SHARE` and re-reads the
@@ -579,8 +580,9 @@ still accepts the unprefixed `refreshToken`
 (`LEGACY_REFRESH_TOKEN_COOKIE_NAME`). Refresh reads the current name first
 and falls back to `refreshToken`; logout revokes the session of every
 distinct token the request carries under either name. Within one name the
-API takes the most recently created value. When a request carried a
-`refreshToken` cookie, the response clears it at `/api/v1/auth`: the
+API takes the most recently created value. When a login, a successful
+refresh, a Google sign-in or a logout carried a `refreshToken` cookie, the
+response clears it at `/api/v1/auth` (a failed refresh leaves it): the
 host-only form, and the `COOKIE_DOMAIN` form when that is set, skipping
 whichever form is the current cookie itself. The fallback is removed at the
 next major release.
@@ -602,8 +604,8 @@ Every form is set with:
   different domain leaves the old cookie in the browser), and the OAuth
   session cookie. On a secure deployment, turning `COOKIE_DOMAIN` on or off
   switches the cookie between `__Host-` and `__Secure-`, which signs every
-  user in once. A request that still presents `refreshToken` has that
-  cookie cleared. Changing it from one domain to another (or, on local
+  user in once. A leftover `refreshToken` is cleared by the next login,
+  successful refresh, Google sign-in or logout that presents it. Changing it from one domain to another (or, on local
   http, unsetting it) leaves the old domain's cookie in the browser, which
   then sends two values under the same name, oldest first (RFC 6265 §5.4). The API reads the last, most recently created one, so the
   stale token never reaches reuse detection, and the old cookie expires
@@ -768,8 +770,8 @@ blob.
   `app.audit_purge` to `on` and `app.audit_purge_before` to a cutoff after
   the row's `occurred_at`. The purge sets both with `set_config(..., true)`,
   so they end with its transaction. Only `retention.service.ts` names them,
-  and `tests/unit/audit-purge-setting.test.ts` fails if any other file under
-  `src/` does. This guards against a stray `DELETE` in application code. It
+  and `tests/unit/audit-purge-setting.test.ts` fails if any other TypeScript
+  file under `src/` does. This guards against a stray `DELETE` in application code. It
   is not a privilege boundary: any role that can run arbitrary SQL can set
   the same two settings. Revoke `DELETE` on `audit_logs` from every role
   except the one the app runs as.
