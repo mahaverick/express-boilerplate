@@ -50,7 +50,7 @@ export async function denySession(sessionId: string): Promise<void> {
     // revocation is the half that actually ends the session.
     logger.warn('Could not deny session; access tokens stay valid until they expire', {
       sessionId,
-      error: error instanceof Error ? error.message : String(error),
+      error,
     })
   }
 }
@@ -70,7 +70,7 @@ export async function isSessionDenied(sessionId: string): Promise<boolean> {
     // exists to close. The warning is what stops that being silent.
     logger.warn('Denylist unreachable; allowing the request', {
       sessionId,
-      error: error instanceof Error ? error.message : String(error),
+      error,
     })
     return false
   }

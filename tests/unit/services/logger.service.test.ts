@@ -9,6 +9,8 @@
 import { Writable } from 'node:stream'
 import { context, trace, TraceFlags } from '@opentelemetry/api'
 import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks'
+import { DrizzleQueryError } from 'drizzle-orm'
+import postgres from 'postgres'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import {
   createPinoLogger,
@@ -351,6 +353,103 @@ describe('createPinoLogger', () => {
         })
       }))
   })
+})
+
+/**
+ * A fake Postgres unique-violation error, for wrapping in a DrizzleQueryError.
+ * @returns The driver error.
+ */
+function pgUniqueViolation(): postgres.PostgresError {
+  return Object.assign(
+    new postgres.PostgresError(
+      'duplicate key value violates unique constraint "users_email_unique"'
+    ),
+    { code: '23505', constraint_name: 'users_email_unique' }
+  )
+}
+
+describe('serializeErrors redacts a query error, direct or nested as a cause', () => {
+  it('redacts a DrizzleQueryError logged directly', () =>
+    new Promise<void>((resolve) => {
+      const { destination, output } = captureDestination()
+      const log = createPinoLogger({ level: 'error', format: 'json', destination })
+      const error = new DrizzleQueryError(
+        'insert into "users" ("email") values ($1)',
+        ['leaked@example.com'],
+        pgUniqueViolation()
+      )
+
+      log.error({ source: 'test.ts:1', error }, 'insert failed')
+
+      setImmediate(() => {
+        const text = JSON.stringify(parseLastRecord(output))
+        expect(text).not.toContain('leaked@example.com')
+        expect(text).toContain('23505')
+        expect(text).toContain('insert into')
+        resolve()
+      })
+    }))
+
+  it('redacts a DrizzleQueryError nested as the cause of a wrapping Error', () =>
+    new Promise<void>((resolve) => {
+      const { destination, output } = captureDestination()
+      const log = createPinoLogger({ level: 'error', format: 'json', destination })
+      const inner = new DrizzleQueryError(
+        'insert into "users" ("email") values ($1)',
+        ['leaked@example.com'],
+        pgUniqueViolation()
+      )
+      const error = new Error('registration failed', { cause: inner })
+
+      log.error({ source: 'test.ts:1', error }, 'registration failed')
+
+      setImmediate(() => {
+        const text = JSON.stringify(parseLastRecord(output))
+        expect(text).not.toContain('leaked@example.com')
+        expect(text).toContain('23505')
+        resolve()
+      })
+    }))
+
+  it('leaves a plain Error unchanged', () =>
+    new Promise<void>((resolve) => {
+      const { destination, output } = captureDestination()
+      const log = createPinoLogger({ level: 'error', format: 'json', destination })
+
+      log.error({ source: 'test.ts:1', error: new Error('x') }, 'plain failure')
+
+      setImmediate(() => {
+        const parsed = parseLastRecord(output)
+        const errorField = parsed.error as { name: string; message: string }
+        expect(errorField.message).toBe('x')
+        resolve()
+      })
+    }))
+
+  it('stops walking .cause after depth 5, rather than looping on a cyclic chain', () =>
+    new Promise<void>((resolve) => {
+      const { destination, output } = captureDestination()
+      const log = createPinoLogger({ level: 'error', format: 'json', destination })
+      const cyclic: Error & { cause?: unknown } = new Error('a')
+      // Not `cyclic.cause = cyclic`: unicorn/no-error-property-assignment
+      // forbids assigning `cause` directly on a known Error variable.
+      // defineProperty reaches the same self-referential shape without
+      // tripping that rule.
+      Object.defineProperty(cyclic, 'cause', {
+        value: cyclic,
+        enumerable: true,
+        configurable: true,
+      })
+
+      expect(() => {
+        log.error({ source: 'test.ts:1', error: cyclic }, 'cyclic cause')
+      }).not.toThrow()
+
+      setImmediate(() => {
+        expect(output.length).toBeGreaterThan(0)
+        resolve()
+      })
+    }))
 })
 
 describe('loggerOptionsFromEnv', () => {

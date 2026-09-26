@@ -273,8 +273,10 @@ describe('recordPlatformAccess', () => {
     expect(await auditRows(tenantId)).toHaveLength(2)
     expect(warn).toHaveBeenCalledWith(
       'Platform access dedupe unavailable; writing the audit entry anyway',
-      { error: 'redis unavailable' }
+      { error: expect.any(Error) as Error }
     )
+    const loggedError = warn.mock.calls[0]?.[1]?.error as Error
+    expect(loggedError.message).toBe('redis unavailable')
   })
 
   it('releases the dedupe key when the insert fails, so the next visit is recorded', async () => {
@@ -309,7 +311,9 @@ describe('recordPlatformAccess', () => {
     })
 
     expect(warn).toHaveBeenCalledWith('Could not release the platform access dedupe key', {
-      error: 'redis del unavailable',
+      error: expect.any(Error) as Error,
     })
+    const loggedError = warn.mock.calls.at(-1)?.[1]?.error as Error
+    expect(loggedError.message).toBe('redis del unavailable')
   })
 })

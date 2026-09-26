@@ -119,7 +119,7 @@ export class SharedRateLimitStore implements Store {
     this.isInOutage = true
     logger.warn('Redis rate-limit command failed; counting per process until Redis recovers', {
       prefix: this.prefix,
-      error: error instanceof Error ? error.message : String(error),
+      error,
     })
   }
 
