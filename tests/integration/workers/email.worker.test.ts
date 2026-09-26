@@ -21,7 +21,7 @@
 // tests/integration/services/queue.service.test.ts, so jobs this file adds
 // never collide with another vitest worker's keyspace.
 import { randomUUID } from 'node:crypto'
-import type { Job, Worker } from 'bullmq'
+import { Job, type Worker } from 'bullmq'
 import { afterAll, describe, expect, it, vi } from 'vitest'
 import { getMailTransporter } from '@/configs/mailer.config'
 import { addEmailJob, type EmailJobData } from '@/jobs/email.job'
@@ -32,6 +32,7 @@ import { closeQueue, getEmailQueue } from '@/services/queue.service'
 import { startEmailWorker } from '@/workers/email.worker'
 import { deleteMailpitMessage, findMailpitMessages } from '../../helpers/mailpit'
 import { withMutatedMethod } from '../../helpers/mutate'
+import { waitForLoggedCall } from '../../helpers/queue-jobs'
 
 const emailLogRepository = new EmailLogRepository()
 
@@ -63,6 +64,12 @@ const rejectWithConnectionError: StubbedSendMail = () => {
   const error = Object.assign(new Error('Connection refused'), { code: 'ECONNECTION' })
   return Promise.reject(error)
 }
+
+// updateData is swapped on the prototype to record which attempt scrubbed.
+// Declared with a `this` type, as worker-outage.test.ts does for Worker.
+type JobInternals = { updateData: (this: Job, data: unknown) => Promise<void> }
+const jobPrototype = Job.prototype as unknown as JobInternals
+const originalUpdateData = jobPrototype.updateData
 
 // Wait for one specific job id to reach a terminal state on `worker`,
 // resolving with which event fired. Scoped to a single job id (not "the
@@ -166,6 +173,91 @@ describe('email.worker', () => {
     createdLogIds.push(...rows.map((row) => row.id))
     expect(rows[0]?.status).toBe('failed')
   }, 15_000)
+
+  it('scrubs the stored job and logs one error only after its last attempt', async () => {
+    const transporter = getMailTransporter()
+    const recipient = uniqueRecipient('scrub')
+    const token = randomUUID()
+    const scrubs: { jobId: string | undefined; attemptsMade: number }[] = []
+    function recordingUpdateData(this: Job, data: unknown): Promise<void> {
+      scrubs.push({ jobId: this.id, attemptsMade: this.attemptsMade })
+      return originalUpdateData.call(this, data)
+    }
+    const loggerError = vi.spyOn(logger, 'error')
+    const loggerWarn = vi.spyOn(logger, 'warn')
+
+    try {
+      await withMutatedMethod(
+        transporter,
+        'sendMail',
+        rejectWithConnectionError as (typeof transporter)['sendMail'],
+        async () => {
+          await withMutatedMethod(jobPrototype, 'updateData', recordingUpdateData, async () => {
+            const job = await addEmailJob(
+              {
+                to: recipient,
+                templateKey: 'password_reset',
+                variables: {
+                  firstName: 'Ada',
+                  resetUrl: `https://example.test/reset?token=${token}`,
+                  appName: 'Test App',
+                },
+              },
+              'user-scrub',
+              { attempts: 2, backoff: { type: 'fixed', delay: 10 } }
+            )
+            if (!job.id) throw new Error('expected addEmailJob to assign a job id')
+            const jobId = job.id
+
+            await waitForLoggedCall(
+              loggerError,
+              (message, meta) => message === 'job failed permanently' && meta?.jobId === jobId,
+              10_000
+            )
+
+            const stored = await getEmailQueue().getJob(jobId)
+            expect(stored?.attemptsMade).toBe(2)
+            expect(stored?.data).toMatchObject({
+              templateKey: 'password_reset',
+              variables: { firstName: 'Ada', resetUrl: '[redacted]', appName: 'Test App' },
+            })
+            expect(JSON.stringify(stored?.data)).not.toContain(token)
+            // The first, retryable attempt did not scrub: the retry needed the link.
+            expect(scrubs.filter((scrub) => scrub.jobId === jobId)).toEqual([
+              { jobId, attemptsMade: 2 },
+            ])
+            expect(
+              loggerError.mock.calls
+                .filter(([, meta]) => meta?.jobId === jobId)
+                .map(([message]) => message)
+            ).toEqual(['job failed permanently'])
+            expect(loggerError).toHaveBeenCalledWith(
+              'job failed permanently',
+              expect.objectContaining({
+                queue: 'email',
+                jobId,
+                name: 'password_reset',
+                template: 'password_reset',
+                userId: 'user-scrub',
+                attemptsMade: 2,
+              })
+            )
+            expect(
+              loggerWarn.mock.calls.filter(
+                ([message, meta]) => message === 'Email job failed' && meta?.jobId === jobId
+              )
+            ).toHaveLength(1)
+          })
+        }
+      )
+    } finally {
+      loggerError.mockRestore()
+      loggerWarn.mockRestore()
+    }
+
+    const rows = await emailLogRepository.findByRecipient(recipient)
+    createdLogIds.push(...rows.map((row) => row.id))
+  }, 20_000)
 
   // An unlistened 'error' event on an EventEmitter crashes the process
   // (email.worker.ts's own comment on why worker.on('error', ...) is
