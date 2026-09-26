@@ -21,7 +21,8 @@
 // purpose from being claimed as another: it participates in the SAME atomic
 // statement as the revocation check, not a separate lookup a caller could
 // perform race-free but forget to.
-import { eq, sql, type SQL } from 'drizzle-orm'
+import { and, eq, inArray, notExists, sql, type SQL } from 'drizzle-orm'
+import { alias } from 'drizzle-orm/pg-core'
 import {
   userTokenModel,
   type NewUserToken,
@@ -34,7 +35,7 @@ import {
   type SoftDeleteOptions,
   type Touched,
 } from '@/repositories/base.repository'
-import { db, type DbExecutor } from '@/services/database.service'
+import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
 
 /**
  * Query access to the `user_tokens` table: token issuance, lookup by hash,
@@ -315,6 +316,37 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
           sql`${userTokenModel.userId} = ${userId} and ${userTokenModel.purpose} = ${purpose} and ${userTokenModel.revokedAt} is null`
         )
       )
+  }
+
+  /**
+   * Delete up to `limit` token rows past retention: expired before `cutoff`,
+   * or revoked before it without ever being used. A row another row still
+   * points to through `replaced_by_id` is kept until that row is gone.
+   * A rotated-away row stays until it expires: reuse detection needs it while it can still be presented.
+   * @param cutoff - Rows older than this go.
+   * @param limit - The most rows one call deletes.
+   * @param tx - The batch's transaction.
+   * @returns How many rows were deleted.
+   */
+  async purgeExpiredOrRevokedBefore(
+    cutoff: Date,
+    limit: number,
+    tx: DbTransaction
+  ): Promise<number> {
+    const before = sql`${cutoff.toISOString()}::timestamptz`
+    const successor = alias(userTokenModel, 'successor')
+    const pastRetention = sql`(${userTokenModel.expiresAt} < ${before} or (${userTokenModel.revokedAt} < ${before} and ${userTokenModel.consumedAt} is null))`
+    const pointedTo = tx
+      .select({ id: successor.id })
+      .from(successor)
+      .where(eq(successor.replacedById, userTokenModel.id))
+    const batch = tx
+      .select({ id: userTokenModel.id })
+      .from(userTokenModel)
+      .where(and(pastRetention, notExists(pointedTo)))
+      .limit(limit)
+    const result = await tx.delete(userTokenModel).where(inArray(userTokenModel.id, batch))
+    return result.count
   }
 
   /**

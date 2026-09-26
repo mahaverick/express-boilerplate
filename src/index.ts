@@ -84,7 +84,7 @@ async function boot(): Promise<void> {
   if (isShuttingDown()) return
   // Throws if a Worker fails to start: boot() rejects, and the unhandledRejection handler exits 1.
   workers.supervised = startWorkers()
-  logger.info('Workers started (email + notification)')
+  logger.info('Workers started (email, notification, maintenance)')
 }
 
 /**

@@ -366,6 +366,32 @@ describe('SSE_HEARTBEAT_INTERVAL_MS', () => {
   })
 })
 
+describe('RETENTION_* days', () => {
+  it('defaults to 7, 30, 90, 90, 365 and 0', () => {
+    const env = parseEnv(valid)
+    expect([
+      env.RETENTION_TOKENS_DAYS,
+      env.RETENTION_INVITATIONS_DAYS,
+      env.RETENTION_EMAIL_LOGS_DAYS,
+      env.RETENTION_NOTIFICATIONS_READ_DAYS,
+      env.RETENTION_NOTIFICATIONS_UNREAD_DAYS,
+      env.RETENTION_AUDIT_LOGS_DAYS,
+    ]).toEqual([7, 30, 90, 90, 365, 0])
+  })
+
+  it('coerces a whole number of days, 0 included', () => {
+    const env = parseEnv({ ...valid, RETENTION_AUDIT_LOGS_DAYS: '400', RETENTION_TOKENS_DAYS: '0' })
+    expect(env.RETENTION_AUDIT_LOGS_DAYS).toBe(400)
+    expect(env.RETENTION_TOKENS_DAYS).toBe(0)
+  })
+
+  it.each(['-1', '1.5', 'seven'])('rejects %s, naming the variable', (value) => {
+    expect(() => parseEnv({ ...valid, RETENTION_EMAIL_LOGS_DAYS: value })).toThrow(
+      'RETENTION_EMAIL_LOGS_DAYS'
+    )
+  })
+})
+
 describe('trustProxySetting', () => {
   it('maps "false" to the boolean Express understands, not the string', () => {
     // A non-empty string is truthy, and Express reads a string as an address

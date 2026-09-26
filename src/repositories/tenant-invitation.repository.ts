@@ -4,7 +4,7 @@
 // table has no `deletedAt`. Every method takes an optional executor so the
 // invitation service can compose calls in one transaction. Lookups by token
 // join `tenants` and exclude a soft-deleted tenant.
-import { and, desc, eq, gt, isNull, sql } from 'drizzle-orm'
+import { and, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import {
   tenantInvitationModel,
@@ -14,7 +14,7 @@ import { tenantModel } from '@/database/models/tenant.model'
 import { userModel } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
 import { isUniqueViolation } from '@/errors/postgres-errors'
-import { db, type DbExecutor } from '@/services/database.service'
+import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
 
 // The partial unique index that allows one pending invitation per tenant and address.
 const PENDING_UNIQUE_CONSTRAINT = 'tenant_invitations_pending_unique'
@@ -321,5 +321,27 @@ export class TenantInvitationRepository {
       .where(and(eq(invitation.tenantId, tenantId), eq(invitation.id, id), pendingCondition()))
       .returning({ id: invitation.id })
     return rows.length > 0
+  }
+
+  /**
+   * Delete up to `limit` invitations whose latest of expiry, acceptance and
+   * revocation is before `cutoff`. `greatest` ignores NULLs, so a pending
+   * invitation counts from its expiry. No index: the table holds one row per
+   * invite, so the daily scan is cheap.
+   * @param cutoff - Rows older than this go.
+   * @param limit - The most rows one call deletes.
+   * @param tx - The batch's transaction.
+   * @returns How many rows were deleted.
+   */
+  async purgeSettledBefore(cutoff: Date, limit: number, tx: DbTransaction): Promise<number> {
+    const batch = tx
+      .select({ id: invitation.id })
+      .from(invitation)
+      .where(
+        sql`greatest(${invitation.expiresAt}, ${invitation.acceptedAt}, ${invitation.revokedAt}) < ${cutoff.toISOString()}::timestamptz`
+      )
+      .limit(limit)
+    const result = await tx.delete(invitation).where(inArray(invitation.id, batch))
+    return result.count
   }
 }

@@ -112,8 +112,8 @@ describe('Queue Workers through a Redis outage', () => {
     await closeQueue()
     proxy.close()
     resetLifecycleForTests()
-    // Both queues' keys under this file's own prefix, so none are left in the shared Redis.
-    for (const name of ['email', 'notification']) {
+    // Every queue's keys under this file's own prefix, so none are left in the shared Redis.
+    for (const name of ['email', 'notification', 'maintenance']) {
       const cleanup = new Queue(name, {
         connection: { url: target.realUrl },
         prefix: `${target.prefix}:bull`,

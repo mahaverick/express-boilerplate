@@ -11,14 +11,14 @@
 // table has none (its only constraint is the `userId` foreign key), so
 // there is nothing to translate. This is a plain class with exactly the
 // methods a notification inbox needs.
-import { and, desc, eq, isNull, sql } from 'drizzle-orm'
+import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
 import {
   notificationModel,
   type NewNotification,
   type Notification,
 } from '@/database/models/notification.model'
 import { HttpError } from '@/errors/http-error'
-import { db, type DbExecutor } from '@/services/database.service'
+import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
 
 /**
  * The two fields a keyset pagination cursor for `NotificationRepository
@@ -290,5 +290,44 @@ export class NotificationRepository {
       .where(and(eq(notificationModel.id, id), eq(notificationModel.userId, userId)))
     // See markAllRead's own comment: `.count`, not `.rowCount`.
     return result.count > 0
+  }
+
+  /**
+   * Delete up to `limit` notifications read before `cutoff`.
+   * @param cutoff - Rows read before this go.
+   * @param limit - The most rows one call deletes.
+   * @param tx - The batch's transaction.
+   * @returns How many rows were deleted.
+   */
+  async purgeReadBefore(cutoff: Date, limit: number, tx: DbTransaction): Promise<number> {
+    const batch = tx
+      .select({ id: notificationModel.id })
+      .from(notificationModel)
+      .where(sql`${notificationModel.readAt} < ${cutoff.toISOString()}::timestamptz`)
+      .limit(limit)
+    const result = await tx.delete(notificationModel).where(inArray(notificationModel.id, batch))
+    return result.count
+  }
+
+  /**
+   * Delete up to `limit` unread notifications created before `cutoff`.
+   * @param cutoff - Unread rows created before this go.
+   * @param limit - The most rows one call deletes.
+   * @param tx - The batch's transaction.
+   * @returns How many rows were deleted.
+   */
+  async purgeUnreadCreatedBefore(cutoff: Date, limit: number, tx: DbTransaction): Promise<number> {
+    const batch = tx
+      .select({ id: notificationModel.id })
+      .from(notificationModel)
+      .where(
+        and(
+          isNull(notificationModel.readAt),
+          sql`${notificationModel.createdAt} < ${cutoff.toISOString()}::timestamptz`
+        )
+      )
+      .limit(limit)
+    const result = await tx.delete(notificationModel).where(inArray(notificationModel.id, batch))
+    return result.count
   }
 }

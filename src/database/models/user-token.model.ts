@@ -231,6 +231,13 @@ export const userTokenModel = pgTable(
     // virtue of being a foreign key.
     index('user_tokens_session_id_idx').on(table.sessionId),
     index('user_tokens_user_id_idx').on(table.userId),
+    // Retention: the purge's NOT EXISTS probe, and the check this self-reference runs on every delete.
+    index('user_tokens_replaced_by_id_idx').on(table.replacedById),
+    index('user_tokens_expires_at_idx').on(table.expiresAt),
+    // Retention: explicitly revoked, never used (logout, reuse, password change).
+    index('user_tokens_revoked_unconsumed_idx')
+      .on(table.revokedAt)
+      .where(sql`${table.revokedAt} is not null and ${table.consumedAt} is null`),
     // The database-level half of `purpose`'s validity check — see that
     // column's own comment. Built from `TOKEN_PURPOSES` (this file's
     // header), not a hand-typed SQL list, so the three allowed strings

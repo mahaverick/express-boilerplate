@@ -72,7 +72,7 @@
 // otherwise hand it both, plus a 23505 -> 409 translation that has nothing
 // to translate here (there is no unique constraint on this table).
 import { sql, type InferInsertModel, type InferSelectModel } from 'drizzle-orm'
-import { check, pgTable, timestamp, varchar } from 'drizzle-orm/pg-core'
+import { check, index, pgTable, timestamp, varchar } from 'drizzle-orm/pg-core'
 import { MAX_EMAIL_LENGTH } from '@/constants/auth.constants'
 
 /**
@@ -232,6 +232,7 @@ export const emailLogModel = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
+    index('email_logs_created_at_idx').on(table.createdAt),
     // The database-level half of `status`'s validity check — see that
     // column's own comment, and `TOKEN_PURPOSE_SQL_LIST`'s comment in
     // user-token.model.ts for the fuller version of this reasoning.

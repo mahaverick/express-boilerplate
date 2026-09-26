@@ -1,16 +1,17 @@
 // src/services/worker-supervisor.service.ts
 //
-// Starts the email and notification Workers and keeps them on a live
-// connection. A Worker whose connection gave up before its first 'ready'
+// Starts the email, notification and maintenance Workers and keeps them on a
+// live connection. A Worker whose connection gave up before its first 'ready'
 // never recovers: BullMQ's own init has rejected for good, and unless that
 // error is one BullMQ counts as a connection error (ECONNREFUSED, or
-// "Connection is closed.") its fetch loop retries with no delay and starves
-// the event loop. So when that connection ends, the supervisor closes those
-// Workers at once and starts new ones on a fresh connection. While Redis
-// stays down this repeats on each connection's pre-ready give-up, at least
-// ~1.2s apart (longer when connects time out).
+// "Connection is closed.") its fetch loop retries with no delay and starves the
+// event loop. So when that connection ends, the supervisor closes those Workers
+// at once and starts new ones on a fresh connection. While Redis stays down
+// this repeats on each connection's pre-ready give-up, at least ~1.2s apart
+// (longer when connects time out).
 import type { Worker } from 'bullmq'
 import type IORedis from 'ioredis'
+import { ensureRetentionSchedule } from '@/jobs/maintenance.job'
 import { isShuttingDown } from '@/services/lifecycle.service'
 import { logger } from '@/services/logger.service'
 import {
@@ -19,6 +20,7 @@ import {
   setWorkersFailed,
 } from '@/services/queue.service'
 import { startEmailWorker } from '@/workers/email.worker'
+import { startMaintenanceWorker } from '@/workers/maintenance.worker'
 import { startNotificationWorker } from '@/workers/notification.worker'
 
 /**
@@ -51,7 +53,7 @@ async function closeLostWorkers(workers: Worker[]): Promise<void> {
 }
 
 /**
- * Start the email and notification Workers, replacing them whenever their connection gives up before its first ready.
+ * Start the email, notification and maintenance Workers, replacing them whenever their connection gives up before its first ready.
  * @returns A handle whose `close()` closes whichever Workers are current.
  * @throws {Error} Whatever starting a Worker throws at first start, after closing any already started.
  */
@@ -68,17 +70,22 @@ export function startWorkers(): SupervisedWorkers {
     void closing.finally(() => retiring.delete(closing))
   }
 
-  // Starts both Workers on the shared connection. A throw part-way closes
-  // the ones already started, then propagates.
+  // Starts every Worker on the shared connection, then registers the
+  // retention schedule. A throw part-way closes the ones already started,
+  // then propagates.
   const startGeneration = (): void => {
     const generation: WorkerGeneration = { connection: undefined, workers: [] }
     supervisor.generation = generation
     try {
       generation.connection = getQueueConnection()
       // One at a time, so a throw leaves the ones already started in `workers`.
-      for (const start of [startEmailWorker, startNotificationWorker]) {
+      for (const start of [startEmailWorker, startNotificationWorker, startMaintenanceWorker]) {
         generation.workers.push(start())
       }
+      // Each generation retries, so a Redis outage at boot can't leave the purge unscheduled.
+      void ensureRetentionSchedule().catch((error: unknown) => {
+        logger.warn('Registering the retention schedule failed', { error })
+      })
     } catch (error) {
       retire(generation.workers)
       generation.workers = []

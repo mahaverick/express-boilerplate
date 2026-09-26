@@ -1,14 +1,16 @@
 // src/repositories/audit-log.repository.ts
 //
-// Insert and list only: `audit_logs` is append-only, and its trigger rejects
-// any UPDATE or DELETE, so this class has no method that could issue one.
-import { and, desc, eq, sql, type SQL } from 'drizzle-orm'
+// Insert, list, and the retention purge's batch delete. audit_logs'
+// trigger rejects every UPDATE, and every DELETE outside a transaction the
+// retention purge has opened for it (retention.service.ts). This class
+// issues no UPDATE.
+import { and, desc, eq, inArray, sql, type SQL } from 'drizzle-orm'
 import type { AuditAccess, AuditAction } from '@/constants/audit.constants'
 import { auditLogModel, type AuditLog, type NewAuditLog } from '@/database/models/audit-log.model'
 import { tenantModel } from '@/database/models/tenant.model'
 import { userModel } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
-import { db, type DbExecutor } from '@/services/database.service'
+import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
 
 /**
  * The last row of a page: where the next page resumes, newest first.
@@ -145,5 +147,24 @@ export class AuditLogRepository {
       .orderBy(desc(auditLogModel.occurredAt), desc(auditLogModel.id))
       .limit(options.limit + 1)
     return toPage(rows, options.limit)
+  }
+
+  /**
+   * Delete up to `limit` entries that occurred before `cutoff`. The trigger
+   * refuses this unless `tx` is a retention purge transaction; see
+   * retention.service.ts.
+   * @param cutoff - Entries older than this go.
+   * @param limit - The most rows one call deletes.
+   * @param tx - The purge's batch transaction.
+   * @returns How many rows were deleted.
+   */
+  async purgeOccurredBefore(cutoff: Date, limit: number, tx: DbTransaction): Promise<number> {
+    const batch = tx
+      .select({ id: auditLogModel.id })
+      .from(auditLogModel)
+      .where(sql`${auditLogModel.occurredAt} < ${cutoff.toISOString()}::timestamptz`)
+      .limit(limit)
+    const result = await tx.delete(auditLogModel).where(inArray(auditLogModel.id, batch))
+    return result.count
   }
 }
