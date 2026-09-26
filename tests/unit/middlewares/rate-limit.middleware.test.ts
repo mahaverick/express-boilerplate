@@ -19,7 +19,11 @@ import type { Test } from 'supertest'
 import { describe, expect, it, vi } from 'vitest'
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { errorHandler } from '@/middlewares/error.middleware'
-import { createRateLimiter, RATE_LIMITED_CODE } from '@/middlewares/rate-limit.middleware'
+import {
+  createRateLimiter,
+  RATE_LIMITED_CODE,
+  RATE_LIMITER_MARK,
+} from '@/middlewares/rate-limit.middleware'
 import { request } from '../../helpers/request'
 
 vi.mock('@/services/redis.service', async (importOriginal) => ({
@@ -539,8 +543,49 @@ describe('RATE_LIMITS.platformSearch', () => {
   })
 })
 
+describe('RATE_LIMITS.authenticatedWrite', () => {
+  it('returns 429 at the 61st request within a minute, per user', async () => {
+    const app = buildAppBehindAsUser(
+      createRateLimiter(RATE_LIMITS.authenticatedWrite, { limit: 60, windowMs: 60_000 })
+    )
+    const userId = randomUUID()
+
+    for (let index = 0; index < 60; index += 1) {
+      const allowed = await request(app).post('/endpoint').set('x-test-user-id', userId)
+      expect(allowed.status).toBe(201)
+    }
+    const limited = await request(app).post('/endpoint').set('x-test-user-id', userId)
+
+    expect(limited.status).toBe(429)
+    expect(limited.body).toMatchObject({ success: false, code: RATE_LIMITED_CODE })
+  })
+
+  it('keys on the authenticated user id: a second user is unaffected', async () => {
+    const app = buildAppBehindAsUser(
+      createRateLimiter(RATE_LIMITS.authenticatedWrite, { limit: 1, windowMs: 60_000 })
+    )
+    const victim = randomUUID()
+    const other = randomUUID()
+
+    const first = await request(app).post('/endpoint').set('x-test-user-id', victim)
+    const victimBlocked = await request(app).post('/endpoint').set('x-test-user-id', victim)
+    expect(first.status).toBe(201)
+    expect(victimBlocked.status).toBe(429)
+
+    const bystander = await request(app).post('/endpoint').set('x-test-user-id', other)
+    expect(bystander.status).toBe(201)
+  })
+})
+
+describe('createRateLimiter marks its output', () => {
+  it('sets RATE_LIMITER_MARK to the spec name on the returned middleware', () => {
+    const handler = createRateLimiter(RATE_LIMITS.logout)
+    expect((handler as unknown as Record<symbol, unknown>)[RATE_LIMITER_MARK]).toBe('logout')
+  })
+})
+
 describe('store prefix derivation', () => {
-  // The 20-name list and order now live in
+  // The 21-name list and order now live in
   // tests/unit/constants/rate-limit.constants.test.ts, asserted directly
   // against the real RATE_LIMITS object. What that test alone cannot prove
   // is that createRateLimiter actually THREADS spec.name into

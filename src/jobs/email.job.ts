@@ -29,7 +29,10 @@ export type EmailJobData = MailMessage & { userId: string }
  * would keep that token readable long after the email that carried it.
  *
  * `removeOnFail: { age: 7 * 24 * 3600 }` — keep failed jobs for 7 days so an
- * operator can inspect `failedReason` before they expire.
+ * operator can inspect `failedReason` before they expire. The token stays in
+ * Redis only while retries are pending: once the job will not be retried,
+ * the worker replaces every `...Url` value with `[redacted]`
+ * (`recordPermanentFailure`, job-failure.job.ts).
  */
 export const emailJobDefaults: JobsOptions = {
   priority: JobPriority.high,

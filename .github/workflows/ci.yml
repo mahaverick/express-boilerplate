@@ -271,3 +271,43 @@ jobs:
           persist-credentials: false
       - name: Build the production image (no push)
         run: docker build -t express-boilerplate:ci .
+      - name: Run the image and check it starts with --enable-source-maps
+        run: |
+          name=express-ci-sourcemaps
+          # Fixed name, not a captured container id: lets cleanup run by name
+          # from a trap, on every exit path (pass, fail, or a step timeout),
+          # rather than only the ones this script itself anticipates.
+          trap 'docker rm -f "$name" > /dev/null 2>&1 || true' EXIT
+          cat > /tmp/express-boilerplate-ci.env <<'EOF'
+          APP_ENV=local
+          APP_URL=http://localhost:4040
+          WEB_URL=http://localhost:5173
+          DATABASE_URL=postgres://ci:ci@localhost:5432/ci
+          REDIS_URL=redis://localhost:6379
+          JWT_ACCESS_SECRET=0000000000000000000000000000000000000000000000
+          SESSION_SECRET=1111111111111111111111111111111111111111111111
+          WORKER_ENABLED=false
+          EOF
+          # DATABASE_URL/REDIS_URL point at nothing reachable on purpose: both
+          # database.service.ts (postgres.js) and redis.service.ts connect
+          # lazily on first use, never at boot (verified against both files),
+          # so the process starts and listens without either being reachable.
+          # WORKER_ENABLED=false skips BullMQ's own eager Redis connection.
+          docker run -d --name "$name" --env-file /tmp/express-boilerplate-ci.env -p 4040:4040 express-boilerplate:ci
+          for _ in $(seq 1 20); do
+            if curl -sf http://localhost:4040/health > /dev/null; then break; fi
+            sleep 0.5
+          done
+          # -eo pid,args, not -eo args alone: some Docker Engine builds reject
+          # a single-column -eo request with "Couldn't find PID field in ps
+          # output" (verified against a live container). Captured into a
+          # variable and guarded, so a container that died before this point
+          # still prints its logs instead of the step aborting under errexit
+          # with no diagnostics.
+          top_output=$(docker top "$name" -eo pid,args) || { docker logs "$name"; exit 1; }
+          echo "$top_output"
+          if ! echo "$top_output" | grep -- '--enable-source-maps'; then
+            echo "::error::--enable-source-maps is missing from the running process's args"
+            docker logs "$name"
+            exit 1
+          fi

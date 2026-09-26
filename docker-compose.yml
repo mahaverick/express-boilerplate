@@ -16,6 +16,11 @@
 #
 # No app service: the app runs on the host with APP_ENV=local (.env.example),
 # which is what lets it use Mailpit and the defaults below.
+#
+# Every host-side port binds 127.0.0.1 explicitly. By default Docker
+# publishes a port on every interface, and on Linux its own iptables rules
+# bypass a host firewall such as ufw, so a default-bound port is reachable
+# from the rest of the network even where the firewall would block it.
 services:
   postgres:
     image: postgres:18
@@ -23,7 +28,7 @@ services:
       POSTGRES_USER: boilerplate
       POSTGRES_PASSWORD: boilerplate
       POSTGRES_DB: boilerplate
-    ports: ['5433:5432']
+    ports: ['127.0.0.1:5433:5432']
     volumes:
       # postgres:18+ images store data under a major-version-specific
       # subdirectory of /var/lib/postgresql (pg_ctlcluster-compatible
@@ -46,7 +51,7 @@ services:
   # REDIS_KEY_PREFIX (express-boilerplate by default, test-w<N> per test worker).
   redis:
     image: redis:7.2-alpine
-    ports: ['6380:6379']
+    ports: ['127.0.0.1:6380:6379']
     healthcheck:
       test: ['CMD', 'redis-cli', 'ping']
       interval: 5s
@@ -64,7 +69,7 @@ services:
     # — exposed for manual/host-side verification. No Docker HEALTHCHECK
     # here: the image has no shell/wget/curl to run one from inside the
     # container (verified; see otel-collector.yaml's comment).
-    ports: ['4318:4318', '13133:13133']
+    ports: ['127.0.0.1:4318:4318', '127.0.0.1:13133:13133']
 
   tempo:
     # Single-binary Tempo (all components in one process) — the local-dev
@@ -74,7 +79,7 @@ services:
     volumes:
       - ./docker/tempo/config.yaml:/etc/tempo/config.yaml:ro
       - tempo-data:/var/tempo
-    ports: ['3200:3200'] # Tempo API + query frontend
+    ports: ['127.0.0.1:3200:3200'] # Tempo API + query frontend
 
   loki:
     # Single-binary Loki with the image's bundled local config (tsdb, schema
@@ -94,7 +99,7 @@ services:
       GF_AUTH_ANONYMOUS_ENABLED: 'true'
       GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
       GF_AUTH_DISABLE_LOGIN_FORM: 'true'
-    ports: ['3100:3000'] # 3100, not the image's default 3000 — avoids colliding with a locally-run frontend dev server.
+    ports: ['127.0.0.1:3100:3000'] # 3100, not the image's default 3000 — avoids colliding with a locally-run frontend dev server.
     volumes:
       - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
     depends_on: [tempo, loki]
@@ -115,7 +120,7 @@ services:
     # The app's SMTP defaults (localhost:1025, no auth) point here; boot
     # refuses that host and port whenever APP_ENV is not local.
     command: ['--smtp-disable-rdns']
-    ports: ['1025:1025', '8025:8025']
+    ports: ['127.0.0.1:1025:1025', '127.0.0.1:8025:8025']
     # `readyz` is the image's own subcommand for exactly this — verified
     # against the running container (it has a working shell, `docker exec
     # ... sh -c 'echo ok'` succeeds), so this needs none of otel-collector's

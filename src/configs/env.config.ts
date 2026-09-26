@@ -369,7 +369,7 @@ const EnvSchema = z.object({
     })
     .optional()
     .describe(
-      "Domain attribute for the refresh-token and OAuth session cookies, e.g. \"example.com\" to share them with subdomains. Unset means host-only cookies, the narrowest scope. Boot refuses a value that APP_URL's host is not within, since browsers would reject the cookies. Setting it on a deployment with live sessions heals itself: every response that sets or clears the refresh cookie also clears the host-only one. Changing or unsetting it leaves the old domain's refresh cookie in browsers. The API reads the most recently created refreshToken cookie, which is the current one, so the old one is ignored and expires within REFRESH_TOKEN_TTL. Reverting to an earlier value is the exception: the browser keeps that cookie's original creation time, so the other scope's cookie reads as newer and refresh fails until the user logs in again or it expires."
+      "Domain attribute for the refresh-token and OAuth session cookies, e.g. \"example.com\" to share them with subdomains. Unset means host-only cookies, the narrowest scope. Boot refuses a value that APP_URL's host is not within, since browsers would reject the cookies. With COOKIE_SECURE on, the refresh cookie is __Secure-refreshToken when this is set and __Host-refreshToken (Path=/) when it is not, so setting or unsetting it on a live deployment signs users in again once. With COOKIE_SECURE on, a leftover unprefixed refreshToken cookie is still read, then cleared in its host-only form and under this domain. Within one name the API reads the most recently created cookie. Reverting to an earlier value is the exception: the browser keeps that cookie's original creation time, so the other scope's cookie reads as newer and refresh fails until the user logs in again or it expires."
     ),
 
   // Extra browser origins allowed to call this API, comma-separated, e.g.
@@ -457,7 +457,7 @@ const EnvSchema = z.object({
     .stringbool()
     .default(true)
     .describe(
-      'Whether the BullMQ workers (email + notification) start in-process alongside the HTTP server. Set to false for API-only pods behind a load balancer; a separate worker deployment sets this to true.'
+      'Whether the BullMQ workers (email, notification and maintenance) start in-process alongside the HTTP server. Set to false for API-only pods behind a load balancer; a separate worker deployment sets this to true. The daily retention purge runs only where this is true.'
     ),
   WORKER_CONCURRENCY: z.coerce
     .number()
@@ -465,7 +465,64 @@ const EnvSchema = z.object({
     .positive()
     .default(5)
     .describe(
-      'Jobs each BullMQ worker (email, notification) processes at once, per process. Defaults to 5.'
+      'Jobs the email and notification workers each process at once, per process. Defaults to 5. The maintenance worker always runs one job at a time.'
+    ),
+  // Retention windows for the daily purge (retention.service.ts), in whole
+  // days, at most 36500 (about 100 years). 0 turns a rule off. Only a process
+  // with WORKER_ENABLED runs it.
+  RETENTION_TOKENS_DAYS: z.coerce
+    .number()
+    .int()
+    .nonnegative()
+    .max(36_500)
+    .default(7)
+    .describe(
+      'Days to keep a user_tokens row once it has expired, or once it was revoked without ever being used (logout, reuse, password change). A token rotated away is kept until it expires, because reuse detection needs it. 0 never purges; at most 36500. Defaults to 7.'
+    ),
+  RETENTION_INVITATIONS_DAYS: z.coerce
+    .number()
+    .int()
+    .nonnegative()
+    .max(36_500)
+    .default(30)
+    .describe(
+      'Days to keep a tenant invitation after the latest of its expiry, acceptance and revocation. 0 never purges; at most 36500. Defaults to 30.'
+    ),
+  RETENTION_EMAIL_LOGS_DAYS: z.coerce
+    .number()
+    .int()
+    .nonnegative()
+    .max(36_500)
+    .default(90)
+    .describe(
+      'Days to keep an email_logs row (one per email sent or failed). 0 never purges; at most 36500. Defaults to 90.'
+    ),
+  RETENTION_NOTIFICATIONS_READ_DAYS: z.coerce
+    .number()
+    .int()
+    .nonnegative()
+    .max(36_500)
+    .default(90)
+    .describe(
+      'Days to keep a notification after it was read. 0 never purges; at most 36500. Defaults to 90.'
+    ),
+  RETENTION_NOTIFICATIONS_UNREAD_DAYS: z.coerce
+    .number()
+    .int()
+    .nonnegative()
+    .max(36_500)
+    .default(365)
+    .describe(
+      'Days to keep a notification nobody read, counted from when it was created. 0 never purges; at most 36500. Defaults to 365.'
+    ),
+  RETENTION_AUDIT_LOGS_DAYS: z.coerce
+    .number()
+    .int()
+    .nonnegative()
+    .max(36_500)
+    .default(0)
+    .describe(
+      'Days to keep an audit_logs row. Defaults to 0, which keeps the audit log forever. Set a number of days, at most 36500, only where your compliance rules allow deleting audit history.'
     ),
   // Every Redis key and channel goes through redisKey() (redis.service.ts),
   // which joins this and its parts with ':'. A trailing colon would double it.

@@ -71,7 +71,7 @@ export function createApp(): Express {
   app.use(requestId)
   app.use(requestContext)
   app.use(express.json({ limit: '1mb' }))
-  app.use(express.urlencoded({ extended: false }))
+  app.use(express.urlencoded({ extended: false, limit: '100kb' }))
 
   // Liveness: deliberately shallow. If this checked the database, a transient
   // blip would make the orchestrator restart a healthy process — which is how

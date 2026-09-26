@@ -27,6 +27,7 @@ import { Worker, type Job } from 'bullmq'
 import { getEnv } from '@/configs/env.config'
 import { redactedForLog } from '@/errors/postgres-errors'
 import { addEmailJob } from '@/jobs/email.job'
+import { isTerminalFailure, recordPermanentFailure } from '@/jobs/job-failure.job'
 import type { NotificationJobData } from '@/jobs/notification.job'
 import { NotificationPreferenceRepository } from '@/repositories/notification-preference.repository'
 import { NotificationRepository } from '@/repositories/notification.repository'
@@ -174,23 +175,17 @@ export function startNotificationWorker(): Worker<NotificationJobData> {
   })
 
   worker.on('failed', (job, error) => {
-    // redactedForLog, not the raw error: unlike email.worker.ts's own
-    // `failed` handler (processEmailJob only ever throws a plain `Error` it
-    // constructs itself), the retry path here can fail with whatever
-    // `NotificationRepository.createOnce` propagates — a real
-    // `DrizzleQueryError`, which carries enumerable `query`/`params`
-    // (CLAUDE.md's own "never log bound query parameters" rule, already
-    // applied for the identical reason in mailer.service.ts's
-    // `recordDelivery`). Nothing here is a raw token — `metadataWithoutVariables`
-    // already stripped `variables` before the insert — but the bound params
-    // still include title/body/userId. An `addEmailJob` rejection's ioredis
-    // `command.args` hold the token; the logger keeps only name/message/stack.
-    logger.error('Notification job failed', {
-      jobId: job?.id,
-      type: job?.data.type,
-      attempt: job?.attemptsMade,
-      error: redactedForLog(error),
-    })
+    if (job === undefined || !isTerminalFailure(job, error)) {
+      // createOnce can fail with a DrizzleQueryError whose params hold title, body and userId.
+      logger.warn('Notification job failed', {
+        jobId: job?.id,
+        type: job?.data.type,
+        attempt: job?.attemptsMade,
+        error: redactedForLog(error),
+      })
+      return
+    }
+    void recordPermanentFailure('notification', job, error)
   })
 
   worker.on('error', (error: unknown) => {

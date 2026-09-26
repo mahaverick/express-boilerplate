@@ -17,15 +17,17 @@ import { randomUUID } from 'node:crypto'
 import type { Response, Test } from 'supertest'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
-import { REFRESH_REUSE_GRACE_MS, REFRESH_TOKEN_COOKIE_NAME } from '@/constants/auth.constants'
+import { REFRESH_REUSE_GRACE_MS } from '@/constants/auth.constants'
 import type { User } from '@/database/models/user.model'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { hashToken } from '@/services/session.service'
+import { testRefreshCookie } from '../../helpers/refresh-cookie'
 import { request } from '../../helpers/request'
 
 const app = createApp()
 const userRepository = new UserRepository()
+const REFRESH_TOKEN_COOKIE_NAME = testRefreshCookie().name
 
 const VALID_PASSWORD = 'correct horse battery staple'
 

@@ -32,6 +32,17 @@ static import would have reintroduced, one layer up, the exact failure mode
 (an uncaught stack trace from inside a dependency instead of a clean
 message) this repo exists to remove.
 
+With `WORKER_ENABLED`, `index.ts` then starts the Workers through
+`startWorkers()` (`worker-supervisor.service.ts`): email, notification and
+maintenance. Each time the supervisor starts a worker generation (boot is
+the first) it also registers the daily retention schedule
+(`ensureRetentionSchedule`, `src/jobs/maintenance.job.ts`). A failed
+registration logs a `warn` and is retried with the next generation. A new
+generation starts only when a worker connection gives up before its first
+ready, so a registration that fails while the Workers stay healthy waits
+for the next restart. The scheduler is stored in Redis, so one registered
+earlier keeps running meanwhile.
+
 **`server.ts`** exports `startServer(port?)` and `gracefulShutdown(server, workers?)`.
 `startServer` takes the port as a parameter rather than reading it from
 `getEnv()` internally, specifically so tests can bind an ephemeral port
@@ -84,9 +95,9 @@ odd ones out: neither requires a bearer access token (a user's access token
 has often already expired by the time either is called), and both instead
 read the refresh-token cookie directly off the raw `Cookie` header — there
 is no `cookie-parser` dependency in this codebase; the cookie name is known
-in advance (`REFRESH_TOKEN_COOKIE_NAME`), so parsing the one value this API
-cares about by hand costs less than a dependency for the rest of RFC 6265
-nothing here needs.
+in advance (`refreshCookieSpec`, plus the legacy `refreshToken` — see
+SECURITY.md, "Cookies"), so parsing the values this API cares about by hand
+costs less than a dependency for the rest of RFC 6265 nothing here needs.
 
 **The repository layer** (`src/repositories/`) is a thin layer over
 `src/database/models/`: `BaseRepository` owns soft-delete filtering,
@@ -174,15 +185,30 @@ exception to `handle()`, not to the layering above.
 **Lock order**, binding for every transaction that locks more than one row
 set:
 
-1. the tenant's owner rows (`lockOwners`, ordered by `id`);
-2. memberships, ordered by `user_id` (`lockMemberships`);
-3. only when the actor has no membership in the tenant, the actor's
+1. the user row, for password writes, login, refresh rotation, logout,
+   the refresh kills and the Google account claim (`lockById`,
+   `user.repository.ts`); nothing takes tenant locks and then the user row;
+2. the tenant's owner rows (`lockOwners`, ordered by `id`);
+3. memberships, ordered by `user_id` (`lockMemberships`);
+4. only when the actor has no membership in the tenant, the actor's
    platform-tenant membership, `FOR SHARE` (`lockTenantAccess`,
    `tenant-access.service.ts`, via `lockPlatformRole`,
    `user-membership.repository.ts`);
-4. the row a tenant or settings update writes (`lockById`,
+5. the row a tenant or settings update writes (`lockById`,
    `tenant.repository.ts`; `lockByTenantId`,
    `tenant-settings.repository.ts`).
+
+**Lock modes.** A lock that only guards a read-then-write takes
+`FOR NO KEY UPDATE`, not `FOR UPDATE`. `FOR UPDATE` also conflicts with the
+`FOR KEY SHARE` lock that every foreign-key insert takes on the row it
+references. Held on a tenant, it would block that tenant's audit inserts
+and invitation accepts for the whole transaction. `FOR UPDATE` is used only
+where the transaction deletes the locked row or changes a key column. A
+repository method that serves both kinds takes a `mode: RowLockMode`
+(`src/types/lock-mode.ts`), defaulting to `'no key update'`. The user row's
+modes are listed in SECURITY.md, "Password change and reset against a
+concurrent login". The two-connection tests detect blocking with
+`pg_blocking_pids` (`tests/helpers/lock-probe.ts`), not with sleeps.
 
 It's written into the JSDoc of `lockOwners`, `lockMemberships` and
 `lockPlatformRole` (`user-membership.repository.ts`), of
@@ -197,7 +223,7 @@ layers above.
 
 | Service                      | Job                                                                                                                                                                                                                                                                                                                                                                                              |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `tenant-access.service.ts`   | `lockTenantAccess(actor, tenantId, otherUserIds, tx)`: locks owners, memberships and, when the actor has no membership, the platform membership, in that order (step 3 above), returning the actor's access and the locked memberships. `resolveActorAccess(actor, tenantId, tx)` wraps it for a caller with no other memberships to lock. Membership wins; the platform tenant is members-only. |
+| `tenant-access.service.ts`   | `lockTenantAccess(actor, tenantId, otherUserIds, tx)`: locks owners, memberships and, when the actor has no membership, the platform membership, in that order (step 4 above), returning the actor's access and the locked memberships. `resolveActorAccess(actor, tenantId, tx)` wraps it for a caller with no other memberships to lock. Membership wins; the platform tenant is members-only. |
 | `platform.service.ts`        | `getPlatformMembership` (one indexed read, no cache), `autoJoin` (viewer only, verified addresses on `PLATFORM_EMAIL_DOMAINS`), `bootstrapGrant` (the `platform:grant` script only).                                                                                                                                                                                                             |
 | `platform-tenant.service.ts` | `searchAll`: every customer tenant, for staff. The only importer of `platform-tenant.repository.ts`.                                                                                                                                                                                                                                                                                             |
 | `audit.service.ts`           | `record(entry, tx)`, in the caller's transaction, with strict per-action metadata; `recordPlatformAccess` (hourly, deduplicated in Redis); `listForTenant` and `listPlatformWide` (keyset).                                                                                                                                                                                                      |
@@ -391,6 +417,11 @@ collector directly via `OTEL_EXPORTER_OTLP_ENDPOINT` — see CLAUDE.md's
 "Observability" section for what `src/observability/tracing.ts` does and
 does not instrument, and how a Loki log line links back to its trace.
 
+Every published port binds `127.0.0.1` only, so no other machine on the
+network can reach the stack's services: Postgres with its fixed development
+password, Redis with no password at all, Grafana with anonymous admin, and
+Mailpit.
+
 **Postgres is pinned to major version 18** because generated migrations may
 use `uuidv7()` as a column default, which is built into Postgres from 18
 onward; on 17 or older, a migration referencing it fails with `function
@@ -433,7 +464,11 @@ container.
   ship inside the image while appearing pruned. `prune` is the command that
   actually removes them — verified empirically against the built image.
 - `runner` copies over only `node_modules`, `dist/`, and `package.json`,
-  runs as a non-root user (uid 10001), and declares `HEALTHCHECK NONE` —
+  starts
+  `node --enable-source-maps --import ./dist/observability/tracing.js dist/index.js`
+  (so a logged stack trace names the original `.ts` line; `tsconfig.json`
+  emits the maps), runs as a non-root user (uid 10001), and
+  declares `HEALTHCHECK NONE` —
   the orchestrator already owns liveness/readiness via `/health` and
   `/health/ready`; a second, Docker-level health signal would just be a
   second opinion that can disagree with the first under load.
@@ -455,12 +490,6 @@ security-relevant detail on all of it. It does **not** build:
   later step-up plan; no such flow exists yet.
 - OpenAPI documentation, or a bootstrap/seed script (`pnpm bootstrap` does
   not exist — do not run it).
-- **A retention job for `user_tokens`,** which grows by roughly 2,900 rows
-  per active user per month and is never pruned. **Unassigned** — a
-  scheduled job needs a scheduler, and there is none yet; see
-  [DATABASE.md](DATABASE.md#user_tokens-grows-without-bound-and-nothing-prunes-it).
-  This is recorded here deliberately — "a later plan will do it" reads the
-  same as "nobody is doing it" right up until nobody does.
 
 Everything else this list used to name as not-yet-built has since shipped,
 by later plans not otherwise documented in this file: forgot/reset password
@@ -471,11 +500,17 @@ CLAUDE.md's "OAuth" section), tenancy/RBAC (`tenant.controller.ts`,
 BullMQ job queue (`src/jobs/`, `src/workers/` — see CLAUDE.md's "Job queue"
 and "Notifications" sections), and OpenTelemetry SDK wiring in the app
 itself (`src/observability/tracing.ts` starts a `NodeSDK` and exports
-traces and logs — see CLAUDE.md's "Observability" section). The rate
+traces and logs — see CLAUDE.md's "Observability" section), and a daily
+data-retention purge (`src/services/retention.service.ts`, run by the
+maintenance worker — see [DATABASE.md](DATABASE.md#user_tokens-retention)
+and MIGRATIONS.md, "Upgrading to 3.2.0"). The rate
 limiters also cover the tenant, invitation and staff-search routes
 (`createRateLimiter(RATE_LIMITS.createTenant)` and
 `createRateLimiter(RATE_LIMITS.inviteTenantMember)` on `tenant.routes.ts`,
 `createRateLimiter(RATE_LIMITS.invitationPreview)` and
 `createRateLimiter(RATE_LIMITS.invitationAccept)` on `invitation.routes.ts`,
 and `createRateLimiter(RATE_LIMITS.platformSearch)` on
-`platform.routes.ts`).
+`platform.routes.ts`). Every other authenticated write is limited by
+`createRateLimiter(RATE_LIMITS.authenticatedWrite)`, one instance per
+router (tenant, notification and profile), all counting under one Redis
+prefix per user.

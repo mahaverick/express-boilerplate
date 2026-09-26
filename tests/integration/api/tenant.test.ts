@@ -1016,8 +1016,7 @@ describe('/api/v1/tenants', () => {
       let calls = 0
       const heldLockOwners: typeof realLockOwners = async function (
         this: UserMembershipRepository,
-        tenantId: string,
-        executor?: DbExecutor
+        ...parameters: Parameters<typeof realLockOwners>
       ) {
         calls += 1
         // Only the first caller (the admin's DELETE) is held.
@@ -1025,7 +1024,7 @@ describe('/api/v1/tenants', () => {
           signalArrived()
           await heldReleased
         }
-        return realLockOwners.call(this, tenantId, executor)
+        return realLockOwners.apply(this, parameters)
       }
 
       await withMutatedMethod(

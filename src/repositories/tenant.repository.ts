@@ -128,9 +128,11 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
   }
 
   /**
-   * Find a live tenant by id and lock its row (`SELECT … FOR UPDATE`) for
-   * the rest of the transaction. Lock order: after the access locks
-   * `lockTenantAccess` takes (tenant-access.service.ts).
+   * Find a live tenant by id and lock its row (`SELECT … FOR NO KEY UPDATE`)
+   * for the rest of the transaction. No transaction that takes it deletes a
+   * tenant or changes its id, so foreign-key inserts referencing the tenant
+   * (audit rows, memberships, invitations) do not wait for it. Lock order:
+   * after the access locks `lockTenantAccess` takes (tenant-access.service.ts).
    * @param id - The tenant's id.
    * @param executor - The transaction to hold the lock in. Required: on the pool, the lock would release as soon as the statement finished.
    * @returns The locked tenant, or undefined when none exists or it is soft-deleted.
@@ -141,7 +143,7 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
       .from(tenantModel)
       .where(this.scope(eq(tenantModel.id, id)))
       .limit(1)
-      .for('update')
+      .for('no key update')
     return row
   }
 

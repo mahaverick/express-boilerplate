@@ -6,8 +6,10 @@
 // third profile route added later inherits the gate automatically instead
 // of it being one more thing a future edit can forget to add.
 import { Router } from 'express'
+import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { profileController } from '@/controllers/profile.controller'
 import { requireAuth } from '@/middlewares/auth.middleware'
+import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
 
 /**
  * Build the profile routes.
@@ -17,6 +19,10 @@ export function createProfileRouter(): Router {
   const router = Router()
   router.use(requireAuth)
   router.get('/', profileController.getProfile)
-  router.patch('/', profileController.updateProfile)
+  router.patch(
+    '/',
+    createRateLimiter(RATE_LIMITS.authenticatedWrite),
+    profileController.updateProfile
+  )
   return router
 }

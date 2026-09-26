@@ -21,7 +21,7 @@
 // purpose from being claimed as another: it participates in the SAME atomic
 // statement as the revocation check, not a separate lookup a caller could
 // perform race-free but forget to.
-import { eq, sql, type SQL } from 'drizzle-orm'
+import { eq, inArray, sql, type SQL } from 'drizzle-orm'
 import {
   userTokenModel,
   type NewUserToken,
@@ -34,14 +34,15 @@ import {
   type SoftDeleteOptions,
   type Touched,
 } from '@/repositories/base.repository'
-import { db, type DbExecutor } from '@/services/database.service'
+import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
 
 /**
  * Query access to the `user_tokens` table: token issuance, lookup by hash,
  * atomic single-use claiming (`claimOnce`), and bulk revocation by session
  * or by user. Every lookup excludes a soft-deleted row by default — see
- * `BaseRepository.scope`, which every method below is built on so none of
- * them can drift from that behaviour independently.
+ * `BaseRepository.scope`, which every method below except the retention
+ * purge is built on so none of them can drift from that behaviour
+ * independently. The purge deletes expired rows whether soft-deleted or not.
  */
 export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)['_']['config']> {
   /**
@@ -170,7 +171,8 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    * chain for one login. Used by logout and by reuse detection;
    * session.service.ts denies the session's access tokens afterwards. A
    * caller that runs this inside its own transaction must deny the session
-   * only after that transaction commits.
+   * only after that transaction commits. Lock the user row FOR NO KEY UPDATE
+   * first, for the reason `revokeAllForUser` gives.
    * @param sessionId - The session id shared by every token in the chain.
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns Resolves once every matching row is revoked.
@@ -203,13 +205,13 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    * An entire rotation chain shares one session id, so the ids are
    * deduplicated.
    *
-   * KNOWN GAP, not fixed here: a session mid-rotation when this runs — the
-   * old refresh row already claimed by `rotateRefreshToken`, the new one
-   * not yet written — survives on both the revocation and denial side,
-   * because the row this method's `WHERE` clause would otherwise catch
-   * does not exist yet at the instant this query runs. Real, pre-existing,
-   * and needs the rotation and this revocation to share a transaction to
-   * close properly; not attempted here.
+   * A session mid-rotation when this runs (old row claimed, next row not yet
+   * committed) survives it: the next row is not in this statement's snapshot.
+   * Lock the user row FOR NO KEY UPDATE first (`UserRepository.lockById`),
+   * as password writes and the Google account claim do before their
+   * in-transaction revoke. Rotation holds it FOR SHARE from before its claim
+   * until its next row commits, so this statement then starts after that
+   * commit.
    * @param userId - The user whose tokens should all be revoked.
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns The distinct session ids of the rows it revoked.
@@ -260,10 +262,8 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    * "simplify" this back to `!=`; that is precisely the silent regression
    * this comment exists to prevent.
    *
-   * Same known gap as `revokeAllForUser`, not fixed here either: a session
-   * mid-rotation when this runs — the old refresh row already claimed by
-   * `rotateRefreshToken`, the new one not yet written — survives on both the
-   * revocation and denial side.
+   * The same mid-rotation caveat as `revokeAllForUser`, closed the same way:
+   * lock the user row first.
    * @param userId - The user whose tokens should all be revoked, except one session's.
    * @param sessionId - The one session id to spare; every token sharing it is left untouched.
    * @param executor - Where to run the query. Defaults to the pool.
@@ -316,6 +316,42 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
           sql`${userTokenModel.userId} = ${userId} and ${userTokenModel.purpose} = ${purpose} and ${userTokenModel.revokedAt} is null`
         )
       )
+  }
+
+  /**
+   * Delete up to `limit` token rows past retention: expired before `cutoff`,
+   * or revoked before it without ever being used. A rotated-away row stays
+   * until it expires: reuse detection needs it while it can still be
+   * presented. Soft-deleted rows go too, so this doesn't use `scope`. A kept
+   * row that pointed at a deleted one through `replaced_by_id` has that
+   * pointer set to NULL by the foreign key.
+   * Takes the batch oldest id first with FOR UPDATE SKIP LOCKED: a row a
+   * request holds is left for a later run instead of waited on, so a batch
+   * can come back short while matching rows remain. The foreign key's update
+   * of a kept row is an ordinary write and does wait on a lock a request
+   * holds on that row.
+   * @param cutoff - Rows older than this go.
+   * @param limit - The most rows one call deletes.
+   * @param tx - The batch's transaction.
+   * @returns How many rows were deleted.
+   */
+  async purgeExpiredOrRevokedBefore(
+    cutoff: Date,
+    limit: number,
+    tx: DbTransaction
+  ): Promise<number> {
+    const before = sql`${cutoff.toISOString()}::timestamptz`
+    const batch = tx
+      .select({ id: userTokenModel.id })
+      .from(userTokenModel)
+      .where(
+        sql`${userTokenModel.expiresAt} < ${before} or (${userTokenModel.revokedAt} < ${before} and ${userTokenModel.consumedAt} is null)`
+      )
+      .orderBy(userTokenModel.id)
+      .limit(limit)
+      .for('update', { skipLocked: true })
+    const result = await tx.delete(userTokenModel).where(inArray(userTokenModel.id, batch))
+    return result.count
   }
 
   /**

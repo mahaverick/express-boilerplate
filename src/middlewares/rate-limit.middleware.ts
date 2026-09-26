@@ -21,6 +21,10 @@
 // limiters must never share a `name` — a shared bucket lets traffic on one
 // endpoint spend another's budget. `RATE_LIMITS`'s own test
 // (tests/unit/constants/rate-limit.constants.test.ts) pins uniqueness.
+// One deliberate exception: `authenticatedWrite` is built once per router
+// (tenant, notification, profile), and all three share its name, so on
+// Redis they spend one per-user budget. On the in-memory fallback each
+// router's instance counts on its own, so the budget splits per router.
 import { type NextFunction, type Request, type RequestHandler, type Response } from 'express'
 import { rateLimit } from 'express-rate-limit'
 import { SharedRateLimitStore } from '@/configs/rate-limit-store.config'
@@ -67,10 +71,19 @@ function keyGeneratorFor(
 }
 
 /**
+ * A marker `createRateLimiter` sets on every middleware it returns, keyed
+ * to the spec's own name. `tests/unit/routes/route-limiters.test.ts`'s
+ * guard test reads it off a route's handler chain to prove a rate limiter
+ * is actually present, rather than inferring it from the route file's
+ * source text.
+ */
+export const RATE_LIMITER_MARK = Symbol('rateLimiter')
+
+/**
  * Build a rate limiter from a `RATE_LIMITS` entry.
  * @param spec - The limiter's configuration — see `RateLimiterSpec`.
  * @param overrides - `windowMs`/`limit` to override, e.g. a small window for a test. Every other field is fixed by `spec`.
- * @returns Express middleware enforcing the limit.
+ * @returns Express middleware enforcing the limit, tagged with `RATE_LIMITER_MARK` set to `spec.name`.
  */
 export function createRateLimiter(
   spec: RateLimiterSpec,
@@ -78,7 +91,7 @@ export function createRateLimiter(
 ): RequestHandler {
   const keyGenerator = keyGeneratorFor(spec.keyBy)
 
-  return rateLimit({
+  const handler = rateLimit({
     windowMs: overrides.windowMs ?? spec.windowMs,
     limit: overrides.limit ?? spec.limit,
     standardHeaders: true,
@@ -89,4 +102,6 @@ export function createRateLimiter(
       next(new HttpError(spec.message, 429, RATE_LIMITED_CODE))
     },
   })
+  Object.assign(handler, { [RATE_LIMITER_MARK]: spec.name })
+  return handler
 }

@@ -44,7 +44,7 @@ interface QueryErrorShape {
  * @param error - The thrown or forwarded error.
  * @returns True when the error exposes both `query` and `params`.
  */
-function isQueryError(error: unknown): error is QueryErrorShape {
+export function isQueryError(error: unknown): error is QueryErrorShape {
   if (typeof error !== 'object' || error === null) return false
   const candidate = error as { query?: unknown; params?: unknown }
   return typeof candidate.query === 'string' && Array.isArray(candidate.params)
@@ -120,12 +120,15 @@ function stackFramesOf(error: QueryErrorShape): string | undefined {
  * `detail` field does so routinely (`Key (lower(email))=(...) already
  * exists.`). The code says the same thing without the value.
  *
- * Its callers are `errorHandler` (error.middleware.ts), the process-level
- * handlers in `index.ts`, the notification worker, and the services and
- * middleware that log a failed query instead of throwing it, such as
- * `mailer.service.ts`'s `recordDelivery` (a failed
- * `EmailLogRepository.record()` write, whose bound parameters include a
- * recipient email address).
+ * `logger.service.ts`'s `serializeOneError` applies this automatically to
+ * every Error-valued field the logger is given, and to each error in its
+ * `.cause` chain. It only reaches values that are `instanceof Error`,
+ * though — a query-shaped value that isn't one, such as `index.ts`'s
+ * unhandled-rejection `reason` (a rejection can settle with anything, not
+ * only an Error), still needs its own explicit `redactedForLog(error)` call
+ * at the logging site. Calling it twice on the same value is safe either
+ * way: a redacted object has `paramCount`, not `params`, so `isQueryError`
+ * on it is false and a second call returns it unchanged.
  * @param error - The thrown or forwarded error.
  * @returns The error itself when it is not a query error; a redacted, parameter-free record when it is.
  */

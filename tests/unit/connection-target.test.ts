@@ -54,14 +54,18 @@ const composeHostPort = (service: string): string => {
   const end = rest.findIndex((line) => /^ {2}\S/.test(line))
   const block = end === -1 ? rest : rest.slice(0, end)
 
-  // ports: ['<host>:<container>', ...] — the host side is the one a
-  // developer's own service can collide with. Split rather than match: any
-  // `(\d+):(\d+)` pattern trips sonarjs/super-linear-regex, and there is no
-  // reason to run a backtracking-capable matcher over a string this shaped.
+  // ports: ['[<bind-address>:]<host>:<container>', ...] — the host side is
+  // the one a developer's own service can collide with. Split rather than
+  // match: any `(\d+):(\d+)` pattern trips sonarjs/super-linear-regex, and
+  // there is no reason to run a backtracking-capable matcher over a string
+  // this shaped.
   const portsLine = block.find((line) => line.trimStart().startsWith('ports:'))
   expect(portsLine, `the "${service}" service block declares a ports: mapping`).toBeDefined()
   const firstMapping = (portsLine ?? '').split(/['"]/, 3)[1] ?? ''
-  const host = firstMapping.split(':', 2)[0] ?? ''
+  // The container port is always last; the host port is the segment right
+  // before it, whether or not a bind address prefixes the mapping.
+  const segments = firstMapping.split(':')
+  const host = segments.at(-2) ?? ''
   expect(host, `the "${service}" ports: mapping reads host:container`).toMatch(/^\d+$/)
   return host
 }

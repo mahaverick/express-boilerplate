@@ -1,7 +1,8 @@
 // src/database/models/audit-log.model.ts
 //
-// Append-only: migration 0016's `audit_logs_immutable` trigger rejects every
-// UPDATE and DELETE. Both foreign keys are RESTRICT, so no cascade reaches it.
+// Append-only: the `audit_logs_immutable` trigger rejects every UPDATE, and
+// every DELETE outside a retention purge transaction. Both foreign keys are
+// RESTRICT, so no cascade reaches it.
 import { sql, type InferInsertModel, type InferSelectModel } from 'drizzle-orm'
 import { check, index, jsonb, pgTable, timestamp, varchar } from 'drizzle-orm/pg-core'
 import {

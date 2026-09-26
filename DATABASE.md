@@ -56,45 +56,42 @@ by `check-file` — see [STRUCTURE.md](STRUCTURE.md)):
   `UserTokenRepository.claimOnce`, distinguishing a row spent through its
   normal single-use path from one killed by an explicit revoke;
   `replaced_by_id` self-references the row a token was rotated into —
-  forensic metadata for tracing a chain after the fact, read by nothing at
-  runtime. See [SECURITY.md](SECURITY.md) for the security reasoning and
+  forensic metadata for tracing a chain after the fact, read by no
+  application code. Its foreign key is `ON DELETE SET NULL`, so when the
+  retention purge deletes a row's successor, the database nulls the
+  pointer; a chain read back later may have gaps. See [SECURITY.md](SECURITY.md) for the security reasoning and
   [ARCHITECTURE.md](ARCHITECTURE.md) for how the repository layer sits on
   top of both models.
 
-### `user_tokens` grows without bound, and nothing prunes it
+### `user_tokens` retention
 
-**No plan currently owns a retention job for this table.** Stating that
-plainly rather than leaving it implied, because the growth is not slow and
-the table has no ceiling of its own:
+Every rotation inserts a row and leaves the old one in place, revoked and
+consumed. Rotation is append-only by design: reuse detection needs the old
+row to recognise a replay. With a 15-minute `ACCESS_TOKEN_TTL`, a client
+that stays logged in refreshes about 4 times an hour: roughly **96 rows per
+active user per day, ~2,900 per month**, plus one per login.
 
-Every rotation INSERTs a row and leaves the old one in place with
-`revoked_at` set — rotation is append-only by design, since reuse detection
-needs the revoked row to still be there to recognise a replay. With a
-15-minute `ACCESS_TOKEN_TTL`, a client that stays logged in refreshes about
-4 times an hour: roughly **96 rows per active user per day, ~2,900 per
-month**, plus one per login. A modest 10,000-user deployment writes tens of
-millions of rows a year, all of them dead within `REFRESH_TOKEN_TTL` and
-none of them ever deleted. `SESSION_ABSOLUTE_TTL` bounds how long a session
-lives, not how many rows it leaves behind.
-
-What a retention job would do: delete rows that are both revoked and past
-`REFRESH_TOKEN_TTL` (they can never be presented again, so reuse detection
-has no use for them), on a schedule. `user_tokens.deleted_at` exists as the
-seam for a soft-delete variant of that. It is deliberately **not built
-here** — a scheduled job needs a scheduler, and this boilerplate has none:
-BullMQ is listed in [MIGRATIONS.md](MIGRATIONS.md) as a dependency not yet
-adopted. The natural home is whichever plan adopts a queue or scheduler
-first; until one does, a downstream project running this at scale should
-treat it as its own operational task (a cron'd `DELETE`, or a partitioned
-table) rather than assume the boilerplate handles it.
+The daily retention purge (`src/services/retention.service.ts`) bounds
+that. A row is deleted once `RETENTION_TOKENS_DAYS` (default 7) days have
+passed since its `expires_at`, or since a revoke that never consumed it
+(logout, reuse, a password change): `expires_at < cutoff OR (revoked_at <
+cutoff AND consumed_at IS NULL)`. A rotated-away row carries
+`consumed_at`, so it is kept until it expires: until then, a client could
+present it, and reuse detection must still recognise it. A whole rotation
+chain goes in one run: `replaced_by_id` is `ON DELETE SET NULL`, so a kept
+row that pointed at a purged one has that pointer nulled. Deletes run in
+batches of 5,000, each its own transaction. `RETENTION_TOKENS_DAYS=0` turns
+the rule off. Migration `0017` adds the indexes the predicate uses.
+`user_tokens.deleted_at` is not used by the purge, which deletes
+soft-deleted rows by the same rule.
 
 `drizzle.config.ts`'s schema glob (`./src/database/models/*.model.ts`)
 picks up a new model automatically — no config change needed to add one.
 
 ## Migrations directory
 
-`src/database/migrations/` is **tracked**, and holds six generated
-migrations today: `0000_tearful_crusher_hogan.sql` (creates `users`),
+`src/database/migrations/` is **tracked**. Its first six migrations are
+`0000_tearful_crusher_hogan.sql` (creates `users`),
 `0001_great_dragon_man.sql` (creates `user_tokens`, with its foreign keys
 to `users` and to itself for `replaced_by_id`),
 `0002_abandoned_tarantula.sql` (adds `user_tokens.session_started_at`),
@@ -110,13 +107,13 @@ comment on that column), and `0005_bitter_blob.sql` (widens `purpose` to
 `varchar(32)` and adds `user_tokens_purpose_check`, a CHECK constraint
 restricting it to the three `TokenPurpose` values at the database level —
 `$type<TokenPurpose>()` is compile-time only, so this is what stops a raw
-SQL insert from writing anything else), plus `meta/_journal.json` recording
-all six in order. Everything under this directory is **generated**
-by `drizzle-kit generate`, with one documented exception: `0016` (see
-[MIGRATIONS.md](MIGRATIONS.md), "Upgrading to 3.1.0") carries hand-added
-statements on top of its generated ones, called out in the file's own
-comments. Don't hand-edit a migration outside a documented exception like
-that one.
+SQL insert from writing anything else); `meta/_journal.json` records every
+migration in order. Everything under this directory is **generated**
+by `drizzle-kit generate`, with two documented exceptions: `0016` and
+`0017` (see [MIGRATIONS.md](MIGRATIONS.md), "Upgrading to 3.1.0" and
+"Upgrading to 3.2.0") carry hand-added statements on top of their generated
+ones, called out in each file's own comments. Don't hand-edit a migration
+outside a documented exception like those.
 
 Generated does not mean disposable. Migrations are the ordered, immutable
 record of how the schema got to its current state — `drizzle-kit migrate`

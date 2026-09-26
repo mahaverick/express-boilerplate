@@ -19,16 +19,19 @@
 // that a real enqueue eventually leaves a matching job sitting on the real
 // "email" queue, not that Mailpit delivery also works end to end.
 import { randomUUID } from 'node:crypto'
-import type { Job, Worker } from 'bullmq'
-import { afterAll, describe, expect, it } from 'vitest'
+import { UnrecoverableError, type Job, type Worker } from 'bullmq'
+import { afterAll, describe, expect, it, vi } from 'vitest'
 import type { EmailJobData } from '@/jobs/email.job'
 import { addNotificationJob, type NotificationJobData } from '@/jobs/notification.job'
 import { NotificationPreferenceRepository } from '@/repositories/notification-preference.repository'
 import { NotificationRepository } from '@/repositories/notification.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
+import { logger } from '@/services/logger.service'
 import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
 import { startNotificationWorker } from '@/workers/notification.worker'
+import { withMutatedMethod } from '../../helpers/mutate'
+import { waitForLoggedCall } from '../../helpers/queue-jobs'
 
 /**
  * The email queue's currently queued/settled jobs, typed as `EmailJobData`
@@ -257,5 +260,71 @@ describe('notification.worker', () => {
 
     const failedJob = await getNotificationQueue().getJob(job.id)
     expect(failedJob?.failedReason).toBeDefined()
+  }, 15_000)
+
+  it('scrubs the stored job on its first attempt when it throws UnrecoverableError', async () => {
+    const userId = await createUser()
+    const token = `secret-${randomUUID()}`
+    const loggerError = vi.spyOn(logger, 'error')
+
+    try {
+      await withMutatedMethod(
+        NotificationPreferenceRepository.prototype,
+        'isChannelEnabled',
+        () => Promise.reject(new UnrecoverableError('preferences unavailable')),
+        async () => {
+          // notificationJobDefaults allows 3 attempts; only the error type ends it at 1.
+          const job = await addNotificationJob({
+            userId,
+            type: 'verify_email',
+            title: 'Verify your email',
+            body: 'body',
+            metadata: { templateKey: 'email_verification' },
+            email: {
+              to: uniqueEmail('unrecoverable'),
+              templateKey: 'email_verification',
+              variables: {
+                firstName: 'Ada',
+                verificationUrl: `https://example.test/verify?token=${token}`,
+                appName: 'Test App',
+              },
+            },
+          })
+          if (!job.id) throw new Error('expected addNotificationJob to assign a job id')
+          const jobId = job.id
+
+          await waitForLoggedCall(
+            loggerError,
+            (message, meta) => message === 'job failed permanently' && meta?.jobId === jobId,
+            10_000
+          )
+
+          const stored = await getNotificationQueue().getJob(jobId)
+          expect(stored?.attemptsMade).toBe(1)
+          expect(stored?.data).toMatchObject({
+            userId,
+            metadata: { templateKey: 'email_verification' },
+            email: {
+              templateKey: 'email_verification',
+              variables: { firstName: 'Ada', verificationUrl: '[redacted]', appName: 'Test App' },
+            },
+          })
+          expect(JSON.stringify(stored?.data)).not.toContain(token)
+          expect(loggerError).toHaveBeenCalledWith(
+            'job failed permanently',
+            expect.objectContaining({
+              queue: 'notification',
+              jobId,
+              name: 'verify_email',
+              template: 'email_verification',
+              userId,
+              attemptsMade: 1,
+            })
+          )
+        }
+      )
+    } finally {
+      loggerError.mockRestore()
+    }
   }, 15_000)
 })

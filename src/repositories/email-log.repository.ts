@@ -10,8 +10,8 @@
 // should. (3) BaseRepository's 23505 -> HttpError(409) translation exists
 // for a unique constraint a caller could violate; this table has none, so
 // there is nothing to translate. This is a plain class with exactly the
-// two methods a delivery log needs.
-import { asc, eq } from 'drizzle-orm'
+// methods a delivery log needs: write, read, and the retention purge.
+import { asc, eq, inArray, sql } from 'drizzle-orm'
 import { MAX_EMAIL_LENGTH } from '@/constants/auth.constants'
 import {
   emailLogModel,
@@ -24,7 +24,7 @@ import {
   type NewEmailLog,
 } from '@/database/models/email-log.model'
 import { HttpError } from '@/errors/http-error'
-import { db, type DbExecutor } from '@/services/database.service'
+import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
 
 /**
  * Replace `entry.errorCode` with `UNKNOWN_ERROR_CODE` unless it already
@@ -266,5 +266,27 @@ export class EmailLogRepository {
       .from(emailLogModel)
       .where(eq(emailLogModel.recipient, recipient))
       .orderBy(asc(emailLogModel.createdAt), asc(emailLogModel.id))
+  }
+
+  /**
+   * Delete up to `limit` rows created before `cutoff`.
+   * Takes the batch oldest id first with FOR UPDATE SKIP LOCKED: a row a
+   * request holds is left for a later run instead of waited on, so a batch
+   * can come back short while matching rows remain.
+   * @param cutoff - Rows older than this go.
+   * @param limit - The most rows one call deletes.
+   * @param tx - The batch's transaction.
+   * @returns How many rows were deleted.
+   */
+  async purgeCreatedBefore(cutoff: Date, limit: number, tx: DbTransaction): Promise<number> {
+    const batch = tx
+      .select({ id: emailLogModel.id })
+      .from(emailLogModel)
+      .where(sql`${emailLogModel.createdAt} < ${cutoff.toISOString()}::timestamptz`)
+      .orderBy(emailLogModel.id)
+      .limit(limit)
+      .for('update', { skipLocked: true })
+    const result = await tx.delete(emailLogModel).where(inArray(emailLogModel.id, batch))
+    return result.count
   }
 }

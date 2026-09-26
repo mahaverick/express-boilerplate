@@ -7,6 +7,164 @@ elsewhere with the reasoning intact instead of rediscovered. Also: every
 supply-chain bypass currently sitting in `pnpm-workspace.yaml`, a generated
 file nobody reads by default.
 
+## Upgrading to 3.2.0
+
+3.2.0 adds one migration, six optional variables and a third BullMQ queue.
+It also makes several behaviours stricter. No variable is renamed or
+becomes required. Read "Migration `0017`", "Stricter than 3.1.0" and "The
+refresh cookie is renamed" before upgrading a database, a client or a proxy.
+
+### Migration `0017`
+
+`0017` is partly hand-written. drizzle generated the foreign-key change and
+six indexes. The new body of the `audit_logs_immutable()` trigger function
+was added by hand, marked `-- Hand-added` in the file.
+
+- `user_tokens.replaced_by_id`'s self-referencing foreign key is dropped
+  and re-added as `ON DELETE SET NULL`. When the retention purge deletes a
+  row, the database nulls its predecessor's `replaced_by_id`, so a whole
+  rotation chain clears in one run.
+- Indexes for the retention purge:
+  - `user_tokens(replaced_by_id)`;
+  - `user_tokens(expires_at)`;
+  - `user_tokens(revoked_at)`, for rows revoked and never consumed;
+  - `email_logs(created_at)`;
+  - `notifications(read_at)`, for read rows;
+  - `notifications(created_at)`, for unread rows.
+
+  They build without `CONCURRENTLY`, because drizzle's migrator runs in a
+  transaction.
+
+- `audit_logs_immutable()` still refuses every UPDATE. A DELETE now passes
+  only in a transaction that set `app.audit_purge` to `on` and
+  `app.audit_purge_before` past the row's `occurred_at`, both
+  transaction-local. With `RETENTION_AUDIT_LOGS_DAYS` at its default `0`,
+  nothing sets them, so the table stays append-only. `TRUNCATE` is
+  unaffected. The trigger that calls the function is unchanged.
+
+While it runs, `0017` blocks every read and write on `user_tokens`, so
+every login and refresh waits, and blocks writes to `email_logs` and
+`notifications`. On a large database, see "Schema migrations on a live
+database" below.
+
+### New optional variables: data retention
+
+A daily purge at 03:00 UTC, on the new `maintenance` queue, deletes rows
+past their retention window. Each variable is a non-negative whole number
+of days; `0` turns that rule off. An empty value counts as unset and takes
+the default.
+
+| Variable                              | Default | Deletes                                                                                                                                                                                                                                                          |
+| ------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `RETENTION_TOKENS_DAYS`               | `7`     | `user_tokens` that many days past expiry, or past a revoke that never used them (logout, reuse, password change). A rotated-away token is kept until it expires, for reuse detection. A kept row whose successor is purged has its `replaced_by_id` set to NULL. |
+| `RETENTION_INVITATIONS_DAYS`          | `30`    | `tenant_invitations` whose latest of expiry, acceptance and revocation is that old.                                                                                                                                                                              |
+| `RETENTION_EMAIL_LOGS_DAYS`           | `90`    | `email_logs` created that long ago.                                                                                                                                                                                                                              |
+| `RETENTION_NOTIFICATIONS_READ_DAYS`   | `90`    | Notifications read that long ago.                                                                                                                                                                                                                                |
+| `RETENTION_NOTIFICATIONS_UNREAD_DAYS` | `365`   | Unread notifications created that long ago.                                                                                                                                                                                                                      |
+| `RETENTION_AUDIT_LOGS_DAYS`           | `0`     | `audit_logs` rows that old. `0` keeps the audit log forever.                                                                                                                                                                                                     |
+
+**The first run deletes the backlog.** On a deployment that has been
+running, the first 03:00 run deletes every row already past its window, in
+batches of 5,000, each its own short transaction. To keep a table's rows
+until you're ready, set its variable to `0` before upgrading.
+
+The purge runs where `WORKER_ENABLED=true`:
+
+- **Scheduling.** The schedule is registered each time the worker
+  supervisor starts a worker generation; boot is the first. It is one
+  scheduler under `REDIS_KEY_PREFIX`, upserted idempotently, so any number
+  of replicas still make one schedule. A failed registration logs `warn`
+  (`Registering the retention schedule failed`) and is retried with the
+  next generation. A new generation starts only when a worker connection
+  gives up before its first ready, so a registration that fails while the
+  Workers stay healthy waits for the next restart. Check for that line
+  after the first deploy.
+- **Logging.** Each enabled rule logs one `info` line, `retention purge`, with the
+  table and the count. The two notification rules report as
+  `notifications.read` and `notifications.unread`.
+- **Failure.** A failing rule logs `retention purge failed` at `error`, on
+  every attempt, and the others still run. The job then fails, and BullMQ retries it, 3 attempts in all,
+  with exponential backoff from 60 seconds.
+
+### A third queue
+
+`maintenance` joins `email` and `notification` under `<prefix>:bull`. Its
+worker starts wherever the other two do. It always runs one job at a time;
+`WORKER_CONCURRENCY` doesn't apply to it.
+
+### Failed jobs are scrubbed, and logged once
+
+A job that won't be retried has every key ending in `Url` or `Token` in its
+stored data replaced with `[redacted]`, and logs one `error` line, `job
+failed permanently`. Earlier attempts now log at `warn`, not `error`, as
+`Email job failed` and `Notification job failed` (the new maintenance
+worker's are `Maintenance job failed`). If you alert on those messages at
+`error`, alert on `job failed permanently` instead. Two other lines stay at
+`error`: `retention purge failed`, on every attempt, and
+`Scrubbing a failed job's data failed`, when the rewrite itself fails.
+
+### Stricter than 3.1.0
+
+- **Every authenticated write is rate-limited.**
+  - Writes that had no limiter now share one: 60 a minute per user,
+    prefix `rl:authenticated-write:`.
+  - The limit answers `429` in the usual error envelope, with the message
+    `Too many requests, please slow down`.
+  - It covers the tenant `PATCH`, member `PATCH` and `DELETE`, invitation
+    `DELETE` and settings `PATCH` routes, the four notification writes,
+    and `PATCH /api/v1/profile`.
+  - A client that bulk-edits must pace itself.
+- **Free text rejects control and bidi characters.**
+  - The fields: tenant `name`, `logo`, `website` and `description`, and
+    `firstName` and `lastName` on register and profile.
+  - They answer `400` for U+0000–U+001F, U+007F–U+009F, U+202A–U+202E and
+    U+2066–U+2069.
+  - `description` still accepts newlines and tabs, and stores `\r\n` as
+    `\n`.
+- **A login that races a password change or reset fails with `401`** when
+  the hash changed after it was checked (SECURITY.md, "Password change and
+  reset against a concurrent login").
+- **A refresh that races a password change or reset** either has its new
+  token revoked or answers `401`.
+
+### The refresh cookie is renamed
+
+With `COOKIE_SECURE` on, the refresh cookie is now:
+
+- `__Host-refreshToken` at path `/`;
+- or `__Secure-refreshToken` at path `/api/v1/auth`, when `COOKIE_DOMAIN`
+  is set.
+
+Local http keeps `refreshToken`. Refresh and logout still accept the old
+`refreshToken` cookie, so a finished upgrade logs nobody out. A login, a
+successful refresh, a Google sign-in or a logout that sees it clears it; a
+failed refresh leaves it.
+
+3.1.0 reads only `refreshToken`. During a rolling deploy, a client that
+signed in or refreshed on a 3.2.0 replica holds only the new cookie and
+gets a 401 from a 3.1.0 replica; after a rollback to 3.1.0, every user who
+signed in or refreshed on 3.2.0 is signed out.
+That fallback is removed at the next major release. Until then, a client,
+proxy or WAF rule that names the cookie must accept both names. A
+`__Host-` cookie is sent on every request to the API's origin, not only
+under `/api/v1/auth`. On a secure deployment, setting or unsetting
+`COOKIE_DOMAIN` later switches between the two prefixed names, which signs
+every user in once. See SECURITY.md, "Cookies".
+
+### Operations
+
+- The image starts Node with `--enable-source-maps`, so logged stack traces
+  point at the original `.ts` lines.
+- `docker-compose.yml` publishes every port on `127.0.0.1` only. A browser
+  or tool on another machine that used to reach the local stack (Grafana,
+  Mailpit) no longer can.
+- The logger drops a Postgres error's bound parameters wherever it is
+  logged under a top-level key, including as another error's `cause`.
+- A password change or reset whose session-denylist write fails still
+  succeeds, as before, and now also logs one `error` line,
+  `session denylist write failed after password change`, with the user id
+  and the number of sessions not denied.
+
 ## Upgrading to 3.1.0
 
 3.1.0 adds a migration, one optional variable, a script, new response
@@ -390,6 +548,16 @@ add a real row:
   CREATE INDEX CONCURRENTLY IF NOT EXISTS tenants_slug_trgm_idx ON tenants USING gin (slug gin_trgm_ops) WHERE deleted_at IS NULL;
   ```
   Then add `IF NOT EXISTS` to both `CREATE INDEX` statements in the not-yet-applied `0016` file. A failed `CONCURRENTLY` build leaves an INVALID index: check `pg_index.indisvalid`, and drop and rebuild it if it's false.
+- **`0017` blocks every read and write on `user_tokens` until the migration batch commits, and writes to `email_logs` and `notifications` while their indexes build.** Its first statement drops `user_tokens`' `replaced_by_id` foreign key, which takes an `ACCESS EXCLUSIVE` lock, and drizzle's migrator applies all pending migrations in one transaction. So every login and refresh waits while the re-added foreign key validates every `user_tokens` row and all six indexes build (no `CONCURRENTLY`); each `CREATE INDEX` also holds a `SHARE` lock on its table, which blocks inserts, updates and deletes. No purge has pruned `user_tokens` before this release, so it may be large. On a large database, build the indexes by hand first, each as a statement on its own and outside any transaction:
+  ```sql
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS user_tokens_replaced_by_id_idx ON user_tokens (replaced_by_id);
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS user_tokens_expires_at_idx ON user_tokens (expires_at);
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS user_tokens_revoked_unconsumed_idx ON user_tokens (revoked_at) WHERE revoked_at IS NOT NULL AND consumed_at IS NULL;
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS email_logs_created_at_idx ON email_logs (created_at);
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS notifications_read_at_idx ON notifications (read_at) WHERE read_at IS NOT NULL;
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS notifications_unread_created_idx ON notifications (created_at) WHERE read_at IS NULL;
+  ```
+  Then add `IF NOT EXISTS` to the six `CREATE INDEX` statements in the not-yet-applied `0017` file. A failed `CONCURRENTLY` build leaves an INVALID index: check `pg_index.indisvalid`, and drop and rebuild it if it's false. That leaves the foreign key's validation scan under the `ACCESS EXCLUSIVE` lock, so apply the migration in a quiet window. The hand-added function replacement takes only a brief lock and needs no manual step.
 
 ## Supply-chain bypasses in `pnpm-workspace.yaml`
 

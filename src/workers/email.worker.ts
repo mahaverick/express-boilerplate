@@ -5,6 +5,7 @@
 import { Worker, type Job } from 'bullmq'
 import { getEnv } from '@/configs/env.config'
 import type { EmailJobData } from '@/jobs/email.job'
+import { isTerminalFailure, recordPermanentFailure } from '@/jobs/job-failure.job'
 import { logger } from '@/services/logger.service'
 import { sendMail } from '@/services/mailer.service'
 import { getQueueConnection } from '@/services/queue.service'
@@ -53,12 +54,16 @@ export function startEmailWorker(): Worker<EmailJobData> {
   })
 
   worker.on('failed', (job, error) => {
-    logger.error('Email job failed', {
-      jobId: job?.id,
-      templateKey: job?.data.templateKey,
-      attempt: job?.attemptsMade,
-      error,
-    })
+    if (job === undefined || !isTerminalFailure(job, error)) {
+      logger.warn('Email job failed', {
+        jobId: job?.id,
+        templateKey: job?.data.templateKey,
+        attempt: job?.attemptsMade,
+        error,
+      })
+      return
+    }
+    void recordPermanentFailure('email', job, error)
   })
 
   worker.on('error', (error: unknown) => {

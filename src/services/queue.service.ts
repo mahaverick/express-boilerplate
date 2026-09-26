@@ -35,6 +35,7 @@ const state: {
   producer: QueueRedis | undefined
   emailQueue: Queue | undefined
   notificationQueue: Queue | undefined
+  maintenanceQueue: Queue | undefined
   closed: boolean
   workerConnectionLost: Set<(dead: IORedis) => void>
   haveWorkersFailed: boolean
@@ -43,6 +44,7 @@ const state: {
   producer: undefined,
   emailQueue: undefined,
   notificationQueue: undefined,
+  maintenanceQueue: undefined,
   closed: false,
   workerConnectionLost: new Set(),
   haveWorkersFailed: false,
@@ -174,10 +176,11 @@ function getProducerConnection(): IORedis {
     (dead) => {
       if (state.producer?.connection !== dead) return
       state.producer = undefined
-      // Both queues hold the dead instance, so they are rebuilt on next use.
-      const orphans = [state.emailQueue, state.notificationQueue]
+      // Every queue holds the dead instance, so each is rebuilt on next use.
+      const orphans = [state.emailQueue, state.notificationQueue, state.maintenanceQueue]
       state.emailQueue = undefined
       state.notificationQueue = undefined
+      state.maintenanceQueue = undefined
       for (const orphan of orphans) void discardQueue(orphan)
     }
   )
@@ -218,6 +221,24 @@ export function getNotificationQueue(): Queue {
     })
   }
   return state.notificationQueue
+}
+
+/**
+ * Get the shared "maintenance" queue, creating it on first use. It carries
+ * the retention purge, over the same producer connection as the others.
+ * @returns The maintenance queue.
+ */
+export function getMaintenanceQueue(): Queue {
+  if (!state.maintenanceQueue) {
+    state.maintenanceQueue = new Queue('maintenance', {
+      connection: getProducerConnection(),
+      prefix: redisKey('bull'),
+    })
+    state.maintenanceQueue.on('error', (error: unknown) => {
+      logger.error('Maintenance queue error', { error })
+    })
+  }
+  return state.maintenanceQueue
 }
 
 /**
@@ -328,7 +349,7 @@ export async function closeQueue(): Promise<void> {
     // connection options) as using a "shared" connection, and its own
     // RedisConnection#close() skips quitting/disconnecting whenever
     // `shared` is true. So the producer connection outlives this call and
-    // is ended below, once, for both queues.
+    // is ended below, once, for every queue.
     await emailQueue.close()
   }
   if (state.notificationQueue) {
@@ -338,6 +359,12 @@ export async function closeQueue(): Promise<void> {
     // above — this queue was also built from the already-constructed
     // ioredis instance, so this does not touch the producer connection either.
     await notificationQueue.close()
+  }
+  if (state.maintenanceQueue) {
+    const maintenanceQueue = state.maintenanceQueue
+    state.maintenanceQueue = undefined
+    // Built from the same ioredis instance, so this leaves the producer connection open too.
+    await maintenanceQueue.close()
   }
   const connections = [state.worker?.connection, state.producer?.connection]
   state.worker = undefined

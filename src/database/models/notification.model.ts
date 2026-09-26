@@ -97,6 +97,12 @@ export const notificationModel = pgTable(
     // cursor built from one such row could not reliably resume after it.
     index('notifications_user_created_idx').on(table.userId, table.createdAt, table.id),
     uniqueIndex('notifications_dedupe_key_unique').on(table.dedupeKey),
+    index('notifications_read_at_idx')
+      .on(table.readAt)
+      .where(sql`${table.readAt} is not null`),
+    index('notifications_unread_created_idx')
+      .on(table.createdAt)
+      .where(sql`${table.readAt} is null`),
   ]
 )
 

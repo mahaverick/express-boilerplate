@@ -22,12 +22,14 @@
 // `/preferences` sits under this same router, not a separate one: it is
 // still "notification settings", addressed relative to
 // `/api/v1/notifications`, and splitting it out would buy nothing since
-// both halves share the one auth gate and nothing else in this file is
-// route-specific enough to warrant its own middleware.
+// both halves share the one auth gate, and every write shares one
+// `authenticatedWrite` limiter.
 import { Router } from 'express'
+import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { notificationStreamController } from '@/controllers/notification-stream.controller'
 import { notificationController } from '@/controllers/notification.controller'
 import { requireAuth } from '@/middlewares/auth.middleware'
+import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
 
 /**
  * Build the notification routes.
@@ -38,13 +40,15 @@ export function createNotificationRouter(): Router {
 
   router.use(requireAuth)
 
+  const writeLimiter = createRateLimiter(RATE_LIMITS.authenticatedWrite)
+
   router.get('/stream', notificationStreamController.streamNotifications)
   router.get('/', notificationController.listNotifications)
-  router.patch('/:id/read', notificationController.markRead)
-  router.patch('/read-all', notificationController.markAllRead)
-  router.delete('/:id', notificationController.deleteNotification)
+  router.patch('/:id/read', writeLimiter, notificationController.markRead)
+  router.patch('/read-all', writeLimiter, notificationController.markAllRead)
+  router.delete('/:id', writeLimiter, notificationController.deleteNotification)
   router.get('/preferences', notificationController.getPreferences)
-  router.put('/preferences', notificationController.updatePreferences)
+  router.put('/preferences', writeLimiter, notificationController.updatePreferences)
 
   return router
 }

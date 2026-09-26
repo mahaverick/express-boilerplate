@@ -74,7 +74,9 @@ export interface NotificationJobData {
  * `removeOnFail: { age: 3 * 24 * 3600 }` — keep failed jobs for 3 days so an
  * operator can inspect `failedReason`, shorter than email's 7 since a failed
  * notification job has no independent per-recipient audit trail
- * (`email_logs`) the way a failed email job does.
+ * (`email_logs`) the way a failed email job does. `email.variables`' token
+ * stays in Redis only while retries are pending (`recordPermanentFailure`,
+ * job-failure.job.ts).
  */
 export const notificationJobDefaults: JobsOptions = {
   priority: JobPriority.normal,

@@ -6,12 +6,15 @@
 // winston version had — `level` as a label, `timestamp`, `message` — plus a
 // mixin that pulls correlation data out of AsyncLocalStorage and the active
 // span, and a formatter that turns any Error-valued field into
-// { name, message, stack } (JSON.stringify of a bare Error is "{}").
+// { name, message, stack }, redacted via redactedForLog wherever it (or
+// something in its .cause chain) turns out to be a database query error
+// (JSON.stringify of a bare Error is "{}").
 import { createRequire } from 'node:module'
 import { trace } from '@opentelemetry/api'
 import pino, { type DestinationStream, type Logger, type StreamEntry } from 'pino'
 import type { PrettyOptions } from 'pino-pretty'
 import { getEnv, logFormat, type Env } from '@/configs/env.config'
+import { isQueryError, redactedForLog } from '@/errors/postgres-errors'
 import { requestContextStore } from '@/services/request-context.service'
 
 /**
@@ -110,18 +113,49 @@ function requestContextFields(): Record<string, string> {
   return fields
 }
 
+// How many nodes — the top-level error plus its .cause chain — serializeOneError
+// will look at before it stops walking. Bounded, so a cyclic .cause chain
+// ends instead of recursing forever.
+const CAUSE_WALK_DEPTH = 5
+
 /**
- * Replace every Error-valued key with a plain { name, message, stack } object.
+ * Serialise one Error, redacting it in place if it carries a database
+ * query and bound parameters, else recursing into its own `.cause` (also
+ * redacted if necessary). Bounded by `CAUSE_WALK_DEPTH` — four `.cause`
+ * hops, five nodes including the top-level error — so a cyclic `.cause`
+ * chain ends instead of recursing forever inside a log call.
+ * @param error - The error to serialise.
+ * @param depth - How many levels of `.cause` have already been walked.
+ * @returns A plain object safe to write to the log.
+ */
+function serializeOneError(error: Error, depth = 0): Record<string, unknown> {
+  if (isQueryError(error)) {
+    return redactedForLog(error) as Record<string, unknown>
+  }
+  const plain: Record<string, unknown> = {
+    name: error.name,
+    message: error.message,
+    stack: error.stack,
+  }
+  const cause = (error as { cause?: unknown }).cause
+  if (depth < CAUSE_WALK_DEPTH - 1 && cause instanceof Error) {
+    plain.cause = serializeOneError(cause, depth + 1)
+  }
+  return plain
+}
+
+/**
+ * Replace every Error-valued key with a plain, redacted object. Walks each
+ * error's own `.cause` chain (not only the top-level value) so a query
+ * error wrapped by a higher-level Error is still caught before its bound
+ * parameters reach the log.
  * @param object - The merged log object pino is about to serialise.
- * @returns A shallow copy with Errors made serialisable.
+ * @returns A shallow copy with Errors made serialisable and redacted.
  */
 function serializeErrors(object: Record<string, unknown>): Record<string, unknown> {
   const result: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(object)) {
-    result[key] =
-      value instanceof Error
-        ? { name: value.name, message: value.message, stack: value.stack }
-        : value
+    result[key] = value instanceof Error ? serializeOneError(value) : value
   }
   return result
 }

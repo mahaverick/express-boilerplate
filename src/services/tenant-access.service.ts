@@ -16,6 +16,7 @@ import { HttpError } from '@/errors/http-error'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import type { DbTransaction } from '@/services/database.service'
 import type { Actor, TenantAccess } from '@/types/actor'
+import type { RowLockMode } from '@/types/lock-mode'
 
 const userMembershipRepository = new UserMembershipRepository()
 
@@ -42,6 +43,7 @@ export interface LockedTenantAccess {
  * @param actor - The signed-in user.
  * @param tenantId - The tenant acted on.
  * @param otherUserIds - Other members to lock in the same statement, such as a target.
+ * @param mode - `'update'` when the transaction deletes a locked membership; otherwise `'no key update'`.
  * @param tx - The transaction to hold the locks in.
  * @returns The actor's access and the locked memberships that exist, in `user_id` order.
  * @throws {HttpError} 404 `Tenant not found` when the actor is neither a member nor staff, as `resolveTenant` answers.
@@ -50,12 +52,14 @@ export async function lockTenantAccess(
   actor: Actor,
   tenantId: string,
   otherUserIds: readonly string[],
+  mode: RowLockMode,
   tx: DbTransaction
 ): Promise<LockedTenantAccess> {
-  await userMembershipRepository.lockOwners(tenantId, tx)
+  await userMembershipRepository.lockOwners(tenantId, mode, tx)
   const memberships = await userMembershipRepository.lockMemberships(
     tenantId,
     [actor.userId, ...otherUserIds],
+    mode,
     tx
   )
   const own = memberships.find((membership) => membership.userId === actor.userId)
@@ -79,6 +83,6 @@ export async function resolveActorAccess(
   tenantId: string,
   tx: DbTransaction
 ): Promise<ActorAccess> {
-  const locked = await lockTenantAccess(actor, tenantId, [], tx)
+  const locked = await lockTenantAccess(actor, tenantId, [], 'no key update', tx)
   return locked.actor
 }

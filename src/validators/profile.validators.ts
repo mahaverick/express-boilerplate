@@ -38,6 +38,7 @@
 // silently dropped, exactly like every other unrecognised key.
 import { z } from 'zod'
 import { MAX_NAME_LENGTH } from '@/constants/auth.constants'
+import { safeText } from '@/validators/safe-text.validators'
 
 // `.nullable().optional()` gives each field three distinguishable states in
 // the parsed result, which is exactly the distinction PATCH semantics need:
@@ -57,6 +58,7 @@ const optionalNameField = z
   .trim()
   .min(1, 'Must not be empty.')
   .max(MAX_NAME_LENGTH, `Must be at most ${MAX_NAME_LENGTH} characters.`)
+  .refine(safeText(), 'This field contains characters that are not allowed')
   .nullable()
   .optional()
 

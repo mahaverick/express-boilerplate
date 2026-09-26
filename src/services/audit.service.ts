@@ -122,9 +122,7 @@ export async function recordPlatformAccess(
     if (reply === null) return undefined
     hasClaimedKey = true
   } catch (error) {
-    logger.warn('Platform access dedupe unavailable; writing the audit entry anyway', {
-      error: error instanceof Error ? error.message : String(error),
-    })
+    logger.warn('Platform access dedupe unavailable; writing the audit entry anyway', { error })
   }
 
   try {
@@ -156,9 +154,7 @@ async function releaseDedupeKey(key: string): Promise<void> {
     const redis = await getRedis()
     await redis.del(key)
   } catch (error) {
-    logger.warn('Could not release the platform access dedupe key', {
-      error: error instanceof Error ? error.message : String(error),
-    })
+    logger.warn('Could not release the platform access dedupe key', { error })
   }
 }
 

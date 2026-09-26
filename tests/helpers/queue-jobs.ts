@@ -1,10 +1,11 @@
 // tests/helpers/queue-jobs.ts
 //
 // Read jobs straight off the BullMQ queues, for test files that start no
-// Worker. 'prioritized' is included: email and notification jobs carry a
-// priority, and BullMQ keeps them there until a Worker pulls them.
+// Worker, and wait for a Worker's log line. 'prioritized' is included: email
+// and notification jobs carry a priority, and BullMQ keeps them there until
+// a Worker pulls them.
 import type { Job, Queue } from 'bullmq'
-import { expect } from 'vitest'
+import { expect, type MockInstance } from 'vitest'
 import type { EmailJobData } from '@/jobs/email.job'
 import type { NotificationJobData } from '@/jobs/notification.job'
 import { getEmailQueue, getNotificationQueue } from '@/services/queue.service'
@@ -77,6 +78,29 @@ export async function expectNoJob<TData>(
   await sleep(NO_JOB_SETTLE_MS)
   const jobs = await queuedJobs<TData>(queue)
   expect(jobs.some((job) => isMatch(job.data))).toBe(false)
+}
+
+/**
+ * Poll a logger spy until one of its calls matches. A Worker's 'failed'
+ * handler scrubs and logs after the event that settles a job, so a test that
+ * reads the scrubbed job waits for the log line, not the event.
+ * @param spy - A `vi.spyOn(logger, level)` spy.
+ * @param isMatch - Which call to wait for, given its message and meta.
+ * @param timeoutMs - How long to poll before failing.
+ * @returns Resolves once a matching call has been made.
+ * @throws {Error} When no call matches within `timeoutMs`.
+ */
+export async function waitForLoggedCall(
+  spy: MockInstance<(message: string, meta?: Record<string, unknown>) => void>,
+  isMatch: (message: string, meta: Record<string, unknown> | undefined) => boolean,
+  timeoutMs = DEFAULT_TIMEOUT_MS
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (spy.mock.calls.some(([message, meta]) => isMatch(message, meta))) return
+    await sleep(POLL_INTERVAL_MS)
+  }
+  throw new Error(`waitForLoggedCall: no matching log call within ${timeoutMs}ms`)
 }
 
 /**

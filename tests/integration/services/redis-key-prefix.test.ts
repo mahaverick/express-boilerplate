@@ -9,7 +9,6 @@ import { randomUUID } from 'node:crypto'
 import type { RedisClientType } from 'redis'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createApp } from '@/app'
-import { REFRESH_TOKEN_COOKIE_NAME } from '@/constants/auth.constants'
 import { sql } from '@/services/database.service'
 import { emitNotification } from '@/services/notification-emitter.service'
 import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
@@ -18,6 +17,7 @@ import { verifyAccessToken } from '@/services/session.service'
 import { fakeNotification } from '../../helpers/notification-subscriber'
 import { workerRedisKeyPrefix } from '../../helpers/redis-prefix'
 import { isEventuallyTrue } from '../../helpers/redis-proxy'
+import { testRefreshCookie } from '../../helpers/refresh-cookie'
 import { request } from '../../helpers/request'
 
 const scope = vi.hoisted(() => ({ workerPrefix: '', prefix: '' }))
@@ -56,6 +56,7 @@ const PASSWORD = 'correct horse battery staple'
 const SETTLE_TIMEOUT_MS = 5000
 
 const app = createApp()
+const REFRESH_TOKEN_COOKIE_NAME = testRefreshCookie().name
 const email = `redis-key-prefix-${randomUUID()}@example.test`
 const notifiedUserId = `redis-key-prefix-${randomUUID()}`
 const observed: {

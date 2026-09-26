@@ -22,6 +22,7 @@ import { z } from 'zod'
 import { MEMBERSHIP_ROLES, RESERVED_SLUGS } from '@/constants/tenant.constants'
 import { hostnameDomain } from '@/utilities/email.utilities'
 import { emailSchema } from '@/validators/auth.validators'
+import { normalizeMultilineText, safeText } from '@/validators/safe-text.validators'
 
 const MAX_TENANT_NAME_LENGTH = 255
 const MAX_TENANT_DESCRIPTION_LENGTH = 1000
@@ -73,6 +74,22 @@ export const slugSchema = z
     message: 'This slug is reserved and cannot be used.',
   })
 
+// Pulled out of both schemas below (rather than inlined in each
+// `z.preprocess()` call) so `unicorn/max-nested-calls` doesn't see a
+// `.refine()` chain nested inside a `.preprocess()` call nested inside the
+// enclosing `z.object()` call. Shared, not duplicated: `newTenantSchema`
+// and `updateTenantSchema` wrap it with a different `.nullable()`/
+// `.optional()` tail, the same way both already share `slugSchema`.
+const tenantDescriptionField = z
+  .string()
+  .trim()
+  .min(1, 'Must not be empty.')
+  .max(
+    MAX_TENANT_DESCRIPTION_LENGTH,
+    `Description must be at most ${MAX_TENANT_DESCRIPTION_LENGTH} characters.`
+  )
+  .refine(safeText({ multiline: true }), 'Description contains characters that are not allowed')
+
 /**
  * `POST /api/v1/tenants` request body. The caller becomes the tenant's sole
  * `'owner'` member (`TenantRepository.create`'s own `ownerId` parameter,
@@ -84,22 +101,16 @@ export const newTenantSchema = z.object({
     .string()
     .trim()
     .min(1, 'Name is required.')
-    .max(MAX_TENANT_NAME_LENGTH, `Name must be at most ${MAX_TENANT_NAME_LENGTH} characters.`),
+    .max(MAX_TENANT_NAME_LENGTH, `Name must be at most ${MAX_TENANT_NAME_LENGTH} characters.`)
+    .refine(safeText(), 'Name contains characters that are not allowed'),
   slug: slugSchema,
-  description: z
-    .string()
-    .trim()
-    .min(1, 'Must not be empty.')
-    .max(
-      MAX_TENANT_DESCRIPTION_LENGTH,
-      `Description must be at most ${MAX_TENANT_DESCRIPTION_LENGTH} characters.`
-    )
-    .optional(),
+  description: z.preprocess(normalizeMultilineText, tenantDescriptionField).optional(),
   logo: z
     .string()
     .trim()
     .min(1, 'Must not be empty.')
     .max(MAX_TENANT_LOGO_LENGTH, `Logo must be at most ${MAX_TENANT_LOGO_LENGTH} characters.`)
+    .refine(safeText(), 'Logo contains characters that are not allowed')
     .optional(),
   website: z
     .string()
@@ -109,6 +120,7 @@ export const newTenantSchema = z.object({
       MAX_TENANT_WEBSITE_LENGTH,
       `Website must be at most ${MAX_TENANT_WEBSITE_LENGTH} characters.`
     )
+    .refine(safeText(), 'Website contains characters that are not allowed')
     .optional(),
 })
 
@@ -150,22 +162,15 @@ export const updateTenantSchema = z.object({
     .trim()
     .min(1, 'Name is required.')
     .max(MAX_TENANT_NAME_LENGTH, `Name must be at most ${MAX_TENANT_NAME_LENGTH} characters.`)
+    .refine(safeText(), 'Name contains characters that are not allowed')
     .optional(),
-  description: z
-    .string()
-    .trim()
-    .min(1, 'Must not be empty.')
-    .max(
-      MAX_TENANT_DESCRIPTION_LENGTH,
-      `Description must be at most ${MAX_TENANT_DESCRIPTION_LENGTH} characters.`
-    )
-    .nullable()
-    .optional(),
+  description: z.preprocess(normalizeMultilineText, tenantDescriptionField).nullable().optional(),
   logo: z
     .string()
     .trim()
     .min(1, 'Must not be empty.')
     .max(MAX_TENANT_LOGO_LENGTH, `Logo must be at most ${MAX_TENANT_LOGO_LENGTH} characters.`)
+    .refine(safeText(), 'Logo contains characters that are not allowed')
     .nullable()
     .optional(),
   website: z
@@ -176,6 +181,7 @@ export const updateTenantSchema = z.object({
       MAX_TENANT_WEBSITE_LENGTH,
       `Website must be at most ${MAX_TENANT_WEBSITE_LENGTH} characters.`
     )
+    .refine(safeText(), 'Website contains characters that are not allowed')
     .nullable()
     .optional(),
 })
