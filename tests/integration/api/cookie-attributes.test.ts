@@ -298,6 +298,28 @@ describe('refresh cookie: name, path and domain per deployment', () => {
     expect(refreshLines[0]).not.toMatch(ANY_DOMAIN)
     expect(refreshLines[1]).toMatch(SCOPED_DOMAIN)
     expect(refreshLines[1]).not.toMatch(EPOCH_EXPIRY)
+
+    const loggedOut = await request(app)
+      .post('/api/v1/auth/logout')
+      .set('Cookie', cookiePair(refreshLines[1]))
+    expect(loggedOut.status).toBe(200)
+    const logoutLines = cookieLines(loggedOut, PLAIN_COOKIE)
+    expect(logoutLines).toHaveLength(2)
+    expect(logoutLines.every((line) => EPOCH_EXPIRY.test(line))).toBe(true)
+    const scopedClears = logoutLines.filter((line) => SCOPED_DOMAIN.test(line))
+    expect(scopedClears).toHaveLength(1)
+    expectRefreshAttributes(scopedClears[0], {
+      path: PATH_AUTH,
+      isSecure: false,
+      domain: SCOPED_DOMAIN,
+    })
+    const hostOnlyClears = logoutLines.filter((line) => !ANY_DOMAIN.test(line))
+    expect(hostOnlyClears).toHaveLength(1)
+    expectRefreshAttributes(hostOnlyClears[0], {
+      path: PATH_AUTH,
+      isSecure: false,
+      domain: undefined,
+    })
   })
 
   it('sends exactly one refreshToken Set-Cookie per response when COOKIE_DOMAIN is unset', async () => {
@@ -364,6 +386,9 @@ describe('refresh cookie: the legacy refreshToken name', () => {
     const currentState = await tokenState(current)
     expect(currentState?.isConsumed).toBe(true)
     expect(await tokenState(legacy)).toEqual({ isConsumed: false, isRevoked: false })
+    const hostLines = cookieLines(refreshed, HOST_COOKIE)
+    expect(hostLines).toHaveLength(1)
+    expect(hostLines[0]).not.toMatch(EPOCH_EXPIRY)
     expect(cookieLines(refreshed, PLAIN_COOKIE)).toHaveLength(1)
   })
 
@@ -467,6 +492,33 @@ describe('refresh cookie: Google callback', () => {
     } else {
       expect(lines[0]).not.toMatch(ANY_DOMAIN)
     }
+  })
+})
+
+describe('refresh cookie: Google callback with a legacy cookie', () => {
+  it('clears a legacy refreshToken the callback request carries and sets __Host-refreshToken', async () => {
+    const app = appWith(SECURE_HOST_ONLY)
+    const email = `cookie-attributes-google-${randomUUID()}@example.test`
+    passport.use(GOOGLE_STRATEGY_NAME, new FakeGoogleSuccessStrategy(googleProfile(email)))
+
+    const response = await request(app)
+      .get('/api/v1/auth/google/callback')
+      .set('X-Forwarded-Proto', 'https')
+      .set('Cookie', `${PLAIN_COOKIE}=${'a'.repeat(64)}`)
+
+    const user = await userRepository.findByEmail(email)
+    if (user) createdIds.push(user.id)
+    expect(response.status).toBe(302)
+    const current = cookieLines(response, HOST_COOKIE)
+    expect(current).toHaveLength(1)
+    expect(current[0]).not.toMatch(EPOCH_EXPIRY)
+    expect(current[0]).toMatch(/SameSite=Lax/i)
+    expect(current[0]).toMatch(PATH_ROOT)
+    const legacyClears = cookieLines(response, PLAIN_COOKIE)
+    expect(legacyClears).toHaveLength(1)
+    expect(legacyClears[0]).toMatch(EPOCH_EXPIRY)
+    expect(legacyClears[0]).toMatch(PATH_AUTH)
+    expect(legacyClears[0]).not.toMatch(ANY_DOMAIN)
   })
 })
 

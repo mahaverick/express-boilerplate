@@ -7,10 +7,8 @@
 // directly, so weakening it here fails that test rather than only being
 // noticed by whoever next reads SECURITY.md.
 //
-// The two cookie constants below exist here — not as literals inside
-// auth.controller.ts — because Task 7 (refresh/logout) reads and clears the
-// same cookie by name and path. A literal string repeated in a second file
-// is exactly the kind of drift this file exists to prevent everywhere else.
+// The refresh cookie's name, path and domain are defined once here
+// (refreshCookieSpec), so a set, a read and a clear cannot drift.
 
 /**
  * bcrypt work factor (log2 of the number of hashing rounds) applied to
