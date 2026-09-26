@@ -26,7 +26,8 @@
 // claimed as another's.
 //
 // Every revocation here also denies the revoked sessions' access tokens
-// (session-denylist.service.ts, best-effort). The repository only revokes
+// (session-denylist.service.ts, best-effort), except revokeSessionRows, whose
+// caller denies after its transaction commits. The repository only revokes
 // rows and reports which sessions it touched; it never writes Redis.
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import jwt from 'jsonwebtoken'
@@ -36,6 +37,13 @@ import type { TokenPurpose, UserToken } from '@/database/models/user-token.model
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
+import {
+  db,
+  withTransaction,
+  type DbExecutor,
+  type DbTransaction,
+} from '@/services/database.service'
+import { logger } from '@/services/logger.service'
 import { denySession } from '@/services/session-denylist.service'
 import { MS_PER_SECOND, requireDurationMs } from '@/utilities/duration.utilities'
 
@@ -158,6 +166,7 @@ function generateRawToken(): string {
  * @param ttlMs - How long the token is valid for, in milliseconds.
  * @param sessionId - The rotation-chain id, for `'refresh'`; omitted (column stays NULL — neither column has a DB default) for every other purpose.
  * @param sessionStartedAt - When that chain began, for `'refresh'`; omitted for every other purpose.
+ * @param executor - Where to insert. Defaults to the pool.
  * @returns The inserted row's id, the raw token to hand back, and its expiry.
  */
 async function createTokenRow(
@@ -165,19 +174,23 @@ async function createTokenRow(
   purpose: TokenPurpose,
   ttlMs: number,
   sessionId: string | undefined,
-  sessionStartedAt: Date | undefined
+  sessionStartedAt: Date | undefined,
+  executor: DbExecutor = db
 ): Promise<{ id: string; raw: string; expiresAt: Date }> {
   const raw = generateRawToken()
   const expiresAt = new Date(Date.now() + ttlMs)
 
-  const row = await userTokenRepository.create({
-    userId,
-    purpose,
-    sessionId,
-    sessionStartedAt,
-    tokenHash: hashToken(raw),
-    expiresAt,
-  })
+  const row = await userTokenRepository.create(
+    {
+      userId,
+      purpose,
+      sessionId,
+      sessionStartedAt,
+      tokenHash: hashToken(raw),
+      expiresAt,
+    },
+    executor
+  )
 
   return { id: row.id, raw, expiresAt }
 }
@@ -257,11 +270,13 @@ export function verifyAccessToken(token: string): VerifyAccessTokenResult {
  * Issue a new refresh token for a session.
  * @param userId - The user the token belongs to.
  * @param sessionId - The session (rotation-chain) id this token starts or continues.
+ * @param executor - Where to insert the token row: a caller's transaction, or the pool (default).
  * @returns The raw token to hand to the client, and its metadata.
  */
 export async function issueRefreshToken(
   userId: string,
-  sessionId: string
+  sessionId: string,
+  executor: DbExecutor = db
 ): Promise<IssuedRefreshToken> {
   const env = getEnv()
   // This is where a session's absolute clock starts. `rotateRefreshToken`
@@ -279,7 +294,8 @@ export async function issueRefreshToken(
     'refresh',
     requireDurationMs(env.REFRESH_TOKEN_TTL),
     sessionId,
-    sessionStartedAt
+    sessionStartedAt,
+    executor
   )
 
   return { raw, userId, sessionId, expiresAt }
@@ -487,24 +503,63 @@ export async function revokeRefreshToken(raw: string): Promise<void> {
 }
 
 /**
- * Revoke every live refresh token belonging to a user, across every
- * session, and deny each revoked session's access tokens
- * (best-effort — see `denySession`). Used where every session must end at
- * once — e.g. a password change, or a "log out everywhere" action.
- * @param userId - The user whose sessions should all end.
- * @returns Resolves once every one of the user's tokens is revoked and each revoked session's access tokens are denied, best-effort.
+ * Revoke a user's token rows in the caller's transaction and report the
+ * sessions revoked. The denylist is left to `denySessionsAfterCommit`: a
+ * denial written before commit would outlive a rollback.
+ * @param userId - The user whose tokens are revoked, every purpose.
+ * @param options - `exceptSessionId` spares that one session's tokens.
+ * @param options.exceptSessionId - The one session id to spare, if any.
+ * @param tx - The transaction the revocation commits with.
+ * @returns The distinct ids of the sessions revoked, never the spared one.
  */
-export async function revokeAllSessions(userId: string): Promise<void> {
-  await denySessions(await userTokenRepository.revokeAllForUser(userId))
+export function revokeSessionRows(
+  userId: string,
+  options: { exceptSessionId?: string },
+  tx: DbTransaction
+): Promise<string[]> {
+  if (options.exceptSessionId === undefined) {
+    return userTokenRepository.revokeAllForUser(userId, tx)
+  }
+  return userTokenRepository.revokeAllForUserExceptSession(userId, options.exceptSessionId, tx)
 }
 
 /**
- * Revoke every live session belonging to a user EXCEPT one, and deny each
- * revoked session's access tokens (best-effort — see `denySession`). The
- * password-change primitive: every OTHER session must end at once, while
- * the session presenting the request that triggered the change is spared —
- * ending it too would sign the caller out of the very request whose
- * response they are about to receive.
+ * Deny the sessions a committed password change or reset revoked. Never
+ * rejects, because the change already stands. When Redis refuses, those
+ * sessions' access tokens stay valid for up to ACCESS_TOKEN_TTL, as when the
+ * denylist fails open, and one error line is logged.
+ * @param userId - The user whose sessions were revoked.
+ * @param sessionIds - The revoked session ids.
+ * @returns Resolves once every denial is written or the failure is logged.
+ */
+export async function denySessionsAfterCommit(userId: string, sessionIds: string[]): Promise<void> {
+  const outcomes = await Promise.all(sessionIds.map((sessionId) => denySession(sessionId)))
+  const failed = outcomes.filter((outcome) => outcome === 'failed').length
+  if (failed > 0) {
+    logger.error('session denylist write failed after password change', {
+      userId,
+      sessionCount: failed,
+    })
+  }
+}
+
+/**
+ * Revoke every live token belonging to a user, across every session, and
+ * deny each revoked session's access tokens (best-effort — see
+ * `denySession`). Used where every session must end at once, such as a
+ * verified Google identity claiming an account, and ahead of a reset's
+ * transaction.
+ * @param userId - The user whose sessions should all end.
+ * @returns Resolves once every token is revoked and each revoked session is denied, best-effort.
+ */
+export async function revokeAllSessions(userId: string): Promise<void> {
+  const sessionIds = await withTransaction((tx) => revokeSessionRows(userId, {}, tx))
+  await denySessions(sessionIds)
+}
+
+/**
+ * Revoke every live session belonging to a user except one, and deny each
+ * revoked session's access tokens (best-effort — see `denySession`).
  * @param userId - The user whose sessions should all end, except one.
  * @param sessionId - The one session id to spare.
  * @returns Resolves once every other session's tokens are revoked and denied, best-effort.
@@ -513,5 +568,8 @@ export async function revokeAllSessionsExceptCurrent(
   userId: string,
   sessionId: string
 ): Promise<void> {
-  await denySessions(await userTokenRepository.revokeAllForUserExceptSession(userId, sessionId))
+  const sessionIds = await withTransaction((tx) =>
+    revokeSessionRows(userId, { exceptSessionId: sessionId }, tx)
+  )
+  await denySessions(sessionIds)
 }

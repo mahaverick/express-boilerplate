@@ -28,10 +28,11 @@ import { logger } from '@/services/logger.service'
 import { autoJoinSafely, getPlatformMembership } from '@/services/platform.service'
 import {
   claimToken,
+  denySessionsAfterCommit,
   issueRefreshToken,
   issueToken,
   revokeAllSessions,
-  revokeAllSessionsExceptCurrent,
+  revokeSessionRows,
   rotateRefreshToken,
   signAccessToken,
   type IssuedRefreshToken,
@@ -215,6 +216,10 @@ async function platformRoleForLogin(userId: string): Promise<MembershipRole | nu
  * guard, after ONE bcrypt comparison, with one 401 — a separate early
  * return for any of them would be a timing oracle. The message is literally
  * false for an unverified account with the right password; that is accepted.
+ *
+ * The token is issued in a transaction that re-reads the hash FOR SHARE. A
+ * password change or reset still in flight is waited for, and one that
+ * committed after the compare answers the same 401, so no session outlives it.
  * @param input - The validated login body.
  * @returns The user, their platform role, an access token and a new refresh token.
  * @throws {HttpError} 401 'Invalid email or password'.
@@ -234,9 +239,16 @@ export async function login(input: LoginInput): Promise<LoginResult> {
   // After the guard, so a failed attempt never reaches it; it never throws.
   await autoJoinSafely(user)
 
+  const comparedHash = user.passwordHash
   const sessionId = randomUUID()
+  const refreshToken = await withTransaction(async (tx) => {
+    const locked = await userRepository.lockById(user.id, 'share', tx)
+    if (locked?.passwordHash !== comparedHash) {
+      throw new HttpError('Invalid email or password', 401)
+    }
+    return issueRefreshToken(user.id, sessionId, tx)
+  })
   const accessToken = signAccessToken(user, sessionId)
-  const refreshToken = await issueRefreshToken(user.id, sessionId)
   const platformRole = await platformRoleForLogin(user.id)
   return { user, accessToken, refreshToken, platformRole }
 }
@@ -309,9 +321,14 @@ export async function requestPasswordReset(email: string): Promise<void> {
  * Reset a password with a token from the mailed link.
  *
  * Any claim failure (unknown, wrong purpose, used, expired) and a deleted
- * account answer the same 400. Sessions are revoked before the write, so a
- * failed write leaves none alive; that revokes every purpose, so older
- * reset links die too.
+ * account answer the same 400. Every token is revoked first, on its own:
+ * a failed write then still leaves no session alive, and every purpose goes,
+ * so older reset links die too. The user row is then locked, the hash
+ * stored and the tokens revoked again in one transaction. That second revoke
+ * catches a session a login created after the first: either it committed
+ * before the lock and is revoked here, or it waited on the lock and sees the
+ * new state. Those sessions are denied after commit; if Redis refuses, the
+ * reset stands and one error line is logged.
  * @param input - The validated `{ token, password }` body.
  * @returns Resolves once the password is stored.
  * @throws {HttpError} 400 'Invalid or expired reset link.'
@@ -327,17 +344,19 @@ export async function resetPassword(input: ResetPasswordInput): Promise<void> {
 
   await revokeAllSessions(user.id)
 
-  if (!user.emailVerifiedAt) {
-    // A federated link on a never-verified account may be a squatter's; the reset proves the mailbox.
-    await authProviderRepository.deleteFederatedForUser(user.id)
-  }
-
-  // One transaction, so the new password and the verification land together.
-  await withTransaction(async (tx) => {
+  const revokedSessionIds = await withTransaction(async (tx) => {
+    const locked = await userRepository.lockById(user.id, 'no key update', tx)
+    if (!locked) throw new HttpError(INVALID_RESET_TOKEN_MESSAGE, 400)
+    if (!locked.emailVerifiedAt) {
+      // A federated link on a never-verified account may be a squatter's; the reset proves the mailbox.
+      await authProviderRepository.deleteFederatedForUser(user.id, tx)
+    }
     await userRepository.update(user.id, { passwordHash }, {}, tx)
     // A reset proves the mailbox; markEmailVerified never moves an earlier timestamp.
-    if (!user.emailVerifiedAt) await markEmailVerified(user.id, tx)
+    if (!locked.emailVerifiedAt) await markEmailVerified(user.id, tx)
+    return revokeSessionRows(user.id, {}, tx)
   })
+  await denySessionsAfterCommit(user.id, revokedSessionIds)
 }
 
 /**
@@ -345,12 +364,14 @@ export async function resetPassword(input: ResetPasswordInput): Promise<void> {
  *
  * Order: federated-only guard (before any compare, so a password-less
  * account is not told "wrong password"); verify current; reject a no-op;
- * hash; revoke every OTHER session; store; notify.
+ * hash; then one transaction that locks the user row, stores the hash and
+ * revokes every OTHER session; then deny those sessions; then notify.
  *
- * Revoke-then-store fails safe: on a failed store the other sessions are
- * gone and the password is unchanged. Store-then-revoke would leave an
- * attacker's sessions alive behind a changed password. No transaction: the
- * denial half is in Redis and could never join it.
+ * The one transaction closes the race with a login: the login either
+ * commits first and loses its session here, or waits on the row lock and
+ * sees the new hash. A failed store changes nothing. If the denylist write
+ * fails after commit, the change stands, one error line is logged, and the
+ * revoked sessions' access tokens stay valid for up to ACCESS_TOKEN_TTL.
  *
  * Without a session id (a pre-`sid` token) every session is revoked, the
  * caller's included — that token cannot be told apart from a stolen one.
@@ -387,13 +408,14 @@ export async function changePassword(
 
   const passwordHash = await hashPassword(input.newPassword)
 
-  if (currentSessionId) {
-    await revokeAllSessionsExceptCurrent(user.id, currentSessionId)
-  } else {
-    await revokeAllSessions(user.id)
-  }
-
-  await userRepository.update(user.id, { passwordHash })
+  const revokeOptions = currentSessionId ? { exceptSessionId: currentSessionId } : {}
+  const revokedSessionIds = await withTransaction(async (tx) => {
+    const locked = await userRepository.lockById(user.id, 'no key update', tx)
+    if (!locked) throw new HttpError('Account no longer exists or is inactive', 401)
+    await userRepository.update(user.id, { passwordHash }, {}, tx)
+    return revokeSessionRows(user.id, revokeOptions, tx)
+  })
+  await denySessionsAfterCommit(user.id, revokedSessionIds)
 
   // Fire-and-forget: a mail failure must never fail a change that already
   // succeeded. This template carries no secret.

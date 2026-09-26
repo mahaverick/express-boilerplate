@@ -14,7 +14,7 @@
 // see that file's header comment for why the actual `db.select()/.insert()/
 // .update()` calls live here, against the concrete `userModel`, rather than
 // in the generic base class.
-import { sql, type SQL } from 'drizzle-orm'
+import { eq, sql, type SQL } from 'drizzle-orm'
 import { userModel, type User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
 import {
@@ -22,7 +22,7 @@ import {
   type SoftDeleteOptions,
   type Touched,
 } from '@/repositories/base.repository'
-import { db, type DbExecutor } from '@/services/database.service'
+import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
 
 /**
  * Query access to the `users` table: lookup by id or email, creation,
@@ -75,6 +75,30 @@ export class UserRepository extends BaseRepository<(typeof userModel)['_']['conf
       this.touched({ emailVerifiedAt: new Date() }),
       executor
     )
+  }
+
+  /**
+   * Find a live user by id and lock the row until the transaction ends.
+   * `'no key update'` is for a password write, and still lets inserts that
+   * reference the user through. `'share'` is for a login's re-read of the
+   * hash, which waits for that write and lets other readers through.
+   * @param id - The user's id.
+   * @param mode - The lock strength.
+   * @param tx - The transaction to hold the lock in. Required: on the pool, the lock would release as soon as the statement finished.
+   * @returns The locked user, or undefined when none exists or it is soft-deleted.
+   */
+  async lockById(
+    id: string,
+    mode: 'no key update' | 'share',
+    tx: DbTransaction
+  ): Promise<User | undefined> {
+    const [row] = await tx
+      .select()
+      .from(userModel)
+      .where(this.scope(eq(userModel.id, id)))
+      .limit(1)
+      .for(mode)
+    return row
   }
 
   /**

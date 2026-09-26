@@ -27,7 +27,7 @@ describe('session denylist', () => {
 
   it('denies a session with a TTL equal to ACCESS_TOKEN_TTL, so the entry dies when the tokens do', async () => {
     const { denySession } = await import('@/services/session-denylist.service')
-    await denySession('session-abc')
+    expect(await denySession('session-abc')).toBe('denied')
 
     // Computed from the same source the service reads (getEnv().ACCESS_TOKEN_TTL),
     // not a hard-coded number: this asserts the ACTUAL invariant the
@@ -56,9 +56,9 @@ describe('session denylist', () => {
     expect(await isSessionDenied('session-abc')).toBe(false)
   })
 
-  it('never throws out of denySession, so a Redis outage cannot fail a logout', async () => {
+  it('never throws out of denySession, and reports the failure, so a Redis outage cannot fail a logout', async () => {
     redis.set.mockRejectedValue(new Error('connection refused'))
     const { denySession } = await import('@/services/session-denylist.service')
-    await expect(denySession('session-abc')).resolves.toBeUndefined()
+    await expect(denySession('session-abc')).resolves.toBe('failed')
   })
 })

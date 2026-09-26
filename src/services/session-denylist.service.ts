@@ -14,6 +14,11 @@ function denylistKey(sessionId: string): string {
 }
 
 /**
+ * Whether a denial was written.
+ */
+export type DenyOutcome = 'denied' | 'failed'
+
+/**
  * Mark a session's access tokens as no longer honoured.
  *
  * The TTL is the whole design. An entry only has to outlive the tokens it
@@ -32,9 +37,9 @@ function denylistKey(sessionId: string): string {
  * know a given access token exists. What this closes is the ordinary case:
  * a logout should not leave a usable credential behind for fifteen minutes.
  * @param sessionId - The session whose access tokens should stop working.
- * @returns Resolves once the entry is written, or once the failure is logged.
+ * @returns 'denied' once the entry is written; 'failed' once a failure is logged. Never rejects.
  */
-export async function denySession(sessionId: string): Promise<void> {
+export async function denySession(sessionId: string): Promise<DenyOutcome> {
   try {
     const seconds = Math.ceil(requireDurationMs(getEnv().ACCESS_TOKEN_TTL) / MS_PER_SECOND)
     const redis = await getRedis()
@@ -43,6 +48,7 @@ export async function denySession(sessionId: string): Promise<void> {
     await redis.set(denylistKey(sessionId), '1', {
       expiration: { type: 'EX', value: seconds },
     })
+    return 'denied'
   } catch (error) {
     // Never rethrow. Every revocation in session.service.ts calls this after
     // its database write (logout and password reset, for example), and a
@@ -52,6 +58,7 @@ export async function denySession(sessionId: string): Promise<void> {
       sessionId,
       error,
     })
+    return 'failed'
   }
 }
 
