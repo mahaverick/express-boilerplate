@@ -113,16 +113,17 @@ function requestContextFields(): Record<string, string> {
   return fields
 }
 
-// How many .cause levels serializeOneError walks before it stops, so a
-// self-referential (or otherwise cyclic) cause chain still terminates.
+// How many nodes — the top-level error plus its .cause chain — serializeOneError
+// will look at before it stops walking. Bounded, so a cyclic .cause chain
+// ends instead of recursing forever.
 const CAUSE_WALK_DEPTH = 5
 
 /**
  * Serialise one Error, redacting it in place if it carries a database
  * query and bound parameters, else recursing into its own `.cause` (also
- * redacted if necessary) up to `CAUSE_WALK_DEPTH` levels — deep enough for
- * a cyclic `.cause` chain to terminate rather than loop forever inside a
- * log call.
+ * redacted if necessary). Bounded by `CAUSE_WALK_DEPTH` — four `.cause`
+ * hops, five nodes including the top-level error — so a cyclic `.cause`
+ * chain ends instead of recursing forever inside a log call.
  * @param error - The error to serialise.
  * @param depth - How many levels of `.cause` have already been walked.
  * @returns A plain object safe to write to the log.

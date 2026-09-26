@@ -120,12 +120,15 @@ function stackFramesOf(error: QueryErrorShape): string | undefined {
  * `detail` field does so routinely (`Key (lower(email))=(...) already
  * exists.`). The code says the same thing without the value.
  *
- * `logger.service.ts`'s `serializeOneError` calls this automatically for
- * every logged error, direct or anywhere in its `.cause` chain. The
- * explicit `redactedForLog(error)` calls remaining at logging sites in
- * `src/` predate that and are now harmless duplicates, not wrong: a
- * redacted object has `paramCount`, not `params`, so `isQueryError` on it
- * is false and a second call returns it unchanged.
+ * `logger.service.ts`'s `serializeOneError` applies this automatically to
+ * every Error-valued field the logger is given, and to each error in its
+ * `.cause` chain. It only reaches values that are `instanceof Error`,
+ * though — a query-shaped value that isn't one, such as `index.ts`'s
+ * unhandled-rejection `reason` (a rejection can settle with anything, not
+ * only an Error), still needs its own explicit `redactedForLog(error)` call
+ * at the logging site. Calling it twice on the same value is safe either
+ * way: a redacted object has `paramCount`, not `params`, so `isQueryError`
+ * on it is false and a second call returns it unchanged.
  * @param error - The thrown or forwarded error.
  * @returns The error itself when it is not a query error; a redacted, parameter-free record when it is.
  */
