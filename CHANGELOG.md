@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.0](https://github.com/mahaverick/express-boilerplate/compare/v3.1.0...v3.2.0) (2026-09-26)
+
+
+### Features
+
+* write rate limits, lock modes, log redaction, cookie prefix and data retention (stream 5a) ([#55](https://github.com/mahaverick/express-boilerplate/issues/55)) ([2b28fbe](https://github.com/mahaverick/express-boilerplate/commit/2b28fbee2e3c4833912da851e2e6fcc742e4d08a))
+
 ## [3.1.0](https://github.com/mahaverick/express-boilerplate/compare/v3.0.0...v3.1.0) (2026-09-25)
 
 
