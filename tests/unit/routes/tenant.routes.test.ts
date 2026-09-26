@@ -49,4 +49,27 @@ describe('createTenantRouter', () => {
     expect(inviteLimiter).toHaveProperty('resetKey')
     expect(resendLimiter).toBe(inviteLimiter)
   })
+
+  it('mounts one authenticatedWrite limiter instance across every route that shares it', () => {
+    const router = createTenantRouter()
+    const writeRoutes: [string, string][] = [
+      ['patch', '/:slug'],
+      ['patch', '/:slug/members/:userId'],
+      ['delete', '/:slug/members/:userId'],
+      ['delete', '/:slug/invitations/:id'],
+      ['patch', '/:slug/settings'],
+    ]
+
+    // Position 1: right after requireJsonContentType, same convention the
+    // file's existing invite/resend test already establishes.
+    const limiters = writeRoutes.map(([method, path]) => handlersFor(router, method, path)[1])
+
+    for (const limiter of limiters) {
+      expect(limiter).toHaveProperty('resetKey')
+    }
+    const [first, ...rest] = limiters
+    for (const limiter of rest) {
+      expect(limiter).toBe(first)
+    }
+  })
 })

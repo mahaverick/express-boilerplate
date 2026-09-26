@@ -1,6 +1,6 @@
 // src/constants/rate-limit.constants.ts
 //
-// The 20 rate-limit specs this API enforces, and the key-derivation
+// The 21 rate-limit specs this API enforces, and the key-derivation
 // functions `createRateLimiter` (rate-limit.middleware.ts) maps `keyBy` to.
 // The key-derivation functions live here, not in rate-limit.middleware.ts,
 // because `loginRateLimitKey` (the one composite key) must be constructible
@@ -59,7 +59,7 @@ export interface RateLimiterSpec {
 }
 
 /**
- * The 20 rate limiters this API mounts, by name.
+ * The 21 rate limiters this API mounts, by name.
  */
 export type RateLimitName =
   | 'register'
@@ -82,6 +82,7 @@ export type RateLimitName =
   | 'invitationPreview'
   | 'invitationAccept'
   | 'platformSearch'
+  | 'authenticatedWrite'
 
 const RATE_LIMITED_MESSAGE = 'Too many attempts. Please try again later.'
 
@@ -138,7 +139,7 @@ export function authenticatedUserRateLimitKey(request: Request): string {
 }
 
 /**
- * The 20 rate-limit specs this API enforces. `name` is the live Redis key
+ * The 21 rate-limit specs this API enforces. `name` is the live Redis key
  * prefix — see this file's own header comment before changing one.
  */
 export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
@@ -388,5 +389,20 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     limit: 60,
     keyBy: 'user',
     message: RATE_LIMITED_MESSAGE,
+  },
+  /**
+   * One shared budget for every authenticated write that has no
+   * route-specific limiter of its own — a floor, not a replacement for a
+   * tighter limiter where one already exists.
+   * tests/unit/routes/route-limiters.test.ts's guard test fails a new
+   * unlimited write route rather than relying on every future PR to
+   * remember this comment.
+   */
+  authenticatedWrite: {
+    name: 'authenticated-write',
+    windowMs: 60_000,
+    limit: 60,
+    keyBy: 'user',
+    message: 'Too many requests, please slow down',
   },
 }

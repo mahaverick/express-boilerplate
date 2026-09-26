@@ -46,6 +46,12 @@ export function createTenantRouter(): Router {
   const router = Router()
   router.use(requireAuth)
 
+  // One instance, reused at every call site below with no route-specific
+  // limiter of its own — matching inviteRateLimiter's own reasoning: on
+  // the in-memory fallback, separate createRateLimiter(...) calls would
+  // count separately, splitting one 60/minute budget into five.
+  const writeLimiter = createRateLimiter(RATE_LIMITS.authenticatedWrite)
+
   // -- Tenant CRUD --
   router.post(
     '/',
@@ -58,6 +64,7 @@ export function createTenantRouter(): Router {
   router.patch(
     '/:slug',
     requireJsonContentType,
+    writeLimiter,
     resolveTenant(),
     requireRole('owner', 'admin'),
     tenantController.updateTenant
@@ -70,6 +77,7 @@ export function createTenantRouter(): Router {
   router.patch(
     '/:slug/members/:userId',
     requireJsonContentType,
+    writeLimiter,
     resolveTenant(),
     requireRole('owner'),
     tenantController.updateMemberRole
@@ -77,6 +85,7 @@ export function createTenantRouter(): Router {
   router.delete(
     '/:slug/members/:userId',
     requireJsonContentType,
+    writeLimiter,
     resolveTenant(),
     requireRole('owner', 'admin'),
     tenantController.removeMember
@@ -111,6 +120,7 @@ export function createTenantRouter(): Router {
   router.delete(
     '/:slug/invitations/:id',
     requireJsonContentType,
+    writeLimiter,
     resolveTenant(),
     requireRole('owner', 'admin'),
     tenantController.revokeInvitation
@@ -121,6 +131,7 @@ export function createTenantRouter(): Router {
   router.patch(
     '/:slug/settings',
     requireJsonContentType,
+    writeLimiter,
     resolveTenant(),
     requireRole('owner', 'admin'),
     tenantController.updateSettings
