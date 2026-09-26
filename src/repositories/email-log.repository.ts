@@ -270,6 +270,9 @@ export class EmailLogRepository {
 
   /**
    * Delete up to `limit` rows created before `cutoff`.
+   * Takes the batch oldest id first with FOR UPDATE SKIP LOCKED: a row a
+   * request holds is left for a later run instead of waited on, so a batch
+   * can come back short while matching rows remain.
    * @param cutoff - Rows older than this go.
    * @param limit - The most rows one call deletes.
    * @param tx - The batch's transaction.
@@ -280,7 +283,9 @@ export class EmailLogRepository {
       .select({ id: emailLogModel.id })
       .from(emailLogModel)
       .where(sql`${emailLogModel.createdAt} < ${cutoff.toISOString()}::timestamptz`)
+      .orderBy(emailLogModel.id)
       .limit(limit)
+      .for('update', { skipLocked: true })
     const result = await tx.delete(emailLogModel).where(inArray(emailLogModel.id, batch))
     return result.count
   }

@@ -329,6 +329,9 @@ export class TenantInvitationRepository {
    * revocation is before `cutoff`. `greatest` ignores NULLs, so a pending
    * invitation counts from its expiry. No index: the table holds one row per
    * invite, so the daily scan is cheap.
+   * Takes the batch oldest id first with FOR UPDATE SKIP LOCKED: a row a
+   * request holds is left for a later run instead of waited on, so a batch
+   * can come back short while matching rows remain.
    * @param cutoff - Rows older than this go.
    * @param limit - The most rows one call deletes.
    * @param tx - The batch's transaction.
@@ -341,7 +344,9 @@ export class TenantInvitationRepository {
       .where(
         sql`greatest(${invitation.expiresAt}, ${invitation.acceptedAt}, ${invitation.revokedAt}) < ${cutoff.toISOString()}::timestamptz`
       )
+      .orderBy(invitation.id)
       .limit(limit)
+      .for('update', { skipLocked: true })
     const result = await tx.delete(invitation).where(inArray(invitation.id, batch))
     return result.count
   }

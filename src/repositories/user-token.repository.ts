@@ -325,6 +325,11 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    * presented. Soft-deleted rows go too, so this doesn't use `scope`. A kept
    * row that pointed at a deleted one through `replaced_by_id` has that
    * pointer set to NULL by the foreign key.
+   * Takes the batch oldest id first with FOR UPDATE SKIP LOCKED: a row a
+   * request holds is left for a later run instead of waited on, so a batch
+   * can come back short while matching rows remain. The foreign key's update
+   * of a kept row is an ordinary write and does wait on a lock a request
+   * holds on that row.
    * @param cutoff - Rows older than this go.
    * @param limit - The most rows one call deletes.
    * @param tx - The batch's transaction.
@@ -342,7 +347,9 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
       .where(
         sql`${userTokenModel.expiresAt} < ${before} or (${userTokenModel.revokedAt} < ${before} and ${userTokenModel.consumedAt} is null)`
       )
+      .orderBy(userTokenModel.id)
       .limit(limit)
+      .for('update', { skipLocked: true })
     const result = await tx.delete(userTokenModel).where(inArray(userTokenModel.id, batch))
     return result.count
   }

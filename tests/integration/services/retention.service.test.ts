@@ -5,7 +5,9 @@
 // file's rows carry the real current time and can't match any predicate, so
 // the `deleted` counts here are exact.
 import { randomBytes, randomUUID } from 'node:crypto'
+import postgres from 'postgres'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { getEnv } from '@/configs/env.config'
 import { EmailLogRepository } from '@/repositories/email-log.repository'
 import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'
 import { sql } from '@/services/database.service'
@@ -17,6 +19,7 @@ import {
   type RetentionResult,
 } from '@/services/retention.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
+import { deferred, waitForWaiter } from '../../helpers/lock-probe'
 import { withMutatedMethod } from '../../helpers/mutate'
 
 const NOW = new Date('2001-01-01T03:00:00.000Z')
@@ -250,6 +253,15 @@ async function insertAuditRow(tenantId: string, occurredAt: string): Promise<str
   return row.id
 }
 
+/**
+ * Two rows from the same seed.
+ * @param insert - Inserts one row.
+ * @returns Both ids, in insert order.
+ */
+async function seedPair(insert: () => Promise<string>): Promise<[string, string]> {
+  return [await insert(), await insert()]
+}
+
 describe('runRetentionPurge', () => {
   it('deletes tokens expired, or revoked unused, before the cutoff, and keeps rotated ones until they expire', async () => {
     const userId = await insertUser()
@@ -460,6 +472,83 @@ describe('runRetentionPurge', () => {
       purge.mockRestore()
     }
   }, 30_000)
+
+  it('skips a row another transaction holds, without waiting, and deletes it on the next run', async () => {
+    const userId = await insertUser()
+    const tenantId = await insertTenant()
+    const tokens = await seedPair(() => insertToken(userId, { expiresAt: justOlder(DAYS.tokens) }))
+    const invitations = await seedPair(() =>
+      insertInvitation(tenantId, { expiresAt: justOlder(DAYS.invitations) })
+    )
+    const emailLogs = await seedPair(() => insertEmailLog(justOlder(DAYS.emailLogs)))
+    const read = await seedPair(() =>
+      insertNotification(
+        userId,
+        justOlder(DAYS.notificationsUnread),
+        justOlder(DAYS.notificationsRead)
+      )
+    )
+    const unread = await seedPair(() =>
+      insertNotification(userId, justOlder(DAYS.notificationsUnread))
+    )
+    const audit = await seedPair(() => insertAuditRow(tenantId, justOlder(DAYS.auditLogs)))
+    // The first of each pair is held; its twin is free.
+    const heldTokens = [tokens[0]]
+    const heldInvitations = [invitations[0]]
+    const heldEmailLogs = [emailLogs[0]]
+    const heldNotifications = [read[0], unread[0]]
+    const heldAudit = [audit[0]]
+
+    const holder = postgres(getEnv().DATABASE_URL, { max: 1 })
+    const locked = deferred<number>()
+    const release = deferred()
+    const holding = holder.begin(async (tx) => {
+      await tx`select id from user_tokens where id = any(${heldTokens}) for update`
+      await tx`select id from tenant_invitations where id = any(${heldInvitations}) for update`
+      await tx`select id from email_logs where id = any(${heldEmailLogs}) for update`
+      await tx`select id from notifications where id = any(${heldNotifications}) for update`
+      await tx`select id from audit_logs where id = any(${heldAudit}) for update`
+      const [row] = await tx<{ pid: number }[]>`select pg_backend_pid() as pid`
+      if (!row) throw new Error('pg_backend_pid() returned no row')
+      locked.resolve(row.pid)
+      await release.promise
+    })
+
+    try {
+      const holderPid = await locked.promise
+      const firstRun = runRetentionPurge(NOW, DAYS)
+      expect(await waitForWaiter(holderPid, firstRun)).toBe(false)
+      const first = await firstRun
+      expect(first.map((result) => result.error)).toEqual([
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+      ])
+      expect(first.map((result) => result.deleted)).toEqual([1, 1, 1, 1, 1, 1])
+      expect(await surviving('user_tokens', tokens)).toEqual(heldTokens)
+      expect(await surviving('tenant_invitations', invitations)).toEqual(heldInvitations)
+      expect(await surviving('email_logs', emailLogs)).toEqual(heldEmailLogs)
+      expect(await surviving('notifications', [...read, ...unread])).toEqual(
+        sorted(heldNotifications)
+      )
+      expect(await surviving('audit_logs', audit)).toEqual(heldAudit)
+    } finally {
+      release.resolve()
+      await holding
+      await holder.end({ timeout: 5 })
+    }
+
+    const second = await runRetentionPurge(NOW, DAYS)
+    expect(second.map((result) => result.deleted)).toEqual([1, 1, 1, 1, 1, 1])
+    expect(await surviving('user_tokens', tokens)).toEqual([])
+    expect(await surviving('tenant_invitations', invitations)).toEqual([])
+    expect(await surviving('email_logs', emailLogs)).toEqual([])
+    expect(await surviving('notifications', [...read, ...unread])).toEqual([])
+    expect(await surviving('audit_logs', audit)).toEqual([])
+  })
 
   it('runs every other rule when one fails, and reports and logs that one', async () => {
     const old = await insertEmailLog(justOlder(DAYS.emailLogs))

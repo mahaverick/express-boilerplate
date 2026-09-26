@@ -294,6 +294,9 @@ export class NotificationRepository {
 
   /**
    * Delete up to `limit` notifications read before `cutoff`.
+   * Takes the batch oldest id first with FOR UPDATE SKIP LOCKED: a row a
+   * request holds is left for a later run instead of waited on, so a batch
+   * can come back short while matching rows remain.
    * @param cutoff - Rows read before this go.
    * @param limit - The most rows one call deletes.
    * @param tx - The batch's transaction.
@@ -304,13 +307,18 @@ export class NotificationRepository {
       .select({ id: notificationModel.id })
       .from(notificationModel)
       .where(sql`${notificationModel.readAt} < ${cutoff.toISOString()}::timestamptz`)
+      .orderBy(notificationModel.id)
       .limit(limit)
+      .for('update', { skipLocked: true })
     const result = await tx.delete(notificationModel).where(inArray(notificationModel.id, batch))
     return result.count
   }
 
   /**
    * Delete up to `limit` unread notifications created before `cutoff`.
+   * Takes the batch oldest id first with FOR UPDATE SKIP LOCKED: a row a
+   * request holds is left for a later run instead of waited on, so a batch
+   * can come back short while matching rows remain.
    * @param cutoff - Unread rows created before this go.
    * @param limit - The most rows one call deletes.
    * @param tx - The batch's transaction.
@@ -326,7 +334,9 @@ export class NotificationRepository {
           sql`${notificationModel.createdAt} < ${cutoff.toISOString()}::timestamptz`
         )
       )
+      .orderBy(notificationModel.id)
       .limit(limit)
+      .for('update', { skipLocked: true })
     const result = await tx.delete(notificationModel).where(inArray(notificationModel.id, batch))
     return result.count
   }

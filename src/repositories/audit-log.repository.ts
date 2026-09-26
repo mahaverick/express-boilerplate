@@ -153,6 +153,9 @@ export class AuditLogRepository {
    * Delete up to `limit` entries that occurred before `cutoff`. The trigger
    * refuses this unless `tx` is a retention purge transaction; see
    * retention.service.ts.
+   * Takes the batch oldest id first with FOR UPDATE SKIP LOCKED: a row a
+   * request holds is left for a later run instead of waited on, so a batch
+   * can come back short while matching rows remain.
    * @param cutoff - Entries older than this go.
    * @param limit - The most rows one call deletes.
    * @param tx - The purge's batch transaction.
@@ -163,7 +166,9 @@ export class AuditLogRepository {
       .select({ id: auditLogModel.id })
       .from(auditLogModel)
       .where(sql`${auditLogModel.occurredAt} < ${cutoff.toISOString()}::timestamptz`)
+      .orderBy(auditLogModel.id)
       .limit(limit)
+      .for('update', { skipLocked: true })
     const result = await tx.delete(auditLogModel).where(inArray(auditLogModel.id, batch))
     return result.count
   }
