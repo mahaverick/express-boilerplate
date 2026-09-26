@@ -192,8 +192,13 @@ export async function bootstrapGrant(email: string, role: MembershipRole): Promi
     const platform = await tenantRepository.findPlatformTenant(tx)
     if (!platform) throw new HttpError('The platform tenant is missing', 500)
 
-    await userMembershipRepository.lockOwners(platform.id, tx)
-    const [existing] = await userMembershipRepository.lockMemberships(platform.id, [user.id], tx)
+    await userMembershipRepository.lockOwners(platform.id, 'no key update', tx)
+    const [existing] = await userMembershipRepository.lockMemberships(
+      platform.id,
+      [user.id],
+      'no key update',
+      tx
+    )
     const membership = existing
       ? await regrant(existing, role, tx)
       : await userMembershipRepository.create({ userId: user.id, tenantId: platform.id, role }, tx)

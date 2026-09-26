@@ -14,7 +14,8 @@
 //   pnpm exec vitest run tests/integration/services/tenant-access.service.test.ts                    # green
 //
 // Pool note: test mode has max 2 connections, and the race holds both. A
-// query inside a service that skipped `tx` would hang here.
+// query inside a service that skipped `tx` would hang here. The probe that
+// shows the staff read waiting opens its own connection (lock-probe.ts).
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { MembershipRole } from '@/constants/tenant.constants'
@@ -28,6 +29,7 @@ import { db, sql } from '@/services/database.service'
 import { resolveActorAccess } from '@/services/tenant-access.service'
 import { changeRole, removeMember } from '@/services/tenant-membership.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
+import { backendPid, deferred, untilSignalled, waitForBlocked } from '../../helpers/lock-probe'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { platformTenant } from '../../helpers/platform-staff'
 
@@ -57,28 +59,6 @@ function outcomeOf(result: PromiseSettledResult<unknown>): string | number {
  */
 async function addMember(tenant: Tenant, user: User, role: MembershipRole): Promise<void> {
   await userMembershipRepository.create({ userId: user.id, tenantId: tenant.id, role })
-}
-
-/**
- * A promise with its resolver exposed.
- * @returns The promise and its resolve function.
- */
-function deferred(): { promise: Promise<void>; resolve: () => void } {
-  let settle: (() => void) | undefined
-  // eslint-disable-next-line unicorn/prefer-promise-with-resolvers -- tsconfig.json pins `lib: ["ES2023"]`; `Promise.withResolvers` is ES2024 and untyped under it.
-  const promise = new Promise<void>((resolve) => {
-    settle = resolve
-  })
-  return { promise, resolve: () => settle?.() }
-}
-
-/**
- * Wait for `promise`, or give up after `ms`.
- * @param promise - What to wait for.
- * @param ms - The longest wait.
- */
-async function withTimeout(promise: Promise<void>, ms: number): Promise<void> {
-  await Promise.race([promise, new Promise((resolve) => setTimeout(resolve, ms))])
 }
 
 describe('tenant-access.service', () => {
@@ -175,22 +155,22 @@ describe('tenant-access.service', () => {
 
   describe('the platform-membership lock', () => {
     /**
-     * What the staff write's locked platform read ran and saw, in order
-     * with the demotion's commit.
+     * What the race produced: both outcomes, the order of the staff read
+     * against the demotion's commit, and whether the staff read queued.
      */
     interface DemotionRace {
       outcomes: (string | number)[]
       events: string[]
+      didStaffWait: boolean
     }
 
     /**
      * Staff admin S removes manager M from tenant T while platform owner P's
-     * demotion of S to viewer holds S's platform row FOR UPDATE, uncommitted.
-     * P's transaction waits (inside `updateRole`) until S has called
-     * `lockPlatformRole` and that call has either returned or had time to
-     * block, then commits.
+     * demotion of S to viewer holds S's platform row, uncommitted. P's
+     * transaction waits inside `updateRole` until the probe has answered
+     * whether S's platform read queued behind it, then commits.
      * @param platformRead - The read S's transaction makes in place of `lockPlatformRole`.
-     * @returns The two outcomes (S, then P) and the order of S's read against P's commit.
+     * @returns The race's outcomes (S, then P), events, whether S waited, and the rows involved.
      */
     async function raceStaffRemovalAgainstDemotion(
       platformRead: UserMembershipRepository['lockPlatformRole']
@@ -207,8 +187,8 @@ describe('tenant-access.service', () => {
 
       const events: string[] = []
       const demotionHolds = deferred()
-      const staffReadCalled = deferred()
-      const staffReadReturned = deferred()
+      const releaseDemotion = deferred()
+      const staffPid = deferred<number>()
 
       // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
       const realUpdateRole = UserMembershipRepository.prototype.updateRole
@@ -218,8 +198,7 @@ describe('tenant-access.service', () => {
       ) {
         const updated = await realUpdateRole.apply(this, parameters)
         demotionHolds.resolve()
-        await withTimeout(staffReadCalled.promise, 5000)
-        await withTimeout(staffReadReturned.promise, 500)
+        await releaseDemotion.promise
         events.push('demotion committing')
         return updated
       }
@@ -228,14 +207,14 @@ describe('tenant-access.service', () => {
         userId,
         tx
       ) {
-        staffReadCalled.resolve()
+        staffPid.resolve(await backendPid(tx))
         const role = await platformRead.call(this, userId, tx)
         events.push(`staff read ${String(role)}`)
-        staffReadReturned.resolve()
         return role
       }
 
       let outcomes: (string | number)[] = []
+      let didStaffWait = false
       await withMutatedMethod(
         UserMembershipRepository.prototype,
         'updateRole',
@@ -252,15 +231,22 @@ describe('tenant-access.service', () => {
                 staff.id,
                 'viewer'
               )
-              await withTimeout(demotionHolds.promise, 5000)
-              const removal = removeMember({ userId: staff.id }, tenant.id, manager.id)
+              let removal: Promise<void> | undefined
+              try {
+                await untilSignalled(demotionHolds.promise, demotion, 'the demotion')
+                removal = removeMember({ userId: staff.id }, tenant.id, manager.id)
+                const pid = await untilSignalled(staffPid.promise, removal, 'the staff removal')
+                didStaffWait = await waitForBlocked(pid, removal)
+              } finally {
+                releaseDemotion.resolve()
+              }
               const settled = await Promise.allSettled([removal, demotion])
               outcomes = settled.map((result) => outcomeOf(result))
             }
           )
         }
       )
-      return { outcomes, events, staff, tenant, manager }
+      return { outcomes, events, didStaffWait, staff, tenant, manager }
     }
 
     /**
@@ -270,6 +256,7 @@ describe('tenant-access.service', () => {
     async function expectRefusedOnTheDemotedRole(
       race: Awaited<ReturnType<typeof raceStaffRemovalAgainstDemotion>>
     ): Promise<void> {
+      expect(race.didStaffWait).toBe(true)
       expect(race.outcomes).toEqual([403, 'fulfilled'])
       expect(race.events).toEqual(['demotion committing', 'staff read viewer'])
       expect(await userMembershipRepository.findPlatformRole(race.staff.id)).toBe('viewer')

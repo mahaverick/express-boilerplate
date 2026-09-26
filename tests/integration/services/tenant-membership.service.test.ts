@@ -15,7 +15,7 @@ import { HttpError } from '@/errors/http-error'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
-import { sql, type DbExecutor } from '@/services/database.service'
+import { sql } from '@/services/database.service'
 import { changeRole, removeMember } from '@/services/tenant-membership.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { withMutatedMethod } from '../../helpers/mutate'
@@ -105,13 +105,12 @@ describe('tenant-membership.service', () => {
     })
     const meetingLockOwners: typeof realLockOwners = async function (
       this: UserMembershipRepository,
-      tenantId: string,
-      executor?: DbExecutor
+      ...parameters: Parameters<typeof realLockOwners>
     ) {
       arrivals += 1
       if (arrivals >= 2) releaseBarrier()
       await Promise.race([barrier, new Promise((resolve) => setTimeout(resolve, 1000))])
-      return realLockOwners.call(this, tenantId, executor)
+      return realLockOwners.apply(this, parameters)
     }
 
     let outcomes: (string | number)[] = []

@@ -23,6 +23,7 @@ import { userModel, type User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
 import { isUniqueViolation } from '@/errors/postgres-errors'
 import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
+import type { RowLockMode } from '@/types/lock-mode'
 
 /**
  * One `user_memberships` row for `listByTenant`, joined with the subset of
@@ -314,27 +315,32 @@ export class UserMembershipRepository {
   }
 
   /**
-   * Lock a tenant's owner memberships until the transaction ends
-   * (`SELECT … FOR UPDATE`, in id order so two lockers never deadlock). A
-   * concurrent demotion or removal of an owner waits here, which is what
-   * makes the last-owner check atomic. Only meaningful inside a
-   * transaction. Lock order: this first, then `lockMemberships`.
+   * Lock a tenant's owner memberships until the transaction ends, in id
+   * order so two lockers never deadlock. A concurrent demotion or removal of
+   * an owner waits here, which is what makes the last-owner check atomic.
+   * Only meaningful inside a transaction. Lock order: this first, then
+   * `lockMemberships`.
    * @param tenantId - The tenant whose owners to lock.
+   * @param mode - `'update'` when the transaction may delete a locked row; otherwise `'no key update'`, which lets foreign-key checks through.
    * @param executor - The transaction to hold the lock in.
    * @returns The locked owner memberships.
    */
-  async lockOwners(tenantId: string, executor: DbExecutor = db): Promise<UserMembership[]> {
+  async lockOwners(
+    tenantId: string,
+    mode: RowLockMode = 'no key update',
+    executor: DbExecutor = db
+  ): Promise<UserMembership[]> {
     return executor
       .select()
       .from(userMembershipModel)
       .where(and(eq(userMembershipModel.tenantId, tenantId), eq(userMembershipModel.role, 'owner')))
       .orderBy(userMembershipModel.id)
-      .for('update')
+      .for(mode)
   }
 
   /**
    * Lock and return the memberships of `userIds` in a tenant until the
-   * transaction ends (`SELECT … FOR UPDATE`, in `user_id` order).
+   * transaction ends, in `user_id` order.
    *
    * Lock order within one transaction: the tenant's owner rows first
    * (`lockOwners`), then this, then `lockPlatformRole` when the actor has no
@@ -342,12 +348,14 @@ export class UserMembershipRepository {
    * transactions never wait on each other in a cycle.
    * @param tenantId - The tenant.
    * @param userIds - The users whose memberships to lock. Duplicates and non-members are ignored.
+   * @param mode - `'update'` when the transaction may delete a locked row; otherwise `'no key update'`.
    * @param executor - The transaction to hold the locks in.
    * @returns The locked memberships that exist, in `user_id` order.
    */
   async lockMemberships(
     tenantId: string,
     userIds: readonly string[],
+    mode: RowLockMode = 'no key update',
     executor: DbExecutor = db
   ): Promise<UserMembership[]> {
     return executor
@@ -360,6 +368,6 @@ export class UserMembershipRepository {
         )
       )
       .orderBy(userMembershipModel.userId)
-      .for('update')
+      .for(mode)
   }
 }

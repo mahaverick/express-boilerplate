@@ -49,9 +49,10 @@ export class TenantSettingsRepository {
   }
 
   /**
-   * Find the settings row for one tenant and lock it (`SELECT … FOR
-   * UPDATE`) for the rest of the transaction. Lock order: after the access
-   * locks `lockTenantAccess` takes (tenant-access.service.ts).
+   * Find the settings row for one tenant and lock it (`SELECT … FOR NO KEY
+   * UPDATE`) for the rest of the transaction. Nothing deletes a settings row
+   * or changes its key. Lock order: after the access locks
+   * `lockTenantAccess` takes (tenant-access.service.ts).
    * @param tenantId - The tenant whose settings to lock.
    * @param executor - The transaction to hold the lock in. Required: on the pool, the lock would release as soon as the statement finished.
    * @returns The locked row, or undefined when no such tenant exists.
@@ -64,7 +65,7 @@ export class TenantSettingsRepository {
       .select()
       .from(tenantSettingsModel)
       .where(eq(tenantSettingsModel.tenantId, tenantId))
-      .for('update')
+      .for('no key update')
     return row
   }
 

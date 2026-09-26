@@ -365,6 +365,7 @@ describe('UserMembershipRepository', () => {
         userMembershipRepository.lockMemberships(
           tenant.id,
           [second.id, outsider.id, third.id, first.id, first.id],
+          'no key update',
           tx
         )
       )
@@ -377,7 +378,7 @@ describe('UserMembershipRepository', () => {
       const tenant = await createTenant(owner.id)
 
       const locked = await db.transaction((tx) =>
-        userMembershipRepository.lockMemberships(tenant.id, [], tx)
+        userMembershipRepository.lockMemberships(tenant.id, [], 'no key update', tx)
       )
 
       expect(locked).toEqual([])
@@ -395,7 +396,7 @@ describe('UserMembershipRepository', () => {
 
       // Pool note: test mode has max 2 connections; the transaction holds one, the probe uses the other.
       await db.transaction(async (tx) => {
-        await userMembershipRepository.lockMemberships(tenant.id, [member.id], tx)
+        await userMembershipRepository.lockMemberships(tenant.id, [member.id], 'no key update', tx)
         await expect(
           sql`select id from user_memberships where id = ${membership.id} for update nowait`
         ).rejects.toMatchObject({ code: '55P03' })

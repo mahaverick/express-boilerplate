@@ -18,6 +18,7 @@ import {
   type ActorAccess,
 } from '@/services/tenant-access.service'
 import type { Actor, TenantAccess } from '@/types/actor'
+import type { RowLockMode } from '@/types/lock-mode'
 
 const userMembershipRepository = new UserMembershipRepository()
 
@@ -62,6 +63,7 @@ export async function lockActorRole(
  * @param tenantId - The tenant.
  * @param targetUserId - The member being changed or removed.
  * @param minimum - The lowest role the route admits.
+ * @param mode - `'update'` when the caller deletes the target's membership.
  * @param executor - The transaction to hold the locks in.
  * @returns The actor's current effective role, how they reached the tenant, and the target's membership.
  * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access; 403 `Insufficient permissions` when their role is now below `minimum`; 404 `Member not found` when the target is not a member.
@@ -71,9 +73,10 @@ async function lockActorAndTarget(
   tenantId: string,
   targetUserId: string,
   minimum: MembershipRole,
+  mode: RowLockMode,
   executor: DbTransaction
 ): Promise<{ actorRole: MembershipRole; access: TenantAccess; target: UserMembership }> {
-  const locked = await lockTenantAccess(actor, tenantId, [targetUserId], executor)
+  const locked = await lockTenantAccess(actor, tenantId, [targetUserId], mode, executor)
   assertRoleAtLeast(locked.actor, minimum)
   const target = locked.memberships.find((membership) => membership.userId === targetUserId)
   if (!target) throw new HttpError('Member not found', 404)
@@ -120,6 +123,7 @@ export async function changeRole(
       tenantId,
       targetUserId,
       'owner',
+      'no key update',
       tx
     )
     if (!canActorModifyTarget(actorRole, target.role, targetUserId === actor.userId)) {
@@ -160,11 +164,13 @@ export async function removeMember(
   targetUserId: string
 ): Promise<void> {
   await db.transaction(async (tx) => {
+    // FOR UPDATE: this transaction deletes the target's membership row.
     const { actorRole, access, target } = await lockActorAndTarget(
       actor,
       tenantId,
       targetUserId,
       'admin',
+      'update',
       tx
     )
     if (!canActorModifyTarget(actorRole, target.role, targetUserId === actor.userId)) {
