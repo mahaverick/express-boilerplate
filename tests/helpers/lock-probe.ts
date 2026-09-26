@@ -1,7 +1,8 @@
 // tests/helpers/lock-probe.ts
 //
 // Detects a row-lock wait without sleeping on a guess: pg_blocking_pids(pid)
-// lists the backends a waiting backend is queued behind. The test pool has
+// lists the backends a waiting backend is queued behind, which answers both
+// 'is this backend waiting' and 'is anything waiting on this one'. The test pool has
 // two connections and a race holds both, so each probe opens its own
 // single-connection client and closes it before returning.
 import { setTimeout as delay } from 'node:timers/promises'
@@ -26,22 +27,22 @@ export async function backendPid(executor: DbExecutor): Promise<number> {
 }
 
 /**
- * Poll pg_blocking_pids(pid) every 10 ms on a dedicated connection until it
- * is non-empty (true) or `settled` has settled (false).
- * @param pid - The backend to watch, from `backendPid`.
- * @param settled - The work running on that backend; once it settles, the backend was not left waiting.
- * @param options - Bounds on the wait.
- * @param options.timeoutMs - The longest wait, in ms (default 5000).
- * @returns True when the backend was seen waiting on a lock, false when the work finished without waiting.
+ * Poll `isObserved` every 10 ms on a dedicated connection until it answers true
+ * (true) or `settled` has settled (false).
+ * @param isObserved - One probe query answering whether the wait is seen.
+ * @param settled - The work being watched.
+ * @param timeoutMs - The longest wait.
+ * @param label - Names the wait in the timeout error.
+ * @returns True when `isObserved` answered true first.
  * @throws {Error} When neither happens within `timeoutMs`.
  */
-// eslint-disable-next-line unicorn/consistent-boolean-name -- reads as the wait it performs, like `await waitForBlocked(pid, work)`
-export async function waitForBlocked(
-  pid: number,
+// eslint-disable-next-line unicorn/consistent-boolean-name -- reads as the wait it performs, like the two exports below
+async function pollUntil(
+  isObserved: (probe: postgres.Sql) => Promise<boolean>,
   settled: Promise<unknown>,
-  options: { timeoutMs?: number } = {}
+  timeoutMs: number,
+  label: string
 ): Promise<boolean> {
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
   let hasSettled = false
   const observe = async (): Promise<void> => {
     try {
@@ -58,17 +59,75 @@ export async function waitForBlocked(
   const deadline = Date.now() + timeoutMs
   try {
     while (Date.now() < deadline) {
-      const [row] = await probe<{ blocked: boolean }[]>`
-        select cardinality(pg_blocking_pids(${pid}::int)) > 0 as blocked
-      `
-      if (row?.blocked) return true
+      if (await isObserved(probe)) return true
       if (hasSettled) return false
       await delay(POLL_INTERVAL_MS)
     }
-    throw new Error(`backend ${pid} neither waited on a lock nor finished within ${timeoutMs} ms`)
+    throw new Error(`${label}: no lock wait and no finish within ${timeoutMs} ms`)
   } finally {
     await probe.end({ timeout: 5 })
   }
+}
+
+/**
+ * Poll pg_blocking_pids(pid) until it is non-empty (true) or `settled`
+ * has settled (false).
+ * @param pid - The backend to watch, from `backendPid`.
+ * @param settled - The work running on that backend.
+ * @param options - Bounds on the wait.
+ * @param options.timeoutMs - The longest wait, in ms (default 5000).
+ * @returns True when the backend was seen waiting on a lock.
+ * @throws {Error} When neither happens within `timeoutMs`.
+ */
+// eslint-disable-next-line unicorn/consistent-boolean-name -- reads as the wait it performs, like `await waitForBlocked(pid, work)`
+export async function waitForBlocked(
+  pid: number,
+  settled: Promise<unknown>,
+  options: { timeoutMs?: number } = {}
+): Promise<boolean> {
+  return pollUntil(
+    async (probe) => {
+      const [row] = await probe<{ blocked: boolean }[]>`
+        select cardinality(pg_blocking_pids(${pid}::int)) > 0 as blocked
+      `
+      return row?.blocked === true
+    },
+    settled,
+    options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    `backend ${pid}`
+  )
+}
+
+/**
+ * Poll until some backend is queued behind `holderPid` (true), or `settled`
+ * has settled (false). Use it when the waiting side runs on a connection
+ * whose pid the test cannot capture.
+ * @param holderPid - The backend holding the lock, from `backendPid`.
+ * @param settled - The work expected to queue behind it.
+ * @param options - Bounds on the wait.
+ * @param options.timeoutMs - The longest wait, in ms (default 5000).
+ * @returns True when a backend was seen waiting on the holder.
+ * @throws {Error} When neither happens within `timeoutMs`.
+ */
+// eslint-disable-next-line unicorn/consistent-boolean-name -- reads as the wait it performs, like `await waitForWaiter(pid, work)`
+export async function waitForWaiter(
+  holderPid: number,
+  settled: Promise<unknown>,
+  options: { timeoutMs?: number } = {}
+): Promise<boolean> {
+  return pollUntil(
+    async (probe) => {
+      const [row] = await probe<{ waiting: boolean }[]>`
+        select exists (
+          select 1 from pg_stat_activity where ${holderPid}::int = any(pg_blocking_pids(pid))
+        ) as waiting
+      `
+      return row?.waiting === true
+    },
+    settled,
+    options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    `waiters on backend ${holderPid}`
+  )
 }
 
 /**

@@ -325,7 +325,7 @@ export async function requestPasswordReset(email: string): Promise<void> {
  * a failed write then still leaves no session alive, and every purpose goes,
  * so older reset links die too. The user row is then locked, the hash
  * stored and the tokens revoked again in one transaction. That second revoke
- * catches a session a login created after the first: either it committed
+ * catches a session a login or refresh created after the first: either it committed
  * before the lock and is revoked here, or it waited on the lock and sees the
  * new state. Those sessions are denied after commit; if Redis refuses, the
  * reset stands and one error line is logged.

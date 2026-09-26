@@ -8,6 +8,15 @@
 // second side waited. Two logins are raced too: one holds FOR SHARE while the
 // other finishes without waiting. There are no sleeps.
 //
+// A refresh rotation is raced the same way. It takes FOR SHARE on the user
+// row before it claims the presented token, so the password side's revoke
+// either starts after the rotation's new token has committed, or the rotation
+// waits and finds its token revoked. The grace path (a replayed token within
+// REFRESH_REUSE_GRACE_MS gets a sibling) is raced too. The rotation's
+// mutation proofs run for change only: reset's extra revoke before its
+// transaction serialises some of those schedules on its own, while in change
+// the user row lock is the only thing that does.
+//
 // Seams, all through withMutatedMethod:
 // - login pauses after its lastLoggedInAt UPDATE, the one call between the
 //   compare and its transaction;
@@ -36,9 +45,20 @@ import { logger } from '@/services/logger.service'
 import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
 import { getRedis } from '@/services/redis.service'
 import { isSessionDenied } from '@/services/session-denylist.service'
-import { hashToken, issueRefreshToken, issueToken } from '@/services/session.service'
+import {
+  hashToken,
+  issueRefreshToken,
+  issueToken,
+  rotateRefreshToken,
+} from '@/services/session.service'
 import { hashPassword, isPasswordValid } from '@/utilities/password.utilities'
-import { backendPid, deferred, untilSignalled, waitForBlocked } from '../../helpers/lock-probe'
+import {
+  backendPid,
+  deferred,
+  untilSignalled,
+  waitForBlocked,
+  waitForWaiter,
+} from '../../helpers/lock-probe'
 import { withMutatedMethod } from '../../helpers/mutate'
 
 const userRepository = new UserRepository()
@@ -606,3 +626,335 @@ describe('the denylist write after commit', () => {
     expect(failures).toEqual([[DENYLIST_FAILURE, { userId: user.id, sessionCount: 1 }]])
   })
 })
+
+/**
+ * A session with one live refresh token, or, with `rotated`, one already
+ * rotated so that presenting the first token again takes the grace path.
+ * @param user - The session's user.
+ * @param options - How to seed it.
+ * @param options.rotated - Rotates once and presents the rotated-away token.
+ * @returns The session id and the raw token the race presents.
+ */
+async function seedSession(
+  user: User,
+  options: { rotated: boolean }
+): Promise<{ sessionId: string; presented: string }> {
+  const sessionId = randomUUID()
+  const issued = await issueRefreshToken(user.id, sessionId)
+  if (options.rotated) await rotateRefreshToken(issued.raw)
+  return { sessionId, presented: issued.raw }
+}
+
+/**
+ * The refresh rows in one session, all and still live.
+ * @param sessionId - The session.
+ * @returns Both counts.
+ */
+async function sessionRows(sessionId: string): Promise<{ total: number; live: number }> {
+  const [row] = await sql<{ total: number; live: number }[]>`
+    select count(*)::int as total,
+           count(*) filter (where revoked_at is null)::int as live
+    from user_tokens where session_id = ${sessionId}
+  `
+  return { total: row?.total ?? 0, live: row?.live ?? 0 }
+}
+
+/**
+ * The rotation locks first: it takes FOR SHARE, claims (or, on the
+ * grace path, passes its checks) and pauses before inserting its next
+ * token; the password write queues behind it; then the rotation commits.
+ * @param writePassword - The prepared password write.
+ * @param presented - The raw token the rotation presents.
+ * @param options - Mutation-proof switches.
+ * @param options.unlockedRotation - Makes the rotation take no user lock (mutation proof only).
+ * @returns Whether the password side queued behind the rotation, and both outcomes.
+ */
+async function raceRotationFirst(
+  writePassword: () => Promise<void>,
+  presented: string,
+  options: { unlockedRotation?: boolean } = {}
+): Promise<{
+  passwordWaited: boolean
+  rotation: PromiseSettledResult<Awaited<ReturnType<typeof rotateRefreshToken>>>
+  password: PromiseSettledResult<void>
+}> {
+  // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
+  const realLockById = UserRepository.prototype.lockById
+  // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
+  const realCreate = UserTokenRepository.prototype.create
+  const rotationPid = deferred<number>()
+  const rotationPaused = deferred()
+  const releaseRotation = deferred()
+  // A holder object: TypeScript does not see assignments made inside the callback.
+  const flags = { reachedLock: false }
+
+  const lockById: typeof realLockById = async function (this: UserRepository, id, mode, tx) {
+    if (mode !== 'share') return realLockById.call(this, id, mode, tx)
+    flags.reachedLock = true
+    rotationPid.resolve(await backendPid(tx))
+    if (options.unlockedRotation) return
+    return realLockById.call(this, id, mode, tx)
+  }
+  const pausingCreate: typeof realCreate = async function (
+    this: UserTokenRepository,
+    ...parameters
+  ) {
+    if (parameters[0].purpose === 'refresh') {
+      rotationPaused.resolve()
+      await releaseRotation.promise
+    }
+    return realCreate.apply(this, parameters)
+  }
+
+  // A holder object: TypeScript does not see assignments made inside the callback.
+  const observed: {
+    waited: boolean
+    settled?: [
+      PromiseSettledResult<Awaited<ReturnType<typeof rotateRefreshToken>>>,
+      PromiseSettledResult<void>,
+    ]
+  } = { waited: false }
+  await withMutations(
+    [
+      (run) => withMutatedMethod(UserRepository.prototype, 'lockById', lockById, run),
+      (run) => withMutatedMethod(UserTokenRepository.prototype, 'create', pausingCreate, run),
+    ],
+    async () => {
+      const rotating = rotateRefreshToken(presented)
+      let writing: Promise<void> | undefined
+      try {
+        await untilSignalled(rotationPaused.promise, rotating, 'the rotation')
+        if (!flags.reachedLock) throw new Error('the rotation paused before taking the user lock')
+        const pid = await rotationPid.promise
+        writing = writePassword()
+        observed.waited = await waitForWaiter(pid, writing)
+      } finally {
+        releaseRotation.resolve()
+      }
+      observed.settled = await Promise.allSettled([rotating, writing ?? Promise.resolve()])
+    }
+  )
+  if (!observed.settled) throw new Error('the race did not run')
+  return {
+    passwordWaited: observed.waited,
+    rotation: observed.settled[0],
+    password: observed.settled[1],
+  }
+}
+
+/**
+ * The password write locks first: it locks the user row, stores the
+ * hash, revokes, and holds; the rotation then queues on FOR SHARE.
+ * @param writePassword - The prepared password write.
+ * @param presented - The raw token the rotation presents.
+ * @param options - Mutation-proof switches.
+ * @param options.unlockedRotation - Makes the rotation take no user lock (mutation proof only).
+ * @returns Whether the rotation waited, and both outcomes.
+ */
+async function racePasswordFirstForRotation(
+  writePassword: () => Promise<void>,
+  presented: string,
+  options: { unlockedRotation?: boolean } = {}
+): Promise<{
+  rotationWaited: boolean
+  rotation: PromiseSettledResult<Awaited<ReturnType<typeof rotateRefreshToken>>>
+  password: PromiseSettledResult<void>
+}> {
+  // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
+  const realLockById = UserRepository.prototype.lockById
+  const rotationPid = deferred<number>()
+  const passwordRevoked = deferred()
+  const releasePassword = deferred()
+  // A holder object: TypeScript does not see assignments made inside the callback.
+  const flags = { passwordLocked: false }
+
+  const lockById: typeof realLockById = async function (this: UserRepository, id, mode, tx) {
+    if (mode !== 'share') {
+      const row = await realLockById.call(this, id, mode, tx)
+      flags.passwordLocked = true
+      return row
+    }
+    rotationPid.resolve(await backendPid(tx))
+    if (options.unlockedRotation) return
+    return realLockById.call(this, id, mode, tx)
+  }
+
+  const observed: {
+    waited: boolean
+    settled?: [
+      PromiseSettledResult<Awaited<ReturnType<typeof rotateRefreshToken>>>,
+      PromiseSettledResult<void>,
+    ]
+  } = { waited: false }
+  await withMutations(
+    [
+      (run) => withMutatedMethod(UserRepository.prototype, 'lockById', lockById, run),
+      ...holdAfterRevoke(
+        () => passwordRevoked.resolve(),
+        releasePassword.promise,
+        () => flags.passwordLocked
+      ),
+    ],
+    async () => {
+      const writing = writePassword()
+      let rotating: ReturnType<typeof rotateRefreshToken> | undefined
+      try {
+        await untilSignalled(passwordRevoked.promise, writing, 'the password write')
+        rotating = rotateRefreshToken(presented)
+        const pid = await untilSignalled(rotationPid.promise, rotating, 'the rotation')
+        observed.waited = await waitForBlocked(pid, rotating)
+      } finally {
+        releasePassword.resolve()
+      }
+      observed.settled = await Promise.allSettled([
+        rotating ?? Promise.reject(new Error('the rotation never started')),
+        writing,
+      ])
+    }
+  )
+  if (!observed.settled) throw new Error('the race did not run')
+  return {
+    rotationWaited: observed.waited,
+    rotation: observed.settled[0],
+    password: observed.settled[1],
+  }
+}
+
+/**
+ * The rotation committed first, so the password write revoked and denied its new token.
+ * @param sessionId - The rotated session.
+ * @param race - The race's result.
+ */
+async function expectRotatedSessionRevoked(
+  sessionId: string,
+  race: Awaited<ReturnType<typeof raceRotationFirst>>
+): Promise<void> {
+  expect(race.passwordWaited).toBe(true)
+  expect(race.password.status).toBe('fulfilled')
+  if (race.rotation.status !== 'fulfilled') throw race.rotation.reason
+  expect(race.rotation.value.sessionId).toBe(sessionId)
+  // The raw client returns timestamps as strings, so ask Postgres instead.
+  const [row] = await sql<{ revoked: boolean }[]>`
+    select revoked_at is not null as revoked from user_tokens
+    where token_hash = ${hashToken(race.rotation.value.raw)}
+  `
+  expect(row?.revoked).toBe(true)
+  const rows = await sessionRows(sessionId)
+  expect(rows.live).toBe(0)
+  expect(await isSessionDenied(sessionId)).toBe(true)
+}
+
+/**
+ * The password write committed first, so the rotation found its token revoked.
+ * @param sessionId - The session.
+ * @param totalBefore - How many rows the session had before the race.
+ * @param race - The race's result.
+ */
+async function expectRotationRefused(
+  sessionId: string,
+  totalBefore: number,
+  race: Awaited<ReturnType<typeof racePasswordFirstForRotation>>
+): Promise<void> {
+  expect(race.rotationWaited).toBe(true)
+  expect(race.password.status).toBe('fulfilled')
+  expect(race.rotation).toMatchObject({
+    status: 'rejected',
+    reason: { statusCode: 401, message: 'Invalid refresh token' },
+  })
+  expect(await sessionRows(sessionId)).toEqual({ total: totalBefore, live: 0 })
+  expect(await isSessionDenied(sessionId)).toBe(true)
+}
+
+describe.each<PasswordFlow>(['change', 'reset'])(
+  'password %s against a concurrent refresh rotation',
+  (flow) => {
+    it('revokes and denies the token of a rotation that committed first', async () => {
+      const user = await seedUser()
+      const writePassword = await preparePasswordWrite(flow, user)
+      const { sessionId, presented } = await seedSession(user, { rotated: false })
+      await expectRotatedSessionRevoked(
+        sessionId,
+        await raceRotationFirst(writePassword, presented)
+      )
+    })
+
+    it('refuses a rotation that waited behind a committed password write', async () => {
+      const user = await seedUser()
+      const writePassword = await preparePasswordWrite(flow, user)
+      const { sessionId, presented } = await seedSession(user, { rotated: false })
+      await expectRotationRefused(
+        sessionId,
+        1,
+        await racePasswordFirstForRotation(writePassword, presented)
+      )
+    })
+
+    it('revokes and denies a grace sibling issued before the password write', async () => {
+      const user = await seedUser()
+      const writePassword = await preparePasswordWrite(flow, user)
+      const { sessionId, presented } = await seedSession(user, { rotated: true })
+      await expectRotatedSessionRevoked(
+        sessionId,
+        await raceRotationFirst(writePassword, presented)
+      )
+    })
+
+    it('refuses a grace replay that waited behind a committed password write', async () => {
+      const user = await seedUser()
+      const writePassword = await preparePasswordWrite(flow, user)
+      const { sessionId, presented } = await seedSession(user, { rotated: true })
+      await expectRotationRefused(
+        sessionId,
+        2,
+        await racePasswordFirstForRotation(writePassword, presented)
+      )
+    })
+
+    // DELIBERATELY red under MUTATION_PROOF=1: with no user lock, the
+    // revoke waits on the claimed row, re-checks it, and never sees the new
+    // row inserted after its snapshot.
+    it.runIf(process.env.MUTATION_PROOF === '1' && flow === 'change')(
+      'reproduces the rotation-first test with a rotation that takes no user lock',
+      async () => {
+        const user = await seedUser()
+        const writePassword = await preparePasswordWrite(flow, user)
+        const { sessionId, presented } = await seedSession(user, { rotated: false })
+        await expectRotatedSessionRevoked(
+          sessionId,
+          await raceRotationFirst(writePassword, presented, { unlockedRotation: true })
+        )
+      }
+    )
+
+    // DELIBERATELY red under MUTATION_PROOF=1: the revoke runs before the
+    // sibling exists, and nothing makes the password side wait.
+    it.runIf(process.env.MUTATION_PROOF === '1' && flow === 'change')(
+      'reproduces the grace rotation-first test with a rotation that takes no user lock',
+      async () => {
+        const user = await seedUser()
+        const writePassword = await preparePasswordWrite(flow, user)
+        const { sessionId, presented } = await seedSession(user, { rotated: true })
+        await expectRotatedSessionRevoked(
+          sessionId,
+          await raceRotationFirst(writePassword, presented, { unlockedRotation: true })
+        )
+      }
+    )
+
+    // DELIBERATELY red under MUTATION_PROOF=1: the kill marker is not yet
+    // committed when the grace check reads it, so a sibling is issued.
+    it.runIf(process.env.MUTATION_PROOF === '1' && flow === 'change')(
+      'reproduces the grace password-first test with a rotation that takes no user lock',
+      async () => {
+        const user = await seedUser()
+        const writePassword = await preparePasswordWrite(flow, user)
+        const { sessionId, presented } = await seedSession(user, { rotated: true })
+        await expectRotationRefused(
+          sessionId,
+          2,
+          await racePasswordFirstForRotation(writePassword, presented, { unlockedRotation: true })
+        )
+      }
+    )
+  }
+)

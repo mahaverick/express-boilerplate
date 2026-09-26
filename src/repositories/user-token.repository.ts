@@ -203,13 +203,12 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    * An entire rotation chain shares one session id, so the ids are
    * deduplicated.
    *
-   * KNOWN GAP, not fixed here: a session mid-rotation when this runs — the
-   * old refresh row already claimed by `rotateRefreshToken`, the new one
-   * not yet written — survives on both the revocation and denial side,
-   * because the row this method's `WHERE` clause would otherwise catch
-   * does not exist yet at the instant this query runs. Real, pre-existing,
-   * and needs the rotation and this revocation to share a transaction to
-   * close properly; not attempted here.
+   * A session mid-rotation when this runs (old row claimed, next row not yet
+   * committed) survives it: the next row is not in this statement's snapshot.
+   * Lock the user row FOR NO KEY UPDATE first (`UserRepository.lockById`),
+   * as password change and reset do. Rotation holds it FOR SHARE from before
+   * its claim until its next row commits, so this statement then starts
+   * after that commit.
    * @param userId - The user whose tokens should all be revoked.
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns The distinct session ids of the rows it revoked.
@@ -260,10 +259,8 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    * "simplify" this back to `!=`; that is precisely the silent regression
    * this comment exists to prevent.
    *
-   * Same known gap as `revokeAllForUser`, not fixed here either: a session
-   * mid-rotation when this runs — the old refresh row already claimed by
-   * `rotateRefreshToken`, the new one not yet written — survives on both the
-   * revocation and denial side.
+   * The same mid-rotation caveat as `revokeAllForUser`, closed the same way:
+   * lock the user row first.
    * @param userId - The user whose tokens should all be revoked, except one session's.
    * @param sessionId - The one session id to spare; every token sharing it is left untouched.
    * @param executor - Where to run the query. Defaults to the pool.

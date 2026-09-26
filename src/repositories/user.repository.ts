@@ -81,7 +81,7 @@ export class UserRepository extends BaseRepository<(typeof userModel)['_']['conf
    * Find a live user by id and lock the row until the transaction ends.
    * `'no key update'` is for a password write, and still lets inserts that
    * reference the user through. `'share'` is for a login's re-read of the
-   * hash, which waits for that write and lets other readers through.
+   * hash or a refresh rotation, which wait for that write and let each other through.
    * @param id - The user's id.
    * @param mode - The lock strength.
    * @param tx - The transaction to hold the lock in. Required: on the pool, the lock would release as soon as the statement finished.
