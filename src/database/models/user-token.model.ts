@@ -13,13 +13,13 @@
 // input to a different string every time and could never be looked up by
 // value.
 //
-// THIS TABLE GROWS WITHOUT BOUND AND NOTHING PRUNES IT. Rotation is
-// append-only on purpose — the revoked row has to survive for reuse
-// detection to recognise a replay of it — so a client refreshing on a
-// 15-minute access TTL writes roughly 96 rows a day, ~2,900 a month, and
-// none are ever deleted. No plan owns a retention job; see DATABASE.md's
-// "`user_tokens` grows without bound" for what one would do and why it is
-// not built here.
+// THIS TABLE GROWS WITH EVERY ROTATION. Rotation is append-only on purpose
+// — the revoked row has to survive for reuse detection to recognise a
+// replay of it — so a client refreshing on a 15-minute access TTL writes
+// roughly 96 rows a day, ~2,900 a month. The daily retention purge
+// (retention.service.ts) deletes a row RETENTION_TOKENS_DAYS after it
+// expired, or after a revoke that never consumed it; a rotated-away row is
+// kept until it expires. See DATABASE.md's "`user_tokens` retention".
 //
 // ONE TABLE, THREE PURPOSES (`purpose` below). This table originally held
 // only refresh tokens; it was generalised to also hold email-verification
@@ -51,7 +51,9 @@
 // response). What `replacedById` actually is, is FORENSIC METADATA: after
 // the fact, it lets a human walk one session's rotation chain in order and
 // see which row replaced which. Useful in an incident review, load-bearing
-// for nothing at runtime. A plan that wants to build on it should build on
+// for nothing at runtime. Its foreign key is ON DELETE SET NULL, so when the
+// retention purge deletes a row's successor the database nulls the pointer,
+// and a chain read back after a purge may have gaps. A plan that wants to build on it should build on
 // that description, not on the mechanism claim it used to carry.
 import { sql, type InferInsertModel, type InferSelectModel } from 'drizzle-orm'
 import {
@@ -168,9 +170,9 @@ export const userTokenModel = pgTable(
     // Denormalised rather than derived as `min(created_at) where session_id
     // = $1`, which the existing session_id index would have served without
     // a new column. Two reasons: the derived form makes the cap depend on
-    // the oldest row still present, so the retention job this table needs
-    // (see this file's header comment on unbounded growth) would silently
-    // EXTEND every live session the first time it purged one — a data
+    // the oldest row still present, so the retention purge (see this file's
+    // header comment) would silently EXTEND every live session the first
+    // time it purged one — a data
     // cleanup task quietly becoming a security regression. And it is read
     // on the rotation path, where a copied column costs nothing and an
     // extra aggregate query per refresh costs a round trip.
@@ -195,12 +197,14 @@ export const userTokenModel = pgTable(
     // killed without ever being used" (e.g. a stolen refresh token's family
     // on reuse detection, or a superseded reset request): both leave
     // `revokedAt` set, but only the former also sets `consumedAt`.
-    // Read by nothing yet — reserved for the purposes that need to tell
-    // the two apart once they have redemption endpoints of their own.
+    // Read by `findGraceSession` (session.service.ts), which lets only a
+    // consumed row mint a grace sibling, and by the retention purge, which
+    // keeps a consumed row until it expires.
     consumedAt: timestamp('consumed_at', { withTimezone: true }),
     // Self-referencing: the row this one was rotated into. Written by
     // `rotateRefreshToken` and read by nothing — forensic metadata, not a
     // mechanism; see this file's header comment before building on it.
+    // ON DELETE SET NULL, so purging a row nulls its predecessor's pointer.
     //
     // The `(): AnyPgColumn` return annotation is required, not decorative —
     // without it TypeScript cannot resolve `userTokenModel`'s own type while
@@ -212,10 +216,9 @@ export const userTokenModel = pgTable(
     ),
     // Required only so this table satisfies BaseRepository's
     // SoftDeletableTableConfig bound (base.repository.ts) — a refresh token
-    // is retired via `revokedAt`, above, never via soft delete. Nothing in
-    // this plan ever sets this column; it is reserved for a possible future
-    // retention job that purges very old, already-revoked rows, which is a
-    // distinct operation from revocation itself.
+    // is retired via `revokedAt`, above, never via soft delete. No
+    // application path sets this column. The retention purge ignores it: it hard-deletes by
+    // expiry and revocation, soft-deleted rows included.
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
