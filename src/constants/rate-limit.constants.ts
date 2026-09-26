@@ -16,8 +16,9 @@
 //
 // Every limiter shares one 429 body/handler (rate-limit.middleware.ts's
 // `createRateLimiter`) and `standardHeaders: true` / `legacyHeaders: false`
-// — neither varies per limiter, so `message` is the identical literal on
-// all 20 rather than 20 independent copies that could drift.
+// — neither varies per limiter, and `message` is the identical literal on
+// twenty of these; `authenticatedWrite` names its own, since its message
+// differs from every other entry's.
 //
 // This table is the single source of truth for the per-endpoint threat
 // model: each entry below carries its own comment for why its window,

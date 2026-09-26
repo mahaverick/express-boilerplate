@@ -22,8 +22,8 @@
 // `/preferences` sits under this same router, not a separate one: it is
 // still "notification settings", addressed relative to
 // `/api/v1/notifications`, and splitting it out would buy nothing since
-// both halves share the one auth gate and every write shares one
-// authenticatedWrite limiter.
+// both halves share the one auth gate, and every write shares one
+// `authenticatedWrite` limiter.
 import { Router } from 'express'
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { notificationStreamController } from '@/controllers/notification-stream.controller'
