@@ -207,7 +207,8 @@ export const userTokenModel = pgTable(
     // this object literal is still being constructed (the standard Drizzle
     // pattern for a self-referencing column).
     replacedById: varchar('replaced_by_id', { length: 36 }).references(
-      (): AnyPgColumn => userTokenModel.id
+      (): AnyPgColumn => userTokenModel.id,
+      { onDelete: 'set null' }
     ),
     // Required only so this table satisfies BaseRepository's
     // SoftDeletableTableConfig bound (base.repository.ts) — a refresh token
@@ -231,7 +232,7 @@ export const userTokenModel = pgTable(
     // virtue of being a foreign key.
     index('user_tokens_session_id_idx').on(table.sessionId),
     index('user_tokens_user_id_idx').on(table.userId),
-    // Retention: the purge's NOT EXISTS probe, and the check this self-reference runs on every delete.
+    // The self-reference's ON DELETE SET NULL looks rows up by this column on every delete.
     index('user_tokens_replaced_by_id_idx').on(table.replacedById),
     index('user_tokens_expires_at_idx').on(table.expiresAt),
     // Retention: explicitly revoked, never used (logout, reuse, password change).

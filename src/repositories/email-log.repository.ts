@@ -10,7 +10,7 @@
 // should. (3) BaseRepository's 23505 -> HttpError(409) translation exists
 // for a unique constraint a caller could violate; this table has none, so
 // there is nothing to translate. This is a plain class with exactly the
-// two methods a delivery log needs.
+// methods a delivery log needs: write, read, and the retention purge.
 import { asc, eq, inArray, sql } from 'drizzle-orm'
 import { MAX_EMAIL_LENGTH } from '@/constants/auth.constants'
 import {

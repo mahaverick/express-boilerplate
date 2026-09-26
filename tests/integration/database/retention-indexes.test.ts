@@ -50,7 +50,7 @@ describe('retention indexes', () => {
       'user_tokens_revoked_unconsumed_idx',
       `select id from user_tokens where ${TOKEN_PREDICATE} limit 5000`,
     ],
-    // The NOT EXISTS probe, and the check the replaced_by_id foreign key runs on delete.
+    // The lookup the replaced_by_id foreign key's ON DELETE SET NULL runs on every delete.
     [
       'user_tokens_replaced_by_id_idx',
       `select 1 from user_tokens where replaced_by_id = '00000000-0000-0000-0000-000000000000'`,

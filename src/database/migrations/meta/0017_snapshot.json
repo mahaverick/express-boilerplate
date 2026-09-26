@@ -1,5 +1,5 @@
 {
-  "id": "f55f9a16-bcac-4391-adba-04ea787c1d14",
+  "id": "fdeafd6a-6761-4fb7-bb33-5071fb7ac4b5",
   "prevId": "33c5f890-1edb-49fb-b18d-8965ce245f7b",
   "version": "7",
   "dialect": "postgresql",
@@ -1350,7 +1350,7 @@
           "columnsTo": [
             "id"
           ],
-          "onDelete": "no action",
+          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },

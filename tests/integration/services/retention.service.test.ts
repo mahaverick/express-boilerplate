@@ -272,24 +272,67 @@ describe('runRetentionPurge', () => {
     ).toEqual(sorted([expiredNew, killedNew, rotatedOld]))
   })
 
-  it('keeps a token another row still points to, and deletes it on the next run', async () => {
+  it('deletes a whole rotation chain in one run', async () => {
     const userId = await insertUser()
     const old = justOlder(DAYS.tokens)
-    const successor = await insertToken(userId, { expiresAt: old })
-    const predecessor = await insertToken(userId, {
+    const third = await insertToken(userId, { expiresAt: old })
+    const second = await insertToken(userId, {
       expiresAt: old,
+      revokedAt: old,
+      consumedAt: old,
+      replacedById: third,
+    })
+    const first = await insertToken(userId, {
+      expiresAt: old,
+      revokedAt: old,
+      consumedAt: old,
+      replacedById: second,
+    })
+
+    const results = await runRetentionPurge(NOW, DAYS)
+
+    expect(deletedBy(results, 'user_tokens')).toBe(3)
+    expect(await surviving('user_tokens', [first, second, third])).toEqual([])
+  })
+
+  it('deletes a token a kept predecessor points to, and clears that pointer', async () => {
+    const userId = await insertUser()
+    const old = justOlder(DAYS.tokens)
+    // Revoked unused (a logout ended the session): past retention.
+    const successor = await insertToken(userId, { expiresAt: LATER, revokedAt: old })
+    // Rotated away and not yet expired: kept, still pointing at the successor.
+    const predecessor = await insertToken(userId, {
+      expiresAt: LATER,
       revokedAt: old,
       consumedAt: old,
       replacedById: successor,
     })
 
-    const first = await runRetentionPurge(NOW, DAYS)
-    expect(deletedBy(first, 'user_tokens')).toBe(1)
-    expect(await surviving('user_tokens', [successor, predecessor])).toEqual([successor])
+    const results = await runRetentionPurge(NOW, DAYS)
 
-    const second = await runRetentionPurge(NOW, DAYS)
-    expect(deletedBy(second, 'user_tokens')).toBe(1)
-    expect(await surviving('user_tokens', [successor])).toEqual([])
+    expect(deletedBy(results, 'user_tokens')).toBe(1)
+    expect(await surviving('user_tokens', [successor, predecessor])).toEqual([predecessor])
+    const [row] = await sql<{ replacedById: string | null }[]>`
+      select replaced_by_id as "replacedById" from user_tokens where id = ${predecessor}
+    `
+    expect(row?.replacedById).toBeNull()
+  })
+
+  it('deletes an expired predecessor and leaves its live successor alone', async () => {
+    const userId = await insertUser()
+    const old = justOlder(DAYS.tokens)
+    const live = await insertToken(userId, { expiresAt: LATER })
+    const expired = await insertToken(userId, {
+      expiresAt: old,
+      revokedAt: old,
+      consumedAt: old,
+      replacedById: live,
+    })
+
+    const results = await runRetentionPurge(NOW, DAYS)
+
+    expect(deletedBy(results, 'user_tokens')).toBe(1)
+    expect(await surviving('user_tokens', [live, expired])).toEqual([live])
   })
 
   it('dates an invitation by the latest of its expiry, acceptance and revocation', async () => {

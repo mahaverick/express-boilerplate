@@ -1,3 +1,6 @@
+ALTER TABLE "user_tokens" DROP CONSTRAINT "user_tokens_replaced_by_id_user_tokens_id_fk";
+--> statement-breakpoint
+ALTER TABLE "user_tokens" ADD CONSTRAINT "user_tokens_replaced_by_id_user_tokens_id_fk" FOREIGN KEY ("replaced_by_id") REFERENCES "public"."user_tokens"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "email_logs_created_at_idx" ON "email_logs" USING btree ("created_at");--> statement-breakpoint
 CREATE INDEX "notifications_read_at_idx" ON "notifications" USING btree ("read_at") WHERE "notifications"."read_at" is not null;--> statement-breakpoint
 CREATE INDEX "notifications_unread_created_idx" ON "notifications" USING btree ("created_at") WHERE "notifications"."read_at" is null;--> statement-breakpoint

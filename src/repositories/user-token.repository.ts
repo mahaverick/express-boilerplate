@@ -21,8 +21,7 @@
 // purpose from being claimed as another: it participates in the SAME atomic
 // statement as the revocation check, not a separate lookup a caller could
 // perform race-free but forget to.
-import { and, eq, inArray, notExists, sql, type SQL } from 'drizzle-orm'
-import { alias } from 'drizzle-orm/pg-core'
+import { eq, inArray, sql, type SQL } from 'drizzle-orm'
 import {
   userTokenModel,
   type NewUserToken,
@@ -41,8 +40,9 @@ import { db, type DbExecutor, type DbTransaction } from '@/services/database.ser
  * Query access to the `user_tokens` table: token issuance, lookup by hash,
  * atomic single-use claiming (`claimOnce`), and bulk revocation by session
  * or by user. Every lookup excludes a soft-deleted row by default — see
- * `BaseRepository.scope`, which every method below is built on so none of
- * them can drift from that behaviour independently.
+ * `BaseRepository.scope`, which every method below except the retention
+ * purge is built on so none of them can drift from that behaviour
+ * independently. The purge deletes expired rows whether soft-deleted or not.
  */
 export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)['_']['config']> {
   /**
@@ -320,9 +320,11 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
 
   /**
    * Delete up to `limit` token rows past retention: expired before `cutoff`,
-   * or revoked before it without ever being used. A row another row still
-   * points to through `replaced_by_id` is kept until that row is gone.
-   * A rotated-away row stays until it expires: reuse detection needs it while it can still be presented.
+   * or revoked before it without ever being used. A rotated-away row stays
+   * until it expires: reuse detection needs it while it can still be
+   * presented. Soft-deleted rows go too, so this doesn't use `scope`. A kept
+   * row that pointed at a deleted one through `replaced_by_id` has that
+   * pointer set to NULL by the foreign key.
    * @param cutoff - Rows older than this go.
    * @param limit - The most rows one call deletes.
    * @param tx - The batch's transaction.
@@ -334,16 +336,12 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
     tx: DbTransaction
   ): Promise<number> {
     const before = sql`${cutoff.toISOString()}::timestamptz`
-    const successor = alias(userTokenModel, 'successor')
-    const pastRetention = sql`(${userTokenModel.expiresAt} < ${before} or (${userTokenModel.revokedAt} < ${before} and ${userTokenModel.consumedAt} is null))`
-    const pointedTo = tx
-      .select({ id: successor.id })
-      .from(successor)
-      .where(eq(successor.replacedById, userTokenModel.id))
     const batch = tx
       .select({ id: userTokenModel.id })
       .from(userTokenModel)
-      .where(and(pastRetention, notExists(pointedTo)))
+      .where(
+        sql`${userTokenModel.expiresAt} < ${before} or (${userTokenModel.revokedAt} < ${before} and ${userTokenModel.consumedAt} is null)`
+      )
       .limit(limit)
     const result = await tx.delete(userTokenModel).where(inArray(userTokenModel.id, batch))
     return result.count

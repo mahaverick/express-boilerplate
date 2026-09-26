@@ -1,8 +1,9 @@
 // src/repositories/tenant-invitation.repository.ts
 //
 // Query access to `tenant_invitations`. Standalone (no BaseRepository): the
-// table has no `deletedAt`. Every method takes an optional executor so the
-// invitation service can compose calls in one transaction. Lookups by token
+// table has no `deletedAt`. Every method except the retention purge takes an
+// optional executor so the invitation service can compose calls in one
+// transaction; the purge requires its batch's transaction. Lookups by token
 // join `tenants` and exclude a soft-deleted tenant.
 import { and, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm'
 import type { MembershipRole } from '@/constants/tenant.constants'
