@@ -41,6 +41,7 @@ import {
   MAX_PASSWORD_BYTES,
   MIN_PASSWORD_LENGTH,
 } from '@/constants/auth.constants'
+import { safeText } from '@/validators/safe-text.validators'
 
 // z.email() validates the email FORMAT before any transform chained after
 // it runs — verified empirically: z.email().trim().toLowerCase() still
@@ -84,8 +85,20 @@ const registrationPasswordSchema = z
 export const registerSchema = z.object({
   email: emailSchema,
   password: registrationPasswordSchema,
-  firstName: z.string().trim().min(1).max(MAX_NAME_LENGTH).optional(),
-  lastName: z.string().trim().min(1).max(MAX_NAME_LENGTH).optional(),
+  firstName: z
+    .string()
+    .trim()
+    .min(1)
+    .max(MAX_NAME_LENGTH)
+    .refine(safeText(), 'First name contains characters that are not allowed')
+    .optional(),
+  lastName: z
+    .string()
+    .trim()
+    .min(1)
+    .max(MAX_NAME_LENGTH)
+    .refine(safeText(), 'Last name contains characters that are not allowed')
+    .optional(),
 })
 
 /**
