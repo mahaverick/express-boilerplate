@@ -27,13 +27,18 @@ const eslint = new ESLint({ cwd: process.cwd(), ignore: false })
 // fatals before any rule runs. None of the rules exercised via lintText
 // need type information, so this second instance disables the type-checked
 // rule set to get a clean, non-fatal parse instead.
+//
+// It also turns off single-run inference. Under CI=true, typescript-estree
+// treats a second parse of the same path as a fix pass and builds an isolated
+// program for it; the probes reuse one path, so third-party type-aware rules
+// such as sonarjs/deprecation then run on a virtual file, and can crash.
 const eslintText = new ESLint({
   cwd: process.cwd(),
   ignore: false,
-  // `disableTypeChecked` is a single flat-config object at runtime (verified:
-  // Array.isArray is false), not an array — pass it as-is rather than
-  // casting to Linter.Config[], which would misrepresent its actual shape.
-  overrideConfig: tseslint.configs.disableTypeChecked as Linter.Config,
+  overrideConfig: [
+    tseslint.configs.disableTypeChecked,
+    { languageOptions: { parserOptions: { disallowAutomaticSingleRunInference: true } } },
+  ],
 })
 
 // The aliased lint-cycle fixture (tests/fixtures/lint-cycle/cycle-a.ts)
