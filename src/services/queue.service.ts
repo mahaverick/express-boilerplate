@@ -14,7 +14,7 @@ import { Queue, type Job, type JobsOptions } from 'bullmq'
 import IORedis, { type RedisOptions } from 'ioredis'
 import { getEnv } from '@/configs/env.config'
 import { logger } from '@/services/logger.service'
-import { redisKey } from '@/services/redis.service'
+import { REDIS_CONNECT_TIMEOUT_MS, redisKey } from '@/services/redis.service'
 
 // One ioredis connection and whether it has ever reached 'ready'.
 interface QueueRedis {
@@ -72,7 +72,7 @@ function createQueueRedis(
       if (readiness.hasBeenReady) return Math.min(times * 200, 5000)
       return times > 3 ? undefined : Math.min(times * 200, 2000)
     },
-    connectTimeout: 5000,
+    connectTimeout: REDIS_CONNECT_TIMEOUT_MS,
   })
   connection.on('ready', () => {
     readiness.hasBeenReady = true
