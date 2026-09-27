@@ -577,9 +577,9 @@ const EnvSchema = z.object({
   SMTP_HOST: z
     .string()
     .min(1)
-    .default('localhost')
+    .default('127.0.0.1')
     .describe(
-      'SMTP server host. Defaults to localhost, where the compose Mailpit service listens.'
+      'SMTP server host. Defaults to 127.0.0.1, where the compose Mailpit service listens; an IP literal skips a DNS lookup on every send.'
     ),
   SMTP_PORT: z.coerce
     .number()

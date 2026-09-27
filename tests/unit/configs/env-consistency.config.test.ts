@@ -107,7 +107,7 @@ describe('assertEnvConsistent', () => {
 
     it('reports every default at once when none was replaced', () => {
       const { error } = runChecks({ ...local, APP_ENV: 'qa', NODE_ENV: 'production' })
-      expect(error).toContain('SMTP_HOST is localhost')
+      expect(error).toContain('SMTP_HOST is 127.0.0.1')
       expect(error).toContain('SMTP_PORT is 1025')
       expect(error).toContain('MAIL_FROM is no-reply@example.com')
     })

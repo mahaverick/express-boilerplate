@@ -211,7 +211,7 @@ describe('getDatabaseUrl', () => {
 describe('SMTP configuration', () => {
   it('defaults SMTP_HOST/SMTP_PORT to Mailpit’s local address when absent', () => {
     const parsed = parseEnv(valid)
-    expect(parsed.SMTP_HOST).toBe('localhost')
+    expect(parsed.SMTP_HOST).toBe('127.0.0.1')
     expect(parsed.SMTP_PORT).toBe(1025)
   })
 
