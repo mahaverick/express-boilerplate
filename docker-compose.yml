@@ -117,7 +117,7 @@ services:
     # host's gateway address, which has no PTR record and times out after ~8
     # seconds — long enough for any fire-and-forget test to fail before the
     # mail arrives. Disabling it brings the SMTP greeting down to < 50ms.
-    # The app's SMTP defaults (localhost:1025, no auth) point here; boot
+    # The app's SMTP defaults (127.0.0.1:1025, no auth) point here; boot
     # refuses that host and port whenever APP_ENV is not local.
     command: ['--smtp-disable-rdns']
     ports: ['127.0.0.1:1025:1025', '127.0.0.1:8025:8025']
