@@ -56,8 +56,10 @@ import { denySession } from '@/services/session-denylist.service'
 import { revokeSession, signAccessToken } from '@/services/session.service'
 import { startNotificationWorker } from '@/workers/notification.worker'
 import { truncateAuditLogs } from '../../helpers/audit-log'
+import { deferred } from '../../helpers/lock-probe'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { waitForNotificationSubscriber } from '../../helpers/notification-subscriber'
+import { settle, waitUntil } from '../../helpers/timing'
 
 const userRepository = new UserRepository()
 const notificationRepository = new NotificationRepository()
@@ -242,7 +244,10 @@ class SseConnection {
    * @throws {Error} When no new frame arrives within `timeoutMs`.
    */
   async nextFrame(timeoutMs = 5000): Promise<SseFrame> {
-    await waitUntil(() => this.frames.length > this.nextFrameIndex, timeoutMs)
+    await waitUntil(() => this.frames.length > this.nextFrameIndex, {
+      message: `SSE frame ${String(this.nextFrameIndex)} arrives`,
+      timeout: timeoutMs,
+    })
     const frame = this.frames[this.nextFrameIndex]
     this.nextFrameIndex += 1
     if (!frame) {
@@ -259,49 +264,17 @@ class SseConnection {
    * @returns True once the response has ended; false if `timeoutMs` elapses first.
    */
   async closed(timeoutMs: number): Promise<boolean> {
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const timeoutPromise = new Promise<boolean>((resolve) => {
-      timer = setTimeout(() => resolve(false), timeoutMs)
-    })
+    // The losing settle keeps its timer until it fires; nothing waits on it.
+    const timedOut = (async (): Promise<boolean> => {
+      await settle(timeoutMs, 'timeout arm: a stream that stays open has no event')
+      return false
+    })()
     const endPromise = (async (): Promise<boolean> => {
       await this.ended
       return true
     })()
-    const hasClosed = await Promise.race([endPromise, timeoutPromise])
-    if (timer) clearTimeout(timer)
-    return hasClosed
+    return Promise.race([endPromise, timedOut])
   }
-}
-
-/**
- * Poll `isConditionMet` until it is true, or fail after `timeoutMs`.
- * @param isConditionMet - Checked every `intervalMs` until it returns true.
- * @param timeoutMs - How long to keep polling before giving up.
- * @param intervalMs - How often to poll. Defaults to 20ms.
- * @returns Resolves once `isConditionMet()` is true.
- * @throws {Error} When `timeoutMs` elapses with `isConditionMet` still false.
- */
-async function waitUntil(
-  isConditionMet: () => boolean,
-  timeoutMs: number,
-  intervalMs = 20
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  while (!isConditionMet()) {
-    if (Date.now() > deadline) {
-      throw new Error(`Condition not met within ${timeoutMs}ms`)
-    }
-    await new Promise((resolve) => setTimeout(resolve, intervalMs))
-  }
-}
-
-/**
- * Pause for a fixed duration.
- * @param ms - How long to pause for.
- * @returns Resolves after `ms` milliseconds.
- */
-async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 /**
@@ -484,10 +457,10 @@ describe('GET /api/v1/notifications/stream', () => {
       })
       expect(invited.status).toBe(202)
 
-      await waitUntil(
-        () => connection.frames.some((frame) => frame.event === 'notification'),
-        10_000
-      )
+      await waitUntil(() => connection.frames.some((frame) => frame.event === 'notification'), {
+        message: 'the invitation notification frame arrives',
+        timeout: 10_000,
+      })
       const frame = connection.frames.find((frame) => frame.event === 'notification')
       const delivered = JSON.parse(frame?.data ?? 'null') as Record<string, unknown>
       expect(delivered).toMatchObject({
@@ -630,7 +603,10 @@ describe('GET /api/v1/notifications/stream', () => {
     const connection = openStream({ header: `Bearer ${token}` })
     await connection.waitForResponse()
 
-    await waitUntil(() => connection.rawText.includes(':ping'), 5000, 100)
+    await waitUntil(() => connection.rawText.includes(':ping'), {
+      message: 'a heartbeat comment arrives',
+      interval: 100,
+    })
     expect(connection.rawText).toContain(':ping')
   }, 10_000)
 
@@ -638,18 +614,19 @@ describe('GET /api/v1/notifications/stream', () => {
     const { user, token } = await createAuthenticatedUser()
     const connection = openStream({ header: `Bearer ${token}` })
     await connection.waitForResponse()
-    // The handler registers synchronously once `requireAuth` and this
-    // controller's own `authenticatedUserId`/`requireSessionId` checks
-    // resolve (streamNotifications, notification-stream.controller.ts) —
-    // by the time this client has received any bytes at all, the server has
-    // already run past `onNotification`. This sleep is slack against
-    // scheduling jitter, not a requirement of that ordering.
-    await sleep(50)
+    // No `await` separates the controller's flushHeaders() from its
+    // `onNotification` (streamNotifications, notification-stream.controller.ts),
+    // so this states the precondition and normally passes on the first check.
+    await waitUntil(() => listenerCount(user.id) === 1, {
+      message: "the stream's notification listener is registered",
+    })
 
     const notification = await seedNotification(user.id, 'Pushed live')
     emitNotification(user.id, notification)
 
-    await waitUntil(() => connection.frames.some((frame) => frame.event === 'notification'), 5000)
+    await waitUntil(() => connection.frames.some((frame) => frame.event === 'notification'), {
+      message: 'the live notification frame arrives',
+    })
 
     const frame = connection.frames.find((candidate) => candidate.event === 'notification')
     expect(frame?.id).toBe(notification.id)
@@ -678,7 +655,7 @@ describe('GET /api/v1/notifications/stream', () => {
 
     await waitUntil(
       () => connection.frames.filter((frame) => frame.event === 'notification').length >= 2,
-      5000
+      { message: 'both replayed notification frames arrive' }
     )
 
     const replayed = connection.frames.filter((frame) => frame.event === 'notification')
@@ -710,21 +687,23 @@ describe('GET /api/v1/notifications/stream', () => {
     const live = await seedNotification(user.id, 'Live during replay')
     emitNotification(user.id, live)
 
-    await waitUntil(() => connection.frames.some((frame) => frame.event === 'notification'), 5000)
-    // A fixed settle time, not another `waitUntil`: this asserts an upper
-    // bound (never delivered twice), which a condition-based wait cannot
-    // express — there is no "it stayed at 1" event to poll for.
-    await sleep(200)
+    await waitUntil(() => connection.frames.some((frame) => frame.event === 'notification'), {
+      message: 'the live notification frame arrives',
+    })
+    // A settle, not another `waitUntil`: this asserts an upper bound (never
+    // delivered twice), and there is no "it stayed at 1" event to poll for.
+    await settle(200, 'absence has no event: a duplicate delivery would arrive within it')
 
     const delivered = connection.frames.filter((frame) => frame.event === 'notification')
     expect(delivered.map((frame) => frame.id)).toEqual([live.id])
   })
 
   // The deterministic version of the race the test above only ever WINS by
-  // chance: `withMutatedMethod` delays `findByIdAndUser` — the first of
-  // `fetchMissedNotifications`'s two queries — by 100ms, guaranteeing
+  // chance: `withMutatedMethod` holds `findByIdAndUser` — the first of
+  // `fetchMissedNotifications`'s two queries — at a gate until both
+  // notifications below have reached the stream's handler, guaranteeing
   // `isReplaying` (streamNotifications, notification-stream.controller.ts)
-  // is still true when both notifications below are emitted, so this
+  // is still true when they arrive, so this
   // reliably exercises BOTH branches the flush loop has: a notification
   // that ALSO landed in the missed burst (persisted before the replay
   // query ran) must be delivered exactly once, deduped out of
@@ -737,52 +716,75 @@ describe('GET /api/v1/notifications/stream', () => {
     const { user, token } = await createAuthenticatedUser()
     const first = await seedNotification(user.id, 'First')
 
+    const gate = { entered: false }
+    const release = deferred()
     // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
     const realFindByIdAndUser = NotificationRepository.prototype.findByIdAndUser
-    const delayedFindByIdAndUser: typeof realFindByIdAndUser = async function (
+    const gatedFindByIdAndUser: typeof realFindByIdAndUser = async function (
       this: NotificationRepository,
       id,
       userId
     ) {
       const result = await realFindByIdAndUser.call(this, id, userId)
-      await sleep(100)
+      gate.entered = true
+      await release.promise
       return result
+    }
+    // Registered after the stream's handler, so it hears each notification second.
+    const heardByStream = new Set<string>()
+    const hearAfterStream = (notification: Notification): void => {
+      heardByStream.add(notification.id)
     }
 
     await withMutatedMethod(
       NotificationRepository.prototype,
       'findByIdAndUser',
-      delayedFindByIdAndUser,
+      gatedFindByIdAndUser,
       async () => {
-        const connection = openStream('/api/v1/notifications/stream', {
-          Authorization: `Bearer ${token}`,
-          'Last-Event-ID': first.id,
-        })
-        await connection.waitForResponse()
+        try {
+          const connection = openStream('/api/v1/notifications/stream', {
+            Authorization: `Bearer ${token}`,
+            'Last-Event-ID': first.id,
+          })
+          await connection.waitForResponse()
+          // The controller calls `onNotification` before this query, so its handler is registered.
+          await waitUntil(() => gate.entered, { message: 'the replay query reaches its gate' })
+          onNotification(user.id, hearAfterStream)
 
-        const persistedLive = await seedNotification(user.id, 'Persisted, in the missed burst')
-        emitNotification(user.id, persistedLive)
+          const persistedLive = await seedNotification(user.id, 'Persisted, in the missed burst')
+          emitNotification(user.id, persistedLive)
 
-        // Never inserted — the replay query's own `list()` call can never
-        // find it, so it cannot be in `missedIds` no matter how long the
-        // delay above runs.
-        const ephemeralLive: Notification = {
-          ...persistedLive,
-          id: randomUUID(),
-          title: 'Ephemeral, never persisted',
-          createdAt: new Date(persistedLive.createdAt.getTime() + 1),
+          // Never inserted — the replay query's own `list()` call can never
+          // find it, so it cannot be in `missedIds` however long the gate holds.
+          const ephemeralLive: Notification = {
+            ...persistedLive,
+            id: randomUUID(),
+            title: 'Ephemeral, never persisted',
+            createdAt: new Date(persistedLive.createdAt.getTime() + 1),
+          }
+          emitNotification(user.id, ephemeralLive)
+
+          // Listeners run in registration order, so the stream's handler has
+          // queued both while `isReplaying` was still true.
+          await waitUntil(
+            () => heardByStream.has(persistedLive.id) && heardByStream.has(ephemeralLive.id),
+            { message: "both notifications reach the stream's handler during the replay" }
+          )
+          release.resolve()
+
+          await waitUntil(
+            () => connection.frames.filter((frame) => frame.event === 'notification').length >= 2,
+            { message: 'both notification frames arrive after the replay' }
+          )
+          await settle(200, 'absence has no event: a duplicate delivery would arrive within it')
+
+          const delivered = connection.frames.filter((frame) => frame.event === 'notification')
+          expect(delivered.filter((frame) => frame.id === persistedLive.id)).toHaveLength(1)
+          expect(delivered.filter((frame) => frame.id === ephemeralLive.id)).toHaveLength(1)
+        } finally {
+          release.resolve()
+          offNotification(user.id, hearAfterStream)
         }
-        emitNotification(user.id, ephemeralLive)
-
-        await waitUntil(
-          () => connection.frames.filter((frame) => frame.event === 'notification').length >= 2,
-          5000
-        )
-        await sleep(200)
-
-        const delivered = connection.frames.filter((frame) => frame.event === 'notification')
-        expect(delivered.filter((frame) => frame.id === persistedLive.id)).toHaveLength(1)
-        expect(delivered.filter((frame) => frame.id === ephemeralLive.id)).toHaveLength(1)
       }
     )
   })
@@ -797,11 +799,13 @@ describe('GET /api/v1/notifications/stream', () => {
       'Last-Event-ID': first.id,
     })
     await connection.waitForResponse()
-    await waitUntil(() => connection.frames.some((frame) => frame.id === replayed.id), 5000)
+    await waitUntil(() => connection.frames.some((frame) => frame.id === replayed.id), {
+      message: 'the replayed notification frame arrives',
+    })
 
     // Its live copy arrives after the replay finished, as a Redis round trip can.
     emitNotification(user.id, replayed)
-    await sleep(200)
+    await settle(200, 'absence has no event: a second copy would arrive within it')
 
     const delivered = connection.frames.filter((frame) => frame.event === 'notification')
     expect(delivered.map((frame) => frame.id)).toEqual([replayed.id])
@@ -827,7 +831,10 @@ describe('GET /api/v1/notifications/stream', () => {
     await connection.waitForResponse()
     connection.destroy()
 
-    await waitUntil(() => listenerCount(user.id) === 0, 2000)
+    await waitUntil(() => listenerCount(user.id) === 0, {
+      message: 'the disconnected stream removes its listener',
+      timeout: 2000,
+    })
     expect(listenerCount(user.id)).toBe(0)
   })
 
@@ -840,7 +847,7 @@ describe('GET /api/v1/notifications/stream', () => {
       'Last-Event-ID': randomUUID(),
     })
     const response = await connection.waitForResponse()
-    await sleep(200) // give a wrongly-replayed burst a chance to arrive before asserting it didn't
+    await settle(200, 'absence has no event: a wrongly replayed burst would arrive within it')
 
     expect(response.statusCode).toBe(200)
     expect(connection.frames.some((frame) => frame.event === 'notification')).toBe(false)
@@ -850,14 +857,23 @@ describe('GET /api/v1/notifications/stream', () => {
     const { user, token } = await createAuthenticatedUser()
     const connection = openStream({ header: `Bearer ${token}` })
     await connection.waitForResponse()
-    await waitUntil(() => listenerCount(user.id) === 1, 2000)
+    await waitUntil(() => listenerCount(user.id) === 1, {
+      message: "the stream's notification listener is registered",
+      timeout: 2000,
+    })
 
     connection.destroy()
-    await waitUntil(() => listenerCount(user.id) === 0, 2000)
+    await waitUntil(() => listenerCount(user.id) === 0, {
+      message: 'the disconnected stream removes its listener',
+      timeout: 2000,
+    })
 
     const notification = await seedNotification(user.id, 'After close')
     expect(() => emitNotification(user.id, notification)).not.toThrow()
-    await sleep(100)
+    await settle(
+      100,
+      'absence has no event: a delivery to the closed stream would arrive within it'
+    )
     expect(connection.frames.some((frame) => frame.event === 'notification')).toBe(false)
   })
 
@@ -898,7 +914,10 @@ describe('GET /api/v1/notifications/stream', () => {
     // The heartbeat's own close path must clean up exactly like an
     // ordinary client disconnect does — not merely end the HTTP response
     // while leaving the emitter subscription (and the interval) behind.
-    await waitUntil(() => listenerCount(userId) === 0, 2000)
+    await waitUntil(() => listenerCount(userId) === 0, {
+      message: 'the revoked stream removes its listener',
+      timeout: 2000,
+    })
     expect(listenerCount(userId)).toBe(0)
   }, 10_000)
 
@@ -1011,7 +1030,10 @@ describe('GET /api/v1/notifications/stream', () => {
 
     // A closed stream frees its slot.
     openConnections[0]?.destroy()
-    await waitUntil(() => countStreams(user.id) < cap, 2000)
+    await waitUntil(() => countStreams(user.id) < cap, {
+      message: 'a closed stream frees its slot under the cap',
+      timeout: 2000,
+    })
     const again = openStream({ header: `Bearer ${token}` })
     const reopened = await again.waitForResponse()
     expect(reopened.statusCode).toBe(200)
@@ -1035,7 +1057,10 @@ describe('GET /api/v1/notifications/stream', () => {
     // exp is whole seconds, so the end lands 1-2s after the 2s TTL starts.
     await expect(stream.closed(4000)).resolves.toBe(true)
     // The registry slot is freed too (request 'close' ran), not just the listener.
-    await waitUntil(() => countStreams(user.id) === 0, 2000)
+    await waitUntil(() => countStreams(user.id) === 0, {
+      message: 'the expired stream leaves the shutdown registry',
+      timeout: 2000,
+    })
     expect(listenerCount(user.id)).toBe(0)
   })
 
@@ -1078,7 +1103,10 @@ describe('GET /api/v1/notifications/stream', () => {
         const stream = openStream({ header: `Bearer ${token}` })
         const response = await stream.waitForResponse()
         expect(response.statusCode).toBe(200)
-        await waitUntil(() => listenerCount(user.id) === 1, 2000)
+        await waitUntil(() => listenerCount(user.id) === 1, {
+          message: "the stream's notification listener is registered",
+          timeout: 2000,
+        })
       }
     )
     expect(streamResponses).toHaveLength(1)
@@ -1113,23 +1141,27 @@ describe('GET /api/v1/notifications/stream', () => {
         dedupeKey: null,
         createdAt: new Date(),
       })
-      await sleep(20)
+      await settle(20, "pacing, so 32 MiB stays under Redis's pub/sub output-buffer limit")
     }
 
     // Destroyed server-side, while the client is still paused, and never
     // ended: an end() first would queue the closing chunk, which reaches the
     // client whenever the kernel had already taken the rest.
-    await waitUntil(() => streamResponse.destroyed, 5000)
+    await waitUntil(() => streamResponse.destroyed, {
+      message: 'the server destroys the stalled response',
+    })
     expect(streamResponse.destroyed).toBe(true)
     expect(streamResponse.writableEnded).toBe(false)
     // The request 'close' cleanup ran. That fires a tick after the stall
     // path's own offNotification, so wait on the registry.
-    await waitUntil(() => countStreams(user.id) === 0, 5000)
+    await waitUntil(() => countStreams(user.id) === 0, {
+      message: 'the dropped stream leaves the shutdown registry',
+    })
     expect(listenerCount(user.id)).toBe(0)
 
     // Once it reads again, the client sees a truncated body.
     client.resume()
-    await waitUntil(() => client.destroyed, 5000)
+    await waitUntil(() => client.destroyed, { message: 'the client sees its socket close' })
     expect(client.complete).toBe(false)
   })
 })
