@@ -106,6 +106,7 @@ describe('mutation proof: redactedForLog is what keeps the parameter out', () =>
     "reproduces the direct record's own assertions against the mutated redactedForLog",
     async () => {
       const queryError = await realUniqueViolation()
+      expect(queryError).toBeInstanceOf(DrizzleQueryError)
 
       await withMutatedModule(
         '@/errors/postgres-errors',
@@ -133,6 +134,7 @@ describe('mutation proof: redactedForLog is what keeps the parameter out', () =>
     "reproduces the wrapped record's own assertions against the mutated redactedForLog",
     async () => {
       const queryError = await realUniqueViolation()
+      expect(queryError).toBeInstanceOf(DrizzleQueryError)
 
       await withMutatedModule(
         '@/errors/postgres-errors',
