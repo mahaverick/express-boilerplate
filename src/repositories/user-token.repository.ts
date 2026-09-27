@@ -21,6 +21,12 @@
 // purpose from being claimed as another: it participates in the SAME atomic
 // statement as the revocation check, not a separate lookup a caller could
 // perform race-free but forget to.
+//
+// The four bulk revokers (revokeAllForSession, revokeAllForUser,
+// revokeAllForUserExceptSession, revokeAllForUserAndPurpose) lock the rows
+// they revoke in id order, through `lockedIds`, whatever plan or physical
+// row layout Postgres uses. Two of them sharing rows then queue instead of
+// deadlocking. A new bulk writer must lock the same way.
 import { eq, inArray, sql, type SQL } from 'drizzle-orm'
 import {
   userTokenModel,
@@ -50,6 +56,25 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    */
   constructor() {
     super(userTokenModel)
+  }
+
+  /**
+   * The ids of the rows matching `where`, locked FOR NO KEY UPDATE in id
+   * order. A bulk revoker that updates `WHERE id IN (…)` this subquery takes
+   * its row locks in that order, whatever plan or physical row layout the
+   * predicate gets, so two revokers sharing rows queue instead of
+   * deadlocking. NO KEY UPDATE is the lock the UPDATE itself takes.
+   * @param where - The revoker's predicate, already scoped for soft-delete visibility.
+   * @param executor - Where to run the query; the locks last until its transaction ends.
+   * @returns A subquery for `inArray(userTokenModel.id, …)`.
+   */
+  private lockedIds(where: SQL | undefined, executor: DbExecutor) {
+    return executor
+      .select({ id: userTokenModel.id })
+      .from(userTokenModel)
+      .where(where)
+      .orderBy(userTokenModel.id)
+      .for('no key update')
   }
 
   /**
@@ -172,20 +197,23 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    * session.service.ts denies the session's access tokens afterwards. A
    * caller that runs this inside its own transaction must deny the session
    * only after that transaction commits. Lock the user row FOR NO KEY UPDATE
-   * first, for the reason `revokeAllForUser` gives.
+   * first, for the reason `revokeAllForUser` gives. Locks its rows in id
+   * order (`lockedIds`), whatever the plan or the physical row layout.
    * @param sessionId - The session id shared by every token in the chain.
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns Resolves once every matching row is revoked.
    */
   async revokeAllForSession(sessionId: string, executor: DbExecutor = db): Promise<void> {
+    const locked = this.lockedIds(
+      this.scope(
+        sql`${userTokenModel.sessionId} = ${sessionId} and ${userTokenModel.revokedAt} is null`
+      ),
+      executor
+    )
     await executor
       .update(userTokenModel)
       .set(this.touched({ revokedAt: sql`now()` }))
-      .where(
-        this.scope(
-          sql`${userTokenModel.sessionId} = ${sessionId} and ${userTokenModel.revokedAt} is null`
-        )
-      )
+      .where(inArray(userTokenModel.id, locked))
   }
 
   /**
@@ -212,19 +240,22 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    * in-transaction revoke. Rotation holds it FOR SHARE from before its claim
    * until its next row commits, so this statement then starts after that
    * commit.
+   *
+   * Locks its rows in id order (`lockedIds`), whatever the plan or the
+   * physical row layout.
    * @param userId - The user whose tokens should all be revoked.
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns The distinct session ids of the rows it revoked.
    */
   async revokeAllForUser(userId: string, executor: DbExecutor = db): Promise<string[]> {
+    const locked = this.lockedIds(
+      this.scope(sql`${userTokenModel.userId} = ${userId} and ${userTokenModel.revokedAt} is null`),
+      executor
+    )
     const revoked = await executor
       .update(userTokenModel)
       .set(this.touched({ revokedAt: sql`now()` }))
-      .where(
-        this.scope(
-          sql`${userTokenModel.userId} = ${userId} and ${userTokenModel.revokedAt} is null`
-        )
-      )
+      .where(inArray(userTokenModel.id, locked))
       .returning({ sessionId: userTokenModel.sessionId })
 
     const sessionIds = new Set(
@@ -263,7 +294,8 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    * this comment exists to prevent.
    *
    * The same mid-rotation caveat as `revokeAllForUser`, closed the same way:
-   * lock the user row first.
+   * lock the user row first. Locks its rows in id order (`lockedIds`),
+   * whatever the plan or the physical row layout.
    * @param userId - The user whose tokens should all be revoked, except one session's.
    * @param sessionId - The one session id to spare; every token sharing it is left untouched.
    * @param executor - Where to run the query. Defaults to the pool.
@@ -274,14 +306,16 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
     sessionId: string,
     executor: DbExecutor = db
   ): Promise<string[]> {
+    const locked = this.lockedIds(
+      this.scope(
+        sql`${userTokenModel.userId} = ${userId} and ${userTokenModel.sessionId} is distinct from ${sessionId} and ${userTokenModel.revokedAt} is null`
+      ),
+      executor
+    )
     const revoked = await executor
       .update(userTokenModel)
       .set(this.touched({ revokedAt: sql`now()` }))
-      .where(
-        this.scope(
-          sql`${userTokenModel.userId} = ${userId} and ${userTokenModel.sessionId} is distinct from ${sessionId} and ${userTokenModel.revokedAt} is null`
-        )
-      )
+      .where(inArray(userTokenModel.id, locked))
       .returning({ sessionId: userTokenModel.sessionId })
 
     const sessionIds = new Set(
@@ -297,7 +331,8 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    * purpose predicate is the whole point: `revokeAllForUser` above matches
    * on `userId` alone, so using it to clear stale verification links would
    * take the user's live refresh tokens with it and log them out of every
-   * device as a side effect of requesting an email.
+   * device as a side effect of requesting an email. Locks its rows in id
+   * order (`lockedIds`), whatever the plan or the physical row layout.
    * @param userId - The user whose tokens should be revoked.
    * @param purpose - The only purpose to revoke; every other purpose is untouched.
    * @param executor - Where to run the query. Defaults to the pool.
@@ -308,14 +343,16 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
     purpose: TokenPurpose,
     executor: DbExecutor = db
   ): Promise<void> {
+    const locked = this.lockedIds(
+      this.scope(
+        sql`${userTokenModel.userId} = ${userId} and ${userTokenModel.purpose} = ${purpose} and ${userTokenModel.revokedAt} is null`
+      ),
+      executor
+    )
     await executor
       .update(userTokenModel)
       .set(this.touched({ revokedAt: sql`now()` }))
-      .where(
-        this.scope(
-          sql`${userTokenModel.userId} = ${userId} and ${userTokenModel.purpose} = ${purpose} and ${userTokenModel.revokedAt} is null`
-        )
-      )
+      .where(inArray(userTokenModel.id, locked))
   }
 
   /**
