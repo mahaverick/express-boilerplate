@@ -23,6 +23,7 @@ import {
   getRedis,
   isRedisReachable,
   RECONNECT_DELAY_CAP_MS,
+  REDIS_CONNECT_TIMEOUT_MS,
 } from '@/services/redis.service'
 import { isEventuallyTrue, RedisProxy } from '../../helpers/redis-proxy'
 import { request } from '../../helpers/request'
@@ -35,8 +36,8 @@ const OUTAGE_MS = 1500
 // stays that way: this only has to separate "answered promptly" from "never".
 const PROBE_BOUND_MS = 5000
 
-// One capped reconnect delay (both clients cap theirs at 5s), then as long again to connect.
-const RECOVERY_TIMEOUT_MS = 2 * RECONNECT_DELAY_CAP_MS
+// One capped retry delay, then one connect attempt.
+const RECOVERY_TIMEOUT_MS = RECONNECT_DELAY_CAP_MS + REDIS_CONNECT_TIMEOUT_MS
 
 const target = vi.hoisted(() => ({ realUrl: '', proxyUrl: '' }))
 

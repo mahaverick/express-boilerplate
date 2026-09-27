@@ -18,8 +18,8 @@
 // on an ordinary layout.
 //
 // The MUTATION_PROOF tests are DELIBERATELY red: each swaps the writers for
-// stand-ins that update by their predicate directly, the way they did before
-// they locked in id order, and keeps the real test's assertions.
+// stand-ins that update by their predicate directly, without locking in id
+// order, and keeps the real test's assertions.
 //
 //   MUTATION_PROOF=1 pnpm exec vitest run tests/integration/repositories/user-token-lock-order.test.ts   # red
 //   pnpm exec vitest run tests/integration/repositories/user-token-lock-order.test.ts                    # green

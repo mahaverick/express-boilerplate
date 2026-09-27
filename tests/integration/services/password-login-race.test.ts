@@ -14,8 +14,8 @@
 // waits and finds its token revoked. The grace path (a replayed token within
 // REFRESH_REUSE_GRACE_MS gets a sibling) is raced too.
 //
-// Four rotation tests have no mutation proof, because each still passes with
-// the rotation's user lock removed:
+// Four of the password rotation tests have no mutation proof, because each
+// still passes with the rotation's user lock removed:
 // - password-first, change: the claim waits on the presented row, which the
 //   in-transaction revoke holds, and then finds it revoked;
 // - password-first, reset, normal and grace: reset's revoke before its
