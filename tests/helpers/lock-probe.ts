@@ -13,6 +13,8 @@ import { settle } from './timing'
 
 const POLL_INTERVAL_MS = 10
 const DEFAULT_TIMEOUT_MS = 5000
+// SQLSTATE query_canceled: what statement_timeout raises.
+const QUERY_CANCELED = '57014'
 
 /**
  * The backend pid of the connection running `executor`.
@@ -27,18 +29,50 @@ export async function backendPid(executor: DbExecutor): Promise<number> {
 }
 
 /**
+ * Run one probe query in its own transaction, under a statement_timeout of the time left.
+ * @param probe - The dedicated probe connection.
+ * @param isObserved - The probe query.
+ * @param remainingMs - Time left before the caller's deadline.
+ * @param label - Names the wait in the error.
+ * @returns What `isObserved` answered.
+ * @throws {Error} When the probe query was cancelled at the deadline.
+ */
+async function isObservedOnce(
+  probe: postgres.Sql,
+  isObserved: (probe: postgres.TransactionSql) => Promise<boolean>,
+  remainingMs: number,
+  label: string
+): Promise<boolean> {
+  try {
+    return await probe.begin(async (tx) => {
+      // 0 would mean no limit at all, so never send less than 1 ms.
+      await tx`select set_config('statement_timeout', ${String(Math.max(1, remainingMs))}, true)`
+      return isObserved(tx)
+    })
+  } catch (error) {
+    if (error instanceof postgres.PostgresError && error.code === QUERY_CANCELED) {
+      throw new Error(`${label}: a probe query was still running at the deadline`, {
+        cause: error,
+      })
+    }
+    throw error
+  }
+}
+
+/**
  * Poll `isObserved` every 10 ms on a dedicated connection until it answers true
- * (true) or `settled` has settled (false).
+ * (true) or `settled` has settled (false). Each probe query runs under a
+ * statement_timeout of the time left, so a hung probe fails at the deadline.
  * @param isObserved - One probe query answering whether the wait is seen.
  * @param settled - The work being watched.
  * @param timeoutMs - The longest wait.
  * @param label - Names the wait in the timeout error.
  * @returns True when `isObserved` answered true first.
- * @throws {Error} When neither happens within `timeoutMs`.
+ * @throws {Error} When neither happens within `timeoutMs`, or a probe query is still running at the deadline.
  */
 // eslint-disable-next-line unicorn/consistent-boolean-name -- reads as the wait it performs, like the two exports below
-async function pollUntil(
-  isObserved: (probe: postgres.Sql) => Promise<boolean>,
+export async function pollUntil(
+  isObserved: (probe: postgres.TransactionSql) => Promise<boolean>,
   settled: Promise<unknown>,
   timeoutMs: number,
   label: string
@@ -55,11 +89,15 @@ async function pollUntil(
   }
   void observe()
 
-  const probe = postgres(getEnv().DATABASE_URL, { max: 1 })
+  // Connecting can't outlast the helper's own timeout either.
+  const probe = postgres(getEnv().DATABASE_URL, {
+    max: 1,
+    connect_timeout: Math.max(1, Math.ceil(timeoutMs / 1000)),
+  })
   const deadline = Date.now() + timeoutMs
   try {
     while (Date.now() < deadline) {
-      if (await isObserved(probe)) return true
+      if (await isObservedOnce(probe, isObserved, deadline - Date.now(), label)) return true
       if (hasSettled) return false
       await settle(POLL_INTERVAL_MS, 'poll interval')
     }
