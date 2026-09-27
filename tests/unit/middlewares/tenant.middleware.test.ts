@@ -33,6 +33,7 @@ import { logger } from '@/services/logger.service'
 import { requestContextStore } from '@/services/request-context.service'
 import type { RequestPrincipal } from '@/types/actor'
 import { fakeQueryError, LEAKED_PARAM, loggedText } from '../../helpers/query-error'
+import { settle } from '../../helpers/timing'
 
 /**
  * A fixed tenant row — only `id`/`slug` are read by `resolveTenant`, but the
@@ -339,7 +340,7 @@ describe('resolveTenant', () => {
         // Never calls resolveTenant in this frame at all — its own store
         // must never see frame-a's tenant, proving `enterWith` mutates only
         // the calling async context's store, not a shared/global one.
-        await new Promise((resolve) => setTimeout(resolve, 5))
+        await settle(5, "an async hop, so frame-a's resolveTenant runs enterWith first")
         sawTenantInOtherFrame = requestContextStore.getStore()?.tenant
       }),
     ])

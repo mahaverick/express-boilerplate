@@ -17,6 +17,15 @@ import unicorn from 'eslint-plugin-unicorn'
 import globals from 'globals'
 import tseslint from 'typescript-eslint'
 
+// Test timing (tests/**): every real-time wait goes through tests/helpers/timing.ts.
+const BARE_SLEEP_MESSAGE =
+  'No bare sleeps in tests. Wait on a condition with waitUntil (tests/helpers/timing.ts), use vi.useFakeTimers(), or, when nothing can be observed, settle(ms, reason).'
+const timerPromiseImportBans = ['node:timers/promises', 'timers/promises'].map((name) => ({
+  name,
+  importNames: ['setTimeout'],
+  message: BARE_SLEEP_MESSAGE,
+}))
+
 export default tseslint.config(
   {
     // tests/fixtures/** holds deliberately-broken fixtures (two committed
@@ -470,15 +479,35 @@ export default tseslint.config(
               message:
                 'Use `request` from tests/helpers/request: it binds 127.0.0.1 (see that file).',
             },
+            ...timerPromiseImportBans,
           ],
+        },
+      ],
+      // A bare sleep in a test is a guess at how long something takes, and
+      // the guess fails under load. See CLAUDE.md "Test timing rules".
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: "NewExpression[callee.name='Promise'] CallExpression[callee.name='setTimeout']",
+          message: BARE_SLEEP_MESSAGE,
+        },
+        { selector: "CallExpression[callee.name='sleep']", message: BARE_SLEEP_MESSAGE },
+        {
+          selector: "CallExpression[callee.property.name='waitForTimeout']",
+          message: BARE_SLEEP_MESSAGE,
         },
       ],
     },
   },
   {
-    // The one place that wraps supertest's default export.
+    // The one place that wraps supertest's default export. The timer ban still applies.
     files: ['tests/helpers/request.ts'],
-    rules: { 'no-restricted-imports': 'off' },
+    rules: { 'no-restricted-imports': ['error', { paths: timerPromiseImportBans }] },
+  },
+  {
+    // The one file that may wait on real time directly: it defines waitUntil and settle.
+    files: ['tests/helpers/timing.ts'],
+    rules: { 'no-restricted-syntax': 'off', 'no-restricted-imports': 'off' },
   },
   prettier
 )

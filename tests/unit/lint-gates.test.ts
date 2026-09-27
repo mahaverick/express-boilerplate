@@ -479,4 +479,66 @@ describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS }, () => {
       expect(ids).not.toContain('@typescript-eslint/no-restricted-imports')
     })
   })
+
+  describe('test timing: no bare sleeps under tests/', () => {
+    const probePath = 'tests/integration/probe.test.ts'
+    const bareSleeps = [
+      { label: 'a sleep() call', ruleId: 'no-restricted-syntax', source: 'await sleep(100)\n' },
+      {
+        label: 'a setTimeout inside new Promise',
+        ruleId: 'no-restricted-syntax',
+        source: 'await new Promise((resolve) => setTimeout(resolve, 10))\n',
+      },
+      {
+        label: 'a waitForTimeout() call',
+        ruleId: 'no-restricted-syntax',
+        source: 'await page.waitForTimeout(10)\n',
+      },
+      {
+        label: 'setTimeout from node:timers/promises',
+        ruleId: 'no-restricted-imports',
+        source: "import { setTimeout } from 'node:timers/promises'\n\nawait setTimeout(10)\n",
+      },
+      {
+        label: 'setTimeout from timers/promises',
+        ruleId: 'no-restricted-imports',
+        source: "import { setTimeout as delay } from 'timers/promises'\n\nawait delay(10)\n",
+      },
+    ]
+
+    it.each(bareSleeps)('rejects $label', async ({ ruleId, source }) => {
+      const messages = await messagesFor(probePath, source)
+      expect(messages.find((message) => message.ruleId === ruleId)?.severity).toBe(2)
+    })
+
+    it.each([
+      { label: 'settle(ms, reason)', source: "await settle(10, 'absence has no event')\n" },
+      {
+        label: 'a setImmediate hop',
+        source: 'await new Promise((resolve) => setImmediate(resolve))\n',
+      },
+      { label: 'fake timers', source: 'vi.useFakeTimers()\nsetTimeout(() => undefined, 10)\n' },
+    ])('allows $label', async ({ source }) => {
+      const ids = await ruleIdsFor(probePath, source)
+      expect(ids).not.toContain('no-restricted-syntax')
+      expect(ids).not.toContain('no-restricted-imports')
+    })
+
+    it('exempts tests/helpers/timing.ts, the one file that defines the waits', async () => {
+      const source =
+        "import { setTimeout as delay } from 'node:timers/promises'\n\n" +
+        'await new Promise((resolve) => setTimeout(resolve, 10))\nawait delay(10)\n'
+      const ids = await ruleIdsFor('tests/helpers/timing.ts', source)
+      expect(ids).not.toContain('no-restricted-syntax')
+      expect(ids).not.toContain('no-restricted-imports')
+    })
+
+    it('keeps the timer import ban in tests/helpers/request.ts', async () => {
+      const source = "import { setTimeout } from 'node:timers/promises'\n\nawait setTimeout(10)\n"
+      const messages = await messagesFor('tests/helpers/request.ts', source)
+      expect(messages.find((message) => message.ruleId === 'no-restricted-imports')?.severity).toBe(
+        2
+      )
+    })
+  })
 })

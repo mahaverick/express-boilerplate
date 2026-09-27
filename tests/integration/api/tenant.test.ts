@@ -39,6 +39,7 @@ import { signAccessToken } from '@/services/session.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { request } from '../../helpers/request'
+import { settle } from '../../helpers/timing'
 
 const app = createApp()
 const tenantRepository = new TenantRepository()
@@ -927,7 +928,10 @@ describe('/api/v1/tenants', () => {
         const count = await realCountOwners.call(this, tenantId, executor)
         arrivals += 1
         if (arrivals >= 2) releaseBarrier()
-        await Promise.race([barrier, new Promise((resolve) => setTimeout(resolve, 1000))])
+        await Promise.race([
+          barrier,
+          settle(1000, 'with the owner lock the second caller blocks before it arrives'),
+        ])
         return count
       }
 

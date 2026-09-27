@@ -629,6 +629,27 @@ otel-collector`.** It is bind-mounted; `docker compose up -d` does not
   same rows just because they both insert a user — they are in different
   databases entirely, not merely different transactions.
 
+### Test timing rules
+
+A fixed sleep is a guess at how long something takes, and under a loaded full
+suite the guess is wrong often enough to fail CI. `tests/helpers/timing.ts`
+holds the only two real-time waits a test may use; lint rejects every other
+sleep under `tests/`, and that file is the only exemption.
+
+1. Wait on a condition, never on a duration: `waitUntil(check, { message })`.
+2. A deliberate wait is `settle(ms, reason)`. The reason names what can't be
+   observed ("absence has no event", "poll interval", "injected latency to
+   widen the race").
+3. Wall-clock upper bounds are allowed only when the bound is the claim under
+   test. Each carries a comment naming what it proves and either references a
+   product constant by name or has at least 10x headroom over the measured
+   p99.
+4. No exact counts of process-wide resources. Count only what the test
+   itself created.
+5. Negative checks use a barrier event where one exists, and otherwise
+   `settle` with a reason.
+6. Never raise a timeout to fix a flake before its mechanism is known.
+
 ## Proving a security behaviour is real, without hand-editing `src/`
 
 - **Never break `src/` on disk to prove a test would catch the breakage.**
