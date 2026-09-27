@@ -14,7 +14,11 @@ import { Queue, type Job, type JobsOptions } from 'bullmq'
 import IORedis, { type RedisOptions } from 'ioredis'
 import { getEnv } from '@/configs/env.config'
 import { logger } from '@/services/logger.service'
-import { REDIS_CONNECT_TIMEOUT_MS, redisKey } from '@/services/redis.service'
+import {
+  RECONNECT_DELAY_CAP_MS,
+  REDIS_CONNECT_TIMEOUT_MS,
+  redisKey,
+} from '@/services/redis.service'
 
 // One ioredis connection and whether it has ever reached 'ready'.
 interface QueueRedis {
@@ -69,7 +73,7 @@ function createQueueRedis(
     // fails fast; after it, retry forever so BullMQ survives a Redis outage.
     // `undefined` stops reconnecting: ioredis only checks `typeof retryDelay !== 'number'`.
     retryStrategy: (times) => {
-      if (readiness.hasBeenReady) return Math.min(times * 200, 5000)
+      if (readiness.hasBeenReady) return Math.min(times * 200, RECONNECT_DELAY_CAP_MS)
       return times > 3 ? undefined : Math.min(times * 200, 2000)
     },
     connectTimeout: REDIS_CONNECT_TIMEOUT_MS,
