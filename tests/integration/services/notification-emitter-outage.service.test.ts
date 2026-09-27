@@ -3,6 +3,10 @@
 // Real Redis outages through a TCP proxy this file owns, never by stopping
 // the shared Redis. Its own file because it mocks getEnv()'s REDIS_URL, as
 // redis-outage.service.test.ts does.
+//
+// The MUTATION_PROOF test is DELIBERATELY red: it drops the emitter's 'error'
+// listener, the only thing that destroys a subscriber closed while its reconnect is refused.
+//   MUTATION_PROOF=1 pnpm exec vitest run tests/integration/services/notification-emitter-outage.service.test.ts   # red
 import { randomUUID } from 'node:crypto'
 import { createClient, type RedisClientType } from 'redis'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
@@ -69,14 +73,16 @@ function noopHandler(): void {
 /**
  * Run against a fresh emitter module, whose subscriber has never been opened.
  * @param run - Gets the fresh module and every Redis client it created.
+ * @param decorate - Applied to each client before the fresh module sees it.
  * @returns Resolves once `run` settles.
  */
 async function withFreshEmitter(
-  run: (fresh: EmitterModule, clients: RedisClientType[]) => Promise<void>
+  run: (fresh: EmitterModule, clients: RedisClientType[]) => Promise<void>,
+  decorate: (client: RedisClientType) => RedisClientType = (client) => client
 ): Promise<void> {
   const clients: RedisClientType[] = []
   const createCapturedClient = (): RedisClientType => {
-    const client = createRedisClient()
+    const client = decorate(createRedisClient())
     clients.push(client)
     return client
   }
@@ -113,6 +119,74 @@ async function hasFirstAttemptFailed(clients: RedisClientType[]): Promise<boolea
     () => Promise.resolve(clients[0] !== undefined && !clients[0].isOpen),
     5000
   )
+}
+
+/**
+ * Drop every 'error' listener added to `client` from here on; its logger listener stays.
+ * @param client - A client createRedisClient just built.
+ * @returns The same client.
+ */
+function withoutLaterErrorListeners(client: RedisClientType): RedisClientType {
+  const on = client.on.bind(client)
+  client.on = ((event: string | symbol, listener: (...listenerArguments: unknown[]) => void) =>
+    event === 'error' ? client : on(event, listener)) as RedisClientType['on']
+  return client
+}
+
+/**
+ * Close a live fresh subscriber as its reconnect starts, while nothing listens
+ * on its port, and check it leaves nothing behind.
+ * @param decorate - Applied to each client the fresh emitter creates.
+ * @returns Resolves once every check has passed.
+ */
+async function expectRefusedReconnectCloseLeavesNothing(
+  decorate: (client: RedisClientType) => RedisClientType
+): Promise<void> {
+  const counter: RedisClientType = createClient({ url: target.realUrl })
+  await counter.connect()
+  // Its own proxy: close() stops it listening, so the reconnect is refused before it has a socket.
+  const refusing = new RedisProxy()
+  await refusing.start(new URL(target.realUrl))
+  const mainProxyUrl = target.proxyUrl
+  try {
+    await withFreshEmitter(async (fresh, clients) => {
+      const userId = `refused-reconnect-close-${randomUUID()}`
+      await waitForNotificationSubscriber(emitter, getRedis)
+      const before = await countSubscribers(counter)
+      target.proxyUrl = refusing.urlFor(new URL(target.realUrl))
+      try {
+        fresh.onNotification(userId, noopHandler)
+      } finally {
+        target.proxyUrl = mainProxyUrl
+      }
+      const [subscriber] = clients
+      try {
+        if (!subscriber) throw new Error('the fresh emitter created no subscriber')
+        await waitForNotificationSubscriber(fresh, getRedis)
+        const closing = new Promise<void>((resolve) => {
+          subscriber.once('reconnecting', () => {
+            void fresh.closeNotificationSubscriber().then(resolve)
+          })
+        })
+        refusing.close()
+        await closing
+        await waitUntil(() => !subscriber.isOpen, {
+          message: 'the closed subscriber is still reconnecting',
+        })
+        await waitUntil(async () => (await countSubscribers(counter)) === before, {
+          message: 'Redis still counts the closed subscriber',
+        })
+        expect(clients).toHaveLength(1)
+      } finally {
+        fresh.offNotification(userId, noopHandler)
+        // Only the mutation leaves it open; left alone it would retry for the rest of the file.
+        if (subscriber?.isOpen) subscriber.destroy()
+      }
+    }, decorate)
+  } finally {
+    refusing.close()
+    await counter.close()
+  }
 }
 
 describe('notification pub/sub survives a Redis outage', () => {
@@ -316,6 +390,19 @@ describe('notification pub/sub survives a Redis outage', () => {
       await counter.close()
     }
   }, 15_000)
+
+  it('leaves no subscriber behind when closed as a reconnect starts and Redis stays unreachable', async () => {
+    await expectRefusedReconnectCloseLeavesNothing((client) => client)
+  }, 15_000)
+
+  // DELIBERATELY red under MUTATION_PROOF=1.
+  it.runIf(process.env.MUTATION_PROOF === '1')(
+    'reproduces the unreachable-reconnect close against a subscriber whose error listener is gone',
+    async () => {
+      await expectRefusedReconnectCloseLeavesNothing(withoutLaterErrorListeners)
+    },
+    15_000
+  )
 
   describe('a first connect that fails while a listener waits', () => {
     it('is retried once Redis is back, and closes the open streams so they replay', async () => {
