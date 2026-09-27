@@ -60,22 +60,38 @@ async function isObservedOnce(
 }
 
 /**
+ * When a poll's deadline starts counting.
+ */
+export interface ProbeClock {
+  /**
+   * Starts the `timeoutMs` deadline when it resolves; polling runs from the start either way.
+   */
+  startsOn: Promise<unknown>
+  /**
+   * The longest wait for `startsOn`.
+   */
+  startsWithinMs: number
+}
+
+/**
  * Poll `isObserved` every 10 ms on a dedicated connection until it answers true
  * (true) or `settled` has settled (false). Each probe query runs under a
  * statement_timeout of the time left, so a hung probe fails at the deadline.
  * @param isObserved - One probe query answering whether the wait is seen.
  * @param settled - The work being watched.
- * @param timeoutMs - The longest wait.
+ * @param timeoutMs - The longest wait, counted from the start or, with `clock`, from when it starts.
  * @param label - Names the wait in the timeout error.
+ * @param clock - Starts the deadline late, for work that runs a while before it can wait.
  * @returns True when `isObserved` answered true first.
- * @throws {Error} When neither happens within `timeoutMs`, or a probe query is still running at the deadline.
+ * @throws {Error} When neither happens in time, the clock does not start in time, or a probe query is still running at the deadline.
  */
 // eslint-disable-next-line unicorn/consistent-boolean-name -- reads as the wait it performs, like the two exports below
 export async function pollUntil(
   isObserved: (probe: postgres.TransactionSql) => Promise<boolean>,
   settled: Promise<unknown>,
   timeoutMs: number,
-  label: string
+  label: string,
+  clock?: ProbeClock
 ): Promise<boolean> {
   let hasSettled = false
   const observe = async (): Promise<void> => {
@@ -94,12 +110,23 @@ export async function pollUntil(
     max: 1,
     connect_timeout: Math.max(1, Math.ceil(timeoutMs / 1000)),
   })
-  const deadline = Date.now() + timeoutMs
+  const timing = { hasStarted: !clock, deadline: Date.now() + (clock?.startsWithinMs ?? timeoutMs) }
+  const startClock = async (startsOn: Promise<unknown>): Promise<void> => {
+    await startsOn
+    timing.hasStarted = true
+    timing.deadline = Date.now() + timeoutMs
+  }
+  if (clock) void startClock(clock.startsOn)
   try {
-    while (Date.now() < deadline) {
-      if (await isObservedOnce(probe, isObserved, deadline - Date.now(), label)) return true
+    while (Date.now() < timing.deadline) {
+      if (await isObservedOnce(probe, isObserved, timing.deadline - Date.now(), label)) return true
       if (hasSettled) return false
       await settle(POLL_INTERVAL_MS, 'poll interval')
+    }
+    if (!timing.hasStarted) {
+      throw new Error(
+        `${label}: the clock did not start within ${String(clock?.startsWithinMs)} ms`
+      )
     }
     throw new Error(`${label}: no lock wait and no finish within ${timeoutMs} ms`)
   } finally {
@@ -144,14 +171,15 @@ export async function waitForBlocked(
  * @param settled - The work expected to queue behind it.
  * @param options - Bounds on the wait.
  * @param options.timeoutMs - The longest wait, in ms (default 5000).
+ * @param options.clock - Starts that wait late (see `pollUntil`).
  * @returns True when a backend was seen waiting on the holder.
- * @throws {Error} When neither happens within `timeoutMs`.
+ * @throws {Error} When neither happens within `timeoutMs`, or the clock does not start in time.
  */
 // eslint-disable-next-line unicorn/consistent-boolean-name -- reads as the wait it performs, like `await waitForWaiter(pid, work)`
 export async function waitForWaiter(
   holderPid: number,
   settled: Promise<unknown>,
-  options: { timeoutMs?: number } = {}
+  options: { timeoutMs?: number; clock?: ProbeClock } = {}
 ): Promise<boolean> {
   return pollUntil(
     async (probe) => {
@@ -164,7 +192,8 @@ export async function waitForWaiter(
     },
     settled,
     options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-    `waiters on backend ${holderPid}`
+    `waiters on backend ${holderPid}`,
+    options.clock
   )
 }
 

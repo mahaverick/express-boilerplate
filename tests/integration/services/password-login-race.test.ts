@@ -83,6 +83,11 @@ const userRepository = new UserRepository()
 const OLD_PASSWORD = 'correct horse battery staple'
 const NEW_PASSWORD = 'a brand new secret passphrase'
 const DENYLIST_FAILURE = 'session denylist write failed after password change'
+// How long the revoking side may take to reach its user lock. A password
+// change hashes with bcrypt first, which is CPU-bound, so the waiter probe's
+// deadline starts at the lock instead. This bound only catches a revoking side
+// that never gets there, and stays under the 20 s test timeout.
+const REVOKER_REACHES_LOCK_MS = 15_000
 
 type PasswordFlow = 'change' | 'reset'
 
@@ -749,10 +754,13 @@ async function raceRotationFirst(
   const rotationPid = deferred<number>()
   const rotationPaused = deferred()
   const releaseRotation = deferred()
+  const revokerReachedLock = deferred()
   // A holder object: TypeScript does not see assignments made inside the callback.
-  const flags = { reachedLock: false }
+  const flags = { reachedLock: false, isRevoking: false }
 
   const lockById: typeof realLockById = async function (this: UserRepository, id, mode, tx) {
+    // The rotation took its lock before pausing, so any later call is the revoking side's.
+    if (flags.isRevoking) revokerReachedLock.resolve()
     if (mode !== 'share') {
       if (options.unlockedRevoker) return
       if (options.revokeBeforeLock) await realRevokeAll.call(tokenRepository, id, tx)
@@ -800,8 +808,11 @@ async function raceRotationFirst(
       await untilSignalled(rotationPaused.promise, rotating, 'the rotation')
       if (!flags.reachedLock) throw new Error('the rotation paused before taking the user lock')
       const pid = await rotationPid.promise
+      flags.isRevoking = true
       revoking = revoke()
-      observed.waited = await waitForWaiter(pid, revoking)
+      observed.waited = await waitForWaiter(pid, revoking, {
+        clock: { startsOn: revokerReachedLock.promise, startsWithinMs: REVOKER_REACHES_LOCK_MS },
+      })
     } finally {
       releaseRotation.resolve()
     }
