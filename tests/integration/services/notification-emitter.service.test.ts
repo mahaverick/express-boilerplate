@@ -16,7 +16,8 @@ import {
   notificationChannel,
   waitForNotificationSubscriber,
 } from '../../helpers/notification-subscriber'
-import { isEventuallyTrue, sleep } from '../../helpers/redis-proxy'
+import { isEventuallyTrue } from '../../helpers/redis-proxy'
+import { settle } from '../../helpers/timing'
 
 interface Replica {
   emitter: typeof replicaA
@@ -87,7 +88,7 @@ describe('notification-emitter.service', () => {
     const before = await countSubscribers(client)
 
     replicaA.emitNotification(`publisher-only-${randomUUID()}`, fakeNotification())
-    await sleep(200)
+    await settle(200, 'absence has no event: a subscriber opened by a publish would show within it')
     expect(await countSubscribers(client)).toBe(before)
 
     const userId = `first-listener-${randomUUID()}`
@@ -138,8 +139,7 @@ describe('notification-emitter.service', () => {
       b.emitter.emitNotification(userId, fakeNotification({ userId }))
       expect(await hasReceived(onA.received, 1)).toBe(true)
       expect(await hasReceived(onB.received, 1)).toBe(true)
-      // An upper bound has no event to wait for; settle, then count.
-      await sleep(200)
+      await settle(200, 'absence has no event: a second copy would arrive within it')
       expect(onA.received).toHaveLength(1)
       expect(onB.received).toHaveLength(1)
     } finally {
@@ -160,7 +160,10 @@ describe('notification-emitter.service', () => {
     try {
       replicaA.emitNotification(owner, fakeNotification({ userId: owner }))
       expect(await hasReceived(onOwner.received, 1)).toBe(true)
-      await sleep(100)
+      await settle(
+        100,
+        "absence has no event: a misrouted copy would reach the other user's listener within it"
+      )
       expect(onOther.received).toEqual([])
     } finally {
       replicaA.offNotification(owner, onOwner.handler)
@@ -210,7 +213,10 @@ describe('notification-emitter.service', () => {
       replicaA.onNotification(userId, handler)
       replicaA.offNotification(userId, handler)
       replicaA.emitNotification(userId, fakeNotification({ userId }))
-      await sleep(200)
+      await settle(
+        200,
+        'absence has no event: a delivery after offNotification would arrive within it'
+      )
 
       expect(received).toEqual([])
       expect(replicaA.listenerCount(userId)).toBe(0)
@@ -296,8 +302,10 @@ describe('notification-emitter.service', () => {
     c.emitter.onNotification(userId, noopHandler)
     try {
       await c.emitter.closeNotificationSubscriber()
-      // An upper bound has no event to wait for; settle, then count.
-      await sleep(300)
+      await settle(
+        300,
+        'absence has no event: a same-tick close must not leave a subscriber or socket'
+      )
       expect(await countSubscribers(client)).toBe(before)
       expect(openSocketCount()).toBe(socketsBefore)
     } finally {
@@ -324,7 +332,7 @@ describe('notification-emitter.service', () => {
     const userId = `after-close-${randomUUID()}`
     b.emitter.onNotification(userId, noopHandler)
     try {
-      await sleep(200)
+      await settle(200, 'absence has no event: a reopened subscriber would show within it')
       expect(await countSubscribers(client)).toBe(before - 1)
     } finally {
       b.emitter.offNotification(userId, noopHandler)

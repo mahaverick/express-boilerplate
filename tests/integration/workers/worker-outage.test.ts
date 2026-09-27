@@ -10,10 +10,18 @@ import { Queue, Worker } from 'bullmq'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { gracefulShutdown, startServer } from '@/server'
 import { resetLifecycleForTests } from '@/services/lifecycle.service'
-import { addJob, closeQueue, getEmailQueue, isQueueReachable } from '@/services/queue.service'
+import {
+  addJob,
+  closeQueue,
+  getEmailQueue,
+  getQueueConnection,
+  isQueueReachable,
+  onWorkerConnectionLost,
+} from '@/services/queue.service'
 import { startWorkers, type SupervisedWorkers } from '@/services/worker-supervisor.service'
 import { withMutatedMethod } from '../../helpers/mutate'
-import { isEventuallyTrue, RedisProxy, sleep } from '../../helpers/redis-proxy'
+import { isEventuallyTrue, RedisProxy } from '../../helpers/redis-proxy'
+import { settle, waitUntil } from '../../helpers/timing'
 
 const target = vi.hoisted(() => ({ realUrl: '', proxyUrl: '', prefix: '' }))
 
@@ -42,6 +50,9 @@ const originalRun = workerPrototype.run
 
 // A spinning Worker calls retryIfFailed without end; this many calls means it spins.
 const SPIN_BOUND = 500
+// Starvation claim: a 50ms timer fires within this, so no fetch loop starves the event loop
+// (worker-supervisor.service.ts). Headroom: at least 10x the lag measured under the full suite.
+const STARVED_TIMER_MS = 200
 
 const proxy = new RedisProxy()
 const observed: { retries: number; workers: Worker[]; running?: SupervisedWorkers } = {
@@ -75,7 +86,7 @@ function recordedRun(this: Worker): Promise<void> {
  */
 async function timerDelay(): Promise<number> {
   const startedAt = Date.now()
-  await sleep(50)
+  await settle(50, "the timer is the measurement: its lateness is the event loop's lag")
   return Date.now() - startedAt
 }
 
@@ -128,10 +139,24 @@ describe('Queue Workers through a Redis outage', () => {
     proxy.goDown()
     await withMutatedMethod(workerPrototype, 'run', recordedRun, async () => {
       await withMutatedMethod(workerPrototype, 'retryIfFailed', countedRetryIfFailed, async () => {
-        observed.running = startWorkers()
-        // Past two pre-ready give-ups (about 1.2s each).
-        await sleep(2500)
-        expect(await timerDelay()).toBeLessThan(200)
+        const losses = { count: 0 }
+        const unsubscribe = onWorkerConnectionLost(() => {
+          losses.count += 1
+        })
+        try {
+          observed.running = startWorkers()
+          // Past two pre-ready give-ups (about 1.2s each): a Worker that spins after
+          // its connection gives up has had a whole give-up interval to show it.
+          await waitUntil(() => losses.count >= 2, {
+            message: 'the Worker connection gives up twice before its first ready',
+            timeout: 10_000,
+          })
+        } finally {
+          unsubscribe()
+        }
+        expect(await timerDelay()).toBeLessThan(STARVED_TIMER_MS)
+        // Healthy Workers wait BullMQ's runRetryDelay (15s default) between fetch
+        // retries; a spinning one retries with no delay, up to SPIN_BOUND (500).
         expect(observed.retries).toBeLessThan(50)
         expect(await isQueueReachable()).toBe(false)
 
@@ -146,9 +171,12 @@ describe('Queue Workers through a Redis outage', () => {
     await withMutatedMethod(workerPrototype, 'retryIfFailed', countedRetryIfFailed, async () => {
       observed.retries = 0
       proxy.goDown()
-      await sleep(100)
-      expect(await timerDelay()).toBeLessThan(200)
-      await sleep(1000)
+      await waitUntil(() => getQueueConnection().status !== 'ready', {
+        message: 'the Worker connection sees the outage',
+      })
+      expect(await timerDelay()).toBeLessThan(STARVED_TIMER_MS)
+      await settle(1000, 'rate window: retries per second needs real time')
+      // Same claim as above: runRetryDelay (15s) versus a no-delay spin up to SPIN_BOUND (500).
       expect(observed.retries).toBeLessThan(20)
 
       proxy.comeBack()

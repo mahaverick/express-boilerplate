@@ -106,15 +106,6 @@ export class RedisProxy {
 }
 
 /**
- * Wait `ms` milliseconds.
- * @param ms - How long to wait.
- * @returns Resolves after the delay.
- */
-export async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-/**
  * Poll `isDone` every 100ms until it is true or `timeoutMs` passes.
  * @param isDone - The condition.
  * @param timeoutMs - How long to keep polling.

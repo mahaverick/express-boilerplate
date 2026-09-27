@@ -23,12 +23,15 @@ import {
   fakeNotification,
   waitForNotificationSubscriber,
 } from '../../helpers/notification-subscriber'
-import { isEventuallyTrue, RedisProxy, sleep } from '../../helpers/redis-proxy'
+import { isEventuallyTrue, RedisProxy } from '../../helpers/redis-proxy'
+import { settle, waitUntil } from '../../helpers/timing'
 
 // Longer than the pre-ready fail-fast budget (~600ms), so only retry-forever survives it.
 const OUTAGE_MS = 1500
 // Longer than the subscriber's first retry delay (1s).
 const RETRY_SETTLE_MS = 2000
+// The close claim: prompt, never stuck behind the retry backoff. 10x the whole test's measured p99 (399ms).
+const PROMPT_CLOSE_BUDGET_MS = 4000
 const FAILED_TO_START = 'Notification subscriber failed to start'
 const PUBLISH_FAILED =
   'Notification publish failed; delivering to this process only until Redis recovers'
@@ -81,6 +84,15 @@ async function withFreshEmitter(
   } finally {
     vi.doUnmock('@/services/logger.service')
   }
+}
+
+/**
+ * Whether the shared Redis client has seen the proxy reset its connection.
+ * @returns True once that client is no longer ready.
+ */
+async function hasRedisClientLeftReady(): Promise<boolean> {
+  const client = await getRedis()
+  return !client.isReady
 }
 
 /**
@@ -158,7 +170,9 @@ describe('notification pub/sub survives a Redis outage', () => {
     try {
       await withMutatedMethod(logger, 'warn', logWarn, async () => {
         proxy.goDown()
-        await sleep(100)
+        await waitUntil(hasRedisClientLeftReady, {
+          message: 'the shared Redis client sees the outage',
+        })
         emitNotification(userId, first)
         emitNotification(userId, second)
         expect(await hasReceived(2)).toBe(true)
@@ -172,11 +186,13 @@ describe('notification pub/sub survives a Redis outage', () => {
         emitNotification(userId, third)
         expect(await hasReceived(3)).toBe(true)
         // Through the subscriber only: a successful publish is not also delivered locally.
-        await sleep(200)
+        await settle(200, 'absence has no event: a local copy would arrive within it')
         expect(received).toHaveLength(3)
 
         proxy.goDown()
-        await sleep(100)
+        await waitUntil(hasRedisClientLeftReady, {
+          message: 'the shared Redis client sees the second outage',
+        })
         emitNotification(userId, fourth)
         expect(await hasReceived(4)).toBe(true)
         expect(publishWarnings()).toBe(2)
@@ -193,7 +209,7 @@ describe('notification pub/sub survives a Redis outage', () => {
     registerStream(owner, closer)
 
     proxy.goDown()
-    await sleep(OUTAGE_MS)
+    await settle(OUTAGE_MS, 'outage length; no closer may run while Redis is down')
     expect(closer).not.toHaveBeenCalled()
     proxy.comeBack()
 
@@ -212,15 +228,26 @@ describe('notification pub/sub survives a Redis outage', () => {
       const userId = `backoff-close-${randomUUID()}`
       proxy.goDown()
       fresh.onNotification(userId, noopHandler)
-      // Inside the fail-fast retries: the first attempt was reset, the next is still waiting.
-      await sleep(150)
+      const [subscriber] = clients
+      if (!subscriber) throw new Error('the fresh emitter created no subscriber')
+      const resets = { count: 0 }
+      subscriber.on('error', () => {
+        resets.count += 1
+      })
+      // The first retry has no delay, so only the second reset leaves it waiting in a backoff.
+      await waitUntil(() => resets.count >= 2, {
+        message: "the fresh subscriber's first connect is reset twice",
+      })
       try {
         const close = async (): Promise<'closed'> => {
           await fresh.closeNotificationSubscriber()
           return 'closed'
         }
         const giveUp = async (): Promise<'timed out'> => {
-          await sleep(3000)
+          await settle(
+            PROMPT_CLOSE_BUDGET_MS,
+            'race budget: a close stuck in the backoff never settles'
+          )
           return 'timed out'
         }
         const winner = await Promise.race([close(), giveUp()])
@@ -256,8 +283,7 @@ describe('notification pub/sub survives a Redis outage', () => {
           })
           proxy.goDown()
           await closing
-          // An upper bound has no event to wait for; settle, then count.
-          await sleep(500)
+          await settle(500, 'absence has no event: a subscriber left behind would show within it')
           await waitForNotificationSubscriber(emitter, getRedis)
           expect(await countSubscribers(counter)).toBe(before)
           expect(subscriber.isOpen).toBe(false)
@@ -310,8 +336,10 @@ describe('notification pub/sub survives a Redis outage', () => {
           expect(await hasFirstAttemptFailed(clients)).toBe(true)
           await fresh.closeNotificationSubscriber()
           proxy.comeBack()
-          // Past the first retry's delay; an upper bound has no event to wait for.
-          await sleep(RETRY_SETTLE_MS)
+          await settle(
+            RETRY_SETTLE_MS,
+            "absence has no event: a retry would start within the first retry's delay"
+          )
           expect(clients).toHaveLength(1)
         } finally {
           fresh.offNotification(userId, noopHandler)
@@ -330,7 +358,10 @@ describe('notification pub/sub survives a Redis outage', () => {
           fresh.offNotification(userId, noopHandler)
         }
         proxy.comeBack()
-        await sleep(RETRY_SETTLE_MS)
+        await settle(
+          RETRY_SETTLE_MS,
+          "absence has no event: a retry would start within the first retry's delay"
+        )
         expect(clients).toHaveLength(1)
         await fresh.closeNotificationSubscriber()
       })
