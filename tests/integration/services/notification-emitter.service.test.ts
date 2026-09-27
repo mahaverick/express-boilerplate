@@ -6,7 +6,9 @@
 // subscriber and EventEmitter. That graph never reaches database.service.ts
 // (the model import is type-only), so no extra Postgres pool is opened.
 import { randomUUID } from 'node:crypto'
+import net from 'node:net'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { getEnv } from '@/configs/env.config'
 import type { Notification } from '@/database/models/notification.model'
 import * as replicaA from '@/services/notification-emitter.service'
 import * as redisA from '@/services/redis.service'
@@ -17,7 +19,7 @@ import {
   waitForNotificationSubscriber,
 } from '../../helpers/notification-subscriber'
 import { isEventuallyTrue } from '../../helpers/redis-proxy'
-import { settle } from '../../helpers/timing'
+import { settle, waitUntil } from '../../helpers/timing'
 
 interface Replica {
   emitter: typeof replicaA
@@ -45,11 +47,19 @@ function collector(): {
 }
 
 /**
- * How many TCP sockets this process holds open.
- * @returns The count of open TCP socket handles.
+ * The port one `net.Socket#connect` call dials.
+ * @param connectArguments - The arguments that call received.
+ * @returns The port, or undefined for an IPC path.
  */
-function openSocketCount(): number {
-  return process.getActiveResourcesInfo().filter((resource) => resource === 'TCPSocketWrap').length
+function connectPort(connectArguments: readonly unknown[]): number | undefined {
+  // net.createConnection passes connect() its already-normalised [options, callback] pair.
+  const [first] = connectArguments
+  const options: unknown = Array.isArray(first) ? first[0] : first
+  if (typeof options === 'number') return options
+  if (typeof options === 'object' && options !== null && 'port' in options) {
+    return Number(options.port)
+  }
+  return undefined
 }
 
 function noopHandler(): void {
@@ -296,19 +306,31 @@ describe('notification-emitter.service', () => {
     }
     const client = await redisA.getRedis()
     const before = await countSubscribers(client)
-    const socketsBefore = openSocketCount()
+    const redisPort = Number(new URL(getEnv().REDIS_URL).port || 6379)
     const userId = `same-tick-close-${randomUUID()}`
+    // Only sockets this test opens: every other client here is already connected.
+    const connectSpy = vi.spyOn(net.Socket.prototype, 'connect')
+    const redisSockets = (): net.Socket[] =>
+      connectSpy.mock.calls.flatMap((callArguments, index) => {
+        const socket: unknown = connectSpy.mock.contexts[index]
+        return connectPort(callArguments) === redisPort && socket instanceof net.Socket
+          ? [socket]
+          : []
+      })
 
     c.emitter.onNotification(userId, noopHandler)
     try {
       await c.emitter.closeNotificationSubscriber()
-      await settle(
-        300,
-        'absence has no event: a same-tick close must not leave a subscriber or socket'
-      )
+      // Close waits for the connect to settle, so the subscriber's socket exists by now.
+      expect(redisSockets().length).toBeGreaterThan(0)
+      await waitUntil(() => redisSockets().every((socket) => socket.destroyed), {
+        message: 'a socket the closed subscriber opened is still open',
+      })
+      await settle(300, 'a same-tick close must not reopen a subscriber later')
       expect(await countSubscribers(client)).toBe(before)
-      expect(openSocketCount()).toBe(socketsBefore)
+      expect(redisSockets().every((socket) => socket.destroyed)).toBe(true)
     } finally {
+      connectSpy.mockRestore()
       c.emitter.offNotification(userId, noopHandler)
       await c.redis.closeRedis()
     }
