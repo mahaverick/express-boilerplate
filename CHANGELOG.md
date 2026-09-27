@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.2](https://github.com/mahaverick/express-boilerplate/compare/v3.2.1...v3.2.2) (2026-09-27)
+
+
+### Bug Fixes
+
+* **mail:** default SMTP_HOST to 127.0.0.1 so sends skip a DNS lookup ([6d407cd](https://github.com/mahaverick/express-boilerplate/commit/6d407cd4e1201ea071698ecabae19eb5471f189d))
+
 ## [3.2.1](https://github.com/mahaverick/express-boilerplate/compare/v3.2.0...v3.2.1) (2026-09-27)
 
 
