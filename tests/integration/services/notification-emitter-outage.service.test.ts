@@ -16,7 +16,13 @@ import {
   offNotification,
   onNotification,
 } from '@/services/notification-emitter.service'
-import { closeRedis, createRedisClient, getRedis, isRedisReachable } from '@/services/redis.service'
+import {
+  closeRedis,
+  createRedisClient,
+  getRedis,
+  isRedisReachable,
+  RECONNECT_DELAY_CAP_MS,
+} from '@/services/redis.service'
 import { withMutatedMethod, withMutatedModule } from '../../helpers/mutate'
 import {
   countSubscribers,
@@ -30,6 +36,8 @@ import { settle, waitUntil } from '../../helpers/timing'
 const OUTAGE_MS = 1500
 // Longer than the subscriber's first retry delay (1s).
 const RETRY_SETTLE_MS = 2000
+// One capped reconnect delay, then as long again to connect and resubscribe.
+const RECOVERY_TIMEOUT_MS = 2 * RECONNECT_DELAY_CAP_MS
 // The close claim: prompt, never stuck behind the retry backoff. 10x the whole test's measured p99 (399ms).
 const PROMPT_CLOSE_BUDGET_MS = 4000
 const FAILED_TO_START = 'Notification subscriber failed to start'
@@ -113,10 +121,12 @@ describe('notification pub/sub survives a Redis outage', () => {
     target.proxyUrl = proxy.urlFor(new URL(target.realUrl))
   })
 
-  // A failed test must not leave the next one on a dead proxy, or with its streams.
-  afterEach(() => {
+  // A failed test must not leave the next one on a dead proxy, with its
+  // streams, or behind a reconnect its outage started.
+  afterEach(async () => {
     proxy.comeBack()
     resetLifecycleForTests()
+    await waitForNotificationSubscriber(emitter, getRedis, RECOVERY_TIMEOUT_MS)
   })
 
   afterAll(async () => {
