@@ -230,14 +230,25 @@ describe('notification pub/sub survives a Redis outage', () => {
       fresh.onNotification(userId, noopHandler)
       const [subscriber] = clients
       if (!subscriber) throw new Error('the fresh emitter created no subscriber')
-      const resets = { count: 0 }
-      subscriber.on('error', () => {
-        resets.count += 1
-      })
-      // The first retry has no delay, so only the second reset leaves it waiting in a backoff.
-      await waitUntil(() => resets.count >= 2, {
-        message: "the fresh subscriber's first connect is reset twice",
-      })
+      const attempts = { reconnects: 0, hasSecondFailed: false }
+      const onReconnecting = (): void => {
+        attempts.reconnects += 1
+      }
+      const onError = (): void => {
+        if (attempts.reconnects >= 1) attempts.hasSecondFailed = true
+      }
+      subscriber.on('reconnecting', onReconnecting)
+      subscriber.on('error', onError)
+      try {
+        // The first retry has no delay; once the second attempt fails, the client waits
+        // in the next retry's backoff (100ms) before its third attempt.
+        await waitUntil(() => attempts.hasSecondFailed, {
+          message: "the fresh subscriber's second connect attempt fails",
+        })
+      } finally {
+        subscriber.off('reconnecting', onReconnecting)
+        subscriber.off('error', onError)
+      }
       try {
         const close = async (): Promise<'closed'> => {
           await fresh.closeNotificationSubscriber()
