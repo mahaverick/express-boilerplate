@@ -8,7 +8,7 @@ import { randomUUID } from 'node:crypto'
 import type { RedisClientType } from 'redis'
 import type { Notification } from '@/database/models/notification.model'
 import { redisKey } from '@/services/redis.service'
-import { sleep } from './redis-proxy'
+import { settle } from './timing'
 
 type EmitterModule = typeof import('@/services/notification-emitter.service')
 
@@ -89,7 +89,7 @@ export async function waitForNotificationSubscriber(
       } catch {
         // Redis is still coming back; probe again.
       }
-      await sleep(50)
+      await settle(50, 'poll interval between probe publishes')
     }
   } finally {
     emitter.offNotification(probeUserId, handler)

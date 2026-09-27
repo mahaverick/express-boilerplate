@@ -8,6 +8,7 @@
 // `getMailpitMessage` and `drainMailpit` are new: the former replaces an
 // inline fetch that had no comment to move, the latter has no caller yet.
 import { expect } from 'vitest'
+import { settle } from './timing'
 
 const MAILPIT_API = 'http://localhost:8025/api/v1'
 
@@ -35,7 +36,7 @@ export async function findMailpitMessages(recipient: string): Promise<MailpitMes
     const response = await fetch(`${MAILPIT_API}/search?query=${encodeURIComponent(query)}`)
     const body = (await response.json()) as { messages: MailpitMessage[] }
     if (body.messages.length > 0) return body.messages
-    await new Promise((resolve) => setTimeout(resolve, 100))
+    await settle(100, 'poll interval')
   }
   return []
 }
@@ -63,7 +64,7 @@ export async function assertNoMailpitMessage(recipient: string): Promise<void> {
     const response = await fetch(`${MAILPIT_API}/search?query=${encodeURIComponent(query)}`)
     const body = (await response.json()) as { messages: MailpitMessage[] }
     expect(body.messages).toHaveLength(0)
-    await new Promise((resolve) => setTimeout(resolve, 100))
+    await settle(100, 'poll interval: absence has no event, so the whole budget is polled')
   }
 }
 

@@ -5,11 +5,11 @@
 // 'is this backend waiting' and 'is anything waiting on this one'. The test pool has
 // two connections and a race holds both, so each probe opens its own
 // single-connection client and closes it before returning.
-import { setTimeout as delay } from 'node:timers/promises'
 import { sql as drizzleSql } from 'drizzle-orm'
 import postgres from 'postgres'
 import { getEnv } from '@/configs/env.config'
 import type { DbExecutor } from '@/services/database.service'
+import { settle } from './timing'
 
 const POLL_INTERVAL_MS = 10
 const DEFAULT_TIMEOUT_MS = 5000
@@ -61,7 +61,7 @@ async function pollUntil(
     while (Date.now() < deadline) {
       if (await isObserved(probe)) return true
       if (hasSettled) return false
-      await delay(POLL_INTERVAL_MS)
+      await settle(POLL_INTERVAL_MS, 'poll interval')
     }
     throw new Error(`${label}: no lock wait and no finish within ${timeoutMs} ms`)
   } finally {

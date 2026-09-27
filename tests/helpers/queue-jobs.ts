@@ -14,23 +14,13 @@ import {
   TENANT_INVITATION_TEMPLATE_KEY,
   type TenantInvitationVariables,
 } from '@/templates/email/tenant-invitation.template'
+import { settle } from './timing'
 
 const JOB_STATES = ['waiting', 'active', 'completed', 'delayed', 'prioritized'] as const
 const POLL_INTERVAL_MS = 25
 const DEFAULT_TIMEOUT_MS = 5000
 // How long `expectNoJob` waits for a fire-and-forget enqueue that should not happen.
 const NO_JOB_SETTLE_MS = 300
-
-/**
- * Resolve after `ms` milliseconds.
- * @param ms - How long to wait.
- * @returns A promise that resolves once the time has passed.
- */
-async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => {
-    setTimeout(resolve, ms)
-  })
-}
 
 /**
  * Every job currently on `queue` in a non-failed state, typed as `TData`.
@@ -59,7 +49,7 @@ export async function waitForJob<TData>(
     const jobs = await queuedJobs<TData>(queue)
     const match = jobs.find((job) => isMatch(job.data))
     if (match) return match
-    await sleep(POLL_INTERVAL_MS)
+    await settle(POLL_INTERVAL_MS, 'poll interval')
   }
   throw new Error(`waitForJob: no matching job on "${queue.name}" within ${timeoutMs}ms`)
 }
@@ -75,7 +65,7 @@ export async function expectNoJob<TData>(
   queue: Queue,
   isMatch: (data: TData) => boolean
 ): Promise<void> {
-  await sleep(NO_JOB_SETTLE_MS)
+  await settle(NO_JOB_SETTLE_MS, 'absence has no event: an enqueue that must not happen')
   const jobs = await queuedJobs<TData>(queue)
   expect(jobs.some((job) => isMatch(job.data))).toBe(false)
 }
@@ -98,7 +88,7 @@ export async function waitForLoggedCall(
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     if (spy.mock.calls.some(([message, meta]) => isMatch(message, meta))) return
-    await sleep(POLL_INTERVAL_MS)
+    await settle(POLL_INTERVAL_MS, 'poll interval')
   }
   throw new Error(`waitForLoggedCall: no matching log call within ${timeoutMs}ms`)
 }

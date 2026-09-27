@@ -7,6 +7,7 @@
 // The proxy holds one port for its whole life: re-listening on a hand-picked
 // port could take over another worker's test server on that port.
 import net from 'node:net'
+import { settle } from './timing'
 
 // `down` resets every connection; `silent` accepts connections and never answers.
 type ProxyMode = 'up' | 'down' | 'silent'
@@ -126,7 +127,7 @@ export async function isEventuallyTrue(
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     if (await isDone()) return true
-    await sleep(100)
+    await settle(100, 'poll interval')
   }
   return false
 }
