@@ -27,6 +27,7 @@ import { TenantRepository, type CreateTenantInput } from '@/repositories/tenant.
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
+import { backdateUpdatedAt } from '../../helpers/backdate'
 
 const tenantRepository = new TenantRepository()
 const tenantSettingsRepository = new TenantSettingsRepository()
@@ -285,11 +286,12 @@ describe('TenantRepository', () => {
     it('updates a tenant and bumps updatedAt', async () => {
       const ownerId = await createUser()
       const tenant = await createTenant(ownerId)
+      const backdatedAt = await backdateUpdatedAt('tenants', { column: 'id', value: tenant.id })
 
       const updated = await tenantRepository.update(tenant.id, { name: 'Renamed Inc' })
 
       expect(updated?.name).toBe('Renamed Inc')
-      expect(updated?.updatedAt.getTime()).toBeGreaterThan(tenant.updatedAt.getTime())
+      expect(updated?.updatedAt.getTime()).toBeGreaterThan(backdatedAt.getTime())
     })
 
     it('rejects an update that would duplicate another tenant’s visible slug with HttpError(409)', async () => {
@@ -323,6 +325,10 @@ describe('TenantRepository', () => {
       const tenant = await createTenant(ownerId)
       const original = await tenantSettingsRepository.findByTenantId(tenant.id)
       expect(original).toBeDefined()
+      const backdatedAt = await backdateUpdatedAt('tenant_settings', {
+        column: 'tenant_id',
+        value: tenant.id,
+      })
 
       const updated = await tenantSettingsRepository.update(tenant.id, {
         timezone: 'America/New_York',
@@ -333,7 +339,7 @@ describe('TenantRepository', () => {
       expect(updated?.timezone).toBe('America/New_York')
       expect(updated?.locale).toBe('en-US')
       expect(updated?.metadata).toEqual({ plan: 'pro' })
-      expect(updated?.updatedAt.getTime()).toBeGreaterThan(original?.updatedAt.getTime() ?? 0)
+      expect(updated?.updatedAt.getTime()).toBeGreaterThan(backdatedAt.getTime())
     })
 
     it('returns undefined for a tenant id that has no settings row', async () => {

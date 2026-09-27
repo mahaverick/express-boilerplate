@@ -21,13 +21,13 @@
 //      not luck or timing. Always green.
 //
 //   2. `it.runIf(process.env.MUTATION_PROOF === '1')`, DELIBERATELY red
-//      under that flag: swaps `claimOnce` for a non-atomic "select, sleep,
+//      under that flag: swaps `claimOnce` for a non-atomic "select, meet,
 //      then update by id" implementation — the exact TOCTOU shape
 //      claimOnce's single-statement form exists to rule out — and
-//      reproduces test 1's own assertion against it. The sleep is what
-//      makes the two connections reliably interleave (both complete their
-//      SELECT before either commits its UPDATE) instead of racing to a
-//      serialised, accidentally-safe outcome.
+//      reproduces test 1's own assertion against it. Both callers meet at a
+//      barrier between their SELECT and their UPDATE, so both complete
+//      their SELECT before either commits its UPDATE, every run, instead of
+//      racing to a serialised, accidentally-safe outcome.
 //
 //        MUTATION_PROOF=1 pnpm exec vitest run tests/integration/repositories/user-token-claim-atomicity.test.ts   # red
 //        pnpm exec vitest run tests/integration/repositories/user-token-claim-atomicity.test.ts                    # green
@@ -46,6 +46,7 @@ import {
 import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { db, sql as pgSql } from '@/services/database.service'
+import { deferred } from '../../helpers/lock-probe'
 import { withMutatedMethod } from '../../helpers/mutate'
 
 const userRepository = new UserRepository()
@@ -56,13 +57,6 @@ const userTokenRepository = new UserTokenRepository()
 // — not merely issued concurrently from Node and then serialised waiting
 // for a free connection.
 const CONCURRENT_CLAIMS = 2
-
-// How long the mutated, non-atomic implementation sleeps between its SELECT
-// and its UPDATE. Long enough that two connections reliably both complete
-// their SELECT (and both observe `revoked_at IS NULL`) before either
-// commits its UPDATE — the TOCTOU window claimOnce's single statement
-// exists to close.
-const UNSAFE_CLAIM_DELAY_MS = 50
 
 /**
  * A disposable email, unique to one test run.
@@ -82,44 +76,61 @@ function uniqueHash(): string {
 }
 
 /**
+ * A barrier for `parties` callers: `arrive()` resolves once all of them have called it.
+ * @param parties - How many callers must arrive.
+ * @returns The barrier.
+ */
+function meetingPoint(parties: number): { arrive: () => Promise<void> } {
+  let arrivals = 0
+  const opened = deferred()
+  return {
+    arrive: async () => {
+      arrivals += 1
+      if (arrivals >= parties) opened.resolve()
+      await opened.promise
+    },
+  }
+}
+
+/**
  * The exact TOCTOU shape `claimOnce`'s single UPDATE statement exists to
  * rule out: a separate SELECT to check `revokedAt IS NULL`, THEN a separate
- * UPDATE — with a deliberate delay between them so two concurrent callers
- * both pass the check before either writes. Cannot use `this.scope`/
- * `this.touched` (both `protected` on BaseRepository): the WHERE and SET
- * clauses are inlined instead, otherwise matching claimOnce's own real
- * predicate exactly (tokenHash + purpose + revokedAt IS NULL + not
+ * UPDATE — with every caller meeting at `meeting` between them, so
+ * concurrent callers all pass the check before any writes. Cannot use
+ * `this.scope`/`this.touched` (both `protected` on BaseRepository): the
+ * WHERE and SET clauses are inlined instead, otherwise matching claimOnce's
+ * own real predicate exactly (tokenHash + purpose + revokedAt IS NULL + not
  * soft-deleted).
- * @param tokenHash - The SHA-256 hash of the raw token, hex-encoded.
- * @param purpose - The purpose the token must have been issued for.
- * @returns The claimed row, or undefined when no live row of that purpose matched at SELECT time.
+ * @param meeting - The barrier every concurrent caller meets at after its SELECT.
+ * @returns A non-atomic stand-in for `claimOnce`.
  */
-async function unsafeClaimOnce(
-  tokenHash: string,
-  purpose: TokenPurpose
-): Promise<UserToken | undefined> {
-  const [found] = await db
-    .select()
-    .from(userTokenModel)
-    .where(
-      and(
-        eq(userTokenModel.tokenHash, tokenHash),
-        eq(userTokenModel.purpose, purpose),
-        isNull(userTokenModel.revokedAt),
-        isNull(userTokenModel.deletedAt)
+function unsafeClaimOnce(
+  meeting: ReturnType<typeof meetingPoint>
+): (tokenHash: string, purpose: TokenPurpose) => Promise<UserToken | undefined> {
+  return async (tokenHash, purpose) => {
+    const [found] = await db
+      .select()
+      .from(userTokenModel)
+      .where(
+        and(
+          eq(userTokenModel.tokenHash, tokenHash),
+          eq(userTokenModel.purpose, purpose),
+          isNull(userTokenModel.revokedAt),
+          isNull(userTokenModel.deletedAt)
+        )
       )
-    )
-    .limit(1)
-  if (!found) return undefined
+      .limit(1)
+    // Before the early return, so a caller that found nothing cannot strand the other.
+    await meeting.arrive()
+    if (!found) return
 
-  await new Promise((resolve) => setTimeout(resolve, UNSAFE_CLAIM_DELAY_MS))
-
-  const [updated] = await db
-    .update(userTokenModel)
-    .set({ revokedAt: sql`now()`, consumedAt: sql`now()`, updatedAt: sql`now()` })
-    .where(eq(userTokenModel.id, found.id))
-    .returning()
-  return updated
+    const [updated] = await db
+      .update(userTokenModel)
+      .set({ revokedAt: sql`now()`, consumedAt: sql`now()`, updatedAt: sql`now()` })
+      .where(eq(userTokenModel.id, found.id))
+      .returning()
+    return updated
+  }
 }
 
 /**
@@ -205,7 +216,7 @@ describe('claimOnce is atomic under real concurrency', () => {
       await withMutatedMethod(
         UserTokenRepository.prototype,
         'claimOnce',
-        unsafeClaimOnce,
+        unsafeClaimOnce(meetingPoint(CONCURRENT_CLAIMS)),
         async () => {
           const results = await claimConcurrently(tokenHash, 'password_reset', CONCURRENT_CLAIMS)
           const claimed = results.filter((row): row is UserToken => row !== undefined)

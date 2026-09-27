@@ -12,10 +12,17 @@
 // row before it claims the presented token, so the password side's revoke
 // either starts after the rotation's new token has committed, or the rotation
 // waits and finds its token revoked. The grace path (a replayed token within
-// REFRESH_REUSE_GRACE_MS gets a sibling) is raced too. The rotation's
-// mutation proofs run for change only: reset's extra revoke before its
-// transaction serialises some of those schedules on its own, while in change
-// the user row lock is the only thing that does.
+// REFRESH_REUSE_GRACE_MS gets a sibling) is raced too.
+//
+// Four of the password rotation tests have no mutation proof, because each
+// still passes with the rotation's user lock removed:
+// - password-first, change: the claim waits on the presented row, which the
+//   in-transaction revoke holds, and then finds it revoked;
+// - password-first, reset, normal and grace: reset's revoke before its
+//   transaction has already committed, so the claim or the grace check
+//   refuses, and the kill that follows queues on the user row lock;
+// - rotation-first, reset: that earlier revoke waits on the claimed row, so
+//   the locked revoke starts after the rotation's new token has committed.
 //
 // The same two orderings are run for every other revoking path: a Google
 // account claim, a logout, and the kill a reused refresh token triggers. Each
@@ -76,6 +83,11 @@ const userRepository = new UserRepository()
 const OLD_PASSWORD = 'correct horse battery staple'
 const NEW_PASSWORD = 'a brand new secret passphrase'
 const DENYLIST_FAILURE = 'session denylist write failed after password change'
+// A password change hashes with bcrypt before its user lock, which is
+// CPU-bound, so the waiter probe's deadline starts at the lock; this bounds
+// the whole probe. 12 s plus setup and teardown (under 3 s on a starved CPU)
+// stays under the 20 s test timeout.
+const REVOKER_PROBE_BOUND_MS = 12_000
 
 type PasswordFlow = 'change' | 'reset'
 
@@ -742,10 +754,13 @@ async function raceRotationFirst(
   const rotationPid = deferred<number>()
   const rotationPaused = deferred()
   const releaseRotation = deferred()
+  const revokerReachedLock = deferred()
   // A holder object: TypeScript does not see assignments made inside the callback.
-  const flags = { reachedLock: false }
+  const flags = { reachedLock: false, isRevoking: false }
 
   const lockById: typeof realLockById = async function (this: UserRepository, id, mode, tx) {
+    // The rotation took its lock before pausing, so any later call is the revoking side's.
+    if (flags.isRevoking) revokerReachedLock.resolve()
     if (mode !== 'share') {
       if (options.unlockedRevoker) return
       if (options.revokeBeforeLock) await realRevokeAll.call(tokenRepository, id, tx)
@@ -793,8 +808,11 @@ async function raceRotationFirst(
       await untilSignalled(rotationPaused.promise, rotating, 'the rotation')
       if (!flags.reachedLock) throw new Error('the rotation paused before taking the user lock')
       const pid = await rotationPid.promise
+      flags.isRevoking = true
       revoking = revoke()
-      observed.waited = await waitForWaiter(pid, revoking)
+      observed.waited = await waitForWaiter(pid, revoking, {
+        clock: { startsOn: revokerReachedLock.promise, withinMs: REVOKER_PROBE_BOUND_MS },
+      })
     } finally {
       releaseRotation.resolve()
     }
@@ -1016,7 +1034,7 @@ describe.each<PasswordFlow>(['change', 'reset'])(
 
     // DELIBERATELY red under MUTATION_PROOF=1: the revoke runs before the
     // sibling exists, and nothing makes the password side wait.
-    it.runIf(process.env.MUTATION_PROOF === '1' && flow === 'change')(
+    it.runIf(process.env.MUTATION_PROOF === '1')(
       'reproduces the grace rotation-first test with a rotation that takes no user lock',
       async () => {
         const user = await seedUser()

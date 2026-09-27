@@ -297,8 +297,9 @@ failed` when the scrub itself fails. A test that
   looks like a logout, not an error. Refresh and logout also read the
   legacy `refreshToken` (`LEGACY_REFRESH_TOKEN_COOKIE_NAME`). A login, a
   successful refresh, a Google sign-in or a logout clears it when the
-  request presented it; a failed refresh does not. The fallback goes at
-  the next major.
+  request presented it. A refresh answered 401 clears only the cookie name it
+  read, so the legacy one only when no current cookie came with it; its
+  429 and 5xx clear nothing. The fallback goes at the next major.
 - **`COOKIE_DOMAIN` goes on the refresh-cookie set, its clear, and the OAuth
   session cookie.** A clear with a different domain leaves the cookie behind.
   On a secure deployment, turning it on or off switches the cookie between
@@ -628,6 +629,28 @@ otel-collector`.** It is bind-mounted; `docker compose up -d` does not
   also means two tests in different files are never racing against the
   same rows just because they both insert a user — they are in different
   databases entirely, not merely different transactions.
+
+### Test timing rules
+
+A fixed sleep is a guess at how long something takes, and under a loaded full
+suite the guess is wrong often enough to fail CI. `tests/helpers/timing.ts`
+holds the only two real-time waits a test may use; lint rejects the common
+sleep forms (`sleep()`, a `setTimeout` promise, `timers/promises`) under
+`tests/`, and that file is the only exemption.
+
+1. Wait on a condition, never on a duration: `waitUntil(check, { message })`.
+2. A deliberate wait is `settle(ms, reason)`. The reason names what can't be
+   observed ("absence has no event", "poll interval", "injected latency to
+   widen the race").
+3. Wall-clock upper bounds are allowed only when the bound is the claim under
+   test. Each carries a comment naming what it proves and either references a
+   product constant by name or has at least 10x headroom over the measured
+   p99.
+4. No exact counts of process-wide resources. Count only what the test
+   itself created.
+5. Negative checks use a barrier event where one exists, and otherwise
+   `settle` with a reason.
+6. Never raise a timeout to fix a flake before its mechanism is known.
 
 ## Proving a security behaviour is real, without hand-editing `src/`
 

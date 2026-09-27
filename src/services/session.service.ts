@@ -36,7 +36,8 @@
 // their in-transaction revoke (revokeSession, revokeAllSessionsExceptCurrent
 // and revokeAllSessions' unlocked pass excepted), so a rotation either
 // commits first and its new token is revoked, or waits and then finds the
-// presented token revoked.
+// presented token revoked. Every bulk revoke of `user_tokens` locks its rows
+// in id order (see user-token.repository.ts's header).
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import jwt from 'jsonwebtoken'
 import { getEnv } from '@/configs/env.config'

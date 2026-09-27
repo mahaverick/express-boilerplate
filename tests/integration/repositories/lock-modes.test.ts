@@ -32,12 +32,14 @@ import { UserMembershipRepository } from '@/repositories/user-membership.reposit
 import { UserRepository } from '@/repositories/user.repository'
 import { record } from '@/services/audit.service'
 import { db, sql, type DbExecutor, type DbTransaction } from '@/services/database.service'
+import { bootstrapGrant } from '@/services/platform.service'
 import { changeRole, removeMember } from '@/services/tenant-membership.service'
 import { updateTenant } from '@/services/tenant.service'
 import type { RowLockMode } from '@/types/lock-mode'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { backendPid, deferred, untilSignalled, waitForBlocked } from '../../helpers/lock-probe'
 import { withMutatedMethod } from '../../helpers/mutate'
+import { makeStaff } from '../../helpers/platform-staff'
 
 const tenantRepository = new TenantRepository()
 const tenantSettingsRepository = new TenantSettingsRepository()
@@ -444,9 +446,10 @@ describe('UserMembershipRepository lock modes', () => {
 })
 
 /**
- * Run `run` while recording the mode lockOwners and lockMemberships are called with.
+ * Run `run` while recording the mode lockOwners and lockMemberships are
+ * called with, and each lockPlatformRole call (it has no mode: FOR SHARE).
  * @param run - The service call to observe.
- * @returns One `method:mode` entry per call, in call order.
+ * @returns One `method:mode` entry per lock call, or `lockPlatformRole`, in call order.
  */
 async function recordModes(run: () => Promise<unknown>): Promise<string[]> {
   const calls: string[] = []
@@ -454,6 +457,8 @@ async function recordModes(run: () => Promise<unknown>): Promise<string[]> {
   const realOwners = UserMembershipRepository.prototype.lockOwners
   // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
   const realMemberships = UserMembershipRepository.prototype.lockMemberships
+  // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
+  const realPlatformRole = UserMembershipRepository.prototype.lockPlatformRole
   const owners: typeof realOwners = function (this: UserMembershipRepository, ...parameters) {
     calls.push(`lockOwners:${parameters[1] ?? 'default'}`)
     return realOwners.apply(this, parameters)
@@ -465,16 +470,21 @@ async function recordModes(run: () => Promise<unknown>): Promise<string[]> {
     calls.push(`lockMemberships:${parameters[2] ?? 'default'}`)
     return realMemberships.apply(this, parameters)
   }
-  await withMutatedMethod(UserMembershipRepository.prototype, 'lockOwners', owners, async () => {
-    await withMutatedMethod(
-      UserMembershipRepository.prototype,
-      'lockMemberships',
-      memberships,
-      async () => {
+  const platformRole: typeof realPlatformRole = function (
+    this: UserMembershipRepository,
+    ...parameters
+  ) {
+    calls.push('lockPlatformRole')
+    return realPlatformRole.apply(this, parameters)
+  }
+  const prototype = UserMembershipRepository.prototype
+  await withMutatedMethod(prototype, 'lockOwners', owners, () =>
+    withMutatedMethod(prototype, 'lockMemberships', memberships, () =>
+      withMutatedMethod(prototype, 'lockPlatformRole', platformRole, async () => {
         await run()
-      }
+      })
     )
-  })
+  )
   return calls
 }
 
@@ -514,6 +524,67 @@ describe('the mode each call site passes', () => {
       'lockMemberships:no key update',
       'lockOwners:no key update',
       'lockMemberships:no key update',
+    ])
+  })
+
+  it('takes FOR NO KEY UPDATE for a bootstrap grant, new and changed', async () => {
+    const user = await createUser()
+    await sql`update users set email_verified_at = now() where id = ${user.id}`
+
+    const calls = await recordModes(async () => {
+      await bootstrapGrant(user.email, 'viewer')
+      await bootstrapGrant(user.email, 'admin')
+    })
+
+    expect(calls).toEqual([
+      'lockOwners:no key update',
+      'lockMemberships:no key update',
+      'lockOwners:no key update',
+      'lockMemberships:no key update',
+    ])
+  })
+
+  it('takes FOR UPDATE when staff with no membership remove a member, then locks their platform role', async () => {
+    const owner = await createUser()
+    const member = await createUser()
+    const staff = await createUser()
+    const tenant = await createTenant(owner)
+    await userMembershipRepository.create({
+      userId: member.id,
+      tenantId: tenant.id,
+      role: 'viewer',
+    })
+    await makeStaff(staff.id, 'admin')
+
+    const calls = await recordModes(() => removeMember({ userId: staff.id }, tenant.id, member.id))
+
+    expect(calls).toEqual(['lockOwners:update', 'lockMemberships:update', 'lockPlatformRole'])
+  })
+
+  it('takes FOR NO KEY UPDATE when staff change a role and update a tenant', async () => {
+    const owner = await createUser()
+    const member = await createUser()
+    const staff = await createUser()
+    const tenant = await createTenant(owner)
+    await userMembershipRepository.create({
+      userId: member.id,
+      tenantId: tenant.id,
+      role: 'viewer',
+    })
+    await makeStaff(staff.id, 'owner')
+
+    const calls = await recordModes(async () => {
+      await changeRole({ userId: staff.id }, tenant.id, member.id, 'editor')
+      await updateTenant({ userId: staff.id }, tenant.id, { name: 'Renamed' })
+    })
+
+    expect(calls).toEqual([
+      'lockOwners:no key update',
+      'lockMemberships:no key update',
+      'lockPlatformRole',
+      'lockOwners:no key update',
+      'lockMemberships:no key update',
+      'lockPlatformRole',
     ])
   })
 })

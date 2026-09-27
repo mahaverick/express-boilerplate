@@ -22,6 +22,7 @@
 // by construction, which is why it lives under tests/unit/ and never opens a
 // socket.
 import fs from 'node:fs'
+import net from 'node:net'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
@@ -94,5 +95,13 @@ describe('local connection target', () => {
     expect(published).not.toBe(target.theDefault)
     expect(published).toBe(target.nonDefault)
     expect(envTestPort(target.key)).toBe(published)
+  })
+
+  it('points the suite at Mailpit by IP literal, so a send never resolves a hostname', () => {
+    const line = envTest.split(/\r?\n/).find((candidate) => candidate.startsWith('SMTP_HOST='))
+    expect(line, '.env.test declares SMTP_HOST').toBeDefined()
+    expect(net.isIP((line ?? '').slice('SMTP_HOST='.length)), 'SMTP_HOST is an IPv4 literal').toBe(
+      4
+    )
   })
 })

@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { HttpError } from '@/errors/http-error'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
+import { backdateUpdatedAt } from '../../helpers/backdate'
 
 const userRepository = new UserRepository()
 
@@ -117,11 +118,12 @@ describe('UserRepository', () => {
     const email = uniqueEmail()
     const created = await userRepository.create({ email })
     createdIds.push(created.id)
+    const backdatedAt = await backdateUpdatedAt('users', { column: 'id', value: created.id })
 
     const updated = await userRepository.update(created.id, { firstName: 'Ada' })
 
     expect(updated?.firstName).toBe('Ada')
-    expect(updated?.updatedAt.getTime()).toBeGreaterThan(created.updatedAt.getTime())
+    expect(updated?.updatedAt.getTime()).toBeGreaterThan(backdatedAt.getTime())
   })
 
   it('rejects an update that would duplicate another user’s email with HttpError(409)', async () => {
@@ -160,11 +162,12 @@ describe('UserRepository', () => {
     it('sets email_verified_at and bumps updated_at', async () => {
       const user = await userRepository.create({ email: uniqueEmail(), passwordHash: 'x' })
       createdIds.push(user.id)
+      const backdatedAt = await backdateUpdatedAt('users', { column: 'id', value: user.id })
 
       const verified = await userRepository.markEmailVerified(user.id)
 
       expect(verified?.emailVerifiedAt).toBeInstanceOf(Date)
-      expect(verified?.updatedAt.getTime()).toBeGreaterThan(user.updatedAt.getTime())
+      expect(verified?.updatedAt.getTime()).toBeGreaterThan(backdatedAt.getTime())
     })
 
     it('leaves an already-verified timestamp untouched and returns undefined', async () => {

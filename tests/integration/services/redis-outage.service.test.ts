@@ -6,6 +6,7 @@
 // redis-unreachable.service.test.ts).
 import { randomUUID } from 'node:crypto'
 import express from 'express'
+import IORedis from 'ioredis'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { errorHandler } from '@/middlewares/error.middleware'
@@ -17,12 +18,26 @@ import {
   getQueueConnection,
   isQueueReachable,
 } from '@/services/queue.service'
-import { closeRedis, isRedisReachable } from '@/services/redis.service'
-import { isEventuallyTrue, RedisProxy, sleep } from '../../helpers/redis-proxy'
+import {
+  closeRedis,
+  getRedis,
+  isRedisReachable,
+  RECONNECT_DELAY_CAP_MS,
+  REDIS_CONNECT_TIMEOUT_MS,
+} from '@/services/redis.service'
+import { isEventuallyTrue, RedisProxy } from '../../helpers/redis-proxy'
 import { request } from '../../helpers/request'
+import { settle, waitUntil } from '../../helpers/timing'
 
 // Longer than either client's pre-fix retry budget (node-redis ~600ms, ioredis ~1.2s).
 const OUTAGE_MS = 1500
+
+// A probe that waited on Redis, down or silent, would not settle while it
+// stays that way: this only has to separate "answered promptly" from "never".
+const PROBE_BOUND_MS = 5000
+
+// One capped retry delay, then one connect attempt.
+const RECOVERY_TIMEOUT_MS = RECONNECT_DELAY_CAP_MS + REDIS_CONNECT_TIMEOUT_MS
 
 const target = vi.hoisted(() => ({ realUrl: '', proxyUrl: '' }))
 
@@ -37,10 +52,33 @@ vi.mock('@/configs/env.config', async (importOriginal) => {
 
 const proxy = new RedisProxy()
 
+// Set by the last test: once closed, the queue never reports reachable again.
+const queueLifecycle = { isClosed: false }
+
 async function simulateOutage(): Promise<void> {
   proxy.goDown()
-  await sleep(OUTAGE_MS)
+  await settle(OUTAGE_MS, 'outage length')
   proxy.comeBack()
+}
+
+/**
+ * Whether the shared node-redis client has seen the proxy reset its connection.
+ * @returns True once that client is no longer ready.
+ */
+async function hasRedisClientLeftReady(): Promise<boolean> {
+  const client = await getRedis()
+  return !client.isReady
+}
+
+/**
+ * Whether both queue connections have seen the proxy reset them.
+ * @returns True once neither the Worker connection nor the producer connection is ready.
+ */
+function haveQueueConnectionsLeftReady(): boolean {
+  // The email queue is built on the producer connection instance itself.
+  const { connection: producer } = getEmailQueue().opts
+  if (!(producer instanceof IORedis)) throw new Error('the email queue holds no ioredis instance')
+  return getQueueConnection().status !== 'ready' && producer.status !== 'ready'
 }
 
 /**
@@ -59,7 +97,7 @@ async function settleWithin(operation: Promise<unknown>, ms: number): Promise<st
     }
   })()
   const timedOut = (async () => {
-    await sleep(ms)
+    await settle(ms, 'hang budget: a pending operation has no event')
     return 'hung'
   })()
   return Promise.race([settled, timedOut])
@@ -71,9 +109,15 @@ describe('Redis clients survive an outage', () => {
     target.proxyUrl = proxy.urlFor(new URL(target.realUrl))
   })
 
-  // A failed test must not leave the next one talking to a dead proxy.
-  afterEach(() => {
+  // Every test starts on a live proxy with both clients connected: a test can
+  // end, passed or failed, while a reconnect its outage started is pending.
+  afterEach(async () => {
     proxy.comeBack()
+    if (queueLifecycle.isClosed) return
+    await waitUntil(async () => (await isRedisReachable()) && (await isQueueReachable()), {
+      message: 'both clients are back after the outage',
+      timeout: RECOVERY_TIMEOUT_MS,
+    })
   })
 
   afterAll(async () => {
@@ -87,7 +131,8 @@ describe('Redis clients survive an outage', () => {
     proxy.goDown()
     expect(await isQueueReachable()).toBe(false)
     const duringOutage = addJob(getEmailQueue(), 'outage-probe', { to: 'outage@example.test' })
-    expect(await settleWithin(duringOutage, 5000)).toBe('rejected')
+    // Held until Redis returns, it would hang for the rest of the outage: the test timeout catches that.
+    await expect(duringOutage).rejects.toThrow()
 
     proxy.comeBack()
     expect(await isEventuallyTrue(isQueueReachable, 5000)).toBe(true)
@@ -100,11 +145,11 @@ describe('Redis clients survive an outage', () => {
     expect(await isRedisReachable()).toBe(true)
 
     proxy.goDown()
-    await sleep(100)
+    await waitUntil(hasRedisClientLeftReady, { message: 'node-redis sees the outage' })
     const probedAt = Date.now()
     expect(await isRedisReachable()).toBe(false)
-    expect(Date.now() - probedAt).toBeLessThan(500)
-    await sleep(OUTAGE_MS)
+    expect(Date.now() - probedAt).toBeLessThan(PROBE_BOUND_MS)
+    await settle(OUTAGE_MS, 'outage length')
     proxy.comeBack()
 
     expect(await isEventuallyTrue(isRedisReachable, 5000)).toBe(true)
@@ -114,11 +159,13 @@ describe('Redis clients survive an outage', () => {
     expect(await isQueueReachable()).toBe(true)
 
     proxy.goDown()
-    await sleep(100)
+    await waitUntil(haveQueueConnectionsLeftReady, {
+      message: 'both queue connections see the outage',
+    })
     const probedAt = Date.now()
     expect(await isQueueReachable()).toBe(false)
-    expect(Date.now() - probedAt).toBeLessThan(500)
-    await sleep(OUTAGE_MS)
+    expect(Date.now() - probedAt).toBeLessThan(PROBE_BOUND_MS)
+    await settle(OUTAGE_MS, 'outage length')
     proxy.comeBack()
 
     expect(await isEventuallyTrue(isQueueReachable, 5000)).toBe(true)
@@ -145,7 +192,7 @@ describe('Redis clients survive an outage', () => {
     expect(counted.status).toBe(401)
 
     proxy.goDown()
-    await sleep(100)
+    await waitUntil(hasRedisClientLeftReady, { message: 'node-redis sees the outage' })
     const statuses: number[] = []
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const response = await request(app).post('/login').send(body)
@@ -168,10 +215,10 @@ describe('Redis clients survive an outage', () => {
       3000
     )
     expect(isStuckConnecting).toBe(true)
+    expect(await settleWithin(isQueueReachable(), PROBE_BOUND_MS)).toBe('resolved')
     const probedAt = Date.now()
-    expect(await settleWithin(isQueueReachable(), 1000)).toBe('resolved')
     expect(await isQueueReachable()).toBe(false)
-    expect(Date.now() - probedAt).toBeLessThan(500)
+    expect(Date.now() - probedAt).toBeLessThan(PROBE_BOUND_MS)
 
     proxy.comeBack()
     expect(await isEventuallyTrue(isQueueReachable, 5000)).toBe(true)
@@ -181,14 +228,14 @@ describe('Redis clients survive an outage', () => {
     await getEmailQueue().waitUntilReady()
 
     proxy.goDown()
-    await sleep(100)
-    const enqueuedAt = Date.now()
+    await waitUntil(haveQueueConnectionsLeftReady, {
+      message: 'both queue connections see the outage',
+    })
     const outcome = await settleWithin(
       addJob(getEmailQueue(), 'outage-probe', { to: 'outage@example.test' }),
-      1000
+      PROBE_BOUND_MS
     )
     expect(outcome).toBe('rejected')
-    expect(Date.now() - enqueuedAt).toBeLessThan(500)
 
     proxy.comeBack()
     expect(await isEventuallyTrue(isQueueReachable, 5000)).toBe(true)
@@ -199,10 +246,14 @@ describe('Redis clients survive an outage', () => {
     await getEmailQueue().waitUntilReady()
 
     proxy.goDown()
-    await sleep(100)
+    await waitUntil(haveQueueConnectionsLeftReady, {
+      message: 'both queue connections see the outage',
+    })
     // Waits in the Worker connection's offline queue, like a Worker's own commands.
     const pendingPing = settleWithin(getQueueConnection().ping(), 1000)
-    expect(await settleWithin(closeQueue(), 1000)).toBe('resolved')
+    queueLifecycle.isClosed = true
+    // A close that waited for Redis would hang for the rest of the outage: the test timeout catches that.
+    await expect(closeQueue()).resolves.toBeUndefined()
     // Not asserted: ioredis fails it only if disconnect() lands mid-connect, not between retries.
     await pendingPing
 

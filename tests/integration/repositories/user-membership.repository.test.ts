@@ -23,6 +23,7 @@ import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { db, sql } from '@/services/database.service'
+import { backdateUpdatedAt } from '../../helpers/backdate'
 
 const tenantRepository = new TenantRepository()
 const userMembershipRepository = new UserMembershipRepository()
@@ -267,10 +268,15 @@ describe('UserMembershipRepository', () => {
         role: 'viewer',
       })
 
+      const backdatedAt = await backdateUpdatedAt('user_memberships', {
+        column: 'id',
+        value: membership.id,
+      })
+
       const updated = await userMembershipRepository.updateRole(membership.id, 'manager')
 
       expect(updated?.role).toBe('manager')
-      expect(updated?.updatedAt.getTime()).toBeGreaterThan(membership.updatedAt.getTime())
+      expect(updated?.updatedAt.getTime()).toBeGreaterThan(backdatedAt.getTime())
     })
 
     it('returns undefined for a membership id that does not exist', async () => {

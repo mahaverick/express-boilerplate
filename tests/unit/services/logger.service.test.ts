@@ -368,6 +368,10 @@ function pgUniqueViolation(): postgres.PostgresError {
   )
 }
 
+// vitest types these matchers as `any`; cast once so the object literals below stay typed.
+const ANY_STRING = expect.any(String) as unknown as string
+const ANY_OBJECT = expect.any(Object) as unknown as object
+
 describe('serializeErrors redacts a query error, direct or nested as a cause', () => {
   it('redacts a DrizzleQueryError logged directly', () =>
     new Promise<void>((resolve) => {
@@ -411,45 +415,56 @@ describe('serializeErrors redacts a query error, direct or nested as a cause', (
       })
     }))
 
-  it('leaves a plain Error unchanged', () =>
-    new Promise<void>((resolve) => {
-      const { destination, output } = captureDestination()
-      const log = createPinoLogger({ level: 'error', format: 'json', destination })
+  it('serializes a plain Error as exactly its name, message and stack', async () => {
+    const { destination, output } = captureDestination()
+    const log = createPinoLogger({ level: 'error', format: 'json', destination })
 
-      log.error({ source: 'test.ts:1', error: new Error('x') }, 'plain failure')
+    log.error({ source: 'test.ts:1', error: new Error('x') }, 'plain failure')
+    await new Promise((resolve) => setImmediate(resolve))
 
-      setImmediate(() => {
-        const parsed = parseLastRecord(output)
-        const errorField = parsed.error as { name: string; message: string }
-        expect(errorField.message).toBe('x')
-        resolve()
+    expect(parseLastRecord(output).error).toStrictEqual({
+      name: 'Error',
+      message: 'x',
+      stack: ANY_STRING,
+    })
+  })
+
+  it('keeps exactly five levels of a cyclic .cause chain, the fifth without a cause', async () => {
+    const { destination, output } = captureDestination()
+    const log = createPinoLogger({ level: 'error', format: 'json', destination })
+    const cyclic: Error & { cause?: unknown } = new Error('a')
+    // Not `cyclic.cause = cyclic`: unicorn/no-error-property-assignment
+    // forbids assigning `cause` directly on a known Error variable.
+    // defineProperty reaches the same self-referential shape without
+    // tripping that rule.
+    Object.defineProperty(cyclic, 'cause', {
+      value: cyclic,
+      enumerable: true,
+      configurable: true,
+    })
+
+    expect(() => {
+      log.error({ source: 'test.ts:1', error: cyclic }, 'cyclic cause')
+    }).not.toThrow()
+    await new Promise((resolve) => setImmediate(resolve))
+
+    const levels: unknown[] = []
+    let level: unknown = parseLastRecord(output).error
+    while (level !== undefined) {
+      levels.push(level)
+      level = (level as { cause?: unknown }).cause
+    }
+    expect(levels).toHaveLength(5)
+    for (const outer of levels.slice(0, 4)) {
+      expect(outer).toStrictEqual({
+        name: 'Error',
+        message: 'a',
+        stack: ANY_STRING,
+        cause: ANY_OBJECT,
       })
-    }))
-
-  it('stops walking .cause after depth 5, rather than looping on a cyclic chain', () =>
-    new Promise<void>((resolve) => {
-      const { destination, output } = captureDestination()
-      const log = createPinoLogger({ level: 'error', format: 'json', destination })
-      const cyclic: Error & { cause?: unknown } = new Error('a')
-      // Not `cyclic.cause = cyclic`: unicorn/no-error-property-assignment
-      // forbids assigning `cause` directly on a known Error variable.
-      // defineProperty reaches the same self-referential shape without
-      // tripping that rule.
-      Object.defineProperty(cyclic, 'cause', {
-        value: cyclic,
-        enumerable: true,
-        configurable: true,
-      })
-
-      expect(() => {
-        log.error({ source: 'test.ts:1', error: cyclic }, 'cyclic cause')
-      }).not.toThrow()
-
-      setImmediate(() => {
-        expect(output.length).toBeGreaterThan(0)
-        resolve()
-      })
-    }))
+    }
+    expect(levels[4]).toStrictEqual({ name: 'Error', message: 'a', stack: ANY_STRING })
+  })
 })
 
 describe('loggerOptionsFromEnv', () => {

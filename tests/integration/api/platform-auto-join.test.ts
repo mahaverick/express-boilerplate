@@ -1,7 +1,7 @@
 // tests/integration/api/platform-auto-join.test.ts
 //
-// Auto-join through the paths that call it: password login, Google sign-in
-// and markEmailVerified, with PLATFORM_EMAIL_DOMAINS set. getEnv() memoises
+// Auto-join through the paths that call it: password login, Google sign-in,
+// markEmailVerified and a password reset, with PLATFORM_EMAIL_DOMAINS set. getEnv() memoises
 // the first environment it parses, and database.service.ts parses it at
 // module scope, so the variable is stubbed in beforeAll and every runtime
 // module is imported after it (google-oauth.test.ts explains the pattern).
@@ -20,9 +20,11 @@ import type { User } from '@/database/models/user.model'
 import type { AuthProviderRepository as AuthProviderRepositoryClass } from '@/repositories/auth-provider.repository'
 import type { UserMembershipRepository as UserMembershipRepositoryClass } from '@/repositories/user-membership.repository'
 import type { UserRepository as UserRepositoryClass } from '@/repositories/user.repository'
+import type { resetPassword as ResetPasswordType } from '@/services/auth.service'
 import type { db as DbType, sql as SqlType } from '@/services/database.service'
 import type { completeGoogleSignIn as CompleteGoogleSignInType } from '@/services/google-auth.service'
 import type { logger as LoggerType } from '@/services/logger.service'
+import type { issueToken as IssueTokenType } from '@/services/session.service'
 import type { markEmailVerified as MarkEmailVerifiedType } from '@/services/verification.service'
 import type { hashPassword as HashPasswordType } from '@/utilities/password.utilities'
 import type { truncateAuditLogs as TruncateAuditLogsType } from '../../helpers/audit-log'
@@ -79,6 +81,8 @@ describe('platform auto-join (PLATFORM_EMAIL_DOMAINS set)', () => {
   let sql: typeof SqlType
   let completeGoogleSignIn: typeof CompleteGoogleSignInType
   let markEmailVerified: typeof MarkEmailVerifiedType
+  let resetPassword: typeof ResetPasswordType
+  let issueToken: typeof IssueTokenType
   let hashPassword: typeof HashPasswordType
   let logger: typeof LoggerType
   let truncateAuditLogs: typeof TruncateAuditLogsType
@@ -101,6 +105,10 @@ describe('platform auto-join (PLATFORM_EMAIL_DOMAINS set)', () => {
     completeGoogleSignIn = googleAuthService.completeGoogleSignIn
     const verificationService = await import('@/services/verification.service')
     markEmailVerified = verificationService.markEmailVerified
+    const authService = await import('@/services/auth.service')
+    resetPassword = authService.resetPassword
+    const sessionService = await import('@/services/session.service')
+    issueToken = sessionService.issueToken
     const passwordUtilities = await import('@/utilities/password.utilities')
     hashPassword = passwordUtilities.hashPassword
     const loggerService = await import('@/services/logger.service')
@@ -192,6 +200,16 @@ describe('platform auto-join (PLATFORM_EMAIL_DOMAINS set)', () => {
    */
   async function login(email: string, password: string): Promise<Response> {
     return request(app).post('/api/v1/auth/login').send({ email, password })
+  }
+
+  /**
+   * Reset the user's password with a freshly issued link, as the mailed one would.
+   * @param user - The user.
+   * @returns Resolves once the reset is stored.
+   */
+  async function resetWithLink(user: User): Promise<void> {
+    const link = await issueToken(user.id, 'password_reset', 60_000)
+    await resetPassword({ token: link.raw, password: 'a brand new passphrase for the reset' })
   }
 
   describe('password login', () => {
@@ -345,6 +363,50 @@ describe('platform auto-join (PLATFORM_EMAIL_DOMAINS set)', () => {
       const user = await createUser(staffEmail(), { hasPassword: true, isVerified: true })
 
       await markEmailVerified(user.id)
+
+      expect(await platformRoleOf(user.id)).toBeNull()
+    })
+  })
+
+  describe('password reset', () => {
+    it('verifies an unverified address and joins it as viewer', async () => {
+      const user = await createUser(staffEmail(), { hasPassword: true, isVerified: false })
+
+      await resetWithLink(user)
+
+      const stored = await userRepository.findById(user.id)
+      expect(stored?.emailVerifiedAt).toBeInstanceOf(Date)
+      expect(await platformRoleOf(user.id)).toBe('viewer')
+      expect(await autoJoinedRowCount(user.id)).toBe(1)
+    })
+
+    it('still stores the password and the verification when the join fails inside the reset', async () => {
+      const user = await createUser(staffEmail(), { hasPassword: true, isVerified: false })
+      const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+
+      await withMutatedMethod(
+        membershipRepositoryClass.prototype,
+        'insertIfAbsent',
+        failingInsert,
+        async () => {
+          await resetWithLink(user)
+        }
+      )
+
+      const stored = await userRepository.findById(user.id)
+      expect(stored?.passwordHash).not.toBe(user.passwordHash)
+      expect(stored?.emailVerifiedAt).toBeInstanceOf(Date)
+      expect(await platformRoleOf(user.id)).toBeNull()
+      expect(warn).toHaveBeenCalledWith(
+        'Platform auto-join failed',
+        expect.objectContaining({ userId: user.id })
+      )
+    })
+
+    it('does not join an address that was already verified', async () => {
+      const user = await createUser(staffEmail(), { hasPassword: true, isVerified: true })
+
+      await resetWithLink(user)
 
       expect(await platformRoleOf(user.id)).toBeNull()
     })

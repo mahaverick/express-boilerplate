@@ -243,6 +243,50 @@ function clearRefreshTokenCookie(request: Request, response: Response): void {
   clearLegacyRefreshCookies(request, response, env)
 }
 
+/**
+ * Clear the refresh cookie a failed refresh read, in every form the clear
+ * helpers use for that name. `readRefreshTokenCookie` prefers the current
+ * name, so the legacy cookie was read only when no current one came with it.
+ * When the two names are the same (plain http), the legacy forms are other
+ * scopes of the one name that was read, and are cleared too.
+ * @param request - The refresh request.
+ * @param response - The response to add the clearing Set-Cookie lines to.
+ */
+function clearPresentedRefreshCookie(request: Request, response: Response): void {
+  const env = getEnv()
+  const current = currentRefreshCookie(env)
+  const wasCurrentRead = readCookie(request, current.name) !== undefined
+  if (wasCurrentRead) {
+    response.clearCookie(current.name, refreshCookieOptions(current, env, 'strict'))
+  }
+  if (!wasCurrentRead || current.name === LEGACY_REFRESH_TOKEN_COOKIE_NAME) {
+    clearLegacyRefreshCookies(request, response, env)
+  }
+}
+
+/**
+ * Rotate the presented refresh token, clearing its cookie when the answer is 401.
+ * @param request - The refresh request.
+ * @param response - The response a clear is added to.
+ * @param rawToken - The raw token read from the cookie.
+ * @returns The new access token and refresh token.
+ * @throws {Error} Whatever `authService.refresh` throws, rethrown unchanged.
+ */
+async function refreshOrClearCookie(
+  request: Request,
+  response: Response,
+  rawToken: string
+): Promise<authService.RefreshResult> {
+  try {
+    return await authService.refresh(rawToken)
+  } catch (error) {
+    if (error instanceof HttpError && error.statusCode === 401) {
+      clearPresentedRefreshCookie(request, response)
+    }
+    throw error
+  }
+}
+
 const REGISTER_RESPONSE_MESSAGE =
   'If that address can be registered, a verification email has been sent.'
 
@@ -301,6 +345,24 @@ class AuthController extends BaseController {
    * accepting a body token would let any page that can make the browser POST
    * attempt a refresh with a token it chose. A non-browser client sends the
    * same `Cookie` header.
+   *
+   * A 401 after the cookie was read clears that cookie, so the browser stops
+   * presenting a dead token on every page load. No 401 leaves the presented
+   * token able to refresh:
+   * - unknown, or issued for another purpose: no refresh can claim it;
+   * - replayed outside the grace window, or into a killed session, or past
+   *   the session's absolute lifetime: the session is killed;
+   * - expired, or a refresh row without a session: the claim consumed it,
+   *   and neither can get a sibling;
+   * - the account is gone or inactive: the rotation consumed it, and while
+   *   the account stays so every refresh for it answers 401.
+   * Inside the grace window a replay into a live session gets a sibling and a
+   * fresh cookie, so a 401 racing a successful rotation of the same token
+   * comes from a branch that also kills or refuses the fresh cookie's session.
+   * The one exception: a login or Google sign-in in another tab that lands
+   * while a dead-cookie refresh is in flight loses its own fresh cookie too,
+   * since the clear is by name — that user just signs in again.
+   * The limiter's 429 and a 5xx never clear.
    */
   refresh = this.handle(async (request, response) => {
     const rawToken = readRefreshTokenCookie(request)
@@ -308,7 +370,7 @@ class AuthController extends BaseController {
       throw new HttpError('Missing refresh token', 401)
     }
 
-    const refreshed = await authService.refresh(rawToken)
+    const refreshed = await refreshOrClearCookie(request, response, rawToken)
 
     setRefreshTokenCookie(
       request,

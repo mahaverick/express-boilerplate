@@ -19,6 +19,7 @@ import { sql } from '@/services/database.service'
 import { changeRole, removeMember } from '@/services/tenant-membership.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { withMutatedMethod } from '../../helpers/mutate'
+import { settle } from '../../helpers/timing'
 
 const tenantRepository = new TenantRepository()
 const userMembershipRepository = new UserMembershipRepository()
@@ -109,7 +110,10 @@ describe('tenant-membership.service', () => {
     ) {
       arrivals += 1
       if (arrivals >= 2) releaseBarrier()
-      await Promise.race([barrier, new Promise((resolve) => setTimeout(resolve, 1000))])
+      await Promise.race([
+        barrier,
+        settle(1000, 'fallback only: both callers arrive before either takes the owner lock'),
+      ])
       return realLockOwners.apply(this, parameters)
     }
 

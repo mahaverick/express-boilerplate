@@ -8,6 +8,7 @@ import { type Request } from 'express'
 import { describe, expect, it } from 'vitest'
 import { requestContext } from '@/middlewares/request-context.middleware'
 import { requestContextStore } from '@/services/request-context.service'
+import { settle } from '../../helpers/timing'
 
 describe('requestContext middleware', () => {
   it('sets requestId in the store from request.id', () => {
@@ -60,11 +61,12 @@ describe('requestContext middleware', () => {
     await Promise.all([
       new Promise<void>((resolve) => {
         requestContext({ id: 'req-a', headers: {} } as unknown as Request, {} as never, () => {
-          setTimeout(() => {
+          void (async () => {
+            await settle(10, 'an async hop, so req-b runs while req-a is still in its context')
             const store = requestContextStore.getStore()
             if (store) results.push(store.requestId)
             resolve()
-          }, 10)
+          })()
         })
       }),
       new Promise<void>((resolve) => {

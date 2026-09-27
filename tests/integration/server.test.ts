@@ -10,6 +10,7 @@ import express from 'express'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createApp } from '@/app'
 import { getEnv, trustProxySetting } from '@/configs/env.config'
+import { SERVER_DRAIN_TIMEOUT_MS } from '@/constants/global.constants'
 import { UserRepository } from '@/repositories/user.repository'
 import { gracefulShutdown, startServer } from '@/server'
 import { sql } from '@/services/database.service'
@@ -22,13 +23,12 @@ import { logger } from '@/services/logger.service'
 import { signAccessToken } from '@/services/session.service'
 import { withMutatedModule } from '../helpers/mutate'
 import { request } from '../helpers/request'
+import { settle, waitUntil } from '../helpers/timing'
 
 const userRepository = new UserRepository()
 
-async function resolveAfter<T>(ms: number, value: T): Promise<T> {
-  await new Promise((resolve) => setTimeout(resolve, ms))
-  return value
-}
+// Both shutdown claims: done well before SERVER_DRAIN_TIMEOUT_MS, where a socket left open is force-closed.
+const SHUTDOWN_BUDGET_MS = SERVER_DRAIN_TIMEOUT_MS / 2
 
 /**
  * Open a notification stream and wait for its 200.
@@ -91,7 +91,7 @@ describe('graceful shutdown with open notification streams', () => {
     expect(response.body).toMatchObject({ status: 'shutting-down' })
   })
 
-  it('flips readiness at once, ends open streams (keep-alive included) and resolves within 1.5s', async () => {
+  it('flips readiness at once, ends open streams (keep-alive included) and resolves well before the drain timeout', async () => {
     // Bound to 127.0.0.1, matching the URL below; startServer's default bind is `::`.
     const server = createApp().listen(0, '127.0.0.1')
     await new Promise((resolve) => server.once('listening', resolve))
@@ -119,7 +119,10 @@ describe('graceful shutdown with open notification streams', () => {
           await shutdown
           return 'shut down' as const
         })(),
-        resolveAfter(1500, 'timed out' as const),
+        (async () => {
+          await settle(SHUTDOWN_BUDGET_MS, 'race budget: the shutdown claim')
+          return 'timed out' as const
+        })(),
       ])
       expect(outcome).toBe('shut down')
       await Promise.all([closeStream.ended, keepAliveStream.ended])
@@ -135,21 +138,26 @@ describe('graceful shutdown with open notification streams', () => {
   it('closes a keep-alive socket whose request was still in flight, well before the drain timeout', async () => {
     const app = express()
     app.disable('x-powered-by')
-    app.get('/slow', (_request, response) => {
-      setTimeout(() => response.json({ ok: true }), 300)
+    const slowRequest = { hasArrived: false }
+    app.get('/slow', async (_request, response) => {
+      slowRequest.hasArrived = true
+      await settle(300, 'keeps the request in flight while shutdown starts')
+      response.json({ ok: true })
     })
     const server = app.listen(0, '127.0.0.1')
     await new Promise((resolve) => server.once('listening', resolve))
     const { port } = server.address() as AddressInfo
     const keepAliveAgent = new http.Agent({ keepAlive: true })
     const slow = getOnce(`http://127.0.0.1:${port}/slow`, keepAliveAgent)
-    await resolveAfter(50, undefined)
+    await waitUntil(() => slowRequest.hasArrived, {
+      message: 'the /slow request reaches its handler',
+    })
 
     try {
       const startedAt = Date.now()
       await gracefulShutdown(server)
       // Without the idle sweep, the socket stays open until SERVER_DRAIN_TIMEOUT_MS.
-      expect(Date.now() - startedAt).toBeLessThan(1500)
+      expect(Date.now() - startedAt).toBeLessThan(SHUTDOWN_BUDGET_MS)
       expect(await slow).toBe(200)
     } finally {
       keepAliveAgent.destroy()

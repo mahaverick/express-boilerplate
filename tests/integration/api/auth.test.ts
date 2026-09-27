@@ -25,6 +25,7 @@ import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queu
 import * as passwordUtilities from '@/utilities/password.utilities'
 import { startEmailWorker } from '@/workers/email.worker'
 import { startNotificationWorker } from '@/workers/notification.worker'
+import { backdateUpdatedAt } from '../../helpers/backdate'
 import {
   deleteMailpitMessage,
   drainMailpit,
@@ -701,6 +702,7 @@ describe('POST /api/v1/auth/register and /login', () => {
     it('records lastLoggedInAt on a successful login', async () => {
       const { user, email } = await registerVerifiedUser()
       expect(user.lastLoggedInAt).toBeNull()
+      const backdatedAt = await backdateUpdatedAt('users', { column: 'id', value: user.id })
 
       await request(app).post('/api/v1/auth/login').send({ email, password: VALID_PASSWORD })
 
@@ -708,7 +710,7 @@ describe('POST /api/v1/auth/register and /login', () => {
       expect(reread?.lastLoggedInAt).toBeInstanceOf(Date)
       // updated_at must move with it — the row is not allowed to claim it
       // was last touched before the login that just wrote to it.
-      expect(reread?.updatedAt.getTime()).toBeGreaterThan(user.updatedAt.getTime())
+      expect(reread?.updatedAt.getTime()).toBeGreaterThan(backdatedAt.getTime())
     })
 
     it('does not record lastLoggedInAt when the password is wrong', async () => {

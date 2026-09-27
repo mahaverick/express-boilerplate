@@ -48,6 +48,7 @@ describe('redis unreachable', () => {
   it('isRedisReachable() resolves false within a few seconds instead of hanging', async () => {
     const startedAt = Date.now()
     await expect(isRedisReachable()).resolves.toBe(false)
+    // The claim: it gives up rather than retrying forever. 10x the whole test's measured p99 (795ms).
     expect(Date.now() - startedAt).toBeLessThan(8000)
   }, 10_000)
 
