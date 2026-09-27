@@ -98,10 +98,13 @@ expired-but-not-yet-rotated token is simply revoked, not treated as reuse
 A refresh answered 401 clears the cookie it read, in the same forms the
 logout clear uses for that name, so the browser stops presenting a dead
 token on every page load. No 401 leaves that token able to refresh: it is
-unknown or of another purpose, its session was killed, it expired, or the
-account is gone or inactive. A replay inside the grace window gets a
-sibling instead, so a 401 that races a successful rotation cannot wipe a
-cookie that still works. The limiter's 429 and a 5xx clear nothing.
+unknown or of another purpose, its session was killed, it expired, it is a
+refresh row without a session, or the account is gone or inactive. A replay
+inside the grace window gets a sibling instead, so a 401 that races a
+successful rotation cannot wipe a cookie that still works. The one exception
+is a login or Google sign-in in another tab that lands while a dead-cookie
+refresh is in flight: the 401 clears by name, so the new cookie goes too,
+and the user signs in again. The limiter's 429 and a 5xx clear nothing.
 
 ### Session lifetime: a sliding window AND an absolute ceiling
 

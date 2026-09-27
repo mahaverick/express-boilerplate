@@ -297,7 +297,7 @@ failed` when the scrub itself fails. A test that
   looks like a logout, not an error. Refresh and logout also read the
   legacy `refreshToken` (`LEGACY_REFRESH_TOKEN_COOKIE_NAME`). A login, a
   successful refresh, a Google sign-in or a logout clears it when the
-  request presented it. A refresh answered 401 clears only the cookie it
+  request presented it. A refresh answered 401 clears only the cookie name it
   read, so the legacy one only when no current cookie came with it; its
   429 and 5xx clear nothing. The fallback goes at the next major.
 - **`COOKIE_DOMAIN` goes on the refresh-cookie set, its clear, and the OAuth
@@ -634,8 +634,9 @@ otel-collector`.** It is bind-mounted; `docker compose up -d` does not
 
 A fixed sleep is a guess at how long something takes, and under a loaded full
 suite the guess is wrong often enough to fail CI. `tests/helpers/timing.ts`
-holds the only two real-time waits a test may use; lint rejects every other
-sleep under `tests/`, and that file is the only exemption.
+holds the only two real-time waits a test may use; lint rejects the common
+sleep forms (`sleep()`, a `setTimeout` promise, `timers/promises`) under
+`tests/`, and that file is the only exemption.
 
 1. Wait on a condition, never on a duration: `waitUntil(check, { message })`.
 2. A deliberate wait is `settle(ms, reason)`. The reason names what can't be

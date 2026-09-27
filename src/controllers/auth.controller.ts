@@ -359,6 +359,9 @@ class AuthController extends BaseController {
    * Inside the grace window a replay into a live session gets a sibling and a
    * fresh cookie, so a 401 racing a successful rotation of the same token
    * comes from a branch that also kills or refuses the fresh cookie's session.
+   * The one exception: a login or Google sign-in in another tab that lands
+   * while a dead-cookie refresh is in flight loses its own fresh cookie too,
+   * since the clear is by name — that user just signs in again.
    * The limiter's 429 and a 5xx never clear.
    */
   refresh = this.handle(async (request, response) => {
