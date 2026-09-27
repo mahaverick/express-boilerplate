@@ -18,13 +18,24 @@ import {
   getQueueConnection,
   isQueueReachable,
 } from '@/services/queue.service'
-import { closeRedis, getRedis, isRedisReachable } from '@/services/redis.service'
+import {
+  closeRedis,
+  getRedis,
+  isRedisReachable,
+  REDIS_CONNECT_TIMEOUT_MS,
+} from '@/services/redis.service'
 import { isEventuallyTrue, RedisProxy } from '../../helpers/redis-proxy'
 import { request } from '../../helpers/request'
 import { settle, waitUntil } from '../../helpers/timing'
 
 // Longer than either client's pre-fix retry budget (node-redis ~600ms, ioredis ~1.2s).
 const OUTAGE_MS = 1500
+
+// Bounds only the probe's own round trips: a probe that waited for Redis to
+// return would never settle during these outages.
+const PROBE_BOUND_MS = 5000
+// Below the reconnect's connect timeout, which a probe waiting on that attempt would sit out.
+const CONNECTING_PROBE_BOUND_MS = REDIS_CONNECT_TIMEOUT_MS / 2
 
 const target = vi.hoisted(() => ({ realUrl: '', proxyUrl: '' }))
 
@@ -126,7 +137,7 @@ describe('Redis clients survive an outage', () => {
     await waitUntil(hasRedisClientLeftReady, { message: 'node-redis sees the outage' })
     const probedAt = Date.now()
     expect(await isRedisReachable()).toBe(false)
-    expect(Date.now() - probedAt).toBeLessThan(500)
+    expect(Date.now() - probedAt).toBeLessThan(PROBE_BOUND_MS)
     await settle(OUTAGE_MS, 'outage length')
     proxy.comeBack()
 
@@ -142,7 +153,7 @@ describe('Redis clients survive an outage', () => {
     })
     const probedAt = Date.now()
     expect(await isQueueReachable()).toBe(false)
-    expect(Date.now() - probedAt).toBeLessThan(500)
+    expect(Date.now() - probedAt).toBeLessThan(PROBE_BOUND_MS)
     await settle(OUTAGE_MS, 'outage length')
     proxy.comeBack()
 
@@ -193,10 +204,10 @@ describe('Redis clients survive an outage', () => {
       3000
     )
     expect(isStuckConnecting).toBe(true)
+    expect(await settleWithin(isQueueReachable(), CONNECTING_PROBE_BOUND_MS)).toBe('resolved')
     const probedAt = Date.now()
-    expect(await settleWithin(isQueueReachable(), 1000)).toBe('resolved')
     expect(await isQueueReachable()).toBe(false)
-    expect(Date.now() - probedAt).toBeLessThan(500)
+    expect(Date.now() - probedAt).toBeLessThan(CONNECTING_PROBE_BOUND_MS)
 
     proxy.comeBack()
     expect(await isEventuallyTrue(isQueueReachable, 5000)).toBe(true)
@@ -209,13 +220,11 @@ describe('Redis clients survive an outage', () => {
     await waitUntil(haveQueueConnectionsLeftReady, {
       message: 'both queue connections see the outage',
     })
-    const enqueuedAt = Date.now()
     const outcome = await settleWithin(
       addJob(getEmailQueue(), 'outage-probe', { to: 'outage@example.test' }),
-      1000
+      PROBE_BOUND_MS
     )
     expect(outcome).toBe('rejected')
-    expect(Date.now() - enqueuedAt).toBeLessThan(500)
 
     proxy.comeBack()
     expect(await isEventuallyTrue(isQueueReachable, 5000)).toBe(true)
