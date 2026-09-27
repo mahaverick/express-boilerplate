@@ -12,10 +12,17 @@
 // row before it claims the presented token, so the password side's revoke
 // either starts after the rotation's new token has committed, or the rotation
 // waits and finds its token revoked. The grace path (a replayed token within
-// REFRESH_REUSE_GRACE_MS gets a sibling) is raced too. The rotation's
-// mutation proofs run for change only: reset's extra revoke before its
-// transaction serialises some of those schedules on its own, while in change
-// the user row lock is the only thing that does.
+// REFRESH_REUSE_GRACE_MS gets a sibling) is raced too.
+//
+// Four rotation tests have no mutation proof, because each still passes with
+// the rotation's user lock removed:
+// - password-first, change: the claim waits on the presented row, which the
+//   in-transaction revoke holds, and then finds it revoked;
+// - password-first, reset, normal and grace: reset's revoke before its
+//   transaction has already committed, so the claim or the grace check
+//   refuses, and the kill that follows queues on the user row lock;
+// - rotation-first, reset: that earlier revoke waits on the claimed row, so
+//   the locked revoke starts after the rotation's new token has committed.
 //
 // The same two orderings are run for every other revoking path: a Google
 // account claim, a logout, and the kill a reused refresh token triggers. Each
@@ -1016,7 +1023,7 @@ describe.each<PasswordFlow>(['change', 'reset'])(
 
     // DELIBERATELY red under MUTATION_PROOF=1: the revoke runs before the
     // sibling exists, and nothing makes the password side wait.
-    it.runIf(process.env.MUTATION_PROOF === '1' && flow === 'change')(
+    it.runIf(process.env.MUTATION_PROOF === '1')(
       'reproduces the grace rotation-first test with a rotation that takes no user lock',
       async () => {
         const user = await seedUser()
