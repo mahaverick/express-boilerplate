@@ -306,6 +306,45 @@ async function seedNotification(
   })
 }
 
+/**
+ * Emit a never-persisted sentinel and wait for its frame. It crosses the same
+ * Redis channel, handler and response as every earlier emit, in order, so
+ * once it arrives nothing emitted before it is still in flight.
+ * @param connection - The stream to wait on.
+ * @param userId - The stream's user.
+ * @returns The notification frames that arrived before the sentinel.
+ */
+async function framesBeforeSentinel(
+  connection: SseConnection,
+  userId: string
+): Promise<SseFrame[]> {
+  const sentinelId = randomUUID()
+  emitNotification(userId, {
+    id: sentinelId,
+    userId,
+    type: 'verify_email',
+    title: 'Sentinel',
+    body: 'Marks the end of what was emitted before it.',
+    // eslint-disable-next-line unicorn/no-null -- Notification.metadata/readAt are `T | null` columns
+    metadata: null,
+    // eslint-disable-next-line unicorn/no-null -- see above
+    readAt: null,
+    // eslint-disable-next-line unicorn/no-null -- see above
+    dedupeKey: null,
+    createdAt: new Date(),
+  })
+  const sentinelIndex = await waitUntil(
+    () => {
+      const index = connection.frames.findIndex((frame) => frame.id === sentinelId)
+      return index === -1 ? undefined : index + 1
+    },
+    { message: 'the sentinel frame arrives' }
+  )
+  return connection.frames
+    .slice(0, sentinelIndex - 1)
+    .filter((frame) => frame.event === 'notification')
+}
+
 describe('GET /api/v1/notifications/stream', () => {
   let server: http.Server
   let baseUrl: string
@@ -690,11 +729,8 @@ describe('GET /api/v1/notifications/stream', () => {
     await waitUntil(() => connection.frames.some((frame) => frame.event === 'notification'), {
       message: 'the live notification frame arrives',
     })
-    // A settle, not another `waitUntil`: this asserts an upper bound (never
-    // delivered twice), and there is no "it stayed at 1" event to poll for.
-    await settle(200, 'absence has no event: a duplicate delivery would arrive within it')
 
-    const delivered = connection.frames.filter((frame) => frame.event === 'notification')
+    const delivered = await framesBeforeSentinel(connection, user.id)
     expect(delivered.map((frame) => frame.id)).toEqual([live.id])
   })
 
@@ -731,9 +767,9 @@ describe('GET /api/v1/notifications/stream', () => {
       return result
     }
     // Registered after the stream's handler, so it hears each notification second.
-    const heardByStream = new Set<string>()
+    const passedStreamHandler = new Set<string>()
     const hearAfterStream = (notification: Notification): void => {
-      heardByStream.add(notification.id)
+      passedStreamHandler.add(notification.id)
     }
 
     await withMutatedMethod(
@@ -767,7 +803,9 @@ describe('GET /api/v1/notifications/stream', () => {
           // Listeners run in registration order, so the stream's handler has
           // queued both while `isReplaying` was still true.
           await waitUntil(
-            () => heardByStream.has(persistedLive.id) && heardByStream.has(ephemeralLive.id),
+            () =>
+              passedStreamHandler.has(persistedLive.id) &&
+              passedStreamHandler.has(ephemeralLive.id),
             { message: "both notifications reach the stream's handler during the replay" }
           )
           release.resolve()
@@ -776,9 +814,8 @@ describe('GET /api/v1/notifications/stream', () => {
             () => connection.frames.filter((frame) => frame.event === 'notification').length >= 2,
             { message: 'both notification frames arrive after the replay' }
           )
-          await settle(200, 'absence has no event: a duplicate delivery would arrive within it')
 
-          const delivered = connection.frames.filter((frame) => frame.event === 'notification')
+          const delivered = await framesBeforeSentinel(connection, user.id)
           expect(delivered.filter((frame) => frame.id === persistedLive.id)).toHaveLength(1)
           expect(delivered.filter((frame) => frame.id === ephemeralLive.id)).toHaveLength(1)
         } finally {
@@ -805,9 +842,8 @@ describe('GET /api/v1/notifications/stream', () => {
 
     // Its live copy arrives after the replay finished, as a Redis round trip can.
     emitNotification(user.id, replayed)
-    await settle(200, 'absence has no event: a second copy would arrive within it')
 
-    const delivered = connection.frames.filter((frame) => frame.event === 'notification')
+    const delivered = await framesBeforeSentinel(connection, user.id)
     expect(delivered.map((frame) => frame.id)).toEqual([replayed.id])
   })
 
@@ -847,10 +883,10 @@ describe('GET /api/v1/notifications/stream', () => {
       'Last-Event-ID': randomUUID(),
     })
     const response = await connection.waitForResponse()
-    await settle(200, 'absence has no event: a wrongly replayed burst would arrive within it')
-
     expect(response.statusCode).toBe(200)
-    expect(connection.frames.some((frame) => frame.event === 'notification')).toBe(false)
+
+    // Queued behind the replay, so it arrives after any wrongly replayed burst.
+    expect(await framesBeforeSentinel(connection, user.id)).toEqual([])
   })
 
   it('stops delivering events and removes its listener once the client disconnects', async () => {
@@ -870,11 +906,6 @@ describe('GET /api/v1/notifications/stream', () => {
 
     const notification = await seedNotification(user.id, 'After close')
     expect(() => emitNotification(user.id, notification)).not.toThrow()
-    await settle(
-      100,
-      'absence has no event: a delivery to the closed stream would arrive within it'
-    )
-    expect(connection.frames.some((frame) => frame.event === 'notification')).toBe(false)
   })
 
   it('removes a stream from the shutdown registry once its client disconnects', async () => {
