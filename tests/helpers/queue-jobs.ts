@@ -4,11 +4,12 @@
 // Worker, and wait for a Worker's log line. 'prioritized' is included: email
 // and notification jobs carry a priority, and BullMQ keeps them there until
 // a Worker pulls them.
+import { randomUUID } from 'node:crypto'
 import type { Job, Queue } from 'bullmq'
 import { expect, type MockInstance } from 'vitest'
 import type { EmailJobData } from '@/jobs/email.job'
 import type { NotificationJobData } from '@/jobs/notification.job'
-import { getEmailQueue, getNotificationQueue } from '@/services/queue.service'
+import { addJob, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
 import { EMAIL_VERIFICATION_TEMPLATE_KEY } from '@/templates/email/email-verification.template'
 import {
   TENANT_INVITATION_TEMPLATE_KEY,
@@ -19,8 +20,6 @@ import { settle } from './timing'
 const JOB_STATES = ['waiting', 'active', 'completed', 'delayed', 'prioritized'] as const
 const POLL_INTERVAL_MS = 25
 const DEFAULT_TIMEOUT_MS = 5000
-// How long `expectNoJob` waits for a fire-and-forget enqueue that should not happen.
-const NO_JOB_SETTLE_MS = 300
 
 /**
  * Every job currently on `queue` in a non-failed state, typed as `TData`.
@@ -55,17 +54,22 @@ export async function waitForJob<TData>(
 }
 
 /**
- * Wait `NO_JOB_SETTLE_MS`, then assert no job on `queue` matches. A
- * negative check against a fire-and-forget enqueue can only ever be
- * time-bounded.
- * @param queue - The queue to read.
+ * Assert no job on `queue` matches, once a sentinel added after the action has landed.
+ *
+ * Call it only after observing another job the action enqueues in the same
+ * synchronous step as the one that must not exist (every caller waits for the
+ * invitation email first), so that job's add was issued before the sentinel's.
+ * @param queue - The queue to read. No Worker may consume it.
  * @param isMatch - The job that must not exist.
+ * @returns Resolves once the check has passed.
  */
 export async function expectNoJob<TData>(
   queue: Queue,
   isMatch: (data: TData) => boolean
 ): Promise<void> {
-  await settle(NO_JOB_SETTLE_MS, 'absence has no event: an enqueue that must not happen')
+  // One Queue on one connection: an add issued before this one reaches Redis first.
+  const sentinel = await addJob(queue, 'expect-no-job-sentinel', { sentinel: randomUUID() })
+  await sentinel.remove()
   const jobs = await queuedJobs<TData>(queue)
   expect(jobs.some((job) => isMatch(job.data))).toBe(false)
 }
