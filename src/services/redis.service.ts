@@ -41,6 +41,11 @@ const CLOSED_MESSAGE = 'Redis client is closed; the process is shutting down'
 export const REDIS_CONNECT_TIMEOUT_MS = 5000
 
 /**
+ * The longest a client here waits between reconnect attempts once it has been ready.
+ */
+export const RECONNECT_DELAY_CAP_MS = 5000
+
+/**
  * The pre-ready reconnect policy: a few quick retries, then an `Error` so `connect()` rejects.
  * @param retries - How many reconnect attempts have failed so far.
  * @returns The delay before the next attempt, or the error that stops reconnecting.
@@ -64,7 +69,9 @@ export function createRedisClient(): RedisClientType {
       // Before the first 'ready', give up fast so boot and /health/ready report
       // unreachable (the default retries forever). After it, retry forever.
       reconnectStrategy: (retries) =>
-        readiness.hasBeenReady ? Math.min(retries * 200, 5000) : failFastDelay(retries),
+        readiness.hasBeenReady
+          ? Math.min(retries * 200, RECONNECT_DELAY_CAP_MS)
+          : failFastDelay(retries),
     },
   })
   client.on('error', (error: unknown) => logger.error('Redis error', { error }))
