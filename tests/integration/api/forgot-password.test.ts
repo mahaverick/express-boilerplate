@@ -276,7 +276,9 @@ describe('POST /api/v1/auth/forgot-password', () => {
   it('mails a password-reset link to a registered address', async () => {
     const { email } = await seedUser()
 
-    await forgotPassword(email)
+    const response = await forgotPassword(email)
+    // A non-202 would otherwise surface as a missing mail after the whole poll.
+    expect(response.status).toBe(202)
 
     const messages = await findMailpitMessages(email)
     expect(messages).toHaveLength(1)
