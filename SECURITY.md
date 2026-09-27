@@ -95,6 +95,14 @@ outside the grace window means someone else has it. An
 expired-but-not-yet-rotated token is simply revoked, not treated as reuse
 — nothing else in that session is implicated by an expiry.
 
+A refresh answered 401 clears the cookie it read, in the same forms the
+logout clear uses for that name, so the browser stops presenting a dead
+token on every page load. No 401 leaves that token able to refresh: it is
+unknown or of another purpose, its session was killed, it expired, or the
+account is gone or inactive. A replay inside the grace window gets a
+sibling instead, so a 401 that races a successful rotation cannot wipe a
+cookie that still works. The limiter's 429 and a 5xx clear nothing.
+
 ### Session lifetime: a sliding window AND an absolute ceiling
 
 Two clocks bound a session, and they answer different questions.
@@ -582,7 +590,8 @@ and falls back to `refreshToken`; logout revokes the session of every
 distinct token the request carries under either name. Within one name the
 API takes the most recently created value. When a login, a successful
 refresh, a Google sign-in or a logout carried a `refreshToken` cookie, the
-response clears it at `/api/v1/auth` (a failed refresh leaves it): the
+response clears it at `/api/v1/auth` (a refresh answered 401 clears it only
+when it was the cookie read, with no current cookie beside it): the
 host-only form, and the `COOKIE_DOMAIN` form when that is set, skipping
 whichever form is the current cookie itself. The fallback is removed at the
 next major release.

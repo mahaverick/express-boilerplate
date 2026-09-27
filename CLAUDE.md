@@ -297,8 +297,9 @@ failed` when the scrub itself fails. A test that
   looks like a logout, not an error. Refresh and logout also read the
   legacy `refreshToken` (`LEGACY_REFRESH_TOKEN_COOKIE_NAME`). A login, a
   successful refresh, a Google sign-in or a logout clears it when the
-  request presented it; a failed refresh does not. The fallback goes at
-  the next major.
+  request presented it. A refresh answered 401 clears only the cookie it
+  read, so the legacy one only when no current cookie came with it; its
+  429 and 5xx clear nothing. The fallback goes at the next major.
 - **`COOKIE_DOMAIN` goes on the refresh-cookie set, its clear, and the OAuth
   session cookie.** A clear with a different domain leaves the cookie behind.
   On a secure deployment, turning it on or off switches the cookie between
