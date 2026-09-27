@@ -18,7 +18,12 @@ import {
   getQueueConnection,
   isQueueReachable,
 } from '@/services/queue.service'
-import { closeRedis, getRedis, isRedisReachable } from '@/services/redis.service'
+import {
+  closeRedis,
+  getRedis,
+  isRedisReachable,
+  RECONNECT_DELAY_CAP_MS,
+} from '@/services/redis.service'
 import { isEventuallyTrue, RedisProxy } from '../../helpers/redis-proxy'
 import { request } from '../../helpers/request'
 import { settle, waitUntil } from '../../helpers/timing'
@@ -29,6 +34,9 @@ const OUTAGE_MS = 1500
 // A probe that waited on Redis, down or silent, would not settle while it
 // stays that way: this only has to separate "answered promptly" from "never".
 const PROBE_BOUND_MS = 5000
+
+// One capped reconnect delay (both clients cap theirs at 5s), then as long again to connect.
+const RECOVERY_TIMEOUT_MS = 2 * RECONNECT_DELAY_CAP_MS
 
 const target = vi.hoisted(() => ({ realUrl: '', proxyUrl: '' }))
 
@@ -42,6 +50,9 @@ vi.mock('@/configs/env.config', async (importOriginal) => {
 })
 
 const proxy = new RedisProxy()
+
+// Set by the last test: once closed, the queue never reports reachable again.
+const queueLifecycle = { isClosed: false }
 
 async function simulateOutage(): Promise<void> {
   proxy.goDown()
@@ -97,9 +108,15 @@ describe('Redis clients survive an outage', () => {
     target.proxyUrl = proxy.urlFor(new URL(target.realUrl))
   })
 
-  // A failed test must not leave the next one talking to a dead proxy.
-  afterEach(() => {
+  // Every test starts on a live proxy with both clients connected: a test can
+  // end, passed or failed, while a reconnect its outage started is pending.
+  afterEach(async () => {
     proxy.comeBack()
+    if (queueLifecycle.isClosed) return
+    await waitUntil(async () => (await isRedisReachable()) && (await isQueueReachable()), {
+      message: 'both clients are back after the outage',
+      timeout: RECOVERY_TIMEOUT_MS,
+    })
   })
 
   afterAll(async () => {
@@ -233,6 +250,7 @@ describe('Redis clients survive an outage', () => {
     })
     // Waits in the Worker connection's offline queue, like a Worker's own commands.
     const pendingPing = settleWithin(getQueueConnection().ping(), 1000)
+    queueLifecycle.isClosed = true
     // A close that waited for Redis would hang for the rest of the outage: the test timeout catches that.
     await expect(closeQueue()).resolves.toBeUndefined()
     // Not asserted: ioredis fails it only if disconnect() lands mid-connect, not between retries.
