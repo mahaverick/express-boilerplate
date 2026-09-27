@@ -65,21 +65,23 @@ async function isObservedOnce(
 export interface ProbeClock {
   /**
    * Starts the `timeoutMs` deadline when it resolves; polling runs from the start either way.
+   * A rejection leaves the clock unstarted.
    */
   startsOn: Promise<unknown>
   /**
-   * The longest wait for `startsOn`.
+   * The longest whole poll, counted from its start, whether or not the clock has started.
    */
-  startsWithinMs: number
+  withinMs: number
 }
 
 /**
  * Poll `isObserved` every 10 ms on a dedicated connection until it answers true
  * (true) or `settled` has settled (false). Each probe query runs under a
- * statement_timeout of the time left, so a hung probe fails at the deadline.
+ * statement_timeout of the time left, so a hung probe fails at the deadline
+ * in force when it was issued.
  * @param isObserved - One probe query answering whether the wait is seen.
  * @param settled - The work being watched.
- * @param timeoutMs - The longest wait, counted from the start or, with `clock`, from when it starts.
+ * @param timeoutMs - The longest wait, counted from the start or, with `clock`, from when it starts (and never past `clock.withinMs`).
  * @param label - Names the wait in the timeout error.
  * @param clock - Starts the deadline late, for work that runs a while before it can wait.
  * @returns True when `isObserved` answered true first.
@@ -110,13 +112,26 @@ export async function pollUntil(
     max: 1,
     connect_timeout: Math.max(1, Math.ceil(timeoutMs / 1000)),
   })
-  const timing = { hasStarted: !clock, deadline: Date.now() + (clock?.startsWithinMs ?? timeoutMs) }
-  const startClock = async (startsOn: Promise<unknown>): Promise<void> => {
-    await startsOn
-    timing.hasStarted = true
-    timing.deadline = Date.now() + timeoutMs
+  const pollStart = Date.now()
+  const timing = {
+    hasStarted: !clock,
+    deadline: pollStart + (clock?.withinMs ?? timeoutMs),
+    limitMs: clock?.withinMs ?? timeoutMs,
   }
-  if (clock) void startClock(clock.startsOn)
+  const startClock = async (startsOn: Promise<unknown>, withinMs: number): Promise<void> => {
+    try {
+      await startsOn
+    } catch {
+      // Unstarted, the poll fails at `withinMs`.
+      return
+    }
+    timing.hasStarted = true
+    const clockDeadline = Date.now() + timeoutMs
+    if (clockDeadline >= pollStart + withinMs) return
+    timing.deadline = clockDeadline
+    timing.limitMs = timeoutMs
+  }
+  if (clock) void startClock(clock.startsOn, clock.withinMs)
   try {
     while (Date.now() < timing.deadline) {
       if (await isObservedOnce(probe, isObserved, timing.deadline - Date.now(), label)) return true
@@ -124,11 +139,9 @@ export async function pollUntil(
       await settle(POLL_INTERVAL_MS, 'poll interval')
     }
     if (!timing.hasStarted) {
-      throw new Error(
-        `${label}: the clock did not start within ${String(clock?.startsWithinMs)} ms`
-      )
+      throw new Error(`${label}: the clock did not start within ${timing.limitMs} ms`)
     }
-    throw new Error(`${label}: no lock wait and no finish within ${timeoutMs} ms`)
+    throw new Error(`${label}: no lock wait and no finish within ${timing.limitMs} ms`)
   } finally {
     await probe.end({ timeout: 5 })
   }

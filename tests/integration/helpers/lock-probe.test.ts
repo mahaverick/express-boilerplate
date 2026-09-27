@@ -52,13 +52,54 @@ describe('pollUntil', () => {
       'late clock',
       {
         startsOn: started.promise,
-        startsWithinMs: 5000,
+        withinMs: 5000,
       }
     )
 
     await expect(unobserved).rejects.toThrow('late clock: no lock wait and no finish within 100 ms')
     expect(startedAt.ms).toBeGreaterThan(0)
     expect(Date.now() - startedAt.ms).toBeGreaterThanOrEqual(100)
+  })
+
+  it('never polls past its whole bound once the clock starts', async () => {
+    const started = deferred()
+    const startClock = async (): Promise<void> => {
+      await settle(200, 'start the clock close to the whole bound')
+      started.resolve()
+    }
+    void startClock()
+    const unobserved = pollUntil(
+      () => Promise.resolve(false),
+      deferred().promise,
+      5000,
+      'bounded clock',
+      { startsOn: started.promise, withinMs: 400 }
+    )
+
+    await expect(unobserved).rejects.toThrow(
+      'bounded clock: no lock wait and no finish within 400 ms'
+    )
+  })
+
+  it('answers true from a probe that sees the wait before the clock starts', async () => {
+    const observed = pollUntil(() => Promise.resolve(true), deferred().promise, 100, 'early wait', {
+      startsOn: deferred().promise,
+      withinMs: 5000,
+    })
+
+    await expect(observed).resolves.toBe(true)
+  })
+
+  it('leaves the clock unstarted when its signal rejects', async () => {
+    const unstarted = pollUntil(
+      () => Promise.resolve(false),
+      deferred().promise,
+      100,
+      'rejected clock',
+      { startsOn: Promise.reject(new Error('no lock reached')), withinMs: 300 }
+    )
+
+    await expect(unstarted).rejects.toThrow('rejected clock: the clock did not start within 300 ms')
   })
 
   it('fails when the clock does not start in time', async () => {
@@ -69,7 +110,7 @@ describe('pollUntil', () => {
       'unstarted clock',
       {
         startsOn: deferred().promise,
-        startsWithinMs: 300,
+        withinMs: 300,
       }
     )
 

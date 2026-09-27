@@ -83,11 +83,11 @@ const userRepository = new UserRepository()
 const OLD_PASSWORD = 'correct horse battery staple'
 const NEW_PASSWORD = 'a brand new secret passphrase'
 const DENYLIST_FAILURE = 'session denylist write failed after password change'
-// How long the revoking side may take to reach its user lock. A password
-// change hashes with bcrypt first, which is CPU-bound, so the waiter probe's
-// deadline starts at the lock instead. This bound only catches a revoking side
-// that never gets there, and stays under the 20 s test timeout.
-const REVOKER_REACHES_LOCK_MS = 15_000
+// A password change hashes with bcrypt before its user lock, which is
+// CPU-bound, so the waiter probe's deadline starts at the lock; this bounds
+// the whole probe. 12 s plus setup and teardown (under 3 s on a starved CPU)
+// stays under the 20 s test timeout.
+const REVOKER_PROBE_BOUND_MS = 12_000
 
 type PasswordFlow = 'change' | 'reset'
 
@@ -811,7 +811,7 @@ async function raceRotationFirst(
       flags.isRevoking = true
       revoking = revoke()
       observed.waited = await waitForWaiter(pid, revoking, {
-        clock: { startsOn: revokerReachedLock.promise, startsWithinMs: REVOKER_REACHES_LOCK_MS },
+        clock: { startsOn: revokerReachedLock.promise, withinMs: REVOKER_PROBE_BOUND_MS },
       })
     } finally {
       releaseRotation.resolve()
