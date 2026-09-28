@@ -1,18 +1,10 @@
 /**
  * @file Integration test against the real per-worker Postgres database
  * (see tests/helpers/worker-database.ts) — every email used here is
- * unique to this run and every row created is deleted in afterEach, the
- * same convention tests/integration/api/auth.test.ts and
- * tests/integration/middlewares/auth.middleware.test.ts already follow.
- * This file lives under tests/integration/, never tests/unit/ — see
- * CLAUDE.md's note on why a DB-dependent test under tests/unit/ breaks
- * .husky/pre-commit whenever Docker is down.
- *
- * Authenticated requests here sign a token directly with
- * `signAccessToken` rather than going through POST /api/v1/auth/login —
- * mirroring tests/integration/middlewares/auth.middleware.test.ts's own
- * approach — since these tests are about what happens after
- * authentication, not about login itself.
+ * unique to this run and every row created is deleted in afterEach.
+ * Authenticated requests sign a token directly with `signAccessToken`
+ * rather than going through POST /api/v1/auth/login, since these tests
+ * are about what happens after authentication, not about login itself.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -87,6 +79,16 @@ function uniqueEmail(): string {
   return `profile-api-${randomUUID()}@example.test`
 }
 
+/**
+ * Same convention tests/integration/api/auth.test.ts and
+ * tests/integration/middlewares/auth.middleware.test.ts already
+ * follow. This file lives under tests/integration/, never
+ * tests/unit/ — see CLAUDE.md's note on why a DB-dependent test under
+ * tests/unit/ breaks .husky/pre-commit whenever Docker is down.
+ * Authenticated requests here mirror
+ * tests/integration/middlewares/auth.middleware.test.ts's own
+ * sign-a-token-directly approach.
+ */
 describe('/api/v1/profile', () => {
   const createdIds: string[] = []
 

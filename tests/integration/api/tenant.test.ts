@@ -7,18 +7,10 @@
  * `signAccessToken` rather than going through `POST /api/v1/auth/login`,
  * and most fixtures (tenants, memberships) are built directly via the
  * repositories rather than through this file's own `POST /tenants`
- * endpoint: these tests are about what happens once a caller is already
- * a member with a given role, not about tenant creation itself (which
- * gets its own `describe` block below, exercised through the real
- * endpoint). Members join only by invitation;
+ * endpoint: these tests are about what happens once a caller is
+ * already a member with a given role, not about tenant creation itself
+ * (its own `describe` block below). Members join only by invitation;
  * tests/integration/api/invitation.test.ts covers those endpoints.
- *
- * Rate limiting here is wiring, not thresholds: exhausting
- * `RATE_LIMITS.createTenant`'s real 20-per-hour budget would spend a
- * budget every other integration file running in parallel shares. The
- * 429 behaviour itself, including the user-keyed discriminator, is
- * proven with small overrides in
- * tests/unit/middlewares/rate-limit.middleware.test.ts.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -220,6 +212,14 @@ describe('/api/v1/tenants', () => {
       expect(response.status).toBe(409)
     })
 
+    /**
+     * Wiring, not thresholds: exhausting `RATE_LIMITS.createTenant`'s
+     * real 20-per-hour budget would spend a budget every other
+     * integration file running in parallel shares. The 429 behaviour
+     * itself, including the user-keyed discriminator, is proven with
+     * small overrides in
+     * tests/unit/middlewares/rate-limit.middleware.test.ts.
+     */
     it('runs a limiter — proven by the RateLimit-* headers on an ordinary response', async () => {
       const { token } = await createAuthenticatedUser()
 

@@ -3,27 +3,9 @@
  * (see tests/helpers/worker-database.ts) — same convention as
  * tests/integration/api/notification.test.ts: every user created here
  * is deleted in afterEach, and notifications cascade off that delete
- * (ON DELETE CASCADE, notification.model.ts).
- *
- * This is the one file in tests/integration/api/ that cannot use
- * `request(app)` (supertest) end-to-end: supertest resolves a request
- * once its response has fully ended, and an SSE response, by design,
- * never ends on its own. Instead, this file opens its own real,
- * ephemeral `http.Server` (same as tests/integration/server.test.ts's
- * own `startServer(0)` pattern, but a dedicated server rather than that
- * shared helper — see the "server lifecycle" comment below for why)
- * and drives it with a plain `node:http` client, parsing the raw SSE
- * byte stream itself.
- *
- * `emitNotification` is imported and called directly in several tests,
- * rather than going through a real `NotificationWorker` job — the same
- * "test this layer, not the whole pipeline" reasoning
- * tests/unit/workers/notification.worker.test.ts already applies to
- * the worker in the other direction. `notification.worker.test.ts`
- * (both the unit and integration variants) already covers that
- * `processNotificationJob` calls `emitNotification` after a successful
- * insert; this file only needs to prove the SSE endpoint reacts
- * correctly once that call happens.
+ * (ON DELETE CASCADE, notification.model.ts). This is the one file in
+ * tests/integration/api/ that cannot use `request(app)` (supertest)
+ * end-to-end; see `SseConnection` below for why.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -138,11 +120,14 @@ function applyField(frame: SseFrame, field: string, value: string): void {
 }
 
 /**
- * A raw `node:http` connection to `/api/v1/notifications/stream`, buffering
- * and incrementally parsing the SSE byte stream as it arrives — the "small
- * helper that reads chunks from the response stream" the task brief itself
- * calls for, since neither supertest nor a plain `await` can observe a
- * response that never ends.
+ * A raw `node:http` connection to `/api/v1/notifications/stream`,
+ * buffering and incrementally parsing the SSE byte stream as it
+ * arrives. Neither supertest nor a plain `await` can observe a
+ * response that never ends: supertest resolves a request once its
+ * response has fully ended, and an SSE response, by design, never
+ * ends on its own — same reason this file opens its own real,
+ * ephemeral `http.Server` (see `beforeAll` below) rather than using
+ * `request(app)` end-to-end.
  */
 class SseConnection {
   private buffer = ''
@@ -343,6 +328,17 @@ async function framesBeforeSentinel(
     .filter((frame) => frame.event === 'notification')
 }
 
+/**
+ * `emitNotification` is imported and called directly in several tests
+ * below, rather than going through a real `NotificationWorker` job —
+ * the same "test this layer, not the whole pipeline" reasoning
+ * tests/unit/workers/notification.worker.test.ts applies to the worker
+ * in the other direction. `notification.worker.test.ts` (both the
+ * unit and integration variants) already covers that
+ * `processNotificationJob` calls `emitNotification` after a successful
+ * insert; this file only needs to prove the SSE endpoint reacts
+ * correctly once that call happens.
+ */
 describe('GET /api/v1/notifications/stream', () => {
   let server: http.Server
   let baseUrl: string

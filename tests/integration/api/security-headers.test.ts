@@ -6,16 +6,6 @@
  * which must pass unchanged: that is the proof
  * `Cross-Origin-Resource-Policy: same-site` doesn't break the second
  * frontend.
- *
- * The it.each block below only ever reaches the SSE route's 401
- * rejection, which never calls `response.writeHead` at all (see
- * notification-stream.controller.ts's own header comment) — so it cannot
- * prove helmet's headers, set via `setHeader` on the same response
- * object before this controller runs, actually survive the controller's
- * own `response.writeHead(200, {...})` call on a real 200. `writeHead`
- * can overwrite headers already set on the response if the handler
- * passes them again, so this needs its own case against a live,
- * successfully-opened stream.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -93,6 +83,17 @@ describe('security headers', () => {
   })
 })
 
+/**
+ * The it.each block above only ever reaches the SSE route's 401
+ * rejection, which never calls `response.writeHead` at all (see
+ * notification-stream.controller.ts's own header comment) — so it
+ * cannot prove helmet's headers, set via `setHeader` on the same
+ * response object before this controller runs, actually survive the
+ * controller's own `response.writeHead(200, {...})` call on a real
+ * 200. `writeHead` can overwrite headers already set on the response
+ * if the handler passes them again, so this needs its own case against
+ * a live, successfully-opened stream.
+ */
 describe('security headers on a live SSE stream', () => {
   // supertest only resolves once a response has fully ended, and an SSE response never ends on its own, so this drives its own real, ephemeral http.Server with a plain node:http client instead of request(app).
   let server: http.Server

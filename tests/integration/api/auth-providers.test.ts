@@ -1,21 +1,12 @@
 /**
  * @file Integration tests for GET /api/v1/auth/providers, against the
  * real per-worker Postgres database — same conventions as
- * tests/integration/api/profile.test.ts, whose token approach this file
- * reuses: requests sign a bearer token directly with `signAccessToken`
- * rather than going through POST /auth/login, since these tests are
- * about what happens after authentication rather than about login
- * itself.
- *
- * The case this file exists for is the Google-only user. A Google
- * signup writes both an `'email'` row and a `'google'` row in one
- * transaction (google-auth.service.ts's `findOrCreateByGoogle`), so the
- * presence of an `'email'` provider says nothing about whether a
- * password exists — an implementation that inferred `hasPassword` from
- * the provider list would report `true` for an account that cannot log
- * in with a password at all. That is why the endpoint carries
- * `hasPassword` as its own field, read from `users.password_hash`, and
- * why the assertions below pin the two apart.
+ * tests/integration/api/profile.test.ts, whose token approach this
+ * file reuses: requests sign a bearer token directly with
+ * `signAccessToken` rather than going through POST /auth/login, since
+ * these tests are about what happens after authentication rather than
+ * about login itself. The case this file exists for is the
+ * Google-only user — see the test below.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -153,8 +144,18 @@ describe('GET /api/v1/auth/providers', () => {
     })
   })
 
+  /**
+   * A Google signup writes both an 'email' row and a 'google' row in
+   * one transaction (google-auth.service.ts's `findOrCreateByGoogle`),
+   * so the presence of an 'email' provider says nothing about whether
+   * a password exists — an implementation that inferred `hasPassword`
+   * from the provider list would report `true` for an account that
+   * cannot log in with a password at all. That is why the endpoint
+   * carries `hasPassword` as its own field, read from
+   * `users.password_hash`, and why the assertions below pin the two
+   * apart.
+   */
   it('reports hasPassword false for a Google-only account, which still has an email provider row', async () => {
-    // The case hasPassword exists for: providers here is indistinguishable from a linked account's, so only hasPassword tells them apart.
     const { token } = await seedUser({ withPassword: false, providers: ['email', 'google'] })
 
     const response = await getProviders(token)

@@ -1,18 +1,12 @@
 /**
- * @file Refresh, rotation, reuse detection, logout and cookie handling,
- * against the real per-worker Postgres database and the real compose
- * Redis — every email used here is unique to this run and every row
- * created is deleted in afterEach, the same convention
+ * @file Refresh, rotation, reuse detection, logout and cookie
+ * handling, against the real per-worker Postgres database and the
+ * real compose Redis — every email used here is unique to this run
+ * and every row created is deleted in afterEach, the same convention
  * tests/integration/api/auth.test.ts already follows. This file lives
- * under tests/integration/, never tests/unit/ — see CLAUDE.md's note on
- * why a DB/Redis-dependent test under tests/unit/ breaks
+ * under tests/integration/, never tests/unit/ — see CLAUDE.md's note
+ * on why a DB/Redis-dependent test under tests/unit/ breaks
  * .husky/pre-commit whenever Docker is down.
- *
- * Kept as its own file rather than folded into auth.test.ts:
- * refresh/logout exercise a materially different concern (cookie
- * round-tripping, rotation, rate limiting) from register/login, and
- * this file's helpers (raw cookie extraction, replay) have no use for
- * that file's registration-specific assertions.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -157,6 +151,13 @@ function rawTokenOf(pair: string): string {
   return decodeURIComponent(pair.slice(`${REFRESH_TOKEN_COOKIE_NAME}=`.length))
 }
 
+/**
+ * Kept as its own file rather than folded into auth.test.ts:
+ * refresh/logout exercise a materially different concern (cookie
+ * round-tripping, rotation, rate limiting) from register/login, and
+ * this file's helpers (raw cookie extraction, replay) have no use for
+ * that file's registration-specific assertions.
+ */
 describe('POST /api/v1/auth/refresh and /logout', () => {
   const createdIds: string[] = []
 

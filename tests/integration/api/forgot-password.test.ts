@@ -546,10 +546,15 @@ describe('POST /api/v1/auth/reset-password', () => {
     expect(loginResponse.status).toBe(200)
   })
 
+  /**
+   * Seeded directly: findOrCreateByGoogle rejects an unverified
+   * Google email outright (403 email_not_verified), so seedUser plus
+   * direct repository calls are what construct this state for the
+   * test.
+   */
   it('drops Google links from a never-verified account on reset, so a squatter’s Google identity no longer resolves to it', async () => {
-    // Seeded directly: findOrCreateByGoogle rejects an unverified Google email outright (403 email_not_verified), so seedUser + direct repository calls are what construct this state for the test.
     const { user, email } = await seedUser(false)
-    // A real account always carries this row (register()'s own invariant); deleteFederatedForUser only ever removes non-'email' rows, so this one must exist up front for the assertion below to mean anything.
+    // A real account always carries this row (register()'s own invariant). deleteFederatedForUser only ever removes non-'email' rows, so this one must exist up front for the assertion below to mean anything.
     await authProviderRepository.create({
       userId: user.id,
       provider: 'email',

@@ -1,25 +1,7 @@
 /**
- * @file COOKIE_SECURE and COOKIE_DOMAIN at every site that writes an auth
- * cookie: the refresh cookie on login, refresh, logout (clear) and the
- * Google callback, and express-session's `oauth.sid`.
- *
- * The refresh cookie's name follows the deployment: refreshToken without
- * COOKIE_SECURE, __Host-refreshToken (Path=/) when secure with no
- * COOKIE_DOMAIN, __Secure-refreshToken when secure with one. A request
- * that still carries the legacy refreshToken gets it cleared. A refresh
- * answered 401 clears the cookie it read, and nothing else.
- *
- * getEnv() is a vi.fn over the real one, so each test hands the app its
- * own env without vi.resetModules(). Every test builds a fresh app:
- * createApp() reads TRUST_PROXY and the Google credentials once, and the
- * OAuth session middleware reads its cookie options once per app, on
- * first use.
- *
- * express-session gets no `proxy` option, so it sends a Secure cookie
- * only when req.secure is true (express-session index.js, issecure). The
- * Secure cases therefore run with TRUST_PROXY=1 and
- * X-Forwarded-Proto: https, and one test pins the drop when that header
- * is missing.
+ * @file COOKIE_SECURE and COOKIE_DOMAIN at every site that writes an
+ * auth cookie: the refresh cookie on login, refresh, logout (clear)
+ * and the Google callback, and express-session's `oauth.sid`.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -48,6 +30,13 @@ import { hashPassword } from '@/utilities/password.utilities'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { request } from '../../helpers/request'
 
+/**
+ * getEnv() is a vi.fn over the real one, so each test hands the app
+ * its own env without vi.resetModules(). Every test builds a fresh
+ * app via `appWith` below: createApp() reads TRUST_PROXY and the
+ * Google credentials once, and the OAuth session middleware reads its
+ * cookie options once per app, on first use.
+ */
 vi.mock('@/configs/env.config', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/configs/env.config')>()
   return { ...actual, getEnv: vi.fn(actual.getEnv) }
@@ -230,6 +219,14 @@ class FakeGoogleSuccessStrategy implements passport.Strategy {
   }
 }
 
+/**
+ * The refresh cookie's name follows the deployment: refreshToken
+ * without COOKIE_SECURE, __Host-refreshToken (Path=/) when secure
+ * with no COOKIE_DOMAIN, __Secure-refreshToken when secure with one.
+ * A request that still carries the legacy refreshToken gets it
+ * cleared. A refresh answered 401 clears the cookie it read, and
+ * nothing else.
+ */
 describe('refresh cookie: name, path and domain per deployment', () => {
   it.each([
     {
@@ -544,6 +541,13 @@ describe('refresh cookie: Google callback with a legacy cookie', () => {
   })
 })
 
+/**
+ * express-session gets no `proxy` option, so it sends a Secure cookie
+ * only when req.secure is true (express-session index.js, issecure).
+ * The Secure cases therefore run with TRUST_PROXY=1 and
+ * X-Forwarded-Proto: https, and one test pins the drop when that
+ * header is missing.
+ */
 describe('oauth.sid (express-session)', () => {
   it('carries Secure and COOKIE_DOMAIN when COOKIE_SECURE=true and the request is https via the proxy', async () => {
     const app = appWith(SECURE_SCOPED)
@@ -712,7 +716,13 @@ describe('refresh cookie: a refresh answered 401 clears the cookie it read', () 
     }
   )
 
-  // DELIBERATELY red under MUTATION_PROOF=1: with every cookie clear a no-op, the 401 carries no clearing line; unset, this test is skipped and the file is green.
+  /**
+   * DELIBERATELY red under MUTATION_PROOF=1: with every cookie clear a
+   * no-op, the 401 carries no clearing line.
+   *
+   *   MUTATION_PROOF=1 pnpm exec vitest run tests/integration/api/cookie-attributes.test.ts   # red
+   *   pnpm exec vitest run tests/integration/api/cookie-attributes.test.ts                    # green
+   */
   it.runIf(process.env.MUTATION_PROOF === '1')(
     'reproduces the reset-clear test with the response cookie clear disabled',
     async () => {

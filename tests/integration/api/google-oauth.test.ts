@@ -1,48 +1,10 @@
 /**
  * @file Exercises the real `createOAuthSessionMiddleware()` against the
- * real, per-worker Redis instance (REDIS_URL in .env.test), not a mock:
- * only a real request through a real connect-redis `RedisStore` backed
- * by a real node-redis client can show whether the OAuth redirect
- * (which needs `req.session` for the `state` CSRF parameter) actually
- * works. passport.config.ts's own header comment explains why handing
- * `RedisStore` an un-awaited `Promise<RedisClientType>` does not work,
- * and this file is what proves the lazy-latch replacement does.
- *
- * GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET are set in `beforeAll`, via a
- * dynamic `import('@/app')`, not a static `import` at the top of this
- * file: `@/app` transitively imports `database.service.ts`, which
- * calls `const env = getEnv()` at its own module scope, and a static
- * import's entire dependency graph evaluates before any of this file's
- * own top-level code runs — so a static import would memoise `getEnv()`
- * without `GOOGLE_CLIENT_ID` before `beforeAll` ever ran, regardless of
- * when `createApp()` was actually called. A dynamic `import()` has no
- * such hoisting: it evaluates exactly where it is awaited, so
- * performing it inside `beforeAll`, after the `process.env`
- * assignments, is what gets `GOOGLE_CLIENT_ID` into `getEnv()`'s first
- * (and only) parse. These are never real Google credentials — passport's
- * Google strategy builds the redirect URL locally from
- * `clientID`/`scope`/`callbackURL`; nothing in this test ever calls
- * Google.
- *
- * A separate file, google-oauth-disabled.test.ts, covers the opposite
- * env state (no Google credentials at all — this repo's actual
- * .env.test default). That cannot live in this file: `getEnv()`
- * memoises the first environment it parses for the life of this worker
- * process, so once `createApp()` below has run with GOOGLE_CLIENT_ID
- * set, no later test in this same file could ever observe it unset
- * without `vi.resetModules()`, which discards this whole worker's
- * module cache, including database.service.ts's live postgres pool.
- *
- * `vi.stubEnv`, not a raw `process.env.GOOGLE_CLIENT_ID = ...`
- * assignment: `process.env` persists across test files within one
- * forked worker process (only the module registry resets between
- * files). A raw assignment here would leak `GOOGLE_CLIENT_ID` into
- * whichever file vitest schedules next in this worker, including
- * google-oauth-disabled.test.ts, whose entire premise is that variable
- * being unset. `afterAll(() => vi.unstubAllEnvs())` restores the prior
- * value (here, genuinely absent) rather than merely deleting the key,
- * so this file leaves no trace on `process.env` for whatever runs
- * after it in the same worker.
+ * real, per-worker Redis instance (REDIS_URL in .env.test), not a mock,
+ * proving the lazy-latch `RedisStore` replacement passport.config.ts
+ * uses actually works. `google-oauth-disabled.test.ts` covers the
+ * opposite env state (no Google credentials) in a separate file — see
+ * the describe block below for why it cannot live here too.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -186,6 +148,24 @@ class FakeGoogleSuccessStrategy implements passport.Strategy {
   }
 }
 
+/**
+ * `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` are stubbed via `vi.stubEnv`
+ * for this describe block only, restored in `afterAll` below — never
+ * real Google credentials; passport's Google strategy builds the
+ * redirect URL locally from `clientID`/`scope`/`callbackURL`, so
+ * nothing in this file ever calls Google. `vi.stubEnv`, not a raw
+ * `process.env` assignment, because `process.env` persists across test
+ * files within one forked worker process; a raw assignment would leak
+ * the variable into whichever file vitest schedules next, including
+ * google-oauth-disabled.test.ts, whose entire premise is that variable
+ * being unset. `getEnv()` memoises the first environment it parses for
+ * the life of this worker process, so once `beforeAll` below has run
+ * with the variable set, no later test in this file could ever observe
+ * it unset without `vi.resetModules()` (which discards this whole
+ * worker's module cache, including database.service.ts's live postgres
+ * pool) — that is why the "disabled" state lives in its own file
+ * rather than a second describe block here.
+ */
 describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
   let app: ReturnType<typeof CreateApp>
   let findOrCreateByGoogle: typeof FindOrCreateByGoogleType
@@ -196,17 +176,26 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
 
   /**
    * Every runtime value this describe block needs is imported
-   * dynamically, inside `beforeAll`, after the `vi.stubEnv` calls, not
-   * just `@/app` — see this file's header comment for why. The
-   * identical reasoning applies to every one of these imports, since
-   * `@/services/google-auth.service`, `@/repositories/user.repository`,
+   * dynamically, inside this hook, after the `vi.stubEnv` calls above —
+   * not just `@/app`. `@/app` transitively imports `database.service.ts`,
+   * which calls `getEnv()` at its own module scope, and a static
+   * import's entire dependency graph evaluates before any of this
+   * file's own top-level code runs, so a static import would memoise
+   * `getEnv()` without `GOOGLE_CLIENT_ID` before this hook ever ran,
+   * regardless of when `createApp()` was actually called. A dynamic
+   * `import()` has no such hoisting: it evaluates exactly where it is
+   * awaited, so performing it here, after the `vi.stubEnv` calls, is
+   * what gets `GOOGLE_CLIENT_ID` into `getEnv()`'s first (and only)
+   * parse. The identical reasoning applies to every other import below,
+   * since `@/services/google-auth.service`,
+   * `@/repositories/user.repository`,
    * `@/repositories/auth-provider.repository` and
    * `@/services/database.service` all transitively reach the same
-   * module-scope `getEnv()` call. By the time this `await
+   * module-scope `getEnv()` call — and by the time `await
    * import('@/app')` resolves, every one of those modules is already
    * loaded (createApp's own dependency graph reaches all of them via
    * auth.routes.ts), so the dynamic imports below just return the
-   * already-cached module.
+   * already-cached module, not a second, independent load.
    */
   beforeAll(async () => {
     vi.stubEnv('GOOGLE_CLIENT_ID', 'test-google-client-id')
@@ -230,6 +219,11 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
     issueRefreshToken = sessionService.issueRefreshToken
   })
 
+  /**
+   * Restores the prior value (here, genuinely absent) rather than
+   * merely deleting the key, so this file leaves no trace on
+   * `process.env` for whatever runs after it in this worker.
+   */
   afterAll(() => {
     vi.unstubAllEnvs()
   })

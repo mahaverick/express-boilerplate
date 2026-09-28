@@ -5,24 +5,9 @@
  * deleted in afterEach, and notifications/notification_preferences
  * cascade off that delete (ON DELETE CASCADE, notification.model.ts),
  * so nothing else needs explicit cleanup.
- *
  * Authenticated requests sign a token directly with `signAccessToken`
- * rather than going through POST /api/v1/auth/login, mirroring
- * profile.test.ts's own reasoning: these tests are about what happens
- * after authentication, not about login itself.
- *
- * PUT /preferences cannot be exercised end-to-end for a successful
- * upsert in this file. CONFIGURABLE_NOTIFICATION_TYPES
- * (notification.validators.ts) is currently empty — every
- * NOTIFICATION_TYPES entry is listed as non-disableable — so every
- * well-formed preferences update is rejected until a type with a
- * disableable channel ships. The tests below cover that rejection (and
- * the ordinary validation failures alongside it); a positive
- * upsert-through-the-controller test has nothing to exercise it with
- * yet. NotificationPreferenceRepository.upsert itself already has
- * direct coverage in notification-preference.repository.test.ts, which
- * does not go through this validator and so is unaffected by the empty
- * configurable list.
+ * rather than going through POST /api/v1/auth/login, since these tests
+ * are about what happens after authentication, not about login itself.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -462,8 +447,22 @@ describe('/api/v1/notifications', () => {
     })
   })
 
+  /**
+   * PUT /preferences cannot be exercised end-to-end for a successful
+   * upsert in this describe block. CONFIGURABLE_NOTIFICATION_TYPES
+   * (notification.validators.ts) is currently empty — every
+   * NOTIFICATION_TYPES entry is listed as non-disableable — so every
+   * well-formed preferences update is rejected until a type with a
+   * disableable channel ships. The tests below cover that rejection
+   * (and the ordinary validation failures alongside it); a positive
+   * upsert-through-the-controller test has nothing to exercise it
+   * with yet. NotificationPreferenceRepository.upsert itself already
+   * has direct coverage in notification-preference.repository.test.ts,
+   * which does not go through this validator and so is unaffected by
+   * the empty configurable list.
+   */
   describe('PUT /api/v1/notifications/preferences', () => {
-    // See this file's header comment: CONFIGURABLE_NOTIFICATION_TYPES is currently empty, so this is a rejection, not a bug.
+    // CONFIGURABLE_NOTIFICATION_TYPES is currently empty (see this describe block's own JSDoc), so this is a rejection, not a bug.
     it('rejects an update for verify_email with a clear, field-scoped message', async () => {
       const { token } = await createAuthenticatedUser()
 

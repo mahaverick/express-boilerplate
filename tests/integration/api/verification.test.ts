@@ -367,7 +367,12 @@ const RESEND_BODY = {
 }
 
 describe('POST /api/v1/auth/resend-verification', () => {
-  // Deliberately no describe-local createdIds/afterEach pair here: the module-level ones declared above already apply to every test in this file, and registerUser/registerVerifiedUser below close over that same array.
+  /**
+   * Deliberately no describe-local createdIds/afterEach pair here. The
+   * module-level ones declared above already apply to every test in
+   * this file, and registerUser/registerVerifiedUser below close over
+   * that same array.
+   */
   beforeEach(clearResendVerificationIpLimiter)
 
   it('answers identically for unknown, unverified and already-verified addresses', async () => {
@@ -391,6 +396,13 @@ describe('POST /api/v1/auth/resend-verification', () => {
     expect(response.body).toEqual(RESEND_BODY)
   })
 
+  /**
+   * The positive assertion runs first and polls to completion. By the
+   * time it resolves, the fire-and-forget mail this loop triggered has
+   * either arrived or never will. Ordering the negatives after it
+   * gives an errant send the same window to land before either
+   * negative check starts.
+   */
   it('mails only the unverified address', async () => {
     const unknown = uniqueEmail()
     const { email: unverified } = await registerUser()
@@ -402,12 +414,17 @@ describe('POST /api/v1/auth/resend-verification', () => {
       await resend(email)
     }
 
-    // The positive assertion runs first and polls to completion; by the time it resolves, the fire-and-forget mail this loop triggered has either arrived or never will. Ordering the negatives after it gives an errant send the same window to land before either negative check starts.
     expect(await findMailpitMessages(unverified)).toHaveLength(1)
     await assertNoMailpitMessage(unknown)
     await assertNoMailpitMessage(verified)
   })
 
+  /**
+   * Synchronization point: resendVerificationMail's send runs after
+   * its revoke, and both are unawaited by the 202 response. Waiting
+   * for the resend mail to actually arrive proves the revoke has
+   * already run before the assertions below.
+   */
   it('invalidates the previous link when a new one is sent, and the new one verifies', async () => {
     const { email, user } = await registerUser()
     const first = await issueToken(user.id, 'email_verification', 60_000)
@@ -415,35 +432,38 @@ describe('POST /api/v1/auth/resend-verification', () => {
 
     await resend(email)
 
-    // Synchronization point: resendVerificationMail's send runs after its revoke, and both are unawaited by the 202 response. Waiting for the resend mail to actually arrive proves the revoke has already run before the assertions below.
     const messages = await findMailpitMessages(email)
     expect(messages).toHaveLength(1)
     const detail = await getMailpitMessage(messages[0]?.ID ?? '')
     const secondToken = /token=([0-9a-f]+)/.exec(detail.Text)?.[1]
     expect(secondToken).toBeDefined()
 
-    // Two live links at once means a token read out of an older mail still works after the user has re-requested — the state single-use exists to prevent.
+    // Two live links at once means a token read out of an older mail still works after the user has re-requested. The state single-use exists to prevent that.
     const oldAttempt = await request(app)
       .post('/api/v1/auth/verify-email')
       .send({ token: first.raw, password: VALID_PASSWORD })
     expect(oldAttempt.status).toBe(400)
 
-    // Not just "the old one is dead" — the new one must actually work. A resendVerificationMail with send and revoke swapped would also make the old token fail, and this assertion is what tells the two apart.
+    // Not just "the old one is dead". The new one must actually work: a resendVerificationMail with send and revoke swapped would also make the old token fail, and this assertion tells the two apart.
     const newAttempt = await request(app)
       .post('/api/v1/auth/verify-email')
       .send({ token: secondToken ?? '', password: VALID_PASSWORD })
     expect(newAttempt.status).toBe(200)
   })
 
+  /**
+   * Not hypothetical: revokeAllForUser matches on userId alone, so
+   * reaching for it here would log the user out of every device as a
+   * side effect of asking for an email.
+   */
   it('leaves a live refresh token alone when it clears old links', async () => {
-    // Not hypothetical: revokeAllForUser matches on userId alone, so reaching for it here would log the user out of every device as a side effect of asking for an email.
     const { response: login, email, user } = await registerAndLogin(createdIds)
     await sql`update users set email_verified_at = null where id = ${user.id}`
     await drainMailpit(email)
 
     await resend(email)
 
-    // Same synchronization reasoning as the previous test: the refresh token must not be checked until the revoke that could have touched it is known to have already run, or the assertion below would be vacuous.
+    // Same synchronization reasoning as the previous test. The refresh token must not be checked until the revoke that could have touched it is known to have already run, or the assertion below would be vacuous.
     expect(await findMailpitMessages(email)).toHaveLength(1)
 
     const refreshed = await request(app)
@@ -452,8 +472,13 @@ describe('POST /api/v1/auth/resend-verification', () => {
     expect(refreshed.status).toBe(200)
   })
 
+  /**
+   * RateLimit-* headers alone cannot prove this: the second limiter's
+   * headers simply overwrite the first's, so a header check only ever
+   * proves the last limiter in the chain ran. Reading the store
+   * directly is the only way to prove both fired.
+   */
   it('runs both limiters — proven by counters incrementing under both prefixes', async () => {
-    // RateLimit-* headers alone cannot prove this: the second limiter's headers simply overwrite the first's, so a header check only ever proves the last limiter in the chain ran. Reading the store directly is the only way to prove both fired.
     const email = uniqueEmail()
 
     await resend(email)

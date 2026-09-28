@@ -1,25 +1,16 @@
 /**
- * @file Integration tests for POST /api/v1/auth/change-password, against
- * the real per-worker Postgres database and the real compose Redis —
- * same conventions as tests/integration/api/forgot-password.test.ts
+ * @file Integration tests for POST /api/v1/auth/change-password,
+ * against the real per-worker Postgres database and the real compose
+ * Redis — same conventions as tests/integration/api/forgot-password.test.ts
  * (mail/worker setup) and tests/integration/api/auth.test.ts
  * (login/token mechanics). Both the "email" and "notification" BullMQ
  * workers run for the whole file, so the controller's
- * `addNotificationJob` call actually reaches Mailpit (see those two
- * files' own comments for why both workers, not just one, are
- * required).
- *
- * Most tests here sign a bearer token directly with `signAccessToken`
+ * `addNotificationJob` call actually reaches Mailpit. Most tests sign
+ * a bearer token directly with `signAccessToken`
  * (tests/integration/api/profile.test.ts's own approach) rather than
- * going through POST /auth/login — they are about what happens after
- * authentication, not about login/session mechanics. The one exception
- * is the "revokes every other session" test below, which must log in
- * twice through the real HTTP endpoint:
- * `revokeAllForUserExceptSession`'s denial only has an existing
- * `user_tokens` row to act on for a session that a real login actually
- * created. A fabricated `randomUUID()` session id has no such row, is
- * never denied by anything, and would make that assertion pass whether
- * or not the endpoint under test does anything at all.
+ * going through POST /auth/login, since they are about what happens
+ * after authentication — the one exception is the "revokes every other
+ * session" test below (see its own JSDoc).
  */
 
 import { randomUUID } from 'node:crypto'
@@ -202,7 +193,16 @@ describe('POST /api/v1/auth/change-password', () => {
     expect(newLogin.status).toBe(200)
   })
 
-  // The assertion that proves the design — see this file's header comment for why both tokens below must come from real logins, not a fabricated session id.
+  /**
+   * The assertion that proves the design. Both tokens below must come
+   * from real logins, not a fabricated session id:
+   * `revokeAllForUserExceptSession`'s denial only has an existing
+   * `user_tokens` row to act on for a session that a real login
+   * actually created. A fabricated `randomUUID()` session id has no
+   * such row, is never denied by anything, and would make this
+   * assertion pass whether or not the endpoint under test does
+   * anything at all.
+   */
   it('revokes every other session, but leaves the session that made the change working', async () => {
     const email = uniqueEmail()
     await createUserWithPassword(email)
