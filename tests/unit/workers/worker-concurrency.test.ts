@@ -1,8 +1,10 @@
-// tests/unit/workers/worker-concurrency.test.ts
-//
-// The email and notification workers take their concurrency from WORKER_CONCURRENCY; the maintenance worker always runs one job at a time. BullMQ's
-// Worker is swapped for a recorder and the queue connection for a stub, so
-// no Redis is touched; getEnv() is a vi.fn over the real one.
+/**
+ * @file The email and notification workers take their concurrency from
+ * WORKER_CONCURRENCY; the maintenance worker always runs one job at a
+ * time. BullMQ's Worker is swapped for a recorder and the queue
+ * connection for a stub, so no Redis is touched; getEnv() is a vi.fn
+ * over the real one.
+ */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { getEnv } from '@/configs/env.config'
 import { startEmailWorker } from '@/workers/email.worker'

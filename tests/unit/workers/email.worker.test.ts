@@ -1,9 +1,8 @@
-// tests/unit/workers/email.worker.test.ts
-//
-// Pure-logic coverage of processEmailJob's retry decision, with sendMail
-// mocked — starting a real Worker/Redis connection belongs to
-// tests/integration/workers/email.worker.test.ts, per this repo's own
-// unit/integration split (CLAUDE.md).
+/**
+ * @file Pure-logic coverage of processEmailJob's retry decision, with
+ * sendMail mocked — starting a real Worker/Redis connection belongs to
+ * tests/integration/workers/email.worker.test.ts.
+ */
 import type { Job } from 'bullmq'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { EmailJobData } from '@/jobs/email.job'
@@ -39,10 +38,7 @@ function mockJob(): Job<EmailJobData> {
 }
 
 describe('processEmailJob', () => {
-  // This project's vitest config sets neither restoreMocks nor mockReset
-  // (see tests/helpers/mutate.ts's own header comment for the same fact),
-  // so a mockResolvedValue set by one test would otherwise leak into the
-  // next.
+  // This project's vitest config sets neither restoreMocks nor mockReset, so a mockResolvedValue set by one test would otherwise leak into the next.
   beforeEach(() => {
     vi.mocked(mailerService.sendMail).mockReset()
   })
