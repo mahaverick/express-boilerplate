@@ -332,6 +332,9 @@ importers:
       eslint-config-prettier:
         specifier: ^10.1.8
         version: 10.1.8(eslint@10.11.0(jiti@2.6.1)(supports-color@7.2.0))
+      eslint-formatter-unix:
+        specifier: 9.0.1
+        version: 9.0.1
       eslint-plugin-check-file:
         specifier: 3.3.2
         version: 3.3.2(eslint@10.11.0(jiti@2.6.1)(supports-color@7.2.0))
@@ -2715,6 +2718,10 @@ packages:
     hasBin: true
     peerDependencies:
       eslint: '>=7.0.0'
+
+  eslint-formatter-unix@9.0.1:
+    resolution: {integrity: sha512-6trzj/OL0Q2B5mw3dqryAmQWzo5vVfL9YkaJdw3laouSgbs83TsSz9GFN+1/7lMUlUkBY+8mVEWelkAQoKnlcA==}
+    engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
 
   eslint-import-context@0.1.9:
     resolution: {integrity: sha512-K9Hb+yRaGAGUbwjhFNHvSmmkZs9+zbuoe3kFQ4V1wYjrepUFYM2dZAfNtjbbj3qsPfUfsA68Bx/ICWQMi+C8Eg==}
@@ -6408,6 +6415,8 @@ snapshots:
   eslint-config-prettier@10.1.8(eslint@10.11.0(jiti@2.6.1)(supports-color@7.2.0)):
     dependencies:
       eslint: 10.11.0(jiti@2.6.1)(supports-color@7.2.0)
+
+  eslint-formatter-unix@9.0.1: {}
 
   eslint-import-context@0.1.9(unrs-resolver@1.12.2):
     dependencies:

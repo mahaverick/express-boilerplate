@@ -45,6 +45,15 @@ describe('local/comment-style', () => {
     ['a triple-slash reference', '/// <reference types="vite/client" />\nexport {}\n'],
     ['a pure annotation', 'export const a = /*#__PURE__*/ f()\n'],
     ['a vitest environment directive', '// @vitest-environment node\n// why\nexport {}\n'],
+    ['a multi-line JSDoc', '/**\n * Contract.\n * @returns One.\n */\nexport const a = 1\n'],
+    [
+      '"previously" for an earlier step of the same runtime flow',
+      '/** Unsubscribe a handler previously passed to `onNotification`. */\nexport const a = 1\n',
+    ],
+    [
+      '"previously" across a JSDoc line break',
+      '/**\n * `passport.use(name, strategy)` simply overwrites whatever was previously\n * registered under that name.\n */\nexport const a = 1\n',
+    ],
   ])('allows %s', (_name, code) => {
     expect(lint(code)).toEqual([])
   })
@@ -55,6 +64,10 @@ describe('local/comment-style', () => {
 
   it('rejects a plain block comment', () => {
     expect(lint('/* not JSDoc */\nexport const a = 1\n')).toEqual(['notJsdoc'])
+  })
+
+  it('rejects a divider', () => {
+    expect(lint('/*** divider ***/\nexport const a = 1\n')).toEqual(['notJsdoc'])
   })
 
   it('rejects a multi-line JSX comment', () => {
@@ -72,6 +85,10 @@ describe('local/comment-style', () => {
     ['a brief file', '// see task-3-brief.md\nexport const a = 1\n'],
     ['an audit id', '// M20: nginx headers\nexport const a = 1\n'],
     ['previously', '// previously a cookie\nexport const a = 1\n'],
+    [
+      'previously-shipped',
+      '/** Covers a real, previously-shipped false-negative. */\nexport const a = 1\n',
+    ],
   ])('rejects history: %s', (_name, code) => {
     expect(lint(code)).toEqual(['history'])
   })

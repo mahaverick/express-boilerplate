@@ -44,11 +44,12 @@ export const commentStyleRule = {
         for (const comment of sourceCode.getAllComments()) {
           const isDirective = DIRECTIVE.test(comment.value)
           const match = findHistory(comment.value)
+          const isJsdoc = comment.value.startsWith('*') && comment.value[1] !== '*'
           if (match) context.report({ loc: comment.loc, messageId: 'history', data: { match } })
           if (
             !isDirective &&
+            !isJsdoc &&
             comment.type === 'Block' &&
-            !comment.value.startsWith('*') &&
             !isOneLineJsxComment(sourceCode.text, comment)
           ) {
             context.report({ loc: comment.loc, messageId: 'notJsdoc' })
