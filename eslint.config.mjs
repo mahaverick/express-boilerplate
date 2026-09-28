@@ -396,10 +396,10 @@ export default tseslint.config(
     rules: { 'no-restricted-syntax': 'off', 'no-restricted-imports': 'off' },
   },
   {
-    // Switched to 'error' at the stream gate; lanes run it with --rule until then.
+    // Comment style is enforced; see CLAUDE.md.
     files: ['**/*.{ts,mts,js,mjs}'],
     plugins: { local: { rules: { 'comment-style': commentStyleRule } } },
-    rules: { 'local/comment-style': 'off' },
+    rules: { 'local/comment-style': 'error' },
   },
   {
     // .d.mts mirrors its .mjs exports; a second JSDoc copy would drift (same reason tests/** is off above).
