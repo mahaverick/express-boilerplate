@@ -1,20 +1,18 @@
-// tests/integration/middlewares/tenant.middleware.test.ts
-//
-// Against the real per-worker Postgres database (tests/helpers/worker-
-// database.ts), through a real Express dispatch — not a direct function
-// call. A direct call (tests/unit/middlewares/tenant.middleware.test.ts)
-// cannot prove that `requestContextStore.enterWith(...)` survives Express 5's
-// own `next()` hop from `resolveTenant` into a downstream handler; this file
-// builds a small standalone `express()` app per test (never `createApp()` —
-// no `/tenants/*` route exists yet, that is Task 3's job) and drives it with
-// supertest, the same bare-app pattern tests/integration/api/health.test.ts
-// uses for its own "forwards a rejected promise" case.
-//
-// `requireAuth` itself is NOT exercised here — a stub middleware sets
-// `request.user` directly from a real user id this file created, which is
-// enough to prove `resolveTenant`'s own contract (it reads `request.user.id`,
-// nothing about how it got there). Real `requireAuth` composition is proven
-// once, end-to-end, by Task 3's `tests/integration/api/tenant.test.ts`.
+/**
+ * @file Against the real per-worker Postgres database
+ * (`tests/helpers/worker-database.ts`), through a real Express dispatch,
+ * not a direct function call: a direct call (`tests/unit/middlewares/tenant.middleware.test.ts`)
+ * cannot prove `requestContextStore.enterWith(...)` survives Express 5's own
+ * `next()` hop from `resolveTenant` into a downstream handler. This file
+ * builds its own small standalone `express()` app per test with a bare
+ * probe route, rather than mounting the real `/tenants/*` router, to
+ * isolate `resolveTenant`/`requireRole` from the rest of that router's
+ * composition. `requireAuth` itself is not exercised here: a stub
+ * middleware sets `request.user` directly from a real user id, enough to
+ * prove `resolveTenant`'s own contract, since it only reads
+ * `request.user.id`. Real `requireAuth` composition is proven end-to-end by
+ * `tests/integration/api/tenant.test.ts`.
+ */
 import { randomUUID } from 'node:crypto'
 import express, { type Express, type NextFunction, type Request, type Response } from 'express'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -224,12 +222,7 @@ describe('resolveTenant + requireRole (integration)', () => {
 
     expect(nonexistentResponse.status).toBe(404)
     expect(nonMemberResponse.status).toBe(404)
-    // `requestId` is deliberately excluded from this comparison: it is a
-    // per-request correlation id (requestId middleware), unrelated to
-    // tenant existence, and differs between ANY two requests — even two
-    // identical calls for the same nonexistent slug. Sanity-checked below
-    // to prove these really are two distinct requests, not a caching bug
-    // masking a real difference.
+    // requestId is excluded below: it differs between ANY two requests, so it's sanity-checked here to prove these are two distinct requests, not a caching bug.
     expect(nonexistentBody.requestId).not.toBe(nonMemberBody.requestId)
     expect({
       success: nonMemberBody.success,
