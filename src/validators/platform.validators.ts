@@ -1,7 +1,7 @@
-// src/validators/platform.validators.ts
-//
-// The staff tenant search query. q is trimmed first, so whitespace alone is
-// a 400 rather than a match-everything search.
+/**
+ * @file The staff tenant search query. `q` is trimmed first, so whitespace
+ * alone is a 400 rather than a match-everything search.
+ */
 import { z } from 'zod'
 import { cursorField } from '@/validators/cursor.validators'
 

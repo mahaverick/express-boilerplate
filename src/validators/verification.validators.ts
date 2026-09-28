@@ -1,11 +1,10 @@
-// src/validators/verification.validators.ts
-//
-// The verify body carries a PASSWORD as well as a token, and it is not
-// optional — see the spec's squatting section. Neither field carries the
-// registration password policy: this is a comparison against a stored
-// hash, exactly like login, and applying a policy here would answer
-// differently for a password that was legal when it was set and is not
-// now. auth.validators.ts makes the same call for loginSchema.
+/**
+ * @file Verify-email and resend-verification bodies. Verify requires the
+ * account's password as well as the token, so a link holder cannot verify an
+ * address someone else registered. Neither applies the registration password
+ * policy: like login, this compares against a stored hash, and a policy would
+ * answer differently for a password that was legal when it was set.
+ */
 import { z } from 'zod'
 import { emailSchema } from '@/validators/auth.validators'
 

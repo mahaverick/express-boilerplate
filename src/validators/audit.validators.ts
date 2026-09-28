@@ -1,7 +1,7 @@
-// src/validators/audit.validators.ts
-//
-// Query shapes for the tenant and platform audit-log reads. The cursor is
-// decoded here; a malformed one is a 400.
+/**
+ * @file Query shapes for the tenant and platform audit-log reads. The cursor
+ * is decoded here; a malformed one is a 400.
+ */
 import { z } from 'zod'
 import { AUDIT_ACCESS_KINDS, AUDIT_ACTION_NAMES } from '@/constants/audit.constants'
 import { cursorField } from '@/validators/cursor.validators'

@@ -1,23 +1,11 @@
-// src/validators/tenant.validators.ts
-//
-// Every string field below is bounded by exactly the width of the column it
-// is written to — the same reasoning auth.validators.ts's own header comment
-// gives for its length ceilings, audited here against tenant.model.ts as one
-// pass: `name` -> tenants.name (255), `slug` -> tenants.slug (100, plus the
-// shape/reserved-word rules below), `description` -> tenants.description
-// (1000), `logo`/`website` -> tenants.logo/website (255 each),
-// `timezone` -> tenant_settings.timezone (64), `locale` ->
-// tenant_settings.locale (10). A schema that accepted more than its column
-// holds would not merely fail — it would fail as a 500 (Postgres' 22001,
-// which `BaseRepository`/`TenantSettingsRepository` do not translate to a
-// 409 the way they do a unique violation) — see auth.validators.ts's header
-// comment for the fuller version of this reasoning. `tenant.model.ts`
-// itself inlines these widths rather than exporting `MAX_*` constants
-// (unlike `auth.constants.ts`'s `MAX_EMAIL_LENGTH`/`MAX_NAME_LENGTH`, which
-// `user.model.ts` imports) — that is Task 1's file, out of this task's
-// scope to restructure, so the widths are duplicated here by audit rather
-// than by shared constant, exactly like `auth.validators.ts` already does
-// for every field it caps.
+/**
+ * @file Tenant, member, invitation and settings request bodies. Every string
+ * field is capped at its column's width in tenant.model.ts, which inlines the
+ * widths, so they are repeated here: `name` 255, `slug` 100, `description`
+ * 1000, `logo` and `website` 255, `timezone` 64, `locale` 10. An over-long
+ * value would otherwise reach Postgres as a 22001 and answer 500 instead of
+ * 400.
+ */
 import { z } from 'zod'
 import { MEMBERSHIP_ROLES, RESERVED_SLUGS } from '@/constants/tenant.constants'
 import { hostnameDomain } from '@/utilities/email.utilities'
@@ -31,35 +19,19 @@ const MAX_TENANT_WEBSITE_LENGTH = 255
 const MAX_TENANT_TIMEZONE_LENGTH = 64
 const MAX_TENANT_LOCALE_LENGTH = 10
 
-// `RESERVED_SLUGS` (tenant.constants.ts) is a `readonly [...] as const` tuple
-// of string LITERALS — `ReadonlyArray<T>.includes` requires its argument to
-// be assignable to that literal union, which a parsed `slug: string` is not.
-// A `Set<string>` sidesteps that entirely (`.has(value: string)` accepts any
-// string), the same fix `notification.validators.ts`'s
-// `NON_DISABLEABLE_NOTIFICATION_TYPES` already applies to the identical
-// shape of problem.
+/**
+ * `RESERVED_SLUGS` as a `Set<string>`: the tuple's `.includes` accepts only
+ * its literal union, not a parsed `string`.
+ */
 const RESERVED_SLUGS_SET: ReadonlySet<string> = new Set(RESERVED_SLUGS)
 
-// `.trim()` before the regex, deliberately NOT `.toLowerCase()` the way
-// `emailSchema` (auth.validators.ts) normalises casing before validating.
-// An email's casing is incidental to the identity it names (RFC 5321's
-// local-part aside, nothing in this codebase treats "Foo@x.com" and
-// "foo@x.com" as different accounts — see `userModel`'s own
-// `lower(email)` unique index). A tenant's slug is different: it is a
-// user-CHOSEN public identifier that becomes part of a URL
-// (`/tenants/:slug/...`), so silently lowercasing "MyOrg" to "myorg" would
-// let a caller believe they registered one string while the database holds
-// another. Rejecting mixed case outright, via the regex below, is what
-// keeps the slug the caller sees in a 400 the same one a 201 would have
-// stored.
 /**
  * A tenant's URL-safe identifier: lowercase alphanumeric, hyphen-separated,
  * neither leading nor trailing with a hyphen, 3-100 characters, and not one
- * of `RESERVED_SLUGS` (tenant.constants.ts). Shared between
- * `newTenantSchema` below and, once a later change legitimately needs it
- * (nothing in this task does — `updateTenantSchema` deliberately excludes
- * `slug`; see its own comment), any other endpoint that accepts a caller-
- * supplied slug.
+ * of `RESERVED_SLUGS` (tenant.constants.ts). Trimmed but not lowercased,
+ * unlike `emailSchema`: a slug is a caller-chosen public identifier in a URL,
+ * so mixed case is rejected rather than silently stored as a different
+ * string.
  */
 export const slugSchema = z
   .string()
@@ -74,12 +46,10 @@ export const slugSchema = z
     message: 'This slug is reserved and cannot be used.',
   })
 
-// Pulled out of both schemas below (rather than inlined in each
-// `z.preprocess()` call) so `unicorn/max-nested-calls` doesn't see a
-// `.refine()` chain nested inside a `.preprocess()` call nested inside the
-// enclosing `z.object()` call. Shared, not duplicated: `newTenantSchema`
-// and `updateTenantSchema` wrap it with a different `.nullable()`/
-// `.optional()` tail, the same way both already share `slugSchema`.
+/**
+ * The description field, shared by the create and update schemas. A separate
+ * const keeps `unicorn/max-nested-calls` under its limit.
+ */
 const tenantDescriptionField = z
   .string()
   .trim()
@@ -92,9 +62,8 @@ const tenantDescriptionField = z
 
 /**
  * `POST /api/v1/tenants` request body. The caller becomes the tenant's sole
- * `'owner'` member (`TenantRepository.create`'s own `ownerId` parameter,
- * supplied by the controller from `request.user.id` — never from this
- * body, so a caller cannot name a different owner).
+ * `'owner'` member; the owner comes from `request.user.id`, never from this
+ * body, so a caller cannot name a different owner.
  */
 export const newTenantSchema = z.object({
   name: z
@@ -129,32 +98,16 @@ export const newTenantSchema = z.object({
  */
 export type CreateTenantInput = z.infer<typeof newTenantSchema>
 
-// `.nullable().optional()` on `description`/`logo`/`website` — the same
-// three-state PATCH contract `profile.validators.ts`'s `optionalNameField`
-// already establishes: omitted -> leave the column alone; explicit `null`
-// -> clear it (all three are nullable columns); a string -> set it. `name`
-// stays required-when-present but never nullable — `tenants.name` is
-// `NOT NULL`, so there is no "clear" state for it to express.
-//
-// `slug` IS DELIBERATELY ABSENT. Three independent reasons, each alone
-// sufficient: (1) it is this tenant's URL identity
-// (`/tenants/:slug/...`) — every bookmarked link, every `resolveTenant`
-// lookup, and this very endpoint's own route param would need to change in
-// lockstep with a rename, which this single-field PATCH has no way to
-// signal to a caller holding the OLD slug; (2) changing it would need the
-// exact same shape/reserved-word validation `newTenantSchema.slug`
-// already has, which is a second copy of `slugSchema` this task's brief
-// never asked for; (3) the uniqueness story is asymmetric with creation —
-// `tenants_slug_unique` (tenant.model.ts) is a partial index over
-// non-deleted rows, so a rename would need the identical 409-on-collision
-// handling `TenantRepository.create` already has, again duplicated for no
-// endpoint this task specifies. The safe default is "immutable via this
-// endpoint"; a dedicated rename flow (with redirect/history handling) is
-// real product work for a future task, not an omission here.
 /**
- * `PATCH /api/v1/tenants/:slug` request body. Every field optional — a
- * caller changes only what it names. See this schema's own comment for why
- * `slug` is not one of them.
+ * `PATCH /api/v1/tenants/:slug` request body. Every field optional; a
+ * caller changes only what it names. `description`, `logo` and `website`
+ * take the three PATCH states (absent leaves the column, `null` clears it, a
+ * string sets it); `name` is `NOT NULL`, so it cannot be cleared.
+ *
+ * `slug` is deliberately absent: it is the tenant's URL identity, so a
+ * rename would break every link and needs its own flow, with the create
+ * path's validation and its 409 on collision with the partial
+ * `tenants_slug_unique` index.
  */
 export const updateTenantSchema = z.object({
   name: z
@@ -220,11 +173,9 @@ export const invitationIdSchema = z.object({
 
 /**
  * `PATCH /api/v1/tenants/:slug/members/:userId` request body: the member's
- * new role. The actor->target safety matrix is enforced by
- * `src/policies/tenant.policy.ts`'s `canActorModifyTarget`, applied inside
- * `src/services/tenant-membership.service.ts`'s `changeRole` — not this
- * schema, and not the controller. A schema only knows the SHAPE of a valid
- * role, never who is asking or who they are asking about.
+ * new role. The actor->target matrix (`canActorModifyTarget`,
+ * tenant.policy.ts) is applied in `changeRole` (tenant-membership.service.ts),
+ * not here: a schema knows only the shape of a valid role.
  */
 export const updateMemberRoleSchema = z.object({
   role: z.enum(MEMBERSHIP_ROLES),
@@ -238,18 +189,10 @@ export type UpdateMemberRoleInput = z.infer<typeof updateMemberRoleSchema>
 
 /**
  * `PATCH /api/v1/tenants/:slug/settings` request body. `timezone`/`locale`
- * are bounded to their column widths only — this deliberately does not
- * validate that a submitted value is a real IANA timezone or BCP 47 locale
- * tag (e.g. via `Intl.supportedValuesOf('timeZone')`), matching
- * `tenant_settings.metadata`'s own "extensible, unstructured" ethos
- * (tenant.model.ts's header comment): nothing in this codebase reads either
- * column for a specific value yet, so there is no behaviour a bogus one
- * could corrupt beyond display — a derived project that DOES depend on a
- * valid IANA zone is the right place to add that check, not this
- * boilerplate. `metadata` accepts `null` to clear it (the column is
- * nullable) and otherwise any JSON object — `z.record(z.string(),
- * z.unknown())` rather than `z.unknown()` alone, so a caller cannot send a
- * bare array or primitive where an object is expected.
+ * are bounded to their column widths only, not checked as a real IANA zone
+ * or BCP 47 tag: nothing in this codebase interprets either value, so a project
+ * that depends on one should add that check. `metadata` is `null` to clear
+ * it or any JSON object, never a bare array or primitive.
  */
 export const updateTenantSettingsSchema = z.object({
   timezone: z
