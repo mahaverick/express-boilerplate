@@ -1,38 +1,21 @@
-// tests/unit/services/slack-transport.test.ts
-//
-// Exercises the Slack destination indirectly through `createPinoLogger`
-// (it is internal to logger.service.ts, not exported) by stubbing global
-// `fetch` and asserting on what it was called with. The destination is
-// wired in via `pino.multistream`, alongside the console stream — every
-// `createPinoLogger` call below passes a discard `destination` so console
-// output doesn't pollute the run; the Slack destination is what the
-// assertions actually target.
-//
-// Same `new Promise<void>((resolve) => { ...; setImmediate(() => { ...;
-// resolve() }) })` pattern as logger.service.test.ts, not a Jest-style
-// `(done) => {...}` callback param — Vitest 5 has no special handling for a
-// callback-arity test function, so a `done` parameter is simply never
-// invoked as a completion signal and the test would "pass" without ever
-// running its assertions. `setImmediate` is still needed: a raw `{ write }`
-// destination (the Slack destination, the discard stream below) is called
-// synchronously by pino.multistream — verified directly against the
-// installed pino, not assumed — so the fetch() call itself happens before
-// log.error() returns; but sendToSlack awaits fetch's response before
-// checking `response.ok` or catching a rejection, and several assertions
-// here (the non-OK/thrown-error console.error cases, the dedup summary
-// after `response.ok` is read) depend on that await having settled.
-// `setImmediate` runs in the event loop's "check" phase, after those
-// pending promise microtasks have already flushed.
+/**
+ * @file Exercises the Slack destination indirectly through
+ * `createPinoLogger` (it is internal to logger.service.ts, not
+ * exported) by stubbing global `fetch` and asserting on what it was
+ * called with.
+ */
 import { Writable } from 'node:stream'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinoLogger } from '@/services/logger.service'
 import { requestContextStore } from '@/services/request-context.service'
 
-// Narrower than the global RequestInit on purpose: the Slack destination
-// always calls fetch with a string `body` (JSON.stringify'd), never the
-// other BodyInit variants (Blob, ArrayBuffer, ...) that real RequestInit
-// allows — typing `body` loosely as `unknown` would make every
-// `options.body` read below trip @typescript-eslint/no-base-to-string.
+/**
+ * Narrower than the global RequestInit on purpose: the Slack destination
+ * always calls fetch with a string `body` (JSON.stringify'd), never the
+ * other BodyInit variants (Blob, ArrayBuffer, ...) that real RequestInit
+ * allows — typing `body` loosely as `unknown` would make every
+ * `options.body` read below trip the no-base-to-string lint rule.
+ */
 interface SlackFetchInit {
   method: string
   headers: Record<string, string>
@@ -57,6 +40,24 @@ function discardDestination(): Writable {
   })
 }
 
+/**
+ * The Slack destination is wired in via `pino.multistream`, alongside
+ * the console stream — every `createPinoLogger` call below passes a
+ * discard `destination` so console output doesn't pollute the run; the
+ * Slack destination is what the assertions actually target. Each test
+ * wraps its body in `new Promise<void>((resolve) => { ...;
+ * setImmediate(() => { ...; resolve() }) })` rather than a Jest-style
+ * `(done) => {...}` callback param, since Vitest 5 has no special
+ * handling for a callback-arity test function and a `done` parameter is
+ * simply never invoked. `setImmediate` is needed because a raw `{
+ * write }` destination (the Slack destination, the discard stream
+ * below) is called synchronously by pino.multistream, so the fetch()
+ * call itself happens before log.error() returns, but sendToSlack
+ * awaits fetch's response before checking `response.ok` or catching a
+ * rejection — several assertions here depend on that await having
+ * settled, and `setImmediate` runs in the event loop's "check" phase,
+ * after those pending promise microtasks have already flushed.
+ */
 describe('Slack transport', () => {
   const mockFetch = vi.fn<FetchProcedure>()
 
@@ -68,9 +69,7 @@ describe('Slack transport', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals()
-    // Defensive: only the dedup-summary test below enables fake timers, but
-    // restore unconditionally so a thrown assertion in that test can never
-    // leak fake timers into a later, unrelated test file.
+    // Defensive: only the dedup-summary test below enables fake timers, but restore unconditionally so a thrown assertion in that test can never leak fake timers into a later, unrelated test file.
     vi.useRealTimers()
   })
 
@@ -139,10 +138,7 @@ describe('Slack transport', () => {
 
   it('sends a single summary message once the dedup window closes, only when there were repeats', () =>
     new Promise<void>((resolve) => {
-      // Only setTimeout/clearTimeout are faked, deliberately — the Slack
-      // destination's own dedup timer is the thing under test, but
-      // setImmediate (used below to flush pino's stream pipeline) must keep
-      // running for real, or nothing in this test would ever observe a result.
+      // Only setTimeout/clearTimeout are faked, deliberately — the Slack destination's own dedup timer is the thing under test, but setImmediate (used below to flush pino's stream pipeline) must keep running for real, or nothing in this test would ever observe a result.
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
 
       const log = createPinoLogger({
@@ -173,10 +169,7 @@ describe('Slack transport', () => {
 
   it('pluralizes the summary message when more than one occurrence was suppressed', () =>
     new Promise<void>((resolve) => {
-      // Same shape as the singular test above, but THREE calls (two
-      // suppressed, not one) — the summary's own grammar ternary
-      // (buildSlackSummaryPayload, logger.service.ts) is `count === 1 ? '' :
-      // 's'`, and the singular test above only ever proves the `''` arm.
+      // Same shape as the singular test above, but three calls (two suppressed, not one) — the summary's own grammar ternary (buildSlackSummaryPayload, logger.service.ts) is `count === 1 ? '' : 's'`, and the singular test above only ever proves the `''` arm.
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
 
       const log = createPinoLogger({

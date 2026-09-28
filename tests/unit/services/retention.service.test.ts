@@ -1,8 +1,8 @@
-// tests/unit/services/retention.service.test.ts
-//
-// The pure half of the retention purge: the batch size, and how the
-// environment maps to each rule's days. The purge itself runs against
-// Postgres in tests/integration/services/retention.service.test.ts.
+/**
+ * @file The pure half of the retention purge: the batch size, and how
+ * the environment maps to each rule's days. The purge itself runs
+ * against Postgres in tests/integration/services/retention.service.test.ts.
+ */
 import { describe, expect, it } from 'vitest'
 import { parseEnv } from '@/configs/env.config'
 import { RETENTION_BATCH_SIZE, retentionDays } from '@/services/retention.service'
