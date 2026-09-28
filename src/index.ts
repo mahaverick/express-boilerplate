@@ -47,7 +47,6 @@ async function boot(): Promise<void> {
       handleShutdown((code) => process.exit(code))
     })
   }
-  // The logger has no `fatal`; error is its highest level.
   process.on('unhandledRejection', (reason) => {
     logger.error('Unhandled promise rejection', { error: redactedForLog(reason) })
     handleShutdown((code) => process.exit(code), 1)

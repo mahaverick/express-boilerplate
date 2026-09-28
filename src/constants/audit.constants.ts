@@ -44,11 +44,17 @@ export type AuditTargetType = (typeof AUDIT_TARGET_TYPES)[number]
 
 const role = z.enum(MEMBERSHIP_ROLES)
 const id = z.string().min(1).max(36)
-// Security: a lowercase hostname only, so no address or token can reach the log.
+/**
+ * A lowercase hostname only, so no address or token can reach the log.
+ */
 const emailDomain = z.string().regex(EMAIL_DOMAIN_PATTERN)
-// Null when a stored address has no hostname domain, so the entry is still written.
+/**
+ * Null when a stored address has no hostname domain, so the entry is still written.
+ */
 const invitationEmailDomain = emailDomain.nullable()
-// Field names only, never their values.
+/**
+ * Field names only, never their values.
+ */
 const changedFields = z.array(z.string().regex(/^[a-z][A-Za-z\d]{0,63}$/)).max(32)
 
 /**

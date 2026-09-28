@@ -16,7 +16,8 @@
  * verifying against a dummy hash made at this cost, while each stored hash
  * verifies at the cost it was written with. A higher cost makes an unknown
  * email measurably slower than a wrong password for an existing account,
- * reopening the registration timing oracle, and each +1 doubles the gap.
+ * reopening the login timing oracle (whether an email is registered), and
+ * each +1 doubles the gap.
  * Nothing here rehashes on login, so the gap lasts until every active user
  * has a new hash. Build rehash-on-login first, or accept that trade.
  */
@@ -33,7 +34,8 @@ export const BCRYPT_COST = 12
 export const MAX_PASSWORD_BYTES = 72
 
 /**
- * The shortest password `auth.validators.ts` accepts at registration.
+ * The shortest password `auth.validators.ts` accepts at registration,
+ * password reset and password change.
  *
  * 8 is the OWASP and NIST SP 800-63B floor for a human-chosen password with
  * no composition rules, which this boilerplate does not impose. Registration,

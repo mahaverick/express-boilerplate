@@ -20,10 +20,11 @@ const AUTH_PROVIDER_SQL_LIST = AUTH_PROVIDERS.map((provider) => `'${provider}'`)
  * `'email'` row for a password-based login and/or a `'google'` row for a
  * linked Google account.
  *
- * Password users have an `'email'` row too (created by `register()` and by
- * the Google sign-up path; migration 0010 created one for each user with a
- * password), so `findByUser` answers "does this user have a password login"
- * and the unique index covers email identities as well. No `deletedAt`:
+ * Every password sign-up (`register()`) and every Google sign-up writes an
+ * `'email'` row (migration 0010 created one for each user with a password),
+ * so the unique index covers email identities as well. A Google sign-up's
+ * row exists without a password, so `users.password_hash` is the only
+ * password signal. No `deletedAt`:
  * nothing un-deletes a login method, so `AuthProviderRepository` does not
  * extend `BaseRepository`, which requires one. No OAuth token columns:
  * nothing calls a Google API for the user, so storing them would keep

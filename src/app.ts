@@ -40,7 +40,7 @@ export function createApp(): Express {
   // Security: first, so every response, including preflights, 404s and errors, gets the headers.
   app.use(helmet(helmetOptions))
 
-  // A disallowed preflight falls through without a grant header, which the browser blocks.
+  // Before requestId and the body parsers: an allowed preflight ends here; a disallowed one gets no grant header.
   app.use(cors(corsOptions))
 
   app.use(requestId)

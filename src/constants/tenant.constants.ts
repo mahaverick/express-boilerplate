@@ -41,7 +41,8 @@ export type MembershipRole = (typeof MEMBERSHIP_ROLES)[number]
  * Slugs no tenant may register: route segments under `/tenants/:slug/...`
  * (`new`, `settings`, `members`), misleading public identifiers (`admin`,
  * `api`, `www`), and strings that read as other values (`null`,
- * `undefined`, `true`, `false`). The slug validator in tenant.validators.ts
+ * `undefined`, `true`, `false`), plus `platform`, the staff tenant's slug
+ * (seeded by migration 0016). The slug validator in tenant.validators.ts
  * enforces it.
  */
 export const RESERVED_SLUGS = [
@@ -96,7 +97,6 @@ export const RESERVED_SLUGS = [
   'staging',
   'dev',
   'localhost',
-  // The staff tenant, seeded by migration 0016.
   'platform',
 ] as const
 

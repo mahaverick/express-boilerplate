@@ -235,7 +235,7 @@ export default tseslint.config(
     rules: { 'check-file/filename-naming-convention': 'off' },
   },
   {
-    // Security: the staff search reads every tenant, so only platform services import it.
+    // Security: the staff search reads every tenant, so only platform services import it; lint-gates.test.ts proves this fires.
     files: ['src/**/*.ts'],
     ignores: ['src/services/platform-*.service.ts'],
     rules: {
@@ -255,7 +255,8 @@ export default tseslint.config(
   },
   /**
    * Every controller-scoped rule. Handlers are arrow fields, so routes can
-   * mount them unbound. Models may be imported for types only, which needs
+   * mount them unbound; `unicorn/consistent-function-scoping` skips arrows
+   * here because it would report each one as movable out of its class. Models may be imported for types only, which needs
    * `allowTypeImports` (no-restricted-paths has no such option).
    */
   {

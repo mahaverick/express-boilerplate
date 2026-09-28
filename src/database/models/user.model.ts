@@ -11,7 +11,8 @@ import { MAX_EMAIL_LENGTH, MAX_NAME_LENGTH } from '@/constants/auth.constants'
  * only, matching `findByEmail`'s soft-delete scope, so a soft-deleted user's
  * address can register again. `UserRepository.markEmailVerified` sets
  * `emailVerifiedAt` when a verification token is redeemed, and `login`
- * (auth.service.ts) sets `lastLoggedInAt` on every successful login.
+ * (auth.service.ts) and the Google sign-in (google-auth.service.ts) set
+ * `lastLoggedInAt` on every successful sign-in.
  */
 export const userModel = pgTable(
   'users',

@@ -30,7 +30,8 @@ const TENANT_LIFECYCLE_STATE_SQL_LIST = TENANT_LIFECYCLE_STATES.map((state) => `
  * with a soft delete, while `suspended` only gates access. `findActiveBySlug`
  * (tenant.repository.ts) adds the `active` check to `BaseRepository`'s
  * soft-delete scope. A slug is unique among live tenants only, so an
- * archived tenant's slug can be reclaimed.
+ * archived tenant's slug can be reclaimed. The trigram indexes serve the
+ * staff tenant search and need pg_trgm (migration 0016).
  */
 export const tenantModel = pgTable(
   'tenants',
@@ -80,7 +81,6 @@ export const tenantModel = pgTable(
       'tenants_platform_active',
       sql`not ${table.isPlatform} or (${table.lifecycleState} = 'active' and ${table.deletedAt} is null)`
     ),
-    // Trigram indexes for the staff tenant search (needs pg_trgm, migration 0016).
     index('tenants_name_trgm_idx')
       .using('gin', sql`lower(${table.name}) gin_trgm_ops`)
       .where(isNull(table.deletedAt)),
