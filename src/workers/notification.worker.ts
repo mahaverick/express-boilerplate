@@ -1,28 +1,10 @@
-// src/workers/notification.worker.ts
-//
-// The one place a notification job is actually processed — creates and owns
-// the BullMQ Worker for the "notification" queue defined in
-// notification.job.ts. Fans one job out to up to two channels, each gated
-// by its own `notification_preferences` check:
-//
-//   - in-app: insert a row into `notifications` via `NotificationRepository`,
-//     then publish it through `notification-emitter.service.ts` so a live
-//     `GET /api/v1/notifications/stream` connection on any replica
-//     (notification-stream.controller.ts) sees it immediately, without
-//     polling.
-//   - email: enqueue onto the "email" queue via `addEmailJob` — this worker
-//     never calls `sendMail` directly, the same "go through the queue"
-//     convention CLAUDE.md documents for every other email send.
-//
-// A FAILED CHANNEL FAILS THE JOB, AND A RETRY IS SAFE. The in-app insert is
-// keyed by `notification-job-<jobId>-<jobTimestamp>` (`createOnce`, ON
-// CONFLICT DO NOTHING), so a retry never inserts or emits a second row. The
-// email is enqueued with a matching BullMQ jobId, so a retry while that job
-// is still queued adds nothing. Enqueue failures therefore propagate and
-// BullMQ retries (`notificationJobDefaults`). `job.timestamp` is part of both
-// keys because job ids restart at 1 when the queue's Redis keys are flushed.
-// One gap is accepted: email jobs are removed on completion, so a retry after
-// the email was already sent can send it again.
+/**
+ * @file The BullMQ Worker for the "notification" queue defined in
+ * notification.job.ts. Each job fans out to up to two channels, each gated by
+ * its `notification_preferences` check: an in-app row, published through
+ * notification-emitter.service.ts to live SSE streams on every replica, and
+ * an email enqueued with `addEmailJob`, never sent directly.
+ */
 import { Worker, type Job } from 'bullmq'
 import { getEnv } from '@/configs/env.config'
 import { redactedForLog } from '@/errors/postgres-errors'
@@ -40,15 +22,11 @@ const notificationRepository = new NotificationRepository()
 const preferenceRepository = new NotificationPreferenceRepository()
 
 /**
- * `metadata` with its `variables` key removed, if it had one. A raw
- * verification/reset token lives in `email.variables` (mailer.service.ts's
- * own `MailMessage`), never in `metadata` — but nothing upstream of this
- * worker is trusted to have kept the two separate, so this is the one place
- * that enforces it before anything reaches Postgres, regardless of whether
- * a caller put `variables` in `metadata` on purpose or by copying
- * `email.variables` there by mistake.
+ * `metadata` with its top-level `variables` key removed, if it had one. A raw
+ * token lives in `email.variables`; nothing upstream is trusted to have kept
+ * it out of `metadata`, so this is where that is enforced before Postgres.
  * @param metadata - The job's own metadata, exactly as received.
- * @returns `metadata` without its `variables` key. Every other key is kept, including one also literally named `variables` nested deeper — only the top-level key is stripped, since that's the only shape a caller could plausibly produce by accident here.
+ * @returns `metadata` without its top-level `variables` key; nested keys are kept.
  */
 function metadataWithoutVariables(metadata: Record<string, unknown>): Record<string, unknown> {
   const rest = { ...metadata }
@@ -91,24 +69,28 @@ function emailJobIdFor(job: Job<NotificationJobData>): string {
  * Process one notification job: insert an in-app row when the `in_app`
  * channel is enabled for this user and type, and enqueue the paired email
  * when both an `email` payload is present on the job AND the `email`
- * channel is enabled. Exported for unit testing — see this file's own
- * header comment for why a failure in either channel fails the job.
+ * channel is enabled. Exported for unit testing.
+ *
+ * A failed channel fails the job, and a retry is safe. The in-app insert is
+ * keyed by `notification-job-<jobId>-<jobTimestamp>` (`createOnce`, ON
+ * CONFLICT DO NOTHING), so a retry never inserts or emits a second row; the
+ * email is enqueued with a matching BullMQ jobId, so a retry while that job
+ * is still queued adds nothing. The timestamp is in both keys because job
+ * ids restart at 1 when the queue's Redis keys are flushed. One gap is
+ * accepted: email jobs are removed on completion, so a retry after the email
+ * was sent can send it again.
+ *
+ * The row is emitted only after its insert commits, so a live stream never
+ * shows a notification that `GET /api/v1/notifications` or a replay cannot.
  * @param job - The BullMQ job to process; `job.data` is a `NotificationJobData`.
  * @returns Resolves once both channels have been handled; rejects when either the insert or the email enqueue fails, so BullMQ retries.
- * @throws {Error} Whatever `createOnce` or `addEmailJob` throws — not caught; retries are safe (see header).
+ * @throws {Error} Whatever `createOnce` or `addEmailJob` throws, uncaught, so BullMQ retries.
  */
 export async function processNotificationJob(job: Job<NotificationJobData>): Promise<void> {
   const { userId, type, title, body, metadata, email } = job.data
 
   const isInAppEnabled = await preferenceRepository.isChannelEnabled(userId, type, 'in_app')
   if (isInAppEnabled) {
-    // Built as two calls, not one with `metadata: metadata && ...`:
-    // `exactOptionalPropertyTypes` (tsconfig.json) treats `metadata?: T` as
-    // "present with type T, or the key entirely absent" — never "present
-    // with value `undefined`" — so an optional field this codebase actually
-    // wants to omit must be left out of the object literal, the same
-    // conditional-construction pattern `NotificationRepository.list` already
-    // uses for `nextCursor` (notification.repository.ts).
     const dedupeKey = dedupeKeyFor(job)
     const created = metadata
       ? await notificationRepository.createOnce({
@@ -121,21 +103,9 @@ export async function processNotificationJob(job: Job<NotificationJobData>): Pro
         })
       : await notificationRepository.createOnce({ userId, type, title, body, dedupeKey })
 
-    // Fire only after the insert has actually committed — never before, and
-    // never for a channel that is disabled — so an SSE connection can never
-    // observe a notification via the live stream before `GET
-    // /api/v1/notifications` (or a reconnect's replay burst) can also see
-    // it. Live delivery is best effort (notification-emitter.service.ts's
-    // header): a connection with nothing subscribed just misses it, the same
-    // as any other client that was not listening at the time.
-    //
-    // emitNotification publishes in the background and never rejects; only
-    // serialising the row can throw here. Caught: the row is committed, so
-    // that is not a reason to retry the job.
-    //
-    // undefined: a retry, and this row was already inserted; its emit was
-    // already attempted.
+    // undefined on a retry: the row exists and its emit was already attempted.
     if (created) {
+      // Only serialising can throw; the row is committed, so this must not retry the job.
       try {
         emitNotification(userId, created)
       } catch (error) {
@@ -153,7 +123,6 @@ export async function processNotificationJob(job: Job<NotificationJobData>): Pro
   const isEmailEnabled = await preferenceRepository.isChannelEnabled(userId, type, 'email')
   if (!isEmailEnabled) return
 
-  // Propagates on failure so BullMQ retries; see this file's header.
   await addEmailJob(email, userId, { jobId: emailJobIdFor(job) })
 }
 
