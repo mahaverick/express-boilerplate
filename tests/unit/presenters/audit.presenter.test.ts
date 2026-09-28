@@ -1,4 +1,3 @@
-// tests/unit/presenters/audit.presenter.test.ts
 import { describe, expect, it } from 'vitest'
 import type { AuditLog } from '@/database/models/audit-log.model'
 import { toAuditEntry, toPlatformAuditEntry } from '@/presenters/audit.presenter'
