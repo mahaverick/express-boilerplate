@@ -1,16 +1,15 @@
-// tests/unit/middlewares/rate-limit.middleware.test.ts
-//
-// The limiter's own logic, isolated from the database and from real Redis:
-// `@/services/redis.service` is mocked to always reject, so
-// `SharedRateLimitStore` stays on its in-memory fallback for the whole file
-// — deterministic, and Docker-independent, which is what keeps this a
-// tests/unit/ file (see CLAUDE.md on why a Docker-dependent test must never
-// live there). A bare `express()` app stands in for `createApp()`: importing
-// `@/app` here would pull in `database.service.ts` at module scope for no
-// reason this file needs. The stub route below never checks credentials —
-// it exists only so a request has somewhere to land after the limiter lets
-// it through, so these tests prove the LIMITER's behaviour, not the login
-// controller's (that's tests/integration/api/auth.test.ts's job).
+/**
+ * @file The limiter's own logic, isolated from the database and from
+ * real Redis: `@/services/redis.service` is mocked to always reject, so
+ * `SharedRateLimitStore` stays on its in-memory fallback for the whole
+ * file. A bare `express()` app stands in for `createApp()`: importing
+ * `@/app` here would pull in `database.service.ts` at module scope for
+ * no reason this file needs. The stub route below never checks
+ * credentials — it exists only so a request has somewhere to land after
+ * the limiter lets it through, so these tests prove the limiter's
+ * behaviour, not the login controller's (that's
+ * tests/integration/api/auth.test.ts's job).
+ */
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -136,8 +135,7 @@ describe('RATE_LIMITS.login', () => {
     expect(limited.headers).not.toHaveProperty('x-ratelimit-limit')
   })
 
-  // Property 4. Red without the composite key: keying on email alone makes
-  // this exact scenario fail — see task-7-report.md for the red/green proof.
+  // Red without the composite key: keying on email alone makes this exact scenario fail.
   it('keys on IP AND email: exhausting one email does not lock out a different email from the same IP', async () => {
     const app = buildApp(2)
 
@@ -146,19 +144,20 @@ describe('RATE_LIMITS.login', () => {
     const victimBlocked = await attempt(app, 'victim@example.com')
     expect(victimBlocked.status).toBe(429)
 
-    // A different email, same supertest agent — so the same client IP —
-    // must be entirely unaffected by victim@example.com's counter.
+    // A different email, same supertest agent — so the same client IP — must be entirely unaffected by victim@example.com's counter.
     const bystander = await attempt(app, 'someone-else@example.com')
     expect(bystander.status).toBe(401)
   })
 
-  // Judgement call: a 429 must never be a user-enumeration oracle. The
-  // limiter imports no repository and never learns whether an email is
-  // registered, so the number of attempts before a 429 — and the 429 body
-  // itself — cannot depend on registration status. Proven directly, not
-  // just argued: an unregistered-looking email and a registered-looking one
-  // trip the SAME limiter after the SAME number of attempts, with an
-  // IDENTICAL response.
+  /**
+   * A 429 must never be a user-enumeration oracle. The limiter imports no
+   * repository and never learns whether an email is registered, so the
+   * number of attempts before a 429 — and the 429 body itself — cannot
+   * depend on registration status. Proven directly: an
+   * unregistered-looking email and a registered-looking one trip the
+   * same limiter after the same number of attempts, with an identical
+   * response.
+   */
   it('rate-limits a never-registered-looking email exactly like a registered-looking one', async () => {
     const app = buildApp(1)
 
@@ -258,10 +257,7 @@ describe('RATE_LIMITS.loginAccount', () => {
 
 describe('POST /login wiring', () => {
   it('mounts the ip+email, per-IP and per-account limiters, in that order, before login', () => {
-    // Asserted against the committed route file, the same way `store
-    // prefix derivation` below asserts against the committed middleware
-    // source: a built router does not expose which `RATE_LIMITS` entry
-    // produced each piece of its middleware.
+    // Asserted against the committed route file, the same way `store prefix derivation` below asserts against the committed middleware source: a built router does not expose which `RATE_LIMITS` entry produced each piece of its middleware.
     const routes = fs.readFileSync(path.resolve(process.cwd(), 'src/routes/auth.routes.ts'), 'utf8')
     expect(routes).toMatch(
       /router\.post\(\s*'\/login',\s*createRateLimiter\(RATE_LIMITS\.login\),\s*createRateLimiter\(RATE_LIMITS\.loginIp\),\s*createRateLimiter\(RATE_LIMITS\.loginAccount\),\s*authController\.login\s*\)/
@@ -288,13 +284,15 @@ describe('RATE_LIMITS.register', () => {
     expect(limited.headers).not.toHaveProperty('x-ratelimit-limit')
   })
 
-  // The property that makes this limiter useful at all, and the one thing
-  // that must differ from the login limiter: registration is keyed on IP
-  // ALONE. An attacker enumerating addresses varies the email on every
-  // request by construction, so a key containing the email would hand them
-  // a fresh counter each time and bound nothing. Red if the register
-  // limiter is given loginRateLimitKey (or any email-aware key): each of
-  // these three emails would get its own budget and none would be limited.
+  /**
+   * The one thing that must differ from the login limiter: registration
+   * is keyed on IP alone. An attacker enumerating addresses varies the
+   * email on every request by construction, so a key containing the
+   * email would hand them a fresh counter each time and bound nothing.
+   * Red if the register limiter is given loginRateLimitKey (or any
+   * email-aware key): each of these three emails would get its own
+   * budget and none would be limited.
+   */
   it('keys on IP alone: a different email on every request shares one counter', async () => {
     const app = buildAppBehind(
       createRateLimiter(RATE_LIMITS.register, { limit: 2, windowMs: 60_000 })
@@ -362,10 +360,7 @@ describe('RATE_LIMITS.forgotPasswordEmail', () => {
     const victimBlocked = await request(app).post('/endpoint').send({ email: 'victim@example.com' })
     expect(victimBlocked.status).toBe(429)
 
-    // A different address, same supertest agent (same client IP) — must be
-    // entirely unaffected by victim@example.com's counter, since an
-    // attacker who knows only the victim's address must not be able to
-    // spend anyone else's budget.
+    // A different address, same supertest agent (same client IP) — must be entirely unaffected by victim@example.com's counter, since an attacker who knows only the victim's address must not be able to spend anyone else's budget.
     const bystander = await request(app)
       .post('/endpoint')
       .send({ email: 'someone-else@example.com' })
@@ -407,19 +402,17 @@ describe('RATE_LIMITS.createTenant', () => {
     expect(limited.headers).not.toHaveProperty('x-ratelimit-limit')
   })
 
-  // The property that makes this limiter genuinely different from every
-  // IP-keyed one above, and the one this file's own precedent
-  // (`loginRateLimitKey`'s "keys on IP AND email" test, and the
-  // `RATE_LIMITS.forgotPasswordEmail` describe block's "a different
-  // address is unaffected" test) already establishes matters enough to
-  // prove directly: two different authenticated callers behind the SAME
-  // client IP (one supertest agent, so one shared underlying
-  // connection/IP) must not share a counter. Red if `RATE_LIMITS.createTenant`
-  // were built with express-rate-limit's default IP-based `keyGenerator`
-  // instead of `authenticatedUserRateLimitKey` — every request in this
-  // test would then land in the same bucket regardless of
-  // `x-test-user-id`, and `bystander` below would come back 429 instead
-  // of 201.
+  /**
+   * The property that makes this limiter genuinely different from every
+   * IP-keyed one above, proven directly: two different authenticated
+   * callers behind the same client IP (one supertest agent, so one
+   * shared underlying connection/IP) must not share a counter. Red if
+   * `RATE_LIMITS.createTenant` were built with express-rate-limit's
+   * default IP-based `keyGenerator` instead of
+   * `authenticatedUserRateLimitKey` — every request in this test would
+   * then land in the same bucket regardless of `x-test-user-id`, and
+   * `bystander` below would come back 429 instead of 201.
+   */
   it('keys on the authenticated user id, not IP: a different user is unaffected by another user’s counter', async () => {
     const app = buildAppBehindAsUser(
       createRateLimiter(RATE_LIMITS.createTenant, { limit: 1, windowMs: 60_000 })
@@ -436,11 +429,7 @@ describe('RATE_LIMITS.createTenant', () => {
     expect(bystander.status).toBe(201)
   })
 
-  // `authenticatedUserRateLimitKey`'s own `?? 'anonymous'` fallback, proven
-  // directly: with no `request.user` at all (no `x-test-user-id` header),
-  // every request collapses onto the one shared `'anonymous'` bucket rather
-  // than the key generator throwing — the fail-SAFE direction its own
-  // comment describes (more restrictive, never less), not a crash.
+  // `authenticatedUserRateLimitKey`'s own `?? 'anonymous'` fallback, proven directly: with no `request.user` at all (no `x-test-user-id` header), every request collapses onto the one shared `'anonymous'` bucket rather than the key generator throwing — the fail-safe direction, not a crash.
   it('falls back to one shared bucket when request.user is unset, rather than throwing', async () => {
     const app = buildAppBehindAsUser(
       createRateLimiter(RATE_LIMITS.createTenant, { limit: 1, windowMs: 60_000 })
@@ -471,11 +460,7 @@ describe('RATE_LIMITS.inviteTenantMember', () => {
     expect(limited.body).toMatchObject({ success: false, code: RATE_LIMITED_CODE })
   })
 
-  // Same discriminator as `RATE_LIMITS.createTenant` above, proven again
-  // for this limiter specifically — the two share `createRateLimiter` and
-  // `authenticatedUserRateLimitKey`, but each is a distinct `RATE_LIMITS`
-  // entry with its own store prefix, so each is proven independently
-  // rather than one standing in for both.
+  // Same discriminator as `RATE_LIMITS.createTenant` above, proven again for this limiter specifically — the two share `createRateLimiter` and `authenticatedUserRateLimitKey`, but each is a distinct `RATE_LIMITS` entry with its own store prefix, so each is proven independently rather than one standing in for both.
   it('keys on the authenticated user id, not IP: a different user is unaffected by another user’s counter', async () => {
     const app = buildAppBehindAsUser(
       createRateLimiter(RATE_LIMITS.inviteTenantMember, { limit: 1, windowMs: 60_000 })
@@ -509,8 +494,7 @@ describe('RATE_LIMITS.invitationPreview', () => {
 })
 
 describe('RATE_LIMITS.invitationAccept', () => {
-  // Keyed on IP, not the user: two different signed-in callers behind one
-  // IP share the bucket, because the limiter runs before requireAuth.
+  // Keyed on IP, not the user: two different signed-in callers behind one IP share the bucket, because the limiter runs before requireAuth.
   it('returns 429 once the limit is exceeded, whoever the caller claims to be', async () => {
     const app = buildAppBehindAsUser(
       createRateLimiter(RATE_LIMITS.invitationAccept, { limit: 1, windowMs: 60_000 })
@@ -585,17 +569,20 @@ describe('createRateLimiter marks its output', () => {
 })
 
 describe('store prefix derivation', () => {
-  // The 21-name list and order now live in
-  // tests/unit/constants/rate-limit.constants.test.ts, asserted directly
-  // against the real RATE_LIMITS object. What that test alone cannot prove
-  // is that createRateLimiter actually THREADS spec.name into
-  // limiterStore(...) rather than a hardcoded literal — a hardcoded
-  // 'rl' prefix would pass every RATE_LIMITS assertion while merging every
-  // limiter's Redis counter into one bucket. Asserted against the committed
-  // source, the same way tests/unit/connection-target.test.ts guards the
-  // compose ports and password.utilities.test.ts guards SECURITY.md's
-  // stated bcrypt cost: a built limiter exposes only `resetKey`/`getKey`
-  // (verified — no `store` property), so this is not observable at runtime.
+  /**
+   * The 21-name list and order live in
+   * tests/unit/constants/rate-limit.constants.test.ts, asserted directly
+   * against the real RATE_LIMITS object. What that test alone cannot
+   * prove is that createRateLimiter actually threads spec.name into
+   * limiterStore(...) rather than a hardcoded literal — a hardcoded 'rl'
+   * prefix would pass every RATE_LIMITS assertion while merging every
+   * limiter's Redis counter into one bucket. Asserted against the
+   * committed source, the same way tests/unit/connection-target.test.ts
+   * guards the compose ports and password.utilities.test.ts guards
+   * SECURITY.md's stated bcrypt cost: a built limiter exposes only
+   * `resetKey`/`getKey` (verified — no `store` property), so this is not
+   * observable at runtime.
+   */
   it("derives every limiter's store prefix from spec.name, not a hardcoded string", () => {
     const source = fs.readFileSync(
       path.resolve(process.cwd(), 'src/middlewares/rate-limit.middleware.ts'),

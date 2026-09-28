@@ -1,23 +1,10 @@
-// tests/unit/middlewares/tenant.middleware.test.ts
-//
-// Pure-logic coverage of resolveTenant's branching (found+member, not-found,
-// found-but-not-member, missing identifier, missing request.user, reading
-// the slug param) and requireRole's role check — both repositories' prototype
-// methods spied on, no Docker/Postgres touched. Database-backed proof that
-// `enterWith` survives Express's own `next()` dispatch through a real router
-// lives in tests/integration/middlewares/tenant.middleware.test.ts, per this
-// repo's unit/integration split (CLAUDE.md).
-//
-// `vi.spyOn(TenantRepository.prototype, 'findActiveBySlug')` etc., not
-// `vi.mock('@/repositories/...')`: tenant.middleware.ts builds its own
-// module-private `tenantRepository`/`userMembershipRepository` instances at
-// import time — spying on the prototype reaches those already-constructed
-// instances with a plain property assignment, no module re-mocking or
-// `vi.hoisted()` plumbing needed. Same pattern and reasoning as
-// tests/unit/workers/notification.worker.test.ts's own header comment.
-// Importing the real repository classes does not touch Postgres:
-// database.service.ts's `postgres(...)` client connects lazily on first
-// query, and no test here ever lets the real implementation run.
+/**
+ * @file Pure-logic coverage of resolveTenant's branching and
+ * requireRole's role check, both repositories' prototype methods spied
+ * on, no Docker/Postgres touched. Database-backed proof that
+ * `enterWith` survives Express's own `next()` dispatch through a real
+ * router lives in tests/integration/middlewares/tenant.middleware.test.ts.
+ */
 import { type NextFunction, type Request, type Response } from 'express'
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 import type { MembershipRole } from '@/constants/tenant.constants'
@@ -153,6 +140,17 @@ function buildPrincipalRequest(role?: string): Request {
   } as unknown as Request
 }
 
+/**
+ * `vi.spyOn(TenantRepository.prototype, 'findActiveBySlug')` etc., not
+ * `vi.mock('@/repositories/...')`: tenant.middleware.ts builds its own
+ * module-private `tenantRepository`/`userMembershipRepository`
+ * instances at import time, so spying on the prototype reaches those
+ * already-constructed instances with a plain property assignment, no
+ * module re-mocking or `vi.hoisted()` plumbing needed. Importing the
+ * real repository classes does not touch Postgres:
+ * database.service.ts's `postgres(...)` client connects lazily on
+ * first query, and no test here ever lets the real implementation run.
+ */
 describe('resolveTenant', () => {
   let findActiveBySlugSpy: MockInstance<typeof TenantRepository.prototype.findActiveBySlug>
   let findByUserAndTenantSpy: MockInstance<
@@ -184,17 +182,18 @@ describe('resolveTenant', () => {
     const request = buildRequest({ slug: 'acme', user: mockUser })
     let nextCallCount = 0
     let capturedTenant: unknown
-    // Reads `getStore()` SYNCHRONOUSLY from inside `next` — the same way
-    // Express calls the next middleware/handler synchronously right after
-    // `resolveTenant` calls `enterWith`, so this sees the mutation exactly
-    // the way real downstream code does. Reading `getStore()` from OUTSIDE
-    // the awaited `resolveTenant()(...)` call instead — in the calling
-    // function's OWN continuation, after the fact — captures a stale
-    // pre-`enterWith` snapshot instead: that continuation's promise
-    // reaction was linked to this async context before the inner
-    // `enterWith` call ever ran, which is a real, working-as-designed
-    // AsyncLocalStorage subtlety, not a bug in `resolveTenant` — verified
-    // empirically while writing this test.
+    /**
+     * Reads `getStore()` synchronously from inside `next` — the same way
+     * Express calls the next middleware/handler synchronously right
+     * after `resolveTenant` calls `enterWith`, so this sees the mutation
+     * exactly the way real downstream code does. Reading `getStore()`
+     * from outside the awaited `resolveTenant()(...)` call instead, in
+     * the calling function's own continuation, captures a stale
+     * pre-`enterWith` snapshot: that continuation's promise reaction was
+     * linked to this async context before the inner `enterWith` call
+     * ever ran — a real, working-as-designed AsyncLocalStorage subtlety,
+     * not a bug in `resolveTenant`.
+     */
     const next: NextFunction = (): void => {
       nextCallCount++
       capturedTenant = requestContextStore.getStore()?.tenant
@@ -216,13 +215,16 @@ describe('resolveTenant', () => {
     findByUserAndTenantSpy.mockResolvedValue(mockMembership('viewer'))
 
     const request = buildRequest({ slug: 'acme', user: mockUser })
-    // The WHOLE store, not just `.requestId` — a `{ requestId }`-only store
-    // and the `enterWith`'d `{ requestId, tenant }` one both carry the same
-    // `requestId`, so asserting on that field alone would pass whether or
-    // not `enterWith` actually ran. Asserting the whole store proves BOTH
-    // that the prior field survived the spread AND that `tenant` landed
-    // alongside it — and is what would catch a future refactor back to
-    // hand-listing `requestId` instead of spreading the current store.
+    /**
+     * The whole store, not just `.requestId` — a `{ requestId }`-only
+     * store and the `enterWith`'d `{ requestId, tenant }` one both carry
+     * the same `requestId`, so asserting on that field alone would pass
+     * whether or not `enterWith` actually ran. Asserting the whole store
+     * proves both that the prior field survived the spread and that
+     * `tenant` landed alongside it, which is what would catch a future
+     * refactor back to hand-listing `requestId` instead of spreading the
+     * current store.
+     */
     let capturedStore: unknown
     const next: NextFunction = (): void => {
       capturedStore = requestContextStore.getStore()
@@ -250,8 +252,7 @@ describe('resolveTenant', () => {
     const error = lastCallArgument()
     expect(error).toBeInstanceOf(HttpError)
     expect((error as HttpError).statusCode).toBe(404)
-    // The membership lookup is never reached when the tenant itself was not
-    // found — nothing to check membership against.
+    // The membership lookup is never reached when the tenant itself was not found — nothing to check membership against.
     expect(findByUserAndTenantSpy).not.toHaveBeenCalled()
     expect(request.principal).toBeUndefined()
   })
@@ -269,8 +270,7 @@ describe('resolveTenant', () => {
     const error = lastCallArgument()
     expect(error).toBeInstanceOf(HttpError)
     expect((error as HttpError).statusCode).toBe(404)
-    // Same message as the nonexistent-tenant case above — a caller must not
-    // be able to distinguish the two by response shape (spec correction #2).
+    // Same message as the nonexistent-tenant case above — a caller must not be able to distinguish the two by response shape.
     expect((error as HttpError).message).toBe('Tenant not found')
     expect(request.principal).toBeUndefined()
     expect(findPlatformRoleSpy).toHaveBeenCalledWith('user-1')
@@ -324,9 +324,7 @@ describe('resolveTenant', () => {
 
     let sawTenantInFrameA: unknown = 'not-yet-checked'
     let sawTenantInOtherFrame: unknown = 'not-yet-checked'
-    // Same synchronous-inside-`next` read as the success test above — see
-    // that test's own comment for why reading `getStore()` after an outer
-    // `await` instead would capture a stale snapshot.
+    // Same synchronous-inside-`next` read as the success test above — see that test's own comment for why reading `getStore()` after an outer `await` instead would capture a stale snapshot.
     const captureFrameA: NextFunction = (): void => {
       sawTenantInFrameA = requestContextStore.getStore()?.tenant
     }
@@ -337,9 +335,7 @@ describe('resolveTenant', () => {
         return resolveTenant()(request, noResponse, captureFrameA)
       }),
       requestContextStore.run({ requestId: 'frame-b' }, async () => {
-        // Never calls resolveTenant in this frame at all — its own store
-        // must never see frame-a's tenant, proving `enterWith` mutates only
-        // the calling async context's store, not a shared/global one.
+        // Never calls resolveTenant in this frame at all — its own store must never see frame-a's tenant, proving `enterWith` mutates only the calling async context's store, not a shared/global one.
         await settle(5, "an async hop, so frame-a's resolveTenant runs enterWith first")
         sawTenantInOtherFrame = requestContextStore.getStore()?.tenant
       }),
