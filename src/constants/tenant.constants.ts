@@ -1,13 +1,8 @@
-// src/constants/tenant.constants.ts
-//
-// Single source of truth for the two fixed enumerations the multi-tenancy
-// seam introduces — same "one array, one place" pattern as AUTH_PROVIDERS
-// (auth-provider.constants.ts) and EMAIL_LOG_STATUSES (email-log.model.ts).
-// Both `TENANT_LIFECYCLE_STATES` and `MEMBERSHIP_ROLES` are mirrored into a
-// database CHECK constraint (tenant.model.ts, user-membership.model.ts) —
-// this is a small, deliberately-closed set each (unlike
-// NOTIFICATION_TYPES, which is meant to grow freely), so the migration a
-// CHECK constraint needs is not a cost worth avoiding.
+/**
+ * @file The fixed tenant enumerations, each mirrored into a CHECK constraint
+ * (tenant.model.ts, user-membership.model.ts), plus reserved slugs and the
+ * invitation token size.
+ */
 
 /**
  * Every lifecycle state a tenant can be in.
@@ -20,44 +15,34 @@
 export const TENANT_LIFECYCLE_STATES = ['active', 'suspended', 'archived'] as const
 
 /**
- * One of the fixed set of states a `tenants` row may carry. Derived from
- * `TENANT_LIFECYCLE_STATES` so this type can never list a value the runtime
- * array — and therefore the database CHECK constraint built from it — does
- * not also recognise.
+ * One of the fixed set of states a `tenants` row may carry.
  */
 export type TenantLifecycleState = (typeof TENANT_LIFECYCLE_STATES)[number]
 
 /**
  * Every role a `user_memberships` row can carry, in descending order of
- * privilege (see the plan's actor→target safety matrix for exactly which
- * actions each role may take on another member):
+ * privilege. Which member each role may change is `canActorModifyTarget`
+ * (tenant.policy.ts):
  *
- * - `owner` — full control; can transfer ownership, can delete the tenant.
- * - `admin` — manages members (below admin) and settings, not other admins
- *   or the owner.
- * - `manager` — manages resources/content, not members or settings.
+ * - `owner` — full control, and the only role that changes member roles.
+ * - `admin` — manages members below admin, invitations and settings.
+ * - `manager` — manages resources and content, not members or settings.
  * - `editor` — creates and edits content.
- * - `viewer` — read-only access. The default for a newly added member.
+ * - `viewer` — read-only access; the column default.
  */
 export const MEMBERSHIP_ROLES = ['owner', 'admin', 'manager', 'editor', 'viewer'] as const
 
 /**
- * One of the fixed set of roles a `user_memberships` row may carry. Derived
- * from `MEMBERSHIP_ROLES` so this type can never list a value the runtime
- * array — and therefore the database CHECK constraint built from it — does
- * not also recognise.
+ * One of the fixed set of roles a `user_memberships` row may carry.
  */
 export type MembershipRole = (typeof MEMBERSHIP_ROLES)[number]
 
 /**
- * Slugs no tenant may register — reserved because they either collide with
- * a real or plausible future route segment under `/tenants/:slug/...`
- * (`new`, `settings`, `members`), a term that would be actively misleading
- * as an organization's public identifier (`admin`, `api`, `www`), or a
- * value that has caused real bugs elsewhere as a string masquerading as
- * something else (`null`, `undefined`, `true`, `false`). Checked by a later
- * task's slug validator (`z.string()....refine((slug) => !RESERVED_SLUGS
- * .includes(slug))`) — this file only owns the list, not the check.
+ * Slugs no tenant may register: route segments under `/tenants/:slug/...`
+ * (`new`, `settings`, `members`), misleading public identifiers (`admin`,
+ * `api`, `www`), and strings that read as other values (`null`,
+ * `undefined`, `true`, `false`). The slug validator in tenant.validators.ts
+ * enforces it.
  */
 export const RESERVED_SLUGS = [
   'admin',
@@ -111,7 +96,7 @@ export const RESERVED_SLUGS = [
   'staging',
   'dev',
   'localhost',
-  // The seeded staff tenant (migration 0016).
+  // The staff tenant, seeded by migration 0016.
   'platform',
 ] as const
 
