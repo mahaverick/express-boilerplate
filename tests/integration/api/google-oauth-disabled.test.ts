@@ -22,7 +22,8 @@ const app = createApp()
  *
  * Depends on google-oauth.test.ts cleaning up after itself:
  * `process.env` persists across test files within one forked worker
- * process, so this file's "unset" premise only holds because that file
+ * process (`useWorkerDatabase`'s JSDoc in tests/helpers/worker-database.ts),
+ * so this file's "unset" premise only holds because that file
  * stubs GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET with `vi.stubEnv` and
  * restores them in `afterAll(() => vi.unstubAllEnvs())` rather than
  * leaving a raw `process.env` assignment behind. If that file is ever

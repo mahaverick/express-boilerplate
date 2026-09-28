@@ -43,9 +43,10 @@ JWT_ACCESS_SECRET=   # openssl rand -hex 32
 SESSION_SECRET=      # openssl rand -hex 32
 ```
 
-`.env` is loaded for you, and `pnpm dev` fails fast with a named list if a
-required variable is missing. Every variable is described in
-[ARCHITECTURE.md](ARCHITECTURE.md#environment-variables).
+`.env` is loaded for you (see
+[Configuration](ARCHITECTURE.md#configuration)), and `pnpm dev` fails fast
+with a named list if a required variable is missing. Every variable is
+described in [ARCHITECTURE.md](ARCHITECTURE.md#environment-variables).
 
 ```bash
 curl http://localhost:4040/health/ready   # {"status":"ready","checks":{...}}
@@ -98,7 +99,7 @@ refuses a non-JSON body with 415. See
 | `pnpm env:table`                    | Prints ARCHITECTURE.md's environment table from the Zod schema.              |
 | `pnpm db:migration:generate`        | `drizzle-kit generate`; see [DATABASE.md](DATABASE.md).                      |
 | `pnpm db:migrate`                   | Applies pending migrations against `DATABASE_URL`.                           |
-| `pnpm db:migrate:prod`              | The same, from `dist/database/migrate.js`, as in the production image.       |
+| `pnpm db:migrate:prod`              | The same, as `node dist/database/migrate.js`; run that in the prod image.    |
 | `pnpm platform:grant -- <e> <role>` | Gives a platform-tenant role; see below.                                     |
 | `pnpm commit`                       | Interactive conventional-commit prompt.                                      |
 
@@ -130,6 +131,7 @@ No gate enforces this list.
 
 | Doc                                | Owns                                                                         |
 | ---------------------------------- | ---------------------------------------------------------------------------- |
+| [README.md](README.md)             | Quick start, scripts, making the template yours, this index                  |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Boot, layers, directory rules, configuration and env vars, Docker, deploying |
 | [DATABASE.md](DATABASE.md)         | Client, models, migrations, test database, live schema changes               |
 | [SECURITY.md](SECURITY.md)         | Reporting, supported versions, what is and is not implemented                |

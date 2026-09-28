@@ -144,7 +144,8 @@ verified flag to an address nobody verified.
   also sets `email_verified_at`, since the reset proves the same mailbox
   control, and deletes any federated sign-in linked to it.
 - `POST /api/v1/auth/change-password` (behind `requireAuth`) checks the current
-  password and revokes every other session.
+  password and revokes every other session, or every session when the access
+  token carries no session id.
 - A Google sign-in marks the address verified too (`google-auth.service.ts`).
 
 Each route carries its own rate limiters; SECURITY.md, "Rate limiting", lists
@@ -203,7 +204,9 @@ write. The two exceptions are `handleGoogleCallback` (`auth.controller.ts`),
 which redirects every failure to the frontend instead of answering JSON, and
 `streamNotifications` (`notification-stream.controller.ts`), an SSE stream.
 Both still call a service, so they are exceptions to `handle()`, not to the
-layering above.
+layering above. Each controller file exports one singleton instance
+(`export const tenantController = new TenantController()`), which its routes
+file imports.
 
 **Lock order**, binding for every transaction that locks more than one row
 set:
@@ -781,8 +784,8 @@ and `:X` to the digest `main` already built (see
 
 The image needs the environment described under
 [Configuration](#configuration), including `APP_ENV`. Its `CMD` starts only the
-app; run migrations from the same image with `pnpm db:migrate:prod`
-(`node dist/database/migrate.js`).
+app; run migrations from the same image with `node dist/database/migrate.js`,
+the command `pnpm db:migrate:prod` runs.
 `WORKER_ENABLED` (default `true`) runs the API and the BullMQ Workers in one
 process. To split them, set it to `false` on API-only pods and `true` on a
 separate worker deployment that shares the Redis queues. `WORKER_CONCURRENCY`

@@ -1,8 +1,8 @@
 /**
- * @file Proves `claimToken`'s own expiry check is load-bearing: `claimOnce`
- * deliberately does not check expiry itself, so this check is the only
- * thing standing between a merely-expired verification/reset link and one
- * that is redeemable forever.
+ * @file Proves `claimToken`'s (session.service.ts) own expiry check is
+ * load-bearing: `claimOnce` (user-token.repository.ts) deliberately does not
+ * check expiry itself, so this check is the only thing standing between a
+ * merely-expired verification/reset link and one that is redeemable forever.
  */
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
