@@ -1,8 +1,8 @@
-// src/repositories/platform-tenant.repository.ts
-//
-// Staff-only, cross-tenant reads. Only `services/platform-*.service.ts` may
-// import this file (an eslint rule); every query excludes the platform
-// tenant and soft-deleted tenants.
+/**
+ * @file Staff-only, cross-tenant reads. Only `services/platform-*.service.ts` may
+ * import this file (an eslint rule); every query excludes the platform tenant and
+ * soft-deleted tenants.
+ */
 import { and, count, eq, isNull, sql, type SQL } from 'drizzle-orm'
 import type { TenantLifecycleState } from '@/constants/tenant.constants'
 import { tenantModel } from '@/database/models/tenant.model'
@@ -62,7 +62,8 @@ function escapeLikePattern(value: string): string {
 export class PlatformTenantRepository {
   /**
    * A page of every customer tenant, ordered by `(lower(name), id)`, optionally
-   * filtered by a case-insensitive substring of the name or slug.
+   * filtered by a case-insensitive substring of the name or slug. Member counts
+   * include live members only, matching `UserMembershipRepository.listByTenant`.
    * @param options - Page size, the search text and the cursor.
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns The page, with `nextCursor` only when more rows remain.
@@ -84,9 +85,7 @@ export class PlatformTenantRepository {
         sql`(lower(${tenantModel.name}), ${tenantModel.id}) > (${options.cursor.sortName}, ${options.cursor.id})`
       )
     }
-    // Live members only, matching `UserMembershipRepository.listByTenant`. A
-    // correlated subquery built with a join, so drizzle qualifies every
-    // column: the outer select has one table and renders its columns bare.
+    // Built with a join so drizzle qualifies its columns; the one-table outer select renders them bare.
     const liveMembers = executor
       .select({ count: count() })
       .from(userMembershipModel)

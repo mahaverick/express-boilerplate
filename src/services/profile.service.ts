@@ -1,6 +1,6 @@
-// src/services/profile.service.ts
-//
-// The authenticated user's own profile row, with their platform role.
+/**
+ * @file The authenticated user's own profile row, with their platform role.
+ */
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { NewUser, User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'

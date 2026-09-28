@@ -1,9 +1,8 @@
-// src/repositories/audit-log.repository.ts
-//
-// Insert, list, and the retention purge's batch delete. audit_logs'
-// trigger rejects every UPDATE, and every DELETE outside a transaction the
-// retention purge has opened for it (retention.service.ts). This class
-// issues no UPDATE.
+/**
+ * @file Insert, list, and the retention purge's batch delete for `audit_logs`.
+ * The table's trigger rejects every UPDATE, and every DELETE outside a transaction
+ * the retention purge (retention.service.ts) has opened for it.
+ */
 import { and, desc, eq, inArray, sql, type SQL } from 'drizzle-orm'
 import type { AuditAccess, AuditAction } from '@/constants/audit.constants'
 import { auditLogModel, type AuditLog, type NewAuditLog } from '@/database/models/audit-log.model'

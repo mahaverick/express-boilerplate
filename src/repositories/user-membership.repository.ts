@@ -1,16 +1,7 @@
-// src/repositories/user-membership.repository.ts
-//
-// Deliberately does NOT extend BaseRepository — see
-// user-membership.model.ts's own header comment: no soft-delete concept,
-// no `deletedAt` column, and `delete` below is a genuine hard delete.
-//
-// `listByTenant` joins in only `id`/`email`/`firstName`/`lastName` from
-// `users` — NEVER `passwordHash` — via an explicit column-projection object
-// (`{ id: userModel.id, email: userModel.email, ... }`), not
-// `.select({ membership: userMembershipModel, user: userModel })` (which
-// would select every `users` column, `passwordHash` included, into the
-// response a later task's "list members" endpoint serializes straight to
-// JSON).
+/**
+ * @file Query access to `user_memberships`. It does not extend `BaseRepository`:
+ * the table has no `deletedAt`, and `delete` is a hard delete.
+ */
 import { and, count, eq, inArray, isNull, sql } from 'drizzle-orm'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import { tenantModel, type Tenant } from '@/database/models/tenant.model'
@@ -27,8 +18,7 @@ import type { RowLockMode } from '@/types/lock-mode'
 
 /**
  * One `user_memberships` row for `listByTenant`, joined with the subset of
- * its user's columns safe to return over the wire — see this file's header
- * comment for why this is an explicit projection, not the full `User` row.
+ * its user's columns safe to return over the wire.
  */
 export interface MembershipWithUser {
   /**
@@ -80,9 +70,8 @@ function platformRoleQuery(userId: string, executor: DbExecutor) {
  */
 export class UserMembershipRepository {
   /**
-   * Find the single membership row for one (user, tenant) pair — the
-   * lookup `resolveTenant` (a later task's middleware) makes to decide
-   * whether a user may access a tenant-scoped route at all.
+   * Find the single membership row for one (user, tenant) pair, the lookup
+   * `resolveTenant` (tenant.middleware.ts) makes to admit a user to a tenant.
    * @param userId - The user to look up.
    * @param tenantId - The tenant to look up.
    * @param executor - Where to run the query. Defaults to the pool.
@@ -136,13 +125,11 @@ export class UserMembershipRepository {
   }
 
   /**
-   * Every member of one tenant, with each member's safe user info attached
-   * — the query `GET /tenants/:slug/members` (a later task's controller)
-   * runs. A user whose own account is soft-deleted is excluded (a stale
-   * membership row pointing at a soft-deleted user is not a real,
-   * displayable member) — nothing prunes the membership row itself when a
-   * user is soft-deleted, so this filter is what keeps a "deleted" account
-   * from still appearing in a member list.
+   * Every member of one tenant, with each member's safe user info attached,
+   * for `GET /tenants/:slug/members`. The user columns are an explicit
+   * projection, never the full row, so `passwordHash` cannot reach the
+   * response. A soft-deleted user is excluded: nothing prunes their membership
+   * row, so this filter keeps them out of the member list.
    * @param tenantId - The tenant whose members to list.
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns One entry per member, in no particular guaranteed order.
@@ -164,14 +151,9 @@ export class UserMembershipRepository {
   }
 
   /**
-   * Every tenant one user is a member of, with the tenant row and this
-   * user's role in it attached. Companion to `TenantRepository.listForUser`
-   * (tenant.repository.ts), which answers the same question keyed the
-   * other way round (one `Tenant` per row, with `role` attached rather
-   * than the full membership) — this method exists for a call site that
-   * needs the membership row itself (its `id`, `createdAt`, etc.), not just
-   * the role. A soft-deleted tenant is excluded, same as
-   * `TenantRepository.listForUser`.
+   * Every tenant one user is a member of, with the full membership row and the
+   * tenant. `TenantRepository.listForUser` answers the same question with only
+   * the role. A soft-deleted tenant is excluded.
    * @param userId - The user whose memberships to list.
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns One entry per (still visible) tenant this user belongs to, in no particular guaranteed order.
@@ -192,12 +174,8 @@ export class UserMembershipRepository {
    * application caller is `platform.service.bootstrapGrant`, for a user with
    * no platform membership yet. Tests use it to set up memberships.
    *
-   * Translates a 23505 on `(userId, tenantId)` into `HttpError(409)` rather
-   * than letting the raw driver error escape — the same translation
-   * `BaseRepository.create` gives every table that extends it, applied by
-   * hand here since this table cannot (see this file's header comment). A
-   * caller that hits this should treat it as "already a member", not as an
-   * unexpected failure.
+   * Translates a 23505 on `(userId, tenantId)` into `HttpError(409)`, as
+   * `BaseRepository.create` does, meaning "already a member".
    * @param data - The row's initial column values.
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns The inserted row.
@@ -205,9 +183,6 @@ export class UserMembershipRepository {
   async create(data: NewUserMembership, executor: DbExecutor = db): Promise<UserMembership> {
     try {
       const [row] = await executor.insert(userMembershipModel).values(data).returning()
-      // insert(...).values(one object).returning() always returns
-      // exactly one row when the insert does not throw — same reasoning as
-      // UserRepository.insertOne (user.repository.ts).
       if (row === undefined) throw new HttpError('Insert returned no row', 500)
       return row
     } catch (error) {
@@ -276,18 +251,13 @@ export class UserMembershipRepository {
   }
 
   /**
-   * Remove a member from a tenant — a hard delete, not a soft one (see
-   * this file's header comment).
+   * Remove a member from a tenant: a hard delete.
    * @param id - The membership row's id.
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns True when a row was deleted; false when no membership with this id existed.
    */
   async delete(id: string, executor: DbExecutor = db): Promise<boolean> {
     const result = await executor.delete(userMembershipModel).where(eq(userMembershipModel.id, id))
-    // The postgres-js driver's own result for a write with no
-    // `.returning()` exposes the affected-row count as `.count` — see
-    // NotificationRepository.markAllRead's own comment (notification
-    // .repository.ts) for why this is `.count`, not `.rowCount`.
     return result.count > 0
   }
 

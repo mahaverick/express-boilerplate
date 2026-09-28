@@ -1,8 +1,8 @@
-// src/services/database.service.ts
-//
-// One postgres client for the process. `postgres` pools internally, so a
-// second client means a second pool and double the configured connection
-// budget — which only shows up under load, as "too many connections".
+/**
+ * @file One postgres client for the process. `postgres` pools internally, so a
+ * second client means a second pool and double the configured connection
+ * budget, which shows up only under load, as "too many connections".
+ */
 import { PgTransaction } from 'drizzle-orm/pg-core'
 import { drizzle } from 'drizzle-orm/postgres-js'
 import postgres from 'postgres'

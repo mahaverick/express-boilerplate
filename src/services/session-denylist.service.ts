@@ -21,21 +21,16 @@ export type DenyOutcome = 'denied' | 'failed'
 /**
  * Mark a session's access tokens as no longer honoured.
  *
- * The TTL is the whole design. An entry only has to outlive the tokens it
- * invalidates, so it is set to `ACCESS_TOKEN_TTL` and needs no sweeper and
- * cannot grow without bound. It does NOT expire exactly when the token it
- * targets does, though — the two clocks start at different moments. The
- * TTL here starts NOW, at the moment of denial; the token being denied was
- * minted up to `ACCESS_TOKEN_TTL` earlier and is already partway through
- * its own life. So this entry always OUTLIVES the token it was written
- * for, by however much of the token's life had already elapsed — the safe
- * direction, since the entry disappearing before the token it targets does
- * would silently let that token back in.
+ * The entry's TTL is `ACCESS_TOKEN_TTL`, starting at denial, so it needs no
+ * sweeper and always outlives the token it targets, which was minted earlier.
  *
- * BEST-EFFORT, and deliberately so. A Redis outage or a FLUSHALL drops every
- * entry, and there is no database fallback because the database does not
- * know a given access token exists. What this closes is the ordinary case:
- * a logout should not leave a usable credential behind for fifteen minutes.
+ * Best-effort: a Redis outage or FLUSHALL drops every entry, and the database
+ * has no record of access tokens to fall back on. It closes the ordinary case,
+ * a logout leaving a usable credential behind for up to `ACCESS_TOKEN_TTL`.
+ *
+ * It never rethrows. Every revocation in session.service.ts calls this after
+ * its database write, and a Redis blip must not turn one into a 500: the
+ * database revocation is the half that ends the session.
  * @param sessionId - The session whose access tokens should stop working.
  * @returns 'denied' once the entry is written; 'failed' once a failure is logged. Never rejects.
  */
@@ -43,17 +38,12 @@ export async function denySession(sessionId: string): Promise<DenyOutcome> {
   try {
     const seconds = Math.ceil(requireDurationMs(getEnv().ACCESS_TOKEN_TTL) / MS_PER_SECOND)
     const redis = await getRedis()
-    // `{ EX: seconds }` is `@deprecated` on this pinned `@redis/client@6.2.1`
-    // in favour of this `expiration` form — same effect, current API.
+    // `{ EX: seconds }` is `@deprecated` in `@redis/client@6.2.1` in favour of `expiration`.
     await redis.set(denylistKey(sessionId), '1', {
       expiration: { type: 'EX', value: seconds },
     })
     return 'denied'
   } catch (error) {
-    // Never rethrow. Every revocation in session.service.ts calls this after
-    // its database write (logout and password reset, for example), and a
-    // Redis blip must not turn any of them into a 500: the database
-    // revocation is the half that actually ends the session.
     logger.warn('Could not deny session; access tokens stay valid until they expire', {
       sessionId,
       error,
@@ -64,6 +54,10 @@ export async function denySession(sessionId: string): Promise<DenyOutcome> {
 
 /**
  * Whether a session's access tokens have been revoked.
+ *
+ * Fails open: when Redis is unreachable it logs a warning and returns false.
+ * Failing closed would fail every authenticated request whenever Redis
+ * hiccups, a far larger outage than the window the denylist closes.
  * @param sessionId - The session claimed by the token being checked.
  * @returns True when the token must be rejected.
  */
@@ -72,9 +66,6 @@ export async function isSessionDenied(sessionId: string): Promise<boolean> {
     const redis = await getRedis()
     return (await redis.exists(denylistKey(sessionId))) === 1
   } catch (error) {
-    // FAIL OPEN. Failing closed would make every authenticated request fail
-    // whenever Redis hiccups — a far larger outage than the window this
-    // exists to close. The warning is what stops that being silent.
     logger.warn('Denylist unreachable; allowing the request', {
       sessionId,
       error,
