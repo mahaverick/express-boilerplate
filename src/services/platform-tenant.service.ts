@@ -1,7 +1,7 @@
-// src/services/platform-tenant.service.ts
-//
-// "All tenants" for staff. The route has already checked the platform role;
-// the per-user "your tenants" list stays in tenant.service.ts.
+/**
+ * @file "All tenants" for staff. The route has already checked the platform role;
+ * the per-user "your tenants" list stays in tenant.service.ts.
+ */
 import {
   PlatformTenantRepository,
   type PlatformTenantRow,

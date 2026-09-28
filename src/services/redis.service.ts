@@ -1,28 +1,18 @@
-// src/services/redis.service.ts
-//
-// One shared connection for the process, created lazily. Eager connection at
-// import time would make every unit test that transitively imports a
-// repository open a socket — and fail on a machine with no Redis running.
-// `createRedisClient` builds any extra connection with the same reconnect policy.
+/**
+ * @file One shared node-redis connection for the process, created lazily so that
+ * importing this module opens no socket. `createRedisClient` builds any extra
+ * connection with the same reconnect policy.
+ */
 import { createClient, type RedisClientType } from 'redis'
 import { getEnv } from '@/configs/env.config'
 import { logger } from '@/services/logger.service'
 
-// A mutable property on a top-level `const` (rather than a top-level `let`)
-// so getRedis()/closeRedis() can share state without either function
-// reassigning a top-level binding — that reassignment is what
-// unicorn/no-top-level-assignment-in-function forbids; mutating a property
-// on an object the module still holds by the same reference is not a
-// reassignment and is unaffected by the rule.
-//
-// `closed` exists because `getRedis()` reconnects lazily: without it, a
-// ping issued after `closeRedis()` would silently open a brand-new socket
-// and report healthy instead of reporting that the service is shut down.
-// Postgres gets this for free — `sql.end()` makes every later query on that
-// pool reject — but node-redis's client has no equivalent "permanently
-// dead" state of its own, so the module tracks it. Once true it never
-// resets: this mirrors a real process, where "closed" means shutting down,
-// not "reconnect on demand".
+/**
+ * Module state in one object, so no function reassigns a top-level binding.
+ * `closed` is set by `closeRedis()` and never resets: node-redis has no
+ * permanently-closed state, and without it `getRedis()` would open a new
+ * socket after shutdown and report healthy.
+ */
 const state: {
   client: RedisClientType | undefined
   connecting: Promise<RedisClientType> | undefined
@@ -56,6 +46,8 @@ function failFastDelay(retries: number): number | Error {
 
 /**
  * Create an unconnected client that fails fast before its first 'ready' and retries forever after it.
+ * Giving up before 'ready' lets boot and `/health/ready` report unreachable;
+ * node-redis's default retries forever.
  * @returns The client; the caller connects it.
  */
 export function createRedisClient(): RedisClientType {
@@ -66,8 +58,6 @@ export function createRedisClient(): RedisClientType {
     disableOfflineQueue: true,
     socket: {
       connectTimeout: REDIS_CONNECT_TIMEOUT_MS,
-      // Before the first 'ready', give up fast so boot and /health/ready report
-      // unreachable (the default retries forever). After it, retry forever.
       reconnectStrategy: (retries) =>
         readiness.hasBeenReady
           ? Math.min(retries * 200, RECONNECT_DELAY_CAP_MS)
@@ -146,9 +136,6 @@ export async function isRedisReachable(): Promise<boolean> {
  * @returns Resolves once closed.
  */
 export async function closeRedis(): Promise<void> {
-  // Set unconditionally, before the early return below, so a second call —
-  // or a first call when no client was ever created — still records that
-  // the process is shutting down.
   state.closed = true
   if (!state.client) return
   const current = state.client

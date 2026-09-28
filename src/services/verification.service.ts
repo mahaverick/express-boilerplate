@@ -1,20 +1,8 @@
-// src/services/verification.service.ts
-//
-// Everything about proving a mailbox: the frontend links mailed to a user,
-// the verification mail, verifying with token + password, resending, and
-// markEmailVerified, the one writer of users.email_verified_at.
-//
-// Every link points at the FRONTEND (WEB_URL), not this API. The user
-// clicks one in a mail client, lands on a page, and that page POSTs the
-// token onward — with the account password for verification, with a new
-// password for a reset — to this API's own endpoint. A GET link that acted
-// on its own would put the token in a query string this server logs, and
-// would let any mail scanner that follows links spend it before the user
-// ever sees the message.
-//
-// Verification proves TWO things together: the caller can read the mailbox
-// (they hold the token) and set the password (they can produce it). The
-// spec's "Squatting" section has the full argument; do not drop the password.
+/**
+ * @file Everything about proving a mailbox: the frontend links mailed to a user,
+ * the verification mail, verifying with token and password, resending, and
+ * `markEmailVerified`, the one writer of `users.email_verified_at`.
+ */
 import { getEnv } from '@/configs/env.config'
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
@@ -34,8 +22,10 @@ const userRepository = new UserRepository()
 const userTokenRepository = new UserTokenRepository()
 
 const VERIFICATION_PATH = 'verify-email'
-// Named RESET_PATH, not RESET_PASSWORD_PATH: sonarjs/no-hardcoded-passwords
-// flags any identifier containing "password" paired with a string literal.
+/**
+ * Not RESET_PASSWORD_PATH: sonarjs/no-hardcoded-passwords flags a "password"
+ * identifier holding a string literal.
+ */
 const RESET_PATH = 'reset-password'
 const INVITATION_ACCEPT_PATH = 'invitations/accept'
 
@@ -53,15 +43,16 @@ export const MISSING_FIRST_NAME_FALLBACK = 'there'
 export const INVALID_VERIFICATION_TOKEN_MESSAGE = 'Invalid or expired verification token.'
 
 /**
- * Build an absolute frontend URL for one page, carrying a raw token.
+ * Build an absolute frontend URL for one page, carrying a raw token. Links
+ * point at the frontend (WEB_URL), whose page POSTs the token to this API: a
+ * GET link that acted by itself would put the token in a query string this
+ * server logs, and a mail scanner following links could spend it.
  * @param pagePath - The frontend page, relative to WEB_URL.
  * @param rawToken - The raw token, never its hash.
  * @param webUrl - The frontend origin.
  * @returns The absolute URL with `token` as a query parameter.
  */
 function buildTokenUrl(pagePath: string, rawToken: string, webUrl: string): string {
-  // `new URL(path, base)` resolves a trailing slash on the base correctly
-  // and percent-encodes the token.
   const url = new URL(pagePath, webUrl.endsWith('/') ? webUrl : `${webUrl}/`)
   url.searchParams.set('token', rawToken)
   return url.href
@@ -148,7 +139,10 @@ export async function markEmailVerified(userId: string, executor: DbExecutor = d
 
 /**
  * Verify an email with a token from the mailed link and the account's
- * password. Every failure throws the same 400.
+ * password. Every failure throws the same 400. The password is required:
+ * without it, someone who registered another person's address with a password
+ * they chose would get the account verified by the owner's own click (see
+ * 2026-09-15-verify-email-and-login-timestamps-design.md, "Squatting").
  *
  * Claim FIRST, compare SECOND: one presentation is one attempt, so a wrong
  * password spends the token. The dummy hash runs when there is no user, so
@@ -171,8 +165,7 @@ export async function verifyEmail(token: string, password: string): Promise<void
 
   // Already verified is success: a double-clicked link must not be an error.
   await markEmailVerified(user.id)
-  // Any other link mailed to this user is now pointless; leaving it live
-  // means a token read out of an older mail still works.
+  // Revoke the other links, or a token read out of an older mail still works.
   await userTokenRepository.revokeAllForUserAndPurpose(user.id, 'email_verification')
 }
 
@@ -183,8 +176,7 @@ export async function verifyEmail(token: string, password: string): Promise<void
  * @param user - The unverified user who asked for another link.
  */
 async function resendVerificationMail(user: User): Promise<void> {
-  // Purpose-scoped: revokeAllForUser would take the user's live refresh
-  // tokens with it and log them out everywhere.
+  // Purpose-scoped: revokeAllForUser would also revoke refresh tokens, logging the user out everywhere.
   await userTokenRepository.revokeAllForUserAndPurpose(user.id, 'email_verification')
   await sendVerificationMail(user)
 }

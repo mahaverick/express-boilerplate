@@ -1,7 +1,7 @@
-// src/services/lifecycle.service.ts
-//
-// Process-wide shutdown state, and the registry of open SSE streams: an SSE
-// response never ends by itself, so without this `server.close()` never resolves.
+/**
+ * @file Process-wide shutdown state, and the registry of open SSE streams: an SSE
+ * response never ends by itself, so without this `server.close()` never resolves.
+ */
 import { getEnv } from '@/configs/env.config'
 import { logger } from '@/services/logger.service'
 

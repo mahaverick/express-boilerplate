@@ -1,9 +1,9 @@
-// src/services/notification.service.ts
-//
-// The caller's notification inbox and preferences, and the SSE stream's
-// Last-Event-ID backlog read. Every lookup and mutation goes through the
-// repository's userId-scoped methods, never a lookup by id alone, so a
-// caller cannot act on or learn of another user's notification.
+/**
+ * @file The caller's notification inbox and preferences, and the SSE stream's
+ * Last-Event-ID backlog read. Every lookup and mutation goes through the
+ * repository's userId-scoped methods, so a caller cannot act on or learn of
+ * another user's notification.
+ */
 import { MAX_NOTIFICATION_PAGE_SIZE } from '@/constants/notification.constants'
 import type { Notification, NotificationPreference } from '@/database/models/notification.model'
 import { HttpError } from '@/errors/http-error'
@@ -91,7 +91,9 @@ export async function getPreferences(userId: string): Promise<PreferenceMatrix> 
 }
 
 /**
- * Upsert the given preference entries.
+ * Upsert the given preference entries. Not transactional: a failure partway
+ * leaves earlier upserts committed. Every type is non-configurable, and the
+ * schema requires at least one entry, so no body passes validation to reach it.
  * @param userId - The user.
  * @param preferences - The validated entries; the schema admits configurable types only.
  * @returns The resulting rows, in input order.
@@ -100,8 +102,6 @@ export async function updatePreferences(
   userId: string,
   preferences: UpdatePreferencesInput['preferences']
 ): Promise<NotificationPreference[]> {
-  // Not transactional: a failure partway through leaves earlier upserts
-  // committed. Today no type is configurable, so the array is always empty.
   return Promise.all(
     preferences.map((entry) =>
       notificationPreferenceRepository.upsert(userId, entry.notificationType, {

@@ -1,16 +1,10 @@
-// src/services/auth.service.ts
-//
-// An unknown email and a wrong password are answered IDENTICALLY: same
-// status, same body, AND the same cost. Returning the same body but
-// skipping the bcrypt comparison for an unknown email would still leak
-// which addresses are registered, through response TIMING instead of
-// content. `getDummyHash` (password.utilities.ts) exists so both paths
-// always run one real comparison at the configured cost (BCRYPT_COST).
-//
-// Nothing here touches the HTTP response. Where the reply must go out
-// before the work (register, requestPasswordReset), the work is a function
-// the controller starts after replying, and it never rejects: an unhandled
-// rejection on one branch only is an enumeration oracle.
+/**
+ * @file Email-and-password authentication. An unknown email and a wrong password
+ * get the same status, body and bcrypt cost (`getDummyHash`), so neither content
+ * nor timing reveals a registered address. Work that runs after the reply
+ * (register's mail, requestPasswordReset) never rejects: a rejection on one branch
+ * only would be an enumeration oracle.
+ */
 import { randomUUID } from 'node:crypto'
 import { getEnv } from '@/configs/env.config'
 import { JobPriority } from '@/constants/queue.constants'
@@ -90,7 +84,9 @@ export interface AuthProvidersResult {
 
 /**
  * Tell the owner of an already-registered address that someone tried to
- * register it.
+ * register it. The holder may have been soft-deleted since the insert failed;
+ * then the fallback name is used and the job's correlation id is `''`, which
+ * email.job.ts uses for logging only, never as a database key.
  * @param email - The address that was submitted.
  */
 async function sendRegistrationAttemptMail(email: string): Promise<void> {
@@ -100,17 +96,11 @@ async function sendRegistrationAttemptMail(email: string): Promise<void> {
       to: email,
       templateKey: REGISTRATION_ATTEMPT_TEMPLATE_KEY,
       variables: {
-        // The STORED name, never the submitted one: the submitted value is
-        // attacker-chosen text being delivered into the victim's inbox.
-        // `??` is defensive: findByEmail ignores soft-deleted rows, and the
-        // holder may have been deleted since the insert failed, leaving no
-        // visible row to read a name from.
+        // The stored name, never the submitted one: that is attacker-chosen text in the victim's inbox.
         firstName: existing?.firstName ?? MISSING_FIRST_NAME_FALLBACK,
         appName: getEnv().APP_NAME,
       },
     },
-    // No visible row means no id to correlate the job to; '' is for
-    // logging/correlation only (email.job.ts), never a DB key.
     existing?.id ?? '',
     { priority: JobPriority.normal }
   )
@@ -152,8 +142,7 @@ export async function register(input: RegisterInput): Promise<() => Promise<void
         tx
       )
 
-      // A soft-deleted account may still hold this address's 'email'
-      // provider row; release it so the new account can take it.
+      // A soft-deleted account may still hold this address's 'email' row; release it for the new account.
       await authProviderRepository.releaseEmailOfDeletedUsers(input.email.toLowerCase(), tx)
 
       await authProviderRepository.create(
@@ -164,9 +153,7 @@ export async function register(input: RegisterInput): Promise<() => Promise<void
       return user
     })
   } catch (error) {
-    // A 409 means a live account holds the address (the user insert; a
-    // deleted holder's 'email' row was released above), and the whole write
-    // rolled back. Anything else must surface, not become a cheerful 202.
+    // Only a 409 (a live account holds the address) becomes the 202; anything else must surface.
     if (!isAddressTaken(error)) throw error
   }
 
@@ -233,8 +220,7 @@ export async function login(input: LoginInput): Promise<LoginResult> {
     throw new HttpError('Invalid email or password', 401)
   }
 
-  // After the guard, so a failed attempt leaves no trace; before tokens, so
-  // a failed UPDATE answers 500 without a refresh cookie already set.
+  // Before tokens, so a failed UPDATE answers 500 without a refresh cookie already set.
   await userRepository.update(user.id, { lastLoggedInAt: new Date() })
   // After the guard, so a failed attempt never reaches it; it never throws.
   await autoJoinSafely(user)
@@ -378,7 +364,7 @@ export async function resetPassword(input: ResetPasswordInput): Promise<void> {
  * @param userId - The authenticated caller's id.
  * @param currentSessionId - The session to spare, when the token carried one.
  * @param input - The validated `{ currentPassword, newPassword }` body.
- * @returns Resolves once the password is stored; the notification is not awaited.
+ * @returns Resolves once the password is stored; the notification is not awaited, so a mail failure never fails a change that already committed.
  * @throws {HttpError} 401 when the account is gone; 400 for federated-only, a wrong current password, or no change.
  */
 export async function changePassword(
@@ -417,8 +403,6 @@ export async function changePassword(
   })
   await denySessionsAfterCommit(user.id, revokedSessionIds)
 
-  // Fire-and-forget: a mail failure must never fail a change that already
-  // succeeded. This template carries no secret.
   const notificationJob = addNotificationJob({
     userId: user.id,
     type: 'password_changed',

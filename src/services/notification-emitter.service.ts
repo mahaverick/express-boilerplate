@@ -1,18 +1,10 @@
-// src/services/notification-emitter.service.ts
-//
-// Live notification fanout across every replica. `emitNotification`
-// publishes to one Redis channel, `<REDIS_KEY_PREFIX>:notifications`. Each
-// process with an SSE listener runs one subscriber connection and hands every
-// message to its local EventEmitter, keyed per user, so the publishing process
-// receives its own copy exactly once, like every other replica. The one
-// accepted exception: a publish whose reply is lost is also delivered locally,
-// so that process's listeners can get it twice.
-//
-// Best effort, not durable: the row is already in the database. When the
-// subscriber reconnects after an outage, every open stream is closed, and its
-// client replays the gap from the database via `Last-Event-ID`. A subscriber
-// that fails to start while streams are open is retried on a backoff for as
-// long as any stay open, and its eventual start closes them the same way.
+/**
+ * @file Live notification fanout across replicas over one Redis channel; each
+ * process with an SSE listener runs one subscriber, so the publisher gets its own
+ * copy once (twice if a publish's reply is lost and it also delivers locally).
+ * Best effort, not durable: after an outage open streams are closed and clients
+ * replay the gap from the database via `Last-Event-ID`.
+ */
 import { EventEmitter } from 'node:events'
 import type { RedisClientType } from 'redis'
 import { z } from 'zod'
@@ -39,7 +31,9 @@ function channelName(): string {
   return redisKey('notifications')
 }
 
-// Dates cross the wire as ISO strings (`Date#toJSON`) and are revived here.
+/**
+ * Dates cross the wire as ISO strings (`Date#toJSON`) and are revived here.
+ */
 const isoDate = z.iso.datetime().transform((value) => new Date(value))
 const metadataSchema = z.record(z.string(), z.unknown())
 
@@ -58,18 +52,26 @@ const messageSchema = z.object({
   }),
 })
 
-// A failed start is retried after this delay, doubling up to the cap, while listeners wait.
+/**
+ * A failed start is retried after this delay, doubling up to `RETRY_MAX_MS`, while listeners wait.
+ */
 const RETRY_BASE_MS = 1000
 const RETRY_MAX_MS = 30_000
 
+/**
+ * This process's subscriber client.
+ */
 interface Subscriber {
   client: RedisClientType
-  // No socket yet: from creation, and from each 'reconnecting', until 'connect' or 'error'.
+  /**
+   * No socket yet: from creation, and from each 'reconnecting', until 'connect' or 'error'.
+   */
   isAwaitingSocket: boolean
 }
 
-// Mutable properties on a top-level const, so these functions share state
-// without reassigning a top-level binding (unicorn/no-top-level-assignment-in-function).
+/**
+ * Module state in one object, so no function reassigns a top-level binding.
+ */
 const state: {
   emitter: EventEmitter | undefined
   subscriber: Subscriber | undefined
@@ -78,7 +80,9 @@ const state: {
   isPublishFailing: boolean
   retryTimer: ReturnType<typeof setTimeout> | undefined
   retryCount: number
-  // A start failed while streams were open, so they may have missed messages.
+  /**
+   * A start failed while streams were open, so they may have missed messages.
+   */
   hasMissedMessages: boolean
 } = {
   emitter: undefined,
@@ -92,15 +96,15 @@ const state: {
 }
 
 /**
- * Get the local emitter, constructing it on first use.
+ * Get the local emitter, constructing it on first use. It has no listener cap:
+ * each open SSE connection adds a listener on its user's event name, and a user
+ * with more than ten open streams must not trip Node's leak warning.
  * @returns The process-wide notification emitter.
  */
 function getEmitter(): EventEmitter {
   if (!state.emitter) {
-    // eslint-disable-next-line unicorn/prefer-event-target -- needs `setMaxListeners(0)` (no per-event-name listener cap) and `listenerCount()` (this module's own export, used by notification-stream.test.ts to prove cleanup) — plain `EventEmitter` features `EventTarget` has no equivalent for.
+    // eslint-disable-next-line unicorn/prefer-event-target -- needs `setMaxListeners(0)` and `listenerCount()`, which EventTarget lacks
     state.emitter = new EventEmitter()
-    // Every listener sits on its own per-user event name, one per open SSE
-    // connection, so Node's default 10-listener warning has nothing to flag.
     state.emitter.setMaxListeners(0)
   }
   return state.emitter
@@ -164,8 +168,7 @@ function destroyIfClosed(client: RedisClientType): void {
 async function startSubscriber(client: RedisClientType): Promise<void> {
   try {
     await client.connect()
-    // A close during connect's retries makes connect() resolve unconnected,
-    // and subscribe() on that client never settles.
+    // A close during connect's retries resolves connect() unconnected; subscribe() would never settle.
     if (state.closed || !client.isReady) throw new Error('Closed while connecting')
     await client.subscribe(channelName(), handleMessage)
     state.retryCount = 0
@@ -205,7 +208,6 @@ function scheduleRetry(): void {
     state.retryTimer = undefined
     if (hasLocalListeners()) ensureSubscriber()
   }, delay)
-  // Never keeps the process alive by itself.
   state.retryTimer.unref()
 }
 
@@ -227,8 +229,7 @@ function ensureSubscriber(): void {
   const subscriber: Subscriber = { client, isAwaitingSocket: true }
   const readiness = { hasBeenReady: false }
   client.on('ready', () => {
-    // node-redis resubscribes before 'ready'. Messages published during the
-    // outage are gone, so end every stream and let its client replay them.
+    // Messages published during the outage are lost, so end every stream and let its client replay them.
     if (readiness.hasBeenReady) {
       logger.warn('Notification subscriber reconnected; closing open streams so clients replay')
       closeAllStreams()
@@ -310,10 +311,8 @@ export function onNotification(
 /**
  * Unsubscribe a handler previously passed to `onNotification`.
  *
- * Must be called with the SAME function reference `onNotification` was
- * given — `EventEmitter#off` removes a listener by reference equality, not
- * by user id alone — which is why notification-stream.controller.ts keeps
- * its listener in a named `const`.
+ * Must be called with the same function reference `onNotification` was
+ * given: `EventEmitter#off` removes a listener by reference, not by user id.
  * @param userId - The user this handler was subscribed to.
  * @param handler - The exact function reference passed to the matching `onNotification` call.
  */
@@ -323,7 +322,6 @@ export function offNotification(
 ): void {
   getEmitter().off(eventNameFor(userId), handler)
   if (hasLocalListeners()) return
-  // No stream left to have missed anything, or to wait for a retry.
   cancelRetry()
   state.hasMissedMessages = false
 }
@@ -331,8 +329,7 @@ export function offNotification(
 /**
  * How many local listeners one user's live notification stream has.
  *
- * Exists for tests: notification-stream.test.ts uses it to prove
- * `offNotification` ran when a client disconnected.
+ * Exists for tests, to prove `offNotification` ran when a client disconnected.
  * @param userId - The user to check.
  * @returns The number of currently-registered listeners for this user in this process.
  */
@@ -345,6 +342,8 @@ export function listenerCount(userId: string): number {
  *
  * Resolves once a first connect in progress has ended; a reconnect after
  * `ready` ends in the background, as soon as its current attempt has a socket or fails.
+ * A client with no socket yet is not destroyed here, because destroy() would not
+ * stop the socket being opened; its 'connect' or 'error' listener destroys it.
  * @returns Resolves once the subscriber's start attempt has settled.
  */
 export async function closeNotificationSubscriber(): Promise<void> {
@@ -352,7 +351,6 @@ export async function closeNotificationSubscriber(): Promise<void> {
   cancelRetry()
   const subscriber = state.subscriber
   state.subscriber = undefined
-  // Without a socket, destroy() would not stop the one being opened: its 'connect' or 'error' listener destroys it.
   // destroy, not close: close() waits for queued commands, which a silent Redis never answers.
   if (subscriber && !subscriber.isAwaitingSocket && subscriber.client.isOpen) {
     subscriber.client.destroy()

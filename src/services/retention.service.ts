@@ -1,12 +1,9 @@
-// src/services/retention.service.ts
-//
-// Deletes rows past their retention window, one rule per table. Each rule
-// deletes in batches of RETENTION_BATCH_SIZE by primary key, each batch in its
-// own short transaction, until a batch comes back short. A batch skips rows
-// another transaction has locked, so it can come back short with matching
-// rows left; the next run deletes them. A failing rule is
-// logged and reported; the others still run. The maintenance worker runs this
-// daily (maintenance.job.ts).
+/**
+ * @file Deletes rows past their retention window, one rule per table, in batches
+ * by primary key, each in its own short transaction, until a batch comes back
+ * short. A batch skips locked rows, which the next daily run deletes; a failing
+ * rule is logged and reported while the others still run.
+ */
 import { sql } from 'drizzle-orm'
 import { getEnv, type Env } from '@/configs/env.config'
 import { AuditLogRepository } from '@/repositories/audit-log.repository'

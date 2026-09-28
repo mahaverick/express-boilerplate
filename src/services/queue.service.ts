@@ -1,15 +1,9 @@
-// src/services/queue.service.ts
-//
-// The one place anything in this codebase creates a BullMQ Queue or the
-// ioredis connections it runs over. Deliberately separate from
-// redis.service.ts: that module wraps `redis` (node-redis), BullMQ requires
-// `ioredis`, and the two client libraries cannot share a connection — this
-// module owns its own, lazily, the same way getEnv()/getRedis() do.
-//
-// Two connections: Workers need the offline queue (`maxRetriesPerRequest:
-// null`) to ride out an outage, but a producer on that connection would hold
-// its HTTP caller until Redis returned. Producers get their own connection
-// with the offline queue off, so an enqueue during an outage rejects at once.
+/**
+ * @file The one place that creates a BullMQ Queue or the ioredis connections it
+ * runs over, lazily. Workers and producers get separate connections: Workers need
+ * the offline queue to ride out an outage, while a producer with it off rejects
+ * an enqueue at once instead of holding its HTTP caller until Redis returns.
+ */
 import { Queue, type Job, type JobsOptions } from 'bullmq'
 import IORedis, { type RedisOptions } from 'ioredis'
 import { getEnv } from '@/configs/env.config'
@@ -20,20 +14,19 @@ import {
   redisKey,
 } from '@/services/redis.service'
 
-// One ioredis connection and whether it has ever reached 'ready'.
+/**
+ * One ioredis connection and whether it has ever reached 'ready'.
+ */
 interface QueueRedis {
   connection: IORedis
   readiness: { hasBeenReady: boolean }
 }
 
-// Same shape/reasoning as redis.service.ts's own `state`: a mutable property
-// on a top-level `const` rather than several top-level `let`s, so every
-// function below shares state without any of them reassigning a top-level
-// binding (which unicorn/no-top-level-assignment-in-function forbids).
-//
-// `closed` mirrors redis.service.ts's own flag: once `closeQueue()` runs,
-// later calls must report unreachable/refuse to enqueue rather than silently
-// opening a brand-new connection during shutdown.
+/**
+ * Module state in one object, so no function reassigns a top-level binding.
+ * Once `closed` is set by `closeQueue()`, later calls report unreachable or
+ * refuse to enqueue instead of opening a new connection during shutdown.
+ */
 const state: {
   worker: QueueRedis | undefined
   producer: QueueRedis | undefined
@@ -56,6 +49,8 @@ const state: {
 
 /**
  * Create one ioredis connection that fails fast before its first 'ready' and retries forever after it.
+ * Before 'ready' it stops after three retries, so `isQueueReachable()` answers
+ * quickly; after it, retrying forever lets BullMQ survive a Redis outage.
  * @param label - Names the connection in its logs.
  * @param options - Options on top of the shared URL, timeout and retry strategy.
  * @param onDeadBeforeReady - Called when the connection gives up without ever being ready, unless the module is closed.
@@ -69,8 +64,6 @@ function createQueueRedis(
   const readiness = { hasBeenReady: false }
   const connection = new IORedis(getEnv().REDIS_URL, {
     ...options,
-    // Before the first 'ready', stop after three retries so isQueueReachable()
-    // fails fast; after it, retry forever so BullMQ survives a Redis outage.
     // `undefined` stops reconnecting: ioredis only checks `typeof retryDelay !== 'number'`.
     retryStrategy: (times) => {
       if (readiness.hasBeenReady) return Math.min(times * 200, RECONNECT_DELAY_CAP_MS)
@@ -87,9 +80,7 @@ function createQueueRedis(
     logger.warn(`${label} gave up before its first ready; the next use reconnects`)
     onDeadBeforeReady(connection)
   })
-  // Mandatory: an unlistened 'error' event on an EventEmitter crashes the
-  // Node.js process. ioredis emits 'error' for every failed connection
-  // attempt, not just fatal ones, so this must never be removed.
+  // Never remove: an unlistened 'error' crashes the process, and ioredis emits one per failed attempt.
   connection.on('error', (error: unknown) => {
     logger.error(`${label} error`, { error })
   })
@@ -111,10 +102,10 @@ async function discardQueue(queue: Queue | undefined): Promise<void> {
 /**
  * Get the shared ioredis connection BullMQ Workers run on, connecting on first use.
  *
- * Separate from redis.service.ts's node-redis client — different libraries,
- * cannot share. BullMQ requires `maxRetriesPerRequest: null` on a Worker's
- * connection (it manages its own retry/blocking semantics). Queue producers
- * use `getProducerConnection()` instead.
+ * Separate from redis.service.ts's node-redis client: BullMQ requires ioredis,
+ * and the two libraries cannot share a connection. BullMQ requires
+ * `maxRetriesPerRequest: null` on a Worker's connection, since it manages its
+ * own retry and blocking. Queue producers use `getProducerConnection()`.
  * @returns The shared Worker connection.
  * @throws {Error} If the connection has already been closed.
  */
@@ -125,14 +116,7 @@ export function getQueueConnection(): IORedis {
   state.worker ??= createQueueRedis(
     'BullMQ Redis connection',
     {
-      // BullMQ requires this to be exactly `null`, not merely absent —
-      // verified empirically against the installed ioredis: its own option
-      // merging (lodash.defaults) treats an explicit `undefined` as "unset"
-      // and silently re-applies its own default of 20, which is exactly the
-      // "You are using a non-supported version of Redis" failure this
-      // setting exists to prevent. `null`, unlike `undefined`, survives that
-      // merge untouched.
-      // eslint-disable-next-line unicorn/no-null -- see comment above; undefined does not have the same effect here
+      // eslint-disable-next-line unicorn/no-null -- ioredis's option merge replaces undefined with its default of 20; BullMQ needs null
       maxRetriesPerRequest: null,
     },
     (dead) => {
@@ -157,8 +141,10 @@ export function onWorkerConnectionLost(listener: (dead: IORedis) => void): () =>
 }
 
 /**
- * Record whether this process's Workers failed to start, so readiness can't pass without them.
- * @param haveFailed - True when the last start failed; false once Workers are running again.
+ * Record whether this process's Workers failed to restart, so readiness can't pass without them.
+ * Only the supervisor's restart path calls it (worker-supervisor.service.ts);
+ * a failed first start at boot throws instead, so the flag starts false.
+ * @param haveFailed - True when the last restart failed; false once a restart succeeds.
  */
 export function setWorkersFailed(haveFailed: boolean): void {
   state.haveWorkersFailed = haveFailed
@@ -209,9 +195,8 @@ export function getEmailQueue(): Queue {
 }
 
 /**
- * Get the shared "notification" queue, creating it on first use. Same
- * lazy-singleton shape as `getEmailQueue()` — a separate BullMQ Queue,
- * over the same producer connection.
+ * Get the shared "notification" queue, creating it on first use, over the
+ * same producer connection as the others.
  * @returns The notification queue.
  */
 export function getNotificationQueue(): Queue {
@@ -246,9 +231,10 @@ export function getMaintenanceQueue(): Queue {
 }
 
 /**
- * Enqueue a job. A thin, generically-typed wrapper over `Queue#add` so
- * callers depend on this module's surface rather than importing BullMQ's
- * `Queue` type directly everywhere a job is enqueued.
+ * Enqueue a job. A generic wrapper over `Queue#add`, typed so the job's data
+ * is the caller's `T`: with BullMQ's default type parameters `queue.add()`
+ * returns `Job<any>`, and typing the parameter `Queue<T>` trips
+ * exactOptionalPropertyTypes on BullMQ's unresolved `ExtractDataType`.
  * @param queue - The BullMQ queue to enqueue onto, e.g. `getEmailQueue()`.
  * @param jobName - The job's name, read by whichever worker processes this queue.
  * @param data - The job's payload.
@@ -261,14 +247,6 @@ export async function addJob<T extends object>(
   data: T,
   options?: JobsOptions
 ): Promise<Job<T>> {
-  // Explicit assertion, not an implicit any-return: `queue: Queue` (BullMQ's
-  // own default type parameters) makes `queue.add()`'s return type
-  // `Promise<Job<any, ...>>`, and bullmq's own `ExtractDataType<T, T>`
-  // conditional type (queue.d.ts) does not simplify back to `T` for an
-  // unresolved generic — typing this parameter `Queue<T>` instead trips
-  // exactOptionalPropertyTypes over that same unresolved conditional. An
-  // explicit assertion says plainly what both attempts could only imply:
-  // the caller's own `T` is what this queue actually stores.
   return queue.add(jobName, data, options) as Promise<Job<T>>
 }
 
@@ -312,11 +290,11 @@ async function hasBecomeReady(connection: IORedis): Promise<boolean> {
 
 /**
  * Check that both queue connections, the Workers' and the producers', answer.
- * @returns True when both are ready and answer PING; false once closed, while
- *   the Workers have failed to start (`setWorkersFailed`), or
- *   unreachable, without hanging: before the first 'ready' a connection gives
- *   up after a few retries, and after it any status other than 'ready' is
- *   reported at once.
+ * @returns True when both are ready and answer PING; false once closed, after
+ *   a failed Worker restart until a later one succeeds (`setWorkersFailed`), or
+ *   when unreachable, without hanging: before the first 'ready' a connection
+ *   gives up after a few retries, and after it any status other than 'ready'
+ *   is reported at once.
  */
 export async function isQueueReachable(): Promise<boolean> {
   if (state.closed || state.haveWorkersFailed) return false
@@ -336,38 +314,26 @@ export async function isQueueReachable(): Promise<boolean> {
 
 /**
  * Close every queue and both connections without waiting on Redis. Called by
- * graceful shutdown; safe to call twice.
+ * graceful shutdown; safe to call twice. Closing a Queue leaves the producer
+ * connection open, because BullMQ marks a Queue built from an ioredis instance
+ * as sharing it and skips the quit, so the connection is ended once, below.
  * @returns Resolves once everything is closed.
  */
 export async function closeQueue(): Promise<void> {
-  // Set unconditionally, before either close below, so a second call — or a
-  // first call when nothing was ever created — still records shutdown.
   state.closed = true
   if (state.emailQueue) {
     const emailQueue = state.emailQueue
     state.emailQueue = undefined
-    // Does NOT touch the producer connection — verified empirically (and
-    // against node_modules/bullmq/dist/cjs/utils/create-backend.js's
-    // `shared: isRedisInstance(opts.connection)`): BullMQ marks a Queue
-    // built from an already-constructed ioredis INSTANCE (as opposed to
-    // connection options) as using a "shared" connection, and its own
-    // RedisConnection#close() skips quitting/disconnecting whenever
-    // `shared` is true. So the producer connection outlives this call and
-    // is ended below, once, for every queue.
     await emailQueue.close()
   }
   if (state.notificationQueue) {
     const notificationQueue = state.notificationQueue
     state.notificationQueue = undefined
-    // Same "shared connection" reasoning as the emailQueue.close() call
-    // above — this queue was also built from the already-constructed
-    // ioredis instance, so this does not touch the producer connection either.
     await notificationQueue.close()
   }
   if (state.maintenanceQueue) {
     const maintenanceQueue = state.maintenanceQueue
     state.maintenanceQueue = undefined
-    // Built from the same ioredis instance, so this leaves the producer connection open too.
     await maintenanceQueue.close()
   }
   const connections = [state.worker?.connection, state.producer?.connection]
@@ -378,14 +344,13 @@ export async function closeQueue(): Promise<void> {
 
 /**
  * End one connection without waiting on Redis: `quit()` when ready, `disconnect()` otherwise.
+ * `quit()` is a command, so while not ready it would wait in the offline queue
+ * until Redis returned, and a connection in 'end' rejects it.
  * @param connection - The connection to end, if it was ever created.
  * @returns Resolves once the connection is ended.
  */
 async function endConnection(connection: IORedis | undefined): Promise<void> {
   if (!connection) return
-  // quit() is a command: while not ready it would queue behind the offline
-  // queue until Redis returned. disconnect() fails pending commands instead.
-  // A connection already in 'end' also rejects quit(), so it takes this path too.
   if (connection.status === 'ready') {
     await connection.quit()
   } else {

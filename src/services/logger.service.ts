@@ -1,14 +1,9 @@
-// src/services/logger.service.ts
-//
-// The one place anything in this codebase should write a log line. A pino
-// logger, lazily constructed (same pattern as getEnv()/getRedis()) so
-// importing this module never has a side effect. It keeps the JSON shape the
-// winston version had — `level` as a label, `timestamp`, `message` — plus a
-// mixin that pulls correlation data out of AsyncLocalStorage and the active
-// span, and a formatter that turns any Error-valued field into
-// { name, message, stack }, redacted via redactedForLog wherever it (or
-// something in its .cause chain) turns out to be a database query error
-// (JSON.stringify of a bare Error is "{}").
+/**
+ * @file The one place this codebase writes a log line: a lazily built pino logger
+ * with a `level` label, `timestamp` and `message`, a mixin adding correlation ids
+ * from the request context and active span, and a formatter that serialises every
+ * Error-valued field, redacting database query errors with `redactedForLog`.
+ */
 import { createRequire } from 'node:module'
 import { trace } from '@opentelemetry/api'
 import pino, { type DestinationStream, type Logger, type StreamEntry } from 'pino'
@@ -21,13 +16,10 @@ import { requestContextStore } from '@/services/request-context.service'
  * Parse a single V8 stack frame — `at functionName (path:line:col)` or
  * `at path:line:col` — into its file path and line number.
  *
- * Deliberately not a regex over the whole frame: a pattern that tries to
- * capture "everything up to the last `:line:col`" with nested optional
- * groups is exactly the shape that backtracks superlinearly on a long,
- * paren-free frame. Splitting on the last two `:`-separated segments does
- * the same job in linear time and, as a side effect, also copes with a
- * Windows drive letter (`C:\...`) the same way it copes with `file://`: both
- * just become extra segments swallowed into the path half of the split.
+ * Not a regex over the whole frame: a pattern capturing everything up to the
+ * last `:line:col` backtracks superlinearly on a long, paren-free frame.
+ * Splitting on the last two `:` segments is linear, and a Windows drive letter
+ * or `file://` just stays in the path half.
  * @param frame - One line from `Error().stack`, e.g. `    at foo (a.ts:1:2)`.
  * @returns The frame's path and line number, or `undefined` when the line is
  *   not a stack frame shaped like one of the two forms above.
@@ -51,10 +43,11 @@ function parseStackFrame(frame: string): { path: string; line: string } | undefi
 
 /**
  * Parse the first stack frame external to this file to extract the caller's
- * file path and line number.
+ * file path and line number, skipping this module's own frames.
  *
  * Strips `file://` prefixes (tsx/vitest), `dist/` prefixes (production), and
- * `src/` prefixes (development) down to a repo-relative path.
+ * `src/` prefixes (development) down to a repo-relative path; with neither
+ * `dist/` nor `src/`, it keeps the last two path segments.
  * @returns A `path:line` string identifying the caller, or `'unknown'` when
  *   the stack could not be parsed.
  */
@@ -66,14 +59,7 @@ export function getCallerSource(): string {
     const frame = parseStackFrame(line)
     if (!frame) continue
 
-    // Skip frames inside this module itself (getCallerSource's own frame,
-    // and the logger.error/warn/info/debug wrapper that called it) so the
-    // result names the actual external caller. A SUFFIX check on the parsed
-    // path, not `line.includes('logger.service')`: this file's own test,
-    // tests/unit/services/logger.service.test.ts, contains "logger.service"
-    // as a substring of its own name — an `includes` check would skip the
-    // test's own frame too and walk straight into Vitest's internal runner
-    // frames, which is exactly the false positive this was caught by.
+    // A suffix check, not a substring one, which would also skip logger.service.test.ts's frames.
     if (frame.path.endsWith('logger.service.ts') || frame.path.endsWith('logger.service.js')) {
       continue
     }
@@ -81,9 +67,6 @@ export function getCallerSource(): string {
     const rawPath = frame.path.replace(/^file:\/\//, '')
     const distributionIndex = rawPath.lastIndexOf('/dist/')
     const sourceIndex = rawPath.lastIndexOf('/src/')
-    // Whichever of /dist/ or /src/ appears (a built vs. a dev/test run),
-    // cut everything before it so the printed path is repo-relative; when
-    // neither appears, fall back to the last two path segments.
     const cutIndex = distributionIndex === -1 ? sourceIndex : distributionIndex
     const filePath =
       cutIndex === -1 ? rawPath.split('/').slice(-2).join('/') : rawPath.slice(cutIndex + 1)
@@ -113,9 +96,10 @@ function requestContextFields(): Record<string, string> {
   return fields
 }
 
-// How many nodes — the top-level error plus its .cause chain — serializeOneError
-// will look at before it stops walking. Bounded, so a cyclic .cause chain
-// ends instead of recursing forever.
+/**
+ * How many nodes, the top-level error plus its `.cause` chain, `serializeOneError`
+ * walks. Bounded, so a cyclic `.cause` chain ends.
+ */
 const CAUSE_WALK_DEPTH = 5
 
 /**
@@ -178,9 +162,10 @@ export interface LoggerOptions {
   destination?: DestinationStream
 }
 
-// How long duplicate (same source + message) log entries are suppressed
-// after the first one triggers a Slack send, before a single summary
-// message reports how many were suppressed.
+/**
+ * How long duplicate (same source and message) records are suppressed after
+ * the first is sent to Slack, before one summary reports how many were.
+ */
 const DEDUP_WINDOW_MS = 60_000
 
 const LEVEL_COLORS: Record<string, string> = {
@@ -334,11 +319,8 @@ export function createSlackDestination(options: { webhookUrl: string }): Destina
 const requireCjs = createRequire(import.meta.url)
 
 /**
- * Loads pino-pretty via requireCjs(), indirected through this mutable
- * object rather than called directly, so tests can swap `load` with
- * `tests/helpers/mutate.ts`'s `withMutatedMethod` to force the
- * MODULE_NOT_FOUND path in {@link createPrettyStream} below without
- * touching the real module resolution machinery.
+ * Loads pino-pretty. A mutable object, so tests can swap `load` to force the
+ * MODULE_NOT_FOUND path in {@link createPrettyStream}.
  */
 export const pinoPrettyLoader = {
   load: (): { build: (options: PrettyOptions) => DestinationStream } =>
@@ -381,11 +363,10 @@ function createPrettyStream(destination: DestinationStream): DestinationStream {
   })
 }
 
-// The env schema (env.config.ts) already restricts LOG_LEVEL and
-// SLACK_LOG_LEVEL to these four values — this set is belt-and-braces
-// validation for createPinoLogger's own direct callers (the tests), not new
-// runtime behaviour, and lets `options.level`/`options.slackLogLevel` reach
-// pino.multistream's StreamEntry without an `as pino.Level` cast.
+/**
+ * The levels the env schema allows for LOG_LEVEL and SLACK_LOG_LEVEL, checked
+ * again for `createPinoLogger`'s direct callers.
+ */
 const LEVELS = new Set(['error', 'warn', 'info', 'debug'])
 
 /**
@@ -402,7 +383,9 @@ function toPinoLevel(level: string): pino.Level {
 /**
  * Build a pino logger that writes JSON or pino-pretty text, per `format`.
  * With a Slack webhook, records at or above slackLogLevel are also sent to
- * Slack via pino.multistream.
+ * Slack via pino.multistream. pino's default `err` serializer is replaced
+ * with a pass-through, so `err` keeps the shape `serializeErrors` gives every
+ * Error field.
  * @param options - Level, format, Slack settings, optional destination.
  * @returns The pino logger.
  */
@@ -411,8 +394,7 @@ export function createPinoLogger(options: LoggerOptions): Logger {
   const consoleStream = options.format === 'json' ? base : createPrettyStream(base)
 
   const streams: StreamEntry[] = [
-    // level MUST be explicit: a multistream entry defaults to 'info', which
-    // would silently drop debug lines when LOG_LEVEL=debug.
+    // Explicit: a multistream entry defaults to 'info' and would drop debug lines.
     { level: toPinoLevel(options.level), stream: consoleStream },
   ]
   if (options.slackWebhookUrl) {
@@ -425,35 +407,17 @@ export function createPinoLogger(options: LoggerOptions): Logger {
   return pino(
     {
       level: options.level,
-      // null, not undefined: pino's own LoggerOptions types `base` as
-      // `{ ... } | null` (no `undefined` in the union), so under this
-      // tsconfig's exactOptionalPropertyTypes, `base: undefined` fails to
-      // typecheck even though it works identically at runtime. `null` is
-      // also pino's own documented way to drop the default pid/hostname
-      // bindings, so this is the idiomatic spelling, not just the one that
-      // compiles.
       // eslint-disable-next-line unicorn/no-null -- pino's own LoggerOptions type requires `null`, not `undefined`, to suppress the default pid/hostname bindings
       base: null,
       messageKey: 'message',
       timestamp: () => `,"timestamp":"${new Date().toISOString()}"`,
       mixin: requestContextFields,
-      // pino's default merge lets the logged object's own fields overwrite
-      // the mixin's — so a caller passing `requestId` (or `tenantId`,
-      // `traceId`, `spanId`) in meta would silently spoof correlation data
-      // that is supposed to come only from the request's own
-      // AsyncLocalStorage context / active span. Reversing the merge order
-      // makes the mixin win, restoring the winston-era guarantee that
-      // callers cannot override correlation fields.
+      // Mixin wins, so a caller's meta cannot spoof requestId, tenantId, traceId or spanId.
       mixinMergeStrategy: (mergeObject, mixinObject) => Object.assign(mergeObject, mixinObject),
       formatters: {
         level: (label) => ({ level: label }),
         log: serializeErrors,
       },
-      // pino's own default `err` serializer would otherwise re-process the
-      // { name, message, stack } shape serializeErrors already produced,
-      // turning it into { type: 'Object', message, stack, name } — losing
-      // the clean shape and adding a misleading `type`. Pass it through
-      // untouched so `err` serialises exactly like every other Error field.
       serializers: { err: (value: unknown) => value },
     },
     pino.multistream(streams)
@@ -471,8 +435,6 @@ export function loggerOptionsFromEnv(
   return {
     level: env.LOG_LEVEL,
     format: logFormat(env),
-    // Spread: exactOptionalPropertyTypes rejects an explicit undefined. Same
-    // pattern mailer.config.ts uses for the SMTP credentials.
     ...(env.SLACK_WEBHOOK_URL !== undefined && { slackWebhookUrl: env.SLACK_WEBHOOK_URL }),
     slackLogLevel: env.SLACK_LOG_LEVEL,
   }
