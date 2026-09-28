@@ -1,47 +1,7 @@
-// src/configs/rate-limit-store.config.ts
-//
-// A rate limiter is built by `createRateLimiter(...)`
-// (rate-limit.middleware.ts) the moment `createAuthRouter()` assembles the
-// auth routes — which happens before the startup sequence has connected
-// anything. Nothing in this codebase connects Redis eagerly:
-// `redis.service.ts`'s own header comment says connection is
-// lazy, created on first use, precisely so importing a module that
-// transitively reaches it never opens a socket. A rate-limit Store that
-// resolved its backend at CONSTRUCTION time would therefore be pinned to the
-// in-memory `MemoryStore` fallback for the entire life of the process — and
-// an in-memory counter is per-process, so with N replicas behind a load
-// balancer a limiter configured for "5 attempts" would actually allow
-// "5 x N", non-deterministically, depending on which replica happened to
-// serve which request.
-//
-// SharedRateLimitStore instead LATCHES: every instance starts on
-// `MemoryStore`, and the first `increment()` whose `getRedis()` resolves and
-// whose Lua scripts load makes a Redis-backed store its primary backend from
-// then on (a failed script load leaves it unlatched, to retry on the next
-// request). It never calls `getRedis()` again from the latch path itself
-// once switched — only `sendCommand` does, per actual Redis command, and
-// ALWAYS by asking `getRedis()` for the CURRENT client rather than holding
-// one captured at latch time. That is what makes shutdown safe without any
-// special-casing here: `redis.service.ts`'s `getRedis()` throws once
-// `closeRedis()` has run, deliberately refusing to reopen a socket during
-// shutdown (see that file's header comment) — routing every command through
-// `getRedis()` means this store inherits that guarantee for free instead of
-// re-implementing "don't resurrect a connection" against a client reference
-// of its own.
-//
-// One cost worth naming: until the first successful latch, EVERY request
-// pays `getRedis()`'s bounded connection attempt when Redis is unreachable
-// (the same cost `/health/ready` already pays — see redis.service.ts's
-// `reconnectStrategy`: a 5s connect timeout, up to a few hundred ms of
-// backoff between retries, giving up after 3). That is the trade for never
-// blocking the module-import path on a network call.
-//
-// After the switch, a Redis command that fails (an outage, or a closed client
-// during shutdown) falls back to this store's own MemoryStore for that call,
-// as does a failed switch. It is logged once per outage, and the store goes
-// back to Redis as soon as a command succeeds. A Redis outage must neither 500 every limited route nor switch
-// limiting off (`passOnStoreError`). The cost is per-process counting while
-// Redis is down.
+/**
+ * @file The rate-limit store every limiter uses: shared through Redis when it
+ * is reachable, per-process in memory when it is not.
+ */
 import { MemoryStore, type IncrementResponse, type Options, type Store } from 'express-rate-limit'
 import { RedisStore } from 'rate-limit-redis'
 import { logger } from '@/services/logger.service'
@@ -49,6 +9,18 @@ import { getRedis } from '@/services/redis.service'
 
 /**
  * A rate-limit `Store` that starts in memory, switches once to Redis, and falls back to memory per command while Redis fails.
+ *
+ * Limiters are built before anything connects Redis, so a store that picked
+ * its backend at construction would stay per-process for life, letting N
+ * replicas allow N times the limit. The first `increment()` whose
+ * `getRedis()` resolves and whose Lua scripts load switches to Redis; a
+ * failed attempt stays on memory and retries on the next request, which
+ * until then pays `getRedis()`'s bounded connect attempt. Every Redis
+ * command asks `getRedis()` for the current client, so after `closeRedis()`
+ * commands fail instead of reopening a socket. A failed command falls back
+ * to memory for that call, logged once per outage: an outage neither 500s
+ * limited routes nor turns limiting off (`passOnStoreError` stays unset),
+ * at the cost of per-process counting while Redis is down.
  */
 export class SharedRateLimitStore implements Store {
   private readonly memory = new MemoryStore()
@@ -59,12 +31,9 @@ export class SharedRateLimitStore implements Store {
   private options: Options | undefined
 
   /**
-   * @param prefix - Text prepended to every key once this store is backed by
-   *   Redis, so two limiters never collide in one shared keyspace. Passed
-   *   straight through to `RedisStore`; `MemoryStore` keeps its own
-   *   per-instance map regardless. Also exposed as `this.prefix` (the `Store`
-   *   interface's own optional field), which express-rate-limit's built-in
-   *   validations read to tell two limiters' keys apart.
+   * @param prefix - Prepended to every Redis key so two limiters never
+   *   collide. Also the `Store` interface's `prefix`, which express-rate-limit's
+   *   validations read to tell limiters apart.
    */
   constructor(public readonly prefix: string) {}
 

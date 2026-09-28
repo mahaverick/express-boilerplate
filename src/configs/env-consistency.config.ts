@@ -1,14 +1,14 @@
-// src/configs/env-consistency.config.ts
-//
-// Cross-field rules the schema cannot hold: EnvSchema carries no
-// object-level .refine(), because getDatabaseUrl() needs EnvSchema.pick().
-// getEnv() stays a pure parse; index.ts runs these checks once, at boot.
+/**
+ * @file Cross-field environment rules, run once at boot by index.ts. They live
+ * outside `EnvSchema` because an object-level `.refine()` would break
+ * `getDatabaseUrl()`'s `.pick()`.
+ */
 import { isCookieSecure, trustProxySetting, type Env } from '@/configs/env.config'
 import { SERVER_DRAIN_TIMEOUT_MS } from '@/constants/global.constants'
 
 /**
- * Variables that were renamed, mapped to their new names. Setting an old
- * name refuses boot: the schema no longer reads it, so it would otherwise be
+ * Retired variable names, mapped to their replacements. Setting a retired
+ * name refuses boot: the schema does not read it, so it would otherwise be
  * ignored in silence.
  */
 export const REMOVED_ENV_NAMES: Readonly<Record<string, string>> = Object.freeze({
@@ -20,8 +20,10 @@ export const REMOVED_ENV_NAMES: Readonly<Record<string, string>> = Object.freeze
   QUEUE_PREFIX: 'REDIS_KEY_PREFIX',
 })
 
-// Time left after a hung send gives up, for the database, Redis, queue and
-// OTel closes that run after the workers close.
+/**
+ * Time left after a hung send gives up, for the database, Redis, queue and
+ * OTel closes that run after the workers close.
+ */
 const SHUTDOWN_HEADROOM_MS = 5000
 
 const LOCAL_SMTP_HOSTS = new Set(['localhost', '127.0.0.1'])
@@ -88,7 +90,10 @@ function cookieDomainProblem(env: Env): string | undefined {
  * Refuses unsafe or stale configuration at boot; throws Error with one actionable message.
  *
  * Every problem found goes into that one message, so an operator fixes them
- * all in one pass. Warnings go to `warn` and never stop boot.
+ * all in one pass. Warnings go to `warn` and never stop boot. The SMTP
+ * timeouts must fit in what SHUTDOWN_TIMEOUT_MS leaves after the HTTP drain
+ * and the headroom, since `gracefulShutdown` drains HTTP before it waits for
+ * the in-flight send; on local that is a warning.
  * @param env - The validated environment from `getEnv()`.
  * @param raw - The unparsed environment, normally `process.env`; only read for renamed names.
  * @param warn - Receives each warning message.
@@ -112,8 +117,7 @@ export function assertEnvConsistent(
   const domainProblem = cookieDomainProblem(env)
   if (domainProblem !== undefined) problems.push(domainProblem)
 
-  // Half a credential pair means no auth is attempted at all, so every send
-  // to a provider that needs it fails, silently (Ruling G, mailer.service.ts).
+  // Half a pair sends no auth, so every send to a provider that needs it fails silently.
   if ((env.SMTP_USERNAME === undefined) !== (env.SMTP_PASSWORD === undefined)) {
     const [presentName, missingName] =
       env.SMTP_USERNAME === undefined
@@ -124,10 +128,7 @@ export function assertEnvConsistent(
     )
   }
 
-  // gracefulShutdown drains HTTP first, then waits for the in-flight send,
-  // so the SMTP timeouts get what SHUTDOWN_TIMEOUT_MS leaves after the drain
-  // and the headroom. The sum covers one address and no DNS time, so it is a
-  // sanity check, not a bound on a send.
+  // A sanity check, not a bound: the sum covers one address and no DNS time.
   const smtpChainMs =
     env.SMTP_CONNECTION_TIMEOUT_MS + env.SMTP_GREETING_TIMEOUT_MS + env.SMTP_SOCKET_TIMEOUT_MS
   const smtpBudgetMs = env.SHUTDOWN_TIMEOUT_MS - SERVER_DRAIN_TIMEOUT_MS - SHUTDOWN_HEADROOM_MS
@@ -137,8 +138,7 @@ export function assertEnvConsistent(
     else problems.push(message)
   }
 
-  // express-session only sends a Secure cookie when req.secure is true,
-  // which behind a TLS-terminating proxy needs TRUST_PROXY.
+  // express-session sends a Secure cookie only when req.secure, which behind TLS needs TRUST_PROXY.
   if (
     isCookieSecure(env) &&
     env.GOOGLE_CLIENT_ID !== undefined &&
