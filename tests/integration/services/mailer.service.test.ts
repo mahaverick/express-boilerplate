@@ -286,7 +286,7 @@ describe('sendMail', () => {
    * See this file's own header comment for why this is asserted at the
    * service boundary rather than over HTTP.
    */
-  it('resolves identically for a recipient regardless of transport failure — the property Task 6 asserts end to end over HTTP', async () => {
+  it('resolves identically for a recipient regardless of transport failure — the property tests/integration/api/auth.test.ts asserts end to end over HTTP', async () => {
     const transporter = getMailTransporter()
     const existingLikeRecipient = uniqueRecipient('existing')
     const unknownLikeRecipient = uniqueRecipient('unknown')
