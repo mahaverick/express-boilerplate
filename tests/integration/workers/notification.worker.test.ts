@@ -1,23 +1,13 @@
-// tests/integration/workers/notification.worker.test.ts
-//
-// Integration test against the real Redis and per-worker Postgres started
-// by docker-compose — proves the whole path addNotificationJob writes into
-// Redis is actually picked up and processed by a real BullMQ Worker
-// (notification.worker.ts): enqueue -> Worker pulls the job -> real
-// NotificationRepository insert / real addEmailJob enqueue onto the "email"
-// queue.
-//
-// Runs under this worker's own REDIS_KEY_PREFIX (tests/helpers/setup-global.ts
-// sets `test-w${VITEST_POOL_ID}`), same as
-// tests/integration/workers/email.worker.test.ts and
-// tests/integration/services/queue.service.test.ts, so jobs this file adds
-// never collide with another vitest worker's keyspace.
-//
-// Does NOT also start the email worker (startEmailWorker() lives in
-// tests/integration/workers/email.worker.test.ts, already proven there) —
-// this file's own scope is the notification worker's fan-out contract:
-// that a real enqueue eventually leaves a matching job sitting on the real
-// "email" queue, not that Mailpit delivery also works end to end.
+/**
+ * @file Against the real Redis and per-worker Postgres: proves the whole
+ * path `addNotificationJob` writes into Redis is actually picked up and
+ * processed by a real BullMQ Worker (`notification.worker.ts`) — enqueue,
+ * Worker pulls the job, real `NotificationRepository` insert / real
+ * `addEmailJob` enqueue onto the "email" queue. Does not also start the
+ * email worker: this file's scope is the notification worker's fan-out
+ * contract, that a real enqueue eventually leaves a matching job on the
+ * real "email" queue, not that Mailpit delivery also works end to end.
+ */
 import { randomUUID } from 'node:crypto'
 import { UnrecoverableError, type Job, type Worker } from 'bullmq'
 import { afterAll, describe, expect, it, vi } from 'vitest'
@@ -34,22 +24,13 @@ import { withMutatedMethod } from '../../helpers/mutate'
 import { waitForLoggedCall } from '../../helpers/queue-jobs'
 
 /**
- * The email queue's currently queued/settled jobs, typed as `EmailJobData`
- * — `getEmailQueue()` returns a bare, ungenericised `Queue`
- * (queue.service.ts's own comment on `addJob` explains why: BullMQ's own
- * conditional return type does not resolve for an unparameterised `Queue`),
- * so `.getJobs()` on it is `Job<any>[]` without this assertion. Same
- * "the caller's own T is what this queue actually stores" reasoning
- * `addJob` itself already relies on.
+ * The email queue's currently queued/settled jobs, typed as `EmailJobData`:
+ * `getEmailQueue()` returns a bare, ungenericised `Queue`, so `.getJobs()`
+ * on it is `Job<any>[]` without this assertion.
  * @returns Every job currently on the "email" queue in a non-terminal or completed state.
  */
 async function emailQueueJobs(): Promise<Job<EmailJobData>[]> {
-  // 'prioritized', not just 'waiting': every email job carries an explicit
-  // `priority` (`emailJobDefaults`, email.job.ts — `JobPriority.high`), and
-  // BullMQ routes any job with an explicit priority into its own
-  // "prioritized" list rather than "waiting" until a worker actually pulls
-  // it — verified empirically here (both tests below failed to find their
-  // own just-enqueued job until this state was added).
+  // 'prioritized', not just 'waiting': every email job carries an explicit priority (JobPriority.high), which BullMQ routes into its own list rather than "waiting" until a worker pulls it.
   return getEmailQueue().getJobs([
     'waiting',
     'active',
@@ -117,9 +98,7 @@ describe('notification.worker', () => {
     if (createdUserIds.length > 0) {
       await sql`delete from users where id = any(${createdUserIds})`
     }
-    // Same shutdown ordering as email.worker.test.ts's own afterAll: close
-    // the worker first (drains the current job), then obliterate both
-    // queues this file could have left jobs on, then the shared connection.
+    // Close the worker first (drains the current job), then obliterate both queues this file could have left jobs on, then the shared connection.
     await worker.close()
     await getNotificationQueue().obliterate({ force: true })
     await getEmailQueue().obliterate({ force: true })
@@ -170,10 +149,7 @@ describe('notification.worker', () => {
     const { notifications } = await notificationRepository.list(userId, { limit: 10 })
     expect(notifications).toHaveLength(1)
     expect(notifications[0]?.title).toBe('Verify your email')
-    // The load-bearing assertion: what was actually persisted to Postgres,
-    // not merely what the worker was asked to strip in-process — proves
-    // the raw token never reaches the notifications row at all, matching
-    // task-2-brief.md's own metadata rule.
+    // The load-bearing assertion: what was actually persisted to Postgres, not merely what the worker was asked to strip in-process.
     expect(notifications[0]?.metadata).toEqual({ templateKey: 'email_verification' })
     expect(notifications[0]?.metadata).not.toHaveProperty('variables')
     expect(JSON.stringify(notifications[0]?.metadata)).not.toContain(rawToken)
@@ -239,15 +215,7 @@ describe('notification.worker', () => {
   }, 15_000)
 
   it('fails the job (so BullMQ can retry) when the in-app insert violates the user foreign key', async () => {
-    // Deliberately never inserted into `users` — `notifications.userId`
-    // references it NOT NULL (notification.model.ts), so
-    // NotificationRepository.create's own insert rejects with a real
-    // Postgres foreign-key violation, proving processNotificationJob
-    // actually lets that propagate rather than swallowing it. attempts: 1
-    // asserts the terminal failed state itself, not the retry schedule
-    // (notificationJobDefaults' own 3 attempts is exercised by inspection
-    // of notification.job.ts's own defaults, not by waiting through it
-    // here — same reasoning as email.worker.test.ts's identical choice).
+    // Deliberately never inserted into users: the foreign-key violation proves processNotificationJob actually lets it propagate rather than swallowing it. attempts: 1 asserts the terminal failed state, not the retry schedule.
     const bogusUserId = randomUUID()
 
     const job = await addNotificationJob(

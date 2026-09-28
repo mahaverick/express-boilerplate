@@ -1,25 +1,17 @@
-// tests/integration/workers/email.worker.test.ts
-//
-// Integration test against the real Redis, Mailpit, and per-worker Postgres
-// started by docker-compose — proves the whole path email.job.ts's
-// addEmailJob writes into Redis is actually picked up and processed by a
-// real BullMQ Worker (email.worker.ts): enqueue -> Worker pulls the job ->
-// real sendMail -> real Mailpit delivery / real email_logs row.
-//
-// The PII constraint from task-2-brief.md ("the worker MUST NOT put PII in
-// the thrown error message — BullMQ persists failedReason in Redis") is
-// proven here, not just in tests/unit/workers/email.worker.test.ts: the
-// unit test only proves the Error object processEmailJob throws in-process;
-// it says nothing about what BullMQ actually wrote to Redis's own
-// `failedReason` field, which is a second, independent serialization step.
-// Same "a compile-time/in-process guarantee is not a runtime one until
-// something also checks it there" ethos as mailer.service.ts's own header
-// comment.
-//
-// Runs under this worker's own REDIS_KEY_PREFIX (tests/helpers/setup-global.ts
-// sets `test-w${VITEST_POOL_ID}`), same as
-// tests/integration/services/queue.service.test.ts, so jobs this file adds
-// never collide with another vitest worker's keyspace.
+/**
+ * @file Against the real Redis, Mailpit, and per-worker Postgres: proves
+ * the whole path `email.job.ts`'s `addEmailJob` writes into Redis is
+ * actually picked up and processed by a real BullMQ Worker
+ * (`email.worker.ts`) — enqueue, Worker pulls the job, real `sendMail`,
+ * real Mailpit delivery / real `email_logs` row. The PII constraint (the
+ * worker must not put PII in the thrown error message) is proven here, not
+ * just in `tests/unit/workers/email.worker.test.ts`: the unit test only
+ * proves the Error `processEmailJob` throws in-process, not what BullMQ
+ * itself wrote to Redis's own `failedReason` field, a second, independent
+ * serialization step. Runs under this worker's own `REDIS_KEY_PREFIX`
+ * (`tests/helpers/setup-global.ts`), so jobs this file adds never collide
+ * with another vitest worker's keyspace.
+ */
 import { randomUUID } from 'node:crypto'
 import { Job, type Worker } from 'bullmq'
 import { afterAll, describe, expect, it, vi } from 'vitest'
@@ -36,13 +28,20 @@ import { waitForLoggedCall } from '../../helpers/queue-jobs'
 
 const emailLogRepository = new EmailLogRepository()
 
-// A disposable recipient address, unique to one test — same shape as
-// tests/integration/services/mailer.service.test.ts's own helper.
+/**
+ * A disposable recipient address, unique to one test.
+ * @param label - Names the case, embedded in the address.
+ * @returns A unique `@example.test` address.
+ */
 function uniqueRecipient(label: string): string {
   return `email-worker-${label}-${randomUUID()}@example.test`
 }
 
-// A real, valid password_reset message body for one recipient.
+/**
+ * A real, valid `password_reset` message body for one recipient.
+ * @param to - The recipient.
+ * @returns The `addEmailJob` payload.
+ */
 function passwordResetMessage(to: string): Parameters<typeof addEmailJob>[0] {
   return {
     to,
@@ -55,9 +54,11 @@ function passwordResetMessage(to: string): Parameters<typeof addEmailJob>[0] {
   }
 }
 
-// Nodemailer's own sendMail is an overloaded method — see
-// tests/integration/services/mailer.service.test.ts's identical comment on
-// StubbedSendMail for why the cast below is required to stub it.
+/**
+ * Nodemailer's own `sendMail` is an overloaded method, so a stub needs this
+ * cast to stand in for it (same reasoning as
+ * `tests/integration/services/mailer.service.test.ts`'s `StubbedSendMail`).
+ */
 type StubbedSendMail = (mailOptions: unknown) => Promise<never>
 
 const rejectWithConnectionError: StubbedSendMail = () => {
@@ -65,16 +66,23 @@ const rejectWithConnectionError: StubbedSendMail = () => {
   return Promise.reject(error)
 }
 
-// updateData is swapped on the prototype to record which attempt scrubbed.
-// Declared with a `this` type, as worker-outage.test.ts does for Worker.
+/**
+ * `updateData` swapped on the prototype to record which attempt scrubbed,
+ * declared with a `this` type, as `worker-outage.test.ts` does for Worker.
+ */
 type JobInternals = { updateData: (this: Job, data: unknown) => Promise<void> }
 const jobPrototype = Job.prototype as unknown as JobInternals
 const originalUpdateData = jobPrototype.updateData
 
-// Wait for one specific job id to reach a terminal state on `worker`,
-// resolving with which event fired. Scoped to a single job id (not "the
-// next completed/failed event") so two tests running their own job through
-// the same shared Worker instance can never resolve each other's promise.
+/**
+ * Wait for one specific job id to reach a terminal state on `worker`.
+ * Scoped to a single job id, not "the next completed/failed event", so two
+ * tests running their own job through the same shared Worker instance can
+ * never resolve each other's promise.
+ * @param worker - The Worker to listen on.
+ * @param jobId - The job to watch.
+ * @returns Which event fired first for that job.
+ */
 function waitForJobSettled(
   worker: Worker<EmailJobData>,
   jobId: string
@@ -107,16 +115,9 @@ describe('email.worker', () => {
     if (createdLogIds.length > 0) {
       await sql`delete from email_logs where id = any(${createdLogIds})`
     }
-    // Worker shutdown ordering per task-1-report.md's own forward note:
-    // worker.close() first (drains the current job), then the queue, then
-    // the shared connection — closeQueue()'s own connection.quit() is what
-    // actually closes the socket, since BullMQ never quits a connection it
-    // was handed pre-built (Task 1's "shared connection" finding).
+    // worker.close() first drains the current job; closeQueue()'s connection.quit() is what actually closes the socket, since BullMQ skips quitting a connection it was handed pre-built.
     await worker.close()
-    // Left-over jobs from this file (or an earlier run against this same
-    // shared compose Redis) would otherwise sit under this worker's prefix
-    // and be picked up by the very next test run's worker on start —
-    // mirrors queue.service.test.ts's own reasoning for the identical call.
+    // Left-over jobs from this run would otherwise sit under this worker's prefix and be picked up by the very next run's worker on start.
     await getEmailQueue().obliterate({ force: true })
     await closeQueue()
   })
@@ -146,10 +147,7 @@ describe('email.worker', () => {
       'sendMail',
       rejectWithConnectionError as (typeof transporter)['sendMail'],
       async () => {
-        // attempts: 1 — this test asserts the terminal failed state, not
-        // the retry schedule (emailJobDefaults' own 5 attempts / 75s of
-        // exponential backoff is exercised by inspection of
-        // email.job.ts's own defaults, not by waiting through it here).
+        // attempts: 1 — this asserts the terminal failed state, not the retry schedule (emailJobDefaults' own defaults are exercised by inspection, not by waiting through them here).
         const job = await addEmailJob(passwordResetMessage(recipient), 'user-failure-path', {
           attempts: 1,
         })
@@ -157,11 +155,7 @@ describe('email.worker', () => {
 
         await expect(waitForJobSettled(worker, job.id)).resolves.toBe('failed')
 
-        // The load-bearing assertion: what BullMQ itself persisted to
-        // Redis as failedReason, not merely the Error thrown in-process
-        // (tests/unit/workers/email.worker.test.ts already covers that
-        // half) — proving the PII constraint holds after BullMQ's own
-        // serialization, too.
+        // The load-bearing assertion: what BullMQ itself persisted to Redis as failedReason, not merely the Error thrown in-process.
         const failedJob = await getEmailQueue().getJob(job.id)
         expect(failedJob?.failedReason).toBeDefined()
         expect(failedJob?.failedReason).not.toContain(recipient)
@@ -259,12 +253,7 @@ describe('email.worker', () => {
     createdLogIds.push(...rows.map((row) => row.id))
   }, 20_000)
 
-  // An unlistened 'error' event on an EventEmitter crashes the process
-  // (email.worker.ts's own comment on why worker.on('error', ...) is
-  // mandatory) — this proves the listener is actually attached and routes
-  // to the logger, rather than merely existing in source with nothing ever
-  // exercising it (this repo's own standard for what counts as tested; see
-  // mailer.service.ts's callFramesOf comment on the same theme).
+  // An unlistened 'error' event on an EventEmitter crashes the process, so this proves the listener is actually attached and routes to the logger, not merely present in source.
   it("worker.on('error') logs instead of crashing the process", () => {
     const loggerErrorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {
       // No-op: only the call itself is asserted below.
