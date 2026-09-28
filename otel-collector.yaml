@@ -6,27 +6,18 @@ receivers:
 exporters:
   debug:
     verbosity: normal
-  # Forwards traces to the tempo service (docker-compose.yml), which itself
-  # receives OTLP/HTTP on the same 4318 port — container-to-container, not
-  # the host-published 4318 this collector's own receiver listens on.
-  # `debug` stays wired alongside it (service.pipelines.traces below) so
-  # traces remain visible in `docker compose logs otel-collector` even
-  # without opening Grafana.
+  # Traces go to the tempo service on its container-internal 4318. `debug`
+  # stays in each pipeline so `docker compose logs otel-collector` shows them
+  # without Grafana.
   otlphttp:
     endpoint: http://tempo:4318
   # Loki 3.x ingests OTLP natively at /otlp; the collector appends
   # /v1/logs itself. trace_id/span_id arrive as structured metadata.
   otlphttp/loki:
     endpoint: http://loki:3100/otlp
-# Exposes a real /health endpoint on 13133. Not wired into docker-compose.yml
-# as a Docker HEALTHCHECK: otel/opentelemetry-collector-contrib is genuinely
-# distroless (verified — no sh, wget, curl, or which in the image; only the
-# otelcol-contrib binary itself), and a Docker `test:` always execs inside
-# the target container, so there is nothing installed to run the HTTP check
-# with. The endpoint is still real and reachable from the host on 13133 for
-# manual verification, and any future healthcheck approach (a wrapper image,
-# a host-side prober, Docker's own HTTP healthcheck support if it lands)
-# can use it without reworking this config.
+# /health on 13133, reachable from the host. docker-compose.yml has no
+# HEALTHCHECK for this service: the image is distroless (no sh, wget or curl),
+# and a Docker healthcheck runs inside the container.
 extensions:
   health_check:
     endpoint: 0.0.0.0:13133

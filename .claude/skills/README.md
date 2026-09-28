@@ -20,8 +20,8 @@ self, not a skill.
     SKILL.md
 ```
 
-`<skill-name>` must be kebab-case and must match the `name` field in the
-skill's own frontmatter, or the skill won't resolve.
+`<skill-name>` is kebab-case and matches the `name` field in the skill's own
+frontmatter.
 
 ## `SKILL.md` skeleton
 
