@@ -4,17 +4,6 @@
  * 1025, its own HTTP API on 8025) — never mocked. See CLAUDE.md on why a
  * test like this must live under `tests/integration/`, never
  * `tests/unit/`.
- *
- * "Resolves identically for a recipient regardless of transport failure" is
- * asserted here, at the service boundary: no request handler calls
- * `sendMail` directly; mail reaches it through the queue
- * (`email.worker.ts`).
- *
- * `sendMail` renders internally: `MailMessage` is `{ to, templateKey,
- * variables }`, never pre-rendered subject/text/html — see
- * `mailer.service.ts`'s own header comment for the full reasoning. Every
- * call site below supplies `variables` for a real template rather than
- * literal `subject`/`text` strings.
  */
 import { randomBytes, randomUUID } from 'node:crypto'
 import { inspect } from 'node:util'
@@ -142,6 +131,18 @@ async function recordWithoutNormalization(entry: NewEmailLog): Promise<EmailLog>
   return row
 }
 
+/**
+ * "Resolves identically for a recipient regardless of transport failure"
+ * is asserted here, at the service boundary: no request handler calls
+ * `sendMail` directly; mail reaches it through the queue
+ * (`email.worker.ts`).
+ *
+ * `sendMail` renders internally: `MailMessage` is `{ to, templateKey,
+ * variables }`, never pre-rendered subject/text/html — see
+ * `mailer.service.ts`'s own header comment for the full reasoning. Every
+ * call site below supplies `variables` for a real template rather than
+ * literal `subject`/`text` strings.
+ */
 describe('sendMail', () => {
   const createdLogIds: string[] = []
 

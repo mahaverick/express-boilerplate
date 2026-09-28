@@ -4,15 +4,6 @@
  * is unique to this run and deleted in `afterEach`; deleting the user
  * cascades (`ON DELETE CASCADE` on `user_tokens.user_id`) to every token
  * row it owns.
- *
- * The rotation and reuse-detection tests are deliberately kept from
- * contaminating each other: the rotation test proves the OLD token is
- * invalidated by inspecting the row directly (via the repository), never
- * by presenting the old token again — doing that would itself trigger
- * reuse detection and revoke the new token as a side effect, so the
- * rotation test would then only be passing for the reuse test's reason.
- * The reuse test is the only test that presents an already-rotated token,
- * and it ages the row past the reuse grace window first.
  */
 import { createHash, randomUUID } from 'node:crypto'
 import { eq } from 'drizzle-orm'
@@ -90,6 +81,16 @@ function uniqueEmail(): string {
   return `token-flow-${randomUUID()}@example.test`
 }
 
+/**
+ * The rotation and reuse-detection tests below are deliberately kept from
+ * contaminating each other: the rotation test proves the OLD token is
+ * invalidated by inspecting the row directly (via the repository), never
+ * by presenting the old token again — doing that would itself trigger
+ * reuse detection and revoke the new token as a side effect, so the
+ * rotation test would then only be passing for the reuse test's reason.
+ * The reuse test is the only test that presents an already-rotated token,
+ * and it ages the row past the reuse grace window first.
+ */
 describe('refresh token issuance, rotation, and revocation', () => {
   const createdUserIds: string[] = []
 

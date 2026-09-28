@@ -129,8 +129,8 @@ async function hasFirstAttemptFailed(clients: RedisClientType[]): Promise<boolea
 /**
  * Drop any `'error'` listener registered through `client.on` from here on;
  * its existing logger listener stays. Only intercepts `.on` — a listener
- * added via `.once`, `.addListener` or `.prependListener` would not be
- * caught.
+ * added via `.addListener` or `.prependListener` would not be caught
+ * (`.once` routes through `.on` and is caught).
  * @param client - A client `createRedisClient` just built.
  * @returns The same client.
  */

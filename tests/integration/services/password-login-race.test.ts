@@ -1,60 +1,9 @@
 /**
  * @file A login that compared the old hash must not keep a session past a
- * password change or reset. `login` re-reads the hash `FOR SHARE` in the
- * transaction that issues its token; change and reset lock the user row,
- * store the hash and revoke sessions in one transaction. Each flow is
- * raced in both orders on the pool's two connections, and
- * `pg_blocking_pids` (`lock-probe.ts`) shows the second side waited. Two
- * logins are raced too: one holds `FOR SHARE` while the other finishes
- * without waiting. There are no sleeps.
- *
- * A refresh rotation is raced the same way. It takes `FOR SHARE` on the
- * user row before it claims the presented token, so the password side's
- * revoke either starts after the rotation's new token has committed, or
- * the rotation waits and finds its token revoked. The grace path (a
- * replayed token within `REFRESH_REUSE_GRACE_MS` gets a sibling) is raced
- * too.
- *
- * Four of the password rotation tests have no mutation proof, because
- * each still passes with the rotation's user lock removed:
- * - password-first, change: the claim waits on the presented row, which
- *   the in-transaction revoke holds, and then finds it revoked;
- * - password-first, reset, normal and grace: reset's revoke before its
- *   transaction has already committed, so the claim or the grace check
- *   refuses, and the kill that follows queues on the user row lock;
- * - rotation-first, reset: that earlier revoke waits on the claimed row,
- *   so the locked revoke starts after the rotation's new token has
- *   committed.
- *
- * The same two orderings are run for every other revoking path: a Google
- * account claim, a logout, and the kill a reused refresh token triggers.
- * Each takes the user row `FOR NO KEY UPDATE` before its in-transaction
- * revoke, which queues behind a rotation's `FOR SHARE`. When the revoking
- * side wins, the refused rotation kills the session itself once its own
- * transaction has committed, so two denylist writes are recorded for that
- * session.
- *
- * Seams, all through `withMutatedMethod`:
- * - login pauses after its `lastLoggedInAt` UPDATE, the one call between
- *   the compare and its transaction;
- * - `UserRepository.lockById` reports each side's backend pid, and can
- *   hold login after it has taken `FOR SHARE`;
- * - the revoking side's session revoke can hold after it has run, inside
- *   its locked transaction;
- * - the Redis client's `SET` records each denylist write.
- *
- * The `MUTATION_PROOF` tests below are deliberately red; each keeps the
- * assertions of the test it reproduces:
- *
- * ```
- * MUTATION_PROOF=1 pnpm exec vitest run tests/integration/services/password-login-race.test.ts   # red
- * pnpm exec vitest run tests/integration/services/password-login-race.test.ts                    # green
- * ```
- *
- * Pool note: test mode has max 2 connections and each race holds both. A
- * repository call inside a raced transaction that skipped `tx` would wait
- * for a pool connection that never frees, so the race hangs until a lock
- * probe or the test itself times out.
+ * password change, reset, or refresh rotation. Each flow is raced in both
+ * orders — via lock probes, not sleeps — against `login` and against
+ * `rotateRefreshToken`, proving the loser either waits and finds itself
+ * revoked, or wins and is revoked after the fact.
  */
 import { randomUUID } from 'node:crypto'
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
@@ -154,7 +103,11 @@ async function preparePasswordWrite(flow: PasswordFlow, user: User): Promise<() 
 type Mutation = (run: () => Promise<void>) => Promise<void>
 
 /**
- * Apply every mutation, outermost first, around `run`.
+ * Apply every mutation, outermost first, around `run`. Pool note: test
+ * mode has max 2 connections and every race run through this helper
+ * holds both. A repository call inside a raced transaction that skipped
+ * `tx` would wait for a pool connection that never frees, so the race
+ * hangs until a lock probe or the test itself times out.
  * @param mutations - The replacements.
  * @param run - The race.
  * @returns Resolves once `run` settles and every method is restored.
@@ -254,6 +207,31 @@ async function isStoredPassword(user: User, password: string): Promise<boolean> 
   return row?.password_hash ? isPasswordValid(password, row.password_hash) : false
 }
 
+/**
+ * `login` re-reads the hash `FOR SHARE` in the transaction that issues
+ * its token; change and reset lock the user row, store the hash and
+ * revoke sessions in one transaction. Each flow is raced in both orders
+ * on the pool's two connections, and `pg_blocking_pids` (`lock-probe.ts`)
+ * shows the second side waited. Two logins are raced too (below): one
+ * holds `FOR SHARE` while the other finishes without waiting.
+ *
+ * Seams, all through `withMutatedMethod`:
+ * - login pauses after its `lastLoggedInAt` UPDATE, the one call between
+ *   the compare and its transaction;
+ * - `UserRepository.lockById` reports each side's backend pid, and can
+ *   hold login after it has taken `FOR SHARE`;
+ * - the revoking side's session revoke can hold after it has run, inside
+ *   its locked transaction;
+ * - the Redis client's `SET` records each denylist write.
+ *
+ * The `MUTATION_PROOF` tests in this file are deliberately red; each
+ * keeps the assertions of the test it reproduces:
+ *
+ * ```
+ * MUTATION_PROOF=1 pnpm exec vitest run tests/integration/services/password-login-race.test.ts   # red
+ * pnpm exec vitest run tests/integration/services/password-login-race.test.ts                    # green
+ * ```
+ */
 describe.each<PasswordFlow>(['change', 'reset'])(
   'password %s against a concurrent login',
   (flow) => {
@@ -983,9 +961,31 @@ async function expectRotationRefused(
   expect(race.denials.filter((key) => key.endsWith(`:${sessionId}`))).toHaveLength(2)
 }
 
+/**
+ * A refresh rotation is raced the same way as the login races above. It
+ * takes `FOR SHARE` on the user row before it claims the presented token,
+ * so the password side's revoke either starts after the rotation's new
+ * token has committed, or the rotation waits and finds its token revoked.
+ * The grace path (a replayed token within `REFRESH_REUSE_GRACE_MS` gets a
+ * sibling) is raced too. The same two orderings are run for every other
+ * revoking path below this describe block: a Google account claim, a
+ * logout, and the kill a reused refresh token triggers. Each takes the
+ * user row `FOR NO KEY UPDATE` before its in-transaction revoke, which
+ * queues behind a rotation's `FOR SHARE`. When the revoking side wins,
+ * the refused rotation kills the session itself once its own transaction
+ * has committed, so two denylist writes are recorded for that session.
+ */
 describe.each<PasswordFlow>(['change', 'reset'])(
   'password %s against a concurrent refresh rotation',
   (flow) => {
+    /**
+     * No mutation proof for the `reset` flow: that flow's revoke waits on
+     * the claimed row, so the locked revoke starts after the rotation's
+     * new token has committed even with the rotation's user lock
+     * removed. The `change` flow does have one — see the
+     * `it.runIf(process.env.MUTATION_PROOF === '1' && flow === 'change')`
+     * test below.
+     */
     it('revokes and denies the token of a rotation that committed first', async () => {
       const user = await seedUser()
       const writePassword = await preparePasswordWrite(flow, user)
@@ -997,6 +997,14 @@ describe.each<PasswordFlow>(['change', 'reset'])(
       )
     })
 
+    /**
+     * No mutation proof, either flow: for `change`, the claim waits on
+     * the presented row, which the in-transaction revoke holds, and then
+     * finds it revoked even with the rotation's user lock removed; for
+     * `reset`, the revoke has already committed before the claim runs,
+     * so the claim refuses regardless, and the kill that follows queues
+     * on the user row lock.
+     */
     it('refuses a rotation that waited behind a committed password write', async () => {
       const user = await seedUser()
       const writePassword = await preparePasswordWrite(flow, user)
@@ -1020,6 +1028,14 @@ describe.each<PasswordFlow>(['change', 'reset'])(
       )
     })
 
+    /**
+     * No mutation proof for the `reset` flow, same reasoning as the
+     * non-grace password-first test above: reset's revoke has already
+     * committed before the grace check runs, so it refuses regardless of
+     * the rotation's user lock. The `change` flow does have one — see the
+     * `it.runIf(process.env.MUTATION_PROOF === '1' && flow === 'change')`
+     * test below.
+     */
     it('refuses a grace replay that waited behind a committed password write', async () => {
       const user = await seedUser()
       const writePassword = await preparePasswordWrite(flow, user)

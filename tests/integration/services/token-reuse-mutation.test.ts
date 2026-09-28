@@ -1,40 +1,7 @@
 /**
  * @file Proves the mutation-test harness (`tests/helpers/mutate.ts`) on a
- * REAL security behaviour, against the real per-worker Postgres database —
- * not a toy. The candidate is reuse detection (`rotateRefreshToken`,
- * `session.service.ts`): presenting an already-rotated refresh token must
- * revoke every token in its session family, containing a stolen token the
- * instant its holder tries to use it. The single call that makes this true
- * is `UserTokenRepository.prototype.revokeAllForSession` (see
- * `rotateRefreshToken`'s own header comment). It is also the exact call
- * `revokeRefreshToken` (logout) makes — mutating it here disables both
- * "reuse not detected" and "logout not revoking" at once.
- *
- * Two tests:
- *
- * 1. Always on, both directions in one run: mutate the guard, show the
- *    family survives an attack it should have killed, then let the harness
- *    restore it and show a FRESH family does not survive the same attack.
- *    This is what `pnpm test` and CI run, and it is always green — it is a
- *    regression test for the harness's integration with real security
- *    code, not a demonstration of red output.
- *
- * 2. `it.runIf(process.env.MUTATION_PROOF === '1')`, DELIBERATELY red
- *    under that flag: it reproduces, assertion for assertion, the real
- *    "detects reuse" test
- *    (`tests/integration/services/session.service.test.ts`) against the
- *    same mutated guard, so the failure shown is the actual regression
- *    test failing — not a hand-written stand-in for it. Skipped by
- *    default, so the file is green under `pnpm test`/CI without anyone
- *    editing anything:
- *
- *    ```
- *    MUTATION_PROOF=1 pnpm exec vitest run tests/integration/services/token-reuse-mutation.test.ts   # red
- *    pnpm exec vitest run tests/integration/services/token-reuse-mutation.test.ts                    # green
- *    ```
- *
- *    No file changes between the two runs — only the environment variable
- *    differs — and `git status --porcelain` stays empty throughout.
+ * REAL security behaviour, against the real per-worker Postgres database:
+ * reuse detection (`rotateRefreshToken`, `session.service.ts`).
  */
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -66,6 +33,41 @@ async function ageConsumedTokensPastGrace(userId: string): Promise<void> {
   `
 }
 
+/**
+ * Presenting an already-rotated refresh token must revoke every token in
+ * its session family, containing a stolen token the instant its holder
+ * tries to use it. The single call that makes this true is
+ * `UserTokenRepository.prototype.revokeAllForSession` (see
+ * `rotateRefreshToken`'s own header comment). It is also the exact call
+ * `revokeRefreshToken` (logout) makes — mutating it here disables both
+ * "reuse not detected" and "logout not revoking" at once.
+ *
+ * Two tests:
+ *
+ * 1. Always on, both directions in one run: mutate the guard, show the
+ *    family survives an attack it should have killed, then let the
+ *    harness restore it and show a FRESH family does not survive the
+ *    same attack. This is what `pnpm test` and CI run, and it is always
+ *    green — it is a regression test for the harness's integration with
+ *    real security code, not a demonstration of red output.
+ *
+ * 2. `it.runIf(process.env.MUTATION_PROOF === '1')`, DELIBERATELY red
+ *    under that flag: it reproduces, assertion for assertion, the real
+ *    "detects reuse" test
+ *    (`tests/integration/services/session.service.test.ts`) against the
+ *    same mutated guard, so the failure shown is the actual regression
+ *    test failing — not a hand-written stand-in for it. Skipped by
+ *    default, so the file is green under `pnpm test`/CI without anyone
+ *    editing anything:
+ *
+ *    ```
+ *    MUTATION_PROOF=1 pnpm exec vitest run tests/integration/services/token-reuse-mutation.test.ts   # red
+ *    pnpm exec vitest run tests/integration/services/token-reuse-mutation.test.ts                    # green
+ *    ```
+ *
+ *    No file changes between the two runs — only the environment variable
+ *    differs — and `git status --porcelain` stays empty throughout.
+ */
 describe('mutation-test harness, proven on reuse detection', () => {
   /**
    * Same pattern as `session.service.test.ts`: track every created user id

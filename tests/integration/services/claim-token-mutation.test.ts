@@ -1,11 +1,28 @@
 /**
- * @file Proves `claimToken`'s own expiry check is load-bearing.
- * `claimOnce` (`user-token.repository.ts`) deliberately does NOT check
- * expiry; its own doc comment says so in capitals. `claimToken`
- * (`session.service.ts`) is the only thing standing between a
- * merely-expired verification/reset link and one that is redeemable
- * forever.
- *
+ * @file Proves `claimToken`'s own expiry check is load-bearing: `claimOnce`
+ * deliberately does not check expiry itself, so this check is the only
+ * thing standing between a merely-expired verification/reset link and one
+ * that is redeemable forever.
+ */
+import { randomUUID } from 'node:crypto'
+import { afterEach, describe, expect, it } from 'vitest'
+import type { User } from '@/database/models/user.model'
+import { UserRepository } from '@/repositories/user.repository'
+import { sql } from '@/services/database.service'
+import { claimToken, issueToken } from '@/services/session.service'
+import { withMutatedMethod } from '../../helpers/mutate'
+
+const userRepository = new UserRepository()
+
+/**
+ * A disposable email, unique to one test run.
+ * @returns An email guaranteed unique to this call.
+ */
+function uniqueEmail(): string {
+  return `claim-token-mutation-${randomUUID()}@example.test`
+}
+
+/**
  * WHY `Date.now`, NOT a repository method. Unlike reuse detection
  * (`token-reuse-mutation.test.ts`, which mutates
  * `UserTokenRepository.prototype.revokeAllForSession`), `claimToken`'s
@@ -66,24 +83,6 @@
  *    No file changes between the two runs — only the environment variable
  *    differs — and `git status --porcelain` stays empty throughout.
  */
-import { randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
-import type { User } from '@/database/models/user.model'
-import { UserRepository } from '@/repositories/user.repository'
-import { sql } from '@/services/database.service'
-import { claimToken, issueToken } from '@/services/session.service'
-import { withMutatedMethod } from '../../helpers/mutate'
-
-const userRepository = new UserRepository()
-
-/**
- * A disposable email, unique to one test run.
- * @returns An email guaranteed unique to this call.
- */
-function uniqueEmail(): string {
-  return `claim-token-mutation-${randomUUID()}@example.test`
-}
-
 describe("mutation-test harness, proven on claimToken's expiry check", () => {
   const createdUserIds: string[] = []
 

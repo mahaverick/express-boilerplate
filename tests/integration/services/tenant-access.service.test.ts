@@ -1,23 +1,7 @@
 /**
  * @file Exercises `resolveActorAccess` against the real per-worker
- * Postgres, and the lock order it adds: owners, then memberships, then the
- * platform membership `FOR SHARE`. The lock test runs a staff write in a
- * customer tenant while that staff member's demotion in the platform
- * tenant is still uncommitted. Only the staff write locks rows in two
- * tenants.
- *
- * The last test is DELIBERATELY red under `MUTATION_PROOF=1`. It swaps the
- * `FOR SHARE` read for a plain read in the same transaction and keeps the
- * real test's assertions:
- *
- * ```
- * MUTATION_PROOF=1 pnpm exec vitest run tests/integration/services/tenant-access.service.test.ts   # red
- * pnpm exec vitest run tests/integration/services/tenant-access.service.test.ts                    # green
- * ```
- *
- * Pool note: test mode has max 2 connections, and the race holds both. A
- * query inside a service that skipped `tx` would hang here. The probe that
- * shows the staff read waiting opens its own connection (`lock-probe.ts`).
+ * Postgres, and the lock order it adds: owners, then memberships, then
+ * the platform membership `FOR SHARE`.
  */
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -64,6 +48,25 @@ async function addMember(tenant: Tenant, user: User, role: MembershipRole): Prom
   await userMembershipRepository.create({ userId: user.id, tenantId: tenant.id, role })
 }
 
+/**
+ * The lock test below runs a staff write in a customer tenant while that
+ * staff member's demotion in the platform tenant is still uncommitted.
+ * Only the staff write locks rows in two tenants.
+ *
+ * The last test is DELIBERATELY red under `MUTATION_PROOF=1`. It swaps
+ * the `FOR SHARE` read for a plain read in the same transaction and
+ * keeps the real test's assertions:
+ *
+ * ```
+ * MUTATION_PROOF=1 pnpm exec vitest run tests/integration/services/tenant-access.service.test.ts   # red
+ * pnpm exec vitest run tests/integration/services/tenant-access.service.test.ts                    # green
+ * ```
+ *
+ * Pool note: test mode has max 2 connections, and the race holds both. A
+ * query inside a service that skipped `tx` would hang here. The probe
+ * that shows the staff read waiting opens its own connection
+ * (`lock-probe.ts`).
+ */
 describe('tenant-access.service', () => {
   const createdTenantIds: string[] = []
   const createdUserIds: string[] = []
