@@ -4,16 +4,7 @@
  * win the claim — with real, concurrent database traffic, not sequential
  * assertions, which cannot observe a TOCTOU race at all (see CLAUDE.md).
  * Two tests, same shape as
- * `tests/integration/services/token-reuse-mutation.test.ts`: an always-on
- * test races `CONCURRENT_CLAIMS` truly-parallel `claimOnce` calls (matching
- * the test-mode pool's own `max: 2`, so both genuinely run at the database
- * at once) against one row, where Postgres's own MVCC UPDATE semantics make
- * exactly one winner deterministic; and a `MUTATION_PROOF` test that swaps
- * `claimOnce` for a non-atomic select-then-update stand-in — with both
- * callers meeting at a barrier between their SELECT and their UPDATE — and
- * reproduces the same assertion against it, deliberately red
- * (`MUTATION_PROOF=1 pnpm exec vitest run <this file>`; no file changes
- * between the two runs, per `tests/helpers/mutate.ts`).
+ * `tests/integration/services/token-reuse-mutation.test.ts`.
  */
 import { randomBytes, randomUUID } from 'node:crypto'
 import { and, eq, isNull, sql } from 'drizzle-orm'
@@ -152,6 +143,12 @@ describe('claimOnce is atomic under real concurrency', () => {
     return user.id
   }
 
+  /**
+   * Always on: races `CONCURRENT_CLAIMS` truly-parallel `claimOnce` calls
+   * (matching the test-mode pool's own `max: 2`, so both genuinely run at
+   * the database at once) against one row. Postgres's own MVCC UPDATE
+   * semantics make exactly one winner deterministic.
+   */
   it(`exactly one of ${CONCURRENT_CLAIMS} concurrent claims on the same row succeeds`, async () => {
     const userId = await createUser()
     const tokenHash = uniqueHash()
@@ -175,7 +172,16 @@ describe('claimOnce is atomic under real concurrency', () => {
     expect(finalRow?.consumedAt).not.toBeNull()
   })
 
-  // Deliberately red under MUTATION_PROOF=1 (see this file's @file doc); left unset, this test is skipped and the file is green.
+  /**
+   * Deliberately red under MUTATION_PROOF=1: swaps `claimOnce` for a
+   * non-atomic select-then-update stand-in, with both callers meeting at a
+   * barrier between their SELECT and their UPDATE, and reproduces the
+   * always-on test's own assertion against it. No file changes between the
+   * two runs (`tests/helpers/mutate.ts`).
+   *
+   *   MUTATION_PROOF=1 pnpm exec vitest run tests/integration/repositories/user-token-claim-atomicity.test.ts   # red
+   *   pnpm exec vitest run tests/integration/repositories/user-token-claim-atomicity.test.ts                    # green
+   */
   it.runIf(process.env.MUTATION_PROOF === '1')(
     `reproduces the real "exactly one of ${CONCURRENT_CLAIMS}" assertion against a non-atomic claimOnce`,
     async () => {

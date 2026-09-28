@@ -4,12 +4,7 @@
  * referenced row), FOR UPDATE makes it wait. Each test holds a lock in
  * transaction A and runs the other side in transaction B on the pool's
  * second connection; `tests/helpers/lock-probe.ts` reports whether B queued
- * behind A. Only `tenants` is referenced by foreign keys, so only its lock
- * changes what an ordinary insert does; `tenant_settings` and
- * `user_memberships` are probed with an explicit FOR KEY SHARE instead, the
- * lock such an insert would take. The `MUTATION_PROOF` tests are
- * deliberately red: each swaps a lock method for one that takes FOR UPDATE
- * and keeps the real test's assertion (`MUTATION_PROOF=1 pnpm exec vitest run <this file>`).
+ * behind A.
  */
 import { randomUUID } from 'node:crypto'
 import { and, eq, inArray, isNull } from 'drizzle-orm'
@@ -290,7 +285,14 @@ describe('TenantRepository.lockById', () => {
     expect(wasBlocked).toBe(true)
   })
 
-  // DELIBERATELY red under MUTATION_PROOF=1.
+  /**
+   * Deliberately red under MUTATION_PROOF=1: swaps `lockById` for a stand-in
+   * that takes FOR UPDATE, so the audit insert above blocks instead of
+   * proceeding.
+   *
+   *   MUTATION_PROOF=1 pnpm exec vitest run tests/integration/repositories/lock-modes.test.ts   # red
+   *   pnpm exec vitest run tests/integration/repositories/lock-modes.test.ts                    # green
+   */
   it.runIf(process.env.MUTATION_PROOF === '1')(
     'reproduces the audit-insert test against a lockById that takes FOR UPDATE',
     async () => {
@@ -312,6 +314,11 @@ describe('TenantRepository.lockById', () => {
   )
 })
 
+/**
+ * `tenant_settings` is not referenced by any foreign key, so it is probed
+ * directly with an explicit FOR KEY SHARE — the lock a referencing insert
+ * would take — rather than through a real referencing insert.
+ */
 describe('TenantSettingsRepository.lockByTenantId', () => {
   it('does not block FOR KEY SHARE on the settings row', async () => {
     const tenant = await createTenant(await createUser())
@@ -324,7 +331,13 @@ describe('TenantSettingsRepository.lockByTenantId', () => {
     expect(wasBlocked).toBe(false)
   })
 
-  // DELIBERATELY red under MUTATION_PROOF=1.
+  /**
+   * Deliberately red under MUTATION_PROOF=1: swaps `lockByTenantId` for a
+   * stand-in that takes FOR UPDATE.
+   *
+   *   MUTATION_PROOF=1 pnpm exec vitest run tests/integration/repositories/lock-modes.test.ts   # red
+   *   pnpm exec vitest run tests/integration/repositories/lock-modes.test.ts                    # green
+   */
   it.runIf(process.env.MUTATION_PROOF === '1')(
     'reproduces the settings test against a lockByTenantId that takes FOR UPDATE',
     async () => {
@@ -345,6 +358,11 @@ describe('TenantSettingsRepository.lockByTenantId', () => {
   )
 })
 
+/**
+ * `user_memberships` is not referenced by any foreign key either, so
+ * `lockOwners`/`lockMemberships` are probed with an explicit FOR KEY SHARE,
+ * the lock a referencing insert would take.
+ */
 describe('UserMembershipRepository lock modes', () => {
   it.each([
     { mode: undefined, expected: false },
@@ -364,7 +382,13 @@ describe('UserMembershipRepository lock modes', () => {
     expect(wasBlocked).toBe(expected)
   })
 
-  // DELIBERATELY red under MUTATION_PROOF=1.
+  /**
+   * Deliberately red under MUTATION_PROOF=1: swaps `lockOwners` for a
+   * stand-in that always takes FOR UPDATE, regardless of the mode passed.
+   *
+   *   MUTATION_PROOF=1 pnpm exec vitest run tests/integration/repositories/lock-modes.test.ts   # red
+   *   pnpm exec vitest run tests/integration/repositories/lock-modes.test.ts                    # green
+   */
   it.runIf(process.env.MUTATION_PROOF === '1')(
     "reproduces lockOwners' 'no key update' row against a lockOwners that takes FOR UPDATE",
     async () => {
@@ -412,7 +436,13 @@ describe('UserMembershipRepository lock modes', () => {
     }
   )
 
-  // DELIBERATELY red under MUTATION_PROOF=1.
+  /**
+   * Deliberately red under MUTATION_PROOF=1: swaps `lockMemberships` for a
+   * stand-in that always takes FOR UPDATE, regardless of the mode passed.
+   *
+   *   MUTATION_PROOF=1 pnpm exec vitest run tests/integration/repositories/lock-modes.test.ts   # red
+   *   pnpm exec vitest run tests/integration/repositories/lock-modes.test.ts                    # green
+   */
   it.runIf(process.env.MUTATION_PROOF === '1')(
     "reproduces lockMemberships' 'no key update' row against a lockMemberships that takes FOR UPDATE",
     async () => {

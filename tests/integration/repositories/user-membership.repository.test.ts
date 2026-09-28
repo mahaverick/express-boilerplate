@@ -135,7 +135,12 @@ describe('UserMembershipRepository', () => {
       ).rejects.toMatchObject({ name: 'HttpError', statusCode: 409 })
     })
 
-    // The catch block's other branch: isUniqueViolation false, so a foreign-key violation on userId propagates unchanged rather than becoming an HttpError(409) meant for a (userId, tenantId) collision.
+    /**
+     * The catch block's other branch: `isUniqueViolation` false, so a
+     * foreign-key violation on userId propagates unchanged rather than
+     * becoming an `HttpError(409)` meant for a (userId, tenantId)
+     * collision.
+     */
     it('propagates a non-collision database error unchanged, e.g. a foreign-key violation on userId', async () => {
       const owner = await createUser()
       const tenant = await createTenant(owner.id)

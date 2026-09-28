@@ -6,17 +6,9 @@
  * proof of this lives in
  * `tests/integration/repositories/user-token.repository.test.ts` and
  * `tests/integration/services/session.service.test.ts`; this file exists to
- * show those tests would actually catch a regression, not just that they
- * pass today — same rationale and two-test shape as
- * `token-reuse-mutation.test.ts` and `user-token-claim-atomicity.test.ts`.
- * An always-on test mutates `claimOnce` to the purpose-blind predicate
- * `claimForRotation` once used (tokenHash + revokedAt IS NULL, no purpose
- * check), shows a password-reset token is claimable as an email
- * verification, then shows a fresh token is correctly rejected once
- * restored; a `MUTATION_PROOF` test reproduces the real "claimOnce rejects
- * a claim for a different purpose" assertion against the same mutation,
- * deliberately red (`MUTATION_PROOF=1 pnpm exec vitest run <this file>`; no
- * file changes between the two runs, per `tests/helpers/mutate.ts`).
+ * show those tests would actually catch a regression, same rationale and
+ * two-test shape as `token-reuse-mutation.test.ts` and
+ * `user-token-claim-atomicity.test.ts`.
  */
 import { randomBytes, randomUUID } from 'node:crypto'
 import { and, eq, isNull, sql } from 'drizzle-orm'
@@ -97,6 +89,13 @@ describe('mutation-test harness, proven on claimOnce’s purpose predicate', () 
     return user.id
   }
 
+  /**
+   * Always on: mutates `claimOnce` to the purpose-blind predicate
+   * `claimForRotation` once used (tokenHash + revokedAt IS NULL, no purpose
+   * check), shows a password-reset token is claimable as an email
+   * verification, then shows a fresh token is correctly rejected once
+   * restored.
+   */
   it('a purpose-blind claimOnce lets a password-reset token be claimed as an email verification; restoring the predicate blocks it again', async () => {
     const userId = await createUser()
 
@@ -139,7 +138,15 @@ describe('mutation-test harness, proven on claimOnce’s purpose predicate', () 
     expect(correctlyRejected).toBeUndefined()
   })
 
-  // Deliberately red under MUTATION_PROOF=1 (see this file's @file doc); left unset, this test is skipped and the file is green.
+  /**
+   * Deliberately red under MUTATION_PROOF=1: reproduces the real "claimOnce
+   * rejects a claim for a different purpose" assertion against the same
+   * purpose-blind mutation. No file changes between the two runs
+   * (`tests/helpers/mutate.ts`).
+   *
+   *   MUTATION_PROOF=1 pnpm exec vitest run tests/integration/repositories/user-token-claim-purpose-mutation.test.ts   # red
+   *   pnpm exec vitest run tests/integration/repositories/user-token-claim-purpose-mutation.test.ts                    # green
+   */
   it.runIf(process.env.MUTATION_PROOF === '1')(
     'reproduces the real "claimOnce rejects a claim for a different purpose" test’s own assertion against the purpose-blind mutation',
     async () => {

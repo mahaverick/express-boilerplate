@@ -253,7 +253,11 @@ describe('email.worker', () => {
     createdLogIds.push(...rows.map((row) => row.id))
   }, 20_000)
 
-  // An unlistened 'error' event on an EventEmitter crashes the process, so this proves the listener is actually attached and routes to the logger, not merely present in source.
+  /**
+   * An unlistened 'error' event on an EventEmitter crashes the process, so
+   * this proves the listener is actually attached and routes to the
+   * logger, not merely present in source.
+   */
   it("worker.on('error') logs instead of crashing the process", () => {
     const loggerErrorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {
       // No-op: only the call itself is asserted below.

@@ -123,7 +123,12 @@ describe('AuthProviderRepository', () => {
       ).rejects.toMatchObject({ name: 'HttpError', statusCode: 409 })
     })
 
-    // The catch block's other branch: isUniqueViolation false, so a foreign-key violation on userId propagates unchanged rather than becoming an HttpError(409) meant for a (provider, providerId) collision.
+    /**
+     * The catch block's other branch: `isUniqueViolation` false, so a
+     * foreign-key violation on userId propagates unchanged rather than
+     * becoming an `HttpError(409)` meant for a (provider, providerId)
+     * collision.
+     */
     it('propagates a non-collision database error unchanged, e.g. a foreign-key violation on userId', async () => {
       await expect(
         authProviderRepository.create({
@@ -148,7 +153,13 @@ describe('AuthProviderRepository', () => {
       expect(row.provider).toBe('google')
     })
 
-    // Load-bearing for the auth_providers_provider_check schema guarantee (auth-provider.model.ts): AuthProviderRepository.create's parameter type already blocks an invalid provider at compile time, so this goes around it via a raw insert to prove the database itself rejects it too.
+    /**
+     * Load-bearing for the `auth_providers_provider_check` schema
+     * guarantee (`auth-provider.model.ts`): `AuthProviderRepository.create`'s
+     * parameter type already blocks an invalid provider at compile time,
+     * so this goes around it via a raw insert to prove the database itself
+     * rejects it too.
+     */
     it('rejects an unknown provider at the database, not just in TypeScript', async () => {
       const userId = await createUser()
       await expect(

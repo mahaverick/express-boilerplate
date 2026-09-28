@@ -2,22 +2,8 @@
  * @file `withErrorCodeNormalized`'s shape clause (`ERROR_CODE_PATTERN.test(...)`)
  * is exercised through `record()` only here — a 64-character raw token
  * short-circuits on the length check alone, and the DB-level CHECK tests
- * bypass the repository entirely, so deleting `&& ERROR_CODE_PATTERN.test(...)`
- * from the guard would leave the rest of the suite green while a
- * width-fitting, wrong-shaped value (a 32-character lowercase-hex fragment
- * of a raw token) reached the database and threw. `withErrorCodeNormalized`
- * is a plain module-scope function called by value within the same module,
- * so `withMutatedModule` cannot reach it; `record()`, which uses no `this`,
- * is swapped instead with a full replacement that inlines the length-only
- * regression and drives the real `emailLogRepository` through it. Two
- * tests, same shape as every other mutation-proof file in this repo (see
- * `token-reuse-mutation.test.ts`): an always-on test shows the mutated
- * guard lets a wrong-shaped value reach the database and reject, and the
- * restored guard normalizes it instead; a `MUTATION_PROOF` test reproduces
- * the real "normalizes a wrong-shaped-but-within-width error code"
- * assertion against the same mutation, deliberately red
- * (`MUTATION_PROOF=1 pnpm exec vitest run <this file>`; no file changes
- * between the two runs, per `tests/helpers/mutate.ts`).
+ * bypass the repository entirely. Two tests, same shape as every other
+ * mutation-proof file in this repo (see `token-reuse-mutation.test.ts`).
  */
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -61,6 +47,13 @@ async function recordWithLengthOnlyGuard(entry: NewEmailLog): Promise<EmailLog> 
   return row
 }
 
+/**
+ * `withErrorCodeNormalized` is a plain module-scope function called by
+ * value within the same module, so `withMutatedModule` cannot reach it;
+ * `record()`, which uses no `this`, is swapped instead with a full
+ * replacement that inlines the length-only regression and drives the real
+ * `emailLogRepository` through it.
+ */
 describe('mutation-test harness, proven on withErrorCodeNormalized’s shape clause', () => {
   const createdIds: string[] = []
 
@@ -70,6 +63,11 @@ describe('mutation-test harness, proven on withErrorCodeNormalized’s shape cla
     createdIds.length = 0
   })
 
+  /**
+   * Always on: shows the mutated guard lets a width-fitting, wrong-shaped
+   * value (a 32-character lowercase-hex fragment of a raw token) reach the
+   * database and reject, and the restored guard normalizes it instead.
+   */
   it('a length-only guard lets a wrong-shaped error code reach the database and reject; the real guard normalizes it instead', async () => {
     const wrongShaped = 'a1'.repeat(16) // 32 lowercase-hex characters — fits the width exactly
 
@@ -101,7 +99,15 @@ describe('mutation-test harness, proven on withErrorCodeNormalized’s shape cla
     expect(recorded.errorCode).toBe('UNKNOWN')
   })
 
-  // Deliberately red under MUTATION_PROOF=1 (see this file's @file doc); left unset, this test is skipped and the file is green.
+  /**
+   * Deliberately red under MUTATION_PROOF=1: reproduces the real
+   * "normalizes a wrong-shaped-but-within-width error code" assertion
+   * against the same length-only mutation. No file changes between the two
+   * runs (`tests/helpers/mutate.ts`).
+   *
+   *   MUTATION_PROOF=1 pnpm exec vitest run tests/integration/repositories/email-log-error-code-shape-mutation.test.ts   # red
+   *   pnpm exec vitest run tests/integration/repositories/email-log-error-code-shape-mutation.test.ts                    # green
+   */
   it.runIf(process.env.MUTATION_PROOF === '1')(
     'reproduces the real "normalizes a wrong-shaped-but-within-width error code" test’s own assertion against the length-only mutation',
     async () => {

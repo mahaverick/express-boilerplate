@@ -39,7 +39,11 @@ describe('migrations', () => {
     )
   })
 
-  // Migration 0004 dropped 0003's transient DEFAULT 'refresh'; the Drizzle-schema type gate can't see the live database, so this asserts the column itself.
+  /**
+   * Migration 0004 dropped 0003's transient DEFAULT 'refresh'; the
+   * Drizzle-schema type gate can't see the live database, so this asserts
+   * the column itself.
+   */
   it('user_tokens.purpose has no default and is not nullable at the database level', async () => {
     const [column] = await sql`
       select column_default, is_nullable from information_schema.columns
@@ -50,7 +54,11 @@ describe('migrations', () => {
     expect(column?.is_nullable).toBe('NO')
   })
 
-  // Migration 0005's user_tokens_purpose_check backs $type<TokenPurpose>() (compile-time only) with a database-level CHECK, via a raw insert that bypasses Drizzle's typing.
+  /**
+   * Migration 0005's `user_tokens_purpose_check` backs `$type<TokenPurpose>()`
+   * (compile-time only) with a database-level CHECK, via a raw insert that
+   * bypasses Drizzle's typing.
+   */
   it('rejects an invalid purpose value at the database level via its CHECK constraint', async () => {
     const email = `invalid-purpose-${Date.now()}@example.test`
     const [user] = await sql`insert into users (email) values (${email}) returning id`
@@ -104,7 +112,11 @@ describe('migrations', () => {
     expect(columns).not.toContain('deleted_at')
   })
 
-  // Migration 0006's email_logs_status_check backs $type<EmailLogStatus>() (compile-time only) with a database-level CHECK, same shape as user_tokens_purpose_check above.
+  /**
+   * Migration 0006's `email_logs_status_check` backs
+   * `$type<EmailLogStatus>()` (compile-time only) with a database-level
+   * CHECK, same shape as `user_tokens_purpose_check` above.
+   */
   it('rejects an invalid status value at the database level via its CHECK constraint', async () => {
     await expect(
       sql`
@@ -119,7 +131,13 @@ describe('migrations', () => {
     expect(remaining).toHaveLength(0)
   })
 
-  // Migration 0007's email_logs_error_code_check replaced the varchar(64) width (RAW_TOKEN_BYTES hex-encoded is exactly 64 chars, so it fit a raw token perfectly) with an uppercase-only shape CHECK, tested here against lowercase hex — the one alphabet a raw token is ever encoded in.
+  /**
+   * Migration 0007's `email_logs_error_code_check` replaced the
+   * `varchar(64)` width (`RAW_TOKEN_BYTES` hex-encoded is exactly 64
+   * chars, so it fit a raw token perfectly) with an uppercase-only shape
+   * CHECK, tested here against lowercase hex — the one alphabet a raw
+   * token is ever encoded in.
+   */
   it('rejects a lowercase-hex error_code at the database level via its CHECK constraint', async () => {
     const lowercaseHex = 'a1'.repeat(16) // 32 characters — fits the column width exactly
     await expect(

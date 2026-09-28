@@ -147,8 +147,13 @@ describe('requireAuth', () => {
     })
   })
 
+  /**
+   * Hand-signed, deliberately not via `signAccessToken`, which always sets
+   * `sid`: this reproduces a token minted before that claim existed. Do not
+   * "modernise" this to `signAccessToken` — that would delete the one case
+   * pinning `auth.middleware.ts`'s `payload.sid && ...` guard as tested.
+   */
   it('accepts a token with no `sid` claim — one release of tolerance for tokens minted before this claim existed', async () => {
-    // Hand-signed, deliberately not via signAccessToken, which always sets sid: this reproduces a token minted before that claim existed. Do not "modernise" this to signAccessToken — that would delete the one case pinning auth.middleware.ts's `payload.sid && ...` guard as tested.
     const user = await createUser()
     const token = jwt.sign({ sub: user.id }, getEnv().JWT_ACCESS_SECRET, {
       algorithm: 'HS256',
@@ -186,8 +191,13 @@ describe('requireAuth', () => {
     expect((error as HttpError).code).toBe(ACCESS_TOKEN_EXPIRED_CODE)
   })
 
+  /**
+   * Mutation, not a hand edit (see CLAUDE.md): `isSessionDenied` is
+   * overridden to resolve `true` unconditionally, so only the
+   * `payload.sid &&` short-circuit can keep a sid-less token accepted
+   * below.
+   */
   it('keeps a sid-less token honoured even when the denylist would deny every session, proving `payload.sid &&` is a real short-circuit', async () => {
-    // Mutation, not a hand edit (see CLAUDE.md): isSessionDenied is overridden to resolve true unconditionally, so only the `payload.sid &&` short-circuit can keep a sid-less token accepted below.
     const user = await createUser()
 
     await withMutatedModule<

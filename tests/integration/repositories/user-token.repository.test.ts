@@ -167,7 +167,14 @@ describe('UserTokenRepository', () => {
     expect(await userTokenRepository.wasConsumedWithin(tokenHash, 10_000)).toBe(false)
   })
 
-  // Pins claimOnce's contract: expiry is deliberately not part of its predicate, so every caller must check expiresAt on the row it gets back itself — folding expiry in would make an expired-but-unrevoked row indistinguishable, to rotateRefreshToken's !claimed branch, from a genuinely reused one, revoking an entire session family for a token that simply aged out.
+  /**
+   * Pins `claimOnce`'s contract: expiry is deliberately not part of its
+   * predicate, so every caller must check `expiresAt` on the row it gets
+   * back itself — folding expiry in would make an expired-but-unrevoked row
+   * indistinguishable, to `rotateRefreshToken`'s `!claimed` branch, from a
+   * genuinely reused one, revoking an entire session family for a token
+   * that simply aged out.
+   */
   it("claimOnce claims an expired-but-unrevoked row — expiry is the caller's job, not the predicate's", async () => {
     const userId = await createUser()
     const tokenHash = uniqueHash()
@@ -186,7 +193,12 @@ describe('UserTokenRepository', () => {
     expect(claimed?.revokedAt).not.toBeNull()
   })
 
-  // Without this predicate, a password-reset token could be spent as an email verification, or a verification token could reset a password — turning "I can receive mail at this address" into "I can take over this account."
+  /**
+   * Without this predicate, a password-reset token could be spent as an
+   * email verification, or a verification token could reset a password —
+   * turning "I can receive mail at this address" into "I can take over
+   * this account."
+   */
   it('claimOnce rejects a claim for a different purpose than the row was issued for', async () => {
     const userId = await createUser()
     const tokenHash = uniqueHash()
@@ -388,7 +400,13 @@ describe('UserTokenRepository', () => {
       expect(otherRow?.revokedAt).not.toBeNull()
     })
 
-    // The trap this method exists to close: a row with no sessionId at all (sessionId is only ever set on a 'refresh' row) must still be revoked, since a predicate written with `session_id != $2` evaluates to NULL, not true, for this row, silently leaving it live if the repository's `IS DISTINCT FROM` is ever "simplified" to `!=`.
+    /**
+     * The trap this method exists to close: a row with no sessionId at all
+     * (sessionId is only ever set on a 'refresh' row) must still be
+     * revoked, since a predicate written with `session_id != $2` evaluates
+     * to NULL, not true, for this row, silently leaving it live if the
+     * repository's `IS DISTINCT FROM` is ever "simplified" to `!=`.
+     */
     it('revokes a row with no sessionId at all — the IS DISTINCT FROM case, not != ', async () => {
       const userId = await createUser()
       const sparedSessionId = randomUUID()
@@ -476,7 +494,11 @@ describe('UserTokenRepository', () => {
     })
   })
 
-  // softDelete/markDeleted (BaseRepository) — real token lifecycle uses claimOnce/revokeAllFor* instead, but this is still real, inherited public API.
+  /**
+   * `softDelete`/`markDeleted` (`BaseRepository`) — real token lifecycle
+   * uses `claimOnce`/`revokeAllFor*` instead, but this is still real,
+   * inherited public API.
+   */
   it('softDelete sets deletedAt and excludes the row from findById by default', async () => {
     const userId = await createUser()
     const created = await userTokenRepository.create({

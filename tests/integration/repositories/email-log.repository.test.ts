@@ -87,7 +87,12 @@ describe('EmailLogRepository', () => {
     expect(recorded.providerMessageId).toBeNull()
   })
 
-  // A raw token (session.service.ts) hex-encoded is exactly 64 characters, so truncating an over-length errorCode to ERROR_CODE_MAX_LENGTH (32) instead of normalizing it would write a 32-character prefix of a live secret into this table.
+  /**
+   * A raw token (`session.service.ts`) hex-encoded is exactly 64
+   * characters, so truncating an over-length `errorCode` to
+   * `ERROR_CODE_MAX_LENGTH` (32) instead of normalizing it would write a
+   * 32-character prefix of a live secret into this table.
+   */
   it('normalizes a raw-token-shaped error code to UNKNOWN_ERROR_CODE rather than storing any part of it', async () => {
     const recipient = uniqueRecipient()
     const rawToken = randomBytes(32).toString('hex')
@@ -108,7 +113,17 @@ describe('EmailLogRepository', () => {
     expect(JSON.stringify(row)).not.toContain(rawToken)
   })
 
-  // The test above uses a 64-character token, which fails withErrorCodeNormalized's length check alone and never exercises ERROR_CODE_PATTERN (see email-log-error-code-shape-mutation.test.ts for the load-bearing proof that the regex clause is covered). This value is deliberately 32 characters, exactly ERROR_CODE_MAX_LENGTH, so it passes the length check and the regex clause is the only thing standing between it and the database — and it is also the realistic leak: a 32-character lowercase-hex fragment is exactly what a truncated or mis-derived raw token would look like.
+  /**
+   * The test above uses a 64-character token, which fails
+   * `withErrorCodeNormalized`'s length check alone and never exercises
+   * `ERROR_CODE_PATTERN` (see `email-log-error-code-shape-mutation.test.ts`
+   * for the load-bearing proof that the regex clause is covered). This
+   * value is deliberately 32 characters, exactly `ERROR_CODE_MAX_LENGTH`,
+   * so it passes the length check and the regex clause is the only thing
+   * standing between it and the database — and it is also the realistic
+   * leak: a 32-character lowercase-hex fragment is exactly what a
+   * truncated or mis-derived raw token would look like.
+   */
   it('normalizes a wrong-shaped-but-within-width error code to UNKNOWN_ERROR_CODE', async () => {
     const recipient = uniqueRecipient()
     const wrongShaped = 'a1'.repeat(16) // 32 lowercase-hex characters
@@ -154,7 +169,16 @@ describe('EmailLogRepository', () => {
     expect(await emailLogRepository.findByRecipient(uniqueRecipient())).toEqual([])
   })
 
-  // Drives the token through record()'s actual input and checks the table itself. Scoped to the two fields this schema actually guards against a raw token: errorCode (shape+width normalization, replaced) and templateKey (width alone — 32 is narrower than a 64-character token — also replaced, never rejected); recipient (320) and providerMessageId (255) get width normalization too but carry no protection against a token specifically, since both widths are well past 64.
+  /**
+   * Drives the token through `record()`'s actual input and checks the
+   * table itself. Scoped to the two fields this schema actually guards
+   * against a raw token: `errorCode` (shape+width normalization, replaced)
+   * and `templateKey` (width alone — 32 is narrower than a 64-character
+   * token — also replaced, never rejected). `recipient` (320) and
+   * `providerMessageId` (255) get width normalization too (see the
+   * boundary tests below) but carry no protection against a token
+   * specifically, since both widths are well past 64.
+   */
   it('never contains the raw token, driven through every field this schema actually guards', async () => {
     const rawToken = randomBytes(32).toString('hex') // 64 lowercase-hex characters
 
@@ -185,7 +209,13 @@ describe('EmailLogRepository', () => {
     expect(JSON.stringify(templateKeyRow)).not.toContain(rawToken)
   })
 
-  // Width normalization for recipient/templateKey/providerMessageId, with boundaries measured against the real column widths (MAX_EMAIL_LENGTH, TEMPLATE_KEY_MAX_LENGTH, PROVIDER_MESSAGE_ID_MAX_LENGTH), not assumed: "exactly N passes through unchanged; N+1 normalizes" is the only way to prove the boundary is where the code claims it is.
+  /**
+   * Width normalization for recipient/templateKey/providerMessageId, with
+   * boundaries measured against the real column widths (`MAX_EMAIL_LENGTH`,
+   * `TEMPLATE_KEY_MAX_LENGTH`, `PROVIDER_MESSAGE_ID_MAX_LENGTH`), not
+   * assumed: "exactly N passes through unchanged; N+1 normalizes" is the
+   * only way to prove the boundary is where the code claims it is.
+   */
   describe('width normalization at the exact boundary', () => {
     it('a recipient of exactly MAX_EMAIL_LENGTH characters is stored unchanged', async () => {
       const recipient = recipientOfLength(MAX_EMAIL_LENGTH)

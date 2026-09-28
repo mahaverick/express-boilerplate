@@ -147,7 +147,12 @@ describe('TenantRepository', () => {
       ).toBeUndefined()
     })
 
-    // The catch block's other branch: isUniqueViolation false, so a foreign-key violation on the owner membership insert propagates unchanged rather than becoming an HttpError(409) meant for a slug collision.
+    /**
+     * The catch block's other branch: `isUniqueViolation` false, so a
+     * foreign-key violation on the owner membership insert propagates
+     * unchanged rather than becoming an `HttpError(409)` meant for a slug
+     * collision.
+     */
     it('propagates a non-slug-collision database error unchanged, e.g. a foreign-key violation on ownerId', async () => {
       const bogusOwnerId = randomUUID()
 

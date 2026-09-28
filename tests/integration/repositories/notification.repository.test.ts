@@ -344,7 +344,12 @@ describe('NotificationRepository', () => {
       expect(notifications).toEqual([])
     })
 
-    // Rows created one create() call at a time land at least a millisecond apart, exercising the ordinary created_at < $cursor branch, not the created_at = $cursor AND id < $id tiebreaker (see the test below for that).
+    /**
+     * Rows created one `create()` call at a time land at least a
+     * millisecond apart, exercising the ordinary `created_at < $cursor`
+     * branch, not the `created_at = $cursor AND id < $id` tiebreaker (see
+     * the test below for that).
+     */
     it('pages through every notification exactly once, with no gaps or duplicates', async () => {
       const userId = await createUser()
       const createdIds = new Set<string>()
@@ -362,7 +367,15 @@ describe('NotificationRepository', () => {
       expect(seenIds).toEqual(createdIds) // no gaps: every created row was returned exactly once
     })
 
-    // The load-bearing test for notification.model.ts's claim that createdAt's millisecond precision is what stops the cursor from silently skipping a row sharing a millisecond with the cursor boundary. createdAt is passed explicitly and identically for every row here, forcing every comparison in the keyset predicate through the id tiebreaker, the exact branch a same-millisecond burst would hit.
+    /**
+     * The load-bearing test for `notification.model.ts`'s claim that
+     * `createdAt`'s millisecond precision is what stops the cursor from
+     * silently skipping a row sharing a millisecond with the cursor
+     * boundary. `createdAt` is passed explicitly and identically for every
+     * row here, forcing every comparison in the keyset predicate through
+     * the `id` tiebreaker, the exact branch a same-millisecond burst would
+     * hit.
+     */
     it('pages through every notification exactly once, with no gaps or duplicates, when every row shares the same createdAt', async () => {
       const userId = await createUser()
       const sharedCreatedAt = new Date('2026-01-01T00:00:00.123Z')

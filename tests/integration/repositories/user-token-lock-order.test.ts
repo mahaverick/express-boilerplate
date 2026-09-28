@@ -2,16 +2,8 @@
  * @file The four bulk revokers lock the rows they revoke in id order,
  * whatever plan or physical row layout Postgres uses
  * (`user-token.repository.ts`'s header). Three groups of tests pin that
- * property: a race that builds the one physical layout where a forced
- * sequential scan and a forced index scan would visit shared rows in
- * opposite orders (and so deadlock, if either writer locked out of id
- * order); a plan-shape check that each writer's EXPLAIN output locks
- * through a node that yields id order; and a schema guard against an index
- * that would let two revokers scan shared rows in different orders. The
- * `MUTATION_PROOF` tests are deliberately red: each swaps the writers for
- * stand-ins that update by their predicate directly, without locking in id
- * order, and keeps the real test's assertions
- * (`MUTATION_PROOF=1 pnpm exec vitest run <this file>`).
+ * property: a race on a built physical layout, a plan-shape check, and a
+ * schema guard.
  */
 import { randomBytes, randomUUID } from 'node:crypto'
 import { eq, sql, type Logger, type SQL } from 'drizzle-orm'
@@ -388,12 +380,23 @@ async function raceOnDivergentLayout(): Promise<{ A: Outcome; B: Outcome }> {
   }
 }
 
+/**
+ * A race that builds the one physical layout where a forced sequential scan
+ * and a forced index scan would visit shared rows in opposite orders, and
+ * so deadlock if either writer locked out of id order.
+ */
 describe('bulk token revokers lock rows in id order', () => {
   it('revokeAllForUser (sequential scan) and revokeAllForSession (index scan) never deadlock', async () => {
     expect(await raceOnDivergentLayout()).toEqual({ A: { ok: true }, B: { ok: true } })
   })
 
-  // DELIBERATELY red under MUTATION_PROOF=1: writers that lock in scan order deadlock.
+  /**
+   * Deliberately red under MUTATION_PROOF=1: writers that lock in scan
+   * order deadlock here.
+   *
+   *   MUTATION_PROOF=1 pnpm exec vitest run tests/integration/repositories/user-token-lock-order.test.ts   # red
+   *   pnpm exec vitest run tests/integration/repositories/user-token-lock-order.test.ts                    # green
+   */
   it.runIf(process.env.MUTATION_PROOF === '1')(
     'reproduces the lock-order test against writers that lock in scan order',
     async () => {
@@ -528,6 +531,10 @@ async function expectIdOrderedLocking(
   expect(isIdOrdered(lockRows[0]?.Plans?.[0]), JSON.stringify(plan)).toBe(true)
 }
 
+/**
+ * A plan-shape check that each writer's EXPLAIN output locks through a
+ * LockRows node fed in id order, under every planner setting in `PLANNERS`.
+ */
 describe('each bulk revoker locks through LockRows fed in id order', () => {
   describe.each(PLANNERS)('under $label', ({ settings }) => {
     it.each(WRITERS)('$name', async ({ run }) => {
@@ -535,7 +542,13 @@ describe('each bulk revoker locks through LockRows fed in id order', () => {
     })
   })
 
-  // DELIBERATELY red under MUTATION_PROOF=1: an UPDATE by predicate has no LockRows.
+  /**
+   * Deliberately red under MUTATION_PROOF=1: an UPDATE by predicate has no
+   * LockRows node at all.
+   *
+   *   MUTATION_PROOF=1 pnpm exec vitest run tests/integration/repositories/user-token-lock-order.test.ts   # red
+   *   pnpm exec vitest run tests/integration/repositories/user-token-lock-order.test.ts                    # green
+   */
   it.runIf(process.env.MUTATION_PROOF === '1')(
     'reproduces the plan test against writers that lock in scan order',
     async () => {
