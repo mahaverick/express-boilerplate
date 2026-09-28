@@ -187,7 +187,7 @@ rather than repeating them.
   [ARCHITECTURE.md](ARCHITECTURE.md#layers).
 - **Services never trust `request.principal.role`;** they re-read access under
   lock. A controller may report `role`/`access` but never authorizes on them.
-- **Members join by invitation only.** Don't bring back a "no such user" 404
+- **Members join by invitation only.** Don't add a "no such user" 404
   or a direct add: `POST /tenants/:slug/invitations` answers one fixed 202
   either way (409 `already_member` is the one exception). Accepting needs a
   signed-in user whose **verified** address equals the invited one (403
@@ -387,7 +387,7 @@ exemption.
 
 - **`isPasswordValid`, not `verifyPassword`.** Answer
   `unicorn/consistent-boolean-name` by renaming, never with an `ignore` entry,
-  and don't rename it back to match a spec's wording.
+  and keep that name even where a spec says `verifyPassword`.
 - **`verifyAccessToken` returns `{ ok: true; payload }` or
   `{ ok: false; reason: 'expired' | 'invalid' }`,** never throws.
   `'expired'` is only `jsonwebtoken`'s `TokenExpiredError`; every other

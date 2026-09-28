@@ -210,9 +210,10 @@ Two effects are accepted:
 
 - A correct password still updates `last_logged_in_at` and still runs the
   platform auto-join, even when the re-read then answers 401. Both run after
-  the password check and before the transaction. Running the auto-join inside
-  it would nest its owners → memberships lock chain under the user row's
-  lock.
+  the password check and before the transaction. Inside it, the auto-join's
+  own transaction (the platform-tenant lookup, then membership and audit
+  inserts whose foreign keys take `FOR KEY SHARE`) would run while the user
+  row is held `FOR SHARE`, lengthening that lock.
 - The session denylist (Redis) is written after the transaction commits. If
   that write fails, the request still succeeds: the password is changed and
   the refresh tokens are revoked. One `error` line
@@ -931,8 +932,8 @@ like any other change to that file.
 ### Domain-leak gate
 
 The "Reject domain leakage" step in `.github/workflows/ci.yml` fails CI when a
-term listed in `.github/domain-terms.txt` — the product codebase this
-boilerplate was derived from — reappears in a tracked file. See
+term listed in `.github/domain-terms.txt` — a term your project must never
+leak — appears in a tracked file. See
 [CONTRIBUTING.md](CONTRIBUTING.md) for what a project generated from it
 should do with that list.
 

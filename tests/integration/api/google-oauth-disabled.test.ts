@@ -27,7 +27,7 @@ const app = createApp()
  * stubs GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET with `vi.stubEnv` and
  * restores them in `afterAll(() => vi.unstubAllEnvs())` rather than
  * leaving a raw `process.env` assignment behind. If that file is ever
- * changed to mutate `process.env` directly again, this file can start
+ * changed to mutate `process.env` directly, this file can start
  * failing (or silently stop testing what it claims to) purely from run
  * order.
  */

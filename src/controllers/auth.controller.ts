@@ -9,7 +9,7 @@ import type { Profile as GoogleProfile } from 'passport-google-oauth20'
 import { getEnv, isCookieSecure, type Env } from '@/configs/env.config'
 import {
   GOOGLE_STRATEGY_NAME,
-  // eslint-disable-next-line sonarjs/deprecation -- reads the old cookie name until the next major
+  // eslint-disable-next-line sonarjs/deprecation -- the plain-http cookie name, also read as the COOKIE_SECURE fallback
   LEGACY_REFRESH_TOKEN_COOKIE_NAME,
   refreshCookieSpec,
   type RefreshCookieSpec,
@@ -267,7 +267,7 @@ function clearPresentedRefreshCookie(request: Request, response: Response): void
   if (wasCurrentRead) {
     response.clearCookie(current.name, refreshCookieOptions(current, env, 'strict'))
   }
-  // eslint-disable-next-line sonarjs/deprecation -- reads the old cookie name until the next major
+  // eslint-disable-next-line sonarjs/deprecation -- detects plain http, where the current name is the unprefixed one
   if (!wasCurrentRead || current.name === LEGACY_REFRESH_TOKEN_COOKIE_NAME) {
     clearLegacyRefreshCookies(request, response, env)
   }

@@ -148,9 +148,8 @@ secret `RELEASE_APP_PRIVATE_KEY`; Contents and Pull requests read/write),
 because events `GITHUB_TOKEN` creates start no workflow: its PR would get no
 CI and its tag no promotion.
 
-A multi-commit PR merges via squash, so its PR title becomes the commit
-`release-please` reads (a single-commit PR keeps that commit's own title).
-Either way, PR titles must be conventional commits.
+Every PR merges via squash with the PR title as the commit subject, which is
+what `release-please` reads, so PR titles must be conventional commits.
 
 ## Dependency policy
 

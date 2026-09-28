@@ -2,7 +2,7 @@
  * @file Proves `claimOnce`'s check-then-write is a single atomic statement,
  * so two concurrent callers presenting the same token hash can never both
  * win the claim — with real, concurrent database traffic, not sequential
- * assertions, which cannot observe a TOCTOU race at all (see CLAUDE.md).
+ * assertions, which cannot observe a TOCTOU race at all.
  * Two tests, same shape as
  * `tests/integration/services/token-reuse-mutation.test.ts`.
  */
