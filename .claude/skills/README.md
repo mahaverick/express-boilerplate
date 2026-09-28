@@ -21,7 +21,7 @@ self, not a skill.
 ```
 
 `<skill-name>` must be kebab-case and must match the `name` field in the
-skill's own frontmatter, or the skill won't resolve.
+skill's own frontmatter.
 
 ## `SKILL.md` skeleton
 

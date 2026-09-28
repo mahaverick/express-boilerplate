@@ -1,11 +1,11 @@
+# Each bypass here has a line in CONTRIBUTING.md, "Supply-chain bypasses".
 allowBuilds:
-  # bcrypt's "install" script runs node-gyp-build: it tests the prebuilt
-  # native binding bundled in the package's prebuilds/ for the host
-  # platform, or compiles one from source via node-gyp if that fails.
-  # Required for bcrypt to work at all — it is a native addon, not a
-  # pure-JS package — and it is the password-hashing library this plan's
-  # Task 2 adds. See MIGRATIONS.md.
+  # bcrypt's install script runs node-gyp-build: it tests the prebuilt native
+  # binding in the package's prebuilds/ for the host platform, or compiles one
+  # via node-gyp. bcrypt is a native addon and does not work without it.
   bcrypt: true
+  # esbuild: its postinstall checks the host platform's native binary and
+  # downloads it when the optional per-platform package is missing.
   esbuild: true
   # msgpackr-extract: transitive dependency of bullmq (via msgpackr, which
   # BullMQ uses to encode job data for Redis). Its install script
@@ -14,12 +14,11 @@ allowBuilds:
   # if that fails. If no binding loads, msgpackr falls back to its pure-JS
   # encoder at runtime.
   msgpackr-extract: true
-  # protobufjs: transitive dependency of @opentelemetry/exporter-trace-otlp-http
-  # (via @opentelemetry/otlp-transformer). Its postinstall only reads
+  # protobufjs: transitive dependency of @opentelemetry/sdk-node (via its OTLP
+  # gRPC exporters and @grpc/proto-loader). Its postinstall only reads
   # package.json files to print a stderr warning if a *dependent* pins an
-  # incompatible version scheme for protobufjs itself — verified by reading
-  # scripts/postinstall.js; no network access, no compilation, no arbitrary
-  # code.
+  # incompatible version scheme for protobufjs itself; no network access, no
+  # compilation.
   protobufjs: true
   # unrs-resolver: native binary that eslint-plugin-import-x depends on
   # directly for module/TS-path resolution. Its postinstall only fetches a

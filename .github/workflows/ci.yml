@@ -17,16 +17,9 @@ concurrency:
 permissions:
   contents: read
 
-# Two parallel jobs, not one: `lint` needs nothing but the checked-out repo
-# and node_modules — no Docker services, no database, no build — so it was
-# paying to wait behind postgres/redis/mailpit health checks it never
-# touches. Splitting it out means a lint failure surfaces as fast as
-# `pnpm lint` itself runs, and the two jobs run concurrently rather than
-# lint's ~seconds being serialized in front of test's services startup +
-# full suite. `test` keeps every Docker-dependent step (migrations,
-# `pnpm test:coverage`, the build — `pnpm build` needs no live service
-# itself, but it belongs next to the job that already carries the full env
-# block, not duplicated into a job that has none).
+# `lint` needs no services, so it runs beside `test` and a lint failure
+# surfaces without waiting for Postgres, Redis and Mailpit. `test` holds the
+# steps that need them and the remaining checks.
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -42,49 +35,20 @@ jobs:
       - name: Lint and type-check
         run: pnpm lint
       - name: Format check
-        # Repo-wide (package.json's own format:check script, `prettier --check .`
-        # minus .prettierignore). It used to be scoped to src/**/*.{ts,json,md},
-        # which covered ~11 files and nothing under tests/ at all, while this
-        # step and CONTRIBUTING.md both presented it as the repo-wide standard —
-        # 10 files had drifted, 6 of them tests, before anyone noticed.
+        # Repo-wide: `prettier --check .` minus .prettierignore.
         run: pnpm format:check
       - name: Docs check
         run: pnpm lint:docs
       - name: Reject domain leakage
-        # The boilerplate is derived from a product repo. This gate is why the
-        # derivation can be trusted; without it, a scrub miss ships silently.
+        # Fails on any term from .github/domain-terms.txt (one extended regex
+        # per line) in any tracked file except that one. Scanning `git ls-files`
+        # covers every committed file, whatever its extension, and never walks
+        # node_modules, dist or coverage.
         #
-        # The banned terms live in .github/domain-terms.txt, one extended-regex
-        # per line, for two reasons. First, they are reviewable on their own:
-        # adding or removing a term is a one-line diff in a file that contains
-        # nothing else. Second — and this is what fixed a real blind spot —
-        # this step no longer has to spell the terms out, so it is no longer
-        # its own worst false positive and no longer needs to exempt itself
-        # from the scan. Only the terms file itself is excluded now.
-        #
-        # Anchor each term to how ambiguous it is on its own. A term that is
-        # unambiguous product vocabulary can stay unanchored — any occurrence
-        # anywhere is a real leak. A term that also reads as ordinary English
-        # needs an anchor, or it fails CI on plain prose. Two anchor shapes
-        # cover this: a compound suffix (`term[-_]`) matches only the
-        # compound forms this codebase's own vocabulary actually used, not
-        # the bare English word; a word boundary (`\bterm\b`) is needed
-        # instead when the bare word is itself a substring of a common word
-        # with no boundary before it (e.g. a plain suffix match would trip on
-        # an unrelated verb that happens to end the same way). When adding an
-        # anchored term, verify it the way this file's own terms were
-        # verified: write a sentence of ordinary English using the bare word
-        # and confirm the gate does not trip on it.
-        #
-        # `git ls-files` replaces the old `grep -r --include=<ext>` filter.
-        # That allowlist silently exempted every tracked file without a listed
-        # extension — .env.example, .env.test, docker/postgres/init.sql, the
-        # husky hooks, CODEOWNERS, .gitleaks.toml — precisely the files most
-        # likely to carry a real environment string. It also skipped docs/
-        # wholesale, while docs/superpowers/** is tracked and ships (that
-        # exclusion was hiding 21 hits). Scanning the index instead means
-        # every committed file is covered by construction, and nothing
-        # untracked (node_modules, dist, coverage, .worktrees) is ever walked.
+        # A term that also reads as ordinary English needs an anchor: a
+        # compound suffix (`term[-_]`) or a word boundary (`\bterm\b`). Before
+        # adding one, write an ordinary sentence using the bare word and
+        # confirm the gate does not trip on it.
         run: |
           terms=.github/domain-terms.txt
           # A blank line in the terms file is an empty pattern, which matches
@@ -126,22 +90,13 @@ jobs:
         ports: ['6379:6379']
         options: >-
           --health-cmd="redis-cli ping" --health-interval=10s --health-timeout=5s --health-retries=5
-      # mailer.service.test.ts sends real mail through this and reads it back
-      # via Mailpit's own HTTP API on 8025 — not a mock. Default, unremapped
-      # ports — unlike postgres/redis above, there is no common native
-      # service on 1025/8025 for a GitHub-hosted runner to collide with, so
-      # this needs none of docker-compose.yml's 5433/6380 dodge. Pinned, like
-      # every sibling service here and in docker-compose.yml, to the version
-      # this task actually developed and tested against.
+      # The tests send real mail through this and read it back through
+      # Mailpit's HTTP API on 8025. Default ports: no native service on a
+      # hosted runner holds 1025/8025. Same tag as docker-compose.yml.
       #
-      # --health-cmd uses the image's own `readyz` subcommand (verified
-      # against the running container: it DOES have a shell — `docker exec
-      # ... sh -c 'echo ok'` succeeds). Without this, a Mailpit that has not
-      # finished starting would surface as a failed real-send test with a
-      # MISLEADING message — Ruling G (mailer.service.ts) swallows the
-      # connection error into a 'failed' delivery-log row, so the actual
-      # symptom is "expected 1 message, found 0", not a connection error
-      # naming the real cause.
+      # The health check matters because sendMail never rejects: a Mailpit
+      # that is not ready yet shows up as "expected 1 message, found 0", not
+      # as a connection error.
       mailpit:
         image: axllent/mailpit:v1.31.1
         ports: ['1025:1025', '8025:8025']
@@ -292,21 +247,18 @@ jobs:
           WORKER_ENABLED=false
           EOF
           # DATABASE_URL/REDIS_URL point at nothing reachable on purpose: both
-          # database.service.ts (postgres.js) and redis.service.ts connect
-          # lazily on first use, never at boot (verified against both files),
-          # so the process starts and listens without either being reachable.
-          # WORKER_ENABLED=false skips BullMQ's own eager Redis connection.
+          # clients connect on first use, not at boot, so the process starts
+          # and listens without them. WORKER_ENABLED=false skips BullMQ's
+          # eager Redis connection.
           docker run -d --name "$name" --env-file /tmp/express-boilerplate-ci.env -p 4040:4040 express-boilerplate:ci
           for _ in $(seq 1 20); do
             if curl -sf http://localhost:4040/health > /dev/null; then break; fi
             sleep 0.5
           done
           # -eo pid,args, not -eo args alone: some Docker Engine builds reject
-          # a single-column -eo request with "Couldn't find PID field in ps
-          # output" (verified against a live container). Captured into a
-          # variable and guarded, so a container that died before this point
-          # still prints its logs instead of the step aborting under errexit
-          # with no diagnostics.
+          # a single-column -eo with "Couldn't find PID field in ps output".
+          # Guarded, so a container that already died prints its logs instead
+          # of the step aborting under errexit with no diagnostics.
           top_output=$(docker top "$name" -eo pid,args) || { docker logs "$name"; exit 1; }
           echo "$top_output"
           if ! echo "$top_output" | grep -- '--enable-source-maps'; then

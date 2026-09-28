@@ -1,6 +1,5 @@
-# docker/grafana/provisioning/datasources/loki.yaml — auto-provisions Loki so
-# log lines link to their trace in Tempo. OTLP-ingested records carry
-# trace_id as structured metadata (not in the log body), hence
+# Provisions Loki so log lines link to their trace in Tempo. OTLP-ingested
+# records carry trace_id as structured metadata, not in the log body, hence
 # matcherType: label.
 apiVersion: 1
 datasources:
