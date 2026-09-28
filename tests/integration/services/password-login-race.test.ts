@@ -1,55 +1,61 @@
-// tests/integration/services/password-login-race.test.ts
-//
-// A login that compared the old hash must not keep a session past a password
-// change or reset. login re-reads the hash FOR SHARE in the transaction that
-// issues its token; change and reset lock the user row, store the hash and
-// revoke sessions in one transaction. Each flow is raced in both orders on the
-// pool's two connections, and pg_blocking_pids (lock-probe.ts) shows the
-// second side waited. Two logins are raced too: one holds FOR SHARE while the
-// other finishes without waiting. There are no sleeps.
-//
-// A refresh rotation is raced the same way. It takes FOR SHARE on the user
-// row before it claims the presented token, so the password side's revoke
-// either starts after the rotation's new token has committed, or the rotation
-// waits and finds its token revoked. The grace path (a replayed token within
-// REFRESH_REUSE_GRACE_MS gets a sibling) is raced too.
-//
-// Four of the password rotation tests have no mutation proof, because each
-// still passes with the rotation's user lock removed:
-// - password-first, change: the claim waits on the presented row, which the
-//   in-transaction revoke holds, and then finds it revoked;
-// - password-first, reset, normal and grace: reset's revoke before its
-//   transaction has already committed, so the claim or the grace check
-//   refuses, and the kill that follows queues on the user row lock;
-// - rotation-first, reset: that earlier revoke waits on the claimed row, so
-//   the locked revoke starts after the rotation's new token has committed.
-//
-// The same two orderings are run for every other revoking path: a Google
-// account claim, a logout, and the kill a reused refresh token triggers. Each
-// takes the user row FOR NO KEY UPDATE before its in-transaction revoke,
-// which queues behind a rotation's FOR SHARE. When the revoking side wins,
-// the refused rotation kills the session itself once its own transaction has
-// committed, so two denylist writes are recorded for that session.
-//
-// Seams, all through withMutatedMethod:
-// - login pauses after its lastLoggedInAt UPDATE, the one call between the
-//   compare and its transaction;
-// - UserRepository.lockById reports each side's backend pid, and can hold
-//   login after it has taken FOR SHARE;
-// - the revoking side's session revoke can hold after it has run, inside its
-//   locked transaction;
-// - the Redis client's SET records each denylist write.
-//
-// The MUTATION_PROOF tests below are deliberately red; each keeps the
-// assertions of the test it reproduces:
-//
-//   MUTATION_PROOF=1 pnpm exec vitest run tests/integration/services/password-login-race.test.ts   # red
-//   pnpm exec vitest run tests/integration/services/password-login-race.test.ts                    # green
-//
-// Pool note: test mode has max 2 connections and each race holds both. A
-// repository call inside a raced transaction that skipped `tx` would wait for
-// a pool connection that never frees, so the race hangs until a lock probe
-// or the test itself times out.
+/**
+ * @file A login that compared the old hash must not keep a session past a
+ * password change or reset. `login` re-reads the hash `FOR SHARE` in the
+ * transaction that issues its token; change and reset lock the user row,
+ * store the hash and revoke sessions in one transaction. Each flow is
+ * raced in both orders on the pool's two connections, and
+ * `pg_blocking_pids` (`lock-probe.ts`) shows the second side waited. Two
+ * logins are raced too: one holds `FOR SHARE` while the other finishes
+ * without waiting. There are no sleeps.
+ *
+ * A refresh rotation is raced the same way. It takes `FOR SHARE` on the
+ * user row before it claims the presented token, so the password side's
+ * revoke either starts after the rotation's new token has committed, or
+ * the rotation waits and finds its token revoked. The grace path (a
+ * replayed token within `REFRESH_REUSE_GRACE_MS` gets a sibling) is raced
+ * too.
+ *
+ * Four of the password rotation tests have no mutation proof, because
+ * each still passes with the rotation's user lock removed:
+ * - password-first, change: the claim waits on the presented row, which
+ *   the in-transaction revoke holds, and then finds it revoked;
+ * - password-first, reset, normal and grace: reset's revoke before its
+ *   transaction has already committed, so the claim or the grace check
+ *   refuses, and the kill that follows queues on the user row lock;
+ * - rotation-first, reset: that earlier revoke waits on the claimed row,
+ *   so the locked revoke starts after the rotation's new token has
+ *   committed.
+ *
+ * The same two orderings are run for every other revoking path: a Google
+ * account claim, a logout, and the kill a reused refresh token triggers.
+ * Each takes the user row `FOR NO KEY UPDATE` before its in-transaction
+ * revoke, which queues behind a rotation's `FOR SHARE`. When the revoking
+ * side wins, the refused rotation kills the session itself once its own
+ * transaction has committed, so two denylist writes are recorded for that
+ * session.
+ *
+ * Seams, all through `withMutatedMethod`:
+ * - login pauses after its `lastLoggedInAt` UPDATE, the one call between
+ *   the compare and its transaction;
+ * - `UserRepository.lockById` reports each side's backend pid, and can
+ *   hold login after it has taken `FOR SHARE`;
+ * - the revoking side's session revoke can hold after it has run, inside
+ *   its locked transaction;
+ * - the Redis client's `SET` records each denylist write.
+ *
+ * The `MUTATION_PROOF` tests below are deliberately red; each keeps the
+ * assertions of the test it reproduces:
+ *
+ * ```
+ * MUTATION_PROOF=1 pnpm exec vitest run tests/integration/services/password-login-race.test.ts   # red
+ * pnpm exec vitest run tests/integration/services/password-login-race.test.ts                    # green
+ * ```
+ *
+ * Pool note: test mode has max 2 connections and each race holds both. A
+ * repository call inside a raced transaction that skipped `tx` would wait
+ * for a pool connection that never frees, so the race hangs until a lock
+ * probe or the test itself times out.
+ */
 import { randomUUID } from 'node:crypto'
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import type { User } from '@/database/models/user.model'
@@ -83,10 +89,12 @@ const userRepository = new UserRepository()
 const OLD_PASSWORD = 'correct horse battery staple'
 const NEW_PASSWORD = 'a brand new secret passphrase'
 const DENYLIST_FAILURE = 'session denylist write failed after password change'
-// A password change hashes with bcrypt before its user lock, which is
-// CPU-bound, so the waiter probe's deadline starts at the lock; this bounds
-// the whole probe. 12 s plus setup and teardown (under 3 s on a starved CPU)
-// stays under the 20 s test timeout.
+/**
+ * A password change hashes with bcrypt before its user lock, which is
+ * CPU-bound, so the waiter probe's deadline starts at the lock; this
+ * bounds the whole probe. 12 s plus setup and teardown (under 3 s on a
+ * starved CPU) stays under the 20 s test timeout.
+ */
 const REVOKER_PROBE_BOUND_MS = 12_000
 
 type PasswordFlow = 'change' | 'reset'
@@ -475,8 +483,10 @@ describe.each<PasswordFlow>(['change', 'reset'])(
       await expectLoginRefused(user, await racePasswordFirst(user))
     })
 
-    // DELIBERATELY red under MUTATION_PROOF=1: the revoke runs before the row
-    // lock, so the login's token, committed after it, survives.
+    /**
+     * DELIBERATELY red under `MUTATION_PROOF=1`: the revoke runs before
+     * the row lock, so the login's token, committed after it, survives.
+     */
     it.runIf(process.env.MUTATION_PROOF === '1')(
       'reproduces the login-first test with the revoke moved ahead of the row lock',
       async () => {
@@ -485,8 +495,11 @@ describe.each<PasswordFlow>(['change', 'reset'])(
       }
     )
 
-    // DELIBERATELY red under MUTATION_PROOF=1: login re-reads the hash without
-    // FOR SHARE, sees the uncommitted write's old value and issues a token.
+    /**
+     * DELIBERATELY red under `MUTATION_PROOF=1`: login re-reads the hash
+     * without `FOR SHARE`, sees the uncommitted write's old value and
+     * issues a token.
+     */
     it.runIf(process.env.MUTATION_PROOF === '1')(
       'reproduces the password-first test with an unlocked login re-read',
       async () => {
@@ -621,8 +634,10 @@ describe('two logins at once', () => {
     await expectBothLoggedIn(user, await raceTwoLogins(user))
   })
 
-  // DELIBERATELY red under MUTATION_PROOF=1: an exclusive re-read makes the
-  // second login wait for the first.
+  /**
+   * DELIBERATELY red under `MUTATION_PROOF=1`: an exclusive re-read makes
+   * the second login wait for the first.
+   */
   it.runIf(process.env.MUTATION_PROOF === '1')(
     'reproduces the two-logins test with an exclusive login re-read',
     async () => {
@@ -862,8 +877,10 @@ async function raceRevokerFirst(
       flags.revokerLocked = true
       return row
     }
-    // Only the rotation started after the revoker locked: a reusing
-    // revoker takes FOR SHARE itself, before its kill.
+    /**
+     * Only the rotation started after the revoker locked: a reusing
+     * revoker takes `FOR SHARE` itself, before its kill.
+     */
     if (flags.revokerLocked) rotationPid.resolve(await backendPid(tx))
     if (options.unlockedRotation) return
     return realLockById.call(this, id, mode, tx)
@@ -1015,9 +1032,11 @@ describe.each<PasswordFlow>(['change', 'reset'])(
       )
     })
 
-    // DELIBERATELY red under MUTATION_PROOF=1: with no user lock, the
-    // revoke waits on the claimed row, re-checks it, and never sees the new
-    // row inserted after its snapshot.
+    /**
+     * DELIBERATELY red under `MUTATION_PROOF=1`: with no user lock, the
+     * revoke waits on the claimed row, re-checks it, and never sees the
+     * new row inserted after its snapshot.
+     */
     it.runIf(process.env.MUTATION_PROOF === '1' && flow === 'change')(
       'reproduces the rotation-first test with a rotation that takes no user lock',
       async () => {
@@ -1032,8 +1051,10 @@ describe.each<PasswordFlow>(['change', 'reset'])(
       }
     )
 
-    // DELIBERATELY red under MUTATION_PROOF=1: the revoke runs before the
-    // sibling exists, and nothing makes the password side wait.
+    /**
+     * DELIBERATELY red under `MUTATION_PROOF=1`: the revoke runs before
+     * the sibling exists, and nothing makes the password side wait.
+     */
     it.runIf(process.env.MUTATION_PROOF === '1')(
       'reproduces the grace rotation-first test with a rotation that takes no user lock',
       async () => {
@@ -1048,8 +1069,11 @@ describe.each<PasswordFlow>(['change', 'reset'])(
       }
     )
 
-    // DELIBERATELY red under MUTATION_PROOF=1: the kill marker is not yet
-    // committed when the grace check reads it, so a sibling is issued.
+    /**
+     * DELIBERATELY red under `MUTATION_PROOF=1`: the kill marker is not
+     * yet committed when the grace check reads it, so a sibling is
+     * issued.
+     */
     it.runIf(process.env.MUTATION_PROOF === '1' && flow === 'change')(
       'reproduces the grace password-first test with a rotation that takes no user lock',
       async () => {
@@ -1112,10 +1136,13 @@ describe('an account claim against a concurrent refresh rotation', () => {
     await expectRotationRefused(sessionId, 1, 'fulfilled', race)
   })
 
-  // DELIBERATELY red under MUTATION_PROOF=1: the claim's in-transaction
-  // revoke runs before its user row lock, so it misses the sibling inserted
-  // once the rotation resumes. Removing only the lock would stay green: the
-  // claim's own UPDATEs of the user row also wait for the rotation.
+  /**
+   * DELIBERATELY red under `MUTATION_PROOF=1`: the claim's in-transaction
+   * revoke runs before its user row lock, so it misses the sibling
+   * inserted once the rotation resumes. Removing only the lock would stay
+   * green: the claim's own UPDATEs of the user row also wait for the
+   * rotation.
+   */
   it.runIf(process.env.MUTATION_PROOF === '1')(
     'reproduces the grace claim test with the revoke moved ahead of the user lock',
     async () => {
@@ -1160,9 +1187,11 @@ describe('logout against a concurrent refresh rotation', () => {
     await expectRotationRefused(sessionId, 2, 'fulfilled', race)
   })
 
-  // DELIBERATELY red under MUTATION_PROOF=1: without the user row lock, the
-  // logout's revoke waits on the claimed row, re-checks it, and never sees
-  // the new row inserted after its snapshot.
+  /**
+   * DELIBERATELY red under `MUTATION_PROOF=1`: without the user row lock,
+   * the logout's revoke waits on the claimed row, re-checks it, and never
+   * sees the new row inserted after its snapshot.
+   */
   it.runIf(process.env.MUTATION_PROOF === '1')(
     'reproduces the rotation-first logout test with a logout that takes no user lock',
     async () => {
@@ -1194,8 +1223,11 @@ describe('a reuse kill against a concurrent rotation of the same session', () =>
     await expectRotationRefused(sessionId, 2, 'rejected', race)
   })
 
-  // DELIBERATELY red under MUTATION_PROOF=1: a kill without the user row
-  // lock waits on the claimed row and misses the row inserted after its snapshot.
+  /**
+   * DELIBERATELY red under `MUTATION_PROOF=1`: a kill without the user
+   * row lock waits on the claimed row and misses the row inserted after
+   * its snapshot.
+   */
   it.runIf(process.env.MUTATION_PROOF === '1')(
     'reproduces the rotation-first kill test with a kill that takes no user lock',
     async () => {

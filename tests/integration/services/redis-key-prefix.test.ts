@@ -1,10 +1,11 @@
-// tests/integration/services/redis-key-prefix.test.ts
-//
-// Every Redis key and channel the app writes sits under REDIS_KEY_PREFIX.
-// This file runs under its own prefix nested in this worker's, so every key
-// under it is this file's. A before/after diff catches a key created under a
-// bare, unprefixed keyspace; other workers and a dev server sharing this
-// Redis write under their own prefixes and never match.
+/**
+ * @file Every Redis key and channel the app writes sits under
+ * `REDIS_KEY_PREFIX`. This file runs under its own prefix nested in this
+ * worker's, so every key under it is this file's. A before/after diff
+ * catches a key created under a bare, unprefixed keyspace; other workers
+ * and a dev server sharing this Redis write under their own prefixes and
+ * never match.
+ */
 import { randomUUID } from 'node:crypto'
 import type { RedisClientType } from 'redis'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
@@ -37,8 +38,11 @@ vi.mock('@/configs/env.config', async (importOriginal) => {
   return { ...actual, getEnv: () => env }
 })
 
-// The keyspaces this app wrote before REDIS_KEY_PREFIX existed: BullMQ's
-// default prefix, the rate limiters, the session denylist, connect-redis's default.
+/**
+ * The keyspaces this app would write to bare, without `REDIS_KEY_PREFIX`:
+ * BullMQ's default prefix, the rate limiters, the session denylist,
+ * connect-redis's default.
+ */
 const BARE_KEYSPACE = /^(?:bull|rl|denylist|sess):/
 const KEYSPACES = [
   'bull:email',

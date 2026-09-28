@@ -1,12 +1,16 @@
-// tests/integration/services/notification-emitter-outage.service.test.ts
-//
-// Real Redis outages through a TCP proxy this file owns, never by stopping
-// the shared Redis. Its own file because it mocks getEnv()'s REDIS_URL, as
-// redis-outage.service.test.ts does.
-//
-// The MUTATION_PROOF test is DELIBERATELY red: it drops the emitter's 'error'
-// listener, the only thing that destroys a subscriber closed while its reconnect is refused.
-//   MUTATION_PROOF=1 pnpm exec vitest run tests/integration/services/notification-emitter-outage.service.test.ts   # red
+/**
+ * @file Real Redis outages through a TCP proxy this file owns, never by
+ * stopping the shared Redis. Its own file because it mocks `getEnv()`'s
+ * `REDIS_URL`, as `redis-outage.service.test.ts` does.
+ *
+ * The `MUTATION_PROOF` test is DELIBERATELY red: it drops the emitter's
+ * `'error'` listener, the only thing that destroys a subscriber closed
+ * while its reconnect is refused.
+ *
+ * ```
+ * MUTATION_PROOF=1 pnpm exec vitest run tests/integration/services/notification-emitter-outage.service.test.ts   # red
+ * ```
+ */
 import { randomUUID } from 'node:crypto'
 import { createClient, type RedisClientType } from 'redis'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
@@ -123,8 +127,11 @@ async function hasFirstAttemptFailed(clients: RedisClientType[]): Promise<boolea
 }
 
 /**
- * Drop every 'error' listener added to `client` from here on; its logger listener stays.
- * @param client - A client createRedisClient just built.
+ * Drop any `'error'` listener registered through `client.on` from here on;
+ * its existing logger listener stays. Only intercepts `.on` — a listener
+ * added via `.once`, `.addListener` or `.prependListener` would not be
+ * caught.
+ * @param client - A client `createRedisClient` just built.
  * @returns The same client.
  */
 function withoutLaterErrorListeners(client: RedisClientType): RedisClientType {
@@ -196,8 +203,10 @@ describe('notification pub/sub survives a Redis outage', () => {
     target.proxyUrl = proxy.urlFor(new URL(target.realUrl))
   })
 
-  // A test can end, passed or failed, on a dead proxy, with its streams
-  // still open, or behind a reconnect its outage started.
+  /**
+   * A test can end, passed or failed, on a dead proxy, with its streams
+   * still open, or behind a reconnect its outage started.
+   */
   afterEach(async () => {
     proxy.comeBack()
     resetLifecycleForTests()
@@ -325,8 +334,11 @@ describe('notification pub/sub survives a Redis outage', () => {
       subscriber.on('reconnecting', onReconnecting)
       subscriber.on('error', onError)
       try {
-        // The first retry has no delay; once the second attempt fails, the client waits
-        // in the next retry's backoff (100ms) before its third attempt.
+        /**
+         * The first retry has no delay; once the second attempt fails, the
+         * client waits in the next retry's backoff (100ms) before its third
+         * attempt.
+         */
         await waitUntil(() => attempts.hasSecondFailed, {
           message: "the fresh subscriber's second connect attempt fails",
         })

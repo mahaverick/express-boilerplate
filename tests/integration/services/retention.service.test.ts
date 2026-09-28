@@ -1,9 +1,9 @@
-// tests/integration/services/retention.service.test.ts
-//
-// The retention purge against the real per-worker Postgres. `now` is fixed
-// in 2001 and every row is seeded around that date's cutoffs. Every other
-// file's rows carry the real current time and can't match any predicate, so
-// the `deleted` counts here are exact.
+/**
+ * @file Exercises the retention purge against the real per-worker Postgres.
+ * `now` is fixed in 2001 and every row is seeded around that date's
+ * cutoffs. Every other file's rows carry the real current time and can't
+ * match any predicate, so the `deleted` counts here are exact.
+ */
 import { randomBytes, randomUUID } from 'node:crypto'
 import postgres from 'postgres'
 import { afterEach, describe, expect, it, vi } from 'vitest'

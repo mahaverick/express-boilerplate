@@ -1,8 +1,8 @@
-// tests/integration/services/redis.service.test.ts
-//
-// Integration test against the real Redis started by docker-compose. No
-// keys are written, so there is no cross-worker data-isolation risk here
-// either — see the note in database.service.test.ts.
+/**
+ * @file Integration test against the real Redis started by docker-compose.
+ * No keys are written, so there is no cross-worker data-isolation risk here
+ * (see `database.service.test.ts` for the equivalent Postgres note).
+ */
 import { afterAll, describe, expect, it, vi } from 'vitest'
 import { closeRedis, getRedis, isRedisReachable } from '@/services/redis.service'
 
@@ -26,11 +26,13 @@ describe('redis.service', () => {
     expect(await isRedisReachable()).toBe(false)
   })
 
-  // getRedis() reconnects lazily, so without an explicit "closed" state a
-  // ping issued after closeRedis() would silently open a new socket and
-  // report healthy — exactly the bug this test exists to pin down. Must run
-  // before any test that still needs a working client: closeRedis() marks
-  // the module permanently closed, matching a real process shutting down.
+  /**
+   * `getRedis()` reconnects lazily, so without an explicit "closed" state a
+   * ping issued after `closeRedis()` would silently open a new socket and
+   * report healthy. `closeRedis()` marks the module permanently closed,
+   * matching a real process shutting down, so this must run before any
+   * later test in this file that still needs a working client.
+   */
   it('reports unreachable, without reconnecting, once closed', async () => {
     expect(await isRedisReachable()).toBe(true)
     await closeRedis()

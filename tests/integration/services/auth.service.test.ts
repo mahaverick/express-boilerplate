@@ -1,14 +1,15 @@
-// tests/integration/services/auth.service.test.ts
-//
-// The controller starts register's follow-up mail, requestPasswordReset and
-// the resend-verification mail with a bare `void` after replying, so each
-// must swallow and log its own failure: a rejection there would crash the
-// process on one branch only. Faults are injected with withMutatedMethod;
-// nothing under src/ is edited. Each test also asserts the failure was
-// logged, so a fault that never reached the work cannot pass vacuously, and
-// that the log carries none of the failed query's bound parameters.
-// login's platform-role read is guarded the same way: a failed read answers
-// null instead of failing the sign-in.
+/**
+ * @file The controller starts `register`'s follow-up mail,
+ * `requestPasswordReset` and the resend-verification mail with a bare
+ * `void` after replying, so each must swallow and log its own failure: a
+ * rejection there would crash the process on one branch only. `login`'s
+ * platform-role read is guarded the same way — a failed read answers null
+ * instead of failing the sign-in. Faults are injected with
+ * `withMutatedMethod`; nothing under `src/` is edited. Each test also
+ * asserts the failure was logged, so a fault that never reached the work
+ * cannot pass vacuously, and that the log carries none of the failed
+ * query's bound parameters.
+ */
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'

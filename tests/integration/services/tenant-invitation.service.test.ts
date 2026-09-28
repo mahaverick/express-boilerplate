@@ -1,8 +1,9 @@
-// tests/integration/services/tenant-invitation.service.test.ts
-//
-// The invitation service against the real per-worker Postgres and Redis. No
-// Worker runs here: enqueued jobs stay on the queues, where these tests read
-// them. Queues are obliterated in afterAll.
+/**
+ * @file Exercises the invitation service against the real per-worker
+ * Postgres and Redis. No Worker runs here: enqueued jobs stay on the
+ * queues, where these tests read them. Queues are obliterated in
+ * `afterAll`.
+ */
 import { randomBytes, randomUUID } from 'node:crypto'
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import type { MembershipRole } from '@/constants/tenant.constants'

@@ -1,11 +1,11 @@
-// tests/integration/services/database-transactions.test.ts
-//
-// Real-Postgres proof that withTransaction's reuse is not just the same
-// TYPE of object but the same LIVE transaction: a write made through a
-// nested withTransaction call, and a write made by a repository through a
-// passed-through executor, both roll back when the OUTER code throws
-// after they resolved — proving no savepoint was opened and no
-// repository silently used its own connection instead of the given one.
+/**
+ * @file Real-Postgres proof that `withTransaction`'s reuse is not just the
+ * same TYPE of object but the same LIVE transaction: a write made through a
+ * nested `withTransaction` call, and a write made by a repository through a
+ * passed-through executor, both roll back when the OUTER code throws after
+ * they resolved — proving no savepoint was opened and no repository
+ * silently used its own connection instead of the given one.
+ */
 import { randomUUID } from 'node:crypto'
 import { inArray } from 'drizzle-orm'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -89,11 +89,13 @@ describe('withTransaction and repository executors, against real Postgres', () =
   })
 
   it('UserRepository.create writes through a passed tx, and rolls back when the caller throws after it resolves', async () => {
-    // { email } alone, no other columns — reuses the exact shape
-    // tenant.repository.test.ts:77's own createUser() helper already
-    // relies on (`userRepository.create({ email: uniqueEmail() })`
-    // bare), so this is a proven-working NewUser shape, not a new
-    // assumption about the users table's NOT NULL columns.
+    /**
+     * `{ email }` alone, with no other columns, reuses the exact shape
+     * `tenant.repository.test.ts`'s own `createUser()` helper already
+     * relies on (a bare `userRepository.create({ email: uniqueEmail() })`),
+     * so this is a proven-working `NewUser` shape, not a new assumption
+     * about the `users` table's NOT NULL columns.
+     */
     const email = uniqueEmail()
 
     await expect(
@@ -163,14 +165,16 @@ describe('withTransaction and repository executors, against real Postgres', () =
       })
     ).rejects.toThrow('force rollback')
 
-    // The tenant row itself never committed...
+    // The tenant row itself never committed.
     expect(await tenantRepository.findBySlug(slug)).toBeUndefined()
-    // ...and neither did its owner membership. `ownerId` never got a
-    // tenant id back (the insert that would have produced one rolled
-    // back), so this checks by user rather than by (user, tenant): a
-    // fresh user created only for this test must end up a member of
-    // nothing at all if the membership insert really rolled back with
-    // the rest of the transaction.
+    /**
+     * Nor did its owner membership. `ownerId` never got a tenant id back
+     * (the insert that would have produced one rolled back), so this
+     * checks by user rather than by (user, tenant): a fresh user created
+     * only for this test must end up a member of nothing at all if the
+     * membership insert really rolled back with the rest of the
+     * transaction.
+     */
     expect(await userMembershipRepository.listByUser(ownerId)).toEqual([])
   })
 })

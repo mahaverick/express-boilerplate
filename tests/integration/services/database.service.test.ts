@@ -1,10 +1,10 @@
-// tests/integration/services/database.service.test.ts
-//
-// Integration test against the real Postgres started by docker-compose.
-// These tests never INSERT/UPDATE/DELETE, so they carry no data-isolation
-// risk across parallel vitest forks (pool: 'forks' in vitest.config.ts) —
-// the first test that mutates rows is the trigger for a per-worker schema
-// or transaction-rollback strategy, not this file.
+/**
+ * @file Integration test against the real Postgres started by
+ * docker-compose. These tests never INSERT/UPDATE/DELETE, and each vitest
+ * worker already runs against its own physical database (see
+ * `tests/helpers/worker-database.ts`), so there is no cross-worker
+ * data-isolation risk here either way.
+ */
 import { afterAll, describe, expect, it } from 'vitest'
 import { getEnv } from '@/configs/env.config'
 import { closeDatabase, isDatabaseReachable, sql } from '@/services/database.service'
@@ -23,9 +23,11 @@ describe('database.service', () => {
     expect(await isDatabaseReachable()).toBe(true)
   })
 
-  // postgres.js sends `connection` in the startup packet, so every pooled
-  // connection carries it. SHOW formats the value with a unit (30000 ms reads
-  // back as '30s'); pg_settings gives the raw milliseconds.
+  /**
+   * postgres.js sends `connection` in the startup packet, so every pooled
+   * connection carries it. `SHOW` formats the value with a unit (30000 ms
+   * reads back as `'30s'`); `pg_settings` gives the raw milliseconds.
+   */
   it('applies DB_STATEMENT_TIMEOUT_MS to pooled connections', async () => {
     expect(getEnv().DB_STATEMENT_TIMEOUT_MS).toBe(30_000)
 
