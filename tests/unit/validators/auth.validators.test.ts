@@ -1,4 +1,3 @@
-// tests/unit/validators/auth.validators.test.ts
 import { describe, expect, it } from 'vitest'
 import { registerSchema } from '@/validators/auth.validators'
 

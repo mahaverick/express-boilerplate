@@ -1,4 +1,3 @@
-// tests/unit/validators/safe-text.validators.test.ts
 import { describe, expect, it } from 'vitest'
 import { normalizeMultilineText, safeText } from '@/validators/safe-text.validators'
 

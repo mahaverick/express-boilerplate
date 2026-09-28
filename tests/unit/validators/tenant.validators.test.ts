@@ -1,4 +1,3 @@
-// tests/unit/validators/tenant.validators.test.ts
 import { describe, expect, it } from 'vitest'
 import { RESERVED_SLUGS } from '@/constants/tenant.constants'
 import { newTenantSchema, slugSchema, updateTenantSchema } from '@/validators/tenant.validators'
