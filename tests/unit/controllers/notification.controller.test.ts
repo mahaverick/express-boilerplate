@@ -1,16 +1,8 @@
-// tests/unit/controllers/notification.controller.test.ts
-//
-// Covers `authenticatedUserId`'s own defensive 401 branch, and the three
-// handlers whose error path nothing else in this suite exercises —
-// `listNotifications`, `markAllRead`, `getPreferences`. Same reasoning as
-// tests/unit/controllers/profile.controller.test.ts: notification.routes.ts
-// mounts `requireAuth` router-wide, so `request.user` is always populated by
-// the time any of these run through a real route; reaching the guard at all
-// needs a direct call with no `request.user` set, bypassing routing
-// entirely. `markRead`/`deleteNotification`/`updatePreferences` each already
-// have their error path covered by a real error scenario in
-// tests/integration/api/notification.test.ts (a 404 for a nonexistent
-// notification, an invalid preferences body), so they are not repeated here.
+/**
+ * @file Covers `authenticatedUserId`'s own defensive 401 branch, on
+ * the three handlers whose error path nothing else in this suite
+ * exercises.
+ */
 import type { NextFunction, Request, Response } from 'express'
 import { describe, expect, it, vi } from 'vitest'
 import type { Handler } from '@/controllers/base.controller'
@@ -48,6 +40,17 @@ async function expectAuthenticationRequired(handler: Handler): Promise<void> {
   expect((error as HttpError).message).toBe('Authentication required')
 }
 
+/**
+ * `listNotifications`, `markAllRead` and `getPreferences`:
+ * notification.routes.ts mounts `requireAuth` router-wide, so
+ * `request.user` is always populated by the time any of these run
+ * through a real route; reaching the guard at all needs a direct call
+ * with no `request.user` set, bypassing routing entirely.
+ * `markRead`/`deleteNotification`/`updatePreferences` each already
+ * have their error path covered by a real error scenario in
+ * tests/integration/api/notification.test.ts, so they are not
+ * repeated here.
+ */
 describe('authenticatedUserId (via each handler that reaches it first)', () => {
   it('listNotifications forwards a 401 HttpError to next() when request.user is unset', async () => {
     await expectAuthenticationRequired(notificationController.listNotifications)
