@@ -1,28 +1,14 @@
-// src/utilities/email-template.utilities.ts
-//
-// Shared building blocks for the five plain-function email templates under
-// src/templates/email/ — NOT a template engine. task-3-brief.md's
-// Controller addendum is explicit that this task must not build one (no
-// `{{placeholder}}` parser, no partials, no inheritance): a handful of
-// emails do not justify that surface, so each template is a real
-// TypeScript function that builds its subject/text/html with ordinary
-// template literals. What
-// lives here is only the two small, genuinely-shared concerns every one of
-// those functions needs: escaping a value before it lands in the HTML part,
-// and refusing to render at all when a required value is missing.
-//
 /**
- * The five outbound email templates this app renders — the single source
- * of truth `EmailTemplateKey` is derived from, below. Closes the deferred
- * item from Task 2 (mailer.service.ts's `MailMessage.templateKey` shipped
- * as an unconstrained `string` because these keys did not exist yet — see
- * that file's own comment). Paired the same way
- * `EMAIL_LOG_STATUSES`/`EmailLogStatus` are paired in email-log.model.ts:
- * one array is the single source of truth, the union type is derived from
- * it, and every template's own `..._TEMPLATE_KEY` constant is typed AGAINST
- * that union rather than left as a bare string literal — so a typo
- * (`'email_verifcation'`) is a compile error, not a message that silently
- * renders under a key nothing ever matches.
+ * @file Shared building blocks for the plain-function email templates under
+ * src/templates/email/: HTML escaping and the missing-variable guard. Not a
+ * template engine: each template is a TypeScript function building its
+ * subject, text and HTML with template literals.
+ */
+
+/**
+ * The outbound email templates this app renders, from which
+ * `EmailTemplateKey` is derived. Each template's `..._TEMPLATE_KEY` is typed
+ * against that union, so a typo in a key is a compile error.
  */
 export const EMAIL_TEMPLATE_KEYS = [
   'email_verification',
@@ -33,14 +19,9 @@ export const EMAIL_TEMPLATE_KEYS = [
 ] as const
 
 /**
- * Which of this app's five outbound email templates rendered a given
- * message. Closes `MailMessage.templateKey` (mailer.service.ts) from an
- * unconstrained `string` into this union — the deferred item from Task 2's
- * addendum — and is also what `email_logs.template_key` (email-log.model.ts)
- * is meant to hold, though that column's own type stays a plain `string` at
- * the Drizzle layer (see email-log.repository.ts's header comment on why
- * `record()` still normalizes it defensively rather than leaning on this
- * type alone).
+ * Which template rendered a message: the type of `MailMessage.templateKey`
+ * (mailer.service.ts), and what `email_logs.template_key` holds, though that
+ * column is a plain `string` in Drizzle.
  */
 export type EmailTemplateKey = (typeof EMAIL_TEMPLATE_KEYS)[number]
 
@@ -48,13 +29,9 @@ export type EmailTemplateKey = (typeof EMAIL_TEMPLATE_KEYS)[number]
  * One fully-rendered email: both parts a real client needs, plus the key
  * that produced them.
  *
- * Carries `templateKey` alongside `subject`/`text`/`html` — one step past
- * what task-3-brief.md's addendum literally asks for — so a future caller
- * builds a `MailMessage` as `{ to, ...renderPasswordResetTemplate(vars) }`
- * and can never accidentally send one template's body while logging a
- * different template's key in `email_logs` (email-log.model.ts): the two
- * are produced together, by the same call, and cannot drift apart the way
- * two independently-typed arguments could.
+ * Carries `templateKey` with the body, produced by the same call, so a
+ * caller building `{ to, ...renderPasswordResetTemplate(vars) }` cannot send
+ * one template's body while logging another's key in `email_logs`.
  */
 export interface RenderedEmail {
   templateKey: EmailTemplateKey
@@ -63,12 +40,10 @@ export interface RenderedEmail {
   html: string
 }
 
-// `as const` (not `Readonly<Record<string, string>>`) so `HtmlEscapable`
-// below can be derived from the table's own keys — the five characters
-// escapeHtmlForEmail's regex can ever match, and nothing else. That is what
-// makes the cast inside escapeHtmlForEmail a real narrowing instead of an
-// unreachable `?? character` fallback masking a lookup that could return
-// undefined for any input the regex could actually produce.
+/**
+ * The five HTML-significant characters and their entities. `as const`, so
+ * `HtmlEscapable` is derived from its keys.
+ */
 const HTML_ESCAPE_TABLE = {
   '&': '&amp;',
   '<': '&lt;',
@@ -79,8 +54,8 @@ const HTML_ESCAPE_TABLE = {
 
 /**
  * One of the five characters `escapeHtmlForEmail`'s regex (`/[&<>"']/g`)
- * can ever match — exactly `HTML_ESCAPE_TABLE`'s own key set, derived from
- * it rather than retyped, so the two can never drift apart.
+ * can match: exactly `HTML_ESCAPE_TABLE`'s keys, so the cast in
+ * `escapeHtmlForEmail` is exact.
  */
 type HtmlEscapable = keyof typeof HTML_ESCAPE_TABLE
 
@@ -89,33 +64,18 @@ type HtmlEscapable = keyof typeof HTML_ESCAPE_TABLE
  * interpolate into an email's HTML part — text-node position (between two
  * tags) or attribute position (inside a quoted `href="..."`) alike.
  *
- * A single regex-driven pass, not five chained `.replaceAll` calls in
- * sequence. Both approaches are correct IF the `&` replacement runs first —
- * every other replacement's own output (`&lt;`, `&gt;`, ...) contains a `&`
- * that a later `&`-replacement pass would re-escape into `&amp;lt;` — but a
- * single pass over the original string, replacing each matched character
- * once via a regex callback, makes that ordering bug structurally
- * unreachable instead of merely avoided by writing the calls in the right
- * order.
+ * One regex pass, not chained `.replaceAll` calls, so an `&` produced by an
+ * earlier replacement can never be re-escaped into `&amp;lt;`.
  *
- * This is the ENTIRE structural guarantee against a rendered email
- * executing attacker-controlled markup: every template below routes every
- * interpolated value through this function before it reaches the html part
- * (never the text part — plain text has no markup to execute, and escaping
- * it would show a recipient literal `&amp;` instead of `&`). See each
- * template's own test file for the escaping proof — asserted against the
- * rendered `.html` output, not against this function in isolation, per
- * task-3-brief.md's addendum ("assert on the rendered output, not on the
- * escaping helper in isolation").
+ * The whole guard against a rendered email carrying attacker-controlled
+ * markup: every template routes every interpolated value through this before
+ * it reaches the HTML part, never the text part, where escaping would show a
+ * recipient a literal `&amp;`. The template tests assert escaping on the
+ * rendered HTML, not on this function alone.
  * @param value - The raw string to make safe for HTML.
  * @returns `value` with `& < > " '` replaced by their named HTML entities.
  */
 export function escapeHtmlForEmail(value: string): string {
-  // The cast is exact, not defensive: the regex character class and the
-  // table's key set name the identical five characters (HtmlEscapable's own
-  // comment), so every value this callback ever receives is a valid key —
-  // there is no "else" branch to fall back to, and no `?? character` this
-  // function would otherwise need to keep untested and unreachable.
   return value.replaceAll(/[&<>"']/g, (character) => HTML_ESCAPE_TABLE[character as HtmlEscapable])
 }
 
@@ -124,31 +84,16 @@ export function escapeHtmlForEmail(value: string): string {
  * template interpolates any of them, and throw — naming the first missing
  * one — the moment one is not.
  *
- * This is the guard behind task-3-brief.md's addendum requirement: "a
- * missing variable must fail loudly... `Hello undefined,` in a
- * password-reset email is the canonical example." Every template's own
- * `*Variables` interface already declares each field required (`firstName:
- * string`, never `string | undefined`), so ordinary, correctly-typed
- * TypeScript code can never construct a call this function would reject —
- * but that compile-time guarantee does not reach a caller building the
- * object from data this app does not fully control at the type level (a
- * nullable database column coerced with a non-null assertion, a partial
- * object built with `as`, a value threaded through `unknown` at a module
- * boundary). This function is the last point before that value reaches a
- * sent, user-facing email, and it does not trust the caller's types any
- * more than `EmailLogRepository.record` (email-log.repository.ts) trusts
- * that an `errorCode` it receives already matches its expected shape.
+ * A missing variable must fail loudly, never send `Hello undefined,`. The
+ * `*Variables` interfaces already require every field, but that does not
+ * reach data that bypassed the types (a non-null assertion on a nullable
+ * column, a partial object built with `as`, a value passed through
+ * `unknown`).
  *
- * Takes the explicit list of required names, rather than
- * `Object.entries(variables)` — that distinction is load-bearing, not
- * stylistic: a caller who OMITS a key entirely (`{ resetUrl, appName } as
- * PasswordResetVariables`, `firstName` never set at all) produces an object
- * whose own entries never mention `firstName` in the first place, so an
- * entries-based scan would never see it missing and would let it through to
- * render as `Hello undefined,` — the exact canonical failure this function
- * exists to prevent. Checking each name explicitly (`variables[name]`)
- * reads `undefined` identically whether the key is present-but-undefined or
- * absent altogether, so both shapes are caught the same way.
+ * Takes the required names explicitly rather than scanning
+ * `Object.entries(variables)`: an omitted key never appears in the entries,
+ * while `variables[name]` reads `undefined` whether the key is absent or
+ * present-but-undefined.
  * @param variables - The template's variables object, exactly as the caller supplied it.
  * @param requiredNames - Every key `variables` must carry as a real string — normally every key of its own interface.
  * @param templateKey - Which template is rendering, named in the thrown error so a failure is traceable to its source.
@@ -162,7 +107,7 @@ export function requireEmailVariables<T extends object>(
 ): T {
   for (const name of requiredNames) {
     if (typeof variables[name] !== 'string') {
-      // eslint-disable-next-line unicorn/prefer-type-error -- this is an application-level "the caller's data is incomplete" error, not a JavaScript type violation; a TypeError would misleadingly suggest the latter to anything that branches on error class
+      // eslint-disable-next-line unicorn/prefer-type-error -- incomplete caller data, not a JavaScript type violation
       throw new Error(
         `Cannot render "${templateKey}" email template: required variable "${name}" is missing.`
       )
