@@ -1,13 +1,12 @@
-// tests/integration/repositories/notification.repository.test.ts
-//
-// Integration test against the real per-worker Postgres database (see
-// tests/helpers/worker-database.ts). Every user this file creates is
-// deleted in afterEach — deleting the user is enough: notifications.user_id
-// carries ON DELETE CASCADE (notification.model.ts), so a row this file
-// never explicitly deletes is still gone once its owning user is. One
-// cascade test below asserts that property directly, since it's a schema
-// guarantee this task itself introduced, not an assumption to leave
-// unverified.
+/**
+ * @file Integration test against the real per-worker Postgres database (see
+ * `tests/helpers/worker-database.ts`). Every user this file creates is
+ * deleted in `afterEach` — deleting the user is enough: `notifications.user_id`
+ * carries `ON DELETE CASCADE` (`notification.model.ts`), so a row this file
+ * never explicitly deletes is still gone once its owning user is. One
+ * cascade test below asserts that property directly rather than leaving it
+ * an unverified assumption.
+ */
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
@@ -345,11 +344,12 @@ describe('NotificationRepository', () => {
       expect(notifications).toEqual([])
     })
 
-    // General-case regression: rows created one `create()` call at a time,
-    // which in practice land at least a millisecond apart. This exercises
-    // the ordinary `created_at < $cursor` branch of the keyset predicate,
-    // not the `created_at = $cursor AND id < $id` tiebreaker branch — see
-    // the test below for that.
+    /**
+     * Rows created one `create()` call at a time land at least a
+     * millisecond apart, exercising the ordinary `created_at < $cursor`
+     * branch, not the `created_at = $cursor AND id < $id` tiebreaker (see
+     * the test below for that).
+     */
     it('pages through every notification exactly once, with no gaps or duplicates', async () => {
       const userId = await createUser()
       const createdIds = new Set<string>()
@@ -367,18 +367,15 @@ describe('NotificationRepository', () => {
       expect(seenIds).toEqual(createdIds) // no gaps: every created row was returned exactly once
     })
 
-    // This is the actual load-bearing test for notification.model.ts's own
-    // header comment: it argues `createdAt`'s millisecond precision is what
-    // stops the cursor from silently skipping a row that shares a
-    // millisecond with the cursor boundary. Rows created one at a time
-    // (the test above) almost never land in the same millisecond, so that
-    // argument was asserted in a comment but never actually exercised by a
-    // test until now. `createdAt` is passed explicitly and identically for
-    // every row — `NewNotification.createdAt` is optional (the column has
-    // a database default) precisely because callers are allowed to set it,
-    // and this is the one caller in this codebase that needs to — which
-    // forces every comparison in the keyset predicate through the `id`
-    // tiebreaker, the exact branch a same-millisecond burst would hit.
+    /**
+     * The load-bearing test for `notification.model.ts`'s claim that
+     * `createdAt`'s millisecond precision is what stops the cursor from
+     * silently skipping a row sharing a millisecond with the cursor
+     * boundary. `createdAt` is passed explicitly and identically for every
+     * row here, forcing every comparison in the keyset predicate through
+     * the `id` tiebreaker, the exact branch a same-millisecond burst would
+     * hit.
+     */
     it('pages through every notification exactly once, with no gaps or duplicates, when every row shares the same createdAt', async () => {
       const userId = await createUser()
       const sharedCreatedAt = new Date('2026-01-01T00:00:00.123Z')
@@ -395,8 +392,8 @@ describe('NotificationRepository', () => {
       }
 
       const { seenIds, pageCount } = await pageThroughAll(userId, createdIds)
-      expect(seenIds).toEqual(createdIds) // no gaps: every row was returned exactly once
-      expect(pageCount).toBeGreaterThan(1) // proves pagination actually spanned multiple pages
+      expect(seenIds).toEqual(createdIds) // no gaps: every row was returned exactly once, and pagination spanned multiple pages
+      expect(pageCount).toBeGreaterThan(1)
     })
   })
 
@@ -410,9 +407,7 @@ describe('NotificationRepository', () => {
     })
 
     await sql`delete from users where id = ${user.id}`
-    // The user row is gone without ever being tracked in createdUserIds
-    // above — afterEach has nothing to clean up here, deliberately, since
-    // this test's own point is that the cascade already did it.
+    // Deliberately never tracked in createdUserIds: this test's own point is that the cascade already did the cleanup.
 
     const [row] = await sql`select * from notifications where id = ${notification.id}`
     expect(row).toBeUndefined()

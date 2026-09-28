@@ -1,8 +1,8 @@
-// tests/integration/repositories/audit-log.repository.test.ts
-//
-// AuditLogRepository against the real per-worker Postgres. Every row is
-// scoped to a tenant this file creates, and every listing filters by that
-// tenant to stay isolated from other files' rows.
+/**
+ * @file `AuditLogRepository` against the real per-worker Postgres. Every
+ * row is scoped to a tenant this file creates, and every listing filters
+ * by that tenant to stay isolated from other files' rows.
+ */
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { NewAuditLog } from '@/database/models/audit-log.model'

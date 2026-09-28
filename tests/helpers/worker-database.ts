@@ -1,47 +1,24 @@
-// tests/helpers/worker-database.ts
-//
-// WHY THIS EXISTS. Before this file, every vitest worker shared ONE test
-// database (`.env.test`'s DATABASE_URL). database.service.test.ts's own
-// header comment named the trigger this repo was watching for: "the first
-// test that mutates rows is the trigger for a per-worker schema or
-// transaction-rollback strategy" — migrate.test.ts's uniqueness test was
-// that trigger. With `pool: 'forks'` and `maxWorkers: 8` (vitest.config.ts),
-// two tests in different files racing to insert the same fixed email from
-// two different worker PROCESSES would hit a real, cross-test
-// unique-constraint violation — indistinguishable, from the failure
-// message alone, from an application bug. Task 3's repository-layer tests
-// insert users routinely; this is deliberately fixed before that lands.
-//
-// The chosen mechanism: each worker gets its OWN physical database, keyed
-// off VITEST_POOL_ID (vitest's own worker-slot id — "value is between
-// 1-maxWorkers", verified against the installed vitest package's source:
-// node_modules/vitest/dist/chunks/index.B89dZ0-N.js). All WORKER_COUNT
-// databases are created and migrated once, up front, in
-// tests/helpers/global-setup.ts (the main process, before any worker
-// spawns) — never lazily from inside a worker, which would reintroduce the
-// exact concurrent-migration race tests/helpers/global-setup.ts's own
-// header already explains.
-//
-// Truncating between test FILES was considered and rejected as the sole
-// mechanism: it stops one file's leftover rows from breaking the next file
-// in the SAME worker, but does nothing for two DIFFERENT workers running at
-// the same moment — the actual failure mode this file exists to prevent.
-// Per-worker databases solve that directly; per-test cleanup (already this
-// repo's convention — see migrate.test.ts) still matters for files sharing
-// one worker sequentially, and is unchanged by this file.
-//
-// WORKER_COUNT is the single source of truth for how many worker databases
-// exist; vitest.config.ts imports THIS constant for `maxWorkers` rather than
-// repeating the number. A comment cross-referencing two literals was tried
-// first and rejected: the failure mode if they drift is a worker assigned a
-// VITEST_POOL_ID with no database ever provisioned for it — a connection
-// error, not a configuration error, with nothing pointing at the actual
-// cause. One import makes the two values impossible to disagree.
+/**
+ * @file Gives each vitest worker its own physical Postgres database, keyed by
+ * `VITEST_POOL_ID`, so two worker processes can never race a unique
+ * constraint against the same row from different test files. Truncating
+ * between files alone would not do this: it cannot stop two different
+ * worker processes colliding at the same moment, only one file's leftovers
+ * from breaking the next file in the same worker.
+ */
+
+/**
+ * How many per-worker test databases exist, all created and migrated once,
+ * up front, by `tests/helpers/global-setup.ts`, before any worker starts.
+ * `vitest.config.ts` imports this constant for `maxWorkers` rather than
+ * repeating the number, so the two values cannot drift apart — a worker
+ * assigned a `VITEST_POOL_ID` with no database provisioned for it would
+ * otherwise fail as a bare connection error, with nothing pointing at
+ * "`maxWorkers` and `WORKER_COUNT` disagree" as the actual cause.
+ */
 export const WORKER_COUNT = 8
 
-// Test-infrastructure-only process.env key: the untouched base DATABASE_URL
-// (from .env.test), stashed before useWorkerDatabase() below overwrites
-// process.env.DATABASE_URL for this worker. Never read by application code.
+// Test-infrastructure-only, never read by application code: the untouched base DATABASE_URL, stashed before useWorkerDatabase() below overwrites it.
 const BASE_DATABASE_URL_KEY = 'TEST_DATABASE_BASE_URL'
 
 /**

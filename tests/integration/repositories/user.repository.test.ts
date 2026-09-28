@@ -1,12 +1,12 @@
-// tests/integration/repositories/user.repository.test.ts
-//
-// Integration test against the real per-worker Postgres database (see
-// tests/helpers/worker-database.ts) — this file inserts and mutates rows,
-// so every email it uses is unique to this run (never a fixed literal) and
-// every row it creates is deleted in afterEach. Other tests in the same
-// worker share this database; a fixed email here would eventually collide
-// with one of them, intermittently, in whichever worker happens to run
-// both files.
+/**
+ * @file Integration test against the real per-worker Postgres database (see
+ * `tests/helpers/worker-database.ts`) — this file inserts and mutates rows,
+ * so every email it uses is unique to this run (never a fixed literal) and
+ * every row it creates is deleted in `afterEach`. Other tests in the same
+ * worker share this database; a fixed email here would eventually collide
+ * with one of them, intermittently, in whichever worker happens to run
+ * both files.
+ */
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import { HttpError } from '@/errors/http-error'
@@ -106,8 +106,7 @@ describe('UserRepository', () => {
     const created = await userRepository.create({ email })
     createdIds.push(created.id)
 
-    // Exercises the translation this task exists to add: without it, this
-    // assertion fails with a raw PostgresError (23505) instead of HttpError.
+    // Exercises the unique-violation translation: without it, this assertion fails with a raw PostgresError (23505) instead of HttpError.
     await expect(userRepository.create({ email: email.toUpperCase() })).rejects.toBeInstanceOf(
       HttpError
     )
@@ -174,16 +173,12 @@ describe('UserRepository', () => {
       const user = await userRepository.create({ email: uniqueEmail(), passwordHash: 'x' })
       createdIds.push(user.id)
       const first = await userRepository.markEmailVerified(user.id)
-      // Must prove the first call actually verified the row — otherwise
-      // `first?.emailVerifiedAt` below is `undefined`, and comparing it
-      // against a second `undefined` would pass without proving anything.
+      // Must prove the first call actually verified the row: otherwise first?.emailVerifiedAt below is undefined, and comparing it against a second undefined would pass without proving anything.
       expect(first).toBeDefined()
 
       const second = await userRepository.markEmailVerified(user.id)
 
-      // undefined is SUCCESS here, not failure — it is how the caller learns
-      // the row was already verified. verification.controller.ts depends on
-      // this: a second valid token must answer 200, not 400.
+      // undefined is success here, not failure: verification.controller.ts depends on it to answer 200, not 400, on a second valid token.
       expect(second).toBeUndefined()
       const reread = await userRepository.findById(user.id)
       expect(reread?.emailVerifiedAt?.getTime()).toBe(first?.emailVerifiedAt?.getTime())

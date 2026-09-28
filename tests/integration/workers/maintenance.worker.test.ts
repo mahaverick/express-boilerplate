@@ -1,9 +1,9 @@
-// tests/integration/workers/maintenance.worker.test.ts
-//
-// A real maintenance Worker picks a retention-purge job off the real Redis
-// and runs it against this worker's Postgres, with the schema's default
-// windows and the real clock. No test file leaves rows older than those
-// windows, so the run deletes nothing another file owns.
+/**
+ * @file A real maintenance Worker picks a retention-purge job off the real
+ * Redis and runs it against this worker's Postgres, with the schema's
+ * default windows and the real clock. No test file leaves rows older than
+ * those windows, so the run deletes nothing another file owns.
+ */
 import type { Job, Worker } from 'bullmq'
 import { afterAll, describe, expect, it, vi } from 'vitest'
 import { RETENTION_PURGE_JOB } from '@/jobs/maintenance.job'

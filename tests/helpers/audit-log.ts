@@ -1,16 +1,14 @@
-// tests/helpers/audit-log.ts
-//
-// audit_logs has RESTRICT foreign keys to tenants and users, and its trigger
-// rejects every DELETE outside a retention purge transaction, so a test that
-// hard-deletes tenants or users empties the table first. TRUNCATE fires no
-// row trigger, so it stays open for this. Each worker has its own database and
-// runs its files one at a time, so this never removes another file's rows
-// mid-test.
+/**
+ * @file Empties `audit_logs` in this worker's own database before a test
+ * hard-deletes tenants or users.
+ */
 import { sql } from '@/services/database.service'
 
 /**
  * Empty audit_logs in this worker's database. Call it before hard-deleting
- * tenants or users.
+ * tenants or users: `audit_logs` has RESTRICT foreign keys to `tenants` and
+ * `users`, and a trigger rejects every other DELETE, but TRUNCATE fires no
+ * row trigger.
  * @returns Resolves once the table is empty.
  */
 export async function truncateAuditLogs(): Promise<void> {

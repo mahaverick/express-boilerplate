@@ -1,8 +1,8 @@
-// tests/helpers/query-error.ts
-//
-// A failed-query error as the ORM builds one: its message embeds the bound
-// parameters, and it carries them again as `params`. A log call that passes
-// such an error through raw writes the parameters to the log.
+/**
+ * @file A failed-query error as the ORM builds one: its message embeds the
+ * bound parameters, and it carries them again as `params`. A log call that
+ * passes such an error through raw writes the parameters to the log.
+ */
 import { inspect } from 'node:util'
 import type { MockInstance } from 'vitest'
 

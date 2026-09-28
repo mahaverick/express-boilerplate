@@ -1,8 +1,8 @@
-// tests/integration/repositories/platform-tenant.repository.test.ts
-//
-// The staff search reads every tenant in this worker's database, including
-// other files' leftovers, so each test names its tenants with a marker unique
-// to the test and searches by it.
+/**
+ * @file The staff search reads every tenant in this worker's database,
+ * including other files' leftovers, so each test names its tenants with a
+ * marker unique to the test and searches by it.
+ */
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import {

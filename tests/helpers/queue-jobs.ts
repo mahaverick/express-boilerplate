@@ -1,9 +1,9 @@
-// tests/helpers/queue-jobs.ts
-//
-// Read jobs straight off the BullMQ queues, for test files that start no
-// Worker, and wait for a Worker's log line. 'prioritized' is included: email
-// and notification jobs carry a priority, and BullMQ keeps them there until
-// a Worker pulls them.
+/**
+ * @file Reads jobs straight off the BullMQ queues, for test files that
+ * start no Worker, and waits for a Worker's log line. `'prioritized'` is a
+ * job state included in every read here: email and notification jobs carry
+ * a priority, and BullMQ keeps them there until a Worker pulls them.
+ */
 import { randomUUID } from 'node:crypto'
 import type { Job, Queue } from 'bullmq'
 import { expect, type MockInstance } from 'vitest'

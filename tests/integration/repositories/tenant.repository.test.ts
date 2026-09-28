@@ -1,24 +1,17 @@
-// tests/integration/repositories/tenant.repository.test.ts
-//
-// Integration test against the real per-worker Postgres database (see
-// tests/helpers/worker-database.ts). Every tenant this file creates is
-// deleted in afterEach, tenants first — `tenant_settings.tenant_id` and
-// `user_memberships.tenant_id` both carry `ON DELETE CASCADE`
-// (tenant.model.ts, user-membership.model.ts), so deleting the tenant is
-// enough to take its settings row and every membership row with it, same
-// convention auth-provider.repository.test.ts uses for its own cascade.
-// Users are deleted second, for the ones this file created directly (a
-// tenant's owner membership references a real user row; a membership on
-// its own does not need one deleted separately).
-//
-// This file also covers `TenantSettingsRepository` (`findByTenantId`
-// /`update`) inline, in the "create" describe block and its own small
-// block below, rather than in a separate test file: the brief's own file
-// list does not ask for one, and every settings row in this codebase is
-// created exactly once, atomically, by `TenantRepository.create` — so
-// exercising it via the same tenant fixtures this file already builds is
-// more representative than standing up an isolated settings row a real
-// caller could never produce.
+/**
+ * @file Integration test against the real per-worker Postgres database (see
+ * `tests/helpers/worker-database.ts`). Every tenant this file creates is
+ * deleted in `afterEach`, tenants first, then users: both
+ * `tenant_settings.tenant_id` and `user_memberships.tenant_id` carry `ON
+ * DELETE CASCADE` (`tenant.model.ts`, `user-membership.model.ts`), so
+ * deleting the tenant takes its settings row and every membership row with
+ * it. Also covers `TenantSettingsRepository` (`findByTenantId`/`update`)
+ * inline, rather than in a separate file: every settings row in this
+ * codebase is created exactly once, atomically, by `TenantRepository.create`,
+ * so exercising it via the same tenant fixtures this file already builds is
+ * more representative than standing up an isolated settings row a real
+ * caller could never produce.
+ */
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import { HttpError } from '@/errors/http-error'
@@ -44,9 +37,9 @@ function uniqueEmail(): string {
 
 /**
  * A disposable slug, unique to one test run. Lowercase hex only — already
- * satisfies the `/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/` shape a later task's
- * validator enforces, even though this repository layer does not itself
- * validate slug shape (that is the validator's job, not the repository's).
+ * satisfies the `/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/` shape `slugSchema`
+ * (`tenant.validators.ts`) enforces, even though this repository layer does
+ * not itself validate slug shape.
  * @returns A slug guaranteed unique to this call.
  */
 function uniqueSlug(): string {
@@ -146,9 +139,7 @@ describe('TenantRepository', () => {
         statusCode: 409,
       })
 
-      // The rolled-back attempt must not have left a second tenant, a
-      // settings row, or an owner membership for secondOwnerId behind —
-      // proving the transaction, not just the tenant insert, rolled back.
+      // The rolled-back attempt must not have left a second tenant, a settings row, or an owner membership behind — proving the transaction, not just the tenant insert, rolled back.
       const found = await tenantRepository.findBySlug(slug)
       expect(found?.id).toBe(first.id)
       expect(
@@ -156,11 +147,12 @@ describe('TenantRepository', () => {
       ).toBeUndefined()
     })
 
-    // The catch block's OTHER branch: `isUniqueViolation` false, so the
-    // original error propagates unchanged rather than becoming an
-    // HttpError(409) meant for a slug collision specifically. A foreign-key
-    // violation on the owner membership insert (an `ownerId` naming no real
-    // user) is a real, different failure the same transaction can hit.
+    /**
+     * The catch block's other branch: `isUniqueViolation` false, so a
+     * foreign-key violation on the owner membership insert propagates
+     * unchanged rather than becoming an `HttpError(409)` meant for a slug
+     * collision.
+     */
     it('propagates a non-slug-collision database error unchanged, e.g. a foreign-key violation on ownerId', async () => {
       const bogusOwnerId = randomUUID()
 
@@ -182,11 +174,7 @@ describe('TenantRepository', () => {
     })
 
     it('rejects an unknown lifecycle_state at the database, not just in TypeScript', async () => {
-      // Load-bearing for this task's own schema guarantee
-      // (`tenants_lifecycle_state_check`, tenant.model.ts) — same standard
-      // auth-provider.repository.test.ts's identical check holds itself
-      // to: a raw insert, going around `TenantRepository`'s own typing, to
-      // prove the database itself rejects it.
+      // Load-bearing for the tenants_lifecycle_state_check schema guarantee (tenant.model.ts): a raw insert, around TenantRepository's own typing, proves the database itself rejects it.
       await expect(
         sql`insert into tenants (name, slug, lifecycle_state) values ('x', ${uniqueSlug()}, 'deleted')`
       ).rejects.toMatchObject({ code: '23514' }) // check_violation
@@ -231,8 +219,7 @@ describe('TenantRepository', () => {
       await tenantRepository.update(tenant.id, { lifecycleState: 'suspended' })
 
       expect(await tenantRepository.findActiveBySlug(tenant.slug)).toBeUndefined()
-      // The plain (non-active-scoped) lookup still finds it — suspension is
-      // not a soft-delete.
+      // The plain (non-active-scoped) lookup still finds it: suspension is not a soft-delete.
       expect(await tenantRepository.findBySlug(tenant.slug)).toMatchObject({
         lifecycleState: 'suspended',
       })

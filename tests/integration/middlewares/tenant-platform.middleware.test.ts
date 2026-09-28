@@ -1,13 +1,11 @@
-// tests/integration/middlewares/tenant-platform.middleware.test.ts
-//
-// resolveTenant's platform branch through a real Express dispatch, on the
-// probe harness tenant.middleware.test.ts uses: the principal each caller
-// gets, the requireRole floors each platform role clears, and the platform
-// tenant staying members-only. Staff are users with a membership in the
-// seeded platform tenant.
-//
-// Staff visits write audit rows, which RESTRICT deleting their user and
-// tenant, so afterEach clears audit_logs first.
+/**
+ * @file `resolveTenant`'s platform branch through a real Express dispatch,
+ * on the probe harness `tenant.middleware.test.ts` uses: the principal each
+ * caller gets, the `requireRole` floors each platform role clears, and the
+ * platform tenant staying members-only. Staff visits write audit rows,
+ * which RESTRICT deleting their user and tenant, so `afterEach` clears
+ * `audit_logs` first.
+ */
 import { randomUUID } from 'node:crypto'
 import express, { type Express, type NextFunction, type Request, type Response } from 'express'
 import { afterEach, describe, expect, it, vi } from 'vitest'

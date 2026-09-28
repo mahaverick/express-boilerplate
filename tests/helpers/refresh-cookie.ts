@@ -1,8 +1,9 @@
-// tests/helpers/refresh-cookie.ts
-//
-// The refresh cookie's name and path under the suite's own environment
-// (APP_ENV=local, COOKIE_SECURE and COOKIE_DOMAIN unset): refreshToken on
-// /api/v1/auth. Tests that set their own cookie env build names themselves.
+/**
+ * @file The refresh cookie's name and path under the suite's own
+ * environment (`APP_ENV=local`, `COOKIE_SECURE` and `COOKIE_DOMAIN` unset):
+ * `refreshToken` on `/api/v1/auth`. Tests that set their own cookie env
+ * build names themselves.
+ */
 import { getEnv, isCookieSecure } from '@/configs/env.config'
 import { refreshCookieSpec, type RefreshCookieSpec } from '@/constants/auth.constants'
 
