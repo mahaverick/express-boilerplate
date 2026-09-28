@@ -29,8 +29,9 @@ clients and are not affected by either.
 
 ## Models directory
 
-Every table is one `src/database/models/*.model.ts` file; see
-`src/database/models/` for the full set. The `*.model.ts` suffix is enforced
+Tables are defined in `src/database/models/*.model.ts` files, a closely
+related pair sometimes sharing one file; see `src/database/models/` for the
+full set. The `*.model.ts` suffix is enforced
 by `check-file` (see [ARCHITECTURE.md](ARCHITECTURE.md#directory-rules)). The
 two tables authentication rests on:
 
