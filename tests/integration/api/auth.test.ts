@@ -1,14 +1,15 @@
-// tests/integration/api/auth.test.ts
-//
-// Integration test against the real per-worker Postgres database (see
-// tests/helpers/worker-database.ts) — every email used here is unique to
-// this run (never a fixed literal) and every row created is deleted in
-// afterEach, the same convention tests/integration/repositories/
-// user.repository.test.ts and tests/integration/middlewares/
-// auth.middleware.test.ts already follow. This file lives under
-// tests/integration/, never tests/unit/, precisely because it does that —
-// see CLAUDE.md's note on why a DB-dependent test under tests/unit/ breaks
-// .husky/pre-commit whenever Docker is down.
+/**
+ * @file Integration test against the real per-worker Postgres database
+ * (see tests/helpers/worker-database.ts) — every email used here is
+ * unique to this run (never a fixed literal) and every row created is
+ * deleted in afterEach, the same convention
+ * tests/integration/repositories/user.repository.test.ts and
+ * tests/integration/middlewares/auth.middleware.test.ts already follow.
+ * This file lives under tests/integration/, never tests/unit/ — see
+ * CLAUDE.md's note on why a DB-dependent test under tests/unit/ breaks
+ * .husky/pre-commit whenever Docker is down.
+ */
+
 import { randomUUID } from 'node:crypto'
 import type { Worker } from 'bullmq'
 import type { Response } from 'supertest'
@@ -41,25 +42,26 @@ const userRepository = new UserRepository()
 const authProviderRepository = new AuthProviderRepository()
 const { name: REFRESH_TOKEN_COOKIE_NAME, path: REFRESH_TOKEN_COOKIE_PATH } = testRefreshCookie()
 
-// register/resendVerification now enqueue via BullMQ (addNotificationJob for
-// verification mail, addEmailJob directly for the registration-attempt
-// notice) instead of calling sendMail() directly — nothing in this file's own
-// request cycle ever processes those jobs, so without live Workers every
-// `findMailpitMessages` assertion below would poll its budget and find
-// nothing, and every `assertNoMailpitMessage`-shaped assertion would pass for
-// the wrong reason. The notification worker is required too: a verification
-// email only reaches the "email" queue AFTER the notification worker fans
-// the notification job out to it. One Worker of each kind for the whole file
-// (not one per test) — Worker construction opens a real connection and
-// BullMQ blocking commands, which is not something to pay for per test.
+/**
+ * register/resendVerification enqueue via BullMQ (addNotificationJob
+ * for verification mail, addEmailJob directly for the
+ * registration-attempt notice) instead of calling sendMail() directly.
+ * Nothing in this file's own request cycle ever processes those jobs,
+ * so without live Workers every `findMailpitMessages` assertion below
+ * would poll its budget and find nothing, and every
+ * `assertNoMailpitMessage`-shaped assertion would pass for the wrong
+ * reason. The notification worker is required too: a verification
+ * email only reaches the "email" queue after the notification worker
+ * fans the notification job out to it. One Worker of each kind for the
+ * whole file, not one per test — Worker construction opens a real
+ * connection and BullMQ blocking commands, which is not something to
+ * pay for per test.
+ */
 const worker: Worker<EmailJobData> = startEmailWorker()
 const notificationWorker = startNotificationWorker()
 
 afterAll(async () => {
-  // Same ordering as tests/integration/workers/email.worker.test.ts: workers
-  // first (drains anything in flight), then obliterate so no job this file
-  // enqueued lingers under this vitest worker's shared REDIS_KEY_PREFIX for the
-  // next test file to trip over, then the shared connection.
+  // Workers first (drains anything in flight), then obliterate so no job this file enqueued lingers under this vitest worker's shared REDIS_KEY_PREFIX for the next test file, then the shared connection.
   await worker.close()
   await notificationWorker.close()
   await getEmailQueue().obliterate({ force: true })
@@ -67,26 +69,28 @@ afterAll(async () => {
   await closeQueue()
 })
 
-// A valid registration password everywhere it's needed as a fixture, not
-// itself the thing under test — 8+ characters, comfortably under the byte
-// ceiling.
+/**
+ * A valid registration password everywhere it's needed as a fixture,
+ * not itself the thing under test — 8+ characters, comfortably under
+ * the byte ceiling.
+ */
 const VALID_PASSWORD = 'correct horse battery staple'
 
-// The API legitimately returns JSON `null` for an unset nullable column
-// (firstName/lastName) — `toEqual` must match that exact value, and
-// `undefined` would not. One disable, reused everywhere the shape is
-// asserted, rather than one per occurrence.
+/**
+ * The API legitimately returns JSON `null` for an unset nullable
+ * column (firstName/lastName) — `toEqual` must match that exact value,
+ * and `undefined` would not.
+ */
 // eslint-disable-next-line unicorn/no-null -- see comment above
 const NO_NAME = null
 
-// vitest types `expect.any(...)` as `any` (it's an asymmetric matcher, not
-// a real string) — assigning it directly into an object literal's property
-// trips @typescript-eslint/no-unsafe-assignment at every call site. The
-// `as unknown as string` cast resolves that at the type level (the
-// asymmetric matcher's actual runtime behaviour inside `toEqual` is
-// unaffected) in exactly one place, reused everywhere a `toEqual` shape
-// needs "any string here". The matcher carries no per-test state, so one
-// shared instance is safe across every assertion below.
+/**
+ * vitest types `expect.any(...)` as `any` (it's an asymmetric matcher,
+ * not a real string), which trips \@typescript-eslint/no-unsafe-assignment
+ * at every call site; the `as unknown as string` cast resolves that at
+ * the type level in exactly one place, reused everywhere a `toEqual`
+ * shape needs "any string here".
+ */
 const ANY_STRING = expect.any(String) as unknown as string
 
 /**
@@ -269,13 +273,7 @@ describe('POST /api/v1/auth/register and /login', () => {
     })
 
     it('rejects an email longer than the column can hold as a 400, not a 500', async () => {
-      // Red before the .max() cap on emailSchema: validation passed, the
-      // insert hit users.email's varchar(320) and Postgres answered 22001
-      // (string data right truncation). That is not the unique violation
-      // BaseRepository translates, so it propagated as an unexpected error
-      // — a client error answered 500, and (before the redaction in
-      // error.middleware.ts) logged with the address and bcrypt hash
-      // attached.
+      // Without the .max() cap on emailSchema, an over-length email would pass validation and hit users.email's varchar(320) limit, which is not the unique violation BaseRepository translates, so it would surface as an unexpected 500.
       const domain = '@example.test'
       const overLong = `${'a'.repeat(MAX_EMAIL_LENGTH + 1 - domain.length)}${domain}`
       expect(overLong).toHaveLength(MAX_EMAIL_LENGTH + 1)
@@ -287,8 +285,7 @@ describe('POST /api/v1/auth/register and /login', () => {
     })
 
     it('accepts an email exactly at the column width', async () => {
-      // The other side of the boundary: the cap must be the column's width,
-      // not one short of it.
+      // The other side of the boundary: the cap must be the column's width, not one short of it.
       const domain = '@example.test'
       const local = `${randomUUID()}${'a'.repeat(MAX_EMAIL_LENGTH - domain.length - 36)}`
       const exact = `${local}${domain}`
@@ -297,18 +294,11 @@ describe('POST /api/v1/auth/register and /login', () => {
       const { response, email } = await registerUser({ email: exact })
 
       expect(response.status).toBe(202)
-      // 202 alone is what the taken branch also returns, so it proves nothing
-      // about the insert — confirm the row was actually created.
+      // 202 alone is what the taken branch also returns, so it proves nothing about the insert — confirm the row was actually created.
       const stored = await userRepository.findByEmail(email)
       expect(stored).toBeDefined()
 
-      // This is the boundary that first caught auth_providers.provider_id
-      // being narrower (255) than users.email (MAX_EMAIL_LENGTH, 320): a
-      // registration this long used to insert its `users` row and then
-      // fail the SAME transaction's `auth_providers` insert with a raw
-      // truncation error (500), for input `registerSchema` had already
-      // accepted. Migration 0011 widened the column to match; this
-      // assertion is what would go red again if that width regressed.
+      // Pins that auth_providers.provider_id is at least MAX_EMAIL_LENGTH wide: a registration this long must insert its users row and its same-transaction auth_providers row without a truncation error.
       const provider = await authProviderRepository.findByProviderAndId('email', email)
       expect(provider?.userId).toBe(stored?.id)
     })
@@ -327,8 +317,7 @@ describe('POST /api/v1/auth/register and /login', () => {
       const free = await registerUser({ email: uniqueEmail() })
       const second = await registerUser({ email: taken })
 
-      // Direct equality of status AND body. "Both are 2xx" would pass while
-      // the bodies differed, which is the whole oracle.
+      // Direct equality of status and body: "both are 2xx" would pass while the bodies differed, which is the whole oracle.
       expect(free.response.status).toBe(second.response.status)
       expect(free.response.body).toEqual(second.response.body)
       expect(free.response.status).toBe(202)
@@ -352,12 +341,7 @@ describe('POST /api/v1/auth/register and /login', () => {
       expect(detail.Text).toContain('/verify-email?token=')
       await deleteMailpitMessage(messages[0]?.ID ?? '')
 
-      // The actual proof that sendVerificationMail now routes through
-      // addNotificationJob rather than addEmailJob directly: an in-app row
-      // must also exist. No race to poll for — processNotificationJob
-      // (notification.worker.ts) inserts this row BEFORE it enqueues the
-      // paired email, so Mailpit already having the message above proves
-      // this row was written first.
+      // The proof sendVerificationMail routes through addNotificationJob, not addEmailJob directly: an in-app row must also exist. No race to poll for — processNotificationJob inserts this row before it enqueues the paired email, so Mailpit already having the message above proves this row was written first.
       const user = await userRepository.findByEmail(email)
       if (!user) throw new Error('mails a verification link: no stored row')
       const notifications = await sql`
@@ -371,16 +355,12 @@ describe('POST /api/v1/auth/register and /login', () => {
       await registerUser({ email })
       await drainMailpit(email)
 
-      // Use toUpperCase: proves the taken branch fires case-insensitively,
-      // covering the assertion the deleted "rejects a duplicate email that
-      // only differs by case" test carried.
+      // Use toUpperCase: proves the taken branch fires case-insensitively.
       await registerUser({ email: email.toUpperCase() })
 
       const messages = await findMailpitMessages(email)
       expect(messages).toHaveLength(1)
-      // The notice must NOT carry a verification link: the person registering
-      // is not necessarily the person who owns the mailbox, and a link here
-      // would let the second registrant verify an account they do not own.
+      // The notice must not carry a verification link: the person registering is not necessarily the person who owns the mailbox.
       const detail = await getMailpitMessage(messages[0]?.ID ?? '')
       expect(detail.Text).not.toContain('/verify-email?token=')
     })
@@ -396,13 +376,7 @@ describe('POST /api/v1/auth/register and /login', () => {
     })
 
     it('mails the STORED firstName on the taken branch, never the submitted one', async () => {
-      // The response body carries no name either way (the test above), but
-      // that leaves the outbound MAIL itself unpinned — `sendRegistrationAttemptMail`
-      // (auth.service.ts) reads `existing?.firstName` off the row already
-      // in the database, not `input.firstName` off this request's body. A
-      // refactor that swapped one for the other would pass every test above
-      // while delivering attacker-chosen text into the victim's inbox. This
-      // reads the rendered mail body directly to pin that.
+      // sendRegistrationAttemptMail reads existing?.firstName off the row already in the database, not input.firstName off this request's body: swapping the two would deliver attacker-chosen text into the victim's inbox, invisible in the response body alone.
       const email = uniqueEmail()
       await registerUser({ email, firstName: 'Real' })
       await drainMailpit(email)
@@ -412,10 +386,7 @@ describe('POST /api/v1/auth/register and /login', () => {
       const messages = await findMailpitMessages(email)
       expect(messages).toHaveLength(1)
       const detail = await getMailpitMessage(messages[0]?.ID ?? '')
-      // `Hi ${firstName},` (registration-attempt.template.ts) — the comma
-      // makes this tight enough that a stray substring match elsewhere in
-      // the mail (e.g. inside "Real" as a prefix of some other word)
-      // couldn't produce a false pass.
+      // "Hi Real," with the comma is tight enough that a stray substring match elsewhere in the mail couldn't produce a false pass.
       expect(detail.Text).toContain('Hi Real,')
       expect(detail.HTML).toContain('Real')
       expect(detail.Text).not.toContain('Attacker')
@@ -424,9 +395,7 @@ describe('POST /api/v1/auth/register and /login', () => {
     })
 
     it('answers identically for a soft-deleted address', async () => {
-      // A soft-deleted address is free again (partial users_email_unique),
-      // so this takes the fresh-account branch; either way the answer is
-      // the same 202, which is what this test pins.
+      // A soft-deleted address is free again (partial users_email_unique), so this takes the fresh-account branch; either way the answer is the same 202, which is what this test pins.
       const email = uniqueEmail()
       const { email: registered } = await registerUser({ email })
       const user = await userRepository.findByEmail(registered)
@@ -476,12 +445,7 @@ describe('POST /api/v1/auth/register and /login', () => {
     })
 
     it('creates an email auth_providers row at registration, keyed on the lowercased address', async () => {
-      // See auth.service.ts's `register`: the row must use the LOWERCASED
-      // address as `providerId`, matching `findOrCreateByGoogle`'s own `'email'` row
-      // for a brand-new Google user — `auth_providers_provider_provider_id_unique`
-      // (auth-provider.model.ts) has no case-folding of its own, so a
-      // raw-cased row here could let the same address collide
-      // inconsistently between the two creation paths.
+      // register's row must use the lowercased address as providerId, matching findOrCreateByGoogle's own 'email' row: auth_providers_provider_provider_id_unique has no case-folding of its own, so a raw-cased row here could let the same address collide inconsistently between the two creation paths.
       const email = uniqueEmail()
       const mixedCase = `${email.slice(0, 1).toUpperCase()}${email.slice(1)}`.replace(
         '@example.test',
@@ -500,18 +464,20 @@ describe('POST /api/v1/auth/register and /login', () => {
       )
       expect(provider?.userId).toBe(stored.id)
 
-      // Exactly one provider row — registration must not also create a
-      // 'google' row, and must not create the 'email' row twice.
+      // Exactly one provider row: registration must not also create a 'google' row, and must not create the 'email' row twice.
       const providers = await authProviderRepository.findByUser(stored.id)
       expect(providers.map((row) => row.provider)).toEqual(['email'])
     })
 
-    // Mutation proof: if the check that classifies the taken branch (a 409
-    // from UserRepository.create inside auth.service's register transaction)
-    // stopped recognising a duplicate, the taken branch would answer
-    // differently from the free one and the oracle test above must go RED.
-    // Disguises that 409 as a 422 on UserRepository.prototype; withMutatedMethod
-    // per CLAUDE.md, no source files touched.
+    /**
+     * Mutation proof: if the check that classifies the taken branch (a
+     * 409 from UserRepository.create inside auth.service's register
+     * transaction) stopped recognising a duplicate, the taken branch
+     * would answer differently from the free one and the oracle test
+     * above must go red. Disguises that 409 as a 422 on
+     * UserRepository.prototype via withMutatedMethod; no source files
+     * touched.
+     */
     it.runIf(process.env.MUTATION_PROOF === '1')(
       'MUTATION PROOF: an unrecognised unique violation on the taken branch is detected as an oracle',
       async () => {
@@ -553,11 +519,7 @@ describe('POST /api/v1/auth/register and /login', () => {
 
   describe('login', () => {
     it('logs in with correct credentials, returns an access token, and sets a refresh cookie', async () => {
-      // registerVerifiedUser, not registerUser: a freshly registered
-      // account is unverified by design (Task 9's guard below refuses it),
-      // so "correct credentials succeed" is only true once the account has
-      // been verified — the same precondition every other successful-login
-      // test in this file already satisfies.
+      // registerVerifiedUser, not registerUser: a freshly registered account is unverified, and login refuses an unverified account, so "correct credentials succeed" is only true once the account has been verified.
       const { email } = await registerVerifiedUser()
 
       const { response, body } = await login(email, VALID_PASSWORD)
@@ -574,10 +536,7 @@ describe('POST /api/v1/auth/register and /login', () => {
         },
         accessToken: ANY_STRING,
       })
-      // /password/i, not /passwordhash/i: the stricter pattern, used
-      // identically in the registration test above. A leaked `password`
-      // key — or any other field whose name merely contains it — slips past
-      // a check that only looks for the exact column name.
+      // /password/i, not /passwordhash/i: a leaked `password` key, or any other field whose name merely contains it, slips past a check that only looks for the exact column name.
       expect(JSON.stringify(response.body)).not.toMatch(/password/i)
 
       const refreshCookie = findRefreshTokenCookie(response)
@@ -585,8 +544,7 @@ describe('POST /api/v1/auth/register and /login', () => {
       expect(refreshCookie).toMatch(/HttpOnly/i)
       expect(refreshCookie).toMatch(/SameSite=Strict/i)
       expect(refreshCookie).toContain(`Path=${REFRESH_TOKEN_COOKIE_PATH}`)
-      // Neither Secure nor Domain under APP_ENV=local with no COOKIE_*
-      // overrides; cookie-attributes.test.ts covers the other settings.
+      // Neither Secure nor Domain under APP_ENV=local with no COOKIE_* overrides; cookie-attributes.test.ts covers the other settings.
       expect(refreshCookie).not.toMatch(/Secure/i)
       expect(refreshCookie).not.toMatch(/Domain=/i)
     })
@@ -606,9 +564,7 @@ describe('POST /api/v1/auth/register and /login', () => {
         .set('X-Request-Id', fixedRequestId)
         .send({ email, password: 'definitely-the-wrong-password' })
 
-      // Asserted together, not each in isolation: this is the only way to
-      // pin that the two are indistinguishable rather than merely each
-      // individually plausible.
+      // Asserted together, not each in isolation: this pins that the two are indistinguishable rather than merely each individually plausible.
       expect(unknownEmailResult.status).toBe(401)
       expect(unknownEmailResult.status).toBe(wrongPasswordResult.status)
       expect(unknownEmailResult.body).toEqual(wrongPasswordResult.body)
@@ -624,10 +580,7 @@ describe('POST /api/v1/auth/register and /login', () => {
       await login(uniqueEmail(), 'whatever-password-123')
       await login(email, 'definitely-the-wrong-password')
 
-      // Both paths pay bcrypt's cost — an unknown email is never answered
-      // by skipping the comparison outright, which is what would otherwise
-      // let a caller distinguish the two cases by response TIMING even
-      // though the response BODY (asserted above) is identical.
+      // Both paths pay bcrypt's cost: an unknown email is never answered by skipping the comparison outright, which would let a caller distinguish the two cases by response timing even though the response body is identical.
       expect(passwordValidationSpy).toHaveBeenCalledTimes(2)
     })
 
@@ -669,16 +622,7 @@ describe('POST /api/v1/auth/register and /login', () => {
     })
 
     it('refuses a cross-site form POST outright, so it can never set a session cookie', async () => {
-      // The CSRF direction SECURITY.md's own section did not consider: not
-      // an attacker using the victim's credentials, but an attacker's page
-      // auto-submitting a form that logs the VICTIM into the ATTACKER's
-      // account. `sameSite: 'strict'` does not help — it governs when a
-      // cookie is SENT, not whether a cross-site response may SET one.
-      //
-      // Real, registered credentials are used here deliberately: the point
-      // is that the request is refused on its ENCODING, before the
-      // controller ever looks at the body, so credentials that would
-      // otherwise succeed still set no cookie.
+      // sameSite: 'strict' does not help here: it governs when a cookie is sent, not whether a cross-site response may set one. Real, registered credentials are used deliberately, so this proves the request is refused on its encoding, before the controller ever looks at the body.
       const email = uniqueEmail()
       await registerUser({ email })
 
@@ -708,8 +652,7 @@ describe('POST /api/v1/auth/register and /login', () => {
 
       const reread = await userRepository.findById(user.id)
       expect(reread?.lastLoggedInAt).toBeInstanceOf(Date)
-      // updated_at must move with it — the row is not allowed to claim it
-      // was last touched before the login that just wrote to it.
+      // updated_at must move with it: the row is not allowed to claim it was last touched before the login that just wrote to it.
       expect(reread?.updatedAt.getTime()).toBeGreaterThan(backdatedAt.getTime())
     })
 
@@ -727,10 +670,7 @@ describe('POST /api/v1/auth/register and /login', () => {
     it('refuses an unverified account, identically to a wrong password', async () => {
       const { email } = await registerUser()
       const { email: otherEmail } = await registerVerifiedUser()
-      // Fixed across both requests, exactly like the unknown-email/wrong-
-      // password oracle test above: the envelope carries a per-request
-      // `requestId`, so without pinning it the two bodies would never
-      // deep-equal regardless of the guard's behavior.
+      // Fixed across both requests, exactly like the unknown-email/wrong-password oracle test above: the envelope carries a per-request requestId, so without pinning it the two bodies would never deep-equal regardless of the guard's behavior.
       const fixedRequestId = randomUUID()
 
       const unverified = await request(app)
@@ -742,9 +682,7 @@ describe('POST /api/v1/auth/register and /login', () => {
         .set('X-Request-Id', fixedRequestId)
         .send({ email: otherEmail, password: 'wrong-password-entirely' })
 
-      // Asserted together, not each in isolation: this is the only way to
-      // pin that an unverified account is indistinguishable from a wrong
-      // password, not merely "also a 401".
+      // Asserted together, not each in isolation: this pins that an unverified account is indistinguishable from a wrong password, not merely "also a 401".
       expect(unverified.status).toBe(wrongPassword.status)
       expect(unverified.body).toEqual(wrongPassword.body)
       expect(unverified.status).toBe(401)
@@ -763,23 +701,26 @@ describe('POST /api/v1/auth/register and /login', () => {
       expect(afterVerification.response.status).toBe(200)
     })
 
-    // Mutation proof for the `!user.emailVerifiedAt` clause, same two-part
-    // shape as tests/integration/services/token-reuse-mutation.test.ts:
-    //
-    //   1. Always on: mutate UserRepository.prototype.findByEmail to report
-    //      every row as verified regardless of its real emailVerifiedAt
-    //      value, show a genuinely unverified account logs in anyway, then
-    //      restore and show the SAME account is refused again. Exercises
-    //      the harness against this real guard; always green.
-    //   2. `it.runIf(process.env.MUTATION_PROOF === '1')`, one per test
-    //      above, each reproducing that test's own assertions against the
-    //      mutated dependency — DELIBERATELY red under the flag, skipped
-    //      (green) otherwise. No file under src/ is ever opened for
-    //      writing; see CLAUDE.md.
-    //
-    //     MUTATION_PROOF=1 pnpm exec vitest run tests/integration/api/auth.test.ts   # red
-    //     pnpm exec vitest run tests/integration/api/auth.test.ts                    # green
-    //
+    /**
+     * Mutation proof for the `!user.emailVerifiedAt` clause, same
+     * two-part shape as
+     * tests/integration/services/token-reuse-mutation.test.ts:
+     *
+     *   1. Always on: mutate UserRepository.prototype.findByEmail to
+     *      report every row as verified regardless of its real
+     *      emailVerifiedAt value, show a genuinely unverified account
+     *      logs in anyway, then restore and show the same account is
+     *      refused again. Exercises the harness against this real
+     *      guard; always green.
+     *   2. `it.runIf(process.env.MUTATION_PROOF === '1')`, one per test
+     *      above, each reproducing that test's own assertions against
+     *      the mutated dependency — deliberately red under the flag,
+     *      skipped (green) otherwise. No file under src/ is ever
+     *      opened for writing.
+     *
+     *     MUTATION_PROOF=1 pnpm exec vitest run tests/integration/api/auth.test.ts   # red
+     *     pnpm exec vitest run tests/integration/api/auth.test.ts                    # green
+     */
     // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
     const originalFindByEmail = UserRepository.prototype.findByEmail
     const mutatedFindByEmail: typeof originalFindByEmail = async function (
@@ -800,21 +741,17 @@ describe('POST /api/v1/auth/register and /login', () => {
         mutatedFindByEmail,
         async () => {
           const mutated = await login(email, VALID_PASSWORD)
-          // The bug this proves: a genuinely unverified account (real
-          // emailVerifiedAt is still null) logs in anyway.
+          // The bug this proves: a genuinely unverified account (real emailVerifiedAt is still null) logs in anyway.
           expect(mutated.response.status).toBe(200)
         }
       )
 
-      // RESTORED: the same account, still genuinely unverified, is refused
-      // again — same call, harness back to its real implementation.
+      // Restored: the same account, still genuinely unverified, is refused again, harness back to its real implementation.
       const restored = await login(email, VALID_PASSWORD)
       expect(restored.response.status).toBe(401)
     })
 
-    // DELIBERATELY red when run with MUTATION_PROOF=1 — see this block's
-    // header comment. Left unset, this test is skipped and the file is
-    // green.
+    // DELIBERATELY red when run with MUTATION_PROOF=1 — see this block's header comment. Left unset, this test is skipped and the file is green.
     it.runIf(process.env.MUTATION_PROOF === '1')(
       'reproduces the real "refuses an unverified account" test’s own assertions against the mutated guard',
       async () => {
@@ -836,10 +773,7 @@ describe('POST /api/v1/auth/register and /login', () => {
               .set('X-Request-Id', fixedRequestId)
               .send({ email: otherEmail, password: 'wrong-password-entirely' })
 
-            // With findByEmail mutated, the unverified account's row looks
-            // verified to the controller, so this login SUCCEEDS (200)
-            // while the wrong-password branch still fails (401) on its own
-            // merits — the two diverge, and this assertion goes RED.
+            // With findByEmail mutated, the unverified account's row looks verified to the controller, so this login succeeds (200) while the wrong-password branch still fails (401) on its own merits — the two diverge, and this assertion goes red.
             expect(unverified.status).toBe(wrongPassword.status)
             expect(unverified.body).toEqual(wrongPassword.body)
             expect(unverified.status).toBe(401)
@@ -848,9 +782,7 @@ describe('POST /api/v1/auth/register and /login', () => {
       }
     )
 
-    // DELIBERATELY red when run with MUTATION_PROOF=1 — see this block's
-    // header comment. Left unset, this test is skipped and the file is
-    // green.
+    // DELIBERATELY red when run with MUTATION_PROOF=1 — see this block's header comment. Left unset, this test is skipped and the file is green.
     it.runIf(process.env.MUTATION_PROOF === '1')(
       'reproduces the real "lets the same account in once it is verified" test’s own assertions against the mutated guard',
       async () => {
@@ -861,9 +793,7 @@ describe('POST /api/v1/auth/register and /login', () => {
           async () => {
             const { email } = await registerUser()
 
-            // With findByEmail mutated, the account logs in while still
-            // genuinely unverified — the real test's "before verification"
-            // assertion (401) goes RED here, immediately.
+            // With findByEmail mutated, the account logs in while still genuinely unverified — the real test's "before verification" assertion (401) goes red here, immediately.
             const beforeVerification = await login(email, VALID_PASSWORD)
             expect(beforeVerification.response.status).toBe(401)
           }
@@ -874,11 +804,7 @@ describe('POST /api/v1/auth/register and /login', () => {
 
   describe('logout', () => {
     it('stops honouring the access token as soon as the user logs out', async () => {
-      // registerVerifiedUser + login, not signAccessToken(user, randomUUID()):
-      // a fabricated session id has no user_tokens row behind it, so the
-      // denylist (which denies by PRESENCE) would never deny it and this
-      // test would pass vacuously once Task 4 lands. The access token must
-      // carry the `sid` this login actually created.
+      // registerVerifiedUser + login, not signAccessToken(user, randomUUID()): a fabricated session id has no user_tokens row behind it, so the denylist (which denies by presence) would never deny it and this test would pass vacuously. The access token must carry the sid this login actually created.
       const { email } = await registerVerifiedUser()
       const { response: loginResponse, body: loginBody } = await login(email, VALID_PASSWORD)
       const accessToken = loginBody.data?.accessToken
@@ -887,25 +813,19 @@ describe('POST /api/v1/auth/register and /login', () => {
       const refreshCookie = findRefreshTokenCookie(loginResponse)
       expect(refreshCookie).toBeDefined()
 
-      // Works before logout — the token is genuinely valid for a live
-      // session.
+      // Works before logout: the token is genuinely valid for a live session.
       const beforeLogout = await request(app)
         .get('/api/v1/profile')
         .set('Authorization', `Bearer ${accessToken as string}`)
       expect(beforeLogout.status).toBe(200)
 
-      // The refresh cookie (not the bearer token) is what tells logout
-      // which session to revoke — see auth.controller.ts's `logout`.
+      // The refresh cookie (not the bearer token) is what tells logout which session to revoke.
       const logoutResponse = await request(app)
         .post('/api/v1/auth/logout')
         .set('Cookie', refreshCookie as string)
       expect(logoutResponse.status).toBe(200)
 
-      // THE WHOLE POINT: the same access token, which has NOT expired, is
-      // now refused. As of this task, this assertion STILL FAILS —
-      // `revokeAllForSession` writes the denylist entry, but nothing reads
-      // it yet. Task 4 adds the read side (requireAuth checking
-      // isSessionDenied); see task-3-brief.md.
+      // The whole point: the same access token, which has not expired, is now refused — requireAuth's isSessionDenied check reads the denylist entry logout wrote.
       const afterLogout = await request(app)
         .get('/api/v1/profile')
         .set('Authorization', `Bearer ${accessToken as string}`)

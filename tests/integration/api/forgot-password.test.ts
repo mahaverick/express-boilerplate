@@ -1,15 +1,16 @@
-// tests/integration/api/forgot-password.test.ts
-//
-// Integration tests for POST /api/v1/auth/forgot-password and
-// POST /api/v1/auth/reset-password, against the real per-worker Postgres
-// database and the real compose Redis — same conventions as
-// tests/integration/api/auth.test.ts and
-// tests/integration/api/verification.test.ts: every email used here is
-// unique to this run, every row created is deleted in afterEach, and both
-// the "email" and "notification" BullMQ workers run for the whole file so
-// forgotPassword's `addNotificationJob` call actually reaches Mailpit (see
-// those two files' own comments for why both workers, not just one, are
-// required).
+/**
+ * @file Integration tests for POST /api/v1/auth/forgot-password and
+ * POST /api/v1/auth/reset-password, against the real per-worker
+ * Postgres database and the real compose Redis — same conventions as
+ * tests/integration/api/auth.test.ts and
+ * tests/integration/api/verification.test.ts: every email used here is
+ * unique to this run, every row created is deleted in afterEach, and
+ * both the "email" and "notification" BullMQ workers run for the whole
+ * file so forgotPassword's `addNotificationJob` call actually reaches
+ * Mailpit (see those two files' own comments for why both workers, not
+ * just one, are required).
+ */
+
 import { randomUUID } from 'node:crypto'
 import type { Worker } from 'bullmq'
 import type { Profile as GoogleProfile } from 'passport-google-oauth20'
@@ -228,15 +229,16 @@ async function clearRateLimiterKeys(pattern: string): Promise<void> {
   if (keys.length > 0) await client.del(keys)
 }
 
-// Both forgot-password's IP limiter (5/hour, tight — rate-limit.middleware.ts)
-// and reset-password's IP limiter (10/15min) are keyed on IP ALONE, and this
-// suite's every request shares one client address. Without clearing before
-// every test, a test several places away from the one that actually spends
-// either budget is the one that goes red — the same reasoning
-// verification.test.ts's own `clearResendVerificationIpLimiter` documents.
-// The email-keyed forgot-password limiter needs no clearing: every test uses
-// a fresh, unique address (`uniqueEmail`), so it never shares a bucket with
-// another test regardless.
+/**
+ * Both forgot-password's IP limiter (5/hour) and reset-password's IP
+ * limiter (10/15min) are keyed on IP alone, and this suite's every
+ * request shares one client address. Without clearing before every
+ * test, a test several places away from the one that actually spends
+ * either budget is the one that goes red. The email-keyed
+ * forgot-password limiter needs no clearing: every test uses a fresh,
+ * unique address (`uniqueEmail`), so it never shares a bucket with
+ * another test regardless.
+ */
 beforeEach(async () => {
   await clearRateLimiterKeys(`${redisKey('rl', 'forgot-password-ip')}:*`)
   await clearRateLimiterKeys(`${redisKey('rl', 'reset-password')}:*`)
@@ -287,9 +289,7 @@ describe('POST /api/v1/auth/forgot-password', () => {
     expect(detail.Text).toContain('/reset-password?token=')
     await deleteMailpitMessage(messages[0]?.ID ?? '')
 
-    // Proves the send routed through addNotificationJob (which inserts the
-    // in-app row before enqueuing the paired email — notification.worker.ts's
-    // own header comment), not addEmailJob called directly.
+    // Proves the send routed through addNotificationJob (which inserts the in-app row before enqueuing the paired email), not addEmailJob called directly.
     const user = await userRepository.findByEmail(email)
     if (!user) throw new Error('mails a password-reset link: no stored row')
     const notifications = await sql`
@@ -307,10 +307,7 @@ describe('POST /api/v1/auth/forgot-password', () => {
   })
 
   it('rate limits after the configured number of attempts (IP-keyed)', async () => {
-    // The production IP limiter allows 5 attempts per hour
-    // (rate-limit.middleware.ts). Unknown addresses throughout: a registered
-    // one would also mail on every one of the first 5 attempts, which this
-    // test has no need to drain.
+    // The production IP limiter allows 5 attempts per hour. Unknown addresses throughout: a registered one would also mail on every attempt, which this test has no need to drain.
     for (let index = 0; index < 5; index += 1) {
       const response = await forgotPassword(uniqueEmail())
       expect(response.status).toBe(202)
@@ -322,10 +319,7 @@ describe('POST /api/v1/auth/forgot-password', () => {
   })
 
   it('runs both forgot-password limiters — proven by counters incrementing under both prefixes', async () => {
-    // Same reasoning as verification.test.ts's identical test for
-    // resend-verification: RateLimit-* headers alone only ever prove the
-    // LAST limiter in the chain ran, so reading the store directly is the
-    // only way to prove both fired.
+    // RateLimit-* headers alone only ever prove the last limiter in the chain ran, so reading the store directly is the only way to prove both fired.
     await forgotPassword(uniqueEmail())
 
     const ipKeys = await redisKeysMatching(`${redisKey('rl', 'forgot-password-ip')}:*`)
@@ -352,20 +346,11 @@ describe('POST /api/v1/auth/reset-password', () => {
     })
   })
 
-  // The path a user takes the moment they believe they are compromised:
-  // reset the password to end every session. Before this task,
-  // resetPassword (via revokeAllSessions -> revokeAllForUser) revoked
-  // every refresh-token row — no new refresh was possible — but denied
-  // zero access tokens, so an attacker holding a stolen access token could
-  // keep using it for the rest of ACCESS_TOKEN_TTL (15 minutes) even after
-  // the legitimate user "fixed" things. This is the test that would have
-  // caught that gap.
+  // The path a user takes the moment they believe they are compromised: reset the password to end every session, including a still-live access token, not just future refreshes.
   it('refuses an access token issued before the reset, once the reset completes', async () => {
     const { user, email } = await seedUser()
 
-    // The real login flow, not a fabricated session id: the denylist
-    // denies by PRESENCE, so a token carrying an unknown sid would never
-    // be denied and this assertion would pass vacuously.
+    // The real login flow, not a fabricated session id: the denylist denies by presence, so a token carrying an unknown sid would never be denied and this assertion would pass vacuously.
     const loginResponse = await login(email, VALID_PASSWORD)
     const accessToken = envelopeOf<{ accessToken: string }>(loginResponse).data?.accessToken
     expect(accessToken).toBeDefined()
@@ -379,8 +364,7 @@ describe('POST /api/v1/auth/reset-password', () => {
     const resetResponse = await resetPassword(resetToken, NEW_PASSWORD)
     expect(resetResponse.status).toBe(200)
 
-    // THE WHOLE POINT: the same access token, which has NOT expired, is
-    // now refused.
+    // The whole point: the same access token, which has not expired, is now refused.
     const afterReset = await request(app)
       .get('/api/v1/profile')
       .set('Authorization', `Bearer ${accessToken as string}`)
@@ -414,10 +398,7 @@ describe('POST /api/v1/auth/reset-password', () => {
   })
 
   it('kills a second outstanding reset link once the first succeeds', async () => {
-    // revokeAllSessions (revokeAllForUser, user-token.repository.ts) has no
-    // purpose predicate — a successful reset revokes every live token this
-    // user holds, including any OTHER still-outstanding password_reset link
-    // from an earlier request, not only the one just claimed.
+    // revokeAllSessions has no purpose predicate: a successful reset revokes every live token this user holds, including any other outstanding password_reset link, not only the one just claimed.
     const { user } = await seedUser()
     const first = await seedResetToken(user.id)
     const second = await seedResetToken(user.id)
@@ -524,16 +505,13 @@ describe('POST /api/v1/auth/reset-password', () => {
     const errors = envelopeOf<unknown>(response) as unknown as { errors?: { password?: string[] } }
     expect(errors.errors?.password).toEqual(expect.arrayContaining([expect.any(String)]))
 
-    // The token must still be live — a validation failure must not have
-    // spent it the way a real claim attempt would.
+    // The token must still be live — a validation failure must not have spent it the way a real claim attempt would.
     const retried = await resetPassword(token, NEW_PASSWORD)
     expect(retried.status).toBe(200)
   })
 
   it('rate limits after the configured number of attempts (IP-keyed)', async () => {
-    // The production limiter allows 10 attempts per 15 minutes
-    // (rate-limit.middleware.ts). A fixed, never-valid token throughout —
-    // this test is about volume, not about a real redemption.
+    // The production limiter allows 10 attempts per 15 minutes. A fixed, never-valid token throughout — this test is about volume, not a real redemption.
     for (let index = 0; index < 10; index += 1) {
       const response = await resetPassword('a'.repeat(64), NEW_PASSWORD)
       expect(response.status).toBe(400)
@@ -560,8 +538,7 @@ describe('POST /api/v1/auth/reset-password', () => {
     const resetResponse = await resetPassword(token ?? '', NEW_PASSWORD)
     expect(resetResponse.status).toBe(200)
 
-    // The reset also verified the mailbox — proven independently of login's
-    // own guard, not just inferred from login succeeding below.
+    // The reset also verified the mailbox — proven independently of login's own guard, not just inferred from login succeeding below.
     const row = await userRepository.findById(user.id)
     expect(row?.emailVerifiedAt).toBeInstanceOf(Date)
 
@@ -569,14 +546,15 @@ describe('POST /api/v1/auth/reset-password', () => {
     expect(loginResponse.status).toBe(200)
   })
 
+  /**
+   * Seeded directly: findOrCreateByGoogle rejects an unverified
+   * Google email outright (403 email_not_verified), so seedUser plus
+   * direct repository calls are what construct this state for the
+   * test.
+   */
   it('drops Google links from a never-verified account on reset, so a squatter’s Google identity no longer resolves to it', async () => {
-    // Legacy state, seeded directly: after E1, an unverified Google identity can no longer create it.
     const { user, email } = await seedUser(false)
-    // A real account always carries this row (register()'s own invariant,
-    // see auth-provider.model.ts) — seeded directly here since `seedUser`
-    // bypasses `register()`. `deleteFederatedForUser` only ever removes
-    // non-'email' rows, so this one must exist up front for the assertion
-    // below to mean anything.
+    // A real account always carries this row (register()'s own invariant). deleteFederatedForUser only ever removes non-'email' rows, so this one must exist up front for the assertion below to mean anything.
     await authProviderRepository.create({
       userId: user.id,
       provider: 'email',

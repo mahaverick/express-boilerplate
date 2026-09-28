@@ -1,15 +1,16 @@
-// tests/integration/api/verification.test.ts
-//
-// Integration tests for POST /api/v1/auth/verify-email. Every assertion
-// runs against the real per-worker Postgres database — rows are seeded via
-// repository calls (not through POST /auth/register, whose contract may
-// change independently) and cleaned up in afterEach.
-//
-// The identical-response tests are the security core: they pin that a
-// wrong password, an unknown token, and a malformed body all produce
-// byte-identical responses — distinguishable failures would be a
-// token-state oracle, and a distinguishable wrong-password failure would
-// tell whoever holds a link that the address is squatted.
+/**
+ * @file Integration tests for POST /api/v1/auth/verify-email. Every
+ * assertion runs against the real per-worker Postgres database — rows
+ * are seeded via repository calls (not through POST /auth/register,
+ * whose contract may change independently) and cleaned up in afterEach.
+ *
+ * The identical-response tests are the security core: they pin that a
+ * wrong password, an unknown token, and a malformed body all produce
+ * byte-identical responses — distinguishable failures would be a
+ * token-state oracle, and a distinguishable wrong-password failure
+ * would tell whoever holds a link that the address is squatted.
+ */
+
 import { randomUUID } from 'node:crypto'
 import type { Worker } from 'bullmq'
 import type { Response } from 'supertest'
@@ -38,14 +39,14 @@ const app = createApp()
 const userRepository = new UserRepository()
 const REFRESH_TOKEN_COOKIE_NAME = testRefreshCookie().name
 
-// verifyEmail/resendVerification/register now enqueue via BullMQ
-// (addNotificationJob for verification mail, addEmailJob directly for the
-// registration-attempt notice) instead of calling sendMail() directly — see
-// tests/integration/api/auth.test.ts's identical comment for why every
-// mail-delivery assertion in this file needs both a live email Worker AND a
-// live notification Worker to actually process what these endpoints
-// enqueue: a verification email only lands on the "email" queue after the
-// notification worker fans the notification job out to it.
+/**
+ * verifyEmail/resendVerification/register enqueue via BullMQ
+ * (addNotificationJob for verification mail, addEmailJob directly for
+ * the registration-attempt notice), so every mail-delivery assertion in
+ * this file needs both a live email Worker and a live notification
+ * Worker: a verification email only lands on the "email" queue after
+ * the notification worker fans the notification job out to it.
+ */
 const worker: Worker<EmailJobData> = startEmailWorker()
 const notificationWorker = startNotificationWorker()
 
@@ -74,8 +75,8 @@ async function verify(token: string, password: string): Promise<Response> {
  * email_verification token.
  *
  * Built from repository calls rather than POST /auth/register so this
- * file does not depend on the registration contract (which may change
- * independently in Task 8).
+ * file does not depend on the registration contract, which may change
+ * independently.
  * @returns The user and raw token.
  */
 async function seedUnverifiedUser(): Promise<{ user: { id: string }; token: string }> {
@@ -131,9 +132,7 @@ describe('POST /api/v1/auth/verify-email', () => {
       .set('X-Request-Id', fixedRequestId)
       .send({ token: 'deadbeef', password: VALID_PASSWORD })
 
-    // No `password` field at all. Without the try/catch around parseBody in
-    // the controller, this returns "Validation failed" with fieldErrors and
-    // the assertion below fails — which is the point of including it.
+    // No password field at all: without the try/catch around parseBody in the controller, this returns "Validation failed" with fieldErrors and the assertion below fails.
     const malformed = await request(app)
       .post('/api/v1/auth/verify-email')
       .set('X-Request-Id', fixedRequestId)
@@ -141,8 +140,7 @@ describe('POST /api/v1/auth/verify-email', () => {
 
     expect(malformed.body).toEqual(unknownToken.body)
 
-    // Direct equality, not "both are 4xx". A distinguishable wrong-password
-    // failure tells an attacker holding a link that the address is squatted.
+    // Direct equality, not "both are 4xx": a distinguishable wrong-password failure tells an attacker holding a link that the address is squatted.
     expect(wrongPassword.body).toEqual(unknownToken.body)
     expect(wrongPassword.status).toBe(unknownToken.status)
     expect(wrongPassword.status).toBe(400)
@@ -152,8 +150,7 @@ describe('POST /api/v1/auth/verify-email', () => {
     const { token } = await seedUnverifiedUser()
     await verify(token, 'not-the-right-password')
 
-    // Intended, and documented in SECURITY.md: one link is one attempt, so a
-    // leaked link gives an attacker exactly one guess.
+    // Intended, and documented in SECURITY.md: one link is one attempt, so a leaked link gives an attacker exactly one guess.
     const retried = await verify(token, VALID_PASSWORD)
     expect(retried.status).toBe(400)
   })
@@ -191,8 +188,7 @@ describe('POST /api/v1/auth/verify-email', () => {
 
     const response = await verify(second.raw, VALID_PASSWORD)
 
-    // markEmailVerified returns undefined here — already verified — and that
-    // is SUCCESS. Answering 400 would make a double-click an error.
+    // markEmailVerified returns undefined here (already verified), and that is success: answering 400 would make a double-click an error.
     expect(response.status).toBe(200)
     const after = await userRepository.findById(user.id)
     expect(after?.emailVerifiedAt?.getTime()).toBe(first?.emailVerifiedAt?.getTime())
@@ -213,8 +209,7 @@ describe('POST /api/v1/auth/verify-email', () => {
 
     await verify(token, 'not-the-right-password')
 
-    // The assertion the other tests cannot make: a status code cannot tell
-    // you whether the column was written.
+    // The assertion the other tests cannot make: a status code cannot tell you whether the column was written.
     const row = await userRepository.findById(user.id)
     expect(row?.emailVerifiedAt).toBeNull()
   })
@@ -372,14 +367,12 @@ const RESEND_BODY = {
 }
 
 describe('POST /api/v1/auth/resend-verification', () => {
-  // Deliberately no describe-local `createdIds`/`afterEach` pair here: the
-  // module-level ones declared above (used by `seedUnverifiedUser`) already
-  // apply to every test in this file, and `registerUser`/`registerVerifiedUser`
-  // below close over that same array. A second, shadowing `createdIds`
-  // scoped to just this describe would split cleanup across two arrays for
-  // no benefit — `registerAndLogin` below still takes `createdIds` as an
-  // explicit parameter (matching auth-refresh.test.ts's own helper of the
-  // same name) and is called with the one module-level array.
+  /**
+   * Deliberately no describe-local createdIds/afterEach pair here. The
+   * module-level ones declared above already apply to every test in
+   * this file, and registerUser/registerVerifiedUser below close over
+   * that same array.
+   */
   beforeEach(clearResendVerificationIpLimiter)
 
   it('answers identically for unknown, unverified and already-verified addresses', async () => {
@@ -403,6 +396,13 @@ describe('POST /api/v1/auth/resend-verification', () => {
     expect(response.body).toEqual(RESEND_BODY)
   })
 
+  /**
+   * The positive assertion runs first and polls to completion. By the
+   * time it resolves, the fire-and-forget mail this loop triggered has
+   * either arrived or never will. Ordering the negatives after it
+   * gives an errant send the same window to land before either
+   * negative check starts.
+   */
   it('mails only the unverified address', async () => {
     const unknown = uniqueEmail()
     const { email: unverified } = await registerUser()
@@ -414,20 +414,17 @@ describe('POST /api/v1/auth/resend-verification', () => {
       await resend(email)
     }
 
-    // The positive assertion runs FIRST and polls to completion
-    // (findMailpitMessages) — by the time it resolves, the fire-and-forget
-    // mail this loop triggered has either arrived or never will. Ordering
-    // the negatives (unknown, verified) AFTER it, rather than racing all
-    // three together, gives an errant send the same window to land before
-    // either negative check starts. assertNoMailpitMessage itself now
-    // polls its own bounded budget too (see its own comment) — belt and
-    // suspenders, not redundant: CARRY note from Task 1 names this helper's
-    // history of looking like it polls without actually doing so.
     expect(await findMailpitMessages(unverified)).toHaveLength(1)
     await assertNoMailpitMessage(unknown)
     await assertNoMailpitMessage(verified)
   })
 
+  /**
+   * Synchronization point: resendVerificationMail's send runs after
+   * its revoke, and both are unawaited by the 202 response. Waiting
+   * for the resend mail to actually arrive proves the revoke has
+   * already run before the assertions below.
+   */
   it('invalidates the previous link when a new one is sent, and the new one verifies', async () => {
     const { email, user } = await registerUser()
     const first = await issueToken(user.id, 'email_verification', 60_000)
@@ -435,52 +432,38 @@ describe('POST /api/v1/auth/resend-verification', () => {
 
     await resend(email)
 
-    // Synchronization point: resendVerificationMail's send runs AFTER its
-    // revoke (see that function's own comment on why the order is load-
-    // bearing), and both are unawaited by the 202 response. Waiting for
-    // the resend mail to actually arrive is what proves the revoke has
-    // already run before the assertions below — a bare 202, or a fixed
-    // sleep, proves nothing about background work that hasn't necessarily
-    // finished yet.
     const messages = await findMailpitMessages(email)
     expect(messages).toHaveLength(1)
     const detail = await getMailpitMessage(messages[0]?.ID ?? '')
     const secondToken = /token=([0-9a-f]+)/.exec(detail.Text)?.[1]
     expect(secondToken).toBeDefined()
 
-    // Two live links at once means a token read out of an older mail still
-    // works after the user has re-requested — the state single-use exists
-    // to prevent.
+    // Two live links at once means a token read out of an older mail still works after the user has re-requested. The state single-use exists to prevent that.
     const oldAttempt = await request(app)
       .post('/api/v1/auth/verify-email')
       .send({ token: first.raw, password: VALID_PASSWORD })
     expect(oldAttempt.status).toBe(400)
 
-    // Not just "the old one is dead" — the NEW one must actually work. A
-    // resendVerificationMail with send and revoke swapped would also make
-    // the old token fail (collateral damage, not on purpose), and this
-    // assertion is what tells the two apart.
+    // Not just "the old one is dead". The new one must actually work: a resendVerificationMail with send and revoke swapped would also make the old token fail, and this assertion tells the two apart.
     const newAttempt = await request(app)
       .post('/api/v1/auth/verify-email')
       .send({ token: secondToken ?? '', password: VALID_PASSWORD })
     expect(newAttempt.status).toBe(200)
   })
 
+  /**
+   * Not hypothetical: revokeAllForUser matches on userId alone, so
+   * reaching for it here would log the user out of every device as a
+   * side effect of asking for an email.
+   */
   it('leaves a live refresh token alone when it clears old links', async () => {
-    // The regression this guards is not hypothetical: revokeAllForUser
-    // matches on userId alone, so reaching for it here would log the user
-    // out of every device as a side effect of asking for an email.
     const { response: login, email, user } = await registerAndLogin(createdIds)
     await sql`update users set email_verified_at = null where id = ${user.id}`
     await drainMailpit(email)
 
     await resend(email)
 
-    // Same synchronization reasoning as the previous test: the refresh
-    // token this test asserts on must not be checked until the revoke that
-    // could have touched it (wrongly) is known to have already run.
-    // Without this, the assertion below is vacuous — it would pass whether
-    // or not the revoke had executed yet.
+    // Same synchronization reasoning as the previous test. The refresh token must not be checked until the revoke that could have touched it is known to have already run, or the assertion below would be vacuous.
     expect(await findMailpitMessages(email)).toHaveLength(1)
 
     const refreshed = await request(app)
@@ -489,14 +472,13 @@ describe('POST /api/v1/auth/resend-verification', () => {
     expect(refreshed.status).toBe(200)
   })
 
+  /**
+   * RateLimit-* headers alone cannot prove this: the second limiter's
+   * headers simply overwrite the first's, so a header check only ever
+   * proves the last limiter in the chain ran. Reading the store
+   * directly is the only way to prove both fired.
+   */
   it('runs both limiters — proven by counters incrementing under both prefixes', async () => {
-    // RateLimit-* headers alone cannot prove this: express-rate-limit sets
-    // them on every response it lets through, and the second limiter's
-    // headers simply overwrite the first's — a header check only ever
-    // proves the LAST limiter in the chain ran. Reading the store directly
-    // is the only way to prove both fired; either factory could be deleted
-    // from the route in auth.routes.ts and a header-only assertion would
-    // stay green.
     const email = uniqueEmail()
 
     await resend(email)

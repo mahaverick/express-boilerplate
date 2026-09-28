@@ -1,24 +1,9 @@
-// tests/integration/api/cookie-attributes.test.ts
-//
-// COOKIE_SECURE and COOKIE_DOMAIN at every site that writes an auth cookie:
-// the refresh cookie on login, refresh, logout (clear) and the Google
-// callback, and express-session's `oauth.sid`.
-//
-// The refresh cookie's name follows the deployment: refreshToken without
-// COOKIE_SECURE, __Host-refreshToken (Path=/) when secure with no
-// COOKIE_DOMAIN, __Secure-refreshToken when secure with one. A request that
-// still carries the legacy refreshToken gets it cleared. A refresh answered
-// 401 clears the cookie it read, and nothing else.
-//
-// getEnv() is a vi.fn over the real one, so each test hands the app its own
-// env without vi.resetModules(). Every test builds a fresh app: createApp()
-// reads TRUST_PROXY and the Google credentials once, and the OAuth session
-// middleware reads its cookie options once per app, on first use.
-//
-// express-session gets no `proxy` option, so it sends a Secure cookie only
-// when req.secure is true (express-session index.js, issecure). The Secure
-// cases therefore run with TRUST_PROXY=1 and X-Forwarded-Proto: https, and
-// one test pins the drop when that header is missing.
+/**
+ * @file COOKIE_SECURE and COOKIE_DOMAIN at every site that writes an
+ * auth cookie: the refresh cookie on login, refresh, logout (clear)
+ * and the Google callback, and express-session's `oauth.sid`.
+ */
+
 import { randomUUID } from 'node:crypto'
 import express from 'express'
 import passport from 'passport'
@@ -45,6 +30,13 @@ import { hashPassword } from '@/utilities/password.utilities'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { request } from '../../helpers/request'
 
+/**
+ * getEnv() is a vi.fn over the real one, so each test hands the app
+ * its own env without vi.resetModules(). Every test builds a fresh
+ * app via `appWith` below: createApp() reads TRUST_PROXY and the
+ * Google credentials once, and the OAuth session middleware reads its
+ * cookie options once per app, on first use.
+ */
 vi.mock('@/configs/env.config', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/configs/env.config')>()
   return { ...actual, getEnv: vi.fn(actual.getEnv) }
@@ -109,8 +101,13 @@ function cookieLines(response: Response, name: string): string[] {
   return lines?.filter((line) => line.startsWith(`${name}=`)) ?? []
 }
 
-// The first line for `name` that carries Domain, else the first: a response
-// can also carry a host-only clearing line for the same name.
+/**
+ * The first `name` Set-Cookie line that carries Domain, else the first: a
+ * response can also carry a host-only clearing line for the same name.
+ * @param response - The response.
+ * @param name - The cookie name.
+ * @returns The matching line, or undefined.
+ */
 function cookieLine(response: Response, name: string): string | undefined {
   const lines = cookieLines(response, name)
   return lines.find((line) => ANY_DOMAIN.test(line)) ?? lines[0]
@@ -206,9 +203,11 @@ function googleProfile(email: string): GoogleProfile {
   }
 }
 
-// Skips the OAuth2 dance and succeeds with a fixed profile, so the callback's
-// own cookie-setting path runs over real HTTP. Same technique as
-// google-oauth.test.ts's FakeGoogleSuccessStrategy.
+/**
+ * Skips the OAuth2 dance and succeeds with a fixed profile, so the
+ * callback's own cookie-setting path runs over real HTTP. Same technique
+ * as google-oauth.test.ts's FakeGoogleSuccessStrategy.
+ */
 class FakeGoogleSuccessStrategy implements passport.Strategy {
   name = GOOGLE_STRATEGY_NAME
 
@@ -220,6 +219,14 @@ class FakeGoogleSuccessStrategy implements passport.Strategy {
   }
 }
 
+/**
+ * The refresh cookie's name follows the deployment: refreshToken
+ * without COOKIE_SECURE, __Host-refreshToken (Path=/) when secure
+ * with no COOKIE_DOMAIN, __Secure-refreshToken when secure with one.
+ * A request that still carries the legacy refreshToken gets it
+ * cleared. A refresh answered 401 clears the cookie it read, and
+ * nothing else.
+ */
 describe('refresh cookie: name, path and domain per deployment', () => {
   it.each([
     {
@@ -305,8 +312,7 @@ describe('refresh cookie: name, path and domain per deployment', () => {
     expect(refreshed.status).toBe(200)
     const refreshLines = cookieLines(refreshed, PLAIN_COOKIE)
     expect(refreshLines).toHaveLength(2)
-    // The host-only clear comes first, so a browser that treats the two
-    // scopes as one cookie ends up with the new one.
+    // The host-only clear comes first, so a browser that treats the two scopes as one cookie ends up with the new one.
     expect(refreshLines[0]).toMatch(EPOCH_EXPIRY)
     expect(refreshLines[0]).not.toMatch(ANY_DOMAIN)
     expect(refreshLines[1]).toMatch(SCOPED_DOMAIN)
@@ -535,6 +541,13 @@ describe('refresh cookie: Google callback with a legacy cookie', () => {
   })
 })
 
+/**
+ * express-session gets no `proxy` option, so it sends a Secure cookie
+ * only when req.secure is true (express-session index.js, issecure).
+ * The Secure cases therefore run with TRUST_PROXY=1 and
+ * X-Forwarded-Proto: https, and one test pins the drop when that
+ * header is missing.
+ */
 describe('oauth.sid (express-session)', () => {
   it('carries Secure and COOKIE_DOMAIN when COOKIE_SECURE=true and the request is https via the proxy', async () => {
     const app = appWith(SECURE_SCOPED)
@@ -613,7 +626,9 @@ async function userIdFor(email: string): Promise<string> {
   return user.id
 }
 
-// The three deployments of the name, path and domain table above.
+/**
+ * The three deployments of the name, path and domain table above.
+ */
 const DEPLOYMENTS = [
   {
     label: 'COOKIE_SECURE=false, no COOKIE_DOMAIN',
@@ -701,11 +716,13 @@ describe('refresh cookie: a refresh answered 401 clears the cookie it read', () 
     }
   )
 
-  // DELIBERATELY red under MUTATION_PROOF=1: with every cookie clear a no-op,
-  // the 401 carries no clearing line.
-  //
-  //   MUTATION_PROOF=1 pnpm exec vitest run tests/integration/api/cookie-attributes.test.ts   # red
-  //   pnpm exec vitest run tests/integration/api/cookie-attributes.test.ts                    # green
+  /**
+   * DELIBERATELY red under MUTATION_PROOF=1: with every cookie clear a
+   * no-op, the 401 carries no clearing line.
+   *
+   *   MUTATION_PROOF=1 pnpm exec vitest run tests/integration/api/cookie-attributes.test.ts   # red
+   *   pnpm exec vitest run tests/integration/api/cookie-attributes.test.ts                    # green
+   */
   it.runIf(process.env.MUTATION_PROOF === '1')(
     'reproduces the reset-clear test with the response cookie clear disabled',
     async () => {

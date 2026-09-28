@@ -1,14 +1,16 @@
-// tests/integration/api/invitation.test.ts
-//
-// The invitation endpoints end to end, against the real per-worker Postgres
-// and Redis. No Worker runs: tests read the invitation and verification
-// emails straight off the queues (tests/helpers/queue-jobs.ts).
-//
-// RATE LIMITS are wiring, not thresholds. The preview (60 per 15 min) and
-// accept (20 per 15 min) limiters are keyed on IP, and every request here
-// comes from 127.0.0.1. This file makes 13 accept and 18 preview requests;
-// keep accepts under 20 or the file throttles itself. Thresholds are proven
-// with small overrides in tests/unit/middlewares/rate-limit.middleware.test.ts.
+/**
+ * @file The invitation endpoints end to end, against the real per-worker
+ * Postgres and Redis. No Worker runs: tests read the invitation and
+ * verification emails straight off the queues (tests/helpers/queue-jobs.ts).
+ *
+ * Rate limits here are wiring, not thresholds. The preview (60 per 15 min)
+ * and accept (20 per 15 min) limiters are keyed on IP, and every request
+ * here comes from 127.0.0.1. This file makes 13 accept and 18 preview
+ * requests; keep accepts under 20 or the file throttles itself. Thresholds
+ * are proven with small overrides in
+ * tests/unit/middlewares/rate-limit.middleware.test.ts.
+ */
+
 import { randomBytes, randomUUID } from 'node:crypto'
 import { inspect } from 'node:util'
 import type { Response } from 'supertest'
@@ -379,8 +381,7 @@ describe('invitations API', () => {
       expect(response.status).toBe(400)
     })
 
-    // Each passes z.email() but its domain is no hostname: a bad label, a
-    // label over 63 characters, a domain over 253.
+    // Each passes z.email() but its domain is no hostname: a bad label, a label over 63 characters, a domain over 253.
     it.each([
       ['a label ending in a hyphen', 'invitee@foo-.com'],
       ['a 64-character label', `invitee@${'a'.repeat(64)}.com`],

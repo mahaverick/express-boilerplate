@@ -1,4 +1,8 @@
-// tests/integration/api/health.test.ts
+/**
+ * @file Health-probe behaviour: shallow vs. deep checks, request-id
+ * stamping and the error envelope for unmatched routes.
+ */
+
 import express from 'express'
 import { describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
@@ -41,13 +45,9 @@ describe('health probes', () => {
   })
 
   it('forwards a rejected promise from an async handler without a wrapper', async () => {
-    // Express 5 does this itself; express-async-handler is not installed.
-    //
-    // Built bare rather than from createApp(): Express matches in registration
-    // order and createApp() has already mounted its 404 catch-all, so a route
-    // added afterwards is unreachable — the test would assert 404 and pass for
-    // entirely the wrong reason.
+    // Built bare, not via createApp(): its 404 catch-all is already mounted and would match first, making the test pass for the wrong reason.
     const probe = express()
+    // Express 5 forwards a rejected handler's promise to the error handler itself; express-async-handler is not installed.
     probe.get('/boom', () => Promise.reject(new HttpError('deliberate', 418)))
     probe.use(errorHandler)
     const response = await request(probe).get('/boom')

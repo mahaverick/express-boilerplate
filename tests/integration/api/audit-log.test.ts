@@ -1,7 +1,8 @@
-// tests/integration/api/audit-log.test.ts
-//
-// The two audit-log reads. Fixture rows are inserted directly (the table
-// allows INSERT), so equal timestamps and system actors are exact.
+/**
+ * @file The two audit-log reads. Fixture rows are inserted directly (the
+ * table allows INSERT), so equal timestamps and system actors are exact.
+ */
+
 import { randomUUID } from 'node:crypto'
 import type { Response } from 'supertest'
 import { afterEach, describe, expect, it } from 'vitest'
