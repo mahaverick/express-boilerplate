@@ -133,6 +133,7 @@ export async function isRedisReachable(): Promise<boolean> {
 
 /**
  * Close the connection. Called by graceful shutdown; safe to call twice.
+ * `closed` is set first, so shutdown is recorded even when no client was created.
  * @returns Resolves once closed.
  */
 export async function closeRedis(): Promise<void> {

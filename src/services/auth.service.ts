@@ -364,7 +364,7 @@ export async function resetPassword(input: ResetPasswordInput): Promise<void> {
  * @param userId - The authenticated caller's id.
  * @param currentSessionId - The session to spare, when the token carried one.
  * @param input - The validated `{ currentPassword, newPassword }` body.
- * @returns Resolves once the password is stored; the notification is not awaited, so a mail failure never fails a change that already committed.
+ * @returns Resolves once the password is stored; the notification is not awaited, so a mail failure never fails a change that already committed. The mail carries no secret.
  * @throws {HttpError} 401 when the account is gone; 400 for federated-only, a wrong current password, or no change.
  */
 export async function changePassword(

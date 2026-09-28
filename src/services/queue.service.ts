@@ -142,7 +142,7 @@ export function onWorkerConnectionLost(listener: (dead: IORedis) => void): () =>
 
 /**
  * Record whether this process's Workers failed to restart, so readiness can't pass without them.
- * Only the supervisor's restart path calls it (worker-supervisor.service.ts);
+ * In the application only the supervisor's restart path calls it (worker-supervisor.service.ts);
  * a failed first start at boot throws instead, so the flag starts false.
  * @param haveFailed - True when the last restart failed; false once a restart succeeds.
  */
@@ -317,6 +317,7 @@ export async function isQueueReachable(): Promise<boolean> {
  * graceful shutdown; safe to call twice. Closing a Queue leaves the producer
  * connection open, because BullMQ marks a Queue built from an ioredis instance
  * as sharing it and skips the quit, so the connection is ended once, below.
+ * `closed` is set first, so shutdown is recorded even when nothing was created.
  * @returns Resolves once everything is closed.
  */
 export async function closeQueue(): Promise<void> {
