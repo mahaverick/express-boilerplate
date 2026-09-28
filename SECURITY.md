@@ -274,10 +274,9 @@ mail is enqueued.
 `hashPassword` runs before the insert whether or not the row is kept — so the
 two branches differ only inside one transaction: a taken address stops at the
 failed user insert and rolls back, a free one runs two more `auth_providers`
-statements and commits. That is on the order of a millisecond against a ~250ms bcrypt
-cost.
-That gap is dominated by ordinary network jitter and is accepted rather than
-engineered away.
+statements and commits. That is on the order of a millisecond against a
+~250ms bcrypt cost. That gap is dominated by ordinary network jitter and is
+accepted rather than engineered away.
 
 What still constrains this endpoint is its limiter below: 100 attempts per
 hour from one IP. It bounds bcrypt CPU exhaustion and outbound mail volume,
@@ -721,14 +720,14 @@ per-membership permission blob.
 
 ## What this boilerplate does NOT implement
 
-Everything below ships nothing, in either direction:
+None of these is built, except where the Status column says Partial:
 
 | Control                                               | Status              | What that means for you                                                                                                                                                                                                             |
 | ----------------------------------------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | MFA                                                   | **Not implemented** | No TOTP enrolment, no recovery codes, no step-up.                                                                                                                                                                                   |
 | CSRF tokens                                           | **Not implemented** | See "No CSRF middleware" below — reasoning, not an oversight. The forced-login direction IS defended, by a content-type gate; see the section after it.                                                                             |
 | General-purpose rate limiting                         | **Partial**         | 21 limiters (see "Rate limiting" above). Every write route has one, at least the shared `authenticatedWrite`. There is no global limiter, and authenticated reads (profile, notifications, tenant reads, the audit logs) have none. |
-| Rehash on login                                       | **Not implemented** | Stored hashes keep the cost they were written with. Raising `BCRYPT_COST` opens a `/login` timing difference until they are rewritten; see "Password hashing".                                                                      |
+| Rehash on login                                       | **Not implemented** | See "Password hashing".                                                                                                                                                                                                             |
 | Impersonation, break-glass access, row-level security | **Not implemented** | Staff act only through the platform role; see "Platform staff access and the audit log".                                                                                                                                            |
 | Audit of sign-in and credential events                | **Not implemented** | `audit_logs` records no login, logout, password change or password reset.                                                                                                                                                           |
 | Email change, account deletion                        | **Not implemented** | No endpoint changes a user's email or deletes their own account. `PATCH /api/v1/profile` sets only `firstName` and `lastName`.                                                                                                      |
@@ -921,8 +920,8 @@ leak before it is even pushed.
 ### Dependency audit: a gate with one documented escape hatch
 
 The `test` job in `.github/workflows/ci.yml` runs
-`pnpm audit --prod --audit-level high`, so a high or critical advisory in a
-production dependency with no fixed version fails CI on every PR. To unblock,
+`pnpm audit --prod --audit-level high`, so any high or critical advisory in a
+production dependency fails CI on every PR. When no fixed version exists,
 ignore that one advisory by its GHSA ID under `auditConfig.ignoreGhsas` in
 `pnpm-workspace.yaml` (`pnpm audit --ignore <GHSA>` writes the entry), with a
 comment giving the reason and a date to revisit, and list it in

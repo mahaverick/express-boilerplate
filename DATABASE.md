@@ -105,8 +105,8 @@ statements in three migrations, each called out by a comment in its file:
 - `0017` replaces that trigger's function so the retention purge can delete
   audit rows.
 
-Don't hand-edit a migration otherwise, and never edit one that any database
-has already applied.
+Don't hand-edit a migration otherwise, except as "Schema migrations on a live
+database" below describes, and only before that database has applied it.
 
 Generated does not mean disposable. Migrations are the ordered, immutable
 record of how the schema reached its current state — `pnpm db:migrate`
@@ -174,9 +174,9 @@ pnpm db:migrate
 migrator applies every pending migration inside **one** transaction, so a
 batch either lands whole or not at all — and every lock a migration takes is
 held until the whole batch commits (see "Schema migrations on a live
-database" below). Against a database that is already up to date it exits 0,
-possibly after two Postgres `NOTICE`s saying drizzle's own `drizzle` schema
-and `__drizzle_migrations` table already exist; those are not errors.
+database" below). Against a database that is already up to date it exits 0
+and prints nothing (`migrate.ts` silences Postgres's "already exists,
+skipping" notices).
 `pnpm db:migrate:prod` runs the same logic against the built output
 (`node dist/database/migrate.js`); `pnpm build` copies the migrations into
 `dist/`, and the production image, which has no `drizzle-kit`, migrates this
