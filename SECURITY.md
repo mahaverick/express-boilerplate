@@ -9,24 +9,19 @@ initial response within a few business days.
 
 ## Supported versions
 
-This is a boilerplate, not a hosted service: only the `main` branch is
-supported. Downstream projects generated from it are responsible for their
-own patch cadence — `renovate.json` is wired up so that starts on day one.
+1.x is supported. This is a boilerplate, not a hosted service: a project
+generated from it owns its own patch cadence, and `renovate.json` is wired up
+so that starts on day one.
 
 ## What this boilerplate implements
 
 **Read this section before deciding what your project does not need to
-build.** Registration, login, refresh-token rotation, session revocation and
-an authenticated profile endpoint all ship today. Verify any claim below
-with `grep` before trusting it — that is exactly how the table further down
-came to be rewritten twice already. An earlier revision of this file
-described bcrypt at cost 12, an explicit helmet CSP, and Bearer-token
-authentication as shipped behaviour when **none of it existed**; a later
-revision swung the other way and described **no** authentication, password
-hashing or user table once all three had already shipped. Both directions
-are dangerous for the same reason: this is the file a downstream project
-reads to decide what it does _not_ have to build, so either a false "yes" or
-a false "no" here silently removes a control from a real system.
+build.** Registration, login, refresh-token rotation, session revocation,
+email verification, password reset and change, Google sign-in, tenancy with
+role-based access, and platform staff access all ship. Verify any claim below
+with `grep` before trusting it. This is the file a downstream project reads to
+decide what it does _not_ have to build, so a false "yes" and a false "no" are
+equally dangerous: either one silently removes a control from a real system.
 
 ### Authentication: JWT access tokens + opaque refresh tokens
 
@@ -42,69 +37,59 @@ deliberately opposite on every axis:
   `Authorization: Bearer <token>`, checked by `requireAuth`
   (`src/middlewares/auth.middleware.ts`) on every protected route.
   `requireAuth` also reloads the user by id on every request rather than
-  trusting the token's claims alone, specifically so disabling or
-  soft-deleting an account invalidates every access token already issued to
-  it, immediately, instead of waiting out `ACCESS_TOKEN_TTL`.
+  trusting the token's claims alone, so disabling or soft-deleting an account
+  invalidates every access token already issued to it, immediately, instead
+  of waiting out `ACCESS_TOKEN_TTL`.
 - **Refresh tokens** (`issueRefreshToken`/`rotateRefreshToken`) are opaque
   `crypto.randomBytes(32)` values — never JWTs. Only their SHA-256 hash is
   stored (`user_tokens.token_hash`); the raw value exists only in the
   httpOnly cookie handed to the client and is never written to the database
-  or logged. **There is deliberately no `JWT_REFRESH_SECRET`** — a JWT
-  refresh token would still need a server-side revocation store to be
-  revocable at all (the entire point of a refresh token), so signing one
-  buys nothing but leaks its claims to anyone holding it. An opaque, hashed
-  token carries no information by itself; only this module and the
-  `user_tokens` table it is checked against know what it means. A field
-  that can never be read is not a placeholder reserved for later — it was
-  removed from the environment schema outright.
+  or logged. **There is deliberately no `JWT_REFRESH_SECRET`.** A JWT refresh
+  token would still need a server-side revocation store to be revocable at
+  all, so signing one buys nothing but leaks its claims to anyone holding it.
+  An opaque, hashed token carries no information by itself; only this module
+  and the `user_tokens` table it is checked against know what it means.
 
 ### Refresh rotation and reuse detection
 
-Every refresh grant rotates: `POST /api/v1/auth/refresh` reads the raw
-token from its httpOnly cookie, exchanges it for a new one, and revokes the
-old row. The exchange is one atomic SQL statement —
-`UPDATE user_tokens SET revoked_at = now(), consumed_at = now() WHERE
-token_hash = $1 AND purpose = $2 AND revoked_at IS NULL RETURNING *`
-(`UserTokenRepository.claimOnce`, called here with `purpose = 'refresh'`) —
-not a read-then-check-then-write sequence. That matters concretely: a
-read-check-write would let two concurrent requests presenting the same
-stolen token both observe `revoked_at IS NULL` and both succeed, silently
-defeating reuse detection. The `purpose` predicate rides in that same
-atomic statement, not a separate check: a token minted for one purpose
-(email verification, password reset) can never be claimed as another,
-including as a refresh token — the claim and the purpose check cannot be
-split by a race, because they are the same UPDATE. The atomic claim means
-Postgres itself decides
-which single caller (if any) wins; a losing concurrent caller falls into
-the reuse path below, which — within `REFRESH_REUSE_GRACE_MS` of the
-winning rotation — mints it a sibling token rather than treating it as an
-attack.
+Every refresh grant rotates: `POST /api/v1/auth/refresh` reads the raw token
+from its httpOnly cookie, exchanges it for a new one, and revokes the old
+row. The exchange starts with one atomic SQL statement,
+`UserTokenRepository.claimOnce`: an `UPDATE user_tokens SET revoked_at = now(),
+consumed_at = now()` whose `WHERE` matches the token hash, `purpose =
+'refresh'`, `revoked_at IS NULL` and a row that is not soft-deleted, with
+`RETURNING *`. It is not a read-then-check-then-write sequence, which would let
+two concurrent requests presenting the same stolen token both observe
+`revoked_at IS NULL` and both succeed. The `purpose` predicate rides in that
+same statement, so a token minted for one purpose (email verification,
+password reset) can never be claimed as another, including as a refresh
+token. Postgres itself decides which single caller (if any) wins; a losing
+concurrent caller falls into the reuse path below.
 
 Presenting a token that is **already revoked** (because it was already
 rotated, or already logged out) is reuse. Within `REFRESH_REUSE_GRACE_MS`
-(10s) of that rotation, and only if the session hasn't since been
-explicitly killed (logout, an earlier reuse, a password reset), reuse
-mints a sibling refresh token in the same session instead of revoking
-it — the accepted trade-off that lets two legitimate concurrent requests
-(e.g. two tabs refreshing at once) both succeed. Past that window, or once
-the session is killed, reuse instead revokes every token sharing its
-`session_id` — the entire rotation chain from one login, on one device
-(`revokeAllForSession`) — not just the token presented; a legitimate
-client only ever presents a refresh token once, so a second presentation
-outside the grace window means someone else has it. An
-expired-but-not-yet-rotated token is simply revoked, not treated as reuse
-— nothing else in that session is implicated by an expiry.
+(10s) of that rotation, and only if the session hasn't since been explicitly
+killed (logout, an earlier reuse, a password reset), reuse mints a sibling
+refresh token in the same session instead of revoking it — the accepted
+trade-off that lets two legitimate concurrent requests (two tabs refreshing
+at once) both succeed. Past that window, or once the session is killed, reuse
+revokes every token sharing its `session_id` — the entire rotation chain from
+one login, on one device — not just the token presented; a legitimate client
+only ever presents a refresh token once, so a second presentation outside the
+grace window means someone else has it. An expired-but-not-yet-rotated token
+is simply revoked, not treated as reuse — nothing else in that session is
+implicated by an expiry.
 
 A refresh answered 401 clears the cookie it read, in the same forms the
-logout clear uses for that name, so the browser stops presenting a dead
-token on every page load. No 401 leaves that token able to refresh: it is
-unknown or of another purpose, its session was killed, it expired, it is a
-refresh row without a session, or the account is gone or inactive. A replay
-inside the grace window gets a sibling instead, so a 401 that races a
-successful rotation cannot wipe a cookie that still works. The one exception
-is a login or Google sign-in in another tab that lands while a dead-cookie
-refresh is in flight: the 401 clears by name, so the new cookie goes too,
-and the user signs in again. The limiter's 429 and a 5xx clear nothing.
+logout clear uses for that name, so the browser stops presenting a dead token
+on every page load. No 401 leaves that token able to refresh: it is unknown
+or of another purpose, its session was killed, it expired, it is a refresh
+row without a session, or the account is gone or inactive. A replay inside
+the grace window gets a sibling instead, so a 401 that races a successful
+rotation cannot wipe a cookie that still works. The one exception is a login
+or Google sign-in in another tab that lands while a dead-cookie refresh is in
+flight: the 401 clears by name, so the new cookie goes too, and the user
+signs in again. The limiter's 429 and a 5xx clear nothing.
 
 ### Session lifetime: a sliding window AND an absolute ceiling
 
@@ -112,103 +97,92 @@ Two clocks bound a session, and they answer different questions.
 
 `REFRESH_TOKEN_TTL` (default 30d) is a **sliding** window: every rotation
 issues a token with a fresh expiry, so this bounds how long a client may go
-**idle**. On its own it bounds nothing else — with a 15-minute access
-token, a normal client refreshes roughly four times an hour and never lets
-one expire, so the session lives forever. So does an exfiltrated refresh
-cookie: it stays valid until somebody happens to log out.
+**idle**. On its own it bounds nothing else — with a 15-minute access token,
+a normal client refreshes roughly four times an hour and never lets one
+expire, so the session lives forever. So does an exfiltrated refresh cookie.
 
 `SESSION_ABSOLUTE_TTL` (default 30d) is the **ceiling**: measured from the
 login itself, never reset. `user_tokens.session_started_at` is written once
 when a session begins and copied forward unchanged by every rotation
-(`rotateRefreshToken`, `src/services/session.service.ts`), so it measures
-the age of the **login**, not of the token presented. Past it, rotation
-fails with 401 and the whole session family is revoked — the user signs in
-again, and a stolen cookie has a definite end date whether or not anyone
-noticed the theft.
+(`rotateRefreshToken`), so it measures the age of the **login**, not of the
+token presented. Past it, rotation fails with 401 and the whole session is
+revoked — the user signs in again, and a stolen cookie has a definite end
+date whether or not anyone noticed the theft.
 
-The two default to the same 30 days so they agree out of the box, but they
-are independent knobs: raising how long a client may be idle does not raise
-how long one login may live. A deployment wanting the common "idle 30 days,
-absolute 90" shape sets `REFRESH_TOKEN_TTL=30d` and
-`SESSION_ABSOLUTE_TTL=90d`.
+The two default to the same 30 days, but they are independent knobs: raising
+how long a client may be idle does not raise how long one login may live. A
+deployment wanting "idle 30 days, absolute 90" sets `REFRESH_TOKEN_TTL=30d`
+and `SESSION_ABSOLUTE_TTL=90d`.
 
 The ceiling is enforced on the rotation path only — the check runs when a
 refresh token is presented, not by a background sweep. An access token
-already issued stays valid for the remainder of its own (15-minute) life
-after the ceiling passes. Note also that `user_tokens` accumulates a row per
-rotation. The daily retention purge deletes a rotated-away row only once it
-has expired, so reuse detection keeps every row a client could still
-present; see [DATABASE.md](DATABASE.md#user_tokens-retention).
+already issued stays valid for the rest of its own (15-minute) life after the
+ceiling passes. `user_tokens` accumulates a row per rotation; the daily
+retention purge deletes a rotated-away row only once it has expired, so reuse
+detection keeps every row a client could still present. See
+[DATABASE.md](DATABASE.md#user_tokens-retention).
 
 ### Password hashing: bcrypt at cost 12
 
-Implemented: `src/utilities/password.utilities.ts` exports `hashPassword`/
+`src/utilities/password.utilities.ts` exports `hashPassword`/
 `isPasswordValid`, backed by `BCRYPT_COST = 12` in
 `src/constants/auth.constants.ts`.
-`tests/unit/utilities/password.utilities.test.ts` asserts the cost embedded
-in every hash it produces against that constant, and separately reads this
-file off disk and asserts the number in the heading above still matches
-`BCRYPT_COST` — so this sentence cannot drift from the code the way an
-earlier revision of this file did (see the warning above this table).
+`tests/unit/utilities/password.utilities.test.ts` asserts the cost embedded in
+every hash it produces against that constant, and reads this file off disk to
+assert the number in the heading above still matches `BCRYPT_COST`.
 
 [OWASP's current
 guidance](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html)
-still prefers argon2id over bcrypt; a greenfield project with no existing
-password column has no migration to plan and should take it instead. This
-boilerplate already committed a `users` table with a bcrypt-shaped
-`password_hash varchar(60)` column before this decision was revisited, so
-bcrypt at cost 12 is the accepted, well-understood choice made here —
-switching hashing algorithms afterwards requires either a dual-verify
-migration path or a forced reset for everyone, which is the reason to decide
-this deliberately rather than default into it.
+prefers argon2id over bcrypt. `users.password_hash` is `varchar(60)`, bcrypt's
+output length, and switching algorithms once real passwords are stored needs
+either a dual-verify migration path or a forced reset for everyone. A project
+that wants argon2id should switch before it has users.
 
-Every password is also capped at 72 bytes (`MAX_PASSWORD_BYTES`, same file):
-bcrypt itself silently ignores anything past that point, so without a cap
-two different passwords sharing that 72-byte prefix would hash identically
-and either would then verify successfully against the other's hash.
-Hashing or verifying refuses an over-length password outright instead of
-silently truncating it.
+Every password is capped at 72 bytes (`MAX_PASSWORD_BYTES`, same file): bcrypt
+silently ignores anything past that point, so without a cap two different
+passwords sharing a 72-byte prefix would hash identically and either would
+verify against the other's hash. Hashing or verifying refuses an over-length
+password outright instead of silently truncating it.
+
+Raising `BCRYPT_COST` opens a timing difference on `/login` until every stored
+hash is rewritten at the new cost; `BCRYPT_COST`'s own comment explains why,
+and the remedy (rehash on login) is not built.
 
 ### Password policy: an 8-character floor, no composition rules
 
-`registerSchema` (`src/validators/auth.validators.ts`) requires a password
-of at least `MIN_PASSWORD_LENGTH` (8) characters and rejects nothing else —
-no required uppercase, digit, or symbol. This follows [NIST SP
-800-63B](https://pages.nist.gov/800-63-3/sp800-63b.html)'s current guidance:
-length matters more than complexity, and mandatory composition rules
-measurably push real users toward _more_ predictable passwords (a
-capitalised first letter, a `1` or `!` appended) rather than genuinely
-harder-to-guess ones. This was an implementer's judgement call — the spec
-this plan was built from does not dictate a password policy — recorded here
-so a later maintainer does not "improve" it by bolting composition
-requirements back on; that would be a regression against current guidance,
-not a hardening.
+Every password a user sets — `registerSchema`, `resetPasswordSchema` and
+`changePasswordSchema`'s `newPassword` (`src/validators/auth.validators.ts`) —
+must be at least `MIN_PASSWORD_LENGTH` (8) characters and at most
+`MAX_PASSWORD_BYTES` bytes, and nothing else — no required uppercase, digit,
+or symbol. This follows [NIST SP
+800-63B](https://pages.nist.gov/800-63-3/sp800-63b.html): length matters more
+than complexity, and mandatory composition rules push real users toward
+_more_ predictable passwords (a capitalised first letter, a `1` or `!`
+appended). Bolting composition requirements back on is a regression against
+that guidance, not a hardening.
 
-Only registration enforces this floor. `loginSchema` deliberately applies
-no length rule to the submitted password (only "is present"), so a login
-attempt with a too-short or too-long password fails with the exact same
-"invalid credentials" response as a wrong password for a real account — see
-"User enumeration" below. Routing a bad-length login password through a
-distinct validation error first would leak that distinction to an
-unauthenticated caller before the controller ever gets a chance to make the
-two paths agree.
+`loginSchema` deliberately applies no length rule to the submitted password
+(only "is present"), so a login attempt with a too-short or too-long password
+fails with the same "invalid credentials" response as a wrong password for a
+real account — see "User enumeration" below. A distinct validation error for
+a bad-length login password would leak that distinction to an
+unauthenticated caller.
 
 ### Password change and reset against a concurrent login
 
 A login that checked the old password can't keep a session once a password
 change or reset commits. Both writes run in one transaction that locks the
 user row `FOR NO KEY UPDATE`, writes the new hash, and revokes the user's
-`user_tokens` rows: every session for a reset, every session but the
-caller's for a change (every session, the caller's included, when the
-caller's access token carries no session id). A reset also revokes every token once before that
-transaction, without the lock, so a failed write still leaves no session
-alive. Login still checks the password outside any transaction. It then
-opens a short one that locks the same row `FOR SHARE` and re-reads the
-hash. If the hash changed, it answers the same `401 Invalid email or
-password`; otherwise it issues the refresh token inside that transaction.
-So either the login commits first and the password write revokes its
-session, or the login sees the new hash and fails. There is no third
-ordering.
+`user_tokens` rows: every session for a reset, every session but the caller's
+for a change (every session, the caller's included, when the caller's access
+token carries no session id). A reset also revokes every token once before
+that transaction, without the lock, so a failed write still leaves no session
+alive. Login still checks the password outside any transaction. It then opens
+a short one that locks the same row `FOR SHARE` and re-reads the hash. If the
+hash changed, it answers the same `401 Invalid email or password`; otherwise
+it issues the refresh token inside that transaction. So either the login
+commits first and the password write revokes its session, or the login sees
+the new hash and fails. There is no third ordering.
 
 Refresh rotation also locks the user row `FOR SHARE`, so a refresh racing a
 password write either has its new token revoked or gets 401.
@@ -222,24 +196,23 @@ Every path that locks the user row:
 | Login (after the password compare), refresh rotation    | `FOR SHARE`         | Issues a token only against the hash and session state it checked |
 
 Logins and rotations take `FOR SHARE`, and their `FOR SHARE` locks never
-conflict with each other. A concurrent login's `last_logged_in_at` update
-does wait for the `FOR SHARE` transactions open on the row; each holds it
-for one token insert (a login) or one rotation (a refresh). The reuse and
-lifetime kills run after the rotation's transaction commits, in a
-transaction of their own; taking `FOR NO KEY UPDATE` inside a `FOR SHARE`
-transaction would deadlock two concurrent reuses. The revocations that
-take no user row lock are `revokeSession` and
-`revokeAllSessionsExceptCurrent`, which no application path calls, and
-`revokeAllSessions`, the unlocked pass that a reset and a Google account
-claim run before their locked transaction.
+conflict with each other. A concurrent login's `last_logged_in_at` update does
+wait for the `FOR SHARE` transactions open on the row; each holds it for one
+token insert (a login) or one rotation (a refresh). The reuse and lifetime
+kills run after the rotation's transaction commits, in a transaction of their
+own; taking `FOR NO KEY UPDATE` inside a `FOR SHARE` transaction would
+deadlock two concurrent reuses. The revocations that take no user row lock
+are `revokeSession`, which no application path calls, and
+`revokeAllSessions`, the unlocked pass that a reset and a Google account claim
+run before their locked transaction.
 
 Two effects are accepted:
 
 - A correct password still updates `last_logged_in_at` and still runs the
-  platform auto-join, even when the re-read then answers 401. Both run
-  after the password check and before the transaction. Running the auto-join
-  inside it would nest its owners → memberships lock chain under the user
-  row's lock.
+  platform auto-join, even when the re-read then answers 401. Both run after
+  the password check and before the transaction. Running the auto-join inside
+  it would nest its owners → memberships lock chain under the user row's
+  lock.
 - The session denylist (Redis) is written after the transaction commits. If
   that write fails, the request still succeeds: the password is changed and
   the refresh tokens are revoked. One `error` line
@@ -252,268 +225,224 @@ Two effects are accepted:
 ### User enumeration: closed on `/login` and `/register`
 
 **Scope this claim to the endpoint.** What follows is a property of
-`POST /api/v1/auth/login` and `POST /api/v1/auth/register`. Both used to
-leak whether an address was registered — login through response timing,
-register through its status code — and both are closed now, register at
-the cost of one accepted residual timing difference (below), not zero cost.
+`POST /api/v1/auth/login` and `POST /api/v1/auth/register`. Neither reveals
+whether an address is registered — register at the cost of one accepted
+residual timing difference (below), not zero cost.
 
 #### `/login`: identical responses, identical timing
 
-`POST /api/v1/auth/login` (`src/services/auth.service.ts`'s `login`) answers an
-unknown email and a wrong password for a real account with the same status
-(401), the same body (`"Invalid email or password"`), and the same cost.
-Returning the same body while skipping the bcrypt comparison for an unknown
-email would still leak which addresses are registered — just through
-response **timing** instead of response **content**, since a real password
-check pays for a full bcrypt compare and a short-circuited "no such user"
-would return almost immediately. `getDummyHash()` closes that gap: when no
-user row matches, login still runs one real `isPasswordValid` comparison
+`login` (`src/services/auth.service.ts`) answers an unknown email and a wrong
+password for a real account with the same status (401), the same body
+(`"Invalid email or password"`), and the same cost. Returning the same body
+while skipping the bcrypt comparison for an unknown email would still leak
+which addresses are registered, through response **timing**: a real password
+check pays for a full bcrypt compare. `getDummyHash()` closes that gap: when
+no user row matches, login still runs one real `isPasswordValid` comparison
 against a fixed dummy hash, hashed at the same `BCRYPT_COST` every real
-password uses, so both paths always pay the same cost. A deactivated
-account (`active: false`) is rejected the same way, after the same
-comparison, through the same error — "these credentials are correct but the
-account is disabled" is not something this endpoint lets a caller learn.
+password uses. A deactivated account (`active: false`) and a Google-only
+account with no password are rejected the same way, after the same
+comparison, through the same error.
 
 **An unverified account is rejected the same way, and the message is
-deliberately misleading.** `login`'s guard also rejects any account whose
-`emailVerifiedAt` is still null, joined into the same combined condition
-rather than a separate early return — so an unverified account gets the
-identical `401` body and the identical bcrypt cost a wrong password would.
-`'Invalid email or password'` is, in this case, literally false: the
-credentials are correct, the account simply has not clicked its
-verification link yet. That falsehood is accepted on purpose, for the same
-reason the deactivated-account case accepts it — a truthful "this account
-exists but isn't verified" would confirm both that the address is
-registered and that the submitted password is right, to anyone merely
-trying credentials against it. This trade is recorded here because it has a
-real, ongoing cost: a legitimate user who registered and has not yet
-checked their inbox sees the same generic error a mistyped password
-produces, and files a support ticket that says "login is broken" rather
-than "I haven't verified yet." That ticket is the accepted cost of not
-handing an attacker a working oracle.
+deliberately misleading.** The same combined guard rejects any account whose
+`emailVerifiedAt` is still null, so an unverified account gets the identical
+`401` body and the identical bcrypt cost a wrong password would. `'Invalid
+email or password'` is, in this case, literally false: the credentials are
+correct, the account has not clicked its verification link yet. A truthful
+"this account exists but isn't verified" would confirm both that the address
+is registered and that the submitted password is right, to anyone trying
+credentials against it. The cost is real: a user who registered and has not
+checked their inbox sees the same error a mistyped password produces, and
+files a support ticket that says "login is broken". That ticket is the
+accepted cost of not handing an attacker a working oracle.
 
 #### `/register`: closed by an identical response, not by a rate limit
 
-`POST /api/v1/auth/register` now answers **every** request identically —
-`202`, `'If that address can be registered, a verification email has been
-sent.'`, `data: null` — whether the address is free, already taken, or
-belongs to a soft-deleted row. `BaseRepository.create`'s unique-violation-
-to-409 translation still fires on the duplicate; this endpoint catches that
-specific failure and proceeds to the same response rather than letting it
-become the answer. What differs between the two
-branches is invisible to the caller: a free address gets a
-verification-link email (`EMAIL_VERIFICATION_TEMPLATE_KEY`); a taken
-address gets a "someone tried to register with your address" notice sent
-to the account's **stored** name, never the submitted one. Nothing is
-overwritten on the taken branch — see "Email verification" below for why
-that specific choice matters.
+`POST /api/v1/auth/register` answers **every** request identically — `202`,
+`'If that address can be registered, a verification email has been sent.'`,
+`data: null` — whether the address is free or already taken. The repository's
+unique-violation-to-409 translation still fires on the duplicate; `register`
+catches that specific failure and proceeds to the same response. What differs
+between the two branches is invisible to the caller: a free address gets a
+verification-link email; a taken address gets a "someone tried to register
+with your address" notice addressed to the account's **stored** name, never
+the submitted one. Nothing is overwritten on the taken branch — see "Email
+verification" below for why that matters. The reply goes out before either
+mail is enqueued.
 
-**Residual timing, accepted.** Both branches already pay one full bcrypt
-hash — `hashPassword` runs before the `create` call regardless of whether
-the row is ultimately kept (`src/services/auth.service.ts`) — so the two branches
-differ only by one extra token `INSERT` on the free branch, an indexed
-write on the order of a millisecond against a ~250ms bcrypt cost. That gap
-is dominated by ordinary network jitter, not a signal an attacker can use,
-and is recorded as accepted rather than engineered away.
+**Residual timing, accepted.** Both branches pay one full bcrypt hash —
+`hashPassword` runs before the insert whether or not the row is kept — so the
+two branches differ only inside one transaction: a taken address stops at the
+failed user insert and rolls back, a free one runs two more `auth_providers`
+statements and commits. That is on the order of a millisecond against a
+~250ms bcrypt cost. That gap is dominated by ordinary network jitter and is
+accepted rather than engineered away.
 
-What still constrains this endpoint is the registration limiter below: 100
-attempts per hour from one IP. With the status-code oracle gone, that
-limiter's job is no longer bounding enumeration — it is bounding the two
-things register was already rate-limited for independently of the oracle:
-bcrypt CPU exhaustion, and now, outbound mail volume, since every accepted
-request sends an email down one branch or the other.
+What still constrains this endpoint is its limiter below: 100 attempts per
+hour from one IP. It bounds bcrypt CPU exhaustion and outbound mail volume,
+since every accepted request sends an email down one branch or the other.
 
-### Email verification: the password requirement, the token-burn trade, and an open gap
+### Email verification: the password requirement and the token-burn trade
 
 `POST /api/v1/auth/verify-email` takes `{ token, password }`, not the token
-alone. That second field is load-bearing, not a UX nicety — see the
-squatting scenario below for why omitting it would reopen a worse hole than
-the one this feature closes.
+alone. The second field is load-bearing — see the squatting scenario below.
 
-**A wrong password burns the token.** `verifyEmail` claims the token row
-(`claimToken`, which marks it consumed) **before** comparing the password —
-so presenting a token is what spends it, correct password or not. A wrong
-password on a genuine link fails exactly like an unknown token, and the
-link is now dead: the same link with the correct password afterward still
-fails. One link is one attempt. A legitimate typo costs the user a resend,
-not a retry — accept that trade deliberately, since it generates its own
-support tickets ("my verification link stopped working") that a retry-
-tolerant design would not.
+**A wrong password burns the token.** `verifyEmail`
+(`src/services/verification.service.ts`) claims the token row (`claimToken`,
+which marks it consumed) **before** comparing the password, so presenting a
+token is what spends it, correct password or not. A wrong password on a
+genuine link fails exactly like an unknown token, and the link is then dead.
+One link is one attempt. A legitimate typo costs the user a resend, not a
+retry, and generates its own support tickets ("my verification link stopped
+working"); that trade is deliberate.
 
-**Why the token alone is not enough — the squatting scenario.** An
-attacker registers `victim@example.com` with a password of their own
-choosing. The row now exists, unverified — and who registered first does
-not matter to what follows, because the harmful step is always the same
-one: `emailVerifiedAt` getting written at click time on a row whose
-password the clicker did not set. If verification accepted the token
-alone, both candidate policies for what happens next end in a silent
-takeover, not a stalemate:
+**Why the token alone is not enough — the squatting scenario.** An attacker
+registers `victim@example.com` with a password of their own choosing. The row
+now exists, unverified. The harmful step is always the same one:
+`emailVerifiedAt` getting written at click time on a row whose password the
+clicker did not set. If verification accepted the token alone, both candidate
+policies for a taken-but-unverified address end in a silent takeover:
 
-- _Overwrite the password on a taken-but-unverified address (newest
-  registrant wins)_ — fails when the **victim** registered first and has
-  not yet clicked. The attacker's later registration of the same address
-  overwrites the victim's password, and a fresh verification link goes out
-  to the victim's own inbox as if nothing had happened. The victim's own
-  click then verifies the address with the attacker's chosen credentials.
-- _Write nothing on the taken branch_ (what actually shipped) closes that
-  specific hole and still fails through the only door left open: the
-  address is "known and unverified," so `resend-verification` will mail
-  the victim a fresh, live link for that row, and the victim's own click on
-  it verifies the address the **attacker's** password is sitting on.
+- _Overwrite the password (newest registrant wins)_ — when the **victim**
+  registered first and has not yet clicked, the attacker's registration
+  overwrites the victim's password, and a fresh verification link goes to the
+  victim's inbox. The victim's own click then verifies the address with the
+  attacker's credentials.
+- _Write nothing on the taken branch_ (what ships) — `resend-verification`
+  still mails the victim a live link for the attacker's row, and the victim's
+  own click verifies the address the **attacker's** password is sitting on.
 
-Both variants turn a denial of service into a silent account takeover using
-the victim's own click as the final step. Requiring the password in the
-verify call closes both at once: the attacker knows the password but can
-never produce the mailed token; the mailbox owner can produce the token but
-not the attacker's password. Neither half can complete verification alone,
-so the worst outcome becomes a lockout — never a handover.
+Requiring the password in the verify call closes both: the attacker knows the
+password but can never produce the mailed token; the mailbox owner can
+produce the token but not the attacker's password. Neither half can complete
+verification alone.
 
-**That lockout is an open gap, named here rather than left as a footnote.**
-Until password reset exists (B3 Task 6), a squatted address has **no**
-recovery path: the real owner cannot verify it, because they do not know
-the attacker's password, and the attacker cannot either, because they do
-not control the mailbox. The row sits permanently unverified and
-permanently unusable by the person who actually owns the address. This is
-the accepted lesser failure — a denial of service the real owner can at
-least notice and report, rather than a takeover they might never notice —
-but it is a real, currently-unrecoverable state, not a theoretical one.
-Task 6 closes it: a successful password reset must also set
-`emailVerifiedAt`, since clicking a reset link is the same proof of mailbox
-control verification already asks for.
+**The owner recovers a squatted address through password reset.**
+`POST /api/v1/auth/forgot-password` mails a reset link to the address, and
+`resetPassword` (`src/services/auth.service.ts`) treats a completed reset as
+proof of mailbox control: on an account that was never verified, it deletes
+any federated sign-in linked to the row, sets the new password, and sets
+`emailVerifiedAt`, all in one transaction, and revokes every session. The
+attacker's password stops working; the owner holds the account.
 
-**Backfilling `email_verified_at` before deploying the login gate.**
-`login` now refuses any account whose `emailVerifiedAt` is null. Any
-deployment upgrading from a version before this change has existing users
-sitting at `email_verified_at IS NULL`, because until now nothing ever set
-that column for anyone. Deploying the gate without a backfill first locks
-out every existing user simultaneously, on the same release. Run this
-**before** the deploy that adds the gate, not after and not alongside it:
+**Accounts loaded from elsewhere.** `login` refuses any account whose
+`email_verified_at` is null. Rows written into `users` by anything other than
+this API's own flows — an import from an existing system, for example — have
+it null, so every one of those users is locked out until it is set. Set it
+before they sign in:
 
 ```sql
 UPDATE users SET email_verified_at = created_at WHERE email_verified_at IS NULL;
 ```
 
-This treats every pre-existing account as already verified, on the
-reasoning that those users were already logging in successfully before this
-feature existed at all — there is no attacker/victim ambiguity to resolve
-for a row that predates the mechanism that creates that ambiguity. A fresh
-deployment with no existing users has nothing to backfill.
+That treats every such account as verified. Run it only for accounts whose
+addresses the source system already trusted.
 
-### Rate limiting: one limiter per auth route, one store prefix each
+### Rate limiting: one store prefix per limiter
 
-`RATE_LIMITS` (`src/constants/rate-limit.constants.ts`) lists twenty-one
-rate-limiter specs, each built by `rate-limit.middleware.ts`'s single
-`createRateLimiter(spec)`.
-Fifteen guard the auth router, which is a standing rule for that router:
-every route on it except `GET /providers` has at least one, and `/login`
-(three), `/resend-verification` (two) and `/forgot-password` (two) carry
-several in series. Five guard tenant creation, member invitation,
-invitation preview and accept, and staff tenant search. The last,
-`authenticatedWrite`, covers every other authenticated write (below). Each
-spec is backed by its **own** `SharedRateLimitStore`, with its own key
-prefix `rl:<name>:` (for example `rl:register:`, `rl:login-ip:`,
-`rl:forgot-password-email:`), under `REDIS_KEY_PREFIX` (so
-`<prefix>:rl:login:` in Redis). No limiter can spend another's budget. A
-429 from any limiter but `authenticatedWrite` is a statement about the
-endpoint that returned it; `authenticatedWrite` is one budget shared by
-every route it guards. A new spec takes its own prefix on the same
-pattern; `tests/unit/constants/rate-limit.constants.test.ts` fails if two
-ever collide. `/verify-email` and `/resend-verification`'s
-own per-limiter reasoning — including why `/resend-verification`'s IP layer
-is the tight one and its email layer the generous one — lives in the
-matching entries of `RATE_LIMITS` (rate-limit.constants.ts), one comment
-per limiter. The store starts in
-memory and switches to Redis once Redis answers, so the limit is shared
-across replicas. Whenever a Redis command fails, that request is counted in
-the store's own memory instead, and the next successful command returns it
-to Redis. During an outage, then, counting is per process: with N replicas,
-a client can make up to N× the limit.
+`RATE_LIMITS` (`src/constants/rate-limit.constants.ts`) holds 21 limiter
+specs, each built into middleware by `createRateLimiter(spec)`
+(`src/middlewares/rate-limit.middleware.ts`). Fifteen guard the auth router
+(every route on it except `GET /providers` has at least one), five guard
+tenant creation, member invitation, invitation preview and accept, and staff
+tenant search, and `authenticatedWrite` covers every other authenticated
+write. Paths below are under `/api/v1`; a `user` key is the authenticated
+user's id, and an `email` key is the submitted `email`, trimmed and
+lowercased.
 
-- **Register** (`POST /api/v1/auth/register`): 100 attempts per hour, keyed
-  on the client's **IP alone** — deliberately not the composite login uses.
-  Both threats here come from one caller varying the email, so any key
-  containing the email would hand an attacker a fresh counter per request
-  and bound nothing: enumeration (see above) changes the address by
-  construction, and bcrypt CPU exhaustion does not care what the address is.
-  That second threat is the reason this endpoint cannot stay unlimited at
-  all — `register` hashes at cost 12 (~250ms) before anything else, and
-  node-bcrypt runs on libuv's threadpool (4 threads by default, shared with
-  fs and DNS), so a few dozen concurrent registrations starve the whole
-  process, not just this route. Keying on IP means everyone behind one NAT'd
-  egress address shares a counter, so the **limit**, not the key, is what
-  keeps an office of real people from locking each other out: 100/hour sits
-  far above any human signup rate and far below either attack. Two things
-  make that trade acceptable here where it would not be for login — a 429 on
-  registration delays a **new** signup and can never lock anyone out of an
-  **existing** account, and it clears itself within the window with nobody
-  intervening.
-- **Login** (`POST /api/v1/auth/login`): 5 attempts per 15-minute window,
-  keyed on the **composite** of the client's IP and the submitted email —
-  deliberately neither alone. Email alone would let anyone who merely knows
-  a victim's address lock that victim out of their own account: submit
-  wrong passwords against someone else's email from anywhere, and the real
-  owner starts seeing 429s too — a free denial-of-service needing no
-  credentials of the attacker's own. IP alone, at a limit this tight,
-  would have everyone behind one NAT'd address share five attempts. The
-  composite does **not** stop a distributed attacker (many source IPs, one
-  target account): each (IP, email) pair gets its own counter. Two more
-  limiters sit behind it, in this order: **per-IP** (`rl:login-ip:`, 100
-  attempts per 15 minutes across every email — one IP spraying many
-  accounts) and **per-account** (`rl:login-account:`, 100 attempts per hour
-  against one normalised email from every IP — the distributed case). The
-  per-account limit is high on purpose: an attacker who knows an address
-  can still lock its owner out, but it costs 100 attempts an hour. Attempts
-  the ip+email limiter already rejected never reach the other two, so they
-  spend neither budget. The email in each key is read from the raw request
-  body before validation, and no limiter checks whether the submitted email
-  belongs to a real account, so the number of attempts before a 429 cannot
-  be used to probe which addresses are registered — that would reopen the
-  exact enumeration channel closed above.
-- **Refresh** (`POST /api/v1/auth/refresh`): 300 requests per 5-minute
-  window, keyed on IP alone. Mostly **volume/abuse protection**: a raw
-  refresh token is 256 bits of randomness, so guessing one is infeasible
-  regardless of any rate limit, and replaying an already-rotated token past
-  `REFRESH_REUSE_GRACE_MS` revokes the whole session on that replay (reuse
-  detection, above), so a burst of further attempts fails identically to
-  the first. It does carry one real security role, though: within the
-  grace window, each replay of a stolen, already-rotated token mints a
-  fresh sibling instead of being rejected, and this limiter is what caps
-  how many siblings an attacker can mint before the window closes. Beyond
-  that, what it bounds is the request/database load one client can
-  generate against an endpoint that does two writes per call; its limit is
-  generous precisely because tightening it would only cost real users
-  retrying a flaky connection.
-- **Logout** (`POST /api/v1/auth/logout`): 300 requests per 5-minute window,
-  keyed on IP alone — volume protection on the same reasoning as refresh.
-  Logout is unauthenticated by design (a user whose access token has just
-  expired must still be able to end their session), so an anonymous caller
-  can drive one indexed lookup by token hash plus at most one bounded
-  `UPDATE` per request; that load is what this bounds. It closes no oracle,
-  because there is none — every logout answers 200 whether the presented
-  token was live, already revoked, forged, or absent. Its limit is generous
-  for a reason specific to this route: a 429 answers **before** the handler
-  runs, so it would leave the refresh cookie uncleared. This limiter must
-  never plausibly be the reason a real user cannot log out.
+| Route                                                              | Limiter (`rl:` prefix)                    | Limit              | Key                  |
+| ------------------------------------------------------------------ | ----------------------------------------- | ------------------ | -------------------- |
+| `POST /auth/register`                                              | `register`                                | 100 per hour       | IP                   |
+| `POST /auth/login`, in this order                                  | `login`                                   | 5 per 15 minutes   | IP + submitted email |
+|                                                                    | `login-ip`                                | 100 per 15 minutes | IP                   |
+|                                                                    | `login-account`                           | 100 per hour       | email                |
+| `POST /auth/refresh`                                               | `refresh`                                 | 300 per 5 minutes  | IP                   |
+| `POST /auth/logout`                                                | `logout`                                  | 300 per 5 minutes  | IP                   |
+| `POST /auth/verify-email`                                          | `verify-email`                            | 30 per 15 minutes  | IP                   |
+| `POST /auth/resend-verification`                                   | `resend-verification-ip`                  | 5 per hour         | IP                   |
+|                                                                    | `resend-verification-email`               | 20 per hour        | email                |
+| `POST /auth/forgot-password`                                       | `forgot-password-ip`                      | 5 per hour         | IP                   |
+|                                                                    | `forgot-password-email`                   | 20 per hour        | email                |
+| `POST /auth/reset-password`                                        | `reset-password`                          | 10 per 15 minutes  | IP                   |
+| `POST /auth/change-password`                                       | `change-password`                         | 5 per 15 minutes   | user                 |
+| `GET /auth/google` (when Google sign-in is on)                     | `google-oauth`                            | 300 per 5 minutes  | IP                   |
+| `GET /auth/google/callback` (same)                                 | `google-oauth-callback`                   | 300 per 5 minutes  | IP                   |
+| `POST /tenants`                                                    | `create-tenant`                           | 20 per hour        | user                 |
+| `POST /tenants/:slug/invitations`, `POST …/invitations/:id/resend` | `invite-tenant-member`, one shared budget | 30 per hour        | user                 |
+| `POST /invitations/preview`                                        | `invitation-preview`                      | 60 per 15 minutes  | IP                   |
+| `POST /invitations/accept` (ahead of `requireAuth`)                | `invitation-accept`                       | 20 per 15 minutes  | IP                   |
+| `GET /platform/tenants` (after the staff check)                    | `platform-search`                         | 60 per minute      | user                 |
+| Every other authenticated write (below)                            | `authenticated-write`                     | 60 per minute      | user                 |
 
-- **Every other authenticated write** (`rl:authenticated-write:`): 60
-  requests a minute per user, on each authenticated `POST`, `PUT`, `PATCH`
-  or `DELETE` that has no limiter of its own. Those are the tenant `PATCH`,
-  the member `PATCH` and `DELETE`, the invitation `DELETE` and the settings
-  `PATCH`, the four notification writes, and `PATCH /api/v1/profile`. It
-  runs after `requireAuth`, so it keys on the user, and it answers `429`
-  with its own message, `Too many requests, please slow down`. A route with
-  its own limiter keeps only that one. Each of the three routers builds one
-  instance and mounts it on each of its write routes. With Redis up, every
-  instance counts under the same prefix and user key, so a client gets 60
-  such writes a minute in total, not 60 per route. During a Redis outage
-  each instance counts in its own memory, so the budget is per router and
-  per process. `tests/unit/routes/route-limiters.test.ts` walks the app's
-  router and fails on any write route that has no limiter and is not on its
-  allowlist, where each entry states its reason. It also fails if a `GET`
-  route carries `authenticatedWrite`.
+Each spec is backed by its **own** `SharedRateLimitStore`
+(`src/configs/rate-limit-store.config.ts`) under the key prefix `rl:<name>:`,
+inside `REDIS_KEY_PREFIX` (so `<prefix>:rl:login:` in Redis). No limiter can
+spend another's budget, so a 429 from any limiter but `authenticatedWrite` is
+a statement about the endpoint that returned it. A new spec takes its own
+name; `tests/unit/constants/rate-limit.constants.test.ts` fails if two
+collide. The reasoning behind each limiter's window, limit and key lives on
+its entry in `RATE_LIMITS`. A 429 carries the error envelope with code
+`RATE_LIMITED` and the standard `RateLimit-*` headers.
 
-There is no global limiter: a read is limited only where a route mounts
-one, and most reads mount none.
+The store starts in memory and switches to Redis once Redis answers, so the
+limit is shared across replicas. Whenever a Redis command fails, that request
+is counted in the store's own memory instead, and the next successful command
+returns it to Redis. During an outage, then, counting is per process: with N
+replicas, a client can make up to N× the limit.
+
+- **Register** keys on the client's **IP alone**, deliberately not the
+  composite login uses. Both threats here come from one caller varying the
+  email, so any key containing the email would hand an attacker a fresh
+  counter per request: enumeration changes the address by construction, and
+  bcrypt CPU exhaustion does not care what the address is. `register` hashes
+  at cost 12 (~250ms) before anything else, and bcrypt runs on libuv's
+  threadpool (4 threads by default, shared with fs and DNS), so a few dozen
+  concurrent registrations starve the whole process. Everyone behind one
+  NAT'd address shares the counter, so the **limit** is what keeps an office
+  of real people from locking each other out: 100 an hour sits far above any
+  human signup rate and far below either attack. A 429 here delays a **new**
+  signup and never locks anyone out of an **existing** account.
+- **Login** keys its first limiter on the **composite** of IP and submitted
+  email. Email alone would let anyone who knows a victim's address lock the
+  victim out from anywhere; IP alone, at 5 attempts, would have everyone
+  behind one NAT'd address share five. The composite does not stop a
+  distributed attacker (many IPs, one account), so two more limiters follow:
+  `login-ip` bounds one IP spraying many accounts, and `login-account` bounds
+  every IP against one account. That per-account limit is high on purpose: an
+  attacker who knows an address can still lock its owner out, but it costs
+  100 attempts an hour. Attempts the first limiter rejects never reach the
+  other two, so they spend neither budget. The email in each key is read from
+  the raw body before validation, and no limiter checks whether it belongs to
+  a real account, so the number of attempts before a 429 cannot probe which
+  addresses are registered.
+- **Refresh** is mostly volume protection: a raw refresh token is 256 bits of
+  randomness, so guessing one is infeasible, and a replay past the grace
+  window revokes the whole session. Within the grace window each replay of a
+  stolen, already-rotated token mints a sibling, and this limiter caps how
+  many an attacker can mint before the window closes. The limit is generous
+  because tightening it only costs real users retrying a flaky connection.
+- **Logout** is unauthenticated by design (a user whose access token has just
+  expired must still be able to end their session), so this limiter bounds
+  the lookup and revoke an anonymous caller can drive. It closes no oracle:
+  every logout answers 200. It is generous because a 429 answers **before**
+  the handler runs and leaves the refresh cookie uncleared; it must never
+  plausibly be the reason a real user cannot log out.
+- **Every other authenticated write** — the tenant `PATCH`, the member
+  `PATCH` and `DELETE`, the invitation `DELETE`, the settings `PATCH`, the
+  four notification writes, and `PATCH /api/v1/profile` — carries
+  `authenticatedWrite`, after `requireAuth`, answering `429` with
+  `Too many requests, please slow down`. A route with its own limiter keeps
+  only that one. Each of the three routers (tenant, notification, profile)
+  builds one instance and mounts it on each of its write routes. With Redis
+  up, every instance counts under the same prefix and user key, so a client
+  gets 60 such writes a minute in total, not 60 per route; during a Redis
+  outage each instance counts in its own memory, so the budget is per router
+  and per process. `tests/unit/routes/route-limiters.test.ts` walks the app's
+  router and fails on any write route with no limiter that is not on its
+  allowlist (empty), and on any `GET` route carrying `authenticatedWrite`.
+
+There is no global limiter: a read is limited only where a route mounts one,
+and most reads mount none.
 
 ### Deploying behind a proxy: `TRUST_PROXY` is a required decision
 
@@ -521,23 +450,23 @@ one, and most reads mount none.
 reverse proxy, you must set `TRUST_PROXY`. Leaving it unset is a real
 misconfiguration, not a safe default.**
 
-Every limiter above keys on `request.ip`. Express derives that from the
-socket's peer address unless `trust proxy` is set — so behind a proxy, the
-peer is the **proxy**, and `request.ip` is the same value for every request
-that ever arrives. All four limiters then collapse into one bucket for the
-entire deployment: refresh's "300 per 5 minutes" becomes 300 requests per 5
-minutes shared by all users, and a single noisy client denies refresh to
-everyone else.
+Every IP-keyed limiter above keys on `request.ip`. Express derives that from
+the socket's peer address unless `trust proxy` is set — so behind a proxy,
+the peer is the **proxy**, and `request.ip` is the same value for every
+request. Every IP-keyed limiter then collapses into one bucket for the entire
+deployment: refresh's "300 per 5 minutes" becomes 300 requests per 5 minutes
+shared by all users, and a single noisy client denies refresh to everyone
+else.
 
 The opposite error is worse, and is why this is configuration rather than
 something turned on by default. `X-Forwarded-For` is an ordinary request
 header; anything that can reach the app can write whatever it likes into it.
-Trust it too eagerly and a caller picks its own "client IP" on every
-request, gets a fresh rate-limit bucket each time, and the login limiter
-stops applying at all. **`TRUST_PROXY=true` is refused at boot** for exactly
-this reason (`src/configs/env.config.ts`) — it is the value that gets typed
-by accident, and every legitimate use of it can be written as a hop count or
-an address list instead.
+Trust it too eagerly and a caller picks its own "client IP" on every request,
+gets a fresh rate-limit bucket each time, and the login limiter stops
+applying at all. **`TRUST_PROXY=true` is refused at boot** for exactly this
+reason (`src/configs/env.config.ts`) — it is the value that gets typed by
+accident, and every legitimate use of it can be written as a hop count or an
+address list instead.
 
 What to set:
 
@@ -550,9 +479,9 @@ What to set:
 | Docker/compose networking only               | `uniquelocal`                               |
 
 Count only the proxies **you** control. Each extra hop of trust is one more
-position from which `X-Forwarded-For` can be forged. `createApp()` applies
-the value at boot and a malformed one throws there, so a typo stops the
-process rather than quietly disabling the limiters.
+position from which `X-Forwarded-For` can be forged. `createApp()` applies the
+value at boot and a malformed one throws there, so a typo stops the process
+rather than quietly disabling the limiters.
 
 **`TRUST_PROXY` also decides whether the OAuth session cookie is sent.**
 express-session only emits a `Secure` cookie when `req.secure` is true, and
@@ -579,25 +508,24 @@ The browser enforces the prefixes, not this API. It refuses a `__Host-`
 cookie unless it is `Secure`, host-only and on `Path=/`, and a `__Secure-`
 one unless it is `Secure`. So neither can be planted over plain HTTP, and a
 `__Host-` cookie can't be planted by a sibling subdomain either. A plain
-`refreshToken` could be. The cost of `__Host-` is `Path=/`: the browser
-sends the cookie on every request to the origin, not only to
-`/api/v1/auth`. It is still `HttpOnly`, `Secure` and `SameSite=Strict`
-(`Lax` only from the OAuth callback), so no script reads it and no
-cross-site request carries it. A deployment that wants it scoped to the auth
-routes sets `COOKIE_DOMAIN`, which selects the `__Secure-` row.
+`refreshToken` could be. The cost of `__Host-` is `Path=/`: the browser sends
+the cookie on every request to the origin, not only to `/api/v1/auth`. It is
+still `HttpOnly`, `Secure` and `SameSite=Strict` (`Lax` when set by the Google
+OAuth callback), so no script reads it and no cross-site `POST` carries it. A
+deployment that wants it scoped to the auth routes sets `COOKIE_DOMAIN`, which
+selects the `__Secure-` row.
 
-**The prefixed names log no one out.** With `COOKIE_SECURE` on, the API
-still accepts the unprefixed `refreshToken`
-(`LEGACY_REFRESH_TOKEN_COOKIE_NAME`). Refresh reads the current name first
-and falls back to `refreshToken`; logout revokes the session of every
-distinct token the request carries under either name. Within one name the
-API takes the most recently created value. When a login, a successful
-refresh, a Google sign-in or a logout carried a `refreshToken` cookie, the
-response clears it at `/api/v1/auth` (a refresh answered 401 clears it only
-when it was the cookie read, with no current cookie beside it): the
-host-only form, and the `COOKIE_DOMAIN` form when that is set, skipping
-whichever form is the current cookie itself. The fallback is removed at the
-next major release.
+**The prefixed names log no one out.** With `COOKIE_SECURE` on, the API still
+accepts the unprefixed `refreshToken` (`LEGACY_REFRESH_TOKEN_COOKIE_NAME`).
+Refresh reads the current name first and falls back to `refreshToken`; logout
+revokes the session of every distinct token the request carries under either
+name. Within one name the API takes the most recently created value. When a
+login, a successful refresh, a Google sign-in or a logout carried a
+`refreshToken` cookie, the response clears it at `/api/v1/auth` (a refresh
+answered 401 clears it only when it was the cookie read, with no current
+cookie beside it): the host-only form, and the `COOKIE_DOMAIN` form when that
+is set, skipping whichever form is the current cookie itself. The fallback is
+removed at the next major release.
 
 Every form is set with:
 
@@ -605,86 +533,82 @@ Every form is set with:
   value.
 - `secure: isCookieSecure(env)` — `COOKIE_SECURE` when it is set, otherwise
   `APP_ENV !== 'local'`. The rule lives only in `env.config.ts`, and the
-  refresh cookie and the OAuth session cookie both use it. It is not a
-  hardcoded literal in either direction. A hardcoded `true` would make
-  cookie-based login impossible over plain HTTP in local development
-  (browsers refuse a `Secure` cookie set over `http://`). A hardcoded `false`
-  would ship a refresh token over an unencrypted connection in every other
-  environment. `X-Forwarded-Proto` has no effect on this flag.
+  refresh cookie and the OAuth session cookie both use it. A hardcoded `true`
+  would make cookie-based login impossible over plain HTTP in local
+  development (browsers refuse a `Secure` cookie set over `http://`); a
+  hardcoded `false` would ship a refresh token over an unencrypted connection
+  in every other environment. `X-Forwarded-Proto` has no effect on this flag.
 - `domain: COOKIE_DOMAIN` — omitted when unset, so the cookie is host-only.
   When it is set, the same domain goes on the set, the clear (a clear with a
   different domain leaves the old cookie in the browser), and the OAuth
   session cookie. On a secure deployment, turning `COOKIE_DOMAIN` on or off
   switches the cookie between `__Host-` and `__Secure-`, which signs every
   user in once. A leftover `refreshToken` is cleared by the next login,
-  successful refresh, Google sign-in or logout that presents it. Changing it from one domain to another (or, on local
-  http, unsetting it) leaves the old domain's cookie in the browser, which
-  then sends two values under the same name, oldest first (RFC 6265 §5.4). The API reads the last, most recently created one, so the
-  stale token never reaches reuse detection, and the old cookie expires
-  within `REFRESH_TOKEN_TTL`. Reverting `COOKIE_DOMAIN` to an earlier value
-  is the exception: an overwritten cookie keeps its original creation time
-  (§5.3), so the other scope's cookie reads as newer and refresh fails until
-  the user logs in again or that cookie expires.
+  successful refresh, Google sign-in or logout that presents it. Changing it
+  from one domain to another (or, on local http, unsetting it) leaves the old
+  domain's cookie in the browser, which then sends two values under the same
+  name, oldest first (RFC 6265 §5.4). The API reads the last, most recently
+  created one, so the stale token never reaches reuse detection, and the old
+  cookie expires within `REFRESH_TOKEN_TTL`. Reverting `COOKIE_DOMAIN` to an
+  earlier value is the exception: an overwritten cookie keeps its original
+  creation time (§5.3), so the other scope's cookie reads as newer and
+  refresh fails until the user logs in again or that cookie expires.
 - `sameSite: 'strict'` — the cookie half of this API's CSRF position (see
-  below).
+  below). The Google OAuth callback is the one exception: it sets the cookie
+  with `'lax'`, because the browser reaches the callback by a cross-site
+  redirect from Google, and a `'strict'` cookie set there would be withheld on
+  the redirect to the frontend that follows. `'lax'` still withholds the
+  cookie from cross-site `POST`s and subresource requests.
 
-**`sameSite: 'strict'` assumes the frontend and this API share a
-registrable domain (eTLD+1).** Flagged here for revisiting when OAuth lands
-in a later plan (B4): a cross-site redirect back from an identity provider
-is exactly the navigation `'strict'` suppresses — the cookie would not be
-sent on the browser's return trip from the IdP, breaking the flow. A
-deployment that splits the frontend and API across different top-level
-domains, or that adds a third-party OAuth redirect, needs `'lax'` (for the
-top-level-navigation case OAuth needs) or a real CSRF token instead.
+**`sameSite: 'strict'` assumes the frontend and this API share a registrable
+domain (eTLD+1).** A deployment that splits the frontend and API across
+different registrable domains never gets the cookie back at all, and needs
+`'lax'` plus a CSRF token instead.
 
 ### Mass assignment: an explicit allow-list on profile updates
 
 `PATCH /api/v1/profile` (`src/validators/profile.validators.ts`,
-`src/controllers/profile.controller.ts`) writes only the fields
-`updateProfileSchema` names — `firstName` and `lastName` — no matter what
-else a request body contains. `email`, `id`, `passwordHash` and `active`
-cannot be set through this endpoint: the schema is a plain (non-`.strict()`)
-allow-list that silently strips every unrecognised key rather than
-rejecting the whole request, and `toUpdateValues` in the controller only
-ever reads the two keys that schema can produce — there is deliberately no
-second, independent allow-list re-checking this, since a second definition
-is exactly what would drift from the first over time. Verified directly
-against this repo: `PATCH` with `{"firstName":"Alicia","active":false,
-"email":"attacker@example.com","passwordHash":"x","id":"deadbeef"}` against
-a real session updated only `firstName`; every other field was silently
-dropped.
+`src/services/profile.service.ts`) writes only the fields `updateProfileSchema`
+names — `firstName` and `lastName` — no matter what else a request body
+contains. `email`, `id`, `passwordHash` and `active` cannot be set through
+this endpoint: the schema is a plain (non-`.strict()`) allow-list that
+silently strips every unrecognised key rather than rejecting the whole
+request, and `toUpdateValues` in the profile service only ever reads the two
+keys that schema can produce. There is deliberately no second, independent
+allow-list re-checking this, since a second definition is exactly what would
+drift from the first.
 
 ### Free text rejects control and bidi characters
 
-`safeText` (`src/validators/safe-text.validators.ts`) refines every
-free-text field: the tenant `name`, `logo`, `website` and `description`,
-and `firstName` and `lastName` on register and profile. It rejects Unicode
+`safeText` (`src/validators/safe-text.validators.ts`) refines every free-text
+field: the tenant `name`, `logo`, `website` and `description`, and
+`firstName` and `lastName` on register and profile. It rejects Unicode
 control characters (U+0000–U+001F and U+007F–U+009F) and the bidirectional
 overrides and isolates (U+202A–U+202E and U+2066–U+2069). These can make a
 stored name render as something else in an email, a log line or the UI.
-`description` is multiline. It accepts `\n` and `\t`, stores `\r\n` as
-`\n`, and rejects a lone `\r`. A rejected field answers `400` in the usual
-validation envelope, with `<Field> contains characters that are not
-allowed` (on the profile route, which shares one rule for both names,
+`description` is multiline. It accepts `\n` and `\t`, stores `\r\n` as `\n`,
+and rejects a lone `\r`. A rejected field answers `400` in the usual
+validation envelope, with `<Field> contains characters that are not allowed`
+(on the profile route, which shares one rule for both names,
 `This field contains characters that are not allowed`).
 
 ### Tenant invitations: consent, and no address enumeration
 
-A user becomes a member of a tenant only by accepting an invitation.
-`POST /api/v1/tenants/:slug/members` has been removed. It added any registered
-address directly and answered 404 for an unregistered one.
+A user becomes a member of a tenant only by accepting an invitation. No route
+adds a registered address to a tenant directly.
 
 - **No enumeration.** `POST /api/v1/tenants/:slug/invitations` answers `202`
   with the same body whether or not the address has an account. The one
-  distinguishable answer is `409 already_member`, and it only tells an owner or
-  admin who is already in their own tenant. A registered and an unregistered
-  address also take the same query path: the membership lookup runs either
-  way (against a nil id when there is no account), and the in-app
+  distinguishable answer is `409 already_member`, and it only tells an owner
+  or admin who is already in their own tenant. A registered and an
+  unregistered address also take the same query path: the membership lookup
+  runs either way (against a nil id when there is no account), and the in-app
   notification for a verified account is enqueued off the response path.
 - **Consent.** Accepting (`POST /api/v1/invitations/accept`) needs a signed-in
   user whose verified email equals the invited address. A different address
   gets `403 invitation_email_mismatch`; the invited address, unverified, gets
-  `403 invitation_email_unverified`. Either way nothing is claimed. A forwarded or leaked link is useless to anyone else.
+  `403 invitation_email_unverified`. Either way nothing is claimed. A
+  forwarded or leaked link is useless to anyone else.
 - **Single use.** A token is 32 random bytes, base64url-encoded. Only its
   SHA-256 is stored. The claim is one atomic
   `UPDATE … WHERE accepted_at IS NULL AND revoked_at IS NULL AND expires_at > now()`,
@@ -700,33 +624,29 @@ address directly and answered 404 for an unregistered one.
   `Referrer-Policy: no-referrer` (react-boilerplate's `nginx.conf`), so the
   page's URL doesn't leak onward as a `Referer`. The API sends the same header
   (helmet), but that covers only the API's own responses. The Vite dev server
-  sets no such header. The token never appears in the
-  database, the in-app notification, the list response or the application
-  log.
+  sets no such header. The token never appears in the database, the in-app
+  notification, the list response or the application log.
 - **Resend re-checks the grant matrix.** Resending re-issues the invitation's
   role, so an admin cannot resend an owner or admin invitation, just as they
   cannot create one.
-- **Rate limits:**
-  - Invite and resend share one budget of 30 per hour per user
-    (`rl:invite-tenant-member:`).
-  - Preview allows 60 per 15 minutes per IP (`rl:invitation-preview:`).
-  - Accept allows 20 per 15 minutes per IP (`rl:invitation-accept:`), and its
-    limiter runs ahead of `requireAuth`.
+- **Rate limits:** invite and resend share one budget; preview and accept are
+  limited per IP, and accept's limiter runs ahead of `requireAuth`. See the
+  table under "Rate limiting".
 
 ### Platform staff access and the audit log
 
-Staff are the members of one seeded tenant, the row with `tenants.is_platform = true`
-(slug `platform`, a reserved slug). Their role there is their **platform
-role**. There is no separate staff table and no per-membership permission
-blob.
+Staff are the members of one seeded tenant, the row with
+`tenants.is_platform = true` (slug `platform`, a reserved slug). Their role
+there is their **platform role**. There is no separate staff table and no
+per-membership permission blob.
 
 - **What staff can do in a customer tenant.** In a tenant they don't belong
   to, `resolveTenant` makes the platform role the effective role
   (`access: 'platform'`). It must clear the route's own `requireRole` bar and
-  the service policies, and every write re-reads it under lock in
-  its own transaction (`resolveActorAccess`,
-  `src/services/tenant-access.service.ts`). A staff user demoted or removed
-  mid-request can't finish on the old role. So:
+  the service policies, and every write re-reads it under lock in its own
+  transaction (`resolveActorAccess`, `src/services/tenant-access.service.ts`).
+  A staff user demoted or removed mid-request can't finish on the old role.
+  So:
   - a platform viewer can read but gets 403 on every write;
   - no platform role can change or remove an owner;
   - only a platform owner can change an admin, or grant owner or admin.
@@ -734,8 +654,8 @@ blob.
   membership role counts.
 - **The platform tenant is members-only.** Anyone who isn't a member of the
   platform tenant gets 404 there, and it never appears in staff search. A
-  CHECK keeps it active and undeleted, and a partial unique index allows
-  only one.
+  CHECK keeps it active and undeleted, and a partial unique index allows only
+  one.
 - **Joining.** A **verified** address whose domain is listed in
   `PLATFORM_EMAIL_DOMAINS` joins as `viewer`.
   - The domain is the exact part after the last `@`; subdomains don't match.
@@ -744,14 +664,13 @@ blob.
     error never fails a sign-in.
   - It never promotes or demotes an existing platform membership. Anything
     above viewer takes an invitation or `pnpm platform:grant`.
-  - The list is empty by default. A compromised inbox on a listed domain
-    gets read access to every customer tenant, so list only domains whose
+  - The list is empty by default. A compromised inbox on a listed domain gets
+    read access to every customer tenant, so list only domains whose
     mailboxes you control.
 - **Discovery.** `/api/v1/platform/*` answers non-staff with the app's own
-  `404 Not found`, identical to an unknown route. The search limiter
-  (`rl:platform-search:`, 60 a minute per user) runs after the role check,
-  so a refused caller never sees `RateLimit-*` headers. An unauthenticated
-  caller still gets 401, as on every authenticated router.
+  `404 Not found`, identical to an unknown route. The search limiter runs
+  after the role check, so a refused caller never sees `RateLimit-*` headers.
+  An unauthenticated caller still gets 401, as on every authenticated router.
 - **Search is a separate path.** `GET /api/v1/platform/tenants` is the only
   reader of `repositories/platform-tenant.repository.ts`, and a lint gate in
   `eslint.config.mjs` keeps it that way. `GET /tenants` still lists the
@@ -765,8 +684,8 @@ blob.
     It's deduplicated in Redis; while Redis is down, every staff request
     writes one.
 
-  Each action's metadata has a strict Zod schema. Invitation entries keep
-  the role and the address's domain, never the address or the token.
+  Each action's metadata has a strict Zod schema. Invitation entries keep the
+  role and the address's domain, never the address or the token.
 
   A `BEFORE UPDATE OR DELETE` trigger makes the table append-only for every
   role, with the one retention exception below. Its foreign keys are
@@ -783,154 +702,144 @@ blob.
   the row's `occurred_at`. The purge sets both with `set_config(..., true)`,
   so they end with its transaction. Only `retention.service.ts` names them,
   and `tests/unit/audit-purge-setting.test.ts` fails if any other TypeScript
-  file under `src/` does. This guards against a stray `DELETE` in application code. It
-  is not a privilege boundary: any role that can run arbitrary SQL can set
-  the same two settings. Revoke `DELETE` on `audit_logs` from every role
-  except the one the app runs as.
+  file under `src/` does. This guards against a stray `DELETE` in application
+  code. It is not a privilege boundary: any role that can run arbitrary SQL
+  can set the same two settings. Revoke `DELETE` on `audit_logs` from every
+  role except the one the app runs as.
 
 - **Who reads it.**
   - `GET /api/v1/tenants/:slug/audit-log`: effective owners and admins, so a
     platform admin can read it and a platform viewer can't.
-  - `GET /api/v1/platform/audit-log`: platform owners and admins only;
-    anyone else gets the 404 above.
+  - `GET /api/v1/platform/audit-log`: platform owners and admins only; anyone
+    else gets the 404 above.
 
   Entries name the actor, staff included, with name and email, and
   `access: 'platform'` marks staff actions. Both reads filter by `access`
-  (`member`, `platform` or `system`). The IP, user agent and request
-  id are stored but never returned.
-
-- **Not here:** impersonation ("act as user"), break-glass access,
-  row-level security, and auditing of login, logout and password changes.
+  (`member`, `platform` or `system`). The IP, user agent and request id are
+  stored but never returned.
 
 ## What this boilerplate does NOT implement
 
-Everything below genuinely ships nothing today, in either direction:
+None of these is built, except where the Status column says Partial:
 
-| Control                       | Status              | What that means for you                                                                                                                                                                                                                            |
-| ----------------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| CSRF tokens                   | **Not implemented** | See "No CSRF middleware" below — reasoning, not an oversight. The forced-login direction IS defended, by a content-type gate on the auth router; see the section after it.                                                                         |
-| MFA                           | **Not implemented** | No TOTP enrolment, no recovery codes. Owned by a later plan (B4).                                                                                                                                                                                  |
-| General-purpose rate limiting | **Partial**         | Twenty-one limiters (see "Rate limiting" above). Every authenticated write has one, at least the shared `authenticatedWrite`. There is no global limiter, and authenticated reads (profile, notifications, tenant reads, the audit log) have none. |
+| Control                                               | Status              | What that means for you                                                                                                                                                                                                             |
+| ----------------------------------------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| MFA                                                   | **Not implemented** | No TOTP enrolment, no recovery codes, no step-up.                                                                                                                                                                                   |
+| CSRF tokens                                           | **Not implemented** | See "No CSRF middleware" below — reasoning, not an oversight. The forced-login direction IS defended, by a content-type gate; see the section after it.                                                                             |
+| General-purpose rate limiting                         | **Partial**         | 21 limiters (see "Rate limiting" above). Every write route has one, at least the shared `authenticatedWrite`. There is no global limiter, and authenticated reads (profile, notifications, tenant reads, the audit logs) have none. |
+| Rehash on login                                       | **Not implemented** | See "Password hashing".                                                                                                                                                                                                             |
+| Impersonation, break-glass access, row-level security | **Not implemented** | Staff act only through the platform role; see "Platform staff access and the audit log".                                                                                                                                            |
+| Audit of sign-in and credential events                | **Not implemented** | `audit_logs` records no login, logout, password change or password reset.                                                                                                                                                           |
+| Email change, account deletion                        | **Not implemented** | No endpoint changes a user's email or deletes their own account. `PATCH /api/v1/profile` sets only `firstName` and `lastName`.                                                                                                      |
+| OpenAPI documentation                                 | **Not implemented** | No spec is generated or served.                                                                                                                                                                                                     |
+| Seed data                                             | **Not implemented** | No seed script. `pnpm platform:grant` grants a platform role to an existing, verified user.                                                                                                                                         |
 
-`JWT_ACCESS_SECRET` is required by the environment schema and **is** read —
-by `signAccessToken`/`verifyAccessToken`. `WEB_URL` is also read now, twice
-over: `verification.service.ts`'s `buildVerificationUrl` builds the mailed link from it, and
-`origin.utilities.ts` (see "CORS" below) decides from it whether a
-browser's `Origin` gets a grant. `APP_URL` and `SESSION_SECRET` remain
-required by the schema and read by nothing — they are forward declarations
-for the email/session plans, not evidence those exist. There is no
-`JWT_REFRESH_SECRET` at all (see "Authentication" above).
+The schema's required secrets and public URLs are all read. `JWT_ACCESS_SECRET`
+signs and verifies access tokens (`signAccessToken`/`verifyAccessToken`).
+`SESSION_SECRET` signs the `oauth.sid` session cookie of the Google OAuth
+round-trip (`src/configs/passport.config.ts`). `APP_URL` builds the Google
+callback URL (same file), and boot refuses a `COOKIE_DOMAIN` that `APP_URL`'s
+host is not within (`src/configs/env-consistency.config.ts`). `WEB_URL` builds
+the mailed links and the OAuth redirects, and `origin.utilities.ts` (see
+"CORS" below) decides from it whether a browser's `Origin` gets a grant. There
+is no `JWT_REFRESH_SECRET` at all (see "Authentication" above).
 
 ## CORS
 
 `cors` middleware is mounted (`src/configs/cors.config.ts`, `src/app.ts`),
-answering with `credentials: true` and an origin callback
-(`isAllowedOrigin`, `src/utilities/origin.utilities.ts`) that grants exactly
-`WEB_URL` plus any origin listed in `CORS_ALLOWED_ORIGINS` — never a
-wildcard, which the CORS spec forbids alongside `credentials: true` anyway.
-A request with no `Origin` header (same-origin, or any non-browser client)
-is always allowed; CORS is a browser-only mechanism and there is nothing to
-enforce against a client that doesn't send one.
+answering with `credentials: true` and an origin callback (`isAllowedOrigin`,
+`src/utilities/origin.utilities.ts`) that grants exactly `WEB_URL` plus any
+origin listed in `CORS_ALLOWED_ORIGINS` — never a wildcard, which the CORS
+spec forbids alongside `credentials: true` anyway. A request with no `Origin`
+header (same-origin, or any non-browser client) is always allowed; CORS is a
+browser-only mechanism and there is nothing to enforce against a client that
+doesn't send one.
 
-**Accepted consequence, not a vulnerability.** The content-type CSRF gate
-below still holds exactly as designed — a disallowed origin still gets no
-grant header, and an HTML form still cannot send `application/json` — but
-its blast radius changed the moment an origin allowlist existed to grant
-against. Before this seam, no origin (other than same-origin) could ever
-pass a preflight, so the content-type gate was the only thing standing
-between a script and this API regardless of where it ran. Now, any origin
-listed in `CORS_ALLOWED_ORIGINS` (a second frontend on a sibling
-subdomain, by design) CAN drive a credentialed, `application/json`
-cross-origin request. That means an XSS or full takeover of that second
-frontend now reaches this API the same way the primary frontend does —
-somewhere it could not reach before. This is the deliberate trade this
-feature makes to let a second frontend call the API at all, not an
-oversight to fix; it is the reason `CORS_ALLOWED_ORIGINS` should list only
-origins this deployment actually trusts with the primary frontend's own
-level of access.
+**Accepted consequence, not a vulnerability.** Any origin listed in
+`CORS_ALLOWED_ORIGINS` (a second frontend on a sibling subdomain, by design)
+can drive a credentialed, `application/json` cross-origin request. The
+content-type CSRF gate below still holds — a disallowed origin gets no grant
+header, and an HTML form still cannot send `application/json` — but an XSS or
+full takeover of that second frontend reaches this API the same way the
+primary frontend does. That is the trade that lets a second frontend call the
+API at all, and the reason `CORS_ALLOWED_ORIGINS` should list only origins
+this deployment trusts with the primary frontend's own level of access.
 
 ## Security headers
 
 `helmet` (`src/configs/helmet.config.ts`) is the first middleware mounted in
-`src/app.ts` — before `cors`, before the body parsers, before any route —
-so every response carries these headers, including a 404, a 415 rejection,
-an error response, and a CORS preflight:
+`src/app.ts` — before `cors`, before the body parsers, before any route — so
+every response carries these headers, including a 404, a 415 rejection, an
+error response, and a CORS preflight:
 
-- `Content-Security-Policy: default-src 'none';frame-ancestors 'none'` —
-  this API serves no HTML, so the policy forbids loading any resource type
-  and blocks framing entirely, rather than allow-listing script/style
-  sources that don't apply to a JSON API.
+- `Content-Security-Policy: default-src 'none';frame-ancestors 'none'` — this
+  API serves no HTML, so the policy forbids loading any resource type and
+  blocks framing entirely, rather than allow-listing script/style sources
+  that don't apply to a JSON API.
 - `Cross-Origin-Resource-Policy: same-site`, not helmet's default
-  `same-origin`. CORP is a separate check from CORS: it is only consulted
-  for a `no-cors` request (an `<img>`/`<script>`-style embed, or anything
-  under `Cross-Origin-Embedder-Policy`), never for the credentialed
-  `fetch`/XHR calls the frontends actually make — those are gated by CORS
-  alone, and `same-origin` would not have broken them. The reason to set it
-  anyway is the no-cors case itself: the second frontend on a sibling
-  subdomain (`CORS_ALLOWED_ORIGINS`, see "CORS" above) is a different
-  origin but the same registrable site, so `same-origin` would refuse even
-  a harmless no-cors embed from it. `same-site` allows that while still
-  refusing one from any origin outside the registrable domain.
+  `same-origin`. CORP is a separate check from CORS: it is only consulted for
+  a `no-cors` request (an `<img>`/`<script>`-style embed, or anything under
+  `Cross-Origin-Embedder-Policy`), never for the credentialed `fetch`/XHR
+  calls the frontends make — those are gated by CORS alone. The second
+  frontend on a sibling subdomain (`CORS_ALLOWED_ORIGINS`, see "CORS" above)
+  is a different origin but the same registrable site, so `same-origin` would
+  refuse even a harmless no-cors embed from it. `same-site` allows that while
+  still refusing one from any origin outside the registrable domain.
 - `Referrer-Policy: no-referrer` — no `Referer` header leaks to anywhere,
   including this API's own other origins.
 - `X-Content-Type-Options: nosniff` — stops a browser from MIME-sniffing a
   JSON response body into something it will execute.
-- `Strict-Transport-Security: max-age=31536000; includeSubDomains` —
-  helmet's default; a browser only honours this over HTTPS, so it is inert
-  in local HTTP development.
+- `Strict-Transport-Security: max-age=31536000; includeSubDomains` — helmet's
+  default; a browser only honours this over HTTPS, so it is inert in local
+  HTTP development.
 
 `app.disable('x-powered-by')` (`src/app.ts`) stays in place alongside
 helmet's own `X-Powered-By` removal — harmless, and explicit about intent.
 
 ## No CSRF middleware — reasoning about the shipped design
 
-This reasoning was originally written about an intended, unbuilt design; it
-now describes the shape that actually shipped, and the conclusion still
-holds. CSRF relies on a browser automatically attaching ambient credentials
-(a session cookie) to a cross-site request. This API's credentials are not
+CSRF relies on a browser automatically attaching ambient credentials (a
+session cookie) to a cross-site request. This API's credentials are not
 purely ambient: an `Authorization: Bearer <token>` header is never attached
 automatically by a browser, so the access token can't be used cross-site
-without the frontend's own code choosing to send it. The one credential
-that _is_ a cookie — the refresh token — is `sameSite: 'strict'`, which
-blocks the browser from attaching it to a cross-site request in the first
-place (see "Cookies" above, including the eTLD+1 assumption and the OAuth
-flag). If a project changes `sameSite` away from `'strict'` (the OAuth case
-above is the concrete reason this might happen), or layers a browser
-session on top of this boilerplate (the `SESSION_SECRET` path), this
-conclusion no longer holds and CSRF protection must be revisited explicitly.
+without the frontend's own code choosing to send it. The one credential that
+_is_ a cookie — the refresh token — is `sameSite: 'strict'` (or `'lax'` when
+set by the Google OAuth callback), and neither lets the browser attach it to
+a cross-site `POST`, which every route that reads it is (see "Cookies" above,
+including the eTLD+1 assumption). The OAuth `oauth.sid` session cookie exists
+only on `GET /api/v1/auth/google` and its callback, for five minutes, and
+carries the OAuth `state` check. If a project relaxes `sameSite` further, or
+mounts a browser session on other routes, this conclusion no longer holds and
+CSRF protection must be revisited explicitly.
 
 ### The other CSRF direction: forced login
 
 Everything above reasons about an attacker making a victim's browser act
-**with the victim's credentials**. There is a second direction, and this
-file did not consider it until it was found in review: an attacker making a
-victim's browser log in **with the attacker's credentials**.
+**with the victim's credentials**. There is a second direction: an attacker
+making a victim's browser log in **with the attacker's credentials**.
 
-`app.ts` mounts `express.urlencoded()` globally, so `POST
-/api/v1/auth/login` used to accept a form-encoded body. An attacker's page
-could auto-submit a cross-site form to it carrying the attacker's own email
-and password. A cross-site form POST needs no CORS permission — the browser
-sends it and merely hides the response — and `sameSite: 'strict'` is no
-defence here, because **it governs when a cookie is sent, not whether a
-cross-site response may set one**. The victim's browser stores the reply's
-`Set-Cookie` and the victim is now silently signed into the attacker's
-account. Everything they do next — a document uploaded, a card saved, a
-search typed — happens inside an account the attacker can log into and read
-at leisure.
+`app.ts` mounts `express.urlencoded()` globally. Without a gate, an attacker's
+page could auto-submit a cross-site form to `POST /api/v1/auth/login` carrying
+the attacker's own email and password. A cross-site form POST needs no CORS
+permission — the browser sends it and merely hides the response — and
+`sameSite: 'strict'` is no defence here, because **it governs when a cookie
+is sent, not whether a cross-site response may set one**. The victim's
+browser would store the reply's `Set-Cookie`, and the victim would be
+silently signed into the attacker's account. Everything they do next — a
+document uploaded, a card saved, a search typed — would happen inside an
+account the attacker can log into and read at leisure.
 
-Closed by `requireJsonContentType`
-(`src/middlewares/content-type.middleware.ts`), mounted on the whole auth
-router so B3's routes inherit it: a request declaring any content type other
-than `application/json` is refused with **415**, before the handler sees the
-body. An HTML form can only ever submit
+`requireJsonContentType` (`src/middlewares/content-type.middleware.ts`),
+mounted on the whole auth router, closes it: a request declaring any content
+type other than `application/json` is refused with **415**, before the
+handler sees the body. An HTML form can only ever submit
 `application/x-www-form-urlencoded`, `multipart/form-data` or `text/plain`,
-so refusing those three removes the form vector by construction; and
-requiring `application/json` forces a CORS preflight on any cross-origin
-script. This API now DOES answer that preflight (see "CORS" above) — an
-allowed origin gets a grant and proceeds to this gate on its own merits, a
-disallowed one still gets no grant header and is blocked by the browser
-before this middleware ever runs. Either way, the HTML-form vector this gate
-exists for sends no preflight at all and is refused here regardless of CORS.
+so refusing those removes the form vector by construction; and requiring
+`application/json` forces a CORS preflight on any cross-origin script. An
+allowed origin gets a grant and proceeds to this gate on its own merits; a
+disallowed one gets no grant header and is blocked by the browser before this
+middleware runs. Either way, the HTML-form vector sends no preflight at all
+and is refused here regardless of CORS.
 
 A content-type gate was chosen over relying on the Origin allow-list alone
 because it needs no configuration of its own and holds even for a
@@ -952,103 +861,98 @@ A 5xx is logged server-side (`src/middlewares/error.middleware.ts`) so a
 masked "Internal server error" is still diagnosable. What gets logged is
 redacted first: a failed database query is recorded as its **SQL text**
 (parameterised, so it names tables and columns and holds no values), the
-driver's `SQLSTATE` code, and the call frames — never its bound parameters.
+driver's `SQLSTATE` code, the parameter count, and the call frames — never
+its bound parameters.
 
 The logger also redacts on its own, so a call site can't forget to.
 `serializeErrors` (`src/services/logger.service.ts`) walks each logged error
-and its `cause` chain, five errors deep. It replaces any error that carries
-a query and its parameters with `redactedForLog(error)`. An error logged
-under a top-level key such as `{ error }`, including one wrapped as another
-error's `cause`, keeps its SQL text and `SQLSTATE` code and loses its
-parameters. Other errors serialize as their name, message, stack and
-`cause`.
+and its `cause` chain, five errors deep. It replaces any error that carries a
+query and its parameters with `redactedForLog(error)`. An error logged under
+a top-level key such as `{ error }`, including one wrapped as another error's
+`cause`, keeps its SQL text and `SQLSTATE` code and loses its parameters.
+Other errors serialize as their name, message, stack and `cause`.
 
 This is not a theoretical precaution. `drizzle-orm` builds
 `DrizzleQueryError`'s message as `` `Failed query: ${query}\nparams:
 ${params}` `` (`node_modules/drizzle-orm/errors.js`), so logging the error
-object put the parameters of the failing statement into the log. For a
-failed `insert into users` those parameters are the registrant's **email
-address and bcrypt hash**. `BaseRepository` intercepts only `23505` (unique
-violation, answered 409); every other failure — an over-long value, a check
-violation, a dropped connection mid-statement — propagated intact. The
+object unredacted puts the parameters of the failing statement into the log.
+For a failed `insert into users` those parameters are the registrant's
+**email address and bcrypt hash**. `BaseRepository` intercepts only `23505`
+(unique violation, answered 409); every other failure — an over-long value, a
+check violation, a dropped connection mid-statement — propagates intact. The
 driver error's own message and `detail` are dropped for the same reason at
 one remove: Postgres embeds offending values in some of them (`Key
 (lower(email))=(...) already exists.`).
 
-Separately, and for the same underlying bug: every string field a request
-body can set is now capped at exactly the width of the column it is written
-to (`MAX_EMAIL_LENGTH`/`MAX_NAME_LENGTH`, `src/constants/auth.constants.ts`
-— the same constants `user.model.ts` declares those columns with). A schema
-looser than its column does not just fail; it fails as a **500**, because
-Postgres's `22001` is not a unique violation and nothing translates it. A
-400-character email address did exactly that.
+Separately: `email`, `firstName` and `lastName` are capped at exactly the
+width of the `users` column each is written to (`MAX_EMAIL_LENGTH`/
+`MAX_NAME_LENGTH`, `src/constants/auth.constants.ts` — the same constants
+`user.model.ts` declares those columns with). A schema looser than its column
+does not just fail; it fails as a **500**, because Postgres's `22001` is not a
+unique violation and nothing translates it.
 
 ### A failed job keeps no live link
 
-Verification, reset and invitation emails carry their token inside a link
-in the job's payload (`verificationUrl`, `resetUrl`, `acceptUrl`). Failed
-jobs stay in Redis so an operator can read `failedReason`: 7 days for
-email, 3 for notifications. A job fails for the last time when its attempts
-are used up or it threw BullMQ's `UnrecoverableError`. The worker then
-rewrites the job's stored data, replacing every key ending in `Url` or
-`Token`, at any depth, with `[redacted]`. It then logs one `error` line,
-`job failed permanently`, with the queue, job id and name, user id,
-attempt count and reason, and the email template when the job names one.
-An earlier attempt logs a `warn` and keeps the link, because the retry has
-to send it. So a token sits in Redis only while a retry is pending, unless
-the rewrite itself fails, which logs its own `error` line.
+Verification, reset and invitation emails carry their token inside a link in
+the job's payload (`verificationUrl`, `resetUrl`, `acceptUrl`). Failed jobs
+stay in Redis so an operator can read `failedReason`: 7 days for email, 3 for
+notifications. A job fails for the last time when its attempts are used up
+or it threw BullMQ's `UnrecoverableError`. The worker then rewrites the job's
+stored data, replacing every key ending in `Url` or `Token`, at any depth,
+with `[redacted]`. It then logs one `error` line, `job failed permanently`,
+with the queue, job id and name, user id, attempt count and reason, and the
+email template when the job names one. An earlier attempt logs a `warn` and
+keeps the link, because the retry has to send it. So a token sits in Redis
+only while a retry is pending, unless the rewrite itself fails, which logs
+its own `error` line.
 
 ### Secret scanning at two layers
 
 [`gitleaks`](https://github.com/gitleaks/gitleaks) runs as an optional local
-pre-commit hook (`.pre-commit-config.yaml`, `.gitleaks.toml`) and as a
-blocking check on every pull request (`.github/workflows/gitleaks.yml`),
-which also re-scans each push to `main`. That push run starts after the
-commits have landed, so it detects a leak but cannot block it. The local
-hook alone is not a gate — it is one `git commit --no-verify` away from
-being skipped — so the pull request check is the actual enforcement layer;
-the pre-commit hook exists to catch a leak before it is even pushed.
+pre-commit hook (`.pre-commit-config.yaml`, `.gitleaks.toml`) and as a check
+on every pull request (`.github/workflows/gitleaks.yml`), which also re-scans
+each push to `main`. That push run starts after the commits have landed, so
+it detects a leak but cannot block it. The local hook alone is not a gate —
+it is one `git commit --no-verify` away from being skipped — so the pull
+request check is the enforcement layer; the pre-commit hook exists to catch a
+leak before it is even pushed.
 
 ### Dependency audit: a gate with one documented escape hatch
 
-The `test` job runs `pnpm audit --prod --audit-level high`, and `test` is a
-required check, so a high or critical advisory with no fixed version blocks
-every PR. To unblock, ignore that one advisory by its GHSA ID under
-`auditConfig.ignoreGhsas` in `pnpm-workspace.yaml` (`pnpm audit --ignore
-<GHSA>` writes the entry), with a comment giving the reason and a date to
-revisit, and record it in MIGRATIONS.md like any other change to that file.
+The `test` job in `.github/workflows/ci.yml` runs
+`pnpm audit --prod --audit-level high`, so any high or critical advisory in a
+production dependency fails CI on every PR. When no fixed version exists,
+ignore that one advisory by its GHSA ID under `auditConfig.ignoreGhsas` in
+`pnpm-workspace.yaml` (`pnpm audit --ignore <GHSA>` writes the entry), with a
+comment giving the reason and a date to revisit, and list it in
+[CONTRIBUTING.md, "Supply-chain bypasses in `pnpm-workspace.yaml`"](CONTRIBUTING.md#supply-chain-bypasses-in-pnpm-workspaceyaml)
+like any other change to that file.
 
 ### Domain-leak gate
 
-This boilerplate is derived from a production codebase by stripping
-project-specific terms. `.github/workflows/ci.yml`'s "Reject domain leakage"
-step greps the tree for the terms that must never reappear, so a missed scrub
-fails CI instead of shipping silently.
+The "Reject domain leakage" step in `.github/workflows/ci.yml` fails CI when a
+term listed in `.github/domain-terms.txt` — the product codebase this
+boilerplate was derived from — reappears in a tracked file. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for what a project generated from it
+should do with that list.
 
 ### No `npx <tool>@latest` in committed agent config
 
-An earlier draft of this repository's documentation shipped a `.mcp.json`
-declaring an MCP server as `npx shadcn@latest mcp`, plus a
-`.claude/settings.json` that auto-enabled a plugin. Both were rejected
-before merging, for reasons worth keeping visible so the same shape doesn't
-reappear:
+This repository commits no `.mcp.json` and no `.claude/settings.json` that
+starts a tool by default, for three reasons:
 
 - **Unpinned execution outside the lockfile.** `npx <pkg>@latest` resolves
   and runs whatever is newest on the npm registry at the moment the tool
-  launches — not a version anyone reviewed, not a version pnpm's lockfile
-  or `pnpm audit` has any visibility into. A compromise of that package or
-  its publishing account is code execution on every machine that opens the
-  repo, with no review window between publish and execution.
+  launches — not a version anyone reviewed, and not one pnpm's lockfile or
+  `pnpm audit` can see. A compromise of that package or its publishing
+  account is code execution on every machine that opens the repo, with no
+  review window between publish and execution.
 - **Auto-enabling removes the one consent step that would catch it.** A
-  `.claude/settings.json` that enables a plugin or server by default means
-  a contributor never sees, let alone approves, what just started running.
-- **A boilerplate multiplies the exposure.** This isn't one repository's
-  risk; it's every project generated from this template inheriting the
-  same unpinned, auto-enabled server on day one.
-- It was also, independently, a frontend tool (a React component
-  generator) copied into a backend API's agent config without checking
-  whether anything here would ever use it. Nothing does.
+  `.claude/settings.json` that enables a plugin or server by default means a
+  contributor never sees, let alone approves, what just started running.
+- **A boilerplate multiplies the exposure.** Every project generated from
+  this template inherits the same unpinned, auto-enabled server on day one.
 
-**The rule:** a project that wants an MCP server adds one deliberately, at
-a version pinned in the committed config (not `@latest`), and does not
+**The rule:** a project that wants an MCP server adds one deliberately, at a
+version pinned in the committed config (not `@latest`), and does not
 auto-enable it for every contributor by default.
