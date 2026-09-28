@@ -105,7 +105,8 @@ export async function record(entry: AuditEntry, tx: DbTransaction): Promise<Audi
  * @param tenantId - The tenant they opened.
  * @param platformRole - Their platform role, the access they used.
  * @returns The written row, or undefined when this visit was already recorded this hour.
- * @throws {Error} When the write fails; the dedupe key is released first.
+ * @throws {Error} When the metadata does not match the action's schema or the insert
+ * fails; a key this call claimed is released first.
  */
 export async function recordPlatformAccess(
   actor: Actor,
