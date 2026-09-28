@@ -1,8 +1,8 @@
-// tests/integration/services/tenant.service.test.ts
-//
-// The tenant service against the real per-worker Postgres. Deleting a
-// tenant cascades to its settings and memberships, so afterEach deletes
-// tenants, then the users this file created.
+/**
+ * @file Exercises the tenant service against the real per-worker Postgres.
+ * Deleting a tenant cascades to its settings and memberships, so `afterEach`
+ * deletes tenants, then the users this file created.
+ */
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import { HttpError } from '@/errors/http-error'

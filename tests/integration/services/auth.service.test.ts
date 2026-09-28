@@ -1,14 +1,9 @@
-// tests/integration/services/auth.service.test.ts
-//
-// The controller starts register's follow-up mail, requestPasswordReset and
-// the resend-verification mail with a bare `void` after replying, so each
-// must swallow and log its own failure: a rejection there would crash the
-// process on one branch only. Faults are injected with withMutatedMethod;
-// nothing under src/ is edited. Each test also asserts the failure was
-// logged, so a fault that never reached the work cannot pass vacuously, and
-// that the log carries none of the failed query's bound parameters.
-// login's platform-role read is guarded the same way: a failed read answers
-// null instead of failing the sign-in.
+/**
+ * @file Proves that post-reply mail work and a guarded platform-role read
+ * in `auth.service.ts` swallow and log their own failures instead of
+ * crashing the process, and never leak a failed query's bound parameters
+ * into the log.
+ */
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
@@ -39,6 +34,18 @@ function failingQuery(): Promise<never> {
   return Promise.reject(fakeQueryError())
 }
 
+/**
+ * The controller starts `register`'s follow-up mail,
+ * `requestPasswordReset` and the resend-verification mail with a bare
+ * `void` after replying, so each must swallow and log its own failure: a
+ * rejection there would crash the process on one branch only. `login`'s
+ * platform-role read is guarded the same way — a failed read answers null
+ * instead of failing the sign-in. Faults are injected with
+ * `withMutatedMethod`; nothing under `src/` is edited. Each test also
+ * asserts the failure was logged, so a fault that never reached the work
+ * cannot pass vacuously, and that the log carries none of the failed
+ * query's bound parameters.
+ */
 describe('post-reply work never rejects', () => {
   const createdEmails: string[] = []
 

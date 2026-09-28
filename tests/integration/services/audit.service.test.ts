@@ -1,9 +1,10 @@
-// tests/integration/services/audit.service.test.ts
-//
-// The audit service against the real per-worker Postgres and the shared
-// Redis. Redis faults are injected by swapping one method on the shared
-// client (tests/helpers/mutate.ts), never by touching the server. Dedupe keys
-// are deleted in afterEach, since global setup clears only rate-limit keys.
+/**
+ * @file Exercises the audit service against the real per-worker Postgres
+ * and the shared Redis. Redis faults are injected by swapping one method on
+ * the shared client (`tests/helpers/mutate.ts`), never by touching the
+ * server. Dedupe keys are deleted in `afterEach`, since global setup clears
+ * only rate-limit keys.
+ */
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AuditLogRepository } from '@/repositories/audit-log.repository'

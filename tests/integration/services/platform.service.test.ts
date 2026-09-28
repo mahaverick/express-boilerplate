@@ -1,8 +1,8 @@
-// tests/integration/services/platform.service.test.ts
-//
-// platform.service against the real per-worker Postgres. The domain list is
-// passed in: the suite's environment leaves PLATFORM_EMAIL_DOMAINS unset,
-// which is itself the "nobody joins" case.
+/**
+ * @file Exercises `platform.service` against the real per-worker Postgres.
+ * The domain list is passed in: the suite's environment leaves
+ * `PLATFORM_EMAIL_DOMAINS` unset, which is itself the "nobody joins" case.
+ */
 import { randomUUID } from 'node:crypto'
 import { sql as drizzleSql } from 'drizzle-orm'
 import { afterEach, describe, expect, it, vi } from 'vitest'

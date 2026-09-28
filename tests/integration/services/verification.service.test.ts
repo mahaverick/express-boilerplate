@@ -1,7 +1,7 @@
-// tests/integration/services/verification.service.test.ts
-//
-// markEmailVerified against the real per-worker Postgres database. Every
-// user is deleted in afterEach; token rows cascade.
+/**
+ * @file Exercises `markEmailVerified` against the real per-worker Postgres
+ * database. Every user is deleted in `afterEach`; token rows cascade.
+ */
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import { UserRepository } from '@/repositories/user.repository'

@@ -1,8 +1,9 @@
-// tests/integration/services/audit-writes.test.ts
-//
-// Every tenant, member and invitation mutation writes exactly one audit row
-// inside its own transaction. The rollback cases let the real insert run and
-// then fail the transaction: the row and the change must both be gone.
+/**
+ * @file Every tenant, member and invitation mutation writes exactly one
+ * audit row inside its own transaction. The rollback cases let the real
+ * insert run and then fail the transaction: the row and the change must
+ * both be gone.
+ */
 import { randomBytes, randomUUID } from 'node:crypto'
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import type { MembershipRole } from '@/constants/tenant.constants'
@@ -122,8 +123,12 @@ async function rowsFor(tenantId: string, action: string): Promise<AuditRow[]> {
     from audit_logs where tenant_id = ${tenantId} and action = ${action}`
 }
 
-// The update tests backdate `updated_at` an hour first, so "left alone" is
-// visible at any clock resolution. The raw client returns it as text.
+/**
+ * Backdates a tenant's `updated_at` by an hour, so "left alone" is visible
+ * at any clock resolution.
+ * @param tenantId - The tenant to backdate.
+ * @returns The new `updated_at`, as the raw client returns it: text.
+ */
 async function backdateTenant(tenantId: string): Promise<string> {
   const [row] = await sql<{ updated_at: string }[]>`
     update tenants set updated_at = now() - interval '1 hour'
@@ -152,8 +157,13 @@ async function settingsUpdatedAt(tenantId: string): Promise<string | undefined> 
   return row?.updated_at
 }
 
-// The real insert runs, then the transaction fails: a row written through
-// `tx` rolls back with the change; one written on the pool would survive.
+/**
+ * Runs `run`, then fails its transaction, after letting the real audit
+ * insert happen: a row written through `tx` rolls back with the change; one
+ * written on the pool would survive.
+ * @param run - The mutation under test; must run inside a transaction that
+ * this helper fails.
+ */
 async function expectRollback(run: () => Promise<unknown>): Promise<void> {
   await withMutatedMethod(
     AuditLogRepository.prototype,
@@ -504,9 +514,11 @@ describe('invitation.resent', () => {
   })
 })
 
-// A stored address whose domain is no hostname (the invite validator now
-// refuses these, but older rows may hold one) must not block a resend or a
-// revoke: the audit entry records a null domain.
+/**
+ * A stored address whose domain is no hostname (the invite validator
+ * rejects these; a legacy row can still hold one) must not block a resend
+ * or a revoke: the audit entry records a null domain.
+ */
 describe('an invitation whose stored domain is no hostname', () => {
   const badAddress = `invitee@${'a'.repeat(64)}.com`
 

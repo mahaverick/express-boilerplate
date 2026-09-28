@@ -1,8 +1,8 @@
-// tests/integration/scripts/platform-grant.test.ts
-//
-// runPlatformGrant against the real per-worker Postgres: the exit code and
-// what it prints. The grant rules themselves are covered in
-// tests/integration/services/platform.service.test.ts.
+/**
+ * @file Exercises `runPlatformGrant` against the real per-worker Postgres:
+ * the exit code and what it prints. The grant rules themselves are covered
+ * in `tests/integration/services/platform.service.test.ts`.
+ */
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
