@@ -1,11 +1,8 @@
-// drizzle.config.ts — where drizzle-kit reads schema and writes migrations.
-//
-// Replaces the Express 4-era file that pointed at schema paths which no
-// longer exist. Uses getDatabaseUrl(), not getEnv(): drizzle-kit only needs
-// DATABASE_URL, and getEnv() validates the entire schema (JWT/session
-// secrets included) — a false dependency that would make every
-// `drizzle-kit generate`/`migrate` invocation require secrets that have
-// nothing to do with migrations.
+/**
+ * @file Where drizzle-kit reads the schema and writes migrations. It uses
+ * `getDatabaseUrl()`, not `getEnv()`, so drizzle-kit needs only DATABASE_URL
+ * and none of the app's secrets.
+ */
 import { defineConfig } from 'drizzle-kit'
 import { getDatabaseUrl } from '@/configs/env.config'
 

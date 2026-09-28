@@ -1,9 +1,7 @@
-// src/types/actor.ts
-//
-// The authenticated caller of a service call, once request handling has
-// resolved to "who is making this call" — services take this instead of
-// Request/Response — and the tenant-scoped principal `resolveTenant`
-// attaches to the request.
+/**
+ * @file The authenticated caller a service takes instead of Request/Response,
+ * and the tenant-scoped principal `resolveTenant` attaches to the request.
+ */
 import type { MembershipRole } from '@/constants/tenant.constants'
 
 /**
