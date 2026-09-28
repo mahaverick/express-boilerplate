@@ -5,12 +5,13 @@
 
 /**
  * Words and phrases that narrate history (case-insensitive). A handler
- * previously passed to a function, or a name previously registered under a
- * key, is an earlier step of the same runtime flow: the lookahead lets a
- * participle plus preposition through, across a JSDoc line break's `*`.
+ * previously passed to a function, a name previously registered under a key
+ * and a token previously issued to a session are earlier steps of the same
+ * runtime flow: the lookahead lets exactly those three phrases through, across
+ * a JSDoc line break's `*`.
  */
 export const HISTORY_WORDS =
-  /\b(?:task|stream|lane|wave)[ -]\d+[a-z]?\b|\btask-\d+-[\w-]+\.md\b|\bbefore this fix\b|\ba later (?:task|stream|wave|pr)\b|\bpreviously\b(?![\s*]+(?:\w+(?:ed|en)|sent|set)[\s*]+(?:to|under|by|with|in|into|for|from|on|at)\b)/i
+  /\b(?:task|stream|lane|wave)[ -]\d+[a-z]?\b|\btask-\d+-[\w-]+\.md\b|\bbefore this fix\b|\ba later (?:task|stream|wave|pr)\b|\bpreviously\b(?![\s*]+(?:passed[\s*]+to|registered[\s*]+under|issued[\s*]+to)\b)/i
 
 /**
  * Audit and ledger ids: prefixes H, M, E, X, R or NF directly followed by
