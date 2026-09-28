@@ -1,4 +1,7 @@
-// prettier.config.mjs
+/**
+ * @file Prettier settings, including the import order the sort plugin enforces.
+ */
+
 export default {
   semi: false,
   singleQuote: true,
