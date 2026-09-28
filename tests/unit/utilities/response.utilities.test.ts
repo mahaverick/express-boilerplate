@@ -1,4 +1,3 @@
-// tests/unit/utilities/response.utilities.test.ts
 import { type Response } from 'express'
 import { describe, expect, it, vi, type Mock } from 'vitest'
 import { REQUEST_ID_HEADER } from '@/middlewares/request-id.middleware'
@@ -118,9 +117,7 @@ describe('errorResponse', () => {
     errorResponse(response, 'Access token expired', 401, 'ACCESS_TOKEN_EXPIRED')
 
     expect(body()).toMatchObject({ statusCode: 401, code: 'ACCESS_TOKEN_EXPIRED' })
-    // No field-level detail was supplied, so errors must stay absent even
-    // though code is present — the two are independent fields, not one
-    // overloaded one.
+    // No field-level detail was supplied, so errors must stay absent even though code is present — the two are independent fields, not one overloaded one.
     expect(body()).not.toHaveProperty('errors')
   })
 
@@ -140,9 +137,7 @@ describe('errorResponse', () => {
   })
 
   it('reads the correlation id off the response via the shared header constant', () => {
-    // Guards Finding 3: the header name must have exactly one spelling.
-    // Asserting via the exported constant, not the literal 'X-Request-Id',
-    // means this test cannot pass if the two ever drift apart.
+    // The header name must have exactly one spelling — asserting via the exported constant, not the literal 'X-Request-Id', means this test cannot pass if the two ever drift apart.
     const { response, body, getHeader } = mockResponse()
     errorResponse(response, 'boom', 500)
 
