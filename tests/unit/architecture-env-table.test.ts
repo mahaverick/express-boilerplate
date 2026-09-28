@@ -11,8 +11,7 @@ import { EnvSchemaShape } from '@/configs/env.config'
 import { renderEnvTable } from '@/scripts/generate-env-example'
 
 const architecture = fs.readFileSync(path.resolve(process.cwd(), 'ARCHITECTURE.md'), 'utf8')
-// eslint-disable-next-line unicorn/name-replacements -- "rootDocs" (the repo's root docs) reads clearer than the suggested "rootDocumentation"
-const rootDocs = ['README.md', 'ARCHITECTURE.md']
+const rootDocuments = ['README.md', 'ARCHITECTURE.md']
   .map((name) => fs.readFileSync(path.resolve(process.cwd(), name), 'utf8'))
   .join('\n')
 const HEADER = /^\| Variable +\| Required +\| Default +\| What it does +\|$/
@@ -58,6 +57,6 @@ describe('ARCHITECTURE.md environment table', () => {
   })
 
   it.each(Object.keys(REMOVED_ENV_NAMES))('never mentions the removed name %s', (name) => {
-    expect(rootDocs).not.toMatch(new RegExp(String.raw`\b${name}\b`))
+    expect(rootDocuments).not.toMatch(new RegExp(String.raw`\b${name}\b`))
   })
 })
