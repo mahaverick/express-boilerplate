@@ -48,6 +48,8 @@ jobs:
         # step and CONTRIBUTING.md both presented it as the repo-wide standard —
         # 10 files had drifted, 6 of them tests, before anyone noticed.
         run: pnpm format:check
+      - name: Docs check
+        run: pnpm lint:docs
       - name: Reject domain leakage
         # The boilerplate is derived from a product repo. This gate is why the
         # derivation can be trusted; without it, a scrub miss ships silently.

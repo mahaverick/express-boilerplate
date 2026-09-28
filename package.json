@@ -26,6 +26,7 @@
     "start": "node --env-file-if-exists=.env --import ./dist/observability/tracing.js dist/index.js",
     "lint": "eslint . && tsc -p tsconfig.typecheck.json --noEmit",
     "lint:fix": "eslint . --fix",
+    "lint:docs": "node scripts/lint-docs.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "env:example": "tsx src/scripts/generate-env-example.ts",
