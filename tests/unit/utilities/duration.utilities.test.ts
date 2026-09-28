@@ -19,8 +19,7 @@ describe('parseDurationMs', () => {
   })
 
   it('returns undefined rather than throwing for an empty string', () => {
-    // ms('') throws internally (it fails ms's own non-empty-string guard) —
-    // this function's contract is to never throw, so it must catch that.
+    // ms('') throws internally (it fails ms's own non-empty-string guard) — this function's contract is to never throw, so it must catch that.
     expect(() => parseDurationMs('')).not.toThrow()
     expect(parseDurationMs('')).toBeUndefined()
   })

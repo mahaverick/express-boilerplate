@@ -1,8 +1,8 @@
-// tests/unit/policies/tenant.policy.test.ts
-//
-// The full matrix of each tenant policy. Expected values are written out
-// row by row, not derived from the rules, so a change to a rule has to
-// change this table too.
+/**
+ * @file The full matrix of each tenant policy. Expected values are
+ * written out row by row, not derived from the rules, so a change to a
+ * rule has to change this table too.
+ */
 import { describe, expect, it } from 'vitest'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import { canActorGrantRole, canActorModifyTarget, isRoleAtLeast } from '@/policies/tenant.policy'

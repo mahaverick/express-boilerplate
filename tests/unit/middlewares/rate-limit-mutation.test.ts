@@ -1,39 +1,11 @@
-// tests/unit/middlewares/rate-limit-mutation.test.ts
-//
-// withMutatedMethod was proven against a real security behaviour (reuse
-// detection); withMutatedModule was proven only against a pure fixture
-// pair. That asymmetry is exactly the pattern this project keeps finding
-// — a mechanism that works on a toy and has never been fired at the thing
-// it exists for. This file fires it at loginRateLimitKey
-// (src/constants/rate-limit.constants.ts): the exact mutation a background
-// scanner once caught by hand, reducing the composite `${ip}:${email}` key
-// to IP alone.
-//
-// loginRateLimitKey is PRIVATE to rate-limit.constants.ts — never
-// exported, reached only through `RATE_LIMITS.login.keyBy`, which
-// `createRateLimiter` (rate-limit.middleware.ts) resolves via
-// `keyGeneratorFor` into `rateLimit({ ..., keyGenerator: loginRateLimitKey })`
-// — so there is no exported binding withMutatedModule could replace
-// directly; it mutates a SUBJECT's DEPENDENCY, and a private function is
-// not reachable through any import edge. What IS a genuine dependency edge
-// is `rateLimit` itself, imported from the third-party `express-rate-limit`
-// package (rate-limit.middleware.ts's own import line). Wrapping it to
-// force `keyGenerator` to an IP-only function — whatever `createRateLimiter`
-// actually passed — reproduces the identical observable bug: the composite
-// key collapses to IP alone. Every other limiter built through
-// `createRateLimiter` is unaffected: none of the other 18 `RATE_LIMITS`
-// entries pass their own key-generating function, so they already fall
-// back to express-rate-limit's own IP-based default.
-//
-// This IS proof the variant works against a module imported the way this
-// one is (ESM, extensionless `@/` alias, a factory called at module
-// scope): `loadSubject` is a literal `import('@/middlewares/rate-limit.middleware')`,
-// and `createRateLimiter` is called fresh, post-mutation, exactly as
-// production code calls it.
-//
-// Same in-memory-store setup as the sibling rate-limit.middleware.test.ts:
-// @/services/redis.service is mocked to always reject, so this stays
-// Docker-independent and belongs under tests/unit/.
+/**
+ * @file Fires withMutatedModule at loginRateLimitKey
+ * (src/constants/rate-limit.constants.ts) to prove the harness works
+ * against a real security behaviour, not only a pure fixture pair. Same
+ * in-memory-store setup as the sibling rate-limit.middleware.test.ts:
+ * @/services/redis.service is mocked to always reject, so this stays
+ * Docker-independent.
+ */
 import express, { type Express } from 'express'
 import type { Test } from 'supertest'
 import { describe, expect, it, vi } from 'vitest'
@@ -98,12 +70,20 @@ async function bystanderStatusAfterExhaustingVictim(
   return bystander.status
 }
 
+/**
+ * loginRateLimitKey is private to rate-limit.constants.ts, reached only
+ * through `RATE_LIMITS.login.keyBy`, so there is no exported binding to
+ * replace directly — the mutated dependency is `rateLimit` itself,
+ * imported from the third-party express-rate-limit package, wrapped to
+ * force `keyGenerator` to an IP-only function and so reproduce the
+ * exact bug the composite `${ip}:${email}` key exists to prevent.
+ * Every other limiter built through `createRateLimiter` is unaffected,
+ * since none of the other `RATE_LIMITS` entries pass their own
+ * key-generating function.
+ */
 describe('withMutatedModule, proven on the login rate limiter’s real key generator', () => {
   it('forcing keyGenerator to IP-only reopens the lockout the composite key exists to prevent; restoring closes it again', async () => {
-    // Captured via vi.importActual, bypassing any mock, BEFORE
-    // withMutatedModule registers one — this is the real express-rate-limit,
-    // used to build an override that still calls the real rateLimit()
-    // underneath, with only `keyGenerator` forced.
+    // Captured via vi.importActual, bypassing any mock, before withMutatedModule registers one — this is the real express-rate-limit, used to build an override that still calls the real rateLimit() underneath, with only `keyGenerator` forced.
     const actual = await vi.importActual<typeof import('express-rate-limit')>('express-rate-limit')
 
     await withMutatedModule<
@@ -121,29 +101,29 @@ describe('withMutatedModule, proven on the login rate limiter’s real key gener
       },
       () => import('@/middlewares/rate-limit.middleware'),
       async ({ createRateLimiter }) => {
-        // MUTATED: with the key collapsed to IP-only, a bystander sharing
-        // the victim's IP is blocked too — exactly the lockout the
-        // composite key exists to prevent (rate-limit.middleware.test.ts's
-        // "keys on IP AND email" test asserts the opposite: 401, not 429).
+        // Mutated: with the key collapsed to IP-only, a bystander sharing the victim's IP is blocked too — exactly the lockout the composite key exists to prevent (rate-limit.middleware.test.ts's "keys on IP AND email" test asserts the opposite: 401, not 429).
         const status = await bystanderStatusAfterExhaustingVictim(createRateLimiter)
         expect(status).toBe(429)
       }
     )
 
-    // RESTORED: a fresh import gets the real loginRateLimitKey back.
+    // Restored: a fresh import gets the real loginRateLimitKey back.
     const { createRateLimiter } = await import('@/middlewares/rate-limit.middleware')
     const status = await bystanderStatusAfterExhaustingVictim(createRateLimiter)
     expect(status).toBe(401)
   })
 
-  // DELIBERATELY red when run with MUTATION_PROOF=1 — reproduces the real
-  // "keys on IP AND email" test's own assertion
-  // (tests/unit/middlewares/rate-limit.middleware.test.ts) against the
-  // mutated dependency, so the failure shown is the actual regression test
-  // failing. Left unset (the default), skipped, and the file is green:
-  //
-  //   MUTATION_PROOF=1 pnpm exec vitest run tests/unit/middlewares/rate-limit-mutation.test.ts   # red
-  //   pnpm exec vitest run tests/unit/middlewares/rate-limit-mutation.test.ts                    # green
+  /**
+   * Deliberately red when run with MUTATION_PROOF=1 — reproduces the real
+   * "keys on IP AND email" test's own assertion
+   * (tests/unit/middlewares/rate-limit.middleware.test.ts) against the
+   * mutated dependency, so the failure shown is the actual regression
+   * test failing. Left unset (the default), it is skipped and the file is
+   * green:
+   *
+   *   MUTATION_PROOF=1 pnpm exec vitest run tests/unit/middlewares/rate-limit-mutation.test.ts   # red
+   *   pnpm exec vitest run tests/unit/middlewares/rate-limit-mutation.test.ts                    # green
+   */
   it.runIf(process.env.MUTATION_PROOF === '1')(
     'reproduces the real "keys on IP AND email" test’s own assertion against the mutated key generator',
     async () => {
@@ -172,9 +152,7 @@ describe('withMutatedModule, proven on the login rate limiter’s real key gener
           const victimBlocked = await attempt(app, 'victim@example.com')
           expect(victimBlocked.status).toBe(429)
 
-          // A different email, same supertest agent — so the same client
-          // IP — must be entirely unaffected by victim@example.com's
-          // counter. With the guard mutated, it is not.
+          // A different email, same supertest agent — so the same client IP — must be entirely unaffected by victim@example.com's counter. With the guard mutated, it is not.
           const bystander = await attempt(app, 'someone-else@example.com')
           expect(bystander.status).toBe(401)
         }

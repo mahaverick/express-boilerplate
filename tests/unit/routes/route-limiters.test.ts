@@ -1,12 +1,13 @@
-// tests/unit/routes/route-limiters.test.ts
-//
-// Walks the live app's router stack (built the same way createApp() itself
-// builds it — no route list is hardcoded here) and asserts every
-// POST/PUT/PATCH/DELETE route either carries a rate limiter
-// (RATE_LIMITER_MARK on one of its handlers) or is named on ALLOWLIST with
-// a reason. Express 5 has no app._router (that was Express 4) — app.router
-// is a lazy getter (application.js) over the standalone `router` package,
-// untyped in @types/express, hence the local shapes and the one cast.
+/**
+ * @file Walks the live app's router stack (built the same way
+ * createApp() itself builds it — no route list is hardcoded here) and
+ * asserts every POST/PUT/PATCH/DELETE route either carries a rate
+ * limiter (RATE_LIMITER_MARK on one of its handlers) or is named on
+ * ALLOWLIST with a reason. Express 5 has no `app._router`; `app.router`
+ * is a lazy getter (application.js) over the standalone `router`
+ * package, untyped in Express's own type declarations, hence the local
+ * shapes and the one cast.
+ */
 import type { NextFunction, Request, RequestHandler, Response } from 'express'
 import { describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
@@ -72,9 +73,10 @@ function collectRoutes(
 
 /**
  * The live app's routes matching `methods`, walked from `app.router` —
- * untyped in `@types/express@5.0.6` (Express 5 dropped app._router for a lazy
- * `router` getter; verified against the installed package, no equivalent
- * surfaced in the type declarations), hence this one local cast.
+ * untyped in the installed Express type declarations (Express 5 dropped
+ * app._router for a lazy `router` getter; verified against the
+ * installed package, no equivalent surfaced in the types), hence this
+ * one local cast.
  * @param app - Return value of `createApp()`.
  * @param methods - The lowercase HTTP methods to collect.
  * @returns Every discovered route whose method is in `methods`.

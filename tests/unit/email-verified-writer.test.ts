@@ -1,8 +1,8 @@
-// tests/unit/email-verified-writer.test.ts
-//
-// markEmailVerified (verification.service.ts) is the one writer of
-// users.email_verified_at. This scans src/ so a second writer fails here
-// rather than in review. Comment lines are skipped: prose may name the column.
+/**
+ * @file markEmailVerified (verification.service.ts) must be the one writer
+ * of users.email_verified_at. Scans src/ for a second writer; comment
+ * lines are skipped, since prose may name the column without writing it.
+ */
 import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'

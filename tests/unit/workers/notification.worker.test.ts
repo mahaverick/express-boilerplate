@@ -1,21 +1,10 @@
-// tests/unit/workers/notification.worker.test.ts
-//
-// Pure-logic coverage of processNotificationJob's channel fan-out and retry
-// decision, with both repositories' prototype methods spied on and
-// `addEmailJob` mocked — starting a real Worker/Redis/Postgres belongs to
-// tests/integration/workers/notification.worker.test.ts, per this repo's
-// own unit/integration split (CLAUDE.md).
-//
-// `vi.spyOn(NotificationRepository.prototype, 'createOnce')` etc., not
-// `vi.mock('@/repositories/...')`: notification.worker.ts builds its own
-// module-private `notificationRepository`/`preferenceRepository` instances
-// at import time (CLAUDE.md's own "module-private instance of an exported
-// repository class" shape) — spying on the prototype reaches that already-
-// constructed instance with a plain property assignment, no module
-// re-mocking or `vi.hoisted()` plumbing needed to get at it. Importing the
-// real repository classes does not touch Postgres: `database.service.ts`'s
-// `postgres(...)` client connects lazily on first query, and no test here
-// ever lets the real `create`/`isChannelEnabled` implementation run.
+/**
+ * @file Pure-logic coverage of processNotificationJob's channel
+ * fan-out and retry decision, with both repositories' prototype
+ * methods spied on and `addEmailJob` mocked — starting a real
+ * Worker/Redis/Postgres belongs to
+ * tests/integration/workers/notification.worker.test.ts.
+ */
 import type { Job } from 'bullmq'
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 import type { NewNotification, Notification } from '@/database/models/notification.model'
@@ -32,11 +21,12 @@ vi.mock('@/jobs/email.job', () => ({
   addEmailJob: vi.fn(),
 }))
 
-// `emitNotification` (notification-emitter.service.ts) is a plain exported
-// function, not a class method — there is no prototype for
-// `vi.spyOn(NotificationRepository.prototype, 'create')`'s own pattern to
-// reach, so this is mocked at the module level instead, same as
-// `addEmailJob` immediately above.
+/**
+ * `emitNotification` (notification-emitter.service.ts) is a plain
+ * exported function, not a class method — there is no prototype for a
+ * `vi.spyOn` pattern to reach, so this is mocked at the module level
+ * instead, same as `addEmailJob` immediately above.
+ */
 vi.mock('@/services/notification-emitter.service', () => ({
   emitNotification: vi.fn(),
 }))
@@ -111,6 +101,18 @@ function emailVerificationMessage(to: string): MailMessage {
   }
 }
 
+/**
+ * `vi.spyOn(NotificationRepository.prototype, 'createOnce')` etc., not
+ * `vi.mock('@/repositories/...')`: notification.worker.ts builds its
+ * own module-private `notificationRepository`/`preferenceRepository`
+ * instances at import time, so spying on the prototype reaches that
+ * already-constructed instance with a plain property assignment, no
+ * module re-mocking or `vi.hoisted()` plumbing needed. Importing the
+ * real repository classes does not touch Postgres:
+ * `database.service.ts`'s `postgres(...)` client connects lazily on
+ * first query, and no test here ever lets the real
+ * `create`/`isChannelEnabled` implementation run.
+ */
 describe('processNotificationJob', () => {
   let insertSpy: MockInstance<typeof NotificationRepository.prototype.createOnce>
   let channelEnabledSpy: MockInstance<
@@ -210,9 +212,7 @@ describe('processNotificationJob', () => {
   })
 
   it('does not enqueue an email when the email channel is disabled', async () => {
-    // in_app enabled (first call), email disabled (second call) — same
-    // per-call sequencing `isChannelEnabled` is actually invoked in by
-    // processNotificationJob: in-app is always checked first.
+    // in_app enabled (first call), email disabled (second call) — same per-call sequencing `isChannelEnabled` is actually invoked in by processNotificationJob: in-app is always checked first.
     channelEnabledSpy.mockResolvedValueOnce(true).mockResolvedValueOnce(false)
     insertSpy.mockResolvedValue(mockNotificationRow)
 

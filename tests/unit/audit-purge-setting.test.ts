@@ -1,8 +1,8 @@
-// tests/unit/audit-purge-setting.test.ts
-//
-// audit_logs' trigger lets a DELETE through only in a transaction that set
-// the purge settings. Only the retention purge may set them, so any other
-// file under src/ that names them fails here.
+/**
+ * @file audit_logs' delete trigger only lets a DELETE through inside a
+ * transaction that set the purge settings. Asserts that only
+ * retention.service.ts names them anywhere under src/.
+ */
 import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'

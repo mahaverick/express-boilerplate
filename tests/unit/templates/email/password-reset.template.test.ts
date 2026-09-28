@@ -1,7 +1,7 @@
-// tests/unit/templates/email/password-reset.template.test.ts
-//
-// Pure rendering — no database, no container, no I/O — so this lives under
-// tests/unit/, not tests/integration/ (CLAUDE.md).
+/**
+ * @file Pure rendering — no database, no container, no I/O — so this
+ * lives under tests/unit/, not tests/integration/.
+ */
 import { describe, expect, it } from 'vitest'
 import {
   PASSWORD_RESET_TEMPLATE_KEY,
@@ -84,9 +84,7 @@ describe('renderPasswordResetTemplate', () => {
     })
   })
 
-  // task-3-brief.md: "No token may appear in a subject line." resetUrl is
-  // the one variable in this template that carries the reset token — the
-  // canonical case this rule exists for.
+  // No token may appear in a subject line; resetUrl is the one variable in this template that carries the reset token — the canonical case this rule exists for.
   it('never includes the reset URL in the subject', () => {
     const uniqueToken = 'reset-token-should-never-reach-a-subject-line'
     const rendered = renderPasswordResetTemplate({

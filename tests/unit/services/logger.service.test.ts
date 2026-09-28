@@ -1,11 +1,11 @@
-// tests/unit/services/logger.service.test.ts
-//
-// Exercises pino logger construction via `createPinoLogger`, never the
-// `logger` singleton's own destination — the singleton is memoised off
-// `getEnv()`, so a test that wants a specific format builds its own logger
-// with a capture `destination`. The singleton tests spy on
-// `process.stdout.write`, which is where both the JSON stream and the
-// pino-pretty stream write.
+/**
+ * @file Exercises pino logger construction via `createPinoLogger`,
+ * never the `logger` singleton's own destination — the singleton is
+ * memoised off `getEnv()`, so a test that wants a specific format
+ * builds its own logger with a capture `destination`. The singleton
+ * tests spy on `process.stdout.write`, which is where both the JSON
+ * stream and the pino-pretty stream write.
+ */
 import { Writable } from 'node:stream'
 import { context, trace, TraceFlags } from '@opentelemetry/api'
 import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks'
@@ -22,10 +22,7 @@ import {
 import { requestContextStore } from '@/services/request-context.service'
 import { withMutatedMethod } from '../../helpers/mutate'
 
-// .env.test sets LOG_LEVEL=silent to keep the suite's output readable, but the
-// `logger singleton` block below asserts on what the REAL singleton writes at
-// `info`. Hoisted so it runs before anything calls getEnv(), which memoises
-// the level for the rest of this file.
+// .env.test sets LOG_LEVEL=silent to keep the suite's output readable, but the `logger singleton` block below asserts on what the real singleton writes at `info`; hoisted so it runs before anything calls getEnv(), which memoises the level for the rest of this file.
 vi.hoisted(() => {
   process.env.LOG_LEVEL = 'info'
 })
@@ -130,11 +127,13 @@ describe('createPinoLogger', () => {
         })
       }))
 
-    // Winston-era behaviour: request-context correlation fields must win
-    // over a caller-supplied field of the same name, not merge in whatever
-    // order pino happens to combine the mixin and the log call's own
-    // object. Without mixinMergeStrategy, pino's default merge lets the
-    // logged object's own `requestId` overwrite the mixin's.
+    /**
+     * Request-context correlation fields must win over a caller-supplied
+     * field of the same name, not merge in whatever order pino happens
+     * to combine the mixin and the log call's own object. Without
+     * mixinMergeStrategy, pino's default merge lets the logged object's
+     * own `requestId` overwrite the mixin's.
+     */
     it('the real request context requestId wins over a caller-supplied requestId in meta', () =>
       new Promise<void>((resolve) => {
         const { destination, output } = captureDestination()
@@ -205,12 +204,14 @@ describe('createPinoLogger', () => {
   })
 
   describe('the err key', () => {
-    // pino's own default `err` serializer re-processes whatever is already
-    // under `err` into `{ type, message, stack }` — so serializeErrors's
-    // { name, message, stack } (from an Error instance) gets run through it
-    // a second time, landing as `{ type: 'Object', message, stack, name }`.
-    // The `err` key must instead pass through serializeErrors's output
-    // untouched.
+    /**
+     * pino's own default `err` serializer re-processes whatever is
+     * already under `err` into `{ type, message, stack }` — so
+     * serializeErrors's `{ name, message, stack }` (from an Error
+     * instance) would otherwise be run through it a second time,
+     * landing as `{ type: 'Object', message, stack, name }`. The `err`
+     * key must instead pass through serializeErrors's output untouched.
+     */
     it('does not re-serialize err through pino default serializer, and carries no type key', () =>
       new Promise<void>((resolve) => {
         const { destination, output } = captureDestination()
@@ -433,10 +434,7 @@ describe('serializeErrors redacts a query error, direct or nested as a cause', (
     const { destination, output } = captureDestination()
     const log = createPinoLogger({ level: 'error', format: 'json', destination })
     const cyclic: Error & { cause?: unknown } = new Error('a')
-    // Not `cyclic.cause = cyclic`: unicorn/no-error-property-assignment
-    // forbids assigning `cause` directly on a known Error variable.
-    // defineProperty reaches the same self-referential shape without
-    // tripping that rule.
+    // Not `cyclic.cause = cyclic`: unicorn/no-error-property-assignment forbids assigning `cause` directly on a known Error variable; defineProperty reaches the same self-referential shape without tripping that rule.
     Object.defineProperty(cyclic, 'cause', {
       value: cyclic,
       enumerable: true,
@@ -502,12 +500,15 @@ describe('loggerOptionsFromEnv', () => {
 })
 
 describe('logger singleton', () => {
-  // Exercises the real `logger.info/warn/error/debug` bodies — `getLogger()`,
-  // the `isLevelEnabled()` guard, and `getCallerSource()`'s two-frame skip
-  // (its own frame, then the `Object.info`/`Object.warn`/... wrapper frame
-  // inside logger.service.ts) — through the actual singleton rather than a
-  // mock standing in for it. The mock-and-assert-it-was-called version this
-  // replaced never ran any of that code.
+  /**
+   * Exercises the real `logger.info/warn/error/debug` bodies —
+   * `getLogger()`, the `isLevelEnabled()` guard, and
+   * `getCallerSource()`'s two-frame skip (its own frame, then the
+   * `Object.info`/`Object.warn`/... wrapper frame inside
+   * logger.service.ts) — through the actual singleton rather than a
+   * mock standing in for it, so this exercises real code, not a
+   * mock-and-assert-it-was-called shape.
+   */
   it('info writes a formatted line naming this test file as the source', () =>
     new Promise<void>((resolve) => {
       const output = captureStdout()
@@ -550,18 +551,22 @@ describe('logger singleton', () => {
 })
 
 describe('trace-id correlation', () => {
-  // OTEL is not active in this test run — .env.test (tests/helpers/setup-global.ts)
-  // never sets OTEL_EXPORTER_OTLP_ENDPOINT, so src/observability/tracing.ts's
-  // own NodeSDK is never started for this suite. But `trace.getActiveSpan()`
-  // (requestContextFields, logger.service.ts) reads OTel's GLOBAL context
-  // manager, not anything tracing.ts owns — so this describe block registers
-  // its own, real `AsyncLocalStorageContextManager` (the same context-manager
-  // package tracing.ts's NodeSDK would use) to exercise both branches of the
-  // mixin without starting a full SDK: `context.with(trace.setSpan(...))`
-  // makes a span active for the span-present test below, and simply not
-  // entering that context (as here) leaves none active, so
-  // `trace.getActiveSpan()` returns undefined for a reason specific to this
-  // call site, not because no context manager exists at all.
+  /**
+   * OTEL is not active in this test run — .env.test
+   * (tests/helpers/setup-global.ts) never sets
+   * OTEL_EXPORTER_OTLP_ENDPOINT, so src/observability/tracing.ts's own
+   * NodeSDK is never started for this suite. But `trace.getActiveSpan()`
+   * (requestContextFields, logger.service.ts) reads OTel's global
+   * context manager, not anything tracing.ts owns — so this describe
+   * block registers its own, real `AsyncLocalStorageContextManager`
+   * (the same context-manager package tracing.ts's NodeSDK would use)
+   * to exercise both branches of the mixin without starting a full SDK:
+   * `context.with(trace.setSpan(...))` makes a span active for the
+   * span-present test below, and simply not entering that context (as
+   * here) leaves none active, so `trace.getActiveSpan()` returns
+   * undefined for a reason specific to this call site, not because no
+   * context manager exists at all.
+   */
   beforeAll(() => {
     expect(context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable())).toBe(
       true
@@ -592,9 +597,7 @@ describe('trace-id correlation', () => {
       const { destination, output } = captureDestination()
       const log = createPinoLogger({ level: 'info', format: 'json', destination })
 
-      // trace.wrapSpanContext gives a real, minimal Span backed by exactly
-      // the ids chosen here, so the assertion below is exact-string equality
-      // against a known value — not merely "matches the shape of an id".
+      // trace.wrapSpanContext gives a real, minimal Span backed by exactly the ids chosen here, so the assertion below is exact-string equality against a known value — not merely "matches the shape of an id".
       const spanContext = {
         traceId: '0af7651916cd43dd8448eb211c80319c',
         spanId: 'b7ad6b7169203331',

@@ -1,7 +1,8 @@
-// tests/unit/scripts/platform-grant.test.ts
-//
-// Argument parsing for `pnpm platform:grant -- <email> <role>`. Importing
-// the script does not run it: it acts only when it is the entry module.
+/**
+ * @file Argument parsing for `pnpm platform:grant -- <email> <role>`.
+ * Importing the script does not run it: it acts only when it is the
+ * entry module.
+ */
 import { describe, expect, it } from 'vitest'
 import { parseGrantArguments } from '@/scripts/platform-grant'
 

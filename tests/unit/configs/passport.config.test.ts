@@ -1,34 +1,11 @@
-// tests/unit/configs/passport.config.test.ts
-//
-// Covers the branches google-oauth.test.ts/google-oauth-disabled.test.ts
-// cannot reach through the HTTP layer:
-//
-//   - `configurePassport()`'s own early-return and throw branches. Both
-//     integration files only ever exercise `configurePassport()` INDIRECTLY,
-//     through `auth.routes.ts`'s `if (isGoogleOAuthEnabled()) configurePassport()`
-//     guard (auth.routes.ts:131) — so the "GOOGLE_CLIENT_ID unset" case never
-//     calls `configurePassport()` at all, and the "id set, secret unset"
-//     case has no way to arise through that guard (the guard only checks the
-//     id). Both are called directly here instead.
-//   - `passthroughGoogleProfile`, the strategy's verify function. Nothing in
-//     this suite completes a real Google OAuth round-trip (google-oauth.test.ts's
-//     own header comment: "nothing in this test ever calls Google"), so
-//     Passport never invokes it. `configurePassport()` registers it as
-//     `_verify` on the strategy instance passport-oauth2 constructs
-//     (verified by reading passport-oauth2/lib/strategy.js: `this._verify =
-//     verify` — unwrapped, not re-bound), so retrieving the registered
-//     strategy off the shared `passport` singleton and invoking `_verify`
-//     directly is the one way to reach it without a real Google redirect.
-//   - `createOAuthSessionMiddleware()`'s catch branch: `getRedis()` rejecting
-//     must call `next(error)` and clear the cached promise so a later
-//     request can retry, per this file's own header comment on why a failed
-//     attempt must never poison one after it.
-//
-// getEnv() is mocked as a vi.fn() (not a fixed-return factory):
-// configurePassport() calls getEnv() fresh on every invocation, so a
-// per-test mockReturnValue takes effect without needing vi.resetModules()
-// (and the live postgres pool leak that carries — tests/helpers/mutate.ts's
-// own header comment).
+/**
+ * @file Covers branches
+ * google-oauth.test.ts/google-oauth-disabled.test.ts cannot reach
+ * through the HTTP layer. getEnv() is mocked as a `vi.fn()` rather than
+ * a fixed-return factory, since configurePassport() calls it fresh on
+ * every invocation, so a per-test `mockReturnValue` takes effect
+ * without `vi.resetModules()`.
+ */
 import passport from 'passport'
 import type { VerifyCallback } from 'passport-google-oauth20'
 import { describe, expect, it, vi } from 'vitest'
@@ -126,6 +103,14 @@ function registeredVerifyCallback(): StrategyVerify {
   return strategy._verify
 }
 
+/**
+ * configurePassport()'s own early-return and throw branches: both
+ * integration files only ever exercise it indirectly, through
+ * auth.routes.ts's `isGoogleOAuthEnabled()` guard. Below also covers
+ * passthroughGoogleProfile, the strategy's verify function, reached
+ * here by pulling `_verify` off the registered strategy instance
+ * rather than a real Google redirect.
+ */
 describe('configurePassport', () => {
   it('is a no-op when GOOGLE_CLIENT_ID is absent', () => {
     vi.mocked(getEnv).mockReturnValue({
@@ -170,9 +155,7 @@ describe('configurePassport', () => {
     ).toBeDefined()
   })
 
-  // The pass-through verify function: no database lookup, `done` called
-  // with the raw profile unchanged — this file's own header comment
-  // explains why that policy decision belongs to a later route, not here.
+  // The pass-through verify function: no database lookup, `done` called with the raw profile unchanged — that policy decision belongs to a later route, not here.
   it('passthroughGoogleProfile hands the raw profile straight to done, with no error', () => {
     vi.mocked(getEnv).mockReturnValue({
       ...baseEnv,
@@ -210,12 +193,14 @@ describe('createOAuthSessionMiddleware', () => {
     expect(next).toHaveBeenCalledTimes(1)
     expect(next).toHaveBeenCalledWith(expect.any(Error))
 
-    // The cached promise must have been cleared, not left rejected forever
-    // — otherwise every later request through this same middleware instance
-    // would fail immediately without ever calling getRedis() again. Proven
-    // by making the second attempt reject too (rather than succeed, which
-    // would need a real RedisStore) and confirming getRedis() was called a
-    // SECOND time rather than reusing the first rejected promise.
+    /**
+     * The cached promise must have been cleared, not left rejected forever
+     * — otherwise every later request through this same middleware
+     * instance would fail immediately without calling getRedis() again.
+     * Proven by making the second attempt reject too (succeeding would
+     * need a real RedisStore) and confirming getRedis() was called a
+     * second time rather than reusing the first rejected promise.
+     */
     vi.mocked(getRedis).mockRejectedValueOnce(new Error('still unreachable'))
     const secondNext = vi.fn()
     await middleware(

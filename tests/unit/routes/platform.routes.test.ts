@@ -1,7 +1,7 @@
-// tests/unit/routes/platform.routes.test.ts
-//
-// The role gate must run before the limiter: a limiter first would put
-// RateLimit-* headers on the non-staff 404 and reveal the route.
+/**
+ * @file The role gate must run before the limiter: a limiter first would
+ * put RateLimit-* headers on the non-staff 404 and reveal the route.
+ */
 import type { RequestHandler, Router } from 'express'
 import { describe, expect, it } from 'vitest'
 import { createPlatformRouter } from '@/routes/platform.routes'

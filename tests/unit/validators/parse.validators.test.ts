@@ -1,14 +1,12 @@
-// tests/unit/validators/parse.validators.test.ts
-//
-// parseBody's own behaviour needs no database — this lives under
-// tests/unit/, not tests/integration/ (see CLAUDE.md on why a DB-dependent
-// test must never live under tests/unit/; this one simply isn't one).
-//
-// The `.strict()` schema below is throwaway, defined only for this test. No
-// production schema in this codebase uses `.strict()` — see
-// profile.validators.ts's header comment for why a plain allow-list was
-// chosen there instead — but the option must actually work for whoever
-// reaches for it next, which is exactly what this test proves.
+/**
+ * @file parseBody's own behaviour needs no database, so this lives
+ * under tests/unit/, not tests/integration/. The `.strict()` schema
+ * below is throwaway, defined only for this test — no production schema
+ * in this codebase uses `.strict()` (see profile.validators.ts's header
+ * comment for why a plain allow-list was chosen there instead), but the
+ * option must actually work for whoever reaches for it next, which is
+ * what this test proves.
+ */
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { HttpError } from '@/errors/http-error'
@@ -40,8 +38,7 @@ describe('parseBody', () => {
     expect(error.statusCode).toBe(400)
     const errors = error.errors as Record<string, string[]>
     expect(errors.name).toEqual(['Name is required.'])
-    // No schema-level issue exists here — the additive key must not appear
-    // when there is nothing for it to carry.
+    // No schema-level issue exists here — the additive key must not appear when there is nothing for it to carry.
     expect(errors.formErrors).toBeUndefined()
   })
 
@@ -51,11 +48,13 @@ describe('parseBody', () => {
     const error = captureRejection(strictSchema, { name: 'Ada', extra: 'not allowed' })
 
     expect(error.statusCode).toBe(400)
-    // Before this fix, this schema's only issue is a root-level one with no
-    // field to attach to, and parseBody discarded it entirely — the client
-    // would have received `errors: {}`, indistinguishable from a validator
-    // bug. This is the property that must not regress: a `.strict()`
-    // rejection is client-visible, and names the offending key.
+    /**
+     * A `.strict()` schema's only issue here is a root-level one with no
+     * field to attach to. If parseBody discarded it, the client would
+     * receive `errors: {}`, indistinguishable from a validator bug. This
+     * is the property that must not regress: a `.strict()` rejection is
+     * client-visible, and names the offending key.
+     */
     const errors = error.errors as { formErrors?: string[] }
     expect(errors.formErrors).toBeDefined()
     expect(errors.formErrors?.length).toBeGreaterThan(0)

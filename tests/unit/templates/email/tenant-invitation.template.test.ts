@@ -1,6 +1,6 @@
-// tests/unit/templates/email/tenant-invitation.template.test.ts
-//
-// Pure rendering: no database, no container, no I/O.
+/**
+ * @file Pure rendering: no database, no container, no I/O.
+ */
 import { describe, expect, it } from 'vitest'
 import {
   renderTenantInvitationTemplate,

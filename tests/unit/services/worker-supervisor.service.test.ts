@@ -1,7 +1,8 @@
-// tests/unit/services/worker-supervisor.service.test.ts
-//
-// The supervisor's replacement rules, with the Workers and the queue module
-// mocked. The real outage path is tests/integration/workers/worker-outage.test.ts.
+/**
+ * @file The supervisor's replacement rules, with the Workers and the
+ * queue module mocked. The real outage path is
+ * tests/integration/workers/worker-outage.test.ts.
+ */
 import type { Worker } from 'bullmq'
 import type IORedis from 'ioredis'
 import { afterEach, describe, expect, it, vi } from 'vitest'

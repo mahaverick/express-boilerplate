@@ -1,27 +1,11 @@
-// tests/unit/controllers/tenant.controller.test.ts
-//
-// Covers the branches tests/integration/api/tenant.test.ts cannot reach
-// through the HTTP layer — every one of them a defensive check the file's
-// own header comment (and each function's own comment) describes as
-// unreachable through a correctly-wired route:
-//
-//   - `authenticatedUserId`'s 401 (mirrors profile.controller.test.ts's own
-//     version): `tenant.routes.ts` mounts `requireAuth` router-wide, so
-//     `request.user` is always set by the time any handler here runs.
-//   - `tenantPrincipal`'s 404: every `/tenants/:slug/...` route mounts
-//     `resolveTenant` ahead of its handler, so `request.principal` is
-//     always set too.
-//   - `targetUserIdParameter`'s 400: a plain `:userId` path segment can
-//     never actually parse as `string[] | undefined` — Express's own
-//     `ParamsDictionary` typing allows it only for a route pattern this
-//     codebase does not use. Reaching it needs a param object Express
-//     itself would never build.
-//
-// Every case below calls a `tenantController` handler directly, the same
-// technique tests/unit/controllers/profile.controller.test.ts already
-// establishes, rather than routing through `createApp()` — no database
-// import is reached by doing this: every branch here throws (or returns)
-// before any service call.
+/**
+ * @file Covers the branches tests/integration/api/tenant.test.ts
+ * cannot reach through the HTTP layer, every one a defensive check
+ * unreachable through a correctly-wired route. Every case below calls
+ * a `tenantController` handler directly rather than routing through
+ * `createApp()` — no database import is reached by doing this, since
+ * every branch here throws or returns before any service call.
+ */
 import type { NextFunction, Request, Response } from 'express'
 import { describe, expect, it, vi } from 'vitest'
 import { tenantController } from '@/controllers/tenant.controller'
@@ -52,6 +36,7 @@ const authenticatedPrincipal: RequestPrincipal = {
   access: 'member',
 }
 
+// `tenant.routes.ts` mounts `requireAuth` router-wide, so `request.user` is always set by the time any handler here runs — reaching this 401 needs a direct call, bypassing routing entirely.
 describe('authenticatedUserId (via listTenants)', () => {
   it('forwards a 401 HttpError to next() when request.user is unset', async () => {
     const { next, lastCallArgument } = mockNext()
@@ -67,6 +52,7 @@ describe('authenticatedUserId (via listTenants)', () => {
   })
 })
 
+// Every `/tenants/:slug/...` route mounts `resolveTenant` ahead of its handler, so `request.principal` is always set too — reaching this 404 needs a direct call, bypassing routing entirely.
 describe('tenantPrincipal (via listMembers)', () => {
   it('forwards a 404 HttpError to next() when request.principal is unset', async () => {
     const { next, lastCallArgument } = mockNext()
@@ -82,6 +68,7 @@ describe('tenantPrincipal (via listMembers)', () => {
   })
 })
 
+// A plain `:userId` path segment can never actually parse as `string[] | undefined` under this codebase's route patterns; reaching this 400 needs a param object Express itself would never build.
 describe('targetUserIdParameter (via updateMemberRole)', () => {
   it('forwards a 400 HttpError to next() when :userId is not a single string — a routing bug, not a real request shape', async () => {
     const { next, lastCallArgument } = mockNext()

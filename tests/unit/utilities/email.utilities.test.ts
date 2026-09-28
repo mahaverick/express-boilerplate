@@ -1,4 +1,3 @@
-// tests/unit/utilities/email.utilities.test.ts
 import { describe, expect, it } from 'vitest'
 import { emailDomain, hostnameDomain } from '@/utilities/email.utilities'
 

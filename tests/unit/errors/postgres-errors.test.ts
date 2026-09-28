@@ -1,8 +1,7 @@
-// tests/unit/errors/postgres-errors.test.ts
-//
-// isUniqueViolation's own behaviour needs no database — pure logic over
-// constructed error objects, same reasoning tests/unit/validators/
-// parse.validators.test.ts gives for living under tests/unit/.
+/**
+ * @file isUniqueViolation's own behaviour needs no database — pure logic
+ * over constructed error objects.
+ */
 import { DrizzleQueryError } from 'drizzle-orm'
 import postgres from 'postgres'
 import { describe, expect, it } from 'vitest'

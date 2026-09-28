@@ -1,9 +1,9 @@
-// tests/unit/middlewares/request-context.middleware.test.ts
-//
-// No Express app, no Docker — just the middleware function and the store it
-// populates, called directly the way content-type.middleware.test.ts and
-// error.middleware.test.ts call their middlewares (see CLAUDE.md on why a
-// Docker-dependent test must never live under tests/unit/).
+/**
+ * @file No Express app, no Docker — just the middleware function and the
+ * store it populates, called directly the way
+ * content-type.middleware.test.ts and error.middleware.test.ts call
+ * their middlewares.
+ */
 import { type Request } from 'express'
 import { describe, expect, it } from 'vitest'
 import { requestContext } from '@/middlewares/request-context.middleware'

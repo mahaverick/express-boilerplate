@@ -1,9 +1,10 @@
-// tests/unit/controllers/base.controller.test.ts
-//
-// `handle()` is every controller's error path. Express 5 would forward a
-// rejected promise on its own; these pin the wrapper's own contract: sync
-// and async failures reach `next`, a failure after headers were sent still
-// reaches `next` without a second write, and success never calls `next`.
+/**
+ * @file `handle()` is every controller's error path. Express 5 would
+ * forward a rejected promise on its own; these pin the wrapper's own
+ * contract: sync and async failures reach `next`, a failure after
+ * headers were sent still reaches `next` without a second write, and
+ * success never calls `next`.
+ */
 import type { NextFunction, Request, Response } from 'express'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { BaseController, type Handler } from '@/controllers/base.controller'
