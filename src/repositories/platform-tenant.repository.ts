@@ -1,8 +1,8 @@
-// src/repositories/platform-tenant.repository.ts
-//
-// Staff-only, cross-tenant reads. Only `services/platform-*.service.ts` may
-// import this file (an eslint rule); every query excludes the platform
-// tenant and soft-deleted tenants.
+/**
+ * @file Staff-only, cross-tenant reads. Only `services/platform-*.service.ts` may
+ * import this file (an eslint rule); every query excludes the platform tenant and
+ * soft-deleted tenants.
+ */
 import { and, count, eq, isNull, sql, type SQL } from 'drizzle-orm'
 import type { TenantLifecycleState } from '@/constants/tenant.constants'
 import { tenantModel } from '@/database/models/tenant.model'
@@ -84,9 +84,7 @@ export class PlatformTenantRepository {
         sql`(lower(${tenantModel.name}), ${tenantModel.id}) > (${options.cursor.sortName}, ${options.cursor.id})`
       )
     }
-    // Live members only, matching `UserMembershipRepository.listByTenant`. A
-    // correlated subquery built with a join, so drizzle qualifies every
-    // column: the outer select has one table and renders its columns bare.
+    // Built with a join so drizzle qualifies its columns; the one-table outer select renders them bare.
     const liveMembers = executor
       .select({ count: count() })
       .from(userMembershipModel)

@@ -1,30 +1,8 @@
-// src/repositories/base.repository.ts
-//
-// Generic over the Drizzle table's *config* type, not over query-builder
-// mechanics — a deliberate, narrower shape than "just parameterize
-// db.select().from()". `PgSelectBuilder.from()` (drizzle-orm 0.45.2) types
-// its parameter as a DEFERRED conditional —
-// `TableLikeHasEmptySelection<TFrom> extends true ? DrizzleTypeError<...>
-// : TFrom` — and TypeScript cannot assign an unresolved generic type
-// parameter to a conditional type it cannot yet reduce. This is not
-// specific to this file's design: the minimal possible repro,
-// `function f<T extends PgTable>(t: T) { return db.select().from(t) }`,
-// fails with the identical TS2345 in this drizzle-orm version. The same
-// deferred-conditional problem breaks a generic `.update(table).set(...)`
-// and `.returning()`'s result type for the same reason.
-//
-// So this class does NOT call `db.select()/.insert()/.update()` itself.
-// It owns policy — which condition to query with (soft-delete visibility),
-// what to write on every mutation (`updatedAt`), and how to translate a
-// unique-violation — and delegates the four actual Drizzle chains to
-// `protected abstract` primitives that a subclass implements against its
-// own CONCRETE table (e.g. `userModel`, a literal type, not a generic type
-// parameter — where every one of the conditional types above resolves
-// normally). That subclass is still constrained to return this class's
-// `InferSelectModel`/`InferInsertModel` types, so it cannot silently drift
-// from the shape this class computes from the table config — the split is
-// between *which query to run* (subclass) and *whether the row qualifies /
-// what non-column-specific writes every mutation gets* (base).
+/**
+ * @file `BaseRepository`: soft-delete visibility, `updatedAt` maintenance and
+ * unique-violation translation, shared by every repository whose table has
+ * `id`, `deletedAt` and `updatedAt`.
+ */
 import {
   and,
   eq,
@@ -59,17 +37,14 @@ export type SoftDeletableTableConfig = TableConfig & {
 export interface SoftDeleteOptions {
   /**
    * When true, a row with `deletedAt` set is still visible. Defaults to
-   * false — the entire point of soft delete is that a deleted row behaves
-   * like it does not exist unless a caller explicitly asks otherwise.
+   * false, so a deleted row behaves as if it did not exist.
    */
   includeDeleted?: boolean
 }
 
 /**
- * A write payload with `updatedAt` attached. Every mutation goes through
- * `BaseRepository.touched`, so a subclass's `updateOne`/`markDeleted`
- * signature can require exactly this — not a hand-rolled shape that could
- * quietly omit the timestamp bump on one code path.
+ * A write payload with `updatedAt` attached by `BaseRepository.touched`, so a
+ * subclass's `updateOne` cannot be handed a payload that skips the bump.
  */
 export type Touched<TValues> = TValues & { updatedAt: SQL }
 
@@ -82,18 +57,20 @@ export type Touched<TValues> = TValues & { updatedAt: SQL }
  *   (see `UserRepository.findByEmail`) — unless explicitly requested.
  * - `updatedAt` maintenance: every `update` and `softDelete` bumps it,
  *   via `touched`, so no call site can forget.
- * - Translating a Postgres unique-violation (23505) into `HttpError(409)`.
- *   A repository method that skipped this would let a duplicate-email
- *   insert reach the client as a raw driver error — a 500 instead of the
- *   409 a controller needs to say "that address is taken".
+ * - Translating a Postgres unique-violation (23505) from `create` and
+ *   `update` into `HttpError(409)`, instead of a raw driver error and a 500.
  *
  * A subclass supplies the four concrete Drizzle chains (`selectOne`,
- * `insertOne`, `updateOne`, `markDeleted`) against its own table; see this
- * file's header comment for why that split exists.
+ * `insertOne`, `updateOne`, `markDeleted`) against its own concrete table.
+ * This class cannot run them generically: in drizzle-orm 0.45.2
+ * `PgSelectBuilder.from()` types its parameter as a deferred conditional, so
+ * `function f<T extends PgTable>(t: T) { return db.select().from(t) }` fails
+ * with TS2345, and `.update(table).set()` and `.returning()` break the same
+ * way. The subclass still returns this class's inferred row types.
  */
 export abstract class BaseRepository<TConfig extends SoftDeletableTableConfig> {
   /**
-   * @param table - The Drizzle table this repository queries. Held only for column references (`.id`, `.deletedAt`) used to build conditions — never passed to a Drizzle query-builder method generically; see this file's header comment.
+   * @param table - The Drizzle table this repository queries. Held only for column references (`.id`, `.deletedAt`) used to build conditions, never passed to a query builder.
    */
   protected constructor(protected readonly table: PgTableWithColumns<TConfig>) {}
 
@@ -117,15 +94,10 @@ export abstract class BaseRepository<TConfig extends SoftDeletableTableConfig> {
   }
 
   /**
-   * Combine a match condition with soft-delete visibility. Every lookup —
-   * `findById` here, or a subclass's own (e.g. `findByEmail`) — should build
-   * its condition through this method rather than appending
-   * `isNull(deletedAt)` by hand at each call site: a lookup that forgot
-   * would let a soft-deleted row keep matching, which for a user record
-   * means a "deleted" account that can still log in. Takes the same
-   * `SoftDeleteOptions` object every public method already receives, rather
-   * than a bare boolean, so a call site reads `scope(condition, options)`
-   * instead of an unlabelled `true`/`false`.
+   * Combine a match condition with soft-delete visibility. Every lookup
+   * builds its condition through this rather than appending
+   * `isNull(deletedAt)` by hand: a lookup that forgot would let a
+   * soft-deleted user keep matching, and so keep logging in.
    * @param condition - The match condition, e.g. a primary key or unique-column comparison.
    * @param options - Soft-delete visibility options.
    * @returns The combined condition, ready for a subclass's `.where()`.
@@ -135,10 +107,8 @@ export abstract class BaseRepository<TConfig extends SoftDeletableTableConfig> {
   }
 
   /**
-   * Attach a database-side `updatedAt = now()` to a write payload. `now()`
-   * is evaluated by Postgres, not read from the application's clock, so a
-   * bump can never disagree with the server that actually timestamps the
-   * row.
+   * Attach a database-side `updatedAt = now()` to a write payload, evaluated
+   * by Postgres rather than the application's clock.
    * @param values - The columns a write is changing.
    * @returns The same values with `updatedAt` attached.
    */

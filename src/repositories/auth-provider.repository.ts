@@ -1,13 +1,8 @@
-// src/repositories/auth-provider.repository.ts
-//
-// Deliberately does NOT extend BaseRepository — but NOT because the 23505
-// concern BaseRepository exists to handle doesn't apply here. It does: see
-// `create` below. The only reason this class can't extend it is that
-// `auth_providers` has `updatedAt` but no `deletedAt`
-// (`SoftDeletableTableConfig`, base.repository.ts, requires both), and this
-// table has no soft-delete concept to justify adding one — an unlinked
-// provider (were that ever built) would be a hard delete, same as
-// email-log.repository.ts's audit rows.
+/**
+ * @file Query access to `auth_providers`. It does not extend `BaseRepository`,
+ * which requires a `deletedAt` column this table has no use for; `create`
+ * translates a 23505 into a 409 by hand instead.
+ */
 import { and, eq, inArray, isNotNull, ne } from 'drizzle-orm'
 import type { AuthProvider } from '@/constants/auth-provider.constants'
 import {
@@ -63,14 +58,10 @@ export class AuthProviderRepository {
   /**
    * Link one auth method to one user.
    *
-   * Translates a 23505 on `(provider, providerId)` into `HttpError(409)`
-   * rather than letting the raw driver error escape — the same translation
-   * `BaseRepository.create` gives every table that extends it, applied by
-   * hand here since this table cannot (see this file's header comment). A
-   * caller that hits this (e.g. google-auth.service's findOrCreateByGoogle
-   * losing a race between `findByProviderAndId` and this insert for the
-   * same not-yet-linked Google account) should treat it as "already linked"
-   * and re-fetch via `findByProviderAndId`, not as an unexpected failure.
+   * Translates a 23505 on `(provider, providerId)` into `HttpError(409)`, as
+   * `BaseRepository.create` does. A caller that loses a race to link the same
+   * identity should treat it as "already linked" and re-fetch with
+   * `findByProviderAndId`.
    * @param data - The row's initial column values.
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns The inserted row, including its generated `id` and timestamps.
@@ -78,10 +69,6 @@ export class AuthProviderRepository {
   async create(data: NewAuthProvider, executor: DbExecutor = db): Promise<AuthProviderRecord> {
     try {
       const [row] = await executor.insert(authProviderModel).values(data).returning()
-      // insert(...).values(one object).returning() always returns exactly
-      // one row when the insert does not throw; the driver's own types just
-      // cannot express "same length as input" for a single-row insert —
-      // same reasoning as UserRepository.insertOne (user.repository.ts).
       if (row === undefined) throw new HttpError('Insert returned no row', 500)
       return row
     } catch (error) {
@@ -121,8 +108,8 @@ export class AuthProviderRepository {
 
   /**
    * Delete every federated (non-`'email'`) provider row linked to a user,
-   * keeping the `'email'` row — the invariant every live user has one relies on
-   * (auth-provider.model.ts's own header comment).
+   * keeping the `'email'` row, since every live user has one (see
+   * auth-provider.model.ts).
    * @param userId - The user whose federated provider rows are deleted.
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns Resolves once the rows are gone.

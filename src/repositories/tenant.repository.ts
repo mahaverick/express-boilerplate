@@ -1,28 +1,8 @@
-// src/repositories/tenant.repository.ts
-//
-// `findBySlug`/`findActiveBySlug` build their own conditions and go
-// through `this.selectOne` — the same `BaseRepository.scope`-based shape
-// `UserRepository.findByEmail` uses — so neither can drift from
-// `findById`'s soft-delete behaviour.
-//
-// `create` is the one method that is NOT a thin wrapper over
-// `BaseRepository`'s inherited flow: creating a tenant also creates its
-// settings row and its creator's owner membership, atomically, so a
-// failure partway through (e.g. a slug collision) leaves no orphaned
-// tenant with no settings or no owner. It therefore does not call
-// `BaseRepository.create` (nor `TenantSettingsRepository`/
-// `UserMembershipRepository` — see this method's own comment for why) and
-// instead writes all three rows directly against a `withTransaction`
-// handle, mirroring `register()`'s user+auth_provider transaction in
-// auth.service.ts.
-//
-// Overriding `create` still has to satisfy `BaseRepository`'s own
-// (non-abstract) `create(values, ...): Promise<Tenant>` signature — this
-// class's override accepts `CreateTenantInput` (a strict superset of
-// `NewTenant`, adding only `ownerId`, which does not exist as a tenants
-// column) and still returns `Promise<Tenant>`, so it type-checks as a
-// valid override without weakening what a caller of the base type could
-// rely on.
+/**
+ * @file Query access to `tenants`. `create` overrides `BaseRepository.create`: it
+ * takes `CreateTenantInput` (`NewTenant`'s columns plus `ownerId`) and writes the
+ * tenant, its settings row and its owner membership in one transaction.
+ */
 import { and, eq, isNull, sql, type SQL } from 'drizzle-orm'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import {
@@ -48,20 +28,14 @@ import {
 
 /**
  * The columns `TenantRepository.create` accepts for the tenant row itself,
- * plus `ownerId` — the user whose `'owner'` membership row is inserted
- * alongside it. Deliberately narrower than `NewTenant`: `id`, `deletedAt`,
- * `createdAt`, `updatedAt` and `lifecycleState` are never meant to be set
- * by hand on creation (a new tenant is always `active`, with
- * database-generated id/timestamps) — the same reasoning
- * `BaseRepository.update`'s own `Omit<..., 'id' | 'createdAt' |
- * 'updatedAt'>` already applies to every other mutation in this codebase.
+ * plus `ownerId`, the user whose `'owner'` membership row is inserted
+ * alongside it. `id`, `deletedAt`, `createdAt`, `updatedAt` and
+ * `lifecycleState` are left to their database defaults.
  */
 export type CreateTenantInput = Pick<NewTenant, 'name' | 'slug'> &
   Partial<Pick<NewTenant, 'description' | 'logo' | 'website'>> & {
     /**
-     * The user who is creating this tenant. Becomes the tenant's sole
-     * `'owner'` member — see this file's header comment for why this row
-     * is written in the same transaction as the tenant itself.
+     * The user creating this tenant, who becomes its sole `'owner'` member.
      */
     ownerId: string
   }
@@ -69,9 +43,7 @@ export type CreateTenantInput = Pick<NewTenant, 'name' | 'slug'> &
 /**
  * Query access to the `tenants` table: lookup by slug and/or id, atomic
  * creation (tenant + settings + owner membership), and the tenants a given
- * user belongs to. Every lookup excludes a soft-deleted tenant by default —
- * see `BaseRepository.scope`, which every lookup below is built on so none
- * can drift from `findById`'s soft-delete behaviour.
+ * user belongs to. Every lookup excludes a soft-deleted tenant by default.
  */
 export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['config']> {
   /**
@@ -98,29 +70,15 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
 
   /**
    * Find a tenant by slug, but only when it is fully usable: not
-   * soft-deleted AND `lifecycleState === 'active'`. This is the lookup
-   * `resolveTenant` (a later task's middleware) uses to decide whether a
-   * tenant-scoped route even has a tenant to attach — a `suspended` tenant
-   * must 404 here exactly like a nonexistent one, even though its row (and
-   * `findBySlug`'s view of it) is otherwise perfectly intact. Unlike
-   * `findBySlug`, this method takes no `SoftDeleteOptions` — "active" is
-   * not something a caller should ever be able to opt out of; a caller
-   * that needs a suspended/archived tenant's row wants
-   * `findBySlug(slug, { includeDeleted: true })` or a plain `findBySlug`,
-   * not this method with a bypass flag bolted on.
+   * soft-deleted and `lifecycleState === 'active'`. `resolveTenant`
+   * (tenant.middleware.ts) uses it, so a suspended tenant answers 404 like a
+   * missing one. It takes no `SoftDeleteOptions`: a caller that needs a
+   * suspended or archived tenant uses `findBySlug`.
    * @param slug - The slug to search for.
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns The matching tenant, or undefined when no tenant with this slug is both visible and active.
    */
   findActiveBySlug(slug: string, executor: DbExecutor = db): Promise<Tenant | undefined> {
-    // `sql` directly, not `and()`: `and()`'s return type is `SQL |
-    // undefined` (it can receive zero conditions), which `scope`'s
-    // `condition: SQL` parameter does not accept — same reasoning
-    // `UserRepository.findByEmail` (user.repository.ts) already gives for
-    // building its own condition this way. Plain `and` associativity means
-    // no extra parentheses are needed for correctness here, but this file
-    // still combines every multi-condition lookup through `sql` for one
-    // consistent shape.
     return this.selectOne(
       this.scope(sql`${tenantModel.slug} = ${slug} and ${tenantModel.lifecycleState} = 'active'`),
       executor
@@ -157,12 +115,9 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
   }
 
   /**
-   * Every tenant one user belongs to, with the role they hold in each —
-   * the query `GET /tenants` (a later task's controller) runs to list "my
-   * organizations". A soft-deleted tenant is never included, even if the
-   * user's membership row itself still exists (nothing prunes a membership
-   * when its tenant is archived) — the same soft-delete visibility every
-   * other lookup on this table gives.
+   * Every tenant one user belongs to, with the role they hold in each, for
+   * `GET /tenants`. A soft-deleted tenant is excluded even though the user's
+   * membership row still exists: nothing prunes it when the tenant is deleted.
    * @param userId - The user whose tenant memberships to list.
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns One entry per tenant this user is (still visibly) a member of, in no particular guaranteed order.
@@ -180,16 +135,10 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
 
   /**
    * Create a tenant, its settings row, and its creator's `'owner'`
-   * membership, all in one transaction — see this file's header comment
-   * for why the three inserts are written directly against the
-   * transaction's `tx` handle instead of calling
-   * `TenantSettingsRepository`/`UserMembershipRepository`. A failure at any
-   * point (most commonly, `input.slug` colliding with
-   * `tenants_slug_unique`) rolls back all three; nothing this method
-   * returns can exist without its settings row and owner membership also
-   * existing. Delegates to `withTransaction`, which reuses a passed-in
-   * transaction instead of opening a nested one — so a caller composing
-   * this inside its own transaction still gets one atomic unit, not two.
+   * membership, all in one transaction. A failure at any point (most often a
+   * slug colliding with `tenants_slug_unique`) rolls back all three. A passed-in
+   * transaction is reused (`withTransaction`), so a caller's own transaction
+   * stays one atomic unit.
    * @param input - The tenant's initial columns, plus `ownerId` — the user whose owner membership is created alongside it.
    * @param executor - An existing transaction to compose into, or the pool (default) to open a new transaction in.
    * @returns The newly created tenant row (not the settings or membership rows — fetch those separately via `TenantSettingsRepository.findByTenantId`/`UserMembershipRepository.findByUserAndTenant` if needed).
@@ -208,10 +157,6 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
           })
           .returning()
 
-        // Same "cannot happen but guard anyway" reasoning as
-        // UserRepository.insertOne (user.repository.ts): a single-row
-        // insert.returning() that does not throw always returns exactly
-        // one row.
         if (!tenant) throw new HttpError('Insert returned no row', 500)
 
         await tx.insert(tenantSettingsModel).values({ tenantId: tenant.id })
@@ -247,11 +192,8 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
   }
 
   /**
-   * Insert a single tenant. Only reachable through the inherited
-   * `BaseRepository.create` — this class's own `create` (above) bypasses
-   * it entirely — but still required: `insertOne` is `abstract` on
-   * `BaseRepository`, so a concrete subclass must implement it regardless
-   * of whether anything calls it today.
+   * Insert a single tenant. `BaseRepository` declares it abstract; this class's
+   * own `create` does not call it.
    * @param values - The row's initial column values.
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns The inserted tenant.
