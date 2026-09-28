@@ -1,8 +1,9 @@
-// tests/unit/constants/auth.constants.test.ts
-//
-// The refresh cookie's name, path and domain per deployment. __Host- requires
-// Secure, Path=/ and no Domain; __Secure- requires Secure. A plain name has no
-// prefix rules, so COOKIE_DOMAIN still applies to it.
+/**
+ * @file The refresh cookie's name, path and domain per deployment.
+ * __Host- requires Secure, Path=/ and no Domain; __Secure- requires
+ * Secure. A plain name has no prefix rules, so COOKIE_DOMAIN still
+ * applies to it.
+ */
 import { describe, expect, it } from 'vitest'
 // eslint-disable-next-line sonarjs/deprecation -- reads the old cookie name until the next major
 import { LEGACY_REFRESH_TOKEN_COOKIE_NAME, refreshCookieSpec } from '@/constants/auth.constants'
