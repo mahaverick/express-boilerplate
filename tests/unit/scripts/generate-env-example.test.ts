@@ -24,16 +24,16 @@ describe('render', () => {
     expect(output).not.toContain('JWT_REFRESH_SECRET')
   })
 
-  // Three fields that all graduated out of the same "PLACEHOLDER — nothing
-  // reads this yet" note, at three different points in this repo's history,
-  // once something in src/ actually started reading them:
-  // JWT_ACCESS_SECRET earliest (session.service.ts signs/verifies access
-  // tokens with it), then APP_URL and SESSION_SECRET together in this task
-  // (passport.config.ts's `configurePassport()`/`createOAuthSessionMiddleware()`
-  // read them respectively). One parameterized test, not three near-identical
-  // ones (sonarjs/parameterized-tests) — each case still pins its own
-  // `.describe()` text landing in the generated file, not merely that SOME
-  // description exists.
+  /**
+   * A field a real caller reads (session.service.ts for
+   * JWT_ACCESS_SECRET; passport.config.ts's `configurePassport()`/
+   * `createOAuthSessionMiddleware()` for APP_URL/SESSION_SECRET
+   * respectively) must render its real description, never a
+   * "PLACEHOLDER" note. One parameterized test, not several
+   * near-identical ones (sonarjs/parameterized-tests) — each case still
+   * pins its own `.describe()` text landing in the generated file, not
+   * merely that some description exists.
+   */
   it.each([
     { field: 'JWT_ACCESS_SECRET', expectedText: 'Signs and verifies access tokens' },
     {
@@ -69,8 +69,7 @@ describe('render', () => {
     expect(output).toContain('\nAPP_PORT=4040\n')
   })
 
-  // io: 'input' JSON schema drops a stringbool's default (its input is a
-  // string, its default a boolean), which used to render `# WORKER_ENABLED=`.
+  // io: 'input' JSON schema drops a stringbool's default (its input is a string, its default a boolean) — reading the input schema naively would leave this rendered as `# WORKER_ENABLED=`.
   it('renders a z.stringbool() default as its value, uncommented', () => {
     expect(output).toContain('\nWORKER_ENABLED=true\n')
     expect(output).not.toContain('# WORKER_ENABLED=')
