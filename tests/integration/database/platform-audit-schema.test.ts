@@ -1,10 +1,10 @@
-// tests/integration/database/platform-audit-schema.test.ts
-//
-// What migration 0016 built, asserted against the live per-worker database:
-// the seeded platform tenant and its constraints, and audit_logs' CHECKs,
-// append-only trigger (UPDATE and DELETE; TRUNCATE is open) and RESTRICT
-// foreign keys. Raw SQL throughout, so no
-// application check stands in for the database's.
+/**
+ * @file What migration 0016 built, asserted against the live per-worker
+ * database: the seeded platform tenant and its constraints, and
+ * audit_logs' CHECKs, append-only trigger (UPDATE and DELETE; TRUNCATE is
+ * open) and RESTRICT foreign keys. Raw SQL throughout, so no application
+ * check stands in for the database's.
+ */
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import { sql } from '@/services/database.service'
