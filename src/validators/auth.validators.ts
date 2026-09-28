@@ -119,8 +119,9 @@ export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>
  *
  * `currentPassword` carries no policy, as with login: it is verified, not
  * set, so a policy would answer a wrong password under the length floor
- * differently from a wrong one above it, and would reject a real password set under an older
- * policy. `newPassword` goes through `registrationPasswordSchema`.
+ * differently from a wrong one above it, and would reject a real password
+ * set under an older policy. `newPassword` goes through
+ * `registrationPasswordSchema`.
  */
 export const changePasswordSchema = z.object({
   currentPassword: z.string().min(1, 'Current password is required.'),

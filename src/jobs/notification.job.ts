@@ -52,16 +52,16 @@ export interface NotificationJobData {
  * Default BullMQ job options for every notification job, applied by
  * `addNotificationJob` before any caller-supplied `options` override them.
  *
- * `attempts: 3` with exponential backoff: fewer than email's 5, since no
- * mailed link expires while it retries, and enough to ride out a transient
- * database blip.
+ * `attempts: 3` with exponential backoff (2s base). A retry reruns only the
+ * worker's preference reads and `createOnce` (Postgres) and its
+ * `addEmailJob` enqueue (Redis); the SMTP send is the email job's, with that
+ * job's own retries.
  *
  * `removeOnComplete: true`: `email.variables` may carry a raw token, and the
  * in-app row is already in Postgres.
  *
  * `removeOnFail: { age: 3 * 24 * 3600 }`: failed jobs stay 3 days for an
- * operator to inspect `failedReason`, fewer than email's 7, since a
- * notification job has no `email_logs` trail to keep in step with. A token in `email.variables` stays in
+ * operator to inspect `failedReason`. A token in `email.variables` stays in
  * Redis only while retries are pending (`recordPermanentFailure`,
  * job-failure.job.ts).
  */
