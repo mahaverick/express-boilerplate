@@ -1,13 +1,8 @@
-// src/templates/email/registration-attempt.template.ts
-//
-// "Someone tried to register with your email address" — sent to an EXISTING
-// account's owner when a registration attempt targets their address, so the
-// registration endpoint can return its normal success response either way
-// (Task 5 closes the account-enumeration channel this way; this template is
-// the notification half of that fix). Unlike the other two templates, this
-// one carries no token and no URL at all: it is purely informational, which
-// also means "no token may appear in a subject line" is true here by
-// construction rather than by a rule this file has to remember to follow.
+/**
+ * @file The "someone tried to register with your email address" notice, sent
+ * to an existing account's owner so registration can answer the same way for
+ * a free and a taken address. It carries no token and no URL.
+ */
 import {
   escapeHtmlForEmail,
   requireEmailVariables,
@@ -16,20 +11,14 @@ import {
 } from '@/utilities/email-template.utilities'
 
 /**
- * This template's entry in `EMAIL_TEMPLATE_KEYS` (email-template.utilities.ts).
- * `satisfies`, not a `: EmailTemplateKey` annotation — see
- * email-verification.template.ts's own comment on
- * `EMAIL_VERIFICATION_TEMPLATE_KEY` for why: an annotation would widen this
- * to the whole union, which breaks the literal narrowing
- * `mailer.service.ts`'s `MailMessage` discriminated union depends on.
+ * This template's entry in `EMAIL_TEMPLATE_KEYS`. `satisfies`, not an
+ * annotation, so it stays the literal `MailMessage`'s union narrows on.
  */
 export const REGISTRATION_ATTEMPT_TEMPLATE_KEY = 'registration_attempt' satisfies EmailTemplateKey
 
 /**
- * The variables `renderRegistrationAttemptTemplate` needs, all required: a
- * missing one throws rather than rendering `undefined` — see
- * `requireEmailVariables`'s own comment for why that check exists at
- * runtime despite every field already being declared required here.
+ * The variables `renderRegistrationAttemptTemplate` needs. All are required
+ * strings: `requireEmailVariables` rejects anything else at runtime.
  */
 export interface RegistrationAttemptVariables {
   firstName: string
@@ -43,11 +32,7 @@ const REQUIRED_VARIABLE_NAMES: ReadonlyArray<keyof RegistrationAttemptVariables>
 
 /**
  * Render the "someone tried to register with your email" notice: plain-text
- * and HTML parts. No action link is included — there is no token to carry
- * one, deliberately (see this file's own header comment) — so, unlike the
- * other two templates, the plain-text/HTML parity requirement here is just
- * "the same information in both forms," not "the same actionable URL in
- * both forms."
+ * and HTML parts carrying the same information, with no action link.
  * @param variables - firstName/appName — see `RegistrationAttemptVariables`.
  * @returns The rendered subject, text, and HTML, plus this template's key.
  * @throws {Error} When any required variable is missing — see `requireEmailVariables`.
@@ -75,9 +60,6 @@ export function renderRegistrationAttemptTemplate(
     `— The ${appName} team`,
   ].join('\n')
 
-  // Escaped once, into named consts, rather than inline inside the html
-  // template literal below — see email-verification.template.ts's own
-  // comment on this pattern (dodges sonarjs/no-nested-template-literals).
   const escapedFirstName = escapeHtmlForEmail(firstName)
   const escapedAppName = escapeHtmlForEmail(appName)
 
