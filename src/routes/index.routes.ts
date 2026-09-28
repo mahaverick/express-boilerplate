@@ -1,17 +1,8 @@
-// src/routes/index.routes.ts
-//
-// Not a barrel: `index.ts` re-export modules are banned everywhere in this
-// codebase (see CLAUDE.md) because they hide real edges from
-// import-x/no-cycle. This file re-exports nothing — it BUILDS one `Router`
-// and mounts feature routers on it by path prefix, which is what
-// `check-file` allows an "index" file to do (a router, not an aggregating
-// re-export) and is why it lives at `src/routes/index.routes.ts` rather
-// than `src/routes/index.ts`.
-//
-// The single mount point for every versioned feature router. `app.ts`
-// wires this ONE router under `/api/v1`, so a new feature (Task 8's
-// profile router) is one more `router.use(...)` line here, not another
-// `app.use(...)` in app.ts.
+/**
+ * @file The single mount point for every versioned feature router; app.ts
+ * mounts it under `/api/v1`. It builds a router rather than re-exporting, so
+ * it is not a barrel.
+ */
 import { Router } from 'express'
 import { createAuthRouter } from '@/routes/auth.routes'
 import { createInvitationRouter } from '@/routes/invitation.routes'

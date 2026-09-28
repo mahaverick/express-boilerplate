@@ -1,54 +1,32 @@
-// src/utilities/duration.utilities.ts
-//
-// The one module that imports `ms`, for the same reason password.utilities.ts
-// is the one module that imports bcrypt: everything that needs to turn a
-// human-written duration string ("15m", "30d") into milliseconds goes
-// through parseDurationMs, so the one type-level wrinkle below is paid for
-// exactly once rather than at every call site.
-//
-// `ms`'s own published type is a function overload keyed off its own
-// `StringValue` literal union (`` `${number}` `` optionally suffixed with a
-// unit, e.g. "15m"). That type cannot describe an arbitrary,
-// dynamically-supplied `string` — which is exactly what a value read out of
-// `EnvSchema` or passed in at runtime always is — so calling `ms(value)`
-// with a plain `string` fails to type-check under any of its declared
-// overloads. The cast below narrows the imported binding to the signature
-// `ms` actually implements at runtime once, here, with the real safety
-// enforced by checking the RETURN value (a finite, positive number or
-// nothing) rather than trusting the argument's compile-time type. This is
-// the same "third-party type is narrower than its real contract" shape
-// base.repository.ts documents for Drizzle's query builder, resolved the
-// same way: isolate the workaround in one place instead of asserting at
-// every caller.
+/**
+ * @file The one module that imports `ms`: every human-written duration ("15m",
+ * "30d") becomes milliseconds through `parseDurationMs`.
+ */
 import ms from 'ms'
 
+/**
+ * `ms` narrowed to what it does at runtime. Its published overloads accept
+ * only its `StringValue` literal union, never a runtime `string`, so the
+ * cast lives here once and `parseDurationMs` checks the return value instead.
+ */
 const parse: (value: string) => number | undefined = ms as unknown as (
   value: string
 ) => number | undefined
 
 /**
- * The one place this constant is defined. Both `session.service.ts` (to
- * convert `expiresIn` to whole seconds for `jsonwebtoken`) and
- * `session-denylist.service.ts` (to convert a Redis `EX` TTL to whole
- * seconds) needed it, and it lives here — rather than in either of
- * them — for the same reason `requireDurationMs` does: routing it through
- * `session.service.ts` would close an import cycle
- * (`session.service` -> `session-denylist.service` -> `session.service`),
- * and this module has no such dependency, so it stays a leaf.
+ * Milliseconds per second, for session.service.ts (`expiresIn` in seconds)
+ * and session-denylist.service.ts (a Redis `EX` TTL). Here, not in
+ * session.service.ts: that module imports session-denylist.service.ts, so
+ * the reverse import would close a cycle.
  */
 export const MS_PER_SECOND = 1000
 
 /**
  * Parse a duration string (e.g. "15m", "30d", "3600000") into milliseconds.
  *
- * Never throws. `ms()` itself throws only for a non-string or an empty
- * string (its own "not a non-empty string or a valid number" guard) — this
- * function catches that case, and additionally rejects anything `ms()`
- * could not parse (it returns `undefined` for a non-empty string it does
- * not recognise, rather than throwing) and anything that parses to zero or
- * a negative number, which is never a meaningful token lifetime. Every
- * caller therefore has exactly one failure value to check instead of also
- * having to guard against a thrown error.
+ * Never throws: `ms()`'s throw for an empty string is caught, and a value it
+ * cannot parse or that is not a finite positive number is `undefined`, so a
+ * caller has one failure value to check.
  * @param value - The duration string to parse.
  * @returns The parsed duration in milliseconds, or undefined when `value` is not a valid, positive duration.
  */
@@ -65,12 +43,8 @@ export function parseDurationMs(value: string): number | undefined {
  * Resolve a validated TTL string to milliseconds, trusting the invariant
  * `env.config.ts`'s refinement already enforced at boot.
  *
- * Lives here, not in session.service.ts, because
- * `session-denylist.service.ts` needs it too, and session.service.ts
- * imports `denySession` from that service — routing it through
- * session.service.ts would close an import cycle: session.service ->
- * session-denylist.service -> session.service. This module has no such
- * dependency, so it stays a leaf.
+ * Here, not in session.service.ts, for the same import-cycle reason as
+ * `MS_PER_SECOND`.
  * @param value - An `ACCESS_TOKEN_TTL`/`REFRESH_TOKEN_TTL`-shaped value already known to be `ms()`-parseable.
  * @returns The duration in milliseconds.
  * @throws {Error} Only if that boot-time invariant was somehow violated.
@@ -78,10 +52,7 @@ export function parseDurationMs(value: string): number | undefined {
 export function requireDurationMs(value: string): number {
   const parsed = parseDurationMs(value)
   if (parsed === undefined) {
-    // Unreachable in practice: getEnv() already rejects an unparseable TTL
-    // at boot (env.config.ts). Guards the invariant explicitly rather than
-    // asserting it away, so a future change that weakens that refinement
-    // fails loudly here instead of silently signing a token with NaN.
+    // getEnv() rejects this at boot; throwing beats signing a token with NaN.
     throw new Error(`Invalid duration string: "${value}"`)
   }
   return parsed

@@ -1,9 +1,8 @@
-// src/jobs/notification.job.ts
-//
-// The one place a notification job's payload shape and default options are
-// defined — mirrors email.job.ts's own "one place" framing exactly, for the
-// queue notification.worker.ts fans a single job out to two channels
-// (in-app row, email) from.
+/**
+ * @file The one place a notification job's payload shape and default options
+ * are defined. notification.worker.ts fans each job out to an in-app row and,
+ * when present, an email.
+ */
 import { type Job, type JobsOptions } from 'bullmq'
 import type { NotificationType } from '@/constants/notification.constants'
 import { JobPriority } from '@/constants/queue.constants'
@@ -11,24 +10,19 @@ import type { MailMessage } from '@/services/mailer.service'
 import { addJob, getNotificationQueue } from '@/services/queue.service'
 
 /**
- * The payload stored on a notification job. `email` carries the FULL
- * `MailMessage` discriminated union — not decomposed into flat fields — so
- * `notification.worker.ts` can hand it straight to `addEmailJob(email,
- * userId)` with no `as MailMessage` cast anywhere on this path, the same
- * reasoning `EmailJobData` (email.job.ts) already applies to `MailMessage`
- * itself. `email` is optional: a purely in-app notification (no paired
- * email) simply omits it.
+ * The payload stored on a notification job. `email` carries the whole
+ * `MailMessage` union, so notification.worker.ts hands it to `addEmailJob`
+ * with no cast; a purely in-app notification omits it.
  */
 export interface NotificationJobData {
   /**
-   * The notification's owner — whose in-app inbox the row belongs to, and
-   * who `addEmailJob` records the paired email against.
+   * The notification's owner: whose inbox the row belongs to, and who
+   * `addEmailJob` records the paired email against.
    */
   userId: string
   /**
-   * Which notification type this is — governs both the persisted row's
-   * `type` column and which `notification_preferences` row (if any) gates
-   * delivery on each channel.
+   * The notification type: the row's `type`, and which
+   * `notification_preferences` row (if any) gates each channel.
    */
   type: NotificationType
   /**
@@ -41,18 +35,15 @@ export interface NotificationJobData {
   body: string
   /**
    * Opaque, type-specific data to persist alongside the row (e.g. which
-   * template rendered the paired email). MUST NOT carry a `variables` key —
-   * `notification.worker.ts` strips one if present before the database
-   * insert, since a raw verification/reset token lives there, but a caller
-   * should not rely on that as licence to pass it deliberately.
+   * template rendered the paired email). Must not carry a `variables` key,
+   * where a raw token lives; notification.worker.ts strips one before the
+   * insert, but a caller must not rely on that.
    */
   metadata?: Record<string, unknown>
   /**
-   * The paired email to send, if this notification type has one. Passed
-   * through unmodified to `addEmailJob` — never persisted to the
-   * `notifications` table (see `metadata`'s own comment) — so a raw token
-   * inside `email.variables` never reaches Postgres, only the transient
-   * BullMQ job this queue stores it on.
+   * The paired email, if this type has one. Passed unmodified to
+   * `addEmailJob` and never persisted to `notifications`, so a raw token in
+   * `email.variables` never reaches Postgres, only the transient job.
    */
   email?: MailMessage
 }
@@ -61,21 +52,17 @@ export interface NotificationJobData {
  * Default BullMQ job options for every notification job, applied by
  * `addNotificationJob` before any caller-supplied `options` override them.
  *
- * `attempts: 3` with exponential backoff — a notification is not as
- * latency-sensitive as an email (no user-facing token/link expiring while
- * it retries), so a shorter retry budget than `emailJobDefaults`' own 5 is
- * enough to ride out a transient database blip.
+ * `attempts: 3` with exponential backoff (2s base). A retry reruns only the
+ * worker's preference reads and `createOnce` (Postgres) and its
+ * `addEmailJob` enqueue (Redis); the SMTP send is the email job's, with that
+ * job's own retries.
  *
- * `removeOnComplete: true` — same reasoning as `emailJobDefaults`: on
- * success there is nothing in this job's Redis payload worth keeping
- * (`email.variables`, when present, carries a raw token; the in-app row
- * itself already lives durably in Postgres by the time this job completes).
+ * `removeOnComplete: true`: `email.variables` may carry a raw token, and the
+ * in-app row is already in Postgres.
  *
- * `removeOnFail: { age: 3 * 24 * 3600 }` — keep failed jobs for 3 days so an
- * operator can inspect `failedReason`, shorter than email's 7 since a failed
- * notification job has no independent per-recipient audit trail
- * (`email_logs`) the way a failed email job does. `email.variables`' token
- * stays in Redis only while retries are pending (`recordPermanentFailure`,
+ * `removeOnFail: { age: 3 * 24 * 3600 }`: failed jobs stay 3 days for an
+ * operator to inspect `failedReason`. A token in `email.variables` stays in
+ * Redis only while retries are pending (`recordPermanentFailure`,
  * job-failure.job.ts).
  */
 export const notificationJobDefaults: JobsOptions = {
@@ -90,11 +77,8 @@ export const notificationJobDefaults: JobsOptions = {
 }
 
 /**
- * Enqueue a notification job. The job name is the notification's own
- * `type` (e.g. `'verify_email'`) — same "job name = the thing that
- * discriminates handling" convention `addEmailJob` already follows with
- * `message.templateKey`, even though `notification.worker.ts` currently has
- * only one handler regardless of name.
+ * Enqueue a notification job, named by its `type` (for example
+ * `'verify_email'`), as `addEmailJob` names a job by its template key.
  * @param data - The notification's payload — who it's for, what it says, and the optional paired email.
  * @param options - Override default job options.
  * @returns The created job.

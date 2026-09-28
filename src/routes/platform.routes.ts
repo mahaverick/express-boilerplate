@@ -1,7 +1,7 @@
-// src/routes/platform.routes.ts
-//
-// Staff routes, mounted at /api/v1/platform by index.routes.ts. The role
-// gate runs before the limiter: a refused caller must see no RateLimit headers.
+/**
+ * @file Staff routes, mounted at `/api/v1/platform`. The role gate runs before
+ * the limiter, so a refused caller sees no `RateLimit-*` headers.
+ */
 import { Router } from 'express'
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { auditController } from '@/controllers/audit.controller'

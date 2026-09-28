@@ -1,21 +1,18 @@
-// src/validators/safe-text.validators.ts
-//
-// A free-text field this app stores and later renders (a tenant's name,
-// logo URL, website, description; a person's first/last name) must not be
-// able to carry a Unicode control character or a bidi override/isolate —
-// both are invisible-or-misleading in a browser and neither is legitimate
-// in any of these fields. Not every string field gets this: a search
-// query, an opaque cursor, or a token is never rendered back verbatim the
-// way these are, so each call site opts in individually.
-//
-// On the regex shape: a literal control-character escape or range (e.g.
-// `/[\u0000-\u001F]/`) trips `no-control-regex`. `/\p{Cc}/u`, the Unicode
-// property escape for the same character set (U+0000-U+001F and
-// U+007F-U+009F), does not — but it also matches `\n`/`\t`, which a
-// multiline field must allow. Excluding them from the same character class
-// needs the regex `v` flag's set subtraction, which this project's
-// TypeScript target does not support, so a copy of the string has
-// `\n`/`\t` stripped before the control-character test instead.
+/**
+ * @file `safeText`, the refinement for free-text fields this app stores and
+ * later renders (tenant name, logo URL, website, description; a person's
+ * names): no Unicode control characters and no bidi override or isolate, both
+ * invisible or misleading in a browser. A search query, cursor or token is
+ * never rendered back, so each field opts in.
+ */
+
+/**
+ * Unicode `Cc` (U+0000-U+001F, U+007F-U+009F), written as a property escape
+ * because a literal range trips `no-control-regex`. It also matches `\n` and
+ * `\t`; excluding them in the class needs the `v` flag, which this project's
+ * TypeScript target lacks, so a multiline value has them stripped before the
+ * test instead.
+ */
 const FORBIDDEN_CONTROL = /\p{Cc}/u
 const BIDI_OVERRIDE = /[\u{202A}-\u{202E}\u{2066}-\u{2069}]/u
 const MULTILINE_ALLOWED = /[\n\t]/g

@@ -1,9 +1,9 @@
-// src/scripts/platform-grant.ts
-//
-// `pnpm platform:grant -- <email> <role>`: give an existing, verified user a
-// role in the platform tenant, audited as a system grant. The way to make
-// the first platform owner, since nobody can invite before one exists.
-// Prints the outcome only; never a token or a hash.
+/**
+ * @file `pnpm platform:grant -- <email> <role>`: give an existing, verified
+ * user a role in the platform tenant, audited as a system grant. The way to
+ * make the first platform owner, since nobody can invite before one exists.
+ * Prints the outcome only, never a token or a hash.
+ */
 import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
 import { MEMBERSHIP_ROLES, type MembershipRole } from '@/constants/tenant.constants'
@@ -56,7 +56,6 @@ export async function runPlatformGrant(argv: readonly string[]): Promise<number>
   }
 }
 
-// Only when run directly, never when a test imports this module.
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   process.exitCode = await runPlatformGrant(process.argv.slice(2))
   await closeDatabase()

@@ -1,10 +1,8 @@
-// src/middlewares/request-context.middleware.ts
-//
-// Wraps each request in the AsyncLocalStorage context
-// request-context.service.ts owns, so logger.service.ts can attach the
-// request id to every log line — including from code with no `Request`
-// object in scope. Must run immediately after requestId: it reads
-// `request.id`.
+/**
+ * @file Wraps each request in request-context.service.ts's AsyncLocalStorage
+ * context, so logger.service.ts can attach the request id to every log line,
+ * even from code with no `Request` in scope.
+ */
 import { type NextFunction, type Request, type Response } from 'express'
 import { requestContextStore, type RequestContext } from '@/services/request-context.service'
 

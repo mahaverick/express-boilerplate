@@ -1,8 +1,8 @@
-// src/jobs/maintenance.job.ts
-//
-// The maintenance queue's schedule: the retention purge, daily at 03:00 UTC.
-// The scheduler lives in Redis under REDIS_KEY_PREFIX, so every replica that
-// upserts it shares one schedule.
+/**
+ * @file The maintenance queue's schedule: the retention purge, daily at 03:00
+ * UTC. The scheduler lives in Redis under `REDIS_KEY_PREFIX`, so every replica
+ * that upserts it shares one schedule.
+ */
 import type { JobSchedulerTemplateOptions } from 'bullmq'
 import { getMaintenanceQueue } from '@/services/queue.service'
 

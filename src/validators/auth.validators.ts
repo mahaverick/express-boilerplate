@@ -1,39 +1,10 @@
-// src/validators/auth.validators.ts
-//
-// Registration and login share an email schema but deliberately NOT a
-// password schema. Registration's password goes through a real policy (a
-// length floor as a weak-password guard, and a byte ceiling — see below).
-// Login's does not: a login attempt with a too-short or too-long password
-// must fail with the exact same "invalid credentials" response as a wrong
-// password for a real account (auth.service.ts's identical-error
-// property), and routing it through a DIFFERENT validation error first
-// would leak that distinction back to an unauthenticated caller before
-// login ever gets a chance to make the two paths agree.
-//
-// The byte ceiling on registration matters for a reason that has nothing to
-// do with password strength: `hashPassword` (password.utilities.ts) throws
-// a bare `Error` — not `HttpError` — for input over bcrypt's 72-byte limit.
-// Rejecting that here, as an ordinary validation failure, is what stands
-// between a too-long password and an unhandled 500.
-//
-// The LENGTH CEILINGS below exist for the same class of reason, one step
-// further down: every string field this file accepts is bounded by exactly
-// the width of the column it is written to (MAX_EMAIL_LENGTH /
-// MAX_NAME_LENGTH, auth.constants.ts — the same constants user.model.ts
-// declares those columns with, so the two cannot drift). A schema that
-// accepts more than its column holds does not merely fail: it fails as a
-// 500. Postgres rejects an over-long value with 22001, which is not the
-// unique violation `BaseRepository.create` translates to a 409, so it
-// propagates as an unexpected error — a client error answered as a server
-// error. A 400-character address did exactly that before this cap.
-//
-// Audited against the schema at the time of writing, as one pass rather
-// than field by field: `email` -> users.email (320, capped here);
-// `firstName`/`lastName` -> users.first_name/last_name (100, capped here
-// and in profile.validators.ts). `password` is never stored as given —
-// only its 60-character bcrypt hash is, a width bcrypt fixes, not input —
-// and every remaining column on either table is server-generated (ids,
-// token hashes, timestamps) and reachable from no request body at all.
+/**
+ * @file Auth request bodies. Every string field is capped at the width of the
+ * column it is written to (the `MAX_*_LENGTH` constants user.model.ts also
+ * uses): an over-long value would otherwise reach Postgres as a 22001 and
+ * answer 500 instead of 400. `password` is stored only as its fixed-width
+ * bcrypt hash.
+ */
 import { z } from 'zod'
 import {
   MAX_EMAIL_LENGTH,
@@ -43,26 +14,14 @@ import {
 } from '@/constants/auth.constants'
 import { safeText } from '@/validators/safe-text.validators'
 
-// z.email() validates the email FORMAT before any transform chained after
-// it runs — verified empirically: z.email().trim().toLowerCase() still
-// rejects a leading/trailing-whitespace address, because the format check
-// happens first and only the (still-untrimmed) result is transformed
-// afterwards. Chaining .trim()/.toLowerCase() on a plain z.string() BEFORE
-// piping into z.email() runs normalisation in the order that actually
-// matters: trim and lowercase, THEN validate. This is also what keeps a
-// registered row's stored email agreeing with the table's `lower(email)`
-// unique index (user.model.ts) — the value validated here is the value the
-// controller inserts, not a copy normalised separately at the call site.
-// `.max()` sits BEFORE the pipe, so it measures the trimmed, lowercased
-// value — the exact string the controller goes on to insert — rather than
-// whatever whitespace the client happened to send around it. A too-long
-// address therefore fails validation here (400) instead of the column
-// (22001 -> 500); see this file's header comment.
 /**
  * Normalised email: trimmed, lowercased, max-length-capped, then piped
- * through `z.email()` for format validation. Shared between registration,
- * login, and verification schemas — a single definition of the email policy
- * so two copies cannot drift.
+ * through `z.email()`. Normalising before the pipe matters: `z.email()`
+ * checks the format before any transform chained after it, so it would
+ * reject surrounding whitespace, and the cap would measure the untrimmed
+ * value. The validated value is the one inserted, which keeps it agreeing
+ * with the `lower(email)` unique index. The one email policy, shared by every
+ * auth schema.
  */
 export const emailSchema = z
   .string()
@@ -71,6 +30,11 @@ export const emailSchema = z
   .max(MAX_EMAIL_LENGTH, `Email must be at most ${MAX_EMAIL_LENGTH} characters.`)
   .pipe(z.email())
 
+/**
+ * The password policy for a password being set: a length floor, and
+ * bcrypt's 72-byte ceiling, over which `hashPassword` throws a plain `Error`
+ * that would answer 500.
+ */
 const registrationPasswordSchema = z
   .string()
   .min(MIN_PASSWORD_LENGTH, `Password must be at least ${MIN_PASSWORD_LENGTH} characters long.`)
@@ -107,8 +71,9 @@ export const registerSchema = z.object({
 export type RegisterInput = z.infer<typeof registerSchema>
 
 /**
- * Login request body: an email and a password. See this file's header
- * comment for why the password field carries no policy of its own.
+ * Login request body: an email and a password. The password carries no
+ * policy: a too-short or too-long one must fail with the same 401 as a wrong
+ * password, not a distinguishable 400 first.
  */
 export const loginSchema = z.object({
   email: emailSchema,
@@ -136,12 +101,7 @@ export type ForgotPasswordInput = z.infer<typeof forgotPasswordSchema>
 
 /**
  * Reset-password request body: the raw token from the mailed link, and a new
- * password. The password goes through the SAME `registrationPasswordSchema`
- * registration uses — not a fresh `z.string().min(8)` — for the exact reason
- * this file's header comment gives for that schema existing at all: without
- * the byte-ceiling refine, a password past bcrypt's 72-byte limit would reach
- * `hashPassword` (password.utilities.ts) and throw a bare `Error`, answering
- * a client-error case as a 500.
+ * password, which goes through `registrationPasswordSchema`.
  */
 export const resetPasswordSchema = z.object({
   token: z.string().min(1, 'Token is required.'),
@@ -157,21 +117,11 @@ export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>
  * Change-password request body: the caller's current password, and a new
  * one.
  *
- * `currentPassword` carries NO policy — the identical reasoning this file's
- * header comment gives for `loginSchema`'s password, applied to an
- * authenticated caller instead of an anonymous one: a policy here would
- * leak nothing useful (the caller already knows what they typed) and would
- * answer a wrong-but-well-formed current password differently from a
- * wrong-and-short one — a distinguishable 400 BEFORE the controller ever
- * compares it against the stored hash, rather than the identical
- * "incorrect" outcome both cases must produce. It would also incorrectly
- * reject a caller's real, current password if that password predates
- * today's policy (this schema's `newPassword` floor did not always exist),
- * which `currentPassword` must never do — it is being verified, not set.
- *
- * `newPassword` goes through the SAME `registrationPasswordSchema`
- * registration and reset-password use — not a fresh policy — for the exact
- * reason this file's header comment gives for that schema existing at all.
+ * `currentPassword` carries no policy, as with login: it is verified, not
+ * set, so a policy would answer a wrong password under the length floor
+ * differently from a wrong one above it, and would reject a real password
+ * set under an older policy. `newPassword` goes through
+ * `registrationPasswordSchema`.
  */
 export const changePasswordSchema = z.object({
   currentPassword: z.string().min(1, 'Current password is required.'),

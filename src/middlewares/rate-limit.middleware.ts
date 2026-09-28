@@ -1,30 +1,8 @@
-// src/middlewares/rate-limit.middleware.ts
-//
-// One generic limiter, `createRateLimiter(spec)`, builds every rate
-// limiter this API mounts. The specs (window, limit, key axis) live in
-// `constants/rate-limit.constants.ts`'s `RATE_LIMITS` table, which is the
-// single source of truth for the per-endpoint threat model — see each
-// entry's own comment there (composite login key, tight-IP/generous-email
-// resend-verification and forgot-password pairs, user-keyed tenant/
-// change-password limiters, etc.). See that file's own header comment for
-// why the key-derivation functions live there too (import-x/no-cycle).
-//
-// A factory, not a module-scope constant: `rateLimit(...)` allocates a
-// `Store` instance, and express-rate-limit refuses to let two limiter
-// instances share one (`ERR_ERL_STORE_REUSE`) — build where a router is
-// assembled, matching this codebase's existing convention for
-// parameterised middleware (auth.routes.ts's own header comment on
-// unicorn/no-top-level-side-effects).
-//
-// ONE STORE PREFIX PER ENDPOINT: each call builds its own store with
-// `limiterStore(spec.name)`, keyed `<REDIS_KEY_PREFIX>:rl:<name>:`. Two
-// limiters must never share a `name` — a shared bucket lets traffic on one
-// endpoint spend another's budget. `RATE_LIMITS`'s own test
-// (tests/unit/constants/rate-limit.constants.test.ts) pins uniqueness.
-// One deliberate exception: `authenticatedWrite` is built once per router
-// (tenant, notification, profile), and all three share its name, so on
-// Redis they spend one per-user budget. On the in-memory fallback each
-// router's instance counts on its own, so the budget splits per router.
+/**
+ * @file `createRateLimiter` builds every rate limiter this API mounts, from the
+ * specs in rate-limit.constants.ts's `RATE_LIMITS`, which hold each endpoint's
+ * threat model.
+ */
 import { type NextFunction, type Request, type RequestHandler, type Response } from 'express'
 import { rateLimit } from 'express-rate-limit'
 import { SharedRateLimitStore } from '@/configs/rate-limit-store.config'
@@ -38,9 +16,8 @@ import { redisKey } from '@/services/redis.service'
 
 /**
  * Machine-readable code identifying a rate-limited request, carried in the
- * error envelope's `code` field (`src/errors/http-error.ts`'s `HttpError`)
- * — the same pattern `ACCESS_TOKEN_EXPIRED` uses, so a client can branch on
- * this without matching on `message`.
+ * error envelope's `code` field, so a client can branch on it without
+ * matching on `message`.
  */
 export const RATE_LIMITED_CODE = 'RATE_LIMITED'
 
@@ -55,9 +32,8 @@ function limiterStore(name: string): SharedRateLimitStore {
 
 /**
  * Resolve `spec.keyBy` to the `keyGenerator` express-rate-limit needs, or
- * `undefined` for `'ip'` — which leaves express-rate-limit's own default
- * (IPv6-normalising) key generator in place, the same one every IP-keyed
- * `RATE_LIMITS` entry uses by omitting a custom key generator.
+ * `undefined` for `'ip'`, which keeps express-rate-limit's default
+ * IPv6-normalising key generator.
  * @param keyBy - The spec's key axis.
  * @returns A key generator, or undefined to use express-rate-limit's default.
  */
@@ -71,16 +47,23 @@ function keyGeneratorFor(
 }
 
 /**
- * A marker `createRateLimiter` sets on every middleware it returns, keyed
- * to the spec's own name. `tests/unit/routes/route-limiters.test.ts`'s
- * guard test reads it off a route's handler chain to prove a rate limiter
- * is actually present, rather than inferring it from the route file's
- * source text.
+ * A marker `createRateLimiter` sets on every middleware it returns, holding
+ * the spec's name. route-limiters.test.ts reads it off a route's handler
+ * chain to prove a limiter is present.
  */
 export const RATE_LIMITER_MARK = Symbol('rateLimiter')
 
 /**
  * Build a rate limiter from a `RATE_LIMITS` entry.
+ *
+ * A factory, called where a router is assembled: express-rate-limit refuses
+ * to let two limiters share a store (`ERR_ERL_STORE_REUSE`). Each store is
+ * keyed `<REDIS_KEY_PREFIX>:rl:<name>:`, so two specs must never share a
+ * name (rate-limit.constants.test.ts pins this), or one endpoint's traffic
+ * spends another's budget. The one deliberate exception: `authenticatedWrite`
+ * is built once per router (tenant, notification, profile), so on Redis they
+ * spend one per-user budget, and on the in-memory fallback each router's
+ * instance counts on its own.
  * @param spec - The limiter's configuration — see `RateLimiterSpec`.
  * @param overrides - `windowMs`/`limit` to override, e.g. a small window for a test. Every other field is fixed by `spec`.
  * @returns Express middleware enforcing the limit, tagged with `RATE_LIMITER_MARK` set to `spec.name`.

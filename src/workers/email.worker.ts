@@ -1,7 +1,6 @@
-// src/workers/email.worker.ts
-//
-// The one place an email job is actually processed — creates and owns the
-// BullMQ Worker for the "email" queue defined in email.job.ts.
+/**
+ * @file The BullMQ Worker for the "email" queue defined in email.job.ts.
+ */
 import { Worker, type Job } from 'bullmq'
 import { getEnv } from '@/configs/env.config'
 import type { EmailJobData } from '@/jobs/email.job'
@@ -14,14 +13,10 @@ import { redisKey } from '@/services/redis.service'
 /**
  * Process one email job. Exported for unit testing.
  *
- * `sendMail` never rejects (Ruling G, mailer.service.ts) — it always
- * resolves to `'sent' | 'failed'`, collapsing every failure mode
- * (rendering error, transport rejection) into the same value. Because that
- * distinction isn't observable here, this function cannot single out a
- * deterministic failure (e.g. a missing template variable) from a transient
- * one (e.g. an SMTP outage) — a `'failed'` result always throws a plain,
- * retryable `Error`, and BullMQ's own `attempts`/`backoff`
- * (`emailJobDefaults`, email.job.ts) governs how many times it tries again.
+ * `sendMail` never rejects; it resolves `'failed'` for every failure,
+ * rendering and transport alike, so a deterministic failure cannot be told
+ * from a transient one here. `'failed'` always throws a retryable `Error`,
+ * and `emailJobDefaults` (email.job.ts) sets the retries.
  * @param job - The BullMQ job to process; `job.data` is a `MailMessage` (discriminated union) plus `userId`.
  * @returns Resolves once the email has been sent; rejects (so BullMQ retries) when `sendMail` reports `'failed'`.
  * @throws {Error} When `sendMail` resolves to `'failed'` — deliberately carries only `job.id` and `templateKey`, never the recipient address, since BullMQ persists this message in `failedReason` (Redis).

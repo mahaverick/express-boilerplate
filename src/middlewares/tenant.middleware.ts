@@ -1,37 +1,10 @@
-// src/middlewares/tenant.middleware.ts
-//
-// The tenant-scoping seam: `resolveTenant` (composed after `requireAuth` on
-// every `/tenants/:slug/*` route) confirms the caller has access to the tenant
-// the route names and attaches that fact to the request; `requireRole`
-// (composed after `resolveTenant`) gates on the role it found. Neither
-// exists as a top-level `const` middleware the way `requestContext` does —
-// both are FACTORIES, called where a router is assembled, matching this
-// codebase's existing convention for parameterised middleware (see
-// rate-limit.middleware.ts's own header comment on why every limiter there
-// is a factory too).
-//
-// RULING G — NOT A 403. Both "no tenant with this slug exists" and "this
-// tenant exists but you have no access to it" answer with the exact same
-// 404, from the same thrown `HttpError`, at the same point below. A 403
-// would tell an unauthenticated-for-this-tenant caller that the slug they
-// guessed or enumerated is real; 404 tells them nothing a truly nonexistent
-// slug would not also tell them. This is the plan's spec correction #2,
-// overriding the original design doc's illustrative 403.
-//
-// PLATFORM ACCESS. A caller with no membership may still reach a tenant
-// through their platform-tenant membership (staff), with that platform role
-// as the effective role. Membership always wins: staff who belong to the
-// tenant act with their member role there. The platform tenant itself is
-// members-only. A staff visit is audited (`recordPlatformAccess`), and a
-// failed audit write is logged at warn, never failing the request.
-//
-// ONE STORE, NOT TWO. `resolveTenant` extends the SAME `RequestContext` ALS
-// store `requestContext` (request-context.middleware.ts) already opened for
-// this request, via `requestContextStore.enterWith(...)` — it does not open
-// a second, parallel store. See that file's own header comment for why
-// `tenant` lives on `RequestContext` rather than a dedicated
-// `tenantContextStore` the original design doc sketched (spec correction
-// #3).
+/**
+ * @file The tenant-scoping seam: `resolveTenant` (after `requireAuth` on every
+ * `/tenants/:slug/*` route) confirms the caller's access to the tenant the
+ * route names and attaches it to the request; `requireRole` (after
+ * `resolveTenant`) gates on the role it found. Both are factories, called
+ * where a router is assembled.
+ */
 import { type NextFunction, type Request, type Response } from 'express'
 import { type MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
@@ -50,19 +23,13 @@ const tenantRepository = new TenantRepository()
 const userMembershipRepository = new UserMembershipRepository()
 
 /**
- * Read `request.params.slug` — every tenant-scoped route names its tenant.
+ * Read `request.params.slug`: every tenant-scoped route names its tenant.
+ * `ParamsDictionary` also allows an array, which a plain `:slug` never
+ * produces; it is treated as no slug, which fails safe as a 404.
  * @param request - The incoming request.
  * @returns The slug as supplied, or undefined when the request supplies none.
  */
 function tenantIdentifierFrom(request: Request): string | undefined {
-  // `request.params.slug` types as `string | string[] | undefined`
-  // (`ParamsDictionary`'s index signature allows an array value for a
-  // repeated/splat param pattern) even though a plain `:slug` segment can
-  // never actually produce one — narrowed explicitly rather than asserted,
-  // so the type system's worst case and this function's return type agree.
-  // An array here would mean the route itself is shaped unexpectedly, not
-  // that a real slug was supplied; treating it as "no identifier" is the
-  // same fail-safe direction as every other absent-identifier case below.
   const slug = request.params.slug
   return typeof slug === 'string' ? slug : undefined
 }
@@ -133,16 +100,12 @@ async function scopeRequestToTenant(
   try {
     const identifier = tenantIdentifierFrom(request)
 
-    // `findActiveBySlug` already combines "not soft-deleted" and
-    // "lifecycleState = 'active'" in one lookup (tenant.repository.ts),
-    // which is exactly the gate a suspended/archived tenant must fail the
-    // same way a nonexistent one does.
+    // A suspended, archived or deleted tenant must 404 like a nonexistent one.
     const tenant = identifier ? await tenantRepository.findActiveBySlug(identifier) : undefined
     const principal =
       tenant && request.user ? await principalFor(request.user.id, tenant) : undefined
 
-    // Ruling G: identical 404 whether the tenant does not exist or the
-    // caller has no access to it — see this file's header comment.
+    // Not 403: that would confirm a guessed slug exists.
     if (!principal) {
       throw new HttpError('Tenant not found', 404)
     }
@@ -154,34 +117,7 @@ async function scopeRequestToTenant(
       role: principal.role,
     }
 
-    // Extend the EXISTING store in place, not a new `.run()` — this
-    // middleware does not own the rest of the request's control flow the
-    // way `requestContext` itself does (it is composed into an
-    // already-running chain), and spreading the current store rather than
-    // hand-listing `requestId` keeps this from silently dropping any
-    // field a later change adds to `RequestContext` alongside `tenant`.
-    //
-    // WHAT `enterWith` DOES AND DOES NOT MAKE VISIBLE, precisely — this
-    // matters for anyone composing `resolveTenant` outside a normal
-    // Express dispatch (a job worker, a test harness): the mutated store
-    // is visible to whatever `next()` calls SYNCHRONOUSLY, and to
-    // anything THAT code schedules afterward (an async handler it calls,
-    // a repository query it awaits) — which is exactly how Express
-    // itself dispatches to the next middleware/handler, so this is
-    // correct for every real route with no special handling needed. It
-    // is NOT visible in the continuation of a caller that instead
-    // `await`s this whole `resolveTenant()(...)` call from OUTSIDE and
-    // only then reads `requestContextStore.getStore()` — that caller's
-    // own promise continuation was already linked to the PRE-`enterWith`
-    // store at the moment the call was made, so it observes a stale
-    // snapshot. This is standard, working-as-designed AsyncLocalStorage
-    // behaviour (`enterWith` documents itself as affecting "the current
-    // synchronous execution ... and then persists ... through any
-    // following asynchronous calls" — not calls that were already
-    // in flight beforehand) — not a bug here — and is exactly what
-    // tests/unit/middlewares/tenant.middleware.test.ts's own tests
-    // capture `next`'s SYNCHRONOUS invocation to read the store, not an
-    // outer `await`, having hit this exact trap while writing them.
+    // enterWith, not run(): this middleware does not own the rest of the chain.
     requestContextStore.enterWith({
       ...(requestContextStore.getStore() ?? { requestId: request.id }),
       tenant: tenantContext,
@@ -195,24 +131,30 @@ async function scopeRequestToTenant(
 
 /**
  * Resolve the tenant a request is scoped to, and confirm the authenticated
- * caller has access to it: a membership, or a platform role outside the
- * platform tenant (see this file's header comment). On success, attaches `request.principal` and
- * extends the request's `RequestContext` ALS store with `.tenant` — see
- * this file's header comment for both.
+ * caller has access to it. A member acts with their membership role;
+ * otherwise staff (platform-tenant members) act with their platform role,
+ * except in the platform tenant itself, which is members-only. A staff visit
+ * is audited (`recordPlatformAccess`); a failed audit write is logged at warn
+ * and never fails the request.
+ *
+ * A missing tenant and a tenant the caller cannot access answer the same
+ * 404, never a 403, which would confirm that a guessed slug exists.
+ *
+ * On success, attaches `request.principal` and adds `.tenant` to the
+ * request's existing `RequestContext` store (request-context.service.ts) with
+ * `enterWith`, keeping every field already there. The change is visible to
+ * `next()` and everything it schedules, which is how Express dispatches. A
+ * caller that awaits this middleware from outside and then reads the store
+ * sees the store from before the call; tests read it inside `next`.
  *
  * Reads `request.params.slug` — the only tenant selector this codebase has,
  * by design. There is deliberately no header-based selector: one would let
  * a caller send one tenant in the URL and another in a header, with
  * whichever a handler forgets to re-check becoming a confused-deputy hole.
  *
- * Must run AFTER `requireAuth` — reads `request.user.id`. A route that
- * omits `requireAuth` ahead of this is a routing bug this middleware does
- * not itself defend against beyond failing safe: with no `request.user`,
- * both lookups are skipped and the request 404s exactly like a caller with
- * no access would, rather than throwing on a missing id. That is
- * the safe direction for the mistake to fail in, but it also means such a
- * misconfigured route never surfaces as anything louder than a 404 in
- * testing.
+ * Must run after `requireAuth`, since it reads `request.user.id`. Without
+ * `request.user` the request 404s like a caller with no access, so a route
+ * missing `requireAuth` fails safe but surfaces only as a 404.
  * @returns An Express middleware.
  */
 export function resolveTenant(): (
@@ -220,8 +162,6 @@ export function resolveTenant(): (
   response: Response,
   next: NextFunction
 ) => Promise<void> {
-  // A factory returning a fixed handler, so every route keeps calling
-  // `resolveTenant()` like the other parameterised middleware.
   return scopeRequestToTenant
 }
 
@@ -232,11 +172,8 @@ export function resolveTenant(): (
  * Member and invitation writes re-check the same bar on the role read
  * inside their transaction; this is the early gate.
  *
- * Must run AFTER `resolveTenant` — reads `request.principal`, which only
- * `resolveTenant` sets. A route missing it ahead of this always answers 403
- * (a missing principal is treated as "no role granted", not specially
- * detected as a routing bug) — the same fail-safe direction `resolveTenant`
- * itself takes on a missing `request.user`.
+ * Must run after `resolveTenant`, which sets `request.principal`. Without a
+ * principal it answers 403, failing safe.
  * @param allowedRoles - The roles whose rank, or higher, may proceed.
  * @returns An Express middleware.
  */

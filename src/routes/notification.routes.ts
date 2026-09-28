@@ -1,29 +1,8 @@
-// src/routes/notification.routes.ts
-//
-// Every route on this router is authenticated — a notification inbox and
-// its preferences are always scoped to the caller, never listable or
-// mutable for anyone else — so `requireAuth` is mounted once with
-// `router.use(...)` ahead of all seven of these routes, the same pattern
-// profile.routes.ts already establishes, rather than repeated per route.
-//
-// `/stream` is registered ahead of the `:id`-shaped routes below it
-// (`/:id/read`, `/:id`) for the ordinary Express reason: a literal path
-// segment must be matched before a `:id` pattern that would otherwise
-// capture it — `stream` becoming `request.params.id === 'stream'`. It used
-// to also have to precede `router.use(requireAuth)` itself: `requireAuth`
-// only ever reads a `Bearer` `Authorization` header (auth.middleware.ts),
-// and `EventSource` — the only thing that opened `/stream` before this
-// codebase switched the client to `fetch` — cannot set one, so
-// `notification-stream.controller.ts` used to authenticate the connection
-// itself, from a `?token=` query parameter. Now that the client sends a
-// `Bearer` header like every other request, `/stream` sits behind
-// `requireAuth` the same as the rest of this router.
-//
-// `/preferences` sits under this same router, not a separate one: it is
-// still "notification settings", addressed relative to
-// `/api/v1/notifications`, and splitting it out would buy nothing since
-// both halves share the one auth gate, and every write shares one
-// `authenticatedWrite` limiter.
+/**
+ * @file The notification routes, including preferences and the SSE stream,
+ * every one behind a router-wide `requireAuth`. `/stream` is registered
+ * before the `:id` routes, so `stream` is never captured as an id.
+ */
 import { Router } from 'express'
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { notificationStreamController } from '@/controllers/notification-stream.controller'

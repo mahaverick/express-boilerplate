@@ -1,8 +1,8 @@
-// src/controllers/base.controller.ts
-//
-// The one place a controller's error path is written. Each handler is an
-// arrow-function field wrapped by `handle`, so it is bound to its instance
-// and can be mounted as `router.get('/', someController.method)`.
+/**
+ * @file The one place a controller's error path is written. Each handler is an
+ * arrow-function field wrapped by `handle`, so it is bound to its instance and
+ * can be mounted as `router.get('/', someController.method)`.
+ */
 import type { NextFunction, Request, Response } from 'express'
 import { logger } from '@/services/logger.service'
 
@@ -33,8 +33,7 @@ export abstract class BaseController {
       try {
         await handler(request, response, next)
       } catch (error) {
-        // The error itself is logged by errorHandler, redacted; this line only
-        // marks that the response was already on the wire.
+        // errorHandler logs the error itself, redacted; this only marks the late failure.
         if (response.headersSent) logger.warn('Handler failed after headers were sent')
         next(error)
       }
