@@ -30,8 +30,7 @@ describe('parseEnv', () => {
   })
 
   it('defaults APP_PORT when absent', () => {
-    // Rest-sibling destructuring to build a source object missing this key;
-    // the APP_PORT binding itself is intentionally unused.
+    // Rest-sibling destructuring builds a source object missing this key; the APP_PORT binding itself is intentionally unused.
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { APP_PORT, ...rest } = valid
     expect(parseEnv(rest).APP_PORT).toBe(4040)
@@ -64,9 +63,7 @@ describe('parseEnv', () => {
   })
 
   it('treats an empty-string optional value as absent, not a malformed URL', () => {
-    // Simulates `cp .env.example .env`: the generator leaves genuinely
-    // optional keys either commented out or, if uncommented, as `KEY=`.
-    // dotenv has no other way to express "unset" than an empty value.
+    // Simulates `cp .env.example .env`: the generator leaves genuinely optional keys either commented out or, if uncommented, as `KEY=`, and dotenv has no other way to express "unset".
     expect(() => parseEnv({ ...valid, OTEL_EXPORTER_OTLP_ENDPOINT: '' })).not.toThrow()
     expect(
       parseEnv({ ...valid, OTEL_EXPORTER_OTLP_ENDPOINT: '' }).OTEL_EXPORTER_OTLP_ENDPOINT
@@ -95,13 +92,7 @@ describe('parseEnv', () => {
     expect(parsed.REFRESH_TOKEN_TTL).toBe('7d')
   })
 
-  // This is the exact defect the whole rebuild was justified by: the old
-  // codebase called `ms(process.env.REFRESH_TOKEN_EXPIRY)` directly, and an
-  // unparseable (here: unset) value made `ms()` itself throw at
-  // module-import time — a failure that named a third-party library instead
-  // of the missing environment variable, and took down an unrelated test
-  // suite before any test body ran. Pinning both halves of that property:
-  // the failure is named, and it never originates from inside `ms`.
+  // An unparseable TTL must fail with a validation error naming the field, never a throw from inside ms() at module-import time, which would name a third-party library instead of the field.
   it('rejects a malformed ACCESS_TOKEN_TTL with a validation error naming the field, not a throw from inside ms', () => {
     let message = ''
     let didThrowFromMs = false
@@ -109,9 +100,7 @@ describe('parseEnv', () => {
       parseEnv({ ...valid, ACCESS_TOKEN_TTL: 'not-a-duration' })
     } catch (error) {
       message = (error as Error).message
-      // ms()'s own thrown message, verbatim from its source: "val is not a
-      // non-empty string or a valid number". If this ever appears here, the
-      // refinement stopped catching ms() and let it throw straight through.
+      // ms()'s own thrown message, verbatim from its source: seeing it here means the refinement stopped catching ms() and let it throw straight through.
       didThrowFromMs = message.includes('val is not a non-empty string')
     }
     expect(message).toContain('ACCESS_TOKEN_TTL')
@@ -176,9 +165,7 @@ describe('parseEnv', () => {
 })
 
 describe('getEnv', () => {
-  // Vitest's global setup (tests/helpers/setup-global.ts) loads .env.test
-  // into process.env before any test file runs, so this exercises the real
-  // memoised parse of process.env rather than a hand-built source object.
+  // Vitest's global setup (tests/helpers/setup-global.ts) loads .env.test into process.env before any test file runs, so this exercises the real memoised parse rather than a hand-built source object.
   it('parses process.env and reports the test environment', () => {
     expect(getEnv().NODE_ENV).toBe('test')
     expect(getEnv().APP_ENV).toBe('local')
@@ -190,9 +177,7 @@ describe('getEnv', () => {
 })
 
 describe('getDatabaseUrl', () => {
-  // Vitest's global setup loads .env.test, so DATABASE_URL is already
-  // present in process.env here — this is what drizzle.config.ts relies on
-  // when only DATABASE_URL (not the full schema) is exported.
+  // Vitest's global setup loads .env.test, so DATABASE_URL is already present in process.env here — this is what drizzle.config.ts relies on when only DATABASE_URL (not the full schema) is exported.
   it('reads DATABASE_URL from process.env without requiring the rest of the schema', () => {
     expect(getDatabaseUrl()).toBe(process.env.DATABASE_URL)
   })
@@ -245,11 +230,7 @@ describe('SMTP configuration', () => {
     expect(() => parseEnv({ ...valid, MAIL_FROM: 'not-an-address' })).toThrow(/MAIL_FROM/)
   })
 
-  // These bound the stages of a send to an SMTP host that stops responding
-  // (env.config.ts's comment on the SMTP timeout group). After the HTTP drain
-  // and one send that hangs at each stage against one address,
-  // SHUTDOWN_TIMEOUT_MS must keep 5s for closing the database, Redis and
-  // queues and flushing traces.
+  // These bound the stages of a send to an SMTP host that stops responding; after the HTTP drain and one send that hangs at each stage against one address, SHUTDOWN_TIMEOUT_MS must still keep 5s for closing the database, Redis and queues and flushing traces.
   it('defaults the SMTP_*_TIMEOUT_MS variables to 3000/5000/7000, inside the shutdown budget', () => {
     const parsed = parseEnv(valid)
     expect(parsed.SMTP_CONNECTION_TIMEOUT_MS).toBe(3000)
@@ -279,16 +260,12 @@ describe('SMTP configuration', () => {
 
 describe('TRUST_PROXY', () => {
   it('defaults to "false" — trusting no proxy until an operator says otherwise', () => {
-    // The default has to fail towards OVER-limiting (every client sharing
-    // one bucket behind an unconfigured proxy) rather than towards no limit
-    // at all (a spoofable X-Forwarded-For). See env.config.ts's comment.
+    // The default has to fail towards OVER-limiting (every client sharing one bucket behind an unconfigured proxy) rather than towards no limit at all (a spoofable X-Forwarded-For).
     expect(parseEnv(valid).TRUST_PROXY).toBe('false')
   })
 
   it('refuses the literal "true", naming what to set instead', () => {
-    // `trust proxy: true` believes every hop, so any client that can reach
-    // the app can write its own X-Forwarded-For, get a fresh rate-limit
-    // bucket per request, and walk straight through the login limiter.
+    // `trust proxy: true` believes every hop, so any client that can reach the app can write its own X-Forwarded-For, get a fresh rate-limit bucket per request, and walk straight through the login limiter.
     expect(() => parseEnv({ ...valid, TRUST_PROXY: 'true' })).toThrow(/TRUST_PROXY/)
     expect(() => parseEnv({ ...valid, TRUST_PROXY: 'TRUE' })).toThrow(/TRUST_PROXY/)
   })
@@ -300,12 +277,7 @@ describe('TRUST_PROXY', () => {
 })
 
 describe('WORKER_ENABLED', () => {
-  // The one regression this field exists to prevent: z.coerce.boolean()
-  // coerces via JavaScript's own `Boolean(value)`, and `Boolean("false")` is
-  // `true` — a `.env` file with `WORKER_ENABLED=false` would silently START
-  // the worker. z.stringbool() (Zod 4) parses the string's actual content
-  // instead, so this must resolve to the real boolean `false`, not the
-  // string `"false"` and not `true`.
+  // z.coerce.boolean() coerces via JavaScript's own Boolean(value), and Boolean("false") is true — a .env file with WORKER_ENABLED=false would silently start the worker; z.stringbool() (Zod 4) parses the string's actual content instead.
   it('parses WORKER_ENABLED=false as boolean false', () => {
     const env = parseEnv({ ...valid, WORKER_ENABLED: 'false' })
     expect(env.WORKER_ENABLED).toBe(false)
@@ -408,9 +380,7 @@ describe('RETENTION_* days', () => {
 
 describe('trustProxySetting', () => {
   it('maps "false" to the boolean Express understands, not the string', () => {
-    // A non-empty string is truthy, and Express reads a string as an address
-    // list — so passing "false" through unconverted would mean "trust the
-    // proxy at the address named `false`", which proxy-addr rejects at boot.
+    // A non-empty string is truthy, and Express reads a string as an address list, so passing "false" through unconverted would mean "trust the proxy at the address named `false`", which proxy-addr rejects at boot.
     expect(trustProxySetting('false')).toBe(false)
     expect(trustProxySetting('  FALSE  ')).toBe(false)
   })
