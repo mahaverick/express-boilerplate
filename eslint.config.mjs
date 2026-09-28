@@ -527,5 +527,34 @@ export default tseslint.config(
     files: ['scripts/**/*.d.mts'],
     rules: { 'jsdoc/require-jsdoc': 'off' },
   },
+  {
+    // Lint tooling: its regexes are the tested contract, it is a CLI that prints to the terminal, and its tests import it as a module.
+    files: [
+      'scripts/history-patterns.mjs',
+      'scripts/comment-style.mjs',
+      'scripts/lint-docs.mjs',
+      'scripts/lint-docs.d.mts',
+    ],
+    rules: {
+      'sonarjs/regex-complexity': 'off',
+      'sonarjs/super-linear-regex': 'off',
+      'sonarjs/no-os-command-from-path': 'off',
+      'unicorn/no-null': 'off',
+      'unicorn/name-replacements': 'off',
+      'unicorn/no-exports-in-scripts': 'off',
+      'unicorn/prefer-string-replace-all': 'off',
+      'unicorn/consistent-boolean-name': 'off',
+      'no-restricted-properties': 'off',
+    },
+  },
+  {
+    // Its test doubles share lint-docs.mjs's own interface names (exists, docRefProblems) and its own filename mirrors the module under test.
+    files: ['tests/unit/lint-docs.test.ts'],
+    rules: {
+      'unicorn/name-replacements': 'off',
+      'unicorn/consistent-boolean-name': 'off',
+      'unicorn/no-useless-concat': 'off',
+    },
+  },
   prettier
 )

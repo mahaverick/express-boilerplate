@@ -5,7 +5,6 @@
 import { findHistory } from './history-patterns.mjs'
 
 const DIRECTIVE =
-  // eslint-disable-next-line sonarjs/regex-complexity -- the directive prefix set is the contract; see comment-style.test.ts
   /^\s*(?:eslint-disable|eslint-enable|@ts-(?:expect-error|ignore|nocheck|check)|prettier-ignore|(?:c8|v8|istanbul)\s+ignore|@vite-ignore|webpackChunkName|@vitest-environment|[#@]__PURE__|\/\s*<reference\b)/
 
 /**

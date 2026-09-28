@@ -1,15 +1,13 @@
-// eslint-disable-next-line unicorn/name-replacements -- lint-docs.test.ts matches the module it tests, scripts/lint-docs.mjs; do not rename
 import { describe, expect, it } from 'vitest'
 import {
   anchors,
-  // eslint-disable-next-line unicorn/name-replacements -- docRefProblems is the interface name scripts/lint-docs.mjs exports; do not rename
   docRefProblems,
   historyProblems,
   linkProblems,
   slugify,
 } from '../../scripts/lint-docs.mjs'
 
-// eslint-disable-next-line unicorn/no-useless-concat -- built by concatenation on purpose: lint:docs scans this file too, and a joined literal filename would trip its own doc-citation check
+// built by concatenation on purpose: lint:docs scans this file too, and a joined literal filename would trip its own doc-citation check
 const MISSING = 'NOPE' + '.md'
 
 describe('slugify', () => {
@@ -30,7 +28,6 @@ describe('anchors', () => {
 
 describe('linkProblems', () => {
   const files = new Set(['README.md', 'CLAUDE.md'])
-  // eslint-disable-next-line unicorn/consistent-boolean-name -- exists is the interface name linkProblems' third parameter uses; do not rename
   const exists = (p: string): boolean => files.has(p)
   const readAnchors = (): Set<string> => new Set(['cors'])
 

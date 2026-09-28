@@ -7,7 +7,6 @@
  * Words and phrases that narrate history (case-insensitive).
  */
 export const HISTORY_WORDS =
-  // eslint-disable-next-line sonarjs/regex-complexity -- the alternation set is the contract; see comment-style.test.ts
   /\b(?:task|stream|lane|wave)[ -]\d+[a-z]?\b|\btask-\d+-[\w-]+\.md\b|\bbefore this fix\b|\ba later (?:task|stream|wave|pr)\b|\bpreviously\b/i
 
 /**
@@ -23,6 +22,5 @@ export const HISTORY_IDS = /\b(?:NF|H|M|E|X|R)\d{1,2}[a-z]?\b|\b[PC]-\d{1,2}\b|\
  */
 export function findHistory(text) {
   const match = HISTORY_WORDS.exec(text) ?? HISTORY_IDS.exec(text)
-  // eslint-disable-next-line unicorn/no-null -- null is the documented public return type; see history-patterns.d.mts
   return match ? match[0] : null
 }
