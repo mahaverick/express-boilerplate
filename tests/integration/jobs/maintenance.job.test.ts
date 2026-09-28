@@ -1,8 +1,8 @@
-// tests/integration/jobs/maintenance.job.test.ts
-//
-// The retention schedule against the real Redis, under this worker's own
-// REDIS_KEY_PREFIX. No Worker runs here, so the scheduled job stays delayed
-// until afterAll removes it.
+/**
+ * @file Exercises the retention schedule against the real Redis, under this
+ * worker's own `REDIS_KEY_PREFIX`. No Worker runs in this file, so the
+ * scheduled job stays delayed until `afterAll` removes it.
+ */
 import { afterAll, describe, expect, it } from 'vitest'
 import { ensureRetentionSchedule, RETENTION_PURGE_JOB } from '@/jobs/maintenance.job'
 import { closeQueue, getMaintenanceQueue } from '@/services/queue.service'
