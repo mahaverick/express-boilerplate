@@ -16,6 +16,7 @@ import sonarjs from 'eslint-plugin-sonarjs'
 import unicorn from 'eslint-plugin-unicorn'
 import globals from 'globals'
 import tseslint from 'typescript-eslint'
+import { commentStyleRule } from './scripts/comment-style.mjs'
 
 // Test timing (tests/**): every real-time wait goes through tests/helpers/timing.ts.
 const BARE_SLEEP_MESSAGE =
@@ -416,7 +417,13 @@ export default tseslint.config(
     // type-aware project cannot parse them. Lint them syntactically only.
     // Listed explicitly (not "*.config.ts") so this does not accidentally
     // widen to src/configs/**/*.config.ts, which must stay type-checked.
-    files: ['**/*.mjs', 'vitest.config.ts', 'vitest.unit.config.ts', 'commitlint.config.js'],
+    files: [
+      '**/*.mjs',
+      'scripts/**/*.d.mts',
+      'vitest.config.ts',
+      'vitest.unit.config.ts',
+      'commitlint.config.js',
+    ],
     extends: [tseslint.configs.disableTypeChecked],
   },
   {
@@ -508,6 +515,17 @@ export default tseslint.config(
     // The one file that may wait on real time directly: it defines waitUntil and settle.
     files: ['tests/helpers/timing.ts'],
     rules: { 'no-restricted-syntax': 'off', 'no-restricted-imports': 'off' },
+  },
+  {
+    // Switched to 'error' at the stream gate; lanes run it with --rule until then.
+    files: ['**/*.{ts,mts,js,mjs}'],
+    plugins: { local: { rules: { 'comment-style': commentStyleRule } } },
+    rules: { 'local/comment-style': 'off' },
+  },
+  {
+    // .d.mts mirrors its .mjs exports; a second JSDoc copy would drift (same reason tests/** is off above).
+    files: ['scripts/**/*.d.mts'],
+    rules: { 'jsdoc/require-jsdoc': 'off' },
   },
   prettier
 )
