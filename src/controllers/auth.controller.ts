@@ -9,6 +9,7 @@ import type { Profile as GoogleProfile } from 'passport-google-oauth20'
 import { getEnv, isCookieSecure, type Env } from '@/configs/env.config'
 import {
   GOOGLE_STRATEGY_NAME,
+  // eslint-disable-next-line sonarjs/deprecation -- reads the old cookie name until the next major
   LEGACY_REFRESH_TOKEN_COOKIE_NAME,
   refreshCookieSpec,
   type RefreshCookieSpec,
@@ -123,7 +124,11 @@ function readCookie(request: Request, name: string): string | undefined {
  */
 function readRefreshTokenCookie(request: Request): string | undefined {
   const current = currentRefreshCookie(getEnv())
-  return readCookie(request, current.name) ?? readCookie(request, LEGACY_REFRESH_TOKEN_COOKIE_NAME)
+  return (
+    readCookie(request, current.name) ??
+    // eslint-disable-next-line sonarjs/deprecation -- reads the old cookie name until the next major
+    readCookie(request, LEGACY_REFRESH_TOKEN_COOKIE_NAME)
+  )
 }
 
 /**
@@ -135,6 +140,7 @@ function presentedRefreshTokens(request: Request): string[] {
   const current = currentRefreshCookie(getEnv())
   const tokens = [
     readCookie(request, current.name),
+    // eslint-disable-next-line sonarjs/deprecation -- reads the old cookie name until the next major
     readCookie(request, LEGACY_REFRESH_TOKEN_COOKIE_NAME),
   ].filter((token): token is string => token !== undefined)
   return [...new Set(tokens)]
@@ -151,6 +157,7 @@ function presentedRefreshTokens(request: Request): string[] {
  * @param env - The validated environment.
  */
 function clearLegacyRefreshCookies(request: Request, response: Response, env: Env): void {
+  // eslint-disable-next-line sonarjs/deprecation -- reads the old cookie name until the next major
   if (readCookie(request, LEGACY_REFRESH_TOKEN_COOKIE_NAME) === undefined) return
   const current = currentRefreshCookie(env)
   const forms = [refreshCookieSpec({ COOKIE_SECURE: false })]
@@ -259,6 +266,7 @@ function clearPresentedRefreshCookie(request: Request, response: Response): void
   if (wasCurrentRead) {
     response.clearCookie(current.name, refreshCookieOptions(current, env, 'strict'))
   }
+  // eslint-disable-next-line sonarjs/deprecation -- reads the old cookie name until the next major
   if (!wasCurrentRead || current.name === LEGACY_REFRESH_TOKEN_COOKIE_NAME) {
     clearLegacyRefreshCookies(request, response, env)
   }

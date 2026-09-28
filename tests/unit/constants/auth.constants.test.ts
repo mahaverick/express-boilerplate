@@ -4,6 +4,7 @@
 // Secure, Path=/ and no Domain; __Secure- requires Secure. A plain name has no
 // prefix rules, so COOKIE_DOMAIN still applies to it.
 import { describe, expect, it } from 'vitest'
+// eslint-disable-next-line sonarjs/deprecation -- reads the old cookie name until the next major
 import { LEGACY_REFRESH_TOKEN_COOKIE_NAME, refreshCookieSpec } from '@/constants/auth.constants'
 
 describe('refreshCookieSpec', () => {
@@ -40,6 +41,7 @@ describe('refreshCookieSpec', () => {
   })
 
   it('keeps the legacy name', () => {
+    // eslint-disable-next-line sonarjs/deprecation -- reads the old cookie name until the next major
     expect(LEGACY_REFRESH_TOKEN_COOKIE_NAME).toBe('refreshToken')
   })
 })

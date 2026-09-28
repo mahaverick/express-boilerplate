@@ -66,11 +66,12 @@ export function render(shape: Record<string, z.ZodType>): string {
 }
 
 /**
- * Render README's environment table from the environment schema's field map.
+ * Render ARCHITECTURE.md's environment table from the environment schema's
+ * field map.
  *
  * One row per field, in schema order: whether it is required, its default,
  * and its `.describe()` text with `|` escaped. The output is unpadded;
- * prettier pads the columns once it is pasted into README.md.
+ * prettier pads the columns once it is pasted into ARCHITECTURE.md.
  * @param shape - The schema's field map (`EnvSchema.shape`), keyed by environment variable name.
  * @returns The Markdown table, header row first, with no trailing newline.
  */
@@ -94,7 +95,7 @@ export function renderEnvTable(shape: Record<string, z.ZodType>): string {
 
 // Only act when this module is run directly, not when it is imported by a
 // test. `pnpm env:example` writes .env.example; `pnpm env:table` passes
-// --table and prints README's table to stdout instead.
+// --table and prints ARCHITECTURE.md's table to stdout instead.
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   if (process.argv.includes('--table')) {
     process.stdout.write(`${renderEnvTable(EnvSchemaShape)}\n`)

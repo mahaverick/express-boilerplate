@@ -33,8 +33,8 @@
 // A rotation runs in one transaction that first takes the user row FOR
 // SHARE. Logout, the kills a reused or over-age token triggers, the Google
 // account claim and password writes lock that row FOR NO KEY UPDATE before
-// their in-transaction revoke (revokeSession, revokeAllSessionsExceptCurrent
-// and revokeAllSessions' unlocked pass excepted), so a rotation either
+// their in-transaction revoke (revokeSession and revokeAllSessions' unlocked
+// pass excepted), so a rotation either
 // commits first and its new token is revoked, or waits and then finds the
 // presented token revoked. Every bulk revoke of `user_tokens` locks its rows
 // in id order (see user-token.repository.ts's header).
@@ -644,22 +644,5 @@ export async function denySessionsAfterCommit(userId: string, sessionIds: string
  */
 export async function revokeAllSessions(userId: string): Promise<void> {
   const sessionIds = await withTransaction((tx) => revokeSessionRows(userId, {}, tx))
-  await denySessions(sessionIds)
-}
-
-/**
- * Revoke every live session belonging to a user except one, and deny each
- * revoked session's access tokens (best-effort — see `denySession`).
- * @param userId - The user whose sessions should all end, except one.
- * @param sessionId - The one session id to spare.
- * @returns Resolves once every other session's tokens are revoked and denied, best-effort.
- */
-export async function revokeAllSessionsExceptCurrent(
-  userId: string,
-  sessionId: string
-): Promise<void> {
-  const sessionIds = await withTransaction((tx) =>
-    revokeSessionRows(userId, { exceptSessionId: sessionId }, tx)
-  )
   await denySessions(sessionIds)
 }

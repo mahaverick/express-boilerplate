@@ -28,7 +28,6 @@ import {
   issueRefreshToken,
   issueToken,
   revokeAllSessions,
-  revokeAllSessionsExceptCurrent,
   revokeSession,
   rotateRefreshToken,
   signAccessToken,
@@ -588,23 +587,6 @@ describe('revocation denies the revoked sessions (session.service owns the denyl
 
     expect(await isSessionDenied(sessionOne)).toBe(true)
     expect(await isSessionDenied(sessionTwo)).toBe(true)
-    expect(await isSessionDenied(otherUsersSession)).toBe(false)
-  })
-
-  it('revokeAllSessionsExceptCurrent denies every revoked session except the spared one, and never another user’s', async () => {
-    const userId = await createUser()
-    const otherUserId = await createUser()
-    const spared = randomUUID()
-    const revoked = randomUUID()
-    const otherUsersSession = randomUUID()
-    await issueRefreshToken(userId, spared)
-    await issueRefreshToken(userId, revoked)
-    await issueRefreshToken(otherUserId, otherUsersSession)
-
-    await revokeAllSessionsExceptCurrent(userId, spared)
-
-    expect(await isSessionDenied(spared)).toBe(false)
-    expect(await isSessionDenied(revoked)).toBe(true)
     expect(await isSessionDenied(otherUsersSession)).toBe(false)
   })
 

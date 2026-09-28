@@ -113,6 +113,7 @@ export const MAX_NAME_LENGTH = 100
  * The refresh cookie's unprefixed name: the current name without
  * COOKIE_SECURE, and still read everywhere else so a browser holding it
  * keeps its session.
+ * @deprecated removed in the next major version
  */
 export const LEGACY_REFRESH_TOKEN_COOKIE_NAME = 'refreshToken'
 
@@ -146,8 +147,10 @@ export function refreshCookieSpec(env: {
   const domain = env.COOKIE_DOMAIN
   if (!env.COOKIE_SECURE) {
     return domain === undefined
-      ? { name: LEGACY_REFRESH_TOKEN_COOKIE_NAME, path: REFRESH_TOKEN_COOKIE_PATH }
-      : { name: LEGACY_REFRESH_TOKEN_COOKIE_NAME, path: REFRESH_TOKEN_COOKIE_PATH, domain }
+      ? // eslint-disable-next-line sonarjs/deprecation -- reads the old cookie name until the next major
+        { name: LEGACY_REFRESH_TOKEN_COOKIE_NAME, path: REFRESH_TOKEN_COOKIE_PATH }
+      : // eslint-disable-next-line sonarjs/deprecation -- reads the old cookie name until the next major
+        { name: LEGACY_REFRESH_TOKEN_COOKIE_NAME, path: REFRESH_TOKEN_COOKIE_PATH, domain }
   }
   if (domain === undefined) return { name: '__Host-refreshToken', path: '/' }
   return { name: '__Secure-refreshToken', path: REFRESH_TOKEN_COOKIE_PATH, domain }
