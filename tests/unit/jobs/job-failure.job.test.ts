@@ -1,8 +1,9 @@
-// tests/unit/jobs/job-failure.job.test.ts
-//
-// The failed-job rules on plain stand-ins for BullMQ's Job: which failure is
-// the last, what scrubbing replaces, and what the one error line carries.
-// The real Worker path is tests/integration/workers/*.worker.test.ts.
+/**
+ * @file The failed-job rules on plain stand-ins for BullMQ's Job: which
+ * failure is the last, what scrubbing replaces, and what the one error
+ * line carries. The real Worker path is
+ * tests/integration/workers/*.worker.test.ts.
+ */
 import { UnrecoverableError, type Job } from 'bullmq'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -60,10 +61,7 @@ describe('isTerminalFailure', () => {
 
   it('matches UnrecoverableError by name too, as BullMQ does', () => {
     const error = new Error('stop')
-    // Not `error.name = ...`: unicorn/no-error-property-assignment forbids
-    // assigning a built-in Error property directly, including via
-    // Object.assign. defineProperty reaches the same shape without
-    // tripping that rule (same pattern as logger.service.test.ts).
+    // Not `error.name = ...`: unicorn/no-error-property-assignment forbids assigning a built-in Error property directly, including via Object.assign; defineProperty reaches the same shape without tripping that rule.
     Object.defineProperty(error, 'name', { value: 'UnrecoverableError' })
     expect(isTerminalFailure(fakeJob({ attemptsMade: 1, attempts: 5 }), error)).toBe(true)
   })
