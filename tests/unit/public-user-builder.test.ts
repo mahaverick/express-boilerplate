@@ -1,8 +1,8 @@
-// tests/unit/public-user-builder.test.ts
-//
-// Every response that returns a user builds it with toProfileResponse, so it
-// carries platformRole. A bare toPublicUser( call outside the presenter
-// would ship a user without it; this scan fails first.
+/**
+ * @file Every response that returns a user must build it through
+ * user.presenter.ts, so it carries platformRole. Scans src/ for a bare
+ * `toPublicUser(` call outside the presenter.
+ */
 import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'

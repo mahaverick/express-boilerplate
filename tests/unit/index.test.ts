@@ -1,14 +1,8 @@
-// tests/unit/index.test.ts
-//
-// index.ts is signal wiring and excluded from coverage, so this proves the
-// one thing a unit test of assertEnvConsistent cannot: that boot runs it,
-// and exits 1 before anything starts. The child's database and Redis point
-// at port 1, so even a regression that let it boot reaches no shared service.
-// Its otherwise-valid base env is this process's: the test env that
-// tests/helpers/setup-global.ts loaded (.env.test.local, then .env.test).
-// VITEST is inherited too, so the child never loads a developer's .env.
-// APP_PORT=70000 makes listen() throw ERR_SOCKET_BAD_PORT, which also exits
-// 1, so the stderr check below is what proves boot stopped before listening.
+/**
+ * @file index.ts is signal wiring and excluded from coverage, so this
+ * proves the one thing a unit test of assertEnvConsistent cannot: that
+ * boot actually calls it and exits 1 before anything starts.
+ */
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
@@ -16,8 +10,15 @@ import { describe, expect, it } from 'vitest'
 const execFileAsync = promisify(execFile)
 
 describe('index.ts boot checks', () => {
+  /**
+   * The spawned child points its database and Redis at port 1, so even
+   * a regression that let boot proceed reaches no shared service;
+   * APP_PORT=70000 forces a second, later exit path (listen() throwing
+   * ERR_SOCKET_BAD_PORT), so the stderr assertion below is what proves
+   * boot stopped before that point. A clean exit leaves `failure`
+   * empty, so the code assertion fails.
+   */
   it('refuses to boot with a renamed variable, printing the new name and exiting 1', async () => {
-    // A clean exit leaves `failure` empty, so the code assertion fails.
     let failure: { code?: number; stderr?: string } = {}
     try {
       await execFileAsync(process.execPath, ['--import', 'tsx', 'src/index.ts'], {
