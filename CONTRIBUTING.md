@@ -196,8 +196,9 @@ that adds it. The file's own comments carry the detail.
   per-platform package or compiles one via `node-gyp`; without a binding,
   `msgpackr` falls back to its pure-JS encoder.
 - **`allowBuilds.protobufjs`**: a transitive dependency of
-  `@opentelemetry/sdk-node` (via its OTLP gRPC exporters). Its postinstall only reads `package.json` files to print a
-  version-scheme warning: no network access, no compilation.
+  `@opentelemetry/sdk-node` (via its OTLP gRPC exporters). Its postinstall
+  only reads `package.json` files to print a version-scheme warning: no
+  network access, no compilation.
 - **`allowBuilds.unrs-resolver`**: the resolver `eslint-plugin-import-x` uses
   for `@/*` alias and TypeScript-path resolution. Its postinstall only fetches
   a prebuilt binary for the host platform. Dev-only.

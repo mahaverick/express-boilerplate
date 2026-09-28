@@ -47,10 +47,11 @@ rather than repeating them.
 ## Logging
 
 - **Use `logger` from `@/services/logger.service`, never `console.*`, in
-  `src/`.** `no-restricted-properties` exempts three files, each of which runs
-  where the logger can't: `logger.service.ts` (the Slack destination's failure
-  path, which must not re-enter the logger), `index.ts` (the pre-boot error
-  path) and `observability/tracing.ts` (it loads before the app).
+  `src/`.** `no-restricted-properties` is off in four files:
+  `configs/env.config.ts` (its job is parsing `process.env`), and three that
+  run where the logger can't: `logger.service.ts` (the Slack destination's
+  failure path, which must not re-enter the logger), `index.ts` (the pre-boot
+  error path) and `observability/tracing.ts` (it loads before the app).
 - **Don't pass `requestId` in log meta.** The request-context mixin adds it,
   and its fields win over a caller's field of the same name. See
   [ARCHITECTURE.md](ARCHITECTURE.md#request-correlation).
@@ -167,7 +168,8 @@ rather than repeating them.
 ## Multi-tenancy and RBAC
 
 - **New tenant routes compose `resolveTenant()` and `requireRole(...)`.**
-  `requireRole` treats each listed role as a floor (`isRoleAtLeast`).
+  `requireRole` treats each listed role as a floor (`isRoleAtLeast`; owner >
+  admin > manager > editor > viewer, `MEMBERSHIP_ROLES`).
 - **The tenant comes from `:slug` only.** Don't add a header-based selector: a
   header naming a different tenant than the path is a confused-deputy hole.
 - **Non-members get 404, not 403**, so a response never reveals that a tenant
@@ -364,7 +366,9 @@ exemption.
   watching the specific error appear.
 - **Don't build a leak assertion on `JSON.stringify(err)`:** an `Error`'s
   `message` and `stack` are non-enumerable, so it prints `{}`. Use
-  `util.inspect(err, { depth: null })`.
+  `util.inspect(err, { depth: null })`. A `DrizzleQueryError` is partly
+  enumerable (`query` and `params` survive), so the same line can be
+  load-bearing in one test and vacuous in the next: check, don't assume.
 - **For a guard `a && b`, a test supplies the case where `a` is true and `b`
   is false;** otherwise `b` can be deleted with the suite green.
 - **Don't assert a constant against itself, or `toStrictEqual` between two
@@ -393,9 +397,10 @@ exemption.
   compares outside any transaction, then locks `FOR SHARE`, re-reads the hash
   and issues the refresh token in one. Keep `lastLoggedInAt` and
   `autoJoinSafely` outside that transaction, so the user row is held
-  `FOR SHARE` only for the re-read and the token insert; `autoJoinSafely`
-  takes no row lock and runs its own transaction (a membership insert that
-  does nothing if one exists, and an audit row). The Redis denylist is written
+  `FOR SHARE` only for the re-read and the token insert. `autoJoinSafely`
+  takes no explicit row lock (only the `FOR KEY SHARE` its inserts' foreign
+  keys take) and runs its own transaction: a membership insert that does
+  nothing if one exists, and an audit row. The Redis denylist is written
   after commit and never fails the request (`denySessionsAfterCommit`). The
   Google claim, logout and both kills take the user row `FOR NO KEY UPDATE`;
   rotation takes it `FOR SHARE`. The kills run after the rotation commits,
@@ -451,7 +456,8 @@ exemption.
   new `POST`/`PUT`/`PATCH`/`DELETE` route, or give the route its own spec.
   Build it once per router and reuse it on each write route, so the in-memory
   fallback keeps one budget. `tests/unit/routes/route-limiters.test.ts` fails
-  otherwise; a hand-rolled `rateLimit()` doesn't count.
+  otherwise; a hand-rolled `rateLimit()` doesn't count. Each entry in its
+  allowlist, for a route that can't carry a limiter, needs a reason.
 - **Bind a timestamp in raw `sql` as `${date.toISOString()}::timestamptz`.**
   A `Date` inside a `sql` template reaches postgres-js unserialised and the
   query fails; `lt(column, date)` is fine.
