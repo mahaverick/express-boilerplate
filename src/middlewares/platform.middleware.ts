@@ -1,7 +1,7 @@
-// src/middlewares/platform.middleware.ts
-//
-// The gate for /platform routes. The platform role is read on every request,
-// with no cache, so a revocation takes effect on the next request.
+/**
+ * @file The gate for `/platform` routes. The platform role is read on every
+ * request, with no cache, so a revocation takes effect on the next request.
+ */
 import type { NextFunction, Request, Response } from 'express'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import { HttpError } from '@/errors/http-error'
