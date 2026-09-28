@@ -2,9 +2,9 @@
  * @file Pure tenant authorization rules. Each returns a boolean and never
  * throws; the calling service throws the HttpError, passing the actor's role
  * as read inside its transaction. Under platform access that role is the
- * platform role, so staff face the same rules as members. Tenant lifecycle
- * endpoints (suspend, archive) must require owner or admin and, under
- * platform access, a platform owner or admin as well.
+ * platform role, so staff face the same rules as members. Any tenant
+ * lifecycle endpoint (suspend, archive) must require owner or admin and,
+ * under platform access, a platform owner or admin as well.
  */
 import { MEMBERSHIP_ROLES, type MembershipRole } from '@/constants/tenant.constants'
 

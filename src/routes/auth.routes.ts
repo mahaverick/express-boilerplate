@@ -1,7 +1,8 @@
 /**
- * @file The `/api/v1/auth` router. Every route carries a rate limiter with its
- * own store prefix: an unlimited auth route is an enumeration oracle, a
- * bcrypt or mail amplifier, or a password oracle. `RATE_LIMITS`
+ * @file The `/api/v1/auth` router. Every route except `GET /providers` (a read
+ * of the caller's own data) carries a rate limiter with its own store prefix:
+ * an unlimited auth route is an enumeration oracle, a bcrypt or mail
+ * amplifier, or a password oracle. `RATE_LIMITS`
  * (rate-limit.constants.ts) holds each limiter's reasoning.
  */
 import { Router, type RequestHandler } from 'express'

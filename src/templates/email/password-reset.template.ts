@@ -11,7 +11,8 @@ import {
 
 /**
  * This template's entry in `EMAIL_TEMPLATE_KEYS`. `satisfies`, not an
- * annotation, so it stays the literal `MailMessage`'s union narrows on.
+ * annotation, so it keeps the literal type that `MailMessage`'s union
+ * narrows on.
  */
 export const PASSWORD_RESET_TEMPLATE_KEY = 'password_reset' satisfies EmailTemplateKey
 

@@ -221,8 +221,9 @@ function setRefreshTokenCookie(
  * cookie on cross-site subresource requests and cross-site unsafe (non-GET)
  * requests — the actual CSRF surface `'strict'` exists to close for every
  * other endpoint — while allowing it on this top-level GET redirect chain.
- * A legacy `refreshToken` cookie is `'lax'` and can arrive here;
- * `setRefreshTokenCookie` clears it like any other set.
+ * A legacy `refreshToken` cookie set by the OAuth callback is `'lax'`, so
+ * this cross-site navigation can carry it here; `setRefreshTokenCookie`
+ * clears it like any other set.
  * @param request - The callback request.
  * @param response - The response to set the cookie on.
  * @param rawToken - The raw refresh token.

@@ -12,7 +12,8 @@ import {
 
 /**
  * This template's entry in `EMAIL_TEMPLATE_KEYS`. `satisfies`, not an
- * annotation, so it stays the literal `MailMessage`'s union narrows on.
+ * annotation, so it keeps the literal type that `MailMessage`'s union
+ * narrows on.
  */
 export const EMAIL_VERIFICATION_TEMPLATE_KEY = 'email_verification' satisfies EmailTemplateKey
 
