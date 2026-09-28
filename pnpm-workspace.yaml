@@ -24,8 +24,5 @@ allowBuilds:
   # directly for module/TS-path resolution. Its postinstall only fetches a
   # prebuilt binary for the host platform; no arbitrary script.
   unrs-resolver: true
-# Minutes (3 days). Matches renovate.json; the excludes below are exceptions to it.
+# Minutes (3 days). Matches renovate.json.
 minimumReleaseAge: 4320
-minimumReleaseAgeExclude:
-  - dotenv@18.0.3
-  - supertest@7.3.0

@@ -203,10 +203,10 @@ that adds it. The file's own comments carry the detail.
   a prebuilt binary for the host platform. Dev-only.
 - **`minimumReleaseAge: 4320`**: pnpm refuses any version published less than
   3 days (4320 minutes) ago, the window `renovate.json` also waits. A frozen
-  install checks every lockfile entry against it.
-- **`minimumReleaseAgeExclude`**: exceptions to that window, one
-  `name@version` per entry (currently `dotenv@18.0.3` and `supertest@7.3.0`).
-  Each is needed only until its version is 3 days old; delete it then.
+  install checks every lockfile entry against it. An exception goes under a
+  `minimumReleaseAgeExclude` key, one `name@version` per entry, needed only
+  until that version is 3 days old; delete the entry then, and the key itself
+  once no exception remains.
 
 ## Docs to update alongside a change
 

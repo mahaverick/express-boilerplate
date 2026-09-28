@@ -52,7 +52,7 @@ services:
       retries: 10
 
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:latest
+    image: otel/opentelemetry-collector-contrib:0.160.0
     command: ['--config=/etc/otel/config.yaml']
     # Bind-mounted: editing otel-collector.yaml needs
     # `docker compose restart otel-collector` — `docker compose up -d` does
