@@ -1,7 +1,7 @@
-// tests/unit/helpers/request.test.ts
-//
-// No database, no Redis: a bare request listener that answers with the
-// local address the connection arrived on.
+/**
+ * @file No database, no Redis: a bare request listener that answers with
+ * the local address the connection arrived on.
+ */
 import http, { type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { request } from '../../helpers/request'

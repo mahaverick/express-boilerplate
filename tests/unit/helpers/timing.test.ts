@@ -1,7 +1,8 @@
-// tests/unit/helpers/timing.test.ts
-//
-// No database, no Redis. Where a timeout decides how many checks run, the
-// count is asserted loosely (at least N), so these tests do not depend on scheduling.
+/**
+ * @file No database, no Redis. Where a timeout decides how many checks
+ * run, the count is asserted loosely (at least N), so these tests do not
+ * depend on scheduling.
+ */
 import { describe, expect, it } from 'vitest'
 import { settle, waitUntil } from '../../helpers/timing'
 
