@@ -1,7 +1,7 @@
-// tests/unit/templates/email/email-verification.template.test.ts
-//
-// Pure rendering — no database, no container, no I/O — so this lives under
-// tests/unit/, not tests/integration/ (CLAUDE.md).
+/**
+ * @file Pure rendering — no database, no container, no I/O — so this
+ * lives under tests/unit/, not tests/integration/.
+ */
 import { describe, expect, it } from 'vitest'
 import {
   EMAIL_VERIFICATION_TEMPLATE_KEY,
@@ -31,10 +31,7 @@ describe('renderEmailVerificationTemplate', () => {
     expect(rendered.html).toContain('Acme')
   })
 
-  // task-3-brief.md: "the reset/verification URL has to be present and
-  // usable in the text part, not only as an HTML anchor" — a text-only
-  // client renders no markup, so the raw, clickable URL must appear as
-  // literal text.
+  // The verification URL has to be present and usable in the text part, not only as an HTML anchor — a text-only client renders no markup, so the raw, clickable URL must appear as literal text.
   it('the verification URL is present and usable (unescaped) in the plain-text part', () => {
     const rendered = renderEmailVerificationTemplate(validVariables)
     expect(rendered.text).toContain(validVariables.verificationUrl)
@@ -45,25 +42,23 @@ describe('renderEmailVerificationTemplate', () => {
     expect(rendered.html).toContain(`href="${validVariables.verificationUrl}"`)
   })
 
-  // Load-bearing: proves escaping through the PUBLIC render function, on
-  // real output, with a payload that would actually execute if unescaped —
-  // not merely one containing an angle bracket, and not a direct call to
-  // escapeHtmlForEmail in isolation (task-3-brief.md's addendum, verbatim).
+  /**
+   * Proves escaping through the public render function, on real output,
+   * with a payload that would actually execute if unescaped — not
+   * merely one containing an angle bracket, and not a direct call to
+   * escapeHtmlForEmail in isolation.
+   */
   describe('escaping', () => {
     it('escapes a script-executing payload in a text-node position (firstName) in html, but leaves text unescaped', () => {
       const payload = '<img src=x onerror=alert(1)>'
       const rendered = renderEmailVerificationTemplate({ ...validVariables, firstName: payload })
 
-      // The raw, dangerous markup must not survive into the HTML part in
-      // any form that a mail client's HTML renderer would execute.
+      // The raw, dangerous markup must not survive into the HTML part in any form that a mail client's HTML renderer would execute.
       expect(rendered.html).not.toContain(payload)
       expect(rendered.html).not.toContain('<img')
       expect(rendered.html).toContain('&lt;img src=x onerror=alert(1)&gt;')
 
-      // The plain-text part is not HTML, so it must NOT be escaped — a
-      // recipient reading it in a text client should see the real value,
-      // not HTML entities. This is what stops a lazy "escape everything
-      // everywhere" implementation from passing.
+      // The plain-text part is not HTML, so it must NOT be escaped — a recipient reading it in a text client should see the real value, not HTML entities. This is what stops a lazy "escape everything everywhere" implementation from passing.
       expect(rendered.text).toContain(payload)
     })
 
@@ -74,14 +69,12 @@ describe('renderEmailVerificationTemplate', () => {
         verificationUrl: payload,
       })
 
-      // The raw href attribute must never let the payload's own quote close
-      // the attribute early and inject a new one.
+      // The raw href attribute must never let the payload's own quote close the attribute early and inject a new one.
       expect(rendered.html).not.toContain(`href="${payload}"`)
       expect(rendered.html).not.toContain('" onmouseover="alert(1)')
       expect(rendered.html).toContain('&quot; onmouseover=&quot;alert(1)')
 
-      // The plain-text part carries the real, working URL — a text client
-      // has no attribute context to break out of.
+      // The plain-text part carries the real, working URL — a text client has no attribute context to break out of.
       expect(rendered.text).toContain(payload)
     })
   })
@@ -105,8 +98,7 @@ describe('renderEmailVerificationTemplate', () => {
     })
   })
 
-  // task-3-brief.md: "No token may appear in a subject line." verificationUrl
-  // is the one variable in this template that could carry a token.
+  // No token may appear in a subject line; verificationUrl is the one variable in this template that could carry a token.
   it('never includes the verification URL in the subject', () => {
     const uniqueToken = 'verify-token-should-never-reach-a-subject-line'
     const rendered = renderEmailVerificationTemplate({
