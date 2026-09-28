@@ -1,12 +1,11 @@
-// tests/helpers/timing.ts
-//
-// waitUntil polls an observable condition instead of guessing how long an
-// async effect takes. settle is a deliberate real-time wait for the rare
-// case where nothing observable stands in for the delay itself; its reason
-// argument names that case at each call site. This is the only file under
-// tests/ that lint lets wait on real time directly (sleep, a setTimeout
-// promise, timers/promises), so every other deliberate wait goes through
-// settle here.
+/**
+ * @file `waitUntil` polls an observable condition instead of guessing how
+ * long an async effect takes; `settle` is a deliberate real-time wait for
+ * the rare case where nothing observable stands in for the delay itself.
+ * `eslint.config.mjs` exempts only this file from the lint rule banning a
+ * bare sleep in a test, so every other deliberate wait goes through `settle`
+ * here.
+ */
 import { setTimeout as delay } from 'node:timers/promises'
 import { inspect } from 'node:util'
 

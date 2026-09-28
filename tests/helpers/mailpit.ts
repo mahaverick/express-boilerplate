@@ -1,12 +1,7 @@
-// tests/helpers/mailpit.ts
-//
-// Mailpit's own HTTP API, shared by every test that asserts on outbound
-// mail. `findMailpitMessages`, `assertNoMailpitMessage` and
-// `deleteMailpitMessage` began as module-scope helpers inside
-// mailer.service.test.ts and were moved here unchanged when a second test
-// file needed them — their comments are original to that file.
-// `getMailpitMessage` and `drainMailpit` are new: the former replaces an
-// inline fetch that had no comment to move, the latter has no caller yet.
+/**
+ * @file Mailpit's own HTTP API, shared by every test that asserts on
+ * outbound mail.
+ */
 import { expect } from 'vitest'
 import { settle } from './timing'
 
@@ -49,12 +44,10 @@ export async function findMailpitMessages(recipient: string): Promise<MailpitMes
  * "arrived" signal to short-circuit on), so it is used sparingly.
  *
  * A single unwaited fetch here would pass whether or not anything is ever
- * going to arrive — CLAUDE.md names this exact shape ("a helper whose
- * JSDoc claims it polls a budget while its body does one unwaited fetch")
- * as a real, previously-shipped false-negative. This loops for the whole
- * budget so a message that lands mid-window — a real risk for a caller
- * racing a fire-and-forget mail send against a negative assertion — still
- * fails it.
+ * going to arrive; see CLAUDE.md for why that shape is a false negative.
+ * This loops for the whole budget so a message that lands mid-window — a
+ * real risk for a caller racing a fire-and-forget mail send against a
+ * negative assertion — still fails it.
  * @param recipient - The `To:` address that must never receive anything.
  * @returns Resolves once the budget has elapsed with nothing found.
  */
@@ -105,6 +98,6 @@ export async function deleteMailpitMessage(id: string): Promise<void> {
       body: JSON.stringify({ IDs: [id] }),
     })
   } catch {
-    // Best-effort only — see this function's own comment.
+    // Best-effort: see this function's own JSDoc.
   }
 }

@@ -1,10 +1,11 @@
-// tests/helpers/lock-probe.ts
-//
-// Detects a row-lock wait without sleeping on a guess: pg_blocking_pids(pid)
-// lists the backends a waiting backend is queued behind, which answers both
-// 'is this backend waiting' and 'is anything waiting on this one'. The test pool has
-// two connections and a race holds both, so each probe opens its own
-// single-connection client and closes it before returning.
+/**
+ * @file Detects a row-lock wait without sleeping on a guess:
+ * `pg_blocking_pids(pid)` lists the backends a waiting backend is queued
+ * behind, which answers both "is this backend waiting" and "is anything
+ * waiting on this one". The test pool holds only `DB_POOL_MAX=2`
+ * connections and a race under test holds both, so each probe opens its own
+ * single-connection client and closes it before returning.
+ */
 import { sql as drizzleSql } from 'drizzle-orm'
 import postgres from 'postgres'
 import { getEnv } from '@/configs/env.config'
@@ -13,7 +14,10 @@ import { settle } from './timing'
 
 const POLL_INTERVAL_MS = 10
 const DEFAULT_TIMEOUT_MS = 5000
-// SQLSTATE query_canceled: what statement_timeout raises.
+
+/**
+ * SQLSTATE `query_canceled`: what `statement_timeout` raises.
+ */
 const QUERY_CANCELED = '57014'
 
 /**
@@ -107,7 +111,7 @@ export async function pollUntil(
   }
   void observe()
 
-  // Connecting can't outlast the helper's own timeout either.
+  // connect_timeout is whole seconds: rounding up gives a sub-second timeoutMs a full second to connect, longer than the poll's own budget.
   const probe = postgres(getEnv().DATABASE_URL, {
     max: 1,
     connect_timeout: Math.max(1, Math.ceil(timeoutMs / 1000)),
