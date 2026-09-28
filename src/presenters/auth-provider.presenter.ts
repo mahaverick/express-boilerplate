@@ -1,8 +1,8 @@
-// src/presenters/auth-provider.presenter.ts
-//
-// `providerId` is deliberately absent from the public shape: it holds the
-// caller's email for 'email' and Google's stable `sub` for 'google', an
-// external identifier with no reason to leave this server.
+/**
+ * @file Auth-provider rows to their wire shape. `providerId` is deliberately
+ * absent: it holds the caller's email for 'email' and Google's stable `sub`
+ * for 'google', an external identifier with no reason to leave this server.
+ */
 import type { AuthProvider } from '@/constants/auth-provider.constants'
 import type { AuthProviderRecord } from '@/database/models/auth-provider.model'
 

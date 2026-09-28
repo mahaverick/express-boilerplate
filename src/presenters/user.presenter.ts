@@ -1,11 +1,9 @@
-// src/presenters/user.presenter.ts
-//
-// Two related projections of a `users` row, in one file so the narrower
-// (`AuthenticatedUser`) and the wider (`PublicUser`) can never drift the
-// way two independent hand-maintained copies would. AuthenticatedUser
-// lives here rather than in a middleware because presenters may not import
-// middlewares, and PublicUser must still be built by extending it, not by
-// re-declaring its field list a second time.
+/**
+ * @file The projections of a `users` row. `PublicUser` extends
+ * `AuthenticatedUser` instead of re-declaring its fields, so the two cannot
+ * drift; `AuthenticatedUser` lives here because presenters may not import
+ * middlewares.
+ */
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { User } from '@/database/models/user.model'
 
@@ -14,12 +12,9 @@ import type { User } from '@/database/models/user.model'
  * Deliberately excludes `passwordHash` and anything else a route handler
  * has no business reading off the authenticated principal.
  *
- * The NARROWER of this file's two projections, and the one `PublicUser`
- * extends. Everything on this interface is CLIENT-VISIBLE by construction
- * — `PublicUser` inherits it and `GET /api/v1/profile` returns that.
- * Server-only principal data (a role, a tenant id) must never be added
- * here — see `request.principal` (types/express.d.ts) for where that goes
- * instead.
+ * Everything here is client-visible, since `PublicUser` inherits it and
+ * `GET /api/v1/profile` returns that. Server-only principal data (a role, a
+ * tenant id) goes on `request.principal` (types/express.d.ts), never here.
  */
 export interface AuthenticatedUser {
   id: string
@@ -41,9 +36,7 @@ export function toAuthenticatedUser(user: User): AuthenticatedUser {
  * The fields of a user row it is safe to return to a client. An explicit
  * allow-list, not a `delete`-the-sensitive-key projection.
  *
- * DERIVED from `AuthenticatedUser` plus `createdAt` — the only field the
- * two ever differed by — so a field added to one reaches the other
- * automatically instead of the two silently drifting.
+ * `AuthenticatedUser` plus `createdAt`.
  */
 export interface PublicUser extends AuthenticatedUser {
   createdAt: Date

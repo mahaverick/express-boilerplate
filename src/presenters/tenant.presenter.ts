@@ -1,7 +1,7 @@
-// src/presenters/tenant.presenter.ts
-//
-// Tenant rows to their wire shapes. `role` and `access` on the detail are
-// reported as resolveTenant found them; nothing is authorized on them here.
+/**
+ * @file Tenant rows to their wire shapes. `role` and `access` on the detail are
+ * reported as `resolveTenant` found them; nothing is authorized on them here.
+ */
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { TenantAccess } from '@/types/actor'

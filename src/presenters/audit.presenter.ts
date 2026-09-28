@@ -1,7 +1,7 @@
-// src/presenters/audit.presenter.ts
-//
-// Audit rows to their wire shape. The stored ip, user agent and request id
-// stay server-side.
+/**
+ * @file Audit rows to their wire shape. The stored IP, user agent and request
+ * id stay server-side.
+ */
 import type { AuditLog } from '@/database/models/audit-log.model'
 
 /**
