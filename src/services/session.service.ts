@@ -4,6 +4,7 @@
  * refresh token must be revocable server-side anyway and a JWT would only leak
  * its claims. Every revocation here also denies the revoked sessions' access
  * tokens, best-effort, except `revokeSessionRows`, whose caller denies after commit.
+ * The repository only revokes rows and reports the sessions; it never writes Redis.
  */
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import jwt from 'jsonwebtoken'

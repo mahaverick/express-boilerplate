@@ -141,8 +141,7 @@ export async function markEmailVerified(userId: string, executor: DbExecutor = d
  * Verify an email with a token from the mailed link and the account's
  * password. Every failure throws the same 400. The password is required:
  * without it, someone who registered another person's address with a password
- * they chose would get the account verified by the owner's own click (see
- * 2026-09-15-verify-email-and-login-timestamps-design.md, "Squatting").
+ * they chose would get the account verified by the owner's own click.
  *
  * Claim FIRST, compare SECOND: one presentation is one attempt, so a wrong
  * password spends the token. The dummy hash runs when there is no user, so

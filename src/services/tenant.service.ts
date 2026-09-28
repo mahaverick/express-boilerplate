@@ -244,7 +244,6 @@ export async function updateSettings(
     if (changed.length === 0) return current
     const settings = await tenantSettingsRepository.update(tenantId, changes, tx)
     if (!settings) throw new HttpError('Tenant settings not found', 404)
-    // The settings row's key is the tenant id.
     await record(
       {
         action: 'tenant.settings_updated',

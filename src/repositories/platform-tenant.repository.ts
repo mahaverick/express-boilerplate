@@ -62,7 +62,8 @@ function escapeLikePattern(value: string): string {
 export class PlatformTenantRepository {
   /**
    * A page of every customer tenant, ordered by `(lower(name), id)`, optionally
-   * filtered by a case-insensitive substring of the name or slug.
+   * filtered by a case-insensitive substring of the name or slug. Member counts
+   * include live members only, matching `UserMembershipRepository.listByTenant`.
    * @param options - Page size, the search text and the cursor.
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns The page, with `nextCursor` only when more rows remain.

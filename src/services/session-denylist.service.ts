@@ -21,21 +21,12 @@ export type DenyOutcome = 'denied' | 'failed'
 /**
  * Mark a session's access tokens as no longer honoured.
  *
- * The TTL is the whole design. An entry only has to outlive the tokens it
- * invalidates, so it is set to `ACCESS_TOKEN_TTL` and needs no sweeper and
- * cannot grow without bound. It does NOT expire exactly when the token it
- * targets does, though — the two clocks start at different moments. The
- * TTL here starts NOW, at the moment of denial; the token being denied was
- * minted up to `ACCESS_TOKEN_TTL` earlier and is already partway through
- * its own life. So this entry always OUTLIVES the token it was written
- * for, by however much of the token's life had already elapsed — the safe
- * direction, since the entry disappearing before the token it targets does
- * would silently let that token back in.
+ * The entry's TTL is `ACCESS_TOKEN_TTL`, starting at denial, so it needs no
+ * sweeper and always outlives the token it targets, which was minted earlier.
  *
- * BEST-EFFORT, and deliberately so. A Redis outage or a FLUSHALL drops every
- * entry, and there is no database fallback because the database does not
- * know a given access token exists. What this closes is the ordinary case:
- * a logout should not leave a usable credential behind for fifteen minutes.
+ * Best-effort: a Redis outage or FLUSHALL drops every entry, and the database
+ * has no record of access tokens to fall back on. It closes the ordinary case,
+ * a logout leaving a usable credential behind for up to `ACCESS_TOKEN_TTL`.
  *
  * It never rethrows. Every revocation in session.service.ts calls this after
  * its database write, and a Redis blip must not turn one into a 500: the

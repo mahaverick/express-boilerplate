@@ -146,6 +146,5 @@ export async function fetchMissedNotifications(
     limit: MAX_NOTIFICATION_PAGE_SIZE,
   })
 
-  // list() returns newest-first; the caller replays oldest-first.
   return notifications.filter((notification) => isNewerThan(notification, cursor)).toReversed()
 }

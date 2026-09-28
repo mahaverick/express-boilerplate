@@ -173,7 +173,6 @@ export async function findOrCreateByGoogle(profile: GoogleProfile): Promise<User
       tx
     )
 
-    // Google verified this address (checked above).
     await markEmailVerified(createdUser.id, tx)
     const verified = await userRepository.findById(createdUser.id, {}, tx)
     if (!verified) throw new HttpError('Created user not found', 500)

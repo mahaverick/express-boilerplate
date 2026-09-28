@@ -281,8 +281,9 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
   /**
    * Revoke every still-live token a user holds for one purpose.
    * `revokeAllForUser` matches on `userId` alone, so clearing stale
-   * verification links with it would also log the user out of every device. Locks its rows in id
-   * order (`lockedIds`), whatever the plan or the physical row layout.
+   * verification links with it would also log the user out of every device.
+   * Locks its rows in id order (`lockedIds`), whatever the plan or the
+   * physical row layout.
    * @param userId - The user whose tokens should be revoked.
    * @param purpose - The only purpose to revoke; every other purpose is untouched.
    * @param executor - Where to run the query. Defaults to the pool.

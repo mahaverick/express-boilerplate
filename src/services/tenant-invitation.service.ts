@@ -1,7 +1,8 @@
 /**
  * @file Invitations to join a tenant: invite, list, resend, revoke, preview, accept.
- * Multi-step writes run in one transaction with their audit entry, whose metadata
- * carries the address's domain only; mail and the in-app notification are
+ * Multi-step writes run in one transaction with their audit entry, and every
+ * query inside one goes through its `tx`. Audit metadata carries the address's
+ * domain only; mail and the in-app notification are
  * enqueued after the write commits, fire-and-forget.
  */
 import { randomBytes } from 'node:crypto'
@@ -514,7 +515,6 @@ export async function accept(rawToken: string, userId: string): Promise<Accepted
       { userId: user.id, tenantId: claimed.tenantId, role: claimed.role },
       tx
     )
-    // The role now held: an existing member keeps theirs.
     await record(
       {
         action: 'invitation.accepted',

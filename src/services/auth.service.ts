@@ -220,7 +220,7 @@ export async function login(input: LoginInput): Promise<LoginResult> {
     throw new HttpError('Invalid email or password', 401)
   }
 
-  // Before tokens, so a failed UPDATE answers 500 without a refresh cookie already set.
+  // After the guard, so a failed attempt leaves no trace; before tokens, so a failed UPDATE sets no cookie.
   await userRepository.update(user.id, { lastLoggedInAt: new Date() })
   // After the guard, so a failed attempt never reaches it; it never throws.
   await autoJoinSafely(user)
@@ -359,7 +359,7 @@ export async function resetPassword(input: ResetPasswordInput): Promise<void> {
  * fails after commit, the change stands, one error line is logged, and the
  * revoked sessions' access tokens stay valid for up to ACCESS_TOKEN_TTL.
  *
- * Without a session id (a pre-`sid` token) every session is revoked, the
+ * Without a session id (no `sid` claim) every session is revoked, the
  * caller's included — that token cannot be told apart from a stolen one.
  * @param userId - The authenticated caller's id.
  * @param currentSessionId - The session to spare, when the token carried one.
