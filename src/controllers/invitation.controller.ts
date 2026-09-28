@@ -1,8 +1,8 @@
-// src/controllers/invitation.controller.ts
-//
-// The invitee's side of an invitation: preview (public) and accept (signed
-// in). A malformed token answers exactly like an unknown one, so the shape
-// check tells a caller nothing the lookup would not.
+/**
+ * @file The invitee's side of an invitation: preview (public) and accept
+ * (signed in). A malformed token answers exactly like an unknown one, so the
+ * shape check tells a caller nothing the lookup would not.
+ */
 import { BaseController } from '@/controllers/base.controller'
 import { authenticatedUserId } from '@/controllers/helpers.controller'
 import { HttpError } from '@/errors/http-error'

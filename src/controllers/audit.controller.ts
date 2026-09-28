@@ -1,8 +1,8 @@
-// src/controllers/audit.controller.ts
-//
-// The two audit-log reads. The tenant route is behind resolveTenant and
-// requireRole('owner', 'admin'); the platform route is behind
-// requirePlatformRole('admin').
+/**
+ * @file The two audit-log reads. The tenant route is behind `resolveTenant` and
+ * `requireRole('owner', 'admin')`; the platform route is behind
+ * `requirePlatformRole('admin')`.
+ */
 import { BaseController } from '@/controllers/base.controller'
 import { tenantPrincipal } from '@/controllers/helpers.controller'
 import { toAuditEntry, toPlatformAuditEntry } from '@/presenters/audit.presenter'
