@@ -1,36 +1,23 @@
-// tests/integration/repositories/user-token-claim-purpose-mutation.test.ts
-//
-// Proves the property task-1-brief.md calls "the test that matters most":
-// without the `purpose` predicate participating in claimOnce's single
-// atomic statement, a password-reset token could be claimed as an email
-// verification, or worse — turning "I can receive mail at this address"
-// into "I can take over this account." The real, always-green proof of
-// this lives in tests/integration/repositories/user-token.repository.test.ts
-// ("claimOnce rejects a claim for a different purpose...") and
-// tests/integration/services/session.service.test.ts ("rejects claiming a
-// password-reset token as an email verification..."); THIS file exists to
-// show those tests would actually catch a regression, not just that they
-// pass today — same rationale, same two-test shape, as
-// token-reuse-mutation.test.ts and user-token-claim-atomicity.test.ts.
-//
-//   1. Always on: mutate claimOnce to the exact predicate claimForRotation
-//      used before this task (tokenHash + revokedAt IS NULL — no purpose
-//      check at all), show a password-reset token is claimable as an email
-//      verification, then let the harness restore the real implementation
-//      and show a FRESH token of the same shape is correctly rejected.
-//
-//   2. `it.runIf(process.env.MUTATION_PROOF === '1')`, DELIBERATELY red
-//      under that flag: reproduces, assertion for assertion, the real
-//      "claimOnce rejects a claim for a different purpose" test's own
-//      `expect(...).toBeUndefined()` against the same purpose-blind
-//      mutation.
-//
-//        MUTATION_PROOF=1 pnpm exec vitest run tests/integration/repositories/user-token-claim-purpose-mutation.test.ts   # red
-//        pnpm exec vitest run tests/integration/repositories/user-token-claim-purpose-mutation.test.ts                    # green
-//
-//      No file changes between the two runs — only the environment
-//      variable differs — and `git status --porcelain` stays empty
-//      throughout (tests/helpers/mutate.ts).
+/**
+ * @file Proves that without the `purpose` predicate participating in
+ * `claimOnce`'s single atomic statement, a password-reset token could be
+ * claimed as an email verification — turning "I can receive mail at this
+ * address" into "I can take over this account." The real, always-green
+ * proof of this lives in
+ * `tests/integration/repositories/user-token.repository.test.ts` and
+ * `tests/integration/services/session.service.test.ts`; this file exists to
+ * show those tests would actually catch a regression, not just that they
+ * pass today — same rationale and two-test shape as
+ * `token-reuse-mutation.test.ts` and `user-token-claim-atomicity.test.ts`.
+ * An always-on test mutates `claimOnce` to the purpose-blind predicate
+ * `claimForRotation` once used (tokenHash + revokedAt IS NULL, no purpose
+ * check), shows a password-reset token is claimable as an email
+ * verification, then shows a fresh token is correctly rejected once
+ * restored; a `MUTATION_PROOF` test reproduces the real "claimOnce rejects
+ * a claim for a different purpose" assertion against the same mutation,
+ * deliberately red (`MUTATION_PROOF=1 pnpm exec vitest run <this file>`; no
+ * file changes between the two runs, per `tests/helpers/mutate.ts`).
+ */
 import { randomBytes, randomUUID } from 'node:crypto'
 import { and, eq, isNull, sql } from 'drizzle-orm'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -65,7 +52,7 @@ function uniqueHash(): string {
 }
 
 /**
- * `claimForRotation`'s exact pre-task-1 predicate: claims the first
+ * `claimForRotation`'s exact former predicate: claims the first
  * not-yet-revoked row for a hash, regardless of purpose. `_purpose` is
  * accepted (and ignored) only so this matches `claimOnce`'s signature for
  * `withMutatedMethod`.
@@ -113,10 +100,7 @@ describe('mutation-test harness, proven on claimOnce’s purpose predicate', () 
   it('a purpose-blind claimOnce lets a password-reset token be claimed as an email verification; restoring the predicate blocks it again', async () => {
     const userId = await createUser()
 
-    // MUTATED: claimOnce ignores purpose entirely — claimForRotation's old
-    // behaviour. A password-reset token must NOT be claimable as an email
-    // verification under the real implementation; under this mutation, it
-    // must be, which is exactly the vulnerability this predicate closes.
+    // MUTATED: claimOnce ignores purpose entirely — under the real implementation this claim must be rejected; under this mutation it must succeed, exactly the vulnerability this predicate closes.
     const mutatedHash = uniqueHash()
     await userTokenRepository.create({
       userId,
@@ -134,15 +118,13 @@ describe('mutation-test harness, proven on claimOnce’s purpose predicate', () 
           mutatedHash,
           'email_verification'
         )
-        // The bug this proves: with the predicate gone, a reset token is
-        // spendable as a verification.
+        // The bug this proves: with the predicate gone, a reset token is spendable as a verification.
         expect(wronglyClaimed).toBeDefined()
         expect(wronglyClaimed?.purpose).toBe('password_reset')
       }
     )
 
-    // RESTORED: a fresh token of the same shape, same sequence of calls,
-    // proves the predicate is back.
+    // RESTORED: a fresh token of the same shape, same sequence of calls, proves the predicate is back.
     const restoredHash = uniqueHash()
     await userTokenRepository.create({
       userId,
@@ -157,9 +139,7 @@ describe('mutation-test harness, proven on claimOnce’s purpose predicate', () 
     expect(correctlyRejected).toBeUndefined()
   })
 
-  // DELIBERATELY red when run with MUTATION_PROOF=1 — see this file's
-  // header comment. Left unset, this test is skipped and the file is
-  // green.
+  // Deliberately red under MUTATION_PROOF=1 (see this file's @file doc); left unset, this test is skipped and the file is green.
   it.runIf(process.env.MUTATION_PROOF === '1')(
     'reproduces the real "claimOnce rejects a claim for a different purpose" test’s own assertion against the purpose-blind mutation',
     async () => {
@@ -178,9 +158,7 @@ describe('mutation-test harness, proven on claimOnce’s purpose predicate', () 
         purposeBlindClaimOnce,
         async () => {
           const wrongPurpose = await userTokenRepository.claimOnce(tokenHash, 'email_verification')
-          // The real test's own assertion, reproduced against the mutated,
-          // purpose-blind implementation — this is what goes red, not a
-          // hand-written stand-in for it.
+          // The real test's own assertion, reproduced against the mutated, purpose-blind implementation — this is what goes red, not a hand-written stand-in.
           expect(wrongPurpose).toBeUndefined()
         }
       )

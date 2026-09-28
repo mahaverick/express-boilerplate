@@ -1,8 +1,10 @@
-// tests/integration/repositories/platform-lookups.repository.test.ts
-//
-// TenantRepository.findPlatformTenant and UserMembershipRepository's
-// findPlatformRole/lockPlatformRole against the seeded platform tenant. Platform memberships made here go with their user in afterEach
-// (user_memberships.user_id cascades); the platform tenant is never deleted.
+/**
+ * @file `TenantRepository.findPlatformTenant` and
+ * `UserMembershipRepository`'s `findPlatformRole`/`lockPlatformRole`
+ * against the seeded platform tenant. Platform memberships made here go
+ * with their user in `afterEach` (`user_memberships.user_id` cascades); the
+ * platform tenant is never deleted.
+ */
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { Tenant } from '@/database/models/tenant.model'

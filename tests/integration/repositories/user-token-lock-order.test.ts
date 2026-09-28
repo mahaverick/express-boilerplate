@@ -1,28 +1,18 @@
-// tests/integration/repositories/user-token-lock-order.test.ts
-//
-// The four bulk revokers lock the rows they revoke in id order, whatever plan
-// or physical row layout Postgres uses (user-token.repository.ts's header).
-//
-// The property test pins that property; it does not reproduce a production
-// interleaving. Two writers deadlock only if they visit shared rows in
-// opposite orders. On today's schema every plan visits in physical order, so
-// the test builds the one layout where physical order and index order
-// disagree: live row `a` is HOT-updated onto a later slot of `b`'s page. It
-// then forces writer A onto a sequential scan (visits b, a) and writer B onto
-// an index scan (visits a, b), while a third connection holds b. Writers that
-// lock in scan order deadlock (40P01); writers that lock in id order queue.
-//
-// The plan-shape test reads EXPLAIN for the SQL each writer really sends:
-// LockRows must sit directly above a node that yields id order. The schema
-// guard fails when an index would make the unordered writers' orders differ
-// on an ordinary layout.
-//
-// The MUTATION_PROOF tests are DELIBERATELY red: each swaps the writers for
-// stand-ins that update by their predicate directly, without locking in id
-// order, and keeps the real test's assertions.
-//
-//   MUTATION_PROOF=1 pnpm exec vitest run tests/integration/repositories/user-token-lock-order.test.ts   # red
-//   pnpm exec vitest run tests/integration/repositories/user-token-lock-order.test.ts                    # green
+/**
+ * @file The four bulk revokers lock the rows they revoke in id order,
+ * whatever plan or physical row layout Postgres uses
+ * (`user-token.repository.ts`'s header). Three groups of tests pin that
+ * property: a race that builds the one physical layout where a forced
+ * sequential scan and a forced index scan would visit shared rows in
+ * opposite orders (and so deadlock, if either writer locked out of id
+ * order); a plan-shape check that each writer's EXPLAIN output locks
+ * through a node that yields id order; and a schema guard against an index
+ * that would let two revokers scan shared rows in different orders. The
+ * `MUTATION_PROOF` tests are deliberately red: each swaps the writers for
+ * stand-ins that update by their predicate directly, without locking in id
+ * order, and keeps the real test's assertions
+ * (`MUTATION_PROOF=1 pnpm exec vitest run <this file>`).
+ */
 import { randomBytes, randomUUID } from 'node:crypto'
 import { eq, sql, type Logger, type SQL } from 'drizzle-orm'
 import { drizzle } from 'drizzle-orm/postgres-js'
@@ -373,8 +363,7 @@ async function raceOnDivergentLayout(): Promise<{ A: Outcome; B: Outcome }> {
     actors.push(writerA)
     expect(await waitForBlocked(await writerA.pid, writerA.statement)).toBe(true)
 
-    // B's index scan meets a first. Unordered, it takes a and queues on b;
-    // ordered, it queues on the first id A holds. Either way it blocks.
+    // B's index scan meets a first: unordered it takes a and queues on b; ordered it queues on the first id A holds. Either way it blocks.
     const writerB = actor(
       connectionB.conn,
       ['enable_seqscan = off', 'enable_bitmapscan = off'],

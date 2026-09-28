@@ -1,20 +1,16 @@
-// tests/integration/repositories/lock-modes.test.ts
-//
-// The row-lock strength each repository lock method takes. FOR NO KEY UPDATE
-// lets a foreign-key insert through (it takes FOR KEY SHARE on the
-// referenced row); FOR UPDATE makes it wait. Each test holds a lock in
-// transaction A and runs the other side in transaction B on the pool's second
-// connection; lock-probe.ts reports whether B queued behind A.
-//
-// Only `tenants` is referenced by foreign keys, so only its lock changes what
-// an ordinary insert does. tenant_settings and user_memberships are probed
-// with an explicit FOR KEY SHARE, the lock such an insert would take.
-//
-// The MUTATION_PROOF tests are DELIBERATELY red: each swaps a lock method for
-// one that takes FOR UPDATE and keeps the real test's assertion.
-//
-//   MUTATION_PROOF=1 pnpm exec vitest run tests/integration/repositories/lock-modes.test.ts   # red
-//   pnpm exec vitest run tests/integration/repositories/lock-modes.test.ts                    # green
+/**
+ * @file The row-lock strength each repository lock method takes: FOR NO KEY
+ * UPDATE lets a foreign-key insert through (it takes FOR KEY SHARE on the
+ * referenced row), FOR UPDATE makes it wait. Each test holds a lock in
+ * transaction A and runs the other side in transaction B on the pool's
+ * second connection; `tests/helpers/lock-probe.ts` reports whether B queued
+ * behind A. Only `tenants` is referenced by foreign keys, so only its lock
+ * changes what an ordinary insert does; `tenant_settings` and
+ * `user_memberships` are probed with an explicit FOR KEY SHARE instead, the
+ * lock such an insert would take. The `MUTATION_PROOF` tests are
+ * deliberately red: each swaps a lock method for one that takes FOR UPDATE
+ * and keeps the real test's assertion (`MUTATION_PROOF=1 pnpm exec vitest run <this file>`).
+ */
 import { randomUUID } from 'node:crypto'
 import { and, eq, inArray, isNull } from 'drizzle-orm'
 import { afterEach, describe, expect, it } from 'vitest'

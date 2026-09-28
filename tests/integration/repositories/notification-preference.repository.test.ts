@@ -1,11 +1,11 @@
-// tests/integration/repositories/notification-preference.repository.test.ts
-//
-// Integration test against the real per-worker Postgres database (see
-// tests/helpers/worker-database.ts). Every user this file creates is
-// deleted in afterEach; notification_preferences.user_id carries ON DELETE
-// CASCADE (notification.model.ts), so a preference row is never explicitly
-// deleted here — the same cascade NotificationRepository's own integration
-// test verifies once directly.
+/**
+ * @file Integration test against the real per-worker Postgres database (see
+ * `tests/helpers/worker-database.ts`). Every user this file creates is
+ * deleted in `afterEach`; `notification_preferences.user_id` carries `ON
+ * DELETE CASCADE` (`notification.model.ts`), so a preference row is never
+ * explicitly deleted here — the same cascade
+ * `notification.repository.test.ts` verifies once directly.
+ */
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import { NOTIFICATION_TYPES } from '@/constants/notification.constants'
@@ -130,9 +130,7 @@ describe('NotificationPreferenceRepository', () => {
 
     it('reflects an explicit row once one exists', async () => {
       const userId = await createUser()
-      // in-app is disabled here to prove isChannelEnabled reads the real
-      // row for a channel that IS disableable — verify_email's email
-      // channel (checked below) never reaches this branch at all.
+      // in-app is disabled here to prove isChannelEnabled reads the real row for a channel that is disableable — verify_email's email channel never reaches this branch at all.
       await preferenceRepository.upsert(userId, 'verify_email', {
         emailEnabled: true,
         inAppEnabled: false,
@@ -150,9 +148,7 @@ describe('NotificationPreferenceRepository', () => {
         inAppEnabled: false,
       })
 
-      // The one channel this repository refuses to ever report disabled —
-      // a user who turned it off would lock themselves out of verifying
-      // their own account. in_app, by contrast, honours the row above.
+      // The one channel this repository refuses to ever report disabled: a user who turned it off would lock themselves out of verifying their own account. in_app, by contrast, honours the row above.
       expect(await preferenceRepository.isChannelEnabled(userId, 'verify_email', 'email')).toBe(
         true
       )
@@ -162,11 +158,7 @@ describe('NotificationPreferenceRepository', () => {
     })
 
     it('always returns true for password_changed’s email channel, even when a row disables it', async () => {
-      // Same non-disableable mechanism as verify_email above, but for a
-      // different reason (notification-preference.repository.ts's
-      // `NON_DISABLEABLE_EMAIL_TYPES` comment): this one locks nobody out —
-      // it exists so an attacker who has taken over the account cannot
-      // silence the one message that tells the real owner it happened.
+      // Same NON_DISABLEABLE_EMAIL_TYPES mechanism as verify_email above, but this one locks nobody out: it exists so an attacker who took over the account cannot silence the message that tells the real owner it happened.
       const userId = await createUser()
       await preferenceRepository.upsert(userId, 'password_changed', {
         emailEnabled: false,
