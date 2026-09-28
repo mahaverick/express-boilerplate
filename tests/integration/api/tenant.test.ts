@@ -1,27 +1,26 @@
-// tests/integration/api/tenant.test.ts
-//
-// Integration test against the real per-worker Postgres database (see
-// tests/helpers/worker-database.ts) — the same convention
-// tests/integration/api/profile.test.ts and
-// tests/integration/middlewares/tenant.middleware.test.ts already follow.
-// Authenticated requests sign a token directly with `signAccessToken`
-// rather than going through `POST /api/v1/auth/login`, and most fixtures
-// (tenants, memberships) are built directly via the repositories rather
-// than through this file's own `POST /tenants` endpoint —
-// `tenant.middleware.test.ts`'s own header comment gives the identical
-// reasoning: these tests are about what happens once a caller is already a
-// member with a given role, not about tenant creation itself (which gets
-// its own `describe` block below, exercised through the real endpoint).
-// Members join only by invitation; tests/integration/api/invitation.test.ts
-// covers those endpoints.
-//
-// RATE LIMITING here is "wiring, not thresholds" — `auth-refresh.test.ts`'s
-// own header comment states the reasoning this file borrows verbatim:
-// exhausting `RATE_LIMITS.createTenant`'s real 20-per-hour budget
-// would spend a budget every other
-// integration file running in parallel shares. The 429 behaviour itself,
-// including the user-keyed discriminator, is proven with small overrides in
-// tests/unit/middlewares/rate-limit.middleware.test.ts.
+/**
+ * @file Integration test against the real per-worker Postgres database
+ * (see tests/helpers/worker-database.ts) — the same convention
+ * tests/integration/api/profile.test.ts and
+ * tests/integration/middlewares/tenant.middleware.test.ts already
+ * follow. Authenticated requests sign a token directly with
+ * `signAccessToken` rather than going through `POST /api/v1/auth/login`,
+ * and most fixtures (tenants, memberships) are built directly via the
+ * repositories rather than through this file's own `POST /tenants`
+ * endpoint: these tests are about what happens once a caller is already
+ * a member with a given role, not about tenant creation itself (which
+ * gets its own `describe` block below, exercised through the real
+ * endpoint). Members join only by invitation;
+ * tests/integration/api/invitation.test.ts covers those endpoints.
+ *
+ * Rate limiting here is wiring, not thresholds: exhausting
+ * `RATE_LIMITS.createTenant`'s real 20-per-hour budget would spend a
+ * budget every other integration file running in parallel shares. The
+ * 429 behaviour itself, including the user-keyed discriminator, is
+ * proven with small overrides in
+ * tests/unit/middlewares/rate-limit.middleware.test.ts.
+ */
+
 import { randomUUID } from 'node:crypto'
 import type { Response } from 'supertest'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -105,11 +104,7 @@ describe('/api/v1/tenants', () => {
 
   afterEach(async () => {
     await truncateAuditLogs()
-    // Tenants first: `tenant_settings.tenant_id` and
-    // `user_memberships.tenant_id` both carry `ON DELETE CASCADE`
-    // (tenant.model.ts, user-membership.model.ts), so deleting the tenant
-    // takes its settings row and every membership row with it — same
-    // convention tenant.repository.test.ts uses.
+    // Tenants first: tenant_settings.tenant_id and user_memberships.tenant_id both carry ON DELETE CASCADE, so deleting the tenant takes its settings and membership rows with it.
     if (createdTenantIds.length > 0) {
       await sql`delete from tenants where id = any(${createdTenantIds})`
       createdTenantIds.length = 0
@@ -316,13 +311,7 @@ describe('/api/v1/tenants', () => {
       expect(response.status).toBe(404)
     })
 
-    // A real race, not a hypothetical one — same reasoning as
-    // profile.test.ts's own "deleted between requireAuth loading it and the
-    // handler loading it again" test: `resolveTenant` (tenant.middleware.ts)
-    // resolves the tenant via `findActiveBySlug`, a DIFFERENT method from
-    // `getTenant`'s own `findById` call — so mutating `findById` alone
-    // cannot make `resolveTenant` itself fail first, and needs no call
-    // counter the way profile.test.ts's `findById` mutation does.
+    // A real race: resolveTenant resolves the tenant via findActiveBySlug, a different method from getTenant's own findById call, so mutating findById alone cannot make resolveTenant itself fail first — no call counter needed.
     it('404s when the tenant is deleted between resolveTenant loading it and the handler loading it again', async () => {
       const { user, token } = await createAuthenticatedUser()
       const tenant = await createTenant(user.id)
@@ -424,11 +413,7 @@ describe('/api/v1/tenants', () => {
       expect(response.status).toBe(404)
     })
 
-    // Mass-assignment: `slug` is not one of `updateTenantSchema`'s fields,
-    // so it is silently stripped, exactly like `updateProfileSchema` strips
-    // `email`/`id`/`passwordHash`/`active` (profile.test.ts's own version of
-    // this test). Read back with raw SQL — an oracle independent of the
-    // repository under test.
+    // Mass-assignment: slug is not one of updateTenantSchema's fields, so it is silently stripped. Read back with raw SQL, an oracle independent of the repository under test.
     it('ignores slug even when supplied, and the stored row proves it', async () => {
       const { user, token } = await createAuthenticatedUser()
       const tenant = await createTenant(user.id)
@@ -446,9 +431,7 @@ describe('/api/v1/tenants', () => {
       expect(row).toEqual({ slug: tenant.slug })
     })
 
-    // Same TOCTOU shape as the GET test above, for `updateTenant`'s own
-    // second lookup — `tenantRepository.update`, taken here because the
-    // request body carries a real change (`hasChanges` is true).
+    // Same TOCTOU shape as the GET test above, for updateTenant's own second lookup — tenantRepository.update, taken here because the request body carries a real change.
     it('404s when the tenant is deleted between resolveTenant loading it and the update itself', async () => {
       const { user, token } = await createAuthenticatedUser()
       const tenant = await createTenant(user.id)
@@ -655,12 +638,7 @@ describe('/api/v1/tenants', () => {
       expect(response.status).toBe(404)
     })
 
-    // The SECOND "Member not found" — a real race, not the "target user was
-    // never a member" 404 two tests above: `findByUserAndTenant` and every
-    // permission/last-owner check already pass, and the membership row
-    // vanishes only in the gap before `updateRole`'s own write. Mutating
-    // `updateRole` (not `findByUserAndTenant`) is what isolates this branch
-    // from the one above.
+    // The second "Member not found" — a real race, not the "target user was never a member" 404 two tests above: permission/last-owner checks already pass, and the row vanishes only in the gap before updateRole's own write.
     it('404s when the membership is deleted between the permission check and the role update itself', async () => {
       const { user: ownerUser, token: ownerToken } = await createAuthenticatedUser()
       const { user: targetUser } = await createAuthenticatedUser()
@@ -812,11 +790,7 @@ describe('/api/v1/tenants', () => {
       expect(response.status).toBe(403)
     })
 
-    // Discovered consequence of the matrix as written, not a fix applied
-    // here — see tenant.controller.ts's `removeMember` and this task's own
-    // report. `actorRole === 'admin'` targeting an `'admin'` (itself) is
-    // `'no'` in the plan's matrix with no self-exception carved out, unlike
-    // the owner row's explicit "self-only".
+    // The matrix carves out no self-exception for admin -> admin, unlike the owner row's explicit "self-only".
     it('blocks an admin from removing THEMSELVES (matrix: admin actor, admin target = no)', async () => {
       const { user: ownerUser } = await createAuthenticatedUser()
       const { user: adminUser, token: adminToken } = await createAuthenticatedUser()
@@ -869,9 +843,7 @@ describe('/api/v1/tenants', () => {
       expect(response.status).toBe(404)
     })
 
-    // The SECOND "Member not found" — same race as updateMemberRole's own
-    // version above: the permission and last-owner checks already pass, and
-    // the row vanishes only in the gap before the delete itself.
+    // The second "Member not found" — same race as updateMemberRole's own version above: the permission and last-owner checks already pass, and the row vanishes only in the gap before the delete itself.
     it('404s when the membership is deleted between the permission check and the delete itself', async () => {
       const { user: ownerUser, token: ownerToken } = await createAuthenticatedUser()
       const { user: targetUser } = await createAuthenticatedUser()
@@ -894,17 +866,20 @@ describe('/api/v1/tenants', () => {
   })
 
   describe('last-owner guard: atomic and blind to soft-deleted owners', () => {
-    // Two owners demote themselves at once. countOwners is wrapped so the
-    // first caller waits (up to 1s) for the second to have counted too.
-    // - Pins: with the owner lock, the second transaction is blocked at
-    //   lockOwners, so the first times out of the wait, commits, and the
-    //   second then counts 1 and gets 409.
-    // - Without the lock both usually count 2 and both succeed, leaving no
-    //   owner; a start gap over 1s could still let that pass.
-    // Pool note: test mode has max 2 connections. The two transactions hold
-    // both, which works only because B waits inside its own connection and A
-    // needs no third. A repository call inside the service that forgot the
-    // executor would hang here until the test timeout.
+    /**
+     * Two owners demote themselves at once. countOwners is wrapped so
+     * the first caller waits (up to 1s) for the second to have counted
+     * too. Pins: with the owner lock, the second transaction is
+     * blocked at lockOwners, so the first times out of the wait,
+     * commits, and the second then counts 1 and gets 409. Without the
+     * lock both usually count 2 and both succeed, leaving no owner.
+     *
+     * Pool note: test mode has max 2 connections. The two transactions
+     * hold both, which works only because B waits inside its own
+     * connection and A needs no third — a repository call inside the
+     * service that forgot the executor would hang here until the test
+     * timeout.
+     */
     it('lets exactly one of two concurrent self-demotions through, leaving one owner', async () => {
       const { user: ownerA, token: tokenA } = await createAuthenticatedUser()
       const { user: ownerB, token: tokenB } = await createAuthenticatedUser()
@@ -924,7 +899,7 @@ describe('/api/v1/tenants', () => {
         tenantId: string,
         executor?: DbExecutor
       ) {
-        // Forward the executor, or post-fix this would count outside the transaction.
+        // Forward the executor, or this would count outside the transaction, defeating the lock.
         const count = await realCountOwners.call(this, tenantId, executor)
         arrivals += 1
         if (arrivals >= 2) releaseBarrier()
@@ -994,9 +969,7 @@ describe('/api/v1/tenants', () => {
       ).toBeDefined()
     })
 
-    // An admin's DELETE is held just before it takes the owner lock, after
-    // any earlier read of the target, while an owner promotes that target to
-    // owner. The permission check must see the promotion and refuse.
+    // An admin's DELETE is held just before it takes the owner lock, after any earlier read of the target, while an owner promotes that target to owner. The permission check must see the promotion and refuse.
     it("re-checks the admin's permission under the lock, so a target promoted to owner mid-request is not removed", async () => {
       const { user: owner, token: ownerToken } = await createAuthenticatedUser()
       const { user: admin, token: adminToken } = await createAuthenticatedUser()
@@ -1093,12 +1066,7 @@ describe('/api/v1/tenants', () => {
       expect(response.status).toBe(404)
     })
 
-    // Defensive, not reachable through any real gap in practice —
-    // `TenantRepository.create` writes the settings row atomically alongside
-    // the tenant itself (getSettings's own comment, tenant.controller.ts) —
-    // but proven the same way as this file's other TOCTOU tests: mutate the
-    // repository call directly, since `resolveTenant` never touches
-    // `tenant_settings` at all and so cannot be tripped up by this.
+    // Defensive, not reachable through any real gap in practice — TenantRepository.create writes the settings row atomically alongside the tenant itself — but proven the same way as this file's other TOCTOU tests: mutate the repository call directly.
     it('404s when the settings row is unexpectedly missing', async () => {
       const { user, token } = await createAuthenticatedUser()
       const tenant = await createTenant(user.id)
@@ -1186,9 +1154,7 @@ describe('/api/v1/tenants', () => {
       expect(response.status).toBe(404)
     })
 
-    // Same shape as GET settings' own defensive test above, for
-    // `updateSettings`'s own second lookup — `tenantSettingsRepository.update`,
-    // taken here because the request body carries a real change.
+    // Same shape as GET settings' own defensive test above, for updateSettings's own second lookup — tenantSettingsRepository.update, taken here because the request body carries a real change.
     it('404s when the settings row is unexpectedly missing at update time', async () => {
       const { user, token } = await createAuthenticatedUser()
       const tenant = await createTenant(user.id)

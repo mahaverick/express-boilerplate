@@ -1,21 +1,23 @@
-// tests/integration/api/security-headers.test.ts
-//
-// helmet is mounted first in createApp(), so every response — success, 404,
-// a 415 rejection, a 401 from the SSE route, and CORS preflights — carries
-// the same headers. The CORS/SSE sibling-origin behaviour is covered by
-// cors.test.ts and notification-stream.test.ts, which must pass unchanged:
-// that is the proof `Cross-Origin-Resource-Policy: same-site` doesn't break
-// the second frontend.
-//
-// The it.each block below only ever reaches the SSE route's 401 rejection,
-// which never calls `response.writeHead` at all (see
-// notification-stream.controller.ts's own header comment) — so it cannot
-// prove helmet's headers, set via `setHeader` on the same response object
-// before this controller runs, actually survive the controller's own
-// `response.writeHead(200, {...})` call on a real 200. `writeHead` can
-// overwrite headers already set on the response if the handler passes them
-// again, so this needs its own case against a live, successfully-opened
-// stream.
+/**
+ * @file helmet is mounted first in createApp(), so every response —
+ * success, 404, a 415 rejection, a 401 from the SSE route, and CORS
+ * preflights — carries the same headers. The CORS/SSE sibling-origin
+ * behaviour is covered by cors.test.ts and notification-stream.test.ts,
+ * which must pass unchanged: that is the proof
+ * `Cross-Origin-Resource-Policy: same-site` doesn't break the second
+ * frontend.
+ *
+ * The it.each block below only ever reaches the SSE route's 401
+ * rejection, which never calls `response.writeHead` at all (see
+ * notification-stream.controller.ts's own header comment) — so it cannot
+ * prove helmet's headers, set via `setHeader` on the same response
+ * object before this controller runs, actually survive the controller's
+ * own `response.writeHead(200, {...})` call on a real 200. `writeHead`
+ * can overwrite headers already set on the response if the handler
+ * passes them again, so this needs its own case against a live,
+ * successfully-opened stream.
+ */
+
 import { randomUUID } from 'node:crypto'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -42,13 +44,16 @@ function expectSecurityHeaders(headers: Record<string, string | undefined>): voi
   expect(headers['x-powered-by']).toBeUndefined()
 }
 
-// One parameterized test, not five near-identical ones
-// (sonarjs/parameterized-tests) — each case still pins its own request shape
-// and expected status, the same convention generate-env-example.test.ts
-// uses. Every case sends a different request (a plain success, a 404 that
-// never reaches a router, a CSRF-gate 415, an unauthenticated SSE 401, and a
-// CORS preflight) so that helmet's mount position — before every other
-// middleware in app.ts — is what each one actually proves.
+/**
+ * One parameterized test, not five near-identical ones
+ * (sonarjs/parameterized-tests) — each case still pins its own request
+ * shape and expected status, the same convention
+ * generate-env-example.test.ts uses. Every case sends a different
+ * request (a plain success, a 404 that never reaches a router, a
+ * CSRF-gate 415, an unauthenticated SSE 401, and a CORS preflight) so
+ * that helmet's mount position — before every other middleware in
+ * app.ts — is what each one actually proves.
+ */
 describe('security headers', () => {
   it.each([
     {
@@ -89,10 +94,7 @@ describe('security headers', () => {
 })
 
 describe('security headers on a live SSE stream', () => {
-  // supertest only resolves a request once its response has fully ENDED,
-  // and an SSE response never ends on its own — same reason
-  // notification-stream.test.ts drives its own real, ephemeral
-  // `http.Server` with a plain `node:http` client instead of `request(app)`.
+  // supertest only resolves once a response has fully ended, and an SSE response never ends on its own, so this drives its own real, ephemeral http.Server with a plain node:http client instead of request(app).
   let server: http.Server
   let baseUrl: string
   const userRepository = new UserRepository()
@@ -134,8 +136,7 @@ describe('security headers on a live SSE stream', () => {
           } catch (error: unknown) {
             reject(error instanceof Error ? error : new Error(String(error)))
           } finally {
-            // Close the still-open connection cleanly rather than letting
-            // it hang for the life of the test process.
+            // Close the still-open connection cleanly rather than letting it hang for the life of the test process.
             streamRequest.destroy()
           }
         }

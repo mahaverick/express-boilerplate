@@ -1,26 +1,27 @@
-// tests/integration/api/change-password.test.ts
-//
-// Integration tests for POST /api/v1/auth/change-password, against the real
-// per-worker Postgres database and the real compose Redis — same
-// conventions as tests/integration/api/forgot-password.test.ts (mail/worker
-// setup) and tests/integration/api/auth.test.ts (login/token mechanics).
-// Both the "email" and "notification" BullMQ workers run for the whole
-// file, so the controller's `addNotificationJob` call actually reaches
-// Mailpit (see those two files' own comments for why both workers, not just
-// one, are required).
-//
-// Most tests here sign a bearer token directly with `signAccessToken`
-// (tests/integration/api/profile.test.ts's own approach) rather than going
-// through POST /auth/login — they are about what happens AFTER
-// authentication, not about login/session mechanics. The ONE exception is
-// the "revokes every other session" test below, which MUST log in twice
-// through the real HTTP endpoint: `revokeAllForUserExceptSession`'s denial
-// only has an existing `user_tokens` row to act on for a session that a
-// real login actually created. A fabricated `randomUUID()` session id has
-// no such row, is never denied by anything, and would make that assertion
-// pass whether or not the endpoint under test does anything at all — the
-// exact vacuous-pass trap that has bitten this repo's session-revocation
-// work before.
+/**
+ * @file Integration tests for POST /api/v1/auth/change-password, against
+ * the real per-worker Postgres database and the real compose Redis —
+ * same conventions as tests/integration/api/forgot-password.test.ts
+ * (mail/worker setup) and tests/integration/api/auth.test.ts
+ * (login/token mechanics). Both the "email" and "notification" BullMQ
+ * workers run for the whole file, so the controller's
+ * `addNotificationJob` call actually reaches Mailpit (see those two
+ * files' own comments for why both workers, not just one, are
+ * required).
+ *
+ * Most tests here sign a bearer token directly with `signAccessToken`
+ * (tests/integration/api/profile.test.ts's own approach) rather than
+ * going through POST /auth/login — they are about what happens after
+ * authentication, not about login/session mechanics. The one exception
+ * is the "revokes every other session" test below, which must log in
+ * twice through the real HTTP endpoint:
+ * `revokeAllForUserExceptSession`'s denial only has an existing
+ * `user_tokens` row to act on for a session that a real login actually
+ * created. A fabricated `randomUUID()` session id has no such row, is
+ * never denied by anything, and would make that assertion pass whether
+ * or not the endpoint under test does anything at all.
+ */
+
 import { randomUUID } from 'node:crypto'
 import type { Worker } from 'bullmq'
 import jwt from 'jsonwebtoken'
@@ -201,9 +202,7 @@ describe('POST /api/v1/auth/change-password', () => {
     expect(newLogin.status).toBe(200)
   })
 
-  // THE ASSERTION THAT PROVES THE DESIGN — see this file's header comment
-  // for why both tokens below must come from real logins, not a fabricated
-  // session id.
+  // The assertion that proves the design — see this file's header comment for why both tokens below must come from real logins, not a fabricated session id.
   it('revokes every other session, but leaves the session that made the change working', async () => {
     const email = uniqueEmail()
     await createUserWithPassword(email)
@@ -228,25 +227,16 @@ describe('POST /api/v1/auth/change-password', () => {
     )
     expect(changeResponse.status).toBe(200)
 
-    // Session B (a different device) is refused immediately — it has NOT
-    // expired, and nothing about it changed except that this endpoint ran.
+    // Session B (a different device) is refused immediately — it has not expired, and nothing about it changed except that this endpoint ran.
     const afterB = await probe(tokenB as string)
     expect(afterB.status).toBe(401)
-    // Session A (the caller who made the change) still works — sparing it
-    // is the entire point of `revokeAllForUserExceptSession` over
-    // `revokeAllSessions`.
+    // Session A (the caller who made the change) still works — sparing it is the point of revokeAllForUserExceptSession over revokeAllSessions.
     const afterA = await probe(tokenA as string)
     expect(afterA.status).toBe(200)
   })
 
   it('revokes every session when the caller’s own token carries no sid claim', async () => {
-    // The fallback branch. `requireAuth` still accepts an access token minted
-    // before the `sid` claim existed (its `payload.sid &&` tolerance), so
-    // `request.sessionId` is undefined and there is no session to spare —
-    // the controller revokes everything instead of sparing one.
-    //
-    // This is also the branch that made the emailed copy hedge: it once said
-    // "only the device you used is still logged in", which is false here.
+    // The fallback branch: requireAuth still accepts a token minted before the sid claim existed, so there is no session to spare and the controller revokes everything instead (see password-changed.template.ts's own doc for why the emailed copy still says "every other session").
     const email = uniqueEmail()
     const { user } = await createUserWithPassword(email)
 
@@ -255,8 +245,7 @@ describe('POST /api/v1/auth/change-password', () => {
     const sessionToken = envelopeOf<{ accessToken: string }>(loginResponse).data?.accessToken
     expect(await probe(sessionToken as string)).toHaveProperty('status', 200)
 
-    // Hand-signed with `sub` ONLY — the `sid` key is absent, not undefined.
-    // `signAccessToken` cannot produce this; it requires a session id.
+    // Hand-signed with sub only — the sid key is absent, not undefined; signAccessToken cannot produce this, since it requires a session id.
     const sidLessToken = jwt.sign({ sub: user.id }, getEnv().JWT_ACCESS_SECRET, {
       algorithm: 'HS256',
       expiresIn: '15m',
@@ -265,17 +254,11 @@ describe('POST /api/v1/auth/change-password', () => {
     const changeResponse = await changePasswordRequest(sidLessToken, CURRENT_PASSWORD, NEW_PASSWORD)
     expect(changeResponse.status).toBe(200)
 
-    // The real session dies, which is what "revoke everything" has to mean
-    // for this to be the safe fallback rather than a silent no-op.
+    // The real session dies, which is what "revoke everything" has to mean for this to be the safe fallback rather than a silent no-op.
     const afterSession = await probe(sessionToken as string)
     expect(afterSession.status).toBe(401)
 
-    // The caller's own sid-less token is NOT denied, and that is correct
-    // rather than a gap: it names no session, so there is no denylist key to
-    // write. It stops working when it expires, at most ACCESS_TOKEN_TTL
-    // later — requireAuth's documented pre-`sid` tolerance, unchanged by
-    // this endpoint. Pinned so that a future change which starts denying it
-    // is a deliberate decision rather than an accident.
+    // The caller's sid-less token is not denied: it names no session, so there is no denylist key to write, and it stops working only at its own expiry (requireAuth's pre-sid tolerance).
     const afterSidLess = await probe(sidLessToken)
     expect(afterSidLess.status).toBe(200)
   })
@@ -320,12 +303,7 @@ describe('POST /api/v1/auth/change-password', () => {
   })
 
   it('rate limits repeated wrong-current-password attempts, keyed by the authenticated user', async () => {
-    // The production limiter allows five attempts per 15 minutes
-    // (rate-limit.middleware.ts), keyed on `request.user.id` — a fresh user
-    // per test means a fresh counter, with nothing else in this file able
-    // to have already spent it. Five, not reset-password's ten: this
-    // endpoint is a password oracle like login, so it carries login's
-    // budget rather than the token-redemption flow's.
+    // Five, not reset-password's ten: this endpoint is a password oracle like login, so it carries login's budget rather than the token-redemption flow's.
     const { token } = await createUserWithPassword()
 
     for (let index = 0; index < 5; index += 1) {
@@ -352,10 +330,7 @@ describe('POST /api/v1/auth/change-password', () => {
     expect(detail.Text).toContain('signed out')
     await deleteMailpitMessage(messages[0]?.ID ?? '')
 
-    // Proves the send routed through addNotificationJob (which inserts the
-    // in-app row before enqueuing the paired email —
-    // notification.worker.ts's own header comment), not addEmailJob called
-    // directly.
+    // Proves the send routed through addNotificationJob (which inserts the in-app row before enqueuing the paired email), not addEmailJob called directly.
     const notifications = await sql`
       select * from notifications where user_id = ${user.id} and type = 'password_changed'
     `

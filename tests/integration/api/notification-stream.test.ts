@@ -1,28 +1,31 @@
-// tests/integration/api/notification-stream.test.ts
-//
-// Integration test against the real per-worker Postgres database (see
-// tests/helpers/worker-database.ts) — same convention as
-// tests/integration/api/notification.test.ts: every user created here is
-// deleted in afterEach, and notifications cascade off that delete (ON
-// DELETE CASCADE, notification.model.ts).
-//
-// This is the one file in tests/integration/api/ that cannot use
-// `request(app)` (supertest) end-to-end: supertest resolves a request once
-// its response has fully ENDED, and an SSE response — by design — never
-// ends on its own. Instead, this file opens its own real, ephemeral
-// `http.Server` (same as tests/integration/server.test.ts's own
-// `startServer(0)` pattern, but a dedicated server rather than that shared
-// helper — see the "server lifecycle" comment below for why) and drives it
-// with a plain `node:http` client, parsing the raw SSE byte stream itself.
-//
-// `emitNotification` is imported and called DIRECTLY in several tests,
-// rather than going through a real `NotificationWorker` job — the same
-// "test this layer, not the whole pipeline" reasoning
-// tests/unit/workers/notification.worker.test.ts already applies to the
-// worker in the other direction. `notification.worker.test.ts` (both the
-// unit and integration variants) already covers that `processNotificationJob`
-// calls `emitNotification` after a successful insert; this file only needs
-// to prove the SSE endpoint reacts correctly once that call happens.
+/**
+ * @file Integration test against the real per-worker Postgres database
+ * (see tests/helpers/worker-database.ts) — same convention as
+ * tests/integration/api/notification.test.ts: every user created here
+ * is deleted in afterEach, and notifications cascade off that delete
+ * (ON DELETE CASCADE, notification.model.ts).
+ *
+ * This is the one file in tests/integration/api/ that cannot use
+ * `request(app)` (supertest) end-to-end: supertest resolves a request
+ * once its response has fully ended, and an SSE response, by design,
+ * never ends on its own. Instead, this file opens its own real,
+ * ephemeral `http.Server` (same as tests/integration/server.test.ts's
+ * own `startServer(0)` pattern, but a dedicated server rather than that
+ * shared helper — see the "server lifecycle" comment below for why)
+ * and drives it with a plain `node:http` client, parsing the raw SSE
+ * byte stream itself.
+ *
+ * `emitNotification` is imported and called directly in several tests,
+ * rather than going through a real `NotificationWorker` job — the same
+ * "test this layer, not the whole pipeline" reasoning
+ * tests/unit/workers/notification.worker.test.ts already applies to
+ * the worker in the other direction. `notification.worker.test.ts`
+ * (both the unit and integration variants) already covers that
+ * `processNotificationJob` calls `emitNotification` after a successful
+ * insert; this file only needs to prove the SSE endpoint reacts
+ * correctly once that call happens.
+ */
+
 import { randomUUID } from 'node:crypto'
 import http, { type IncomingMessage } from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -129,8 +132,7 @@ function applyField(frame: SseFrame, field: string, value: string): void {
       frame.data = value
       break
     }
-    // Any other field (e.g. `retry`) is parsed but deliberately not
-    // captured — nothing in this file asserts on it.
+    // Any other field (e.g. retry) is parsed but deliberately not captured — nothing in this file asserts on it.
     default:
   }
 }
@@ -172,7 +174,7 @@ class SseConnection {
    */
   constructor(baseUrl: string, path: string, headers: Record<string, string> = {}) {
     let resolveReady: (response: IncomingMessage) => void
-    // eslint-disable-next-line unicorn/prefer-promise-with-resolvers -- tsconfig.json pins `lib: ["ES2023"]` deliberately (see MIGRATIONS.md); `Promise.withResolvers` is ES2024 and untyped under that lib.
+    // eslint-disable-next-line unicorn/prefer-promise-with-resolvers -- tsconfig.json pins `lib: ["ES2023"]`; `Promise.withResolvers` is ES2024 and untyped under it.
     this.ready = new Promise((resolve) => {
       resolveReady = resolve
     })
@@ -199,11 +201,7 @@ class SseConnection {
       resolveReady(response)
     })
 
-    // Destroying an in-flight request (this file's own cleanup, and the
-    // "client disconnects" test) can surface as an 'error' event on the
-    // request itself — an unlistened 'error' event on a Node stream throws,
-    // which would otherwise fail whichever test happened to be running when
-    // cleanup destroyed a still-open connection.
+    // Destroying an in-flight request can surface as an 'error' event on the request itself, and an unlistened 'error' event on a Node stream throws.
     this.request.on('error', () => {
       // Expected on a deliberate destroy(); nothing to act on.
     })
@@ -351,15 +349,17 @@ describe('GET /api/v1/notifications/stream', () => {
   const createdUserIds: string[] = []
   const openConnections: SseConnection[] = []
 
+  /**
+   * A dedicated server, not tests/integration/server.test.ts's own
+   * `startServer`/`gracefulShutdown`: this file's cleanup must destroy
+   * every still-open SSE connection before the server can close at all
+   * (an SSE response never ends on its own, so `server.close()`'s
+   * callback would otherwise never fire) — a concern specific to this
+   * file, not something to route through a shared helper that also
+   * tears down the database/Redis/queue connections every other test
+   * file in this worker still needs.
+   */
   beforeAll(async () => {
-    // A dedicated server, not tests/integration/server.test.ts's own
-    // `startServer`/`gracefulShutdown`: this file's cleanup must destroy
-    // every still-open SSE connection before the server can close at all
-    // (an SSE response never ends on its own, so `server.close()`'s
-    // callback would otherwise never fire) — a concern specific to this
-    // file, not something to route through a shared helper that also tears
-    // down the database/Redis/queue connections every other test file in
-    // this worker still needs.
     server = createApp().listen(0, '127.0.0.1')
     await new Promise<void>((resolve) => server.once('listening', resolve))
     const address = server.address() as AddressInfo
@@ -543,12 +543,7 @@ describe('GET /api/v1/notifications/stream', () => {
     expect((JSON.parse(body) as { success: boolean }).success).toBe(false)
   })
 
-  // `/stream` sits behind `requireAuth` (notification.routes.ts) like every
-  // other route now, so "no credential at all" is `requireAuth`'s own
-  // `getBearerToken` rejection (auth.middleware.ts) — not anything this
-  // controller throws. The message it carries (and the absence of a `code`)
-  // is what distinguishes it from the sid-less and denied-session 401s
-  // below, both of which carry `ACCESS_TOKEN_EXPIRED_CODE`.
+  // /stream sits behind requireAuth like every other route, so "no credential at all" is requireAuth's own getBearerToken rejection, not anything this controller throws. The message (and the absence of a code) distinguishes it from the sid-less and denied-session 401s below, both of which carry ACCESS_TOKEN_EXPIRED_CODE.
   it("rejects a connection with no credential at all, as requireAuth's ordinary 401 JSON response, not a stream", async () => {
     const connection = openStream('/api/v1/notifications/stream')
     const response = await connection.waitForResponse()
@@ -563,13 +558,7 @@ describe('GET /api/v1/notifications/stream', () => {
     expect(parsed.code).toBeUndefined()
   })
 
-  // The regression test for this task: a well-formed, valid token in the
-  // query string — the exact shape that used to open a stream before this
-  // task deleted `authenticateStreamRequest` — must now be rejected exactly
-  // like no credential at all, because `requireAuth` never reads
-  // `request.query` and nothing else on this route does either. If the
-  // query-parameter path were still reachable anywhere, this would return
-  // 200, not 401.
+  // A well-formed, valid token in the query string must be rejected exactly like no credential at all: requireAuth never reads request.query and nothing else on this route does either. If a query-parameter path were reachable anywhere, this would return 200, not 401.
   it('no longer authenticates from a ?token= query parameter, even a valid one, now that the query path is deleted', async () => {
     const { token } = await createAuthenticatedUser()
 
@@ -597,10 +586,7 @@ describe('GET /api/v1/notifications/stream', () => {
   it('rejects a connection with an expired token, carrying the distinguishable code', async () => {
     const token = jwt.sign({ sub: randomUUID() }, getEnv().JWT_ACCESS_SECRET, {
       algorithm: 'HS256',
-      // Already expired the moment it's signed — mirrors
-      // tests/integration/middlewares/auth.middleware.test.ts's own
-      // "rejects an expired access token" case, the one other place this
-      // codebase manufactures an expired token by hand.
+      // Already expired the moment it's signed — mirrors auth.middleware.test.ts's own "rejects an expired access token" case.
       expiresIn: -10,
     })
 
@@ -629,14 +615,7 @@ describe('GET /api/v1/notifications/stream', () => {
     )
   })
 
-  // Real time, not a fake timer: this proves the actual `setInterval` wired
-  // into a live connection fires — a mocked clock would only prove this
-  // file's own mock advances correctly. SSE_HEARTBEAT_INTERVAL_MS
-  // (env.config.ts, read by notification-stream.controller.ts) is set to
-  // 1000ms in .env.test specifically so this test doesn't have to wait out
-  // the real 30-second production interval — it was the single slowest test
-  // in the whole suite before that config was pulled out of a hardcoded
-  // controller constant.
+  // Real time, not a fake timer: this proves the actual setInterval wired into a live connection fires — a mocked clock would only prove this file's own mock advances correctly. SSE_HEARTBEAT_INTERVAL_MS is set to 1000ms in .env.test so this test doesn't have to wait out the real 30-second production interval.
   it('sends a heartbeat comment within a few seconds', async () => {
     const { token } = await createAuthenticatedUser()
     const connection = openStream({ header: `Bearer ${token}` })
@@ -653,9 +632,7 @@ describe('GET /api/v1/notifications/stream', () => {
     const { user, token } = await createAuthenticatedUser()
     const connection = openStream({ header: `Bearer ${token}` })
     await connection.waitForResponse()
-    // No `await` separates the controller's flushHeaders() from its
-    // `onNotification` (streamNotifications, notification-stream.controller.ts),
-    // so this states the precondition and normally passes on the first check.
+    // No await separates the controller's flushHeaders() from its onNotification registration, so this states the precondition and normally passes on the first check.
     await waitUntil(() => listenerCount(user.id) === 1, {
       message: "the stream's notification listener is registered",
     })
@@ -702,18 +679,7 @@ describe('GET /api/v1/notifications/stream', () => {
   })
 
   it('does not lose a notification emitted while a reconnect’s replay query is still in flight', async () => {
-    // Regression test for a real ordering bug: an earlier version of
-    // streamNotifications (notification-stream.controller.ts) awaited
-    // `fetchMissedNotifications` BEFORE calling `onNotification`, so a
-    // notification published during that database round trip landed in
-    // neither the replay burst nor the live stream — lost until the next
-    // reconnect. This test does not control exactly when the emit lands
-    // relative to the query (that race is inherent to the scenario), but it
-    // does not need to: emitting immediately after the connection's headers
-    // arrive — before any `await` in this test — gives the emit its best
-    // chance of landing inside that window, and the assertion (delivered
-    // exactly once) holds regardless of which side of the query it actually
-    // lands on.
+    // streamNotifications must call onNotification before awaiting fetchMissedNotifications, or a notification published during that database round trip would land in neither the replay burst nor the live stream. This test does not control exactly when the emit lands relative to the query, but emitting immediately after the connection's headers arrive gives it the best chance of landing inside that window, and the assertion (delivered exactly once) holds regardless of which side of the query it actually lands on.
     const { user, token } = await createAuthenticatedUser()
     const first = await seedNotification(user.id, 'First')
 
@@ -734,20 +700,20 @@ describe('GET /api/v1/notifications/stream', () => {
     expect(delivered.map((frame) => frame.id)).toEqual([live.id])
   })
 
-  // The deterministic version of the race the test above only ever WINS by
-  // chance: `withMutatedMethod` holds `findByIdAndUser` — the first of
-  // `fetchMissedNotifications`'s two queries — at a gate until both
-  // notifications below have reached the stream's handler, guaranteeing
-  // `isReplaying` (streamNotifications, notification-stream.controller.ts)
-  // is still true when they arrive, so this
-  // reliably exercises BOTH branches the flush loop has: a notification
-  // that ALSO landed in the missed burst (persisted before the replay
-  // query ran) must be delivered exactly once, deduped out of
-  // `pendingDuringReplay` by its own `missedIds` check; a notification with
-  // no corresponding row at all (never persisted — `emitNotification` is
-  // called directly here, same as this file's header comment establishes
-  // for every other test in it) can never appear in that burst, and must
-  // still reach the client via the flush loop itself.
+  /**
+   * The deterministic version of the race the test above only ever wins
+   * by chance: `withMutatedMethod` holds `findByIdAndUser` (the first
+   * of `fetchMissedNotifications`'s two queries) at a gate until both
+   * notifications below have reached the stream's handler, guaranteeing
+   * `isReplaying` is still true when they arrive. That reliably
+   * exercises both branches the flush loop has: a notification that
+   * also landed in the missed burst (persisted before the replay query
+   * ran) must be delivered exactly once, deduped out of
+   * `pendingDuringReplay` by its own `missedIds` check; a notification
+   * with no corresponding row at all (never persisted) can never appear
+   * in that burst, and must still reach the client via the flush loop
+   * itself.
+   */
   it('routes notifications emitted during replay through the pending queue — deduping one already in the missed burst, flushing one that is not', async () => {
     const { user, token } = await createAuthenticatedUser()
     const first = await seedNotification(user.id, 'First')
@@ -783,15 +749,14 @@ describe('GET /api/v1/notifications/stream', () => {
             'Last-Event-ID': first.id,
           })
           await connection.waitForResponse()
-          // The controller calls `onNotification` before this query, so its handler is registered.
+          // The controller calls onNotification before this query, so its handler is already registered.
           await waitUntil(() => gate.entered, { message: 'the replay query reaches its gate' })
           onNotification(user.id, hearAfterStream)
 
           const persistedLive = await seedNotification(user.id, 'Persisted, in the missed burst')
           emitNotification(user.id, persistedLive)
 
-          // Never inserted — the replay query's own `list()` call can never
-          // find it, so it cannot be in `missedIds` however long the gate holds.
+          // Never inserted — the replay query's own list() call can never find it, so it cannot be in missedIds however long the gate holds.
           const ephemeralLive: Notification = {
             ...persistedLive,
             id: randomUUID(),
@@ -800,8 +765,7 @@ describe('GET /api/v1/notifications/stream', () => {
           }
           emitNotification(user.id, ephemeralLive)
 
-          // Listeners run in registration order, so the stream's handler has
-          // queued both while `isReplaying` was still true.
+          // Listeners run in registration order, so the stream's handler has queued both while isReplaying was still true.
           await waitUntil(
             () =>
               passedStreamHandler.has(persistedLive.id) &&
@@ -848,15 +812,7 @@ describe('GET /api/v1/notifications/stream', () => {
   })
 
   it('does not leak its listener when the client disconnects while a reconnect’s replay query is still in flight', async () => {
-    // Regression test for the other half of the same bug: the old ordering
-    // also registered `request.on('close')` only after the replay query
-    // resolved, so a disconnect during that window fired 'close' before any
-    // handler was attached — `offNotification` never ran, leaking the
-    // subscription and the heartbeat timer for the life of the process.
-    // Destroying as soon as the response headers arrive, before any
-    // `await` in this test, gives the disconnect its best chance of
-    // landing inside that window; `listenerCount` reaching 0 either way is
-    // what the fix guarantees.
+    // request.on('close') must also be registered before the replay query, or a disconnect during that window fires 'close' before any handler was attached, leaking the subscription and the heartbeat timer for the life of the process. Destroying as soon as the response headers arrive gives the disconnect its best chance of landing inside that window; listenerCount reaching 0 either way is the invariant.
     const { user, token } = await createAuthenticatedUser()
     const first = await seedNotification(user.id, 'First')
 
@@ -918,33 +874,29 @@ describe('GET /api/v1/notifications/stream', () => {
     await vi.waitFor(() => expect(countStreams(user.id)).toBe(0))
   })
 
-  // requireAuth (auth.middleware.ts) rejects a denied session, but only at
-  // connect — it never runs again on a connection already open, and
-  // `/stream` sits behind it exactly like every other route now (this
-  // controller has no connect-time check of its own for a denied session;
-  // see the "refuses to open a stream for an already-denied session" test
-  // below for that path). The heartbeat is the only thing that recurs on an
-  // open SSE connection, so it is the only place a revoked session can
-  // actually be caught here — this test proves that closes the stream, not
-  // merely that the session is rejected on a fresh connect (already covered
-  // by auth.middleware.test.ts's own denylist test).
+  /**
+   * requireAuth rejects a denied session only at connect — it never
+   * runs again on a connection already open, and this controller has
+   * no connect-time check of its own for a denied session (see the
+   * "refuses to open a stream for an already-denied session" test
+   * below for that path). The heartbeat is the only thing that recurs
+   * on an open SSE connection, so it is the only place a revoked
+   * session can actually be caught here — this test proves that closes
+   * the stream, not merely that the session is rejected on a fresh
+   * connect.
+   */
   it('closes an open stream once its session is revoked', async () => {
     const { stream, userId, sessionId } = await openStreamForNewSession()
 
-    // Alive first, or the assertion below proves nothing. The first frame
-    // to arrive is always a heartbeat (no notification is emitted here) —
-    // this just proves the connection is live before revoking it.
+    // Alive first, or the assertion below proves nothing: the first frame to arrive is always a heartbeat.
     await expect(stream.nextFrame()).resolves.toBeDefined()
 
     await revokeSession(sessionId)
 
-    // Within one heartbeat, not immediately: the check rides the existing
-    // interval rather than adding a second timer.
+    // Within one heartbeat, not immediately: the check rides the existing interval rather than adding a second timer.
     await expect(stream.closed(getEnv().SSE_HEARTBEAT_INTERVAL_MS * 2)).resolves.toBe(true)
 
-    // The heartbeat's own close path must clean up exactly like an
-    // ordinary client disconnect does — not merely end the HTTP response
-    // while leaving the emitter subscription (and the interval) behind.
+    // The heartbeat's own close path must clean up exactly like an ordinary client disconnect does, not merely end the HTTP response while leaving the emitter subscription behind.
     await waitUntil(() => listenerCount(userId) === 0, {
       message: 'the revoked stream removes its listener',
       timeout: 2000,
@@ -952,33 +904,30 @@ describe('GET /api/v1/notifications/stream', () => {
     expect(listenerCount(userId)).toBe(0)
   }, 10_000)
 
-  // Pairs with the test above: that one proves a session denied AFTER
-  // connect closes an already-open stream (the heartbeat, the only thing
-  // that recurs on an open connection). This one proves a session denied
-  // BEFORE connect never gets to open a stream at all — now `requireAuth`'s
-  // own denylist check (auth.middleware.ts), the same one every other route
-  // on this router already relies on, not a check this controller runs
-  // itself. Distinguished from the sid-less rejection below by message: both
-  // carry `ACCESS_TOKEN_EXPIRED_CODE`, but only `requireAuth`'s denylist
-  // rejection says "Session ended".
+  /**
+   * Pairs with the test above: that one proves a session denied after
+   * connect closes an already-open stream (the heartbeat, the only
+   * thing that recurs on an open connection). This one proves a
+   * session denied before connect never gets to open a stream at all —
+   * via `requireAuth`'s own denylist check, the same one every other
+   * route on this router already relies on, not a check this
+   * controller runs itself. Distinguished from the sid-less rejection
+   * below by message: both carry `ACCESS_TOKEN_EXPIRED_CODE`, but only
+   * `requireAuth`'s denylist rejection says "Session ended".
+   */
   it("refuses to open a stream for an already-denied session, via requireAuth's denylist check", async () => {
     const user = await userRepository.create({ email: uniqueEmail() })
     createdUserIds.push(user.id)
     const sessionId = randomUUID()
     const token = signAccessToken(user, sessionId)
 
-    // denySession directly, not revokeSession — this test is about
-    // requireAuth's own denylist read, not about revocation writing that
-    // entry (already covered by session.service.test.ts and the
-    // "closes an open stream" test above).
+    // denySession directly, not revokeSession: this test is about requireAuth's own denylist read, not about revocation writing that entry.
     await denySession(sessionId)
 
     const connection = openStream({ header: `Bearer ${token}` })
     const response = await connection.waitForResponse()
 
-    // requireAuth's rejection happens before response.writeHead, so this is
-    // the ordinary JSON 401 envelope, not an event-stream that opens and
-    // then closes.
+    // requireAuth's rejection happens before response.writeHead, so this is the ordinary JSON 401 envelope, not an event-stream that opens and then closes.
     expect(response.statusCode).toBe(401)
     expect(response.headers['content-type']).not.toContain('text/event-stream')
 
@@ -988,14 +937,15 @@ describe('GET /api/v1/notifications/stream', () => {
     expect(parsed.code).toBe(ACCESS_TOKEN_EXPIRED_CODE)
   })
 
-  // The next two tests are a pair: a positive control proving the fixture
-  // is sound, and the actual assertion. `requireAuth` tolerates a sid-less
-  // token until it expires (auth.middleware.test.ts's own 'accepts a token
-  // with no `sid` claim' pair) — this route's own handler does not, once
-  // `requireAuth` has let the request through: see `requireSessionId`'s own
-  // comment (notification-stream.controller.ts) for why. That means this
-  // exact token — genuinely accepted by `requireAuth` — must still fail to
-  // open a stream, purely on this controller's own check.
+  /**
+   * The next two tests are a pair: a positive control proving the
+   * fixture is sound, and the actual assertion. `requireAuth` tolerates
+   * a sid-less token until it expires — this route's own handler does
+   * not, once `requireAuth` has let the request through (see
+   * `requireSessionId`'s own comment for why). That means this exact
+   * token, genuinely accepted by `requireAuth`, must still fail to open
+   * a stream, purely on this controller's own check.
+   */
   it('opens a stream for an ordinary signAccessToken token — the positive control for the next test', async () => {
     const user = await userRepository.create({ email: uniqueEmail() })
     createdUserIds.push(user.id)
@@ -1011,11 +961,7 @@ describe('GET /api/v1/notifications/stream', () => {
   it("refuses to open a stream for a hand-signed token with no `sid` claim at all, via this route's own check after requireAuth", async () => {
     const user = await userRepository.create({ email: uniqueEmail() })
     createdUserIds.push(user.id)
-    // Hand-signed, deliberately NOT via signAccessToken: signAccessToken
-    // always sets `sid`, so it cannot produce the shape this test needs —
-    // a token whose payload never had a `sid` key at all (not
-    // `sid: undefined`; a JWT claim is either present in the signed
-    // payload or absent, there is no way to sign "explicitly undefined").
+    // Hand-signed, deliberately not via signAccessToken: signAccessToken always sets sid, so it cannot produce a token whose payload never had a sid key at all.
     const token = jwt.sign({ sub: user.id }, getEnv().JWT_ACCESS_SECRET, {
       algorithm: 'HS256',
       expiresIn: '15m',
@@ -1024,14 +970,7 @@ describe('GET /api/v1/notifications/stream', () => {
     const connection = openStream({ header: `Bearer ${token}` })
     const response = await connection.waitForResponse()
 
-    // `requireAuth` ADMITS this token (see the positive control above) —
-    // this 401 comes from `requireSessionId`
-    // (notification-stream.controller.ts) reading `request.sessionId` and
-    // finding it unset, not from requireAuth. Both this test and the
-    // "already-denied session" test above carry ACCESS_TOKEN_EXPIRED_CODE,
-    // so the message is what actually attributes the rejection to the
-    // correct layer — "Session ended" is requireAuth's denylist; this one
-    // is requireSessionId's own check.
+    // requireAuth admits this token (see the positive control above); this 401 comes from requireSessionId reading request.sessionId and finding it unset. Both this test and the "already-denied session" test carry ACCESS_TOKEN_EXPIRED_CODE, so the message attributes the rejection to the correct layer: "Session ended" is requireAuth's denylist, this one is requireSessionId's own check.
     expect(response.statusCode).toBe(401)
     expect(response.headers['content-type']).not.toContain('text/event-stream')
 
@@ -1073,9 +1012,7 @@ describe('GET /api/v1/notifications/stream', () => {
   it('ends the stream when the access token that opened it expires', async () => {
     const user = await userRepository.create({ email: uniqueEmail() })
     createdUserIds.push(user.id)
-    // Hand-signed, like the expired-token test above: ACCESS_TOKEN_TTL is
-    // memoised by getEnv() and cannot be shortened per test. 2s, not 1s: exp
-    // is whole seconds, so a 1s token can already be expired at requireAuth.
+    // Hand-signed, like the expired-token test above: ACCESS_TOKEN_TTL is memoised by getEnv() and cannot be shortened per test. 2s, not 1s: exp is whole seconds, so a 1s token can already be expired at requireAuth.
     const token = jwt.sign({ sub: user.id, sid: randomUUID() }, getEnv().JWT_ACCESS_SECRET, {
       algorithm: 'HS256',
       expiresIn: 2,
@@ -1145,18 +1082,14 @@ describe('GET /api/v1/notifications/stream', () => {
     const client = openConnections.at(-1)?.response
     if (!client) throw new Error('expected the stream to have opened')
 
-    // Stop reading: the client parser stops draining its socket, and the
-    // kernel buffers on both sides fill.
+    // Stop reading: the client parser stops draining its socket, and the kernel buffers on both sides fill.
     client.pause()
 
-    // 32 MiB of frames. That is far past any loopback kernel buffering, so
-    // the server-side writable buffer must pass SSE_MAX_BUFFERED_BYTES.
+    // 32 MiB of frames is far past any loopback kernel buffering, so the server-side writable buffer must pass SSE_MAX_BUFFERED_BYTES.
     const body = 'x'.repeat(512 * 1024)
     const frameCount = Math.ceil((32 * 1024 * 1024) / body.length)
     expect(frameCount * body.length).toBeGreaterThan(SSE_MAX_BUFFERED_BYTES * 16)
-    // Paced, and stopped once the server drops the client: delivery crosses
-    // Redis, and an unpaced 32 MiB burst could pass Redis's default 32mb
-    // pub/sub output-buffer limit and disconnect the subscriber.
+    // Paced, and stopped once the server drops the client: delivery crosses Redis, and an unpaced 32 MiB burst could pass Redis's default 32mb pub/sub output-buffer limit and disconnect the subscriber.
     for (let index = 0; index < frameCount && !streamResponse.destroyed; index += 1) {
       emitNotification(user.id, {
         id: randomUUID(),
@@ -1175,16 +1108,13 @@ describe('GET /api/v1/notifications/stream', () => {
       await settle(20, "pacing, so 32 MiB stays under Redis's pub/sub output-buffer limit")
     }
 
-    // Destroyed server-side, while the client is still paused, and never
-    // ended: an end() first would queue the closing chunk, which reaches the
-    // client whenever the kernel had already taken the rest.
+    // Destroyed server-side, while the client is still paused, and never ended: an end() first would queue the closing chunk, which reaches the client whenever the kernel had already taken the rest.
     await waitUntil(() => streamResponse.destroyed, {
       message: 'the server destroys the stalled response',
     })
     expect(streamResponse.destroyed).toBe(true)
     expect(streamResponse.writableEnded).toBe(false)
-    // The request 'close' cleanup ran. That fires a tick after the stall
-    // path's own offNotification, so wait on the registry.
+    // The request 'close' cleanup ran, a tick after the stall path's own offNotification, so wait on the registry.
     await waitUntil(() => countStreams(user.id) === 0, {
       message: 'the dropped stream leaves the shutdown registry',
     })

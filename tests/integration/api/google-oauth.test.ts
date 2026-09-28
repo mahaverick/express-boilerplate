@@ -1,62 +1,50 @@
-// tests/integration/api/google-oauth.test.ts
-//
-// Exercises the REAL `createOAuthSessionMiddleware()` against the real,
-// per-worker Redis instance (REDIS_URL in .env.test) — not a mock. That is
-// the whole point of this file existing under tests/integration/, not
-// tests/unit/: the brief this task was built from flagged
-// `new RedisStore({ client: getRedis() })` as something to "verify
-// empirically" rather than assume, and the only way to actually verify it
-// is to run a real request through a real connect-redis `RedisStore` backed
-// by a real node-redis client and see whether the OAuth redirect (which
-// needs `req.session` for the `state` CSRF parameter) actually works.
-// passport.config.ts's own header comment explains why the naive version
-// (handing `RedisStore` the un-awaited `Promise<RedisClientType>` the brief's
-// own sketch used) does NOT work, and this file is what proves the lazy-latch
-// replacement does.
-//
-// GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET are set in `beforeAll`, via a
-// DYNAMIC `import('@/app')` — not a static `import` at the top of this
-// file, and not merely "set before calling `createApp()`" the way a first
-// draft of this file tried. Verified empirically, the hard way: a static
-// `import { createApp } from '@/app'` at the top of the file, with
-// `process.env.GOOGLE_CLIENT_ID` set inside `beforeAll` immediately before
-// calling `createApp()`, still produced a 404 — because `@/app` transitively
-// imports `database.service.ts`, which calls `const env = getEnv()` at ITS
-// OWN module scope. A static import's entire dependency graph evaluates
-// before ANY of THIS file's own top-level code runs (that is what "static"
-// means for a module graph) — so `getEnv()` was already memoised, without
-// `GOOGLE_CLIENT_ID`, before `beforeAll` (or anything else in this file)
-// ever got a chance to run, regardless of where the `import` statement sat
-// in the file or when `createApp()` was actually CALLED. A dynamic
-// `import()` has no such hoisting: it evaluates exactly where it is
-// awaited, so performing it inside `beforeAll`, after the `process.env`
-// assignments, is what actually gets `GOOGLE_CLIENT_ID` into `getEnv()`'s
-// first (and only) parse. They are never real Google credentials —
-// passport's Google strategy builds the redirect URL locally from
-// `clientID`/`scope`/`callbackURL`; nothing in this test ever calls Google.
-//
-// A SEPARATE file, google-oauth-disabled.test.ts, covers the opposite env
-// state (no Google credentials at all — this repo's actual .env.test
-// default). That cannot live in this file: `getEnv()` memoises the first
-// environment it parses for the life of this worker process, so once
-// `createApp()` below has run with GOOGLE_CLIENT_ID set, no later test in
-// this same file could ever observe it unset without `vi.resetModules()` —
-// which discards this whole worker's module cache, including
-// database.service.ts's live postgres pool (tests/helpers/mutate.ts's own
-// header comment on `withMutatedModule` explains the leak). Two small,
-// cheap files avoid paying that cost for a distinction this simple.
-//
-// `vi.stubEnv`, not a raw `process.env.GOOGLE_CLIENT_ID = ...` assignment —
-// `tests/helpers/worker-database.ts`'s own header comment establishes that
-// `process.env` persists ACROSS test files within one forked worker
-// process (only the module registry resets between files, per
-// tests/helpers/setup-global.ts). A raw assignment here would leak
-// `GOOGLE_CLIENT_ID` into whichever file vitest schedules next in this
-// worker — including google-oauth-disabled.test.ts, whose entire premise is
-// that variable being unset. `afterAll(() => vi.unstubAllEnvs())` restores
-// the prior value (here, genuinely absent, since `.env.test` never sets it)
-// rather than merely deleting the key, so this file leaves no trace on
-// `process.env` for whatever runs after it in the same worker.
+/**
+ * @file Exercises the real `createOAuthSessionMiddleware()` against the
+ * real, per-worker Redis instance (REDIS_URL in .env.test), not a mock:
+ * only a real request through a real connect-redis `RedisStore` backed
+ * by a real node-redis client can show whether the OAuth redirect
+ * (which needs `req.session` for the `state` CSRF parameter) actually
+ * works. passport.config.ts's own header comment explains why handing
+ * `RedisStore` an un-awaited `Promise<RedisClientType>` does not work,
+ * and this file is what proves the lazy-latch replacement does.
+ *
+ * GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET are set in `beforeAll`, via a
+ * dynamic `import('@/app')`, not a static `import` at the top of this
+ * file: `@/app` transitively imports `database.service.ts`, which
+ * calls `const env = getEnv()` at its own module scope, and a static
+ * import's entire dependency graph evaluates before any of this file's
+ * own top-level code runs — so a static import would memoise `getEnv()`
+ * without `GOOGLE_CLIENT_ID` before `beforeAll` ever ran, regardless of
+ * when `createApp()` was actually called. A dynamic `import()` has no
+ * such hoisting: it evaluates exactly where it is awaited, so
+ * performing it inside `beforeAll`, after the `process.env`
+ * assignments, is what gets `GOOGLE_CLIENT_ID` into `getEnv()`'s first
+ * (and only) parse. These are never real Google credentials — passport's
+ * Google strategy builds the redirect URL locally from
+ * `clientID`/`scope`/`callbackURL`; nothing in this test ever calls
+ * Google.
+ *
+ * A separate file, google-oauth-disabled.test.ts, covers the opposite
+ * env state (no Google credentials at all — this repo's actual
+ * .env.test default). That cannot live in this file: `getEnv()`
+ * memoises the first environment it parses for the life of this worker
+ * process, so once `createApp()` below has run with GOOGLE_CLIENT_ID
+ * set, no later test in this same file could ever observe it unset
+ * without `vi.resetModules()`, which discards this whole worker's
+ * module cache, including database.service.ts's live postgres pool.
+ *
+ * `vi.stubEnv`, not a raw `process.env.GOOGLE_CLIENT_ID = ...`
+ * assignment: `process.env` persists across test files within one
+ * forked worker process (only the module registry resets between
+ * files). A raw assignment here would leak `GOOGLE_CLIENT_ID` into
+ * whichever file vitest schedules next in this worker, including
+ * google-oauth-disabled.test.ts, whose entire premise is that variable
+ * being unset. `afterAll(() => vi.unstubAllEnvs())` restores the prior
+ * value (here, genuinely absent) rather than merely deleting the key,
+ * so this file leaves no trace on `process.env` for whatever runs
+ * after it in the same worker.
+ */
+
 import { randomUUID } from 'node:crypto'
 import passport from 'passport'
 import type { Profile as GoogleProfile } from 'passport-google-oauth20'
@@ -131,11 +119,7 @@ function googleProfile(
     id,
     displayName: 'Test User',
     profileUrl: `https://plus.google.com/${id}`,
-    // Omitted entirely, not set to `undefined`, for the "no email" fixture
-    // — `exactOptionalPropertyTypes: true` (tsconfig.json) rejects an
-    // explicit `undefined` for an optional property, the same distinction
-    // this codebase's own controllers draw elsewhere (e.g. the JSON-`null`
-    // vs `undefined` comments in auth.controller.ts).
+    // Omitted entirely, not set to undefined, for the "no email" fixture: exactOptionalPropertyTypes: true (tsconfig.json) rejects an explicit undefined for an optional property.
     ...(overrides.includeEmails !== false && {
       emails: [{ value: email, verified: isEmailVerified }],
     }),
@@ -154,44 +138,49 @@ function googleProfile(
 
 /**
  * A Passport `Strategy` that skips the OAuth2 dance entirely and calls
- * `this.success(profile)` the instant it authenticates a request — the
- * brief's own "option 1" for testing a callback that can never reach the
- * real Google. `configurePassport()` (passport.config.ts) registers the
- * REAL `GoogleStrategy` under `GOOGLE_STRATEGY_NAME`; `passport.use(name,
- * strategy)` (passport's own API) simply overwrites whatever was previously
- * registered under that name, so swapping this in for one test and calling
- * `configurePassport()` again afterwards (real `afterEach`, below) is
- * enough to restore it for every other test in this file — no
- * `vi.resetModules()`, no mocking `passport-google-oauth20` itself.
+ * `this.success(profile)` the instant it authenticates a request, so a
+ * callback that can never reach the real Google can still be driven
+ * over real HTTP. `configurePassport()` (passport.config.ts) registers
+ * the real `GoogleStrategy` under `GOOGLE_STRATEGY_NAME`;
+ * `passport.use(name, strategy)` simply overwrites whatever strategy
+ * is currently registered under that name, so swapping this in for one
+ * test and calling `configurePassport()` again afterwards (real
+ * `afterEach`, below) is enough to restore it for every other test in
+ * this file — no `vi.resetModules()`, no mocking
+ * `passport-google-oauth20` itself.
  *
- * Exists specifically to drive `handleGoogleCallback`'s SUCCESS path over
- * real HTTP, which neither the `findOrCreateByGoogle` suite (calls the
- * function directly, never touches the route, the cookie, or
- * `passport.authenticate`'s own plumbing) nor the "no live OAuth attempt"
- * tests above (deliberately drive the FAILURE path) can reach — and two of
- * this task's brief's own CRITICAL rules only show up on that path:
- * `sameSite: 'lax'` on the response cookie, and `lastLoggedInAt` actually
- * being written.
+ * Exists specifically to drive `handleGoogleCallback`'s success path
+ * over real HTTP, which neither the `findOrCreateByGoogle` suite (calls
+ * the function directly, never touches the route, the cookie, or
+ * `passport.authenticate`'s own plumbing) nor the "no live OAuth
+ * attempt" tests above (deliberately drive the failure path) can reach
+ * — that is also the only path where `sameSite: 'lax'` on the response
+ * cookie and `lastLoggedInAt` actually being written can be observed.
  */
 class FakeGoogleSuccessStrategy implements passport.Strategy {
   name = GOOGLE_STRATEGY_NAME
 
-  // Public, not private: `authenticate`'s `this: passport.StrategyCreated<...>`
-  // parameter type is a MAPPED type passport's own `.d.ts` builds from
-  // `keyof (FakeGoogleSuccessStrategy & StrategyCreatedStatic)`, computed
-  // outside this class's lexical scope — a `private` field is not visible
-  // through that reconstructed type, even from inside this method, so
-  // `this.profile` would not type-check. A public field carries no risk
-  // here: this class exists only inside this test file, for one test's
-  // duration.
+  /**
+   * `profile` is public, not private: `authenticate`'s
+   * `this: passport.StrategyCreated<...>` parameter type is a mapped
+   * type passport's own `.d.ts` builds from
+   * `keyof (FakeGoogleSuccessStrategy & StrategyCreatedStatic)`,
+   * computed outside this class's lexical scope, so a `private` field
+   * is not visible through that reconstructed type and `this.profile`
+   * would not type-check.
+   * @param profile - The fixture profile `authenticate` hands to `done()`.
+   */
   constructor(readonly profile: GoogleProfile) {}
 
+  /**
+   * The cast mirrors `passthroughGoogleProfile`'s own
+   * (passport.config.ts): `Express.User` is this codebase's JWT
+   * principal type; a raw Google profile is what a real
+   * `done(null, profile)` call resolves to for the same strategy in
+   * production, so `handleGoogleCallback`'s custom callback receives an
+   * identically-shaped value either way.
+   */
   authenticate(this: passport.StrategyCreated<FakeGoogleSuccessStrategy>): void {
-    // The cast mirrors `passthroughGoogleProfile`'s own (passport.config.ts):
-    // `Express.User` is this codebase's JWT principal type; a raw Google
-    // profile is what a real `done(null, profile)` call resolves to for
-    // the SAME strategy in production, so `handleGoogleCallback`'s custom
-    // callback receives an identically-shaped value either way.
     // eslint-disable-next-line unicorn/no-undeclared-class-members -- `success` is never a member of THIS class; passport injects it at runtime onto the per-request instance `this` refers to (`StrategyCreatedStatic`, passport's own `.d.ts`), which is exactly what `authenticate`'s `this: passport.StrategyCreated<...>` parameter type documents.
     this.success(this.profile as unknown as Express.User)
   }
@@ -205,20 +194,20 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
   let sql: typeof SqlType
   let issueRefreshToken: typeof IssueRefreshTokenType
 
-  // Every runtime value this describe block needs is imported DYNAMICALLY,
-  // inside `beforeAll`, AFTER the `vi.stubEnv` calls — not just `@/app`.
-  // This file's own header comment explains why for `@/app` specifically
-  // (a static import's whole dependency graph, including
-  // database.service.ts's own module-scope `getEnv()`, evaluates before
-  // `beforeAll` ever runs); the identical reasoning applies to EVERY one of
-  // these imports, since `@/services/google-auth.service`,
-  // `@/repositories/user.repository`, `@/repositories/auth-provider.repository`,
-  // and `@/services/database.service` all transitively reach that same
-  // module-scope `getEnv()` call. By the time this `await import('@/app')`
-  // resolves, every one of those modules is already loaded (createApp's own
-  // dependency graph reaches all of them via auth.routes.ts), so the
-  // dynamic imports below just return the already-cached module — this is
-  // not a second, independent load.
+  /**
+   * Every runtime value this describe block needs is imported
+   * dynamically, inside `beforeAll`, after the `vi.stubEnv` calls, not
+   * just `@/app` — see this file's header comment for why. The
+   * identical reasoning applies to every one of these imports, since
+   * `@/services/google-auth.service`, `@/repositories/user.repository`,
+   * `@/repositories/auth-provider.repository` and
+   * `@/services/database.service` all transitively reach the same
+   * module-scope `getEnv()` call. By the time this `await
+   * import('@/app')` resolves, every one of those modules is already
+   * loaded (createApp's own dependency graph reaches all of them via
+   * auth.routes.ts), so the dynamic imports below just return the
+   * already-cached module.
+   */
   beforeAll(async () => {
     vi.stubEnv('GOOGLE_CLIENT_ID', 'test-google-client-id')
     vi.stubEnv('GOOGLE_CLIENT_SECRET', 'test-google-client-secret')
@@ -245,11 +234,12 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
     vi.unstubAllEnvs()
   })
 
-  // Every user `findOrCreateByGoogle` creates or seeds below is torn down
-  // here — same convention as forgot-password.test.ts/auth-refresh.test.ts.
-  // Deleting the user cascades to its `auth_providers` rows
-  // (`onDelete: 'cascade'`, auth-provider.model.ts), so nothing separately
-  // deletes those.
+  /**
+   * Every user `findOrCreateByGoogle` creates or seeds below is torn
+   * down here. Deleting the user cascades to its `auth_providers` rows
+   * (`onDelete: 'cascade'`, auth-provider.model.ts), so nothing
+   * separately deletes those.
+   */
   const createdIds: string[] = []
 
   afterEach(async () => {
@@ -277,11 +267,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
   })
 
   it('sets the OAuth session cookie needed to verify `state` on the callback', async () => {
-    // `resave: false, saveUninitialized: false` (createOAuthSessionMiddleware)
-    // still issues a cookie here: the Google strategy's `state: true` writes
-    // to `req.session` on this very request (to store the CSRF state value),
-    // which is exactly the kind of write saveUninitialized's own semantics
-    // do not suppress — only a session left completely untouched is skipped.
+    // resave/saveUninitialized: false still issues a cookie here: the Google strategy's state: true writes to req.session on this very request, and only a session left completely untouched is skipped.
     const response = await request(app).get('/api/v1/auth/google')
     const cookies = response.headers['set-cookie'] as string[] | undefined
     expect(cookies).toBeDefined()
@@ -299,30 +285,31 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
     expect(firstState).not.toBe(secondState)
   })
 
+  /**
+   * Google itself can never be hit from a test — see this file's own
+   * header comment. Two shapes are reachable over real HTTP with no
+   * Google credentials needed:
+   *
+   * - No query parameters at all: `passport-oauth2`'s strategy cannot
+   *   tell that apart from a fresh `/google` request (both routes run
+   *   the identical `passport.authenticate(GOOGLE_STRATEGY_NAME, ...)`;
+   *   the only signal it has is the query string), so it redirects to
+   *   Google's consent screen.
+   * - `?error=access_denied` — what Google itself sends when a user
+   *   cancels its consent screen. `passport-oauth2` checks
+   *   `req.query.error` before anything else, so this fails
+   *   immediately, with no network call and no session/state needed,
+   *   calling `handleGoogleCallback`'s custom callback with
+   *   `profile: false` — the branch that redirects to
+   *   `${WEB_URL}/login?error=...` instead of throwing.
+   *
+   * These two prove the route itself (rate limiter, session middleware,
+   * `passport.initialize()`, `handleGoogleCallback`) is wired correctly
+   * end to end; the account-linking policy behind a successful callback
+   * is exercised directly, against the real database, by the
+   * `findOrCreateByGoogle` suite below.
+   */
   describe('GET /api/v1/auth/google/callback', () => {
-    // Google itself can never be hit from a test — see this file's own
-    // header comment and the brief this task was built from. Two shapes
-    // ARE reachable over real HTTP with no Google credentials needed:
-    //
-    // - No query parameters at all: `passport-oauth2`'s strategy cannot
-    //   tell that apart from a FRESH `/google` request (both routes run the
-    //   identical `passport.authenticate(GOOGLE_STRATEGY_NAME, ...)`; the
-    //   only signal it has is the query string), so it redirects to
-    //   Google's consent screen — verified empirically, not assumed: an
-    //   earlier draft of this test asserted a `/login?error=` redirect here
-    //   and failed with the actual `Location` pointing at
-    //   accounts.google.com instead.
-    // - `?error=access_denied` — what Google itself sends when a user
-    //   cancels its consent screen. `passport-oauth2` checks `req.query.error`
-    //   before anything else, so this fails immediately, with no network
-    //   call and no session/state needed, calling `handleGoogleCallback`'s
-    //   custom callback with `profile: false` — exactly the branch that
-    //   redirects to `${WEB_URL}/login?error=...` instead of throwing. This
-    //   is what proves the ROUTE ITSELF (rate limiter, session middleware,
-    //   `passport.initialize()`, `handleGoogleCallback`) is wired correctly
-    //   end to end; the account-linking POLICY behind a successful callback
-    //   is exercised directly, against the real database, by the
-    //   `findOrCreateByGoogle` suite below.
     it('redirects to Google when hit with no query parameters at all (indistinguishable from a fresh /google request)', async () => {
       const response = await request(app).get('/api/v1/auth/google/callback')
 
@@ -335,8 +322,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
 
       expect(response.status).toBe(302)
       expect(response.headers.location).toBeDefined()
-      // WEB_URL from .env.test — this file never overrides it, only
-      // GOOGLE_CLIENT_ID/SECRET (`beforeAll` above).
+      // WEB_URL from .env.test — this file never overrides it, only GOOGLE_CLIENT_ID/SECRET (beforeAll above).
       expect(response.headers.location).toContain('http://localhost:5173/login?error=')
     })
 
@@ -347,11 +333,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
       expect(cookies?.some((cookie) => cookie.startsWith('refreshToken='))).not.toBe(true)
     })
 
-    // `FakeGoogleSuccessStrategy` (module scope, above) drives
-    // `handleGoogleCallback`'s SUCCESS path over real HTTP — see its own
-    // header comment. `configurePassport()` restores the REAL Google
-    // strategy after every test here, so nothing above or below this
-    // `describe` block observes the swap.
+    // FakeGoogleSuccessStrategy (module scope, above) drives handleGoogleCallback's success path over real HTTP; configurePassport() restores the real Google strategy after every test here, so nothing above or below this describe block observes the swap.
     describe('a successful sign-in (fake strategy — Google itself can never be hit)', () => {
       afterEach(async () => {
         const passportConfig = await import('@/configs/passport.config')
@@ -372,13 +354,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
         const cookies = response.headers['set-cookie'] as string[] | undefined
         const refreshCookie = cookies?.find((cookie) => cookie.startsWith('refreshToken='))
         expect(refreshCookie).toBeDefined()
-        // The one property this task's brief calls CRITICAL: `'strict'`
-        // (every other cookie this API sets — `setRefreshTokenCookie`'s
-        // own default) would be withheld on the very redirect chain this
-        // response just started (auth.controller.ts's own header comment
-        // on `setOAuthRefreshTokenCookie`), so asserting the literal
-        // attribute — not just "a cookie exists" — is the point of this
-        // test.
+        // 'strict' (every other cookie this API sets) would be withheld on the very redirect chain this response just started, so asserting the literal attribute, not just "a cookie exists", is the point of this test.
         expect(refreshCookie?.toLowerCase()).toContain('samesite=lax')
         expect(refreshCookie?.toLowerCase()).not.toContain('samesite=strict')
 
@@ -519,11 +495,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
       expect(user.id).toBe(existing.id)
       const link = await authProviderRepository.findByProviderAndId('google', profile.id)
       expect(link?.userId).toBe(existing.id)
-      // No second `'email'` row is created. `existing` is seeded directly
-      // through `userRepository.create` above, bypassing `register()` —
-      // the only place an `'email'` row is written for a password account
-      // (auth.service.ts) — so this user genuinely has none, and linking
-      // must not fabricate one; it only adds the `'google'` row.
+      // No second 'email' row is created: existing is seeded directly, bypassing register() (the only place an 'email' row is written), so this user genuinely has none, and linking must not fabricate one.
       const providers = await authProviderRepository.findByUser(existing.id)
       expect(providers.map((provider) => provider.provider)).toEqual(['google'])
     })
@@ -554,9 +526,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
     })
 
     it("drops a squatter's own pre-existing Google link when a different, verified identity claims the account", async () => {
-      // Seeded directly, because no API path creates it: a squatter's Google
-      // row on a never-verified account the real owner now claims. Pins that
-      // the claim removes it, so findOrCreateByGoogle's step 1 cannot honour it.
+      // Seeded directly, because no API path creates it: a squatter's Google row on a never-verified account the real owner now claims.
       const email = uniqueEmail()
       const existing = await userRepository.create({ email, passwordHash: 'not-a-real-hash' })
       createdIds.push(existing.id)
@@ -588,11 +558,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
         update users set email_verified_at = now() - interval '30 days'
         where id = ${existing.id}
       `
-      // Re-read through the repository, not the raw `sql` result above —
-      // postgres.js's own driver returns a raw query's timestamp column as
-      // a string, not a `Date`; every other integration file in this repo
-      // re-reads through `findById` for the same reason (see e.g.
-      // forgot-password.test.ts's `seedUser`).
+      // Re-read through the repository, not the raw sql result above: postgres.js's own driver returns a raw query's timestamp column as a string, not a Date.
       const alreadyVerified = await userRepository.findById(existing.id)
       expect(alreadyVerified?.emailVerifiedAt).toBeInstanceOf(Date)
 
@@ -633,10 +599,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
     })
 
     it('rejects (with a 4xx, not a 500) a returning Google sign-in whose linked user was soft-deleted', async () => {
-      // REACHABLE, not theoretical — see findOrCreateByGoogle's own comment
-      // on this branch: `auth_providers` rows survive a soft delete (only a
-      // hard delete cascades), so this is exactly the row `findByProviderAndId`
-      // still finds after `softDelete` runs.
+      // Reachable, not theoretical: auth_providers rows survive a soft delete (only a hard delete cascades), so this is exactly the row findByProviderAndId still finds after softDelete runs.
       const profile = googleProfile({ emailVerified: true })
       const user = await findOrCreateByGoogle(profile)
       createdIds.push(user.id)

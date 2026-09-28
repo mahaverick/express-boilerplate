@@ -1,18 +1,20 @@
-// tests/integration/api/auth-refresh.test.ts
-//
-// Task 7's four security properties, against the real per-worker Postgres
-// database and the real compose Redis — every email used here is unique to
-// this run and every row created is deleted in afterEach, the same
-// convention tests/integration/api/auth.test.ts already follows. This file
-// lives under tests/integration/, never tests/unit/ — see CLAUDE.md's note
-// on why a DB/Redis-dependent test under tests/unit/ breaks
-// .husky/pre-commit whenever Docker is down.
-//
-// Kept as its own file rather than folded into auth.test.ts: refresh/logout
-// exercise a materially different concern (cookie round-tripping, rotation,
-// rate limiting) from register/login, and this file's helpers (raw cookie
-// extraction, replay) have no use for that file's registration-specific
-// assertions.
+/**
+ * @file Refresh, rotation, reuse detection, logout and cookie handling,
+ * against the real per-worker Postgres database and the real compose
+ * Redis — every email used here is unique to this run and every row
+ * created is deleted in afterEach, the same convention
+ * tests/integration/api/auth.test.ts already follows. This file lives
+ * under tests/integration/, never tests/unit/ — see CLAUDE.md's note on
+ * why a DB/Redis-dependent test under tests/unit/ breaks
+ * .husky/pre-commit whenever Docker is down.
+ *
+ * Kept as its own file rather than folded into auth.test.ts:
+ * refresh/logout exercise a materially different concern (cookie
+ * round-tripping, rotation, rate limiting) from register/login, and
+ * this file's helpers (raw cookie extraction, replay) have no use for
+ * that file's registration-specific assertions.
+ */
+
 import { randomUUID } from 'node:crypto'
 import type { Response, Test } from 'supertest'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -113,13 +115,12 @@ async function registerAndLogin(
  * array, so the signature follows this file's own convention instead of
  * the other file's.
  *
- * Marked verified even though nothing checks it yet — a later task adds
- * the email-verification gate to login, and a helper that marks from the
- * start means a test built on it keeps testing what it claims to test
- * instead of quietly starting to pass for the wrong reason (login itself
- * getting rejected pre-gate would make a before/after comparison of two
- * `null`s look like proof rotation doesn't write, when it would really be
- * proof login never happened).
+ * Marked verified because login requires `emailVerifiedAt` to succeed:
+ * an unverified seed would fail login outright, and a test built on it
+ * needs to keep testing what it claims to test rather than starting to
+ * pass for the wrong reason (login itself getting rejected would make
+ * a before/after comparison of two `null`s look like proof rotation
+ * doesn't write, when it would really be proof login never happened).
  * @param createdIds - Array to push the created user's id onto, for `afterEach` cleanup.
  * @returns The seeded (verified) user row and the email it was registered with.
  */
@@ -177,13 +178,7 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
         .set('Cookie', firstCookie as string)
       const firstRefreshBody = envelopeOf<{ accessToken: string }>(firstRefresh)
 
-      // The access token is NOT asserted to differ from login's: signing is
-      // deterministic (jsonwebtoken, same secret/payload/second-granularity
-      // `iat`), so two tokens issued for the same user within the same
-      // second are legitimately byte-identical — that would make this
-      // assertion flaky, not meaningful. What "a new pair" actually means
-      // here, and what's worth proving, is the REFRESH token: a freshly
-      // rotated, different raw value (asserted below via `secondCookie`).
+      // The access token is not asserted to differ from login's: signing is deterministic, so two tokens for the same user within the same second are legitimately byte-identical. What "a new pair" proves here is the refresh token, asserted below via secondCookie.
       expect(firstRefresh.status).toBe(200)
       expect(firstRefreshBody.data?.accessToken).toEqual(expect.any(String))
       expect(loginBody.data?.accessToken).toEqual(expect.any(String))
@@ -192,8 +187,7 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
       expect(secondCookie).toBeDefined()
       expect(secondCookie).not.toBe(firstCookie)
 
-      // The NEW refresh token must itself be live — rotation produces a
-      // working credential, not a dead end.
+      // The new refresh token must itself be live — rotation produces a working credential, not a dead end.
       const secondRefresh = await request(app)
         .post('/api/v1/auth/refresh')
         .set('Cookie', secondCookie as string)
@@ -282,8 +276,7 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
       expect(replayed.status).toBe(401)
     })
 
-    // After a COOKIE_DOMAIN change the browser holds two refreshToken cookies
-    // (one per domain scope) and sends the older one first (RFC 6265 §5.4).
+    // After a COOKIE_DOMAIN change the browser holds two refreshToken cookies (one per domain scope) and sends the older one first (RFC 6265 §5.4).
     it('reads the last of two refreshToken cookies: a stale one first does not revoke the live session', async () => {
       const { response: loginResponse, user } = await registerAndLogin(createdIds)
       const stale = refreshCookiePair(loginResponse) as string
@@ -314,15 +307,12 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
         .send({ email, password: VALID_PASSWORD })
       expect(login.status).toBe(200)
       const before = await userRepository.findById(user.id)
-      // Without this, a before/after comparison of two `null`s (e.g. login
-      // itself failing) would look identical to proof that refresh doesn't
-      // write — pin that login actually recorded a sign-in first.
+      // Without this, a before/after comparison of two nulls (e.g. login itself failing) would look identical to proof that refresh doesn't write.
       expect(before?.lastLoggedInAt).toBeInstanceOf(Date)
 
       await request(app)
         .post('/api/v1/auth/refresh')
-        // The raw Set-Cookie line, replayable verbatim — this file's own
-        // helper, not a hand-built cookie.
+        // The raw Set-Cookie line, replayable verbatim — this file's own helper, not a hand-built cookie.
         .set('Cookie', refreshCookiePair(login) as string)
 
       const after = await userRepository.findById(user.id)
@@ -396,10 +386,7 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
       const cookie = refreshCookiePair(loginResponse) as string
       await request(app).post('/api/v1/auth/logout').set('Cookie', cookie)
 
-      // Logging out again with the SAME (already-revoked) token, and with a
-      // token that never existed, must both simply succeed — a caller
-      // cannot use logout's response to test whether a given raw token was
-      // ever live.
+      // Both the same already-revoked token and one that never existed must simply succeed — a caller cannot use logout's response to test whether a raw token was ever live.
       const secondLogout = await request(app).post('/api/v1/auth/logout').set('Cookie', cookie)
       const forgedLogout = await request(app)
         .post('/api/v1/auth/logout')
@@ -410,25 +397,23 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
     })
   })
 
-  // The production limiters on /register and /logout are proven WIRED here,
-  // not proven to 429 here: exhausting either would take 100 registrations
-  // (or 300 logouts) from this suite's single client address, spending a
-  // budget every other integration file running in parallel shares — the
-  // exact cross-test coupling tests/helpers/global-setup.ts's Redis flush
-  // exists to keep out of this suite. The 429 behaviour itself is proven
-  // against the same `createRateLimiter` calls, with small `limit`
-  // overrides, in tests/unit/middlewares/rate-limit.middleware.test.ts.
-  //
-  // `RateLimit-*` headers are set by express-rate-limit on EVERY response it
-  // lets through, not only on a 429 (standardHeaders: true, verified
-  // empirically), so their presence on an ordinary response is exactly the
-  // evidence that a limiter ran. Red proof: delete `createRateLimiter(RATE_LIMITS.register)`
-  // from auth.routes.ts and this goes from green to red.
+  /**
+   * The production limiters on /register and /logout are proven wired
+   * here, not proven to 429: exhausting either would take 100
+   * registrations (or 300 logouts) from this suite's single client
+   * address, spending a budget every other integration file running in
+   * parallel shares. The 429 behaviour itself is proven against the
+   * same `createRateLimiter` calls, with small `limit` overrides, in
+   * tests/unit/middlewares/rate-limit.middleware.test.ts.
+   *
+   * `RateLimit-*` headers are set by express-rate-limit on every
+   * response it lets through, not only on a 429 (standardHeaders:
+   * true), so their presence on an ordinary response is exactly the
+   * evidence that a limiter ran.
+   */
   describe('every auth route is behind a limiter (wiring, not thresholds)', () => {
     it('runs a limiter on /register — proven by the RateLimit-* headers on an ordinary response', async () => {
-      // A body that fails validation: this reaches the limiter (which runs
-      // first) but never reaches bcrypt or the database, so the wiring
-      // proof costs nothing and creates no row to clean up.
+      // A body that fails validation reaches the limiter (which runs first) but never reaches bcrypt or the database, so the wiring proof costs nothing and creates no row to clean up.
       const response = await request(app).post('/api/v1/auth/register').send({ email: 'nope' })
 
       expect(response.status).toBe(400)
@@ -460,13 +445,9 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
       const attempt = (): Test =>
         request(app).post('/api/v1/auth/login').send({ email, password: 'wrong-password' })
 
-      // The production limiter allows 5 attempts per 15 minutes
-      // (rate-limit.middleware.ts) — the first 5 fail normally (401,
-      // unknown email), the 6th is rate-limited.
+      // The production limiter allows 5 attempts per 15 minutes — the first 5 fail normally (401, unknown email), the 6th is rate-limited.
       for (let index = 0; index < 5; index += 1) {
-        // Sequential on purpose: attempts against one shared counter must
-        // happen one after another, not concurrently, for the count to be
-        // deterministic.
+        // Sequential on purpose: attempts against one shared counter must happen one after another for the count to be deterministic.
         const response = await attempt()
         expect(response.status).toBe(401)
       }
