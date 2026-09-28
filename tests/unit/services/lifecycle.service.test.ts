@@ -1,4 +1,3 @@
-// tests/unit/services/lifecycle.service.test.ts
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { getEnv } from '@/configs/env.config'
 import {

@@ -1,4 +1,3 @@
-// tests/unit/middlewares/error.middleware.test.ts
 import { DrizzleQueryError } from 'drizzle-orm'
 import { type Response } from 'express'
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'

@@ -142,10 +142,10 @@ describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS }, () => {
   })
 
   /**
-   * Parameterized (sonarjs/parameterized-tests) rather than one `it()` pair
-   * per directory: three near-identical accepts/rejects pairs tripped that
-   * rule once src/jobs/ and src/workers/ joined src/controllers/ as a
-   * third governed-directory case.
+   * Parameterized (sonarjs/parameterized-tests) rather than one `it()`
+   * per directory: three near-identical accepts/rejects pairs across
+   * src/controllers/, src/jobs/ and src/workers/ trip that rule
+   * otherwise.
    */
   const governedDirectoryCases = [
     {
