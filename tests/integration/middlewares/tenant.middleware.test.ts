@@ -7,11 +7,7 @@
  * builds its own small standalone `express()` app per test with a bare
  * probe route, rather than mounting the real `/tenants/*` router, to
  * isolate `resolveTenant`/`requireRole` from the rest of that router's
- * composition. `requireAuth` itself is not exercised here: a stub
- * middleware sets `request.user` directly from a real user id, enough to
- * prove `resolveTenant`'s own contract, since it only reads
- * `request.user.id`. Real `requireAuth` composition is proven end-to-end by
- * `tests/integration/api/tenant.test.ts`.
+ * composition.
  */
 import { randomUUID } from 'node:crypto'
 import express, { type Express, type NextFunction, type Request, type Response } from 'express'
@@ -82,9 +78,11 @@ function uniqueSlug(): string {
 }
 
 /**
- * Sets `request.user` from a real user id, standing in for `requireAuth` —
- * see this file's header comment for why the real middleware is not
- * exercised here.
+ * Sets `request.user` from a real user id, standing in for `requireAuth`,
+ * which is not exercised here: this stub is enough to prove
+ * `resolveTenant`'s own contract, since it only reads `request.user.id`.
+ * Real `requireAuth` composition is proven end-to-end by
+ * `tests/integration/api/tenant.test.ts`.
  * @param userId - The user id to attach.
  * @returns An Express middleware.
  */
