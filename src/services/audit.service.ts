@@ -1,8 +1,8 @@
-// src/services/audit.service.ts
-//
-// The one writer and reader of `audit_logs`. `record` validates an entry's
-// metadata against its action's strict schema and throws on a mismatch, so a
-// bad entry fails its caller's transaction instead of being dropped.
+/**
+ * @file The one writer and reader of `audit_logs`. `record` validates an entry's
+ * metadata against its action's strict schema and throws on a mismatch, so a bad
+ * entry fails its caller's transaction instead of being dropped.
+ */
 import {
   AUDIT_ACTIONS,
   PLATFORM_ACCESS_DEDUPE_SECONDS,
@@ -27,7 +27,6 @@ import type { PlatformAuditLogQuery, TenantAuditLogQuery } from '@/validators/au
 
 const auditLogRepository = new AuditLogRepository()
 
-// Column widths in audit-log.model.ts.
 const MAX_REQUEST_ID_LENGTH = 64
 const MAX_IP_LENGTH = 45
 const MAX_USER_AGENT_LENGTH = 512
@@ -50,8 +49,10 @@ export type AuditEntry = {
 }[AuditAction]
 
 /**
- * Validate an entry and insert it, with request metadata from the ALS.
- * @param entry - The entry.
+ * Validate an entry and insert it, with request metadata from the ALS. The
+ * request id, IP and user agent are cut to their column widths in
+ * audit-log.model.ts.
+ * @param entry - The entry to validate and insert.
  * @param executor - Where to insert.
  * @returns The inserted row.
  * @throws {Error} When the metadata does not match the action's schema.
@@ -104,7 +105,7 @@ export async function record(entry: AuditEntry, tx: DbTransaction): Promise<Audi
  * @param tenantId - The tenant they opened.
  * @param platformRole - Their platform role, the access they used.
  * @returns The written row, or undefined when this visit was already recorded this hour.
- * @throws {Error} When the insert fails; the dedupe key is released first.
+ * @throws {Error} When the write fails; the dedupe key is released first.
  */
 export async function recordPlatformAccess(
   actor: Actor,
