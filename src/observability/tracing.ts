@@ -1,28 +1,11 @@
-// src/observability/tracing.ts
-//
-// OpenTelemetry tracing bootstrap. Loaded via `--import ./src/observability/tracing.ts`
-// (dev, tsx) or `--import ./dist/observability/tracing.js` (prod) — BEFORE
-// `src/index.ts` ever runs. That ordering is the whole point: Node's
-// `--import` loads this module before any other import in the process, which
-// is the only way auto-instrumentation (HTTP, Express, ioredis, pino) can
-// patch those libraries before the app itself requires them.
-//
-// Because this runs before anything else, it CANNOT use `@/configs/env.config`
-// — `getEnv()` hasn't been (and can't yet be) called, and importing
-// `env.config.ts` here would run its own `dotenv.config()` a second time, out
-// of order, before this module has decided whether tracing is even wanted.
-// This file reads `process.env` directly instead — the one deliberate
-// exception to this repo's own `no-restricted-properties` rule outside
-// `env.config.ts`/`logger.service.ts`/`index.ts` (see eslint.config.mjs).
-// Values from `.env` reach it only because `dev` and `start` pass Node's
-// `--env-file-if-exists=.env` before `--import`.
-// `console.info`/`console.error` are used for the same reason: the app's
-// own logger (`@/services/logger.service`) is not loaded yet, and even once
-// it is, this instrumentation must not depend on the very library it patches.
-//
-// Traces and logs — no metrics, no sampling knob. See CLAUDE.md's
-// "Observability" section for what this deliberately does not cover
-// (Postgres, direct `redis` client calls) and why.
+/**
+ * @file OpenTelemetry bootstrap for traces and logs, loaded with `--import`
+ * before the app so auto-instrumentation can patch HTTP, Express, ioredis and
+ * pino before they load. It runs before env validation, so it reads
+ * `process.env` directly (`.env` arrives through `--env-file-if-exists`) and
+ * writes with `console`, never the logger it instruments. Without
+ * OTEL_EXPORTER_OTLP_ENDPOINT it is a complete no-op.
+ */
 import type { IncomingMessage } from 'node:http'
 // eslint-disable-next-line sonarjs/deprecation -- `register()` is deprecated in favor of `module.registerHooks()`, but that replacement takes a synchronous hooks object, not a loader specifier; `@opentelemetry/instrumentation@0.222.0`'s `hook.mjs` only exports the async `load`/`resolve`/`initialize` shape `register()` expects, so this is the only integration path this package version offers (see the `register()` call below)
 import { register } from 'node:module'
@@ -37,21 +20,15 @@ import { BatchLogRecordProcessor } from '@opentelemetry/sdk-logs'
 import { NodeSDK } from '@opentelemetry/sdk-node'
 import { ATTR_SERVICE_NAME } from '@opentelemetry/semantic-conventions'
 
-// pino is CommonJS imported from ESM; OTel's require-hook never sees that
-// load. The ESM loader hook (import-in-the-middle) makes the instrumentation
-// patch it. Must run before the app's own imports, which --import guarantees.
-// Gated on the same env var buildSdk() itself checks below — installing an
-// ESM loader hook that wraps every module load in the process is not free,
-// and doing it unconditionally would break this file's own documented
-// invariant (CLAUDE.md's Observability section): "no OTEL_EXPORTER_OTLP_ENDPOINT
-// ⇒ complete no-op."
+// OTel's require-hook never sees CommonJS pino imported from ESM; the loader hook does.
 if (process.env.OTEL_EXPORTER_OTLP_ENDPOINT) {
   // eslint-disable-next-line sonarjs/deprecation -- see the disable comment on the `register` import above
   register('@opentelemetry/instrumentation/hook.mjs', import.meta.url)
 }
 
-// Liveness/readiness probes fire every few seconds and produce nothing worth
-// a trace — same two paths app.ts registers before any other route.
+/**
+ * Health probes fire every few seconds and produce nothing worth a trace.
+ */
 const IGNORED_INCOMING_PATHS = new Set(['/health', '/health/ready'])
 
 /**
@@ -64,16 +41,17 @@ export function tracingResourceAttributes(
 ): Record<string, string> {
   return {
     [ATTR_SERVICE_NAME]: source.OTEL_SERVICE_NAME || 'express-boilerplate',
-    // Incubating semconv key, spelled out to keep to the stable package.
-    // Omitted when unset: this runs before env validation.
+    // An incubating semconv key, spelled out to stay on the stable package.
     ...(source.APP_ENV && { 'deployment.environment.name': source.APP_ENV }),
   }
 }
 
 /**
  * Build (but do not start) the NodeSDK instance for a given OTLP endpoint.
- * Split out from the module-scope no-op check below purely so that check can
- * stay a `const` rather than a top-level `let` reassigned conditionally.
+ * Log records carry the active span's context to the collector; the pino
+ * instrumentation's own correlation is off because the logger's mixin
+ * already writes `traceId`/`spanId`. ioredis (BullMQ) is instrumented;
+ * node-redis (redis.service.ts) and postgres.js are not.
  * @param endpoint - The raw `OTEL_EXPORTER_OTLP_ENDPOINT` value (already
  *   confirmed non-empty by the caller).
  * @returns A configured, not-yet-started `NodeSDK`.
@@ -84,13 +62,7 @@ function buildSdk(endpoint: string): NodeSDK {
   return new NodeSDK({
     resource: resourceFromAttributes(tracingResourceAttributes(process.env)),
     traceExporter: new OTLPTraceExporter({ url: `${baseUrl}/v1/traces` }),
-    // @opentelemetry/sdk-logs@0.222.0's `BatchLogRecordProcessor` takes a
-    // single options object (`{ exporter, ... }`), not `(exporter, config)`
-    // positionally — passing the exporter positionally silently leaves
-    // `this._exporter` undefined inside the processor (confirmed: the
-    // record never reached the collector, and `shutdown()` threw trying to
-    // read `.shutdown` off it). See `BatchLogRecordProcessorOptions` in that
-    // package's `types.d.ts`.
+    // sdk-logs takes `{ exporter }`: a positional exporter is silently dropped.
     logRecordProcessors: [
       new BatchLogRecordProcessor({ exporter: new OTLPLogExporter({ url: `${baseUrl}/v1/logs` }) }),
     ],
@@ -100,16 +72,7 @@ function buildSdk(endpoint: string): NodeSDK {
           IGNORED_INCOMING_PATHS.has((request.url ?? '').split('?', 1)[0] ?? ''),
       }),
       new ExpressInstrumentation(),
-      // Patches ioredis — the client `queue.service.ts` (BullMQ) uses.
-      // `redis.service.ts`'s own direct Redis calls go through node-redis
-      // (the `redis` package), which this instrumentation does NOT cover —
-      // see CLAUDE.md's Observability section.
       new IORedisInstrumentation(),
-      // Log SENDING on: every pino record becomes an OTel log record carrying
-      // the active span's trace context, exported to the collector → Loki.
-      // Log CORRELATION off: logger.service.ts's mixin already writes
-      // traceId/spanId (camelCase) into the stdout JSON; letting the
-      // instrumentation add trace_id/span_id as well would duplicate them.
       new PinoInstrumentation({ disableLogCorrelation: true }),
     ],
   })
@@ -128,9 +91,8 @@ if (sdk) {
 /**
  * Flush and shut down the OpenTelemetry SDK as part of graceful shutdown.
  *
- * A no-op when tracing was never started (`OTEL_EXPORTER_OTLP_ENDPOINT`
- * unset) — `sdk` is `undefined` in that case, so this resolves immediately
- * without throwing. Safe to call unconditionally from `server.ts`.
+ * Resolves at once when tracing was never started, so `server.ts` calls it
+ * unconditionally. A shutdown failure is logged, never thrown.
  * @returns Resolves once the SDK has flushed and shut down, or immediately
  *   if tracing was never started.
  */
