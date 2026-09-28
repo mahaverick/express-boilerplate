@@ -1,53 +1,42 @@
-// tests/unit/database/models/user-token.model.test.ts
-//
-// Type-level only, no database. Proves `purpose` has NO default at the
-// Drizzle schema level, so `NewUserToken` requires it on every insert.
-//
-// WHY THIS FILE EXISTS. Migration 0003 gave `purpose` a temporary
-// `DEFAULT 'refresh'` — needed only to backfill pre-existing rows in the
-// same statement that added the `NOT NULL` constraint — and 0004 dropped
-// it once that one-time backfill was done (see user-token.model.ts's own
-// comment on this column). Dropping the default at the SCHEMA level too
-// (not just the database's) is what makes an insert missing `purpose` a
-// compile error instead of a silent `'refresh'` — the highest-privilege
-// purpose, the one that can mint a session. "Only one call site
-// (`createTokenRow`, session.service.ts) ever calls `create()`" is a
-// convention; a convention is exactly what erodes first in a project
-// derived from this boilerplate. This file is the gate that survives that
-// erosion: if a future edit re-adds `.default(...)` to `purpose` for a
-// convenient migration, `purpose` becomes optional in `NewUserToken` again,
-// the `@ts-expect-error` below stops being consumed, and TypeScript reports
-// "Unused '@ts-expect-error' directive" — which `pnpm lint`'s
-// `tsc -p tsconfig.typecheck.json --noEmit` step turns into a real, red
-// gate, without anyone having to remember this reasoning.
-//
-// The gate itself is checked by the compiler, not by anything this test
-// executes at runtime — `tsc` either reports "Unused '@ts-expect-error'
-// directive" or it doesn't; no assertion below can change that. The one
-// runtime `expect` in the `it` block exists for two narrower reasons: it
-// gives `sonarjs/assertions-in-tests` something real to check, and it
-// proves the object literal is a genuine, read value rather than one a
-// future cleanup could quietly delete or `void`-away — deleting the object
-// would also delete the compile-time check it exists to trigger.
+/**
+ * @file Type-level only, no database. Proves `purpose` has no default at
+ * the Drizzle schema level, so `NewUserToken` requires it on every
+ * insert.
+ */
 import { describe, expect, it } from 'vitest'
 import type { NewUserToken } from '@/database/models/user-token.model'
 
+/**
+ * Dropping the default at the schema level, not just the database's, is
+ * what makes an insert missing `purpose` a compile error instead of a
+ * silent `'refresh'`, the highest-privilege purpose, the one that can
+ * mint a session. Only one call site (`createTokenRow`,
+ * session.service.ts) calling `create()` is a convention, not something
+ * enforced elsewhere; this suite is the gate that survives its erosion.
+ * If a future edit re-adds `.default(...)` to `purpose`, it becomes
+ * optional in `NewUserToken` again, the `@ts-expect-error` below stops
+ * being consumed, and TypeScript reports "Unused '@ts-expect-error'
+ * directive" — which `pnpm lint`'s `tsc -p tsconfig.typecheck.json
+ * --noEmit` step turns into a real, red gate. The gate itself is
+ * checked by the compiler, not by anything this test executes at
+ * runtime — `tsc` either reports the unused directive or it doesn't.
+ */
 describe('user_tokens: `purpose` has no default', () => {
+  /**
+   * The one runtime `expect` in this block exists for two narrower
+   * reasons: it gives `sonarjs/assertions-in-tests` something real to
+   * check, and it proves the object literal is a genuine, read value
+   * rather than one a future cleanup could quietly delete or
+   * `void`-away, which would also delete the compile-time check it
+   * exists to trigger.
+   */
   it('omitting `purpose` from a NewUserToken literal is a compile error', () => {
-    // @ts-expect-error — `purpose` is required: TokenPurpose has no
-    // fallback, on purpose. If this stops erroring, `purpose` silently
-    // grew a default again and every `create()` call that forgets it would
-    // mint a 'refresh' row instead of failing to compile.
+    // @ts-expect-error — TokenPurpose has no fallback; if this stops erroring, purpose silently grew a default again and every create() call that forgets it would mint a 'refresh' row instead of failing to compile.
     const missingPurpose: NewUserToken = {
       userId: 'user-id',
       tokenHash: 'a'.repeat(64),
       expiresAt: new Date(),
     }
-    // A real assertion, not a throwaway: proves the literal above is
-    // actually read, not merely constructed and discarded — the type
-    // error this test exists to pin down is on the object literal's
-    // *shape*, so the object has to be a genuine value, not a `void`-ed
-    // one a future cleanup could delete without weakening the check.
     expect(missingPurpose.userId).toBe('user-id')
   })
 })
