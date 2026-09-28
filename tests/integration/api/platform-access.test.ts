@@ -1,12 +1,12 @@
-// tests/integration/api/platform-access.test.ts
-//
-// Staff over the real API: what a platform role lets a user read and change
-// in a tenant they do not belong to, how membership overrides it, and the
-// platform tenant staying closed. Staff are users with a membership in the
-// seeded platform tenant.
-//
-// Staff visits write audit rows, which RESTRICT deleting their user and
-// tenant, so afterEach clears audit_logs first.
+/**
+ * @file Staff over the real API: what a platform role lets a user read and
+ * change in a tenant they do not belong to, how membership overrides it,
+ * and the platform tenant staying closed. Staff are users with a
+ * membership in the seeded platform tenant. Staff visits write audit
+ * rows, which RESTRICT deleting their user and tenant, so afterEach
+ * clears audit_logs first.
+ */
+
 import { randomUUID } from 'node:crypto'
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'

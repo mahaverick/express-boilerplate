@@ -1,8 +1,8 @@
-// tests/integration/database/migrate.test.ts
-//
-// The migration itself already ran once, in the main process, before this
-// file was ever loaded — see tests/helpers/global-setup.ts. These tests
-// assert what that migration actually produced.
+/**
+ * @file The migration itself already ran once, in the main process, before
+ * this file was ever loaded — see `tests/helpers/global-setup.ts`. These
+ * tests assert what that migration actually produced.
+ */
 import { describe, expect, it } from 'vitest'
 import { runMigrations } from '@/database/migrate'
 import { sql } from '@/services/database.service'
@@ -39,13 +39,11 @@ describe('migrations', () => {
     )
   })
 
-  // Migration 0004's entire job was dropping the transient DEFAULT
-  // 'refresh' that 0003 needed only to backfill pre-existing rows.
-  // tests/unit/database/models/user-token.model.test.ts already pins this
-  // at the Drizzle-schema/TypeScript level; that gate is blind to the
-  // database itself, so a lost or reverted 0004 would leave the type gate
-  // green while `purpose` quietly hands out 'refresh' to any insert that
-  // omits it. This asserts the LIVE column, not the schema file.
+  /**
+   * Migration 0004 dropped 0003's transient DEFAULT 'refresh'; the
+   * Drizzle-schema type gate can't see the live database, so this asserts
+   * the column itself.
+   */
   it('user_tokens.purpose has no default and is not nullable at the database level', async () => {
     const [column] = await sql`
       select column_default, is_nullable from information_schema.columns
@@ -56,11 +54,11 @@ describe('migrations', () => {
     expect(column?.is_nullable).toBe('NO')
   })
 
-  // Migration 0005 adds `user_tokens_purpose_check`. `$type<TokenPurpose>()`
-  // (user-token.model.ts) is compile-time only — this proves the database
-  // itself, not just the application, refuses a value outside the three
-  // real purposes, via a raw SQL insert that bypasses Drizzle's typing
-  // entirely.
+  /**
+   * Migration 0005's `user_tokens_purpose_check` backs `$type<TokenPurpose>()`
+   * (compile-time only) with a database-level CHECK, via a raw insert that
+   * bypasses Drizzle's typing.
+   */
   it('rejects an invalid purpose value at the database level via its CHECK constraint', async () => {
     const email = `invalid-purpose-${Date.now()}@example.test`
     const [user] = await sql`insert into users (email) values (${email}) returning id`
@@ -109,20 +107,16 @@ describe('migrations', () => {
         'created_at',
       ])
     )
-    // No updatedAt, no deletedAt — see email-log.model.ts's header comment
-    // (append-only, Ruling D in task-4-brief.md). Asserted as an absence,
-    // not just an omission from the arrayContaining list above, so a later
-    // change that adds either column back fails loudly here instead of
-    // silently passing this file.
+    // No updatedAt, no deletedAt: email_logs is append-only (see email-log.model.ts). Asserted as an absence so a later column addition fails loudly here.
     expect(columns).not.toContain('updated_at')
     expect(columns).not.toContain('deleted_at')
   })
 
-  // Migration 0006 adds `email_logs_status_check`. `$type<EmailLogStatus>()`
-  // (email-log.model.ts) is compile-time only — this proves the database
-  // itself, not just the application, refuses a status outside 'sent' /
-  // 'failed', via a raw SQL insert that bypasses Drizzle's typing entirely.
-  // Same shape as `user_tokens_purpose_check`'s own test above.
+  /**
+   * Migration 0006's `email_logs_status_check` backs
+   * `$type<EmailLogStatus>()` (compile-time only) with a database-level
+   * CHECK, same shape as `user_tokens_purpose_check` above.
+   */
   it('rejects an invalid status value at the database level via its CHECK constraint', async () => {
     await expect(
       sql`
@@ -137,15 +131,13 @@ describe('migrations', () => {
     expect(remaining).toHaveLength(0)
   })
 
-  // Migration 0007 adds `email_logs_error_code_check`, replacing a
-  // width-only column (`errorCode` was originally `varchar(64)`, changed to
-  // `varchar(32)` in this same migration) with a shape constraint. Width
-  // alone did not exclude a raw token: RAW_TOKEN_BYTES (session.service.ts)
-  // hex-encoded is EXACTLY 64 characters, so the old width was chosen to
-  // fit one perfectly rather than reject it. This proves the actual
-  // guarantee — the uppercase-only shape — at the database level, with a
-  // value chosen specifically to be the thing it must exclude: lowercase
-  // hex, the only alphabet a real raw token can ever be encoded in.
+  /**
+   * Migration 0007's `email_logs_error_code_check` replaced the
+   * `varchar(64)` width (`RAW_TOKEN_BYTES` hex-encoded is exactly 64
+   * chars, so it fit a raw token perfectly) with an uppercase-only shape
+   * CHECK, tested here against lowercase hex — the one alphabet a raw
+   * token is ever encoded in.
+   */
   it('rejects a lowercase-hex error_code at the database level via its CHECK constraint', async () => {
     const lowercaseHex = 'a1'.repeat(16) // 32 characters — fits the column width exactly
     await expect(
@@ -170,9 +162,7 @@ describe('migrations', () => {
   })
 
   it('is safe to run again once every migration is already applied', async () => {
-    // runMigrations() closes the pool it uses when it finishes, so this
-    // must be the last test in the file — sql/db are module-scope singletons
-    // shared by every test above within this same test file.
+    // runMigrations() closes the pool it uses when it finishes, so this must be the last test: sql/db are module-scope singletons every test above shares.
     await expect(runMigrations()).resolves.toBeUndefined()
   })
 })

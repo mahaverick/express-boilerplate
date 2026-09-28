@@ -1,12 +1,8 @@
-// src/repositories/tenant-settings.repository.ts
-//
-// Deliberately does NOT extend BaseRepository — same reasoning
-// notification-preference.repository.ts gives for itself: no soft-delete
-// concept (`tenant_settings` has no `deletedAt` — see tenant.model.ts's
-// own header comment for why), and nothing to translate a 23505 into
-// (`tenant_id` is this table's own primary key, so there is no separate
-// unique constraint a write here could violate). A plain class with
-// exactly the operations a settings row needs.
+/**
+ * @file Query access to `tenant_settings`. It does not extend `BaseRepository`:
+ * the table has no `deletedAt`, and `tenant_id` is its primary key, so there is
+ * no separate unique constraint to translate.
+ */
 import { eq, sql } from 'drizzle-orm'
 import {
   tenantSettingsModel,
@@ -81,9 +77,6 @@ export class TenantSettingsRepository {
     values: UpdateTenantSettingsInput,
     executor: DbExecutor = db
   ): Promise<TenantSettings | undefined> {
-    // `sql\`now()\`` — evaluated by Postgres, not read from the
-    // application's clock — same reasoning as `BaseRepository.touched`
-    // (base.repository.ts).
     const [row] = await executor
       .update(tenantSettingsModel)
       .set({ ...values, updatedAt: sql`now()` })

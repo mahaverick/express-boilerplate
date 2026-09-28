@@ -1,21 +1,8 @@
-// tests/integration/services/tenant-access.service.test.ts
-//
-// resolveActorAccess against the real per-worker Postgres, and the lock
-// order it adds: owners, then memberships, then the platform membership FOR
-// SHARE. The lock test runs a staff write in a customer tenant while that
-// staff member's demotion in the platform tenant is still uncommitted. Only
-// the staff write locks rows in two tenants.
-//
-// The last test is DELIBERATELY red under MUTATION_PROOF=1. It swaps the
-// FOR SHARE read for a plain read in the same transaction and keeps the
-// real test's assertions:
-//
-//   MUTATION_PROOF=1 pnpm exec vitest run tests/integration/services/tenant-access.service.test.ts   # red
-//   pnpm exec vitest run tests/integration/services/tenant-access.service.test.ts                    # green
-//
-// Pool note: test mode has max 2 connections, and the race holds both. A
-// query inside a service that skipped `tx` would hang here. The probe that
-// shows the staff read waiting opens its own connection (lock-probe.ts).
+/**
+ * @file Exercises `resolveActorAccess` against the real per-worker
+ * Postgres, and the lock order it adds: owners, then memberships, then
+ * the platform membership `FOR SHARE`.
+ */
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { MembershipRole } from '@/constants/tenant.constants'
@@ -61,6 +48,25 @@ async function addMember(tenant: Tenant, user: User, role: MembershipRole): Prom
   await userMembershipRepository.create({ userId: user.id, tenantId: tenant.id, role })
 }
 
+/**
+ * The lock test below runs a staff write in a customer tenant while that
+ * staff member's demotion in the platform tenant is still uncommitted.
+ * Only the staff write locks rows in two tenants.
+ *
+ * The last test is DELIBERATELY red under `MUTATION_PROOF=1`. It swaps
+ * the `FOR SHARE` read for a plain read in the same transaction and
+ * keeps the real test's assertions:
+ *
+ * ```
+ * MUTATION_PROOF=1 pnpm exec vitest run tests/integration/services/tenant-access.service.test.ts   # red
+ * pnpm exec vitest run tests/integration/services/tenant-access.service.test.ts                    # green
+ * ```
+ *
+ * Pool note: test mode has max 2 connections, and the race holds both. A
+ * query inside a service that skipped `tx` would hang here. The probe
+ * that shows the staff read waiting opens its own connection
+ * (`lock-probe.ts`).
+ */
 describe('tenant-access.service', () => {
   const createdTenantIds: string[] = []
   const createdUserIds: string[] = []
@@ -267,9 +273,11 @@ describe('tenant-access.service', () => {
       expect(kept?.role).toBe('manager')
     }
 
-    // No lock cycle is possible by construction: the only lock that reaches
-    // a second tenant is this FOR SHARE on one platform row, and no
-    // platform-tenant transaction locks rows in a customer tenant.
+    /**
+     * No lock cycle is possible by construction: the only lock that reaches
+     * a second tenant is this `FOR SHARE` on one platform row, and no
+     * platform-tenant transaction locks rows in a customer tenant.
+     */
     it('serialises a staff write behind a concurrent demotion (the FOR SHARE lock)', async () => {
       const race = await raceStaffRemovalAgainstDemotion(
         // eslint-disable-next-line @typescript-eslint/unbound-method -- called with `this` bound by recordingRead
@@ -278,8 +286,10 @@ describe('tenant-access.service', () => {
       await expectRefusedOnTheDemotedRole(race)
     })
 
-    // DELIBERATELY red under MUTATION_PROOF=1: the same assertions, with an
-    // unlocked read of the platform role in the same transaction.
+    /**
+     * DELIBERATELY red under `MUTATION_PROOF=1`: the same assertions, with
+     * an unlocked read of the platform role in the same transaction.
+     */
     it.runIf(process.env.MUTATION_PROOF === '1')(
       'reproduces the lock test against an unlocked platform read',
       async () => {

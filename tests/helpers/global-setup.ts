@@ -1,25 +1,8 @@
-// tests/helpers/global-setup.ts
-//
-// WHY THIS RUNS HERE, NOT IN setup-global.ts. setup-global.ts is wired via
-// vitest.config.ts's `setupFiles`, which runs once PER TEST FILE, inside
-// EVERY forked worker (`pool: 'forks'`, `maxWorkers: 8`). Migrating a
-// database from a `setupFiles` hook would mean up to 8 worker processes
-// racing to run the same `CREATE TABLE`/`CREATE UNIQUE INDEX` against the
-// same database concurrently. drizzle's migrator takes no cross-process
-// lock, so the failure mode is not an obvious "already migrating" error —
-// it's a duplicate-object error ("relation \"users\" already exists") on
-// whichever worker loses the race, which reads like a flaky, unrelated bug
-// rather than what it actually is.
-//
-// vitest's `globalSetup` runs exactly once, in the main process, before any
-// worker is spawned — the right hook for a once-per-run side effect.
-//
-// This now provisions WORKER_COUNT separate databases, not one — see
-// ./worker-database for why each worker needs its own. Postgres has no
-// `CREATE DATABASE IF NOT EXISTS`; the compose stack's Postgres volume (and
-// CI's ephemeral one, freshly created every run) may or may not already
-// have these from a previous run, so a duplicate-database error (42P04) is
-// caught and ignored rather than treated as failure.
+/**
+ * @file Creates and migrates every worker's dedicated test database once, in
+ * vitest's `globalSetup` hook (the main process, before any worker spawns),
+ * and clears leftover Redis rate-limit counters from an earlier run.
+ */
 import postgres from 'postgres'
 import { createClient } from 'redis'
 import { runMigrations } from '@/database/migrate'
@@ -30,9 +13,9 @@ import { testDatabaseUrlForWorker, WORKER_COUNT } from './worker-database'
 /**
  * Delete every rate-limit counter left in Redis before the run starts.
  *
- * Unlike Postgres, Redis is NOT per-worker: all eight workers share the one
- * compose instance, and a counter outlives the run that created it for the
- * length of its window (an hour, for registration). Every integration test
+ * Unlike Postgres, Redis is NOT per-worker: all `WORKER_COUNT` workers share
+ * the one compose instance, and a counter outlives the run that created it
+ * for the length of its window (an hour, for registration). Every integration test
  * also reaches the API from the same client address, so an IP-keyed limiter
  * accumulates across runs — `pnpm test` twice in a row would spend one
  * budget twice and the second run would start seeing 429s that have nothing
@@ -59,18 +42,13 @@ async function clearRateLimitCounters(): Promise<void> {
 
   const client = createClient({
     url,
-    // Bounded for the same reason redis.service.ts bounds its own: node-
-    // redis's default strategy retries forever and never rejects
-    // `connect()`, which would hang global setup — and therefore the whole
-    // suite — instead of falling through to the warning below.
+    // Bounded like redis.service.ts's own client: an unbounded connect() would hang the whole suite instead of falling through to the warning below.
     socket: {
       connectTimeout: 2000,
       reconnectStrategy: (retries) => (retries > 1 ? new Error('Redis unreachable') : 100),
     },
   })
-  // Without a listener, node-redis's emitted 'error' becomes an unhandled
-  // error event and takes the process down — the failure this function is
-  // explicitly allowed to tolerate.
+  // Without a listener, EventEmitter throws node-redis's emitted 'error' and crashes the process.
   client.on('error', () => {})
 
   try {
@@ -91,7 +69,13 @@ async function clearRateLimitCounters(): Promise<void> {
 
 /**
  * Create and migrate every worker's dedicated test database once, before
- * any worker (and therefore any test file) starts.
+ * any worker (and therefore any test file) starts. This must run from
+ * vitest's `globalSetup`, not from `tests/helpers/setup-global.ts`'s
+ * `setupFiles` hook: that hook runs once per test file inside every forked
+ * worker, so migrating from there would race up to `WORKER_COUNT` processes
+ * against the same `CREATE TABLE`/`CREATE UNIQUE INDEX`, and drizzle's
+ * migrator holds no cross-process lock — the loser sees a duplicate-object
+ * error that reads like an unrelated flake, not a migration race.
  */
 export default async function setup(): Promise<void> {
   // Populate process.env from .env.test(.local) before reading DATABASE_URL.
@@ -110,13 +94,11 @@ export default async function setup(): Promise<void> {
     for (const workerUrl of workerUrls) {
       const name = new URL(workerUrl).pathname.slice(1)
       try {
-        // CREATE DATABASE takes no placeholder parameter; `name` is one of
-        // WORKER_COUNT fixed, code-generated identifiers, never user input.
+        // CREATE DATABASE takes no placeholder parameter; `name` is one of WORKER_COUNT fixed, code-generated identifiers, never user input.
         await admin.unsafe(`CREATE DATABASE "${name}"`)
       } catch (error) {
         const code = (error as { code?: string }).code
-        // 42P04 = duplicate_database: already created by a previous run
-        // against this same (persistent) Postgres volume.
+        // 42P04 = duplicate_database: already created by a previous run against this same (persistent) Postgres volume.
         if (code !== '42P04') throw error
       }
     }

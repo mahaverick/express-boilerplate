@@ -1,9 +1,9 @@
-// src/services/platform.service.ts
-//
-// Platform staff are the members of the one tenant with is_platform set.
-// This module reads a user's platform role, joins verified addresses on
-// PLATFORM_EMAIL_DOMAINS as viewer, and grants roles for the bootstrap
-// script. Auto-join never promotes or demotes an existing platform member.
+/**
+ * @file Platform staff are the members of the one tenant with `is_platform` set.
+ * This module reads a user's platform role, joins verified addresses on
+ * PLATFORM_EMAIL_DOMAINS as viewer (never changing an existing member's role),
+ * and grants roles for the bootstrap script.
+ */
 import { PgTransaction } from 'drizzle-orm/pg-core'
 import { getEnv } from '@/configs/env.config'
 import type { MembershipRole } from '@/constants/tenant.constants'

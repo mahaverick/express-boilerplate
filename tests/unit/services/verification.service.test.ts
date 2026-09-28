@@ -7,9 +7,7 @@ import {
 
 describe('buildVerificationUrl', () => {
   it('points at the frontend WEB_URL, not the API', () => {
-    // The base is passed explicitly in every test here. This is a unit
-    // test — it must not depend on a validated env being loadable, and
-    // getEnv() throws when one is not.
+    // The base is passed explicitly in every test here: this is a unit test — it must not depend on a validated env being loadable, and getEnv() throws when one is not.
     const url = new URL(buildVerificationUrl('abc123', 'https://app.example.com'))
 
     expect(url.origin).toBe('https://app.example.com')
@@ -18,19 +16,14 @@ describe('buildVerificationUrl', () => {
   })
 
   it('percent-encodes the token rather than concatenating it raw', () => {
-    // Tokens are hex today (session.service.ts generateRawToken), so nothing needs
-    // escaping yet. This pins the behaviour anyway: the day the encoding
-    // changes, a '+' or '/' in a query string silently decodes to
-    // something else, and a verification link stops working for a
-    // fraction of users with no error anywhere.
+    // Tokens are hex (session.service.ts generateRawToken), so nothing needs escaping today — this pins the behaviour anyway: a future encoding whose alphabet includes '+' or '/' would otherwise silently decode to something else in a query string, breaking a verification link for a fraction of users with no error anywhere.
     const url = new URL(buildVerificationUrl('a+b/c==', 'https://app.example.com'))
 
     expect(url.searchParams.get('token')).toBe('a+b/c==')
   })
 
   it('does not double a slash when WEB_URL has a trailing one', () => {
-    // A cloner's .env is as likely to say https://app.example.com/ as
-    // https://app.example.com, and //verify-email 404s on most routers.
+    // A cloner's .env is as likely to say https://app.example.com/ as https://app.example.com, and //verify-email 404s on most routers.
     expect(buildVerificationUrl('t', 'https://app.example.com/')).toBe(
       'https://app.example.com/verify-email?token=t'
     )

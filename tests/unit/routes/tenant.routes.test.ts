@@ -1,10 +1,10 @@
-// tests/unit/routes/tenant.routes.test.ts
-//
-// Route wiring that no HTTP test can observe. Redis merges invite and
-// resend by their shared `rl:invite-tenant-member:` prefix, but on the
-// in-memory fallback each limiter instance counts alone, so the two routes
-// must mount the very same instance. Building the router touches no
-// database or Redis: every connection is lazy.
+/**
+ * @file Route wiring that no HTTP test can observe. Redis merges invite
+ * and resend by their shared `rl:invite-tenant-member:` prefix, but on
+ * the in-memory fallback each limiter instance counts alone, so the two
+ * routes must mount the very same instance. Building the router touches
+ * no database or Redis: every connection is lazy.
+ */
 import type { RequestHandler, Router } from 'express'
 import { describe, expect, it } from 'vitest'
 import { createTenantRouter } from '@/routes/tenant.routes'
@@ -60,8 +60,7 @@ describe('createTenantRouter', () => {
       ['patch', '/:slug/settings'],
     ]
 
-    // Position 1: right after requireJsonContentType, same convention the
-    // file's existing invite/resend test already establishes.
+    // Position 1: right after requireJsonContentType, same convention the invite/resend test above establishes.
     const limiters = writeRoutes.map(([method, path]) => handlersFor(router, method, path)[1])
 
     for (const limiter of limiters) {

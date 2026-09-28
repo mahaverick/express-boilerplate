@@ -1,17 +1,10 @@
-// tests/integration/services/session.service.test.ts
-//
-// The six security properties this task exists to prove, against the real
-// per-worker Postgres database. Every user row this file creates is
-// unique to this run and deleted in afterEach; deleting the user cascades
-// (ON DELETE CASCADE on user_tokens.user_id) to every token row it owns.
-//
-// Test 4 (rotation) and test 5 (reuse) are deliberately kept from
-// contaminating each other: test 4 proves the OLD token is invalidated by
-// inspecting the row directly (via the repository), never by presenting the
-// old token again — doing that would itself trigger reuse detection and
-// revoke the new token as a side effect, so test 4 would then only be
-// passing for test 5's reason. Test 5 is the only test that presents an
-// already-rotated token, and it ages the row past the reuse grace window first.
+/**
+ * @file Exercises the session/token service's security properties against
+ * the real per-worker Postgres database. Every user row this file creates
+ * is unique to this run and deleted in `afterEach`; deleting the user
+ * cascades (`ON DELETE CASCADE` on `user_tokens.user_id`) to every token
+ * row it owns.
+ */
 import { createHash, randomUUID } from 'node:crypto'
 import { eq } from 'drizzle-orm'
 import jwt from 'jsonwebtoken'
@@ -28,7 +21,6 @@ import {
   issueRefreshToken,
   issueToken,
   revokeAllSessions,
-  revokeAllSessionsExceptCurrent,
   revokeSession,
   rotateRefreshToken,
   signAccessToken,
@@ -51,8 +43,7 @@ function hashRawToken(raw: string): string {
 const userRepository = new UserRepository()
 const userTokenRepository = new UserTokenRepository()
 
-// Each repository revocation, called for one user's one session. The
-// except-session case spares an unrelated id, so the session is revoked.
+// Each repository revocation, called for one user's one session; the except-session case spares an unrelated id.
 const REPOSITORY_REVOKES: readonly [
   string,
   (userId: string, sessionId: string, tx: DbExecutor) => Promise<unknown>,
@@ -72,11 +63,14 @@ const REPOSITORY_REVOKES: readonly [
   ],
 ]
 
-// vitest types `expect.any(...)` as `any` (it's an asymmetric matcher, not a
-// real string) — assigning it directly into an object literal's property
-// trips @typescript-eslint/no-unsafe-assignment. The `as unknown as string`
-// cast resolves that at the type level only (see tests/integration/api/
-// auth.test.ts's own `ANY_STRING`, which this mirrors for this file).
+/**
+ * vitest types `expect.any(...)` as `any` (it's an asymmetric matcher, not
+ * a real string) — assigning it directly into an object literal's property
+ * trips `@typescript-eslint/no-unsafe-assignment`. The `as unknown as
+ * string` cast resolves that at the type level only (see
+ * `tests/integration/api/auth.test.ts`'s own `ANY_STRING`, which this
+ * mirrors for this file).
+ */
 const ANY_STRING = expect.any(String) as unknown as string
 
 /**
@@ -87,6 +81,16 @@ function uniqueEmail(): string {
   return `token-flow-${randomUUID()}@example.test`
 }
 
+/**
+ * The rotation and reuse-detection tests below are deliberately kept from
+ * contaminating each other: the rotation test proves the OLD token is
+ * invalidated by inspecting the row directly (via the repository), never
+ * by presenting the old token again — doing that would itself trigger
+ * reuse detection and revoke the new token as a side effect, so the
+ * rotation test would then only be passing for the reuse test's reason.
+ * The reuse test is the only test that presents an already-rotated token,
+ * and it ages the row past the reuse grace window first.
+ */
 describe('refresh token issuance, rotation, and revocation', () => {
   const createdUserIds: string[] = []
 
@@ -129,14 +133,17 @@ describe('refresh token issuance, rotation, and revocation', () => {
     expect(typeof decoded.iat).toBe('number')
     expect(decoded.exp).toBeGreaterThan(decoded.iat as number)
 
-    // verifyAccessToken returns a discriminated result, not the bare
-    // payload — see session.service.ts's own header comment on
-    // VerifyAccessTokenResult. Asserting the full `{ ok: true, payload }`
-    // shape (not just `payload`) proves acceptance, not merely that a
-    // payload-shaped object came back. `sid`/`jti` are now part of that
-    // shape (session.service.ts's signAccessToken) — `jti` is asserted only
-    // as ANY_STRING since its value is random by design. `exp` must be the
-    // token's own signed expiry, which the notification stream ends at.
+    /**
+     * `verifyAccessToken` returns a discriminated result, not the bare
+     * payload — see `session.service.ts`'s own header comment on
+     * `VerifyAccessTokenResult`. Asserting the full `{ ok: true, payload }`
+     * shape (not just `payload`) proves acceptance, not merely that a
+     * payload-shaped object came back. `sid`/`jti` are part of that shape
+     * (`session.service.ts`'s `signAccessToken`) — `jti` is asserted only
+     * as `ANY_STRING` since its value is random by design. `exp` must be
+     * the token's own signed expiry, which the notification stream ends
+     * at.
+     */
     expect(verifyAccessToken(token)).toEqual({
       ok: true,
       payload: { sub: user.id, sid: sessionId, jti: ANY_STRING, exp: decoded.exp },
@@ -149,16 +156,20 @@ describe('refresh token issuance, rotation, and revocation', () => {
 
     const issued = await issueRefreshToken(userId, sessionId)
 
-    // Property 6: the raw token never appears in the database. Query the
-    // table for the raw value itself and prove nothing matches it.
+    /**
+     * The raw token never appears in the database. Query the table for the
+     * raw value itself and prove nothing matches it.
+     */
     const byRawValue = await sql`select 1 from user_tokens where token_hash = ${issued.raw}`
     expect(byRawValue).toHaveLength(0)
 
-    // A row keyed by the token's actual (hashed) representation does exist.
-    // Re-derive the same hash issueRefreshToken computed, without calling
-    // hashToken() itself — proves the raw value is NOT what got
-    // stored, by confirming the raw value itself still doesn't match
-    // anything even though a row for this session does.
+    /**
+     * A row keyed by the token's actual (hashed) representation does
+     * exist. Re-derive the same hash `issueRefreshToken` computed, without
+     * calling `hashToken()` itself — proves the raw value is NOT what got
+     * stored, by confirming the raw value itself still doesn't match
+     * anything even though a row for this session does.
+     */
     const storedRows = await sql`
       select token_hash from user_tokens where user_id = ${userId} and session_id = ${sessionId}
     `
@@ -179,9 +190,11 @@ describe('refresh token issuance, rotation, and revocation', () => {
     expect(rotated.userId).toBe(userId)
     expect(rotated.sessionId).toBe(sessionId)
 
-    // Prove the OLD token is invalidated by inspecting its row directly —
-    // not by presenting it again, which would trip reuse detection and
-    // revoke the very new token this assertion is about to check.
+    /**
+     * Prove the OLD token is invalidated by inspecting its row directly —
+     * not by presenting it again, which would trip reuse detection and
+     * revoke the very new token this assertion is about to check.
+     */
     const oldRow = await sql`
       select token_hash from user_tokens where user_id = ${userId} and session_id = ${sessionId}
         and revoked_at is not null
@@ -191,8 +204,10 @@ describe('refresh token issuance, rotation, and revocation', () => {
     expect(oldStored?.revokedAt).not.toBeNull()
     expect(oldStored?.replacedById).toBeTruthy()
 
-    // The new token is live and itself rotatable — proof it was not
-    // affected by rotating the old one.
+    /**
+     * The new token is live and itself rotatable — proof it was not
+     * affected by rotating the old one.
+     */
     const rotatedAgain = await rotateRefreshToken(rotated.raw)
     expect(rotatedAgain.sessionId).toBe(sessionId)
   })
@@ -209,21 +224,29 @@ describe('refresh token issuance, rotation, and revocation', () => {
       where user_id = ${userId} and consumed_at is not null
     `
 
-    // The legitimate client already moved on to `rotated.raw`. Someone else
-    // — an attacker who stole the old token — presents the OLD token again.
+    /**
+     * The legitimate client already moved on to `rotated.raw`. Someone
+     * else — an attacker who stole the old token — presents the OLD token
+     * again.
+     */
     await expect(rotateRefreshToken(issued.raw)).rejects.toMatchObject({ statusCode: 401 })
 
-    // The whole family is dead: the token the LEGITIMATE client is now
-    // holding must also be revoked, even though it was never itself misused.
+    /**
+     * The whole family is dead: the token the LEGITIMATE client is now
+     * holding must also be revoked, even though it was never itself
+     * misused.
+     */
     const rotatedTokenRows = await sql`
       select token_hash from user_tokens where user_id = ${userId} and session_id = ${sessionId}
         and revoked_at is not null and replaced_by_id is null
     `
-    // The row must be FOUND before its revokedAt means anything. Asserted
-    // first, and separately: `expect(row?.revokedAt).not.toBeNull()` passes
-    // against `undefined` too, so if reuse detection broke and the query
-    // matched nothing, that assertion alone would still be green while
-    // reading as though it had checked something.
+    /**
+     * The row must be FOUND before its `revokedAt` means anything.
+     * Asserted first, and separately: `expect(row?.revokedAt).not.toBeNull()`
+     * passes against `undefined` too, so if reuse detection broke and the
+     * query matched nothing, that assertion alone would still be green
+     * while reading as though it had checked something.
+     */
     expect(rotatedTokenRows).toHaveLength(1)
     const rotatedRow = await userTokenRepository.findByHash(
       rotatedTokenRows[0]?.token_hash as string
@@ -231,8 +254,10 @@ describe('refresh token issuance, rotation, and revocation', () => {
     expect(rotatedRow).toBeDefined()
     expect(rotatedRow?.revokedAt).not.toBeNull()
 
-    // Confirmed from the client's perspective too: the token that was still
-    // valid a moment ago can no longer be rotated.
+    /**
+     * Confirmed from the client's perspective too: the token that was
+     * still valid a moment ago can no longer be rotated.
+     */
     await expect(rotateRefreshToken(rotated.raw)).rejects.toMatchObject({ statusCode: 401 })
   })
 
@@ -246,12 +271,16 @@ describe('refresh token issuance, rotation, and revocation', () => {
     const userId = await createUser()
     const sessionId = randomUUID()
     const issued = await issueRefreshToken(userId, sessionId)
-    // A second, still-live token in the SAME session — proves expiry alone
-    // does not trigger reuse's "kill the whole family" response.
+    /**
+     * A second, still-live token in the SAME session — proves expiry alone
+     * does not trigger reuse's "kill the whole family" response.
+     */
     const otherInSameSession = await issueRefreshToken(userId, sessionId)
 
-    // Expire only the first-created row (`issued`) — the one this test is
-    // about — leaving `otherInSameSession`'s row untouched.
+    /**
+     * Expire only the first-created row (`issued`) — the one this test is
+     * about — leaving `otherInSameSession`'s row untouched.
+     */
     await sql`
       update user_tokens set expires_at = now() - interval '1 second'
       where id = (
@@ -264,17 +293,22 @@ describe('refresh token issuance, rotation, and revocation', () => {
 
     await expect(rotateRefreshToken(issued.raw)).rejects.toMatchObject({ statusCode: 401 })
 
-    // The other, still-live token in the same session must be unaffected —
-    // expiry is not treated as reuse, so it does not kill the whole family.
+    /**
+     * The other, still-live token in the same session must be unaffected —
+     * expiry is not treated as reuse, so it does not kill the whole
+     * family.
+     */
     const stillRotatable = await rotateRefreshToken(otherInSameSession.raw)
     expect(stillRotatable.sessionId).toBe(sessionId)
   })
 
   it('never mints a grace sibling for an expired token, even replayed inside the grace window', async () => {
-    // findGraceSession's own expiry guard is what this test pins: claimOnce
-    // consumes an expired row same as a live one, so without that guard the
-    // immediate replay below reads as "consumed just now" and gets a
-    // sibling minted from a token that was already dead.
+    /**
+     * `findGraceSession`'s own expiry guard is what this test pins:
+     * `claimOnce` consumes an expired row same as a live one, so without
+     * that guard the immediate replay below reads as "consumed just now"
+     * and gets a sibling minted from a token that was already dead.
+     */
     const userId = await createUser()
     const sessionId = randomUUID()
     const issued = await issueRefreshToken(userId, sessionId)
@@ -295,29 +329,36 @@ describe('refresh token issuance, rotation, and revocation', () => {
   })
 
   it('refuses to rotate once the session passes its absolute lifetime, however fresh the token is', async () => {
-    // The gap this closes: expiresAt is a SLIDING window that every rotation
-    // resets, so a client refreshing every 15 minutes (what a 15-minute
-    // access TTL implies) keeps one login alive forever — and so does
-    // anyone holding a stolen refresh cookie, until an explicit logout.
-    //
-    // The token presented here is brand new and nowhere near its own
-    // expiry; only the SESSION is old. Red before SESSION_ABSOLUTE_TTL
-    // existed: this rotation succeeds, because nothing capped the chain.
+    /**
+     * The gap this closes: `expiresAt` is a SLIDING window that every
+     * rotation resets, so a client refreshing every 15 minutes (what a
+     * 15-minute access TTL implies) keeps one login alive forever — and so
+     * does anyone holding a stolen refresh cookie, until an explicit
+     * logout. `SESSION_ABSOLUTE_TTL` is the cap: the token presented here
+     * is brand new and nowhere near its own expiry; only the SESSION is
+     * old, and rotation must still refuse it.
+     */
     const userId = await createUser()
     const sessionId = randomUUID()
     const issued = await issueRefreshToken(userId, sessionId)
-    // A second live token in the same session, to prove the ceiling applies
-    // to the whole family rather than only the row presented.
+    /**
+     * A second live token in the same session, to prove the ceiling
+     * applies to the whole family rather than only the row presented.
+     */
     const sibling = await issueRefreshToken(userId, sessionId)
 
-    // Age the session past the configured ceiling, read from the same
-    // environment the code reads it from rather than hard-coded here, so
-    // this test tracks SESSION_ABSOLUTE_TTL instead of drifting from it.
+    /**
+     * Age the session past the configured ceiling, read from the same
+     * environment the code reads it from rather than hard-coded here, so
+     * this test tracks `SESSION_ABSOLUTE_TTL` instead of drifting from it.
+     */
     const absoluteTtlMs = parseDurationMs(getEnv().SESSION_ABSOLUTE_TTL)
     if (absoluteTtlMs === undefined) throw new Error('SESSION_ABSOLUTE_TTL is unparseable')
-    // Passed as an ISO string, not a Date: postgres.js cannot infer a
-    // parameter type for a bare Date in this position and serialises it as
-    // text, which fails in the driver before the statement is ever sent.
+    /**
+     * Passed as an ISO string, not a Date: postgres.js cannot infer a
+     * parameter type for a bare Date in this position and serialises it as
+     * text, which fails in the driver before the statement is ever sent.
+     */
     const startedAt = new Date(Date.now() - absoluteTtlMs - 60_000).toISOString()
     await sql`
       update user_tokens set session_started_at = ${startedAt}::timestamptz
@@ -326,9 +367,11 @@ describe('refresh token issuance, rotation, and revocation', () => {
 
     await expect(rotateRefreshToken(issued.raw)).rejects.toMatchObject({ statusCode: 401 })
 
-    // Every token in the family is revoked, not just the one presented:
-    // they all share the same session start, so all are equally past the
-    // ceiling.
+    /**
+     * Every token in the family is revoked, not just the one presented:
+     * they all share the same session start, so all are equally past the
+     * ceiling.
+     */
     await expect(rotateRefreshToken(sibling.raw)).rejects.toMatchObject({ statusCode: 401 })
     const live = await sql`
       select 1 from user_tokens where session_id = ${sessionId} and revoked_at is null
@@ -337,9 +380,11 @@ describe('refresh token issuance, rotation, and revocation', () => {
   })
 
   it('carries the session start forward across rotations rather than resetting it', async () => {
-    // The mechanism the ceiling rests on. If rotation stamped a fresh
-    // session_started_at, the cap above would become a second sliding
-    // window and bound nothing at all.
+    /**
+     * The mechanism the ceiling rests on. If rotation stamped a fresh
+     * `session_started_at`, the cap above would become a second sliding
+     * window and bound nothing at all.
+     */
     const userId = await createUser()
     const sessionId = randomUUID()
     const issued = await issueRefreshToken(userId, sessionId)
@@ -353,10 +398,13 @@ describe('refresh token issuance, rotation, and revocation', () => {
     const rows = await sql`
       select distinct session_started_at from user_tokens where session_id = ${sessionId}
     `
-    // One distinct value across all three rows in the chain, and it is the
-    // one the original login wrote. Compared as strings: what the driver
-    // returns for a timestamptz is not guaranteed to be a Date instance,
-    // and the assertion is about the value, not its JavaScript type.
+    /**
+     * One distinct value across all three rows in the chain, and it is the
+     * one the original login wrote. Compared as strings: what the driver
+     * returns for a `timestamptz` is not guaranteed to be a `Date`
+     * instance, and the assertion is about the value, not its JavaScript
+     * type.
+     */
     expect(rows).toHaveLength(1)
     expect(String(rows[0]?.session_started_at)).toBe(String(before?.session_started_at))
   })
@@ -421,16 +469,17 @@ describe('issueToken and cross-purpose claiming', () => {
     expect(row?.sessionId).toBeNull()
     expect(row?.sessionStartedAt).toBeNull()
     expect(row?.revokedAt).toBeNull()
-    // The raw value is never what's stored — same property issueRefreshToken
-    // is proven against above.
+    // The raw value is never what's stored — same property `issueRefreshToken` is proven against above.
     expect(row?.tokenHash).not.toBe(issued.raw)
   })
 
-  // The test that matters most in this task (see task-1-brief.md): a token
-  // issued for one purpose must not be claimable as another. Without this,
-  // a password-reset token could be spent as an email verification, or a
-  // verification token could reset a password — turning "I can receive mail
-  // at this address" into "I can take over this account."
+  /**
+   * A token issued for one purpose must not be claimable as another.
+   * Without this, a password-reset token could be spent as an email
+   * verification, or a verification token could reset a password —
+   * turning "I can receive mail at this address" into "I can take over
+   * this account."
+   */
   it('rejects claiming a password-reset token as an email verification, and vice versa', async () => {
     const userId = await createUser()
     const resetIssued = await issueToken(userId, 'password_reset', 60_000)
@@ -446,8 +495,10 @@ describe('issueToken and cross-purpose claiming', () => {
     expect(resetClaimedAsVerify).toBeUndefined()
     expect(verifyClaimedAsReset).toBeUndefined()
 
-    // Neither rejected claim touched the row: both remain live and
-    // claimable under their real, original purpose.
+    /**
+     * Neither rejected claim touched the row: both remain live and
+     * claimable under their real, original purpose.
+     */
     const resetClaimedCorrectly = await userTokenRepository.claimOnce(resetHash, 'password_reset')
     const verifyClaimedCorrectly = await userTokenRepository.claimOnce(
       verifyHash,
@@ -484,8 +535,10 @@ describe('claimToken', () => {
     const claimed = await claimToken(issued.raw, 'email_verification')
 
     expect(claimed?.userId).toBe(userId)
-    // Single-use: the same raw token cannot be claimed a second time —
-    // claimOnce already revoked it on the first, successful claim above.
+    /**
+     * Single-use: the same raw token cannot be claimed a second time —
+     * `claimOnce` already revoked it on the first, successful claim above.
+     */
     expect(await claimToken(issued.raw, 'email_verification')).toBeUndefined()
   })
 
@@ -497,14 +550,16 @@ describe('claimToken', () => {
   })
 
   it('refuses an EXPIRED token', async () => {
-    // THE load-bearing test in this task. claimOnce's WHERE clause has no
-    // expiry predicate — it will happily claim this row and return it. If
-    // claimToken forwarded that row instead of checking expiresAt, every
-    // other test in this describe block would still pass, and the product
-    // would ship a verification link that works forever. The mutation
-    // proof in claim-token-mutation.test.ts makes this provable, not just
-    // assumed: it disables exactly this check and shows this exact
-    // assertion goes red.
+    /**
+     * The load-bearing test in this describe block. `claimOnce`'s `WHERE`
+     * clause has no expiry predicate — it will happily claim this row and
+     * return it. If `claimToken` forwarded that row instead of checking
+     * `expiresAt`, every other test in this describe block would still
+     * pass, and the product would ship a verification link that works
+     * forever. The mutation proof in `claim-token-mutation.test.ts` makes
+     * this provable, not just assumed: it disables exactly this check and
+     * shows this exact assertion goes red.
+     */
     const userId = await createUser()
     const issued = await issueToken(userId, 'email_verification', -1000)
 
@@ -512,26 +567,32 @@ describe('claimToken', () => {
   })
 
   it('consumes an expired token rather than leaving it claimable', async () => {
-    // claimOnce already revoked the row by the time expiry is checked.
-    // That is the correct order — one presentation is one attempt — and
-    // this pins it so a later "fix" that checks expiry first does not
-    // quietly make an expired link retryable.
+    /**
+     * `claimOnce` already revoked the row by the time expiry is checked.
+     * That is the correct order — one presentation is one attempt — and
+     * this pins it so a later "fix" that checks expiry first does not
+     * quietly make an expired link retryable.
+     */
     const userId = await createUser()
     const issued = await issueToken(userId, 'email_verification', -1000)
 
     await claimToken(issued.raw, 'email_verification')
 
     const row = await userTokenRepository.findByHash(hashRawToken(issued.raw))
-    // Found FIRST, and separately: `expect(row?.revokedAt).not.toBeNull()`
-    // passes against `undefined` too, so if the row had vanished (or never
-    // matched) this assertion alone would stay green while reading as
-    // though it had checked something — the same trap this file's header
-    // comment already calls out for test 5.
+    /**
+     * Found FIRST, and separately: `expect(row?.revokedAt).not.toBeNull()`
+     * passes against `undefined` too, so if the row had vanished (or never
+     * matched) this assertion alone would stay green while reading as
+     * though it had checked something — the same trap the reuse-detection
+     * test above guards against.
+     */
     expect(row).toBeDefined()
     expect(row?.revokedAt).not.toBeNull()
-    // consumedAt is set ONLY by claimOnce's claim path (never by a bare
-    // revoke) — asserting it too proves the row was actually spent through
-    // claimToken, not merely revoked by some other means.
+    /**
+     * `consumedAt` is set ONLY by `claimOnce`'s claim path (never by a
+     * bare revoke) — asserting it too proves the row was actually spent
+     * through `claimToken`, not merely revoked by some other means.
+     */
     expect(row?.consumedAt).not.toBeNull()
   })
 
@@ -591,25 +652,10 @@ describe('revocation denies the revoked sessions (session.service owns the denyl
     expect(await isSessionDenied(otherUsersSession)).toBe(false)
   })
 
-  it('revokeAllSessionsExceptCurrent denies every revoked session except the spared one, and never another user’s', async () => {
-    const userId = await createUser()
-    const otherUserId = await createUser()
-    const spared = randomUUID()
-    const revoked = randomUUID()
-    const otherUsersSession = randomUUID()
-    await issueRefreshToken(userId, spared)
-    await issueRefreshToken(userId, revoked)
-    await issueRefreshToken(otherUserId, otherUsersSession)
-
-    await revokeAllSessionsExceptCurrent(userId, spared)
-
-    expect(await isSessionDenied(spared)).toBe(false)
-    expect(await isSessionDenied(revoked)).toBe(true)
-    expect(await isSessionDenied(otherUsersSession)).toBe(false)
-  })
-
-  // Each case gets its own user and live row, so every method has a row to
-  // revoke: a method that matched nothing would prove nothing.
+  /**
+   * Each case gets its own user and live row, so every method has a row to
+   * revoke: a method that matched nothing would prove nothing.
+   */
   it.each(REPOSITORY_REVOKES)(
     '%s in a rolled-back transaction revokes and denies nothing',
     async (_name, revoke) => {

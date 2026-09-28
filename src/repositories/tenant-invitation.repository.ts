@@ -1,10 +1,8 @@
-// src/repositories/tenant-invitation.repository.ts
-//
-// Query access to `tenant_invitations`. Standalone (no BaseRepository): the
-// table has no `deletedAt`. Every method except the retention purge takes an
-// optional executor so the invitation service can compose calls in one
-// transaction; the purge requires its batch's transaction. Lookups by token
-// join `tenants` and exclude a soft-deleted tenant.
+/**
+ * @file Query access to `tenant_invitations`. It does not extend `BaseRepository`:
+ * the table has no `deletedAt`. Lookups by token join `tenants` and exclude a
+ * soft-deleted tenant.
+ */
 import { and, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import {
@@ -17,14 +15,17 @@ import { HttpError } from '@/errors/http-error'
 import { isUniqueViolation } from '@/errors/postgres-errors'
 import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
 
-// The partial unique index that allows one pending invitation per tenant and address.
+/**
+ * The partial unique index that allows one pending invitation per tenant and address.
+ */
 const PENDING_UNIQUE_CONSTRAINT = 'tenant_invitations_pending_unique'
 
 const invitation = tenantInvitationModel
 
-// `invitedBy` once the inviter's account is gone. The API contract is
-// `… | null`, because JSON has no undefined.
-// eslint-disable-next-line unicorn/no-null -- see the comment above
+/**
+ * `invitedBy` once the inviter's account is gone.
+ */
+// eslint-disable-next-line unicorn/no-null -- the API contract is `… | null`, because JSON has no undefined
 const NO_INVITER = null
 
 /**

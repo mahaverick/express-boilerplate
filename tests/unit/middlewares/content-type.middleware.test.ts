@@ -1,10 +1,10 @@
-// tests/unit/middlewares/content-type.middleware.test.ts
-//
-// No database, no Redis, no app — a bare `express()` with the middleware in
-// front of a stub handler, which is what keeps this a tests/unit/ file (see
-// CLAUDE.md on why a Docker-dependent test must never live there). The
-// end-to-end proof that the real auth router rejects a cross-site form POST
-// lives in tests/integration/api/auth.test.ts.
+/**
+ * @file No database, no Redis, no app — a bare `express()` with the
+ * middleware in front of a stub handler, which is what keeps this a
+ * tests/unit/ file. The end-to-end proof that the real auth router
+ * rejects a cross-site form POST lives in
+ * tests/integration/api/auth.test.ts.
+ */
 import express, { type Express } from 'express'
 import { describe, expect, it } from 'vitest'
 import {
@@ -41,9 +41,7 @@ describe('requireJsonContentType', () => {
   })
 
   it('rejects the other two encodings a form can produce', async () => {
-    // multipart/form-data and text/plain complete the set the HTML spec
-    // allows a form to submit; refusing all three is what removes the form
-    // vector by construction rather than case by case.
+    // multipart/form-data and text/plain complete the set the HTML spec allows a form to submit; refusing all three is what removes the form vector by construction rather than case by case.
     const multipart = await request(buildApp())
       .post('/endpoint')
       .field('email', 'victim@example.com')
@@ -72,10 +70,7 @@ describe('requireJsonContentType', () => {
   })
 
   it('accepts a request declaring no content type at all', async () => {
-    // /refresh and /logout are legitimately called with no body. An untyped
-    // body is inert anyway — neither express.json() nor express.urlencoded()
-    // parses one — so nothing an attacker sends this way reaches a
-    // validator. See the middleware's own header comment.
+    // /refresh and /logout are legitimately called with no body. An untyped body is inert anyway — neither express.json() nor express.urlencoded() parses one — so nothing an attacker sends this way reaches a validator.
     const response = await request(buildApp()).post('/endpoint')
 
     expect(response.status).toBe(200)

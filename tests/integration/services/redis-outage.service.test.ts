@@ -1,9 +1,9 @@
-// tests/integration/services/redis-outage.service.test.ts
-//
-// A real Redis outage without touching the shared compose Redis: both clients
-// connect through a TCP proxy this file owns (tests/helpers/redis-proxy.ts).
-// Its own file because it mocks getEnv()'s REDIS_URL (same reason as
-// redis-unreachable.service.test.ts).
+/**
+ * @file A real Redis outage without touching the shared compose Redis: both
+ * clients connect through a TCP proxy this file owns
+ * (`tests/helpers/redis-proxy.ts`). Its own file because it mocks
+ * `getEnv()`'s `REDIS_URL` (same reason as `redis-unreachable.service.test.ts`).
+ */
 import { randomUUID } from 'node:crypto'
 import express from 'express'
 import IORedis from 'ioredis'
@@ -29,11 +29,14 @@ import { isEventuallyTrue, RedisProxy } from '../../helpers/redis-proxy'
 import { request } from '../../helpers/request'
 import { settle, waitUntil } from '../../helpers/timing'
 
-// Longer than either client's pre-fix retry budget (node-redis ~600ms, ioredis ~1.2s).
+// Longer than either client's retry budget (node-redis ~600ms, ioredis ~1.2s).
 const OUTAGE_MS = 1500
 
-// A probe that waited on Redis, down or silent, would not settle while it
-// stays that way: this only has to separate "answered promptly" from "never".
+/**
+ * A probe that waited on Redis, down or silent, would not settle while it
+ * stays that way: this only has to separate "answered promptly" from
+ * "never".
+ */
 const PROBE_BOUND_MS = 5000
 
 // One capped retry delay, then one connect attempt.
@@ -109,8 +112,11 @@ describe('Redis clients survive an outage', () => {
     target.proxyUrl = proxy.urlFor(new URL(target.realUrl))
   })
 
-  // Every test starts on a live proxy with both clients connected: a test can
-  // end, passed or failed, while a reconnect its outage started is pending.
+  /**
+   * Every test starts on a live proxy with both clients connected: a test
+   * can end, passed or failed, while a reconnect its outage started is
+   * still pending.
+   */
   afterEach(async () => {
     proxy.comeBack()
     if (queueLifecycle.isClosed) return

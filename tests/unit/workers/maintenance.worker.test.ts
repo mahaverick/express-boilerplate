@@ -1,7 +1,7 @@
-// tests/unit/workers/maintenance.worker.test.ts
-//
-// processMaintenanceJob's decisions, with the purge mocked. The real Worker
-// runs in tests/integration/workers/maintenance.worker.test.ts.
+/**
+ * @file processMaintenanceJob's decisions, with the purge mocked. The
+ * real Worker runs in tests/integration/workers/maintenance.worker.test.ts.
+ */
 import { UnrecoverableError, type Job } from 'bullmq'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { runRetentionPurge } from '@/services/retention.service'

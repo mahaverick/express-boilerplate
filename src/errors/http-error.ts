@@ -1,7 +1,7 @@
-// src/errors/http-error.ts
-//
-// Moved out of middlewares/error.middleware.ts: error classes live outside
-// every layer so any layer can throw one without a banned import.
+/**
+ * @file The HTTP error class. Error classes live outside every layer, so
+ * any layer can throw one without a banned import.
+ */
 
 /**
  * An error carrying the HTTP status the client should receive.

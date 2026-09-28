@@ -1,7 +1,7 @@
-// tests/unit/templates/email/registration-attempt.template.test.ts
-//
-// Pure rendering — no database, no container, no I/O — so this lives under
-// tests/unit/, not tests/integration/ (CLAUDE.md).
+/**
+ * @file Pure rendering — no database, no container, no I/O — so this
+ * lives under tests/unit/, not tests/integration/.
+ */
 import { describe, expect, it } from 'vitest'
 import {
   REGISTRATION_ATTEMPT_TEMPLATE_KEY,
@@ -59,10 +59,7 @@ describe('renderRegistrationAttemptTemplate', () => {
     })
   })
 
-  // This template carries no token or URL at all — see its own header
-  // comment — so "no token in the subject" holds by construction. Pinned
-  // here anyway: the subject must never grow a link/URL later without this
-  // test being revisited.
+  // This template carries no token or URL at all, so "no token in the subject" holds by construction; pinned here anyway, so the subject cannot grow a link/URL later without this test being revisited.
   it('the subject contains no URL', () => {
     const rendered = renderRegistrationAttemptTemplate(validVariables)
     expect(rendered.subject).not.toMatch(/https?:\/\//)

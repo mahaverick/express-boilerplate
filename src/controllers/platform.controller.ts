@@ -1,7 +1,7 @@
-// src/controllers/platform.controller.ts
-//
-// Handlers for /api/v1/platform. Every route runs behind requireAuth and
-// requirePlatformRole (platform.routes.ts).
+/**
+ * @file Handlers for `/api/v1/platform`. Every route runs behind `requireAuth`
+ * and `requirePlatformRole` (platform.routes.ts).
+ */
 import { BaseController } from '@/controllers/base.controller'
 import { searchAll } from '@/services/platform-tenant.service'
 import { successResponse } from '@/utilities/response.utilities'

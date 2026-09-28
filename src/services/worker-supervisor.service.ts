@@ -1,14 +1,8 @@
-// src/services/worker-supervisor.service.ts
-//
-// Starts the email, notification and maintenance Workers and keeps them on a
-// live connection. A Worker whose connection gave up before its first 'ready'
-// never recovers: BullMQ's own init has rejected for good, and unless that
-// error is one BullMQ counts as a connection error (ECONNREFUSED, or
-// "Connection is closed.") its fetch loop retries with no delay and starves the
-// event loop. So when that connection ends, the supervisor closes those Workers
-// at once and starts new ones on a fresh connection. While Redis stays down
-// this repeats on each connection's pre-ready give-up, at least ~1.2s apart
-// (longer when connects time out).
+/**
+ * @file Starts the email, notification and maintenance Workers and keeps them on
+ * a live connection, replacing them whenever their connection gives up before its
+ * first 'ready' (see `startWorkers`).
+ */
 import type { Worker } from 'bullmq'
 import type IORedis from 'ioredis'
 import { ensureRetentionSchedule } from '@/jobs/maintenance.job'
@@ -54,6 +48,18 @@ async function closeLostWorkers(workers: Worker[]): Promise<void> {
 
 /**
  * Start the email, notification and maintenance Workers, replacing them whenever their connection gives up before its first ready.
+ *
+ * A Worker on such a connection never recovers: BullMQ's init has rejected for
+ * good, and unless the error is one BullMQ counts as a connection error
+ * (ECONNREFUSED, or "Connection is closed.") its fetch loop retries with no
+ * delay and starves the event loop. So those Workers are closed inside the
+ * connection's 'end' event and new ones start on a fresh connection. While
+ * Redis stays down this repeats on each pre-ready give-up, at least ~1.2s
+ * apart (longer when connects time out).
+ *
+ * A failed first start throws. A failed restart cannot throw from inside
+ * 'end', so it calls `setWorkersFailed(true)` and readiness stays red until a
+ * later restart succeeds or the process restarts.
  * @returns A handle whose `close()` closes whichever Workers are current.
  * @throws {Error} Whatever starting a Worker throws at first start, after closing any already started.
  */
@@ -70,9 +76,6 @@ export function startWorkers(): SupervisedWorkers {
     void closing.finally(() => retiring.delete(closing))
   }
 
-  // Starts every Worker on the shared connection, then registers the
-  // retention schedule. A throw part-way closes the ones already started,
-  // then propagates.
   const startGeneration = (): void => {
     const generation: WorkerGeneration = { connection: undefined, workers: [] }
     supervisor.generation = generation
@@ -101,8 +104,6 @@ export function startWorkers(): SupervisedWorkers {
     retire(supervisor.generation.workers)
     supervisor.generation.workers = []
     if (supervisor.isClosed || isShuttingDown()) return
-    // A failed restart can't throw from inside 'end': readiness stays red
-    // instead, until the next pre-ready loss restarts them or the process restarts.
     try {
       startGeneration()
       setWorkersFailed(false)

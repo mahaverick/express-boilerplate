@@ -1,13 +1,11 @@
-// src/scripts/generate-env-example.ts
-//
-// Inside src/ on purpose: it imports `@/configs/env.config`, and at the
-// repo-root scripts/ path it would sit outside tsconfig's `include`, so
-// `tsc --noEmit` would skip it and eslint's type-aware parser would error
-// on it. core uses src/scripts/ for exactly this class of tool.
-//
-// .env.example is generated, never hand-edited. A hand-maintained example
-// file drifts from the schema within weeks, and the drift is invisible until
-// someone's first run fails.
+/**
+ * @file Generates `.env.example` (and ARCHITECTURE.md's environment table)
+ * from the environment schema, so the example never drifts from it. Lives in
+ * src/ because it imports `@/configs/env.config`, and outside src/ it would
+ * fall outside tsconfig's `include`, unchecked by `tsc` and type-aware ESLint.
+ * `pnpm env:example` writes the file; `pnpm env:table` passes `--table` and
+ * prints the table.
+ */
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
@@ -37,12 +35,13 @@ function asEnvText(value: unknown): string | undefined {
 function exampleValue(schema: z.ZodType, example: unknown): string | undefined {
   const parsed = schema.safeParse(undefined)
   if (parsed.success && parsed.data !== undefined) return asEnvText(parsed.data)
-  // A required field with no default: write its example, if it has one.
   return asEnvText(example)
 }
 
 /**
  * Render `.env.example` file content from the environment schema's field map.
+ * An optional field with no value is written commented out, since a bare
+ * `KEY=` would look like a required field left blank.
  * @param shape - The schema's field map (`EnvSchema.shape`), keyed by environment variable name.
  * @returns The full `.env.example` file content, including the generated-file header.
  */
@@ -53,10 +52,6 @@ export function render(shape: Record<string, z.ZodType>): string {
     const json = z.toJSONSchema(schema, { target: 'openapi-3.0', io: 'input' })
     const description = typeof json.description === 'string' ? json.description : ''
     const value = exampleValue(schema, json.example)
-    // A field with no value that still accepts undefined is genuinely
-    // optional (e.g. OTEL_EXPORTER_OTLP_ENDPOINT, or COOKIE_SECURE, whose
-    // default is derived from APP_ENV in code). Emit it commented out: an
-    // uncommented `KEY=` looks identical to a required field left blank.
     const isOptional = value === undefined && schema.safeParse(undefined).success
     if (description) lines.push(`# ${description}`)
     lines.push(`${isOptional ? '# ' : ''}${key}=${value ?? ''}`, '')
@@ -66,11 +61,12 @@ export function render(shape: Record<string, z.ZodType>): string {
 }
 
 /**
- * Render README's environment table from the environment schema's field map.
+ * Render ARCHITECTURE.md's environment table from the environment schema's
+ * field map.
  *
  * One row per field, in schema order: whether it is required, its default,
  * and its `.describe()` text with `|` escaped. The output is unpadded;
- * prettier pads the columns once it is pasted into README.md.
+ * prettier pads the columns once it is pasted into ARCHITECTURE.md.
  * @param shape - The schema's field map (`EnvSchema.shape`), keyed by environment variable name.
  * @returns The Markdown table, header row first, with no trailing newline.
  */
@@ -92,9 +88,6 @@ export function renderEnvTable(shape: Record<string, z.ZodType>): string {
   ].join('\n')
 }
 
-// Only act when this module is run directly, not when it is imported by a
-// test. `pnpm env:example` writes .env.example; `pnpm env:table` passes
-// --table and prints README's table to stdout instead.
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   if (process.argv.includes('--table')) {
     process.stdout.write(`${renderEnvTable(EnvSchemaShape)}\n`)

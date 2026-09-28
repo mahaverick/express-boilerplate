@@ -1,8 +1,9 @@
-// src/controllers/verification.controller.ts
-//
-// HTTP only; the rules are in verification.service.ts. Every failure answers
-// identically: distinguishable failures would be a token-state oracle, and a
-// distinguishable wrong password would tell a link holder the address is squatted.
+/**
+ * @file Email-verification handlers, HTTP only; the rules are in
+ * verification.service.ts. Every failure answers identically: distinguishable
+ * failures would be a token-state oracle, and a distinguishable wrong password
+ * would tell a link holder the address is squatted.
+ */
 import type { Response } from 'express'
 import { BaseController } from '@/controllers/base.controller'
 import { HttpError } from '@/errors/http-error'
@@ -36,8 +37,7 @@ class VerificationController extends BaseController {
    * mailed link and the account's password.
    */
   verifyEmail = this.handle(async (request, response) => {
-    // parseBody's field-level 400 is distinguishable from this endpoint's one
-    // failure, so a body missing `password` would answer differently.
+    // parseBody's field-level 400 would differ from this endpoint's one failure.
     let input: VerifyEmailInput
     try {
       input = parseBody(verifyEmailSchema, request.body)
@@ -70,8 +70,7 @@ class VerificationController extends BaseController {
     const sendMail = await verificationService.prepareResendVerification(input.email)
 
     respondResendAccepted(response)
-    // Not awaited, and never rejects: the service logs its own failure, so a
-    // mail failure can neither delay nor change a response already sent.
+    // Never rejects: the service logs its own failure, after the reply is sent.
     void sendMail()
   })
 }

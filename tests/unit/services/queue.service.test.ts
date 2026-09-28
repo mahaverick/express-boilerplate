@@ -1,8 +1,7 @@
-// tests/unit/services/queue.service.test.ts
-//
-// Pure-logic coverage only — anything that touches Redis or BullMQ lives
-// under tests/integration/services/, per this repo's own convention (see
-// redis.service.test.ts vs. redis-unreachable.service.test.ts).
+/**
+ * @file Pure-logic coverage only — anything that touches Redis or BullMQ
+ * lives under tests/integration/services/.
+ */
 import { describe, expect, it } from 'vitest'
 import { JobPriority } from '@/constants/queue.constants'
 

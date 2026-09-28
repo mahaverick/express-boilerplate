@@ -1,10 +1,9 @@
 # syntax=docker/dockerfile:1.7
-# Multi-stage. node:24-alpine, not 22 — see Global Constraints.
+# Multi-stage build on node:24-alpine, the Node line .nvmrc and engines require.
 FROM node:24-alpine AS base
 ENV PNPM_HOME=/pnpm PATH=/pnpm:$PATH
-# Corepack is installed explicitly: Node 25+ no longer bundles it, and doing it
-# now makes the Node 26 move a version bump only. The pnpm version itself comes
-# from package.json's packageManager field (see `corepack install` in deps).
+# Corepack is installed explicitly because Node 25+ does not bundle it. The pnpm
+# version comes from package.json's packageManager field (`corepack install` in deps).
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 RUN npm i -g corepack@0.36.0 && corepack enable
 RUN adduser -D -u 10001 appuser
@@ -25,14 +24,10 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
 FROM deps AS build
 COPY . .
 RUN pnpm build
-# `pnpm install --prod` alone unlinks devDependencies from node_modules but
-# leaves their content behind in node_modules/.pnpm (the content-addressable
-# virtual store) — verified empirically: after `install --frozen-lockfile
-# --prod --ignore-scripts`, node_modules/.pnpm/typescript@6.0.3 and
-# .../drizzle-kit@0.31.10 were both still present, full tsc binary included.
-# `pnpm prune --prod` is the command that actually removes them from the
-# virtual store, so the runtime image carries neither the compiler nor
-# drizzle-kit. Migrations run via dist/database/migrate.js.
+# `pnpm prune --prod`, not `pnpm install --prod`: the install only unlinks
+# devDependencies and leaves them in node_modules/.pnpm, while prune removes
+# them, so the runtime image carries neither tsc nor drizzle-kit. Migrations
+# run via dist/database/migrate.js.
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
     pnpm prune --prod --ignore-scripts
 
@@ -44,17 +39,14 @@ COPY --from=build --chown=10001:10001 /app/node_modules ./node_modules
 COPY --from=build --chown=10001:10001 /app/dist ./dist
 COPY --from=build --chown=10001:10001 /app/package.json ./package.json
 
-# The orchestrator owns liveness and readiness via /health and /health/ready.
-# A Docker HEALTHCHECK would be a second, competing signal that disagrees with
-# the first under load — one signal is better than two.
+# The orchestrator owns liveness and readiness via /health and /health/ready;
+# a Docker HEALTHCHECK would be a second signal that can disagree under load.
 HEALTHCHECK NONE
 
 USER appuser
 EXPOSE 4040
-# Like `pnpm start`, minus --env-file-if-exists (the image has no .env, see
-# .dockerignore; the orchestrator supplies the environment) and plus
-# --enable-source-maps: tracing.js must load via --import, before the app, or
-# OpenTelemetry (traces AND logs) never starts; --enable-source-maps makes a
-# thrown stack trace point at the original .ts line, since the build emits
-# .map files (tsconfig.json's sourceMap: true) alongside the .js it ships.
+# Like `pnpm start` without --env-file-if-exists: the image has no .env
+# (.dockerignore) and the orchestrator supplies the environment. tracing.js
+# loads via --import, before the app, or OpenTelemetry never starts.
+# --enable-source-maps maps stack traces to the .ts lines (tsconfig.json's sourceMap).
 CMD ["node", "--enable-source-maps", "--import", "./dist/observability/tracing.js", "dist/index.js"]

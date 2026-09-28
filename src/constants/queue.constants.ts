@@ -1,13 +1,10 @@
-// src/constants/queue.constants.ts
-//
-// BullMQ priority values — lower number processes first. Named here rather
-// than as magic numbers scattered across every `addJob()` call site, same
-// reasoning as global.constants.ts's own header.
+/**
+ * @file BullMQ job priorities, named so call sites never pass a bare number.
+ */
 
 /**
- * BullMQ job priority levels. Lower numeric value is processed first —
- * BullMQ's own convention, not this file's invention — so `critical` (1)
- * jumps the queue ahead of `low` (10).
+ * BullMQ job priority levels. BullMQ processes a lower value first, so
+ * `critical` (1) runs ahead of `low` (10).
  */
 export const JobPriority = {
   critical: 1,

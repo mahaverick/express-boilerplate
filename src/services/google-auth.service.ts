@@ -1,9 +1,8 @@
-// src/services/google-auth.service.ts
-//
-// The account-linking policy for Google Sign-In. passport.config.ts hands
-// the controller the RAW profile; deciding what it means — a returning
-// user, a link to an existing account, a new account, or a rejection — is
-// this file's job alone.
+/**
+ * @file The account-linking policy for Google Sign-In: from the raw profile
+ * passport.config.ts hands over, decide between a returning user, a link to an
+ * existing account, a new account, or a rejection.
+ */
 import { randomUUID } from 'node:crypto'
 import type { Profile as GoogleProfile } from 'passport-google-oauth20'
 import type { User } from '@/database/models/user.model'
@@ -78,8 +77,7 @@ export async function claimUnverifiedAccount(userId: string, googleId: string): 
   const { claimed, revokedSessionIds } = await withTransaction(async (tx) => {
     await userRepository.lockById(userId, 'no key update', tx)
 
-    // Cleared before linking the claimer's: findOrCreateByGoogle's first
-    // lookup would otherwise still resolve that other Google id here.
+    // Cleared first, or findOrCreateByGoogle's first lookup would still resolve that other Google id here.
     await authProviderRepository.deleteGoogleLinksExcept(userId, googleId, tx)
     await authProviderRepository.createIfAbsent(
       { userId, provider: 'google', providerId: googleId },
@@ -175,7 +173,6 @@ export async function findOrCreateByGoogle(profile: GoogleProfile): Promise<User
       tx
     )
 
-    // Google verified this address (checked above).
     await markEmailVerified(createdUser.id, tx)
     const verified = await userRepository.findById(createdUser.id, {}, tx)
     if (!verified) throw new HttpError('Created user not found', 500)

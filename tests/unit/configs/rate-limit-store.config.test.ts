@@ -1,12 +1,11 @@
-// tests/unit/configs/rate-limit-store.config.test.ts
-//
-// Pins down Conflict B from the SDD ledger: a rate-limit Store built at
-// import time must not resolve its backend eagerly. `getRedis` is mocked
-// throughout — no real Redis connection is opened, which is what keeps this
-// a tests/unit/ file rather than tests/integration/ (see CLAUDE.md on why a
-// Docker-dependent test must never live under tests/unit/). The store's
-// behaviour once it IS backed by real Redis is covered separately, against
-// the real thing, in tests/integration/.
+/**
+ * @file A rate-limit Store built at import time must not resolve its
+ * backend eagerly. `getRedis` is mocked throughout — no real Redis
+ * connection is opened, which is what keeps this a tests/unit/ file
+ * rather than tests/integration/. The store's behaviour once it IS backed
+ * by real Redis is covered separately, against the real thing, in
+ * tests/integration/.
+ */
 import { describe, expect, it, vi, type Mock } from 'vitest'
 import { SharedRateLimitStore } from '@/configs/rate-limit-store.config'
 import { logger } from '@/services/logger.service'
@@ -14,11 +13,14 @@ import { getRedis } from '@/services/redis.service'
 
 vi.mock('@/services/redis.service', () => ({ getRedis: vi.fn() }))
 
-// SharedRateLimitStore.init() only ever reads `windowMs` off this (directly,
-// and indirectly via MemoryStore/RedisStore's own `init`) — every other
-// field of the real `Options` type is irrelevant to the store under test.
-// `as unknown as` (not a direct `as`) because this literal is nowhere near a
-// structural superset of the real, much larger `Options` type.
+/**
+ * SharedRateLimitStore.init() only ever reads `windowMs` off this
+ * (directly, and indirectly via MemoryStore/RedisStore's own `init`) —
+ * every other field of the real `Options` type is irrelevant to the store
+ * under test. `as unknown as`, not a direct `as`, because this literal is
+ * nowhere near a structural superset of the real, much larger `Options`
+ * type.
+ */
 const testOptions = { windowMs: 60_000 } as unknown as Parameters<SharedRateLimitStore['init']>[0]
 
 /**
@@ -72,10 +74,7 @@ describe('SharedRateLimitStore', () => {
     const store = new SharedRateLimitStore('rl:test:')
     store.init(testOptions)
 
-    // MemoryStore.increment() returns the SAME mutable record on every call
-    // for one key (it mutates `totalHits` in place rather than returning a
-    // snapshot) — read `.totalHits` out to a primitive immediately after
-    // each call, or all three variables would alias the one final value.
+    // MemoryStore.increment() returns the SAME mutable record on every call for one key (it mutates `totalHits` in place rather than returning a snapshot), so `.totalHits` is read out to a primitive immediately after each call, or all three variables would alias the one final value.
     const firstResult = await store.increment('client-a')
     const firstHits = firstResult.totalHits
     const secondResult = await store.increment('client-a')
@@ -133,9 +132,7 @@ describe('SharedRateLimitStore', () => {
     commands.length = 0
     const second = await store.increment('client-a')
     expect(second.totalHits).toBe(2)
-    // The Lua scripts are loaded once, at the switch — a second request must
-    // not re-run RedisStore.init() (which would mean re-attempting the
-    // latch on every request instead of switching at most once).
+    // The Lua scripts are loaded once, at the switch — a second request must not re-run RedisStore.init(), which would mean re-attempting the latch on every request instead of switching at most once.
     expect(commands.some((command) => command[0] === 'SCRIPT')).toBe(false)
     expect(commands.some((command) => command[0] === 'EVALSHA')).toBe(true)
   })

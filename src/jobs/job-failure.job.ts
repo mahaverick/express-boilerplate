@@ -1,14 +1,17 @@
-// src/jobs/job-failure.job.ts
-//
-// What a Worker's 'failed' handler does once a job will not be retried:
-// replace the stored payload's links and tokens, then log one error line.
-// Until then the payload keeps them, because a retry has to send them.
+/**
+ * @file What a Worker's `'failed'` handler does once a job will not be
+ * retried: replace the stored payload's links and tokens, then log one error
+ * line. Until then the payload keeps them, because a retry has to send them.
+ */
 import { UnrecoverableError, type Job } from 'bullmq'
 import { logger } from '@/services/logger.service'
 
 const REDACTED = '[redacted]'
 
-// verificationUrl, resetUrl and acceptUrl carry a raw token in their query string.
+/**
+ * Keys whose values are scrubbed: verificationUrl, resetUrl and acceptUrl
+ * carry a raw token in their query string.
+ */
 const SECRET_KEY_PATTERN = /(?:Url|Token)$/
 
 /**

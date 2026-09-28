@@ -1,15 +1,8 @@
-// src/services/tenant-access.service.ts
-//
-// The actor's effective access to a tenant, re-read under lock inside the
-// caller's transaction, so a demotion or removal after resolveTenant still
-// counts. Membership wins; without one, the actor's platform role applies.
-// A platform role is a membership of the platform tenant, so that tenant's
-// non-members have none to fall back on: it stays members-only.
-//
-// Lock order: the tenant's owners, then memberships (by user_id), then the
-// actor's platform membership FOR SHARE. Only the last step reaches a
-// second tenant, and nothing locks the platform tenant before a customer
-// tenant, so the order has no cycle.
+/**
+ * @file The actor's effective access to a tenant, re-read under lock inside the
+ * caller's transaction, so a demotion or removal after `resolveTenant` still
+ * counts. Membership wins; without one, the actor's platform role applies.
+ */
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { UserMembership } from '@/database/models/user-membership.model'
 import { HttpError } from '@/errors/http-error'
@@ -39,7 +32,11 @@ export interface LockedTenantAccess {
 /**
  * Lock the tenant's owners, then the memberships of the actor and
  * `otherUserIds`, then (for an actor with no membership) the actor's
- * platform membership, and return the actor's access as it is now.
+ * platform membership FOR SHARE, and return the actor's access as it is now.
+ * Only the last step reaches a second tenant, and nothing locks the platform
+ * tenant before a customer tenant, so the order has no cycle. A platform role
+ * is a membership of the platform tenant, so the platform tenant itself stays
+ * members-only.
  * @param actor - The signed-in user.
  * @param tenantId - The tenant acted on.
  * @param otherUserIds - Other members to lock in the same statement, such as a target.

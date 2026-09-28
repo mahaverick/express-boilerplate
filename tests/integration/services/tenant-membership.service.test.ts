@@ -1,12 +1,11 @@
-// tests/integration/services/tenant-membership.service.test.ts
-//
-// changeRole and removeMember called directly, against the real per-worker
-// Postgres. The HTTP behaviour is covered by tests/integration/api/
-// tenant.test.ts and tenant-actor-race.test.ts.
-//
-// Pool note: test mode has max 2 connections. The concurrent test's two
-// transactions hold both; a query inside the service that skipped `tx`
-// would hang here until the test timeout.
+/**
+ * @file Exercises `changeRole` and `removeMember` directly, against the
+ * real per-worker Postgres. The HTTP behaviour is covered by
+ * `tests/integration/api/tenant.test.ts` and `tenant-actor-race.test.ts`.
+ * Pool note: test mode has max 2 connections. The concurrent test's two
+ * transactions hold both; a query inside the service that skipped `tx`
+ * would hang here until the test timeout.
+ */
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { Tenant } from '@/database/models/tenant.model'
@@ -81,11 +80,13 @@ describe('tenant-membership.service', () => {
     return tenant
   }
 
-  // Owner A promotes manager B to owner while B's call demotes A. Both
-  // transactions are open and meet at lockOwners before either takes it.
-  // - If A commits first, B is now an owner acting on another owner: 403.
-  // - If B goes first, B is a manager below the owner bar: 403, then A wins.
-  // Either way: A fulfilled, B 403, and no 40P01.
+  /**
+   * Owner A promotes manager B to owner while B's call demotes A. Both
+   * transactions are open and meet at `lockOwners` before either takes it.
+   * If A commits first, B is now an owner acting on another owner: 403. If
+   * B goes first, B is a manager below the owner bar: 403, then A wins.
+   * Either way: A fulfilled, B 403, and no 40P01.
+   */
   it('settles two opposite role changes started together without a deadlock: one wins, one is refused', async () => {
     const ownerA = await createUser()
     const managerB = await createUser()

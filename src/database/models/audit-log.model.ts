@@ -1,8 +1,8 @@
-// src/database/models/audit-log.model.ts
-//
-// Append-only: the `audit_logs_immutable` trigger rejects every UPDATE, and
-// every DELETE outside a retention purge transaction. Both foreign keys are
-// RESTRICT, so no cascade reaches it.
+/**
+ * @file The `audit_logs` table. Append-only: the `audit_logs_immutable`
+ * trigger rejects every UPDATE, and every DELETE outside a retention purge
+ * transaction. Both foreign keys are RESTRICT, so no cascade reaches it.
+ */
 import { sql, type InferInsertModel, type InferSelectModel } from 'drizzle-orm'
 import { check, index, jsonb, pgTable, timestamp, varchar } from 'drizzle-orm/pg-core'
 import {
@@ -35,7 +35,9 @@ export const auditLogModel = pgTable(
     id: varchar('id', { length: 36 })
       .primaryKey()
       .default(sql`uuidv7()`),
-    // Millisecond precision, so a keyset cursor round-trips through a JS Date exactly.
+    /**
+     * Millisecond precision, so a keyset cursor round-trips through a JS Date exactly.
+     */
     occurredAt: timestamp('occurred_at', { withTimezone: true, precision: 3 })
       .notNull()
       .defaultNow(),
@@ -56,8 +58,7 @@ export const auditLogModel = pgTable(
     userAgent: varchar('user_agent', { length: 512 }),
   },
   (table) => [
-    // Ascending on purpose: a backward scan serves `ORDER BY occurred_at DESC,
-    // id DESC`, which a `DESC NULLS LAST` index would not.
+    // Ascending: a backward scan serves ORDER BY occurred_at DESC, id DESC; DESC NULLS LAST would not.
     index('audit_logs_tenant_occurred_idx').on(table.tenantId, table.occurredAt, table.id),
     index('audit_logs_actor_occurred_idx').on(table.actorUserId, table.occurredAt, table.id),
     index('audit_logs_occurred_idx').on(table.occurredAt, table.id),

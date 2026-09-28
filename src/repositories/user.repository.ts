@@ -1,19 +1,6 @@
-// src/repositories/user.repository.ts
-//
-// findByEmail deliberately does not use `eq(userModel.email, email)`. The
-// table's uniqueness guarantee is a `lower(email)` index (see the model's
-// own header comment), not a plain unique index on `email` — an exact-match
-// lookup here would accept "a@x.com" and "A@x.com" as two different users,
-// then fail to find either one deterministically the moment a caller (e.g.
-// login) queries with whichever casing the OTHER row happened to be stored
-// in. Matching with `lower(...) = lower(...)` is what keeps this lookup
-// unable to disagree with what the index itself considers a duplicate.
-//
-// The four `protected` primitives below (selectOne/insertOne/updateOne/
-// markDeleted) are this table's half of BaseRepository's template method —
-// see that file's header comment for why the actual `db.select()/.insert()/
-// .update()` calls live here, against the concrete `userModel`, rather than
-// in the generic base class.
+/**
+ * @file Query access to `users`, on `BaseRepository`.
+ */
 import { eq, sql, type SQL } from 'drizzle-orm'
 import { userModel, type User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
@@ -39,7 +26,9 @@ export class UserRepository extends BaseRepository<(typeof userModel)['_']['conf
   }
 
   /**
-   * Find a user by email, case-insensitively. With `includeDeleted`, a
+   * Find a user by email, case-insensitively: uniqueness is a `lower(email)`
+   * index, so an exact match could treat `a@x.com` and `A@x.com` as two users
+   * and miss whichever casing was stored. With `includeDeleted`, a
    * deleted and a live row can share an address; which one is returned is
    * then unspecified.
    * @param email - The email to search for, in any case.
@@ -127,9 +116,6 @@ export class UserRepository extends BaseRepository<(typeof userModel)['_']['conf
     executor: DbExecutor = db
   ): Promise<User> {
     const [row] = await executor.insert(userModel).values(values).returning()
-    // insert(...).values(one object).returning() always returns exactly
-    // one row when the insert does not throw; the driver's own types just
-    // cannot express "same length as input" for a single-row insert.
     if (row === undefined) throw new HttpError('Insert returned no row', 500)
     return row
   }

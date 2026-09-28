@@ -1,10 +1,10 @@
-// tests/integration/database/audit-purge-trigger.test.ts
-//
-// audit_logs' trigger as migration 0017 left it. UPDATE always raises.
-// DELETE raises unless the deleting transaction set app.audit_purge to 'on'
-// AND app.audit_purge_before past the row's occurred_at. Each setting is
-// tested missing on its own, because a guard of the form `a and b` with no
-// a-true/b-false case can lose either half unnoticed. Raw SQL throughout.
+/**
+ * @file audit_logs' trigger as migration 0017 left it: UPDATE always
+ * raises, and DELETE raises unless the deleting transaction set both
+ * `app.audit_purge` to `'on'` and `app.audit_purge_before` past the row's
+ * `occurred_at`. Each setting is tested missing on its own, so a guard of
+ * the form `a && b` cannot lose either half unnoticed here. Raw SQL throughout.
+ */
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import { sql } from '@/services/database.service'

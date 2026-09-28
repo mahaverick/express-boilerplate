@@ -1,21 +1,14 @@
-// tests/integration/api/auth-providers.test.ts
-//
-// Integration tests for GET /api/v1/auth/providers, against the real
-// per-worker Postgres database — same conventions as
-// tests/integration/api/profile.test.ts, whose token approach this file
-// reuses: requests sign a bearer token directly with `signAccessToken`
-// rather than going through POST /auth/login, since these tests are about
-// what happens AFTER authentication rather than about login itself.
-//
-// The case this file exists for is the Google-only user. A Google signup
-// writes BOTH an `'email'` row and a `'google'` row in one transaction
-// (google-auth.service.ts's `findOrCreateByGoogle`), so the presence of an
-// `'email'` provider says nothing about whether a password exists — a
-// naive implementation that inferred `hasPassword` from the provider list
-// would report `true` for an account that cannot log in with a password at
-// all. That is why the endpoint carries `hasPassword` as its own field,
-// read from `users.password_hash`, and why the assertions below pin the
-// two apart.
+/**
+ * @file Integration tests for GET /api/v1/auth/providers, against the
+ * real per-worker Postgres database — same conventions as
+ * tests/integration/api/profile.test.ts, whose token approach this
+ * file reuses: requests sign a bearer token directly with
+ * `signAccessToken` rather than going through POST /auth/login, since
+ * these tests are about what happens after authentication rather than
+ * about login itself. The case this file exists for is the
+ * Google-only user — see the test below.
+ */
+
 import { randomUUID } from 'node:crypto'
 import type { Response } from 'supertest'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -34,9 +27,11 @@ const authProviderRepository = new AuthProviderRepository()
 
 const PASSWORD = 'correct horse battery staple'
 
-// vitest types `expect.any(...)` as `any` — see
-// tests/integration/api/profile.test.ts's own comment for why this cast
-// exists and is reused as one shared instance across every assertion.
+/**
+ * vitest types `expect.any(...)` as `any`; see profile.test.ts's own
+ * comment for why this cast exists and is reused across every
+ * assertion.
+ */
 const ANY_STRING = expect.any(String) as unknown as string
 
 const createdIds: string[] = []
@@ -101,12 +96,7 @@ async function seedUser(options: {
     await authProviderRepository.create({
       userId: created.id,
       provider,
-      // The real shapes: the `'email'` row's providerId IS the address,
-      // Google's is its stable `sub`. Both are what the production paths
-      // write (auth.service.ts, google-auth.service.ts), so a test
-      // asserting the response never leaks `providerId` is asserting
-      // against realistic values rather than a placeholder that could not
-      // leak anything anyway.
+      // The real shapes production writes: the 'email' row's providerId is the address, Google's is its stable sub.
       providerId: provider === 'email' ? email : `google-sub-${randomUUID()}`,
     })
   }
@@ -154,12 +144,18 @@ describe('GET /api/v1/auth/providers', () => {
     })
   })
 
+  /**
+   * A Google signup writes both an 'email' row and a 'google' row in
+   * one transaction (google-auth.service.ts's `findOrCreateByGoogle`),
+   * so the presence of an 'email' provider says nothing about whether
+   * a password exists — an implementation that inferred `hasPassword`
+   * from the provider list would report `true` for an account that
+   * cannot log in with a password at all. That is why the endpoint
+   * carries `hasPassword` as its own field, read from
+   * `users.password_hash`, and why the assertions below pin the two
+   * apart.
+   */
   it('reports hasPassword false for a Google-only account, which still has an email provider row', async () => {
-    // THE case this endpoint's `hasPassword` field exists for. A Google
-    // signup writes both rows, so `providers` here is indistinguishable
-    // from a linked account's — only `hasPassword` tells them apart, and an
-    // implementation that derived it from the provider list would answer
-    // `true` and send this user to a change-password form they cannot use.
     const { token } = await seedUser({ withPassword: false, providers: ['email', 'google'] })
 
     const response = await getProviders(token)
@@ -182,11 +178,7 @@ describe('GET /api/v1/auth/providers', () => {
   })
 
   it('never exposes providerId, for either provider', async () => {
-    // `providerId` is the caller's own email for `'email'` and Google's
-    // stable `sub` for `'google'`. Neither belongs in this response, and
-    // the `sub` especially has no reason to leave the server. Asserted
-    // against the raw body text rather than the parsed shape, so a nested
-    // or renamed leak is caught too.
+    // Asserted against the raw body text rather than the parsed shape, so a nested or renamed leak is caught too.
     const { userId } = await seedUser({ withPassword: true, providers: ['email', 'google'] })
     const rows = await authProviderRepository.findByUser(userId)
     const user = await userRepository.findById(userId)
@@ -202,12 +194,7 @@ describe('GET /api/v1/auth/providers', () => {
   })
 
   it('orders providers oldest first, even when that is not the order they were inserted in', async () => {
-    // Postgres guarantees no order without an ORDER BY, and in practice
-    // returns rows roughly in insertion order — so seeding `email` then
-    // `google` and asserting that order back would pass with the sort
-    // REMOVED, proving nothing. Backdating the `google` row makes
-    // insertion order and `createdAt` order disagree, so only a controller
-    // that actually sorts can answer `['google', 'email']`.
+    // Backdating the google row makes insertion order and createdAt order disagree, so only a controller that actually sorts can answer ['google', 'email'].
     const { userId, token } = await seedUser({
       withPassword: true,
       providers: ['email', 'google'],
@@ -222,8 +209,7 @@ describe('GET /api/v1/auth/providers', () => {
 
     expect(first.status).toBe(200)
     expect(providerOrder(first)).toEqual(['google', 'email'])
-    // And stable: two identical requests agree, which is the property a UI
-    // rendering this list depends on.
+    // And stable: two identical requests agree, the property a UI rendering this list depends on.
     expect(providerOrder(second)).toEqual(providerOrder(first))
   })
 

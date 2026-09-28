@@ -1,7 +1,8 @@
-// tests/unit/configs/env-consistency.config.test.ts
-//
-// assertEnvConsistent takes the env, the raw source and the warn sink as
-// arguments, so every case here is a crafted env, never the memoised getEnv().
+/**
+ * @file assertEnvConsistent takes the env, the raw source and the warn
+ * sink as arguments, so every case here is a crafted env, never the
+ * memoised getEnv().
+ */
 import { describe, expect, it, vi } from 'vitest'
 import { assertEnvConsistent, REMOVED_ENV_NAMES } from '@/configs/env-consistency.config'
 import { parseEnv } from '@/configs/env.config'
@@ -131,8 +132,7 @@ describe('assertEnvConsistent', () => {
   })
 
   describe('SMTP timeouts against SHUTDOWN_TIMEOUT_MS', () => {
-    // The defaults: 15000 ms of SMTP, the 5000 ms HTTP drain and 5000 ms of
-    // headroom fill SHUTDOWN_TIMEOUT_MS exactly.
+    // The defaults fill SHUTDOWN_TIMEOUT_MS exactly: 15000 ms of SMTP, the 5000 ms HTTP drain and 5000 ms of headroom.
     const atBudget = {
       SMTP_CONNECTION_TIMEOUT_MS: '3000',
       SMTP_GREETING_TIMEOUT_MS: '5000',

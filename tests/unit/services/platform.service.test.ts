@@ -1,8 +1,8 @@
-// tests/unit/services/platform.service.test.ts
-//
-// The pure domain rules auto-join applies, and how a failed join is logged.
-// Importing the service does not touch Postgres: database.service.ts
-// connects on first query, and nothing here queries.
+/**
+ * @file The pure domain rules auto-join applies, and how a failed join
+ * is logged. Importing the service does not touch Postgres:
+ * database.service.ts connects on first query, and nothing here queries.
+ */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { db } from '@/services/database.service'
 import { logger } from '@/services/logger.service'

@@ -1,26 +1,8 @@
-// src/controllers/profile.controller.ts
-//
-// The first authenticated routes in this codebase — both handlers assume
-// `requireAuth` (auth.middleware.ts) has already run and populated
-// `request.user`. `authenticatedUserId` (helpers.controller.ts) still
-// guards against a missing `request.user` rather than asserting it with
-// `!`: today that can only happen if a route is wired up wrong
-// (profile.routes.ts mounts requireAuth ahead of both handlers), but a
-// defensive 401 here costs nothing and turns a future routing mistake into
-// an auth failure instead of a crash or, worse, `undefined` flowing into a
-// database lookup.
-//
-// `getProfile`/`updateProfile` both respond with `toProfileResponse`
-// (user.presenter.ts): `toPublicUser` plus `platformRole`, so the one
-// definition of "what a user looks like to a client" stays in that file.
-//
-// `updateProfile`'s mass-assignment defence is `updateProfileSchema`
-// (profile.validators.ts) alone: it is the only allow-list of writable
-// fields, and `toUpdateValues` (profile.service.ts) only ever reads the two
-// keys that schema can produce. There is deliberately no second check here
-// (e.g. re-validating that `email`/`active` were not requested) — a second,
-// independent allow-list is exactly the kind of duplicate definition that
-// drifts from the first one over time.
+/**
+ * @file Handlers for `/api/v1/profile`, behind `requireAuth`. Both reply with
+ * `toProfileResponse` (user.presenter.ts), the one definition of what a user
+ * looks like to a client.
+ */
 import { BaseController } from '@/controllers/base.controller'
 import { authenticatedUserId } from '@/controllers/helpers.controller'
 import { toProfileResponse } from '@/presenters/user.presenter'
@@ -44,14 +26,12 @@ class ProfileController extends BaseController {
   /**
    * `PATCH /profile`: update the authenticated user's own profile.
    *
-   * Only the fields `updateProfileSchema` names (`firstName`, `lastName`) can
-   * ever reach the database from this handler — see this file's header
-   * comment and profile.validators.ts's for why `email`, `id`, `passwordHash`
-   * and `active` cannot be changed here no matter what the request body
-   * contains. A body with no recognised fields at all (every key stripped, or
-   * none supplied) skips the write entirely and returns the current row
-   * unchanged, rather than issuing a no-op `UPDATE` that would still bump
-   * `updatedAt` for a request that changed nothing.
+   * The mass-assignment defence is `updateProfileSchema` alone: only the
+   * fields it names (`firstName`, `lastName`) reach the database, and
+   * `toUpdateValues` (profile.service.ts) reads only those two keys. There is
+   * deliberately no second allow-list here, which would drift from the first.
+   * A body with no recognised fields skips the write and returns the current
+   * row, so `updatedAt` is not bumped by a request that changed nothing.
    */
   updateProfile = this.handle(async (request, response) => {
     const userId = authenticatedUserId(request)

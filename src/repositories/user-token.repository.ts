@@ -1,32 +1,8 @@
-// src/repositories/user-token.repository.ts
-//
-// The four `protected` primitives below (selectOne/insertOne/updateOne/
-// markDeleted) are this table's half of BaseRepository's template method —
-// see base.repository.ts's header comment for why the actual
-// `db.select()/.insert()/.update()` calls live here, against the concrete
-// `userTokenModel`, rather than in the generic base class.
-//
-// `claimOnce` exists to close a race any single-use-token redemption would
-// otherwise have — originally written for `rotateRefreshToken`
-// (session.service.ts), and generalised here to every purpose
-// (user-token.model.ts's `TokenPurpose`): a plain "read, check revokedAt,
-// then write" sequence lets two concurrent presentations of the same raw
-// token both observe `revokedAt IS NULL` and both proceed, defeating reuse
-// detection (for a refresh token) or double-spending (for a verification or
-// reset token) entirely. `claimOnce` instead does the check and the write in
-// one statement — `UPDATE ... WHERE token_hash = $1 AND purpose = $2 AND
-// revoked_at IS NULL RETURNING *` — so Postgres itself decides which single
-// caller (if any) "wins" the claim; only that caller ever sees a defined
-// result. The `purpose` predicate is what stops a token minted for one
-// purpose from being claimed as another: it participates in the SAME atomic
-// statement as the revocation check, not a separate lookup a caller could
-// perform race-free but forget to.
-//
-// The four bulk revokers (revokeAllForSession, revokeAllForUser,
-// revokeAllForUserExceptSession, revokeAllForUserAndPurpose) lock the rows
-// they revoke in id order, through `lockedIds`, whatever plan or physical
-// row layout Postgres uses. Two of them sharing rows then queue instead of
-// deadlocking. A new bulk writer must lock the same way.
+/**
+ * @file Query access to `user_tokens`, on `BaseRepository`. The four bulk
+ * revokers lock the rows they revoke in id order through `lockedIds`, so two
+ * sharing rows queue instead of deadlocking; a new bulk writer must lock the same way.
+ */
 import { eq, inArray, sql, type SQL } from 'drizzle-orm'
 import {
   userTokenModel,
@@ -101,33 +77,24 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    * legitimate rotation, or a claim for the wrong purpose — gets undefined,
    * never the same row twice.
    *
-   * THIS METHOD DOES NOT CHECK `expiresAt`. An expired-but-not-yet-revoked
-   * row is still "live" by the definition above and WILL be claimed —
-   * deliberately, not an oversight: folding expiry into this predicate
-   * would make a merely-expired token indistinguishable from a genuinely
-   * replayed one, so `rotateRefreshToken`'s reuse-detection branch would
-   * revoke an entire session family for a legitimate user whose token
-   * simply aged out (see the existing test `rejects an expired refresh
-   * token without treating it as reuse of a live session`,
-   * session.service.test.ts). EVERY CALLER MUST CHECK `expiresAt` on the
-   * returned row itself, immediately after claiming, before treating the
-   * claim as a valid redemption — `rotateRefreshToken` does this for
-   * `'refresh'`; a future `email_verification`/`password_reset` redemption
-   * path must do the same, or it ships a token that is redeemable forever.
-   * Pinned by `claimOnce claims an expired-but-unrevoked row — expiry is
-   * the caller's job, not the predicate's` (user-token.repository.test.ts).
+   * The check and the write are one statement, so Postgres picks the single
+   * winner; a read-then-write would let two concurrent presentations both see
+   * `revokedAt IS NULL`, defeating reuse detection or double-spending a
+   * verification or reset token. `purpose` is in the same predicate, so a
+   * token of one purpose can never be claimed as another.
    *
-   * `revokedAt` and `consumedAt` are set together, but mean different
-   * things: `revokedAt IS NULL` is the one fact every caller checks to
-   * decide "is this row still claimable" (see this file's header comment);
-   * `consumedAt` is set ONLY here, so it distinguishes a row spent through
-   * this normal single-use path from one killed by an explicit revoke
-   * (`revokeAllForSession`/`revokeAllForUser`, below), which sets
-   * `revokedAt` alone.
+   * It does not check `expiresAt`, and claims an expired row: folding expiry
+   * in would make an aged-out refresh token look like a replay and kill its
+   * session. Every caller checks `expiresAt` on the returned row
+   * (`rotateRefreshToken`, `claimToken` in session.service.ts), or the token
+   * would be redeemable forever.
+   *
+   * `consumedAt` is set only here, so it tells a row spent through this path
+   * from one killed by an explicit revoke, which sets `revokedAt` alone.
    * @param tokenHash - The SHA-256 hash of the raw token, hex-encoded.
    * @param purpose - The purpose the token must have been issued for; a row that exists but for a different purpose is left untouched and this resolves undefined, exactly as if no row matched at all.
    * @param executor - Where to run the query. Defaults to the pool.
-   * @returns The now-claimed row, EXPIRY NOT CHECKED — its `expiresAt` is still the pre-claim value the caller must validate (its `userId`/`sessionId` are likewise still the values to act on) — or undefined when no not-yet-revoked row of that purpose matched.
+   * @returns The now-claimed row, expiry not checked, or undefined when no not-yet-revoked row of that purpose matched.
    */
   async claimOnce(
     tokenHash: string,
@@ -167,7 +134,6 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
       .from(userTokenModel)
       .where(this.scope(eq(userTokenModel.tokenHash, tokenHash)))
       .limit(1)
-    // withinWindow is boolean | null (SQL NULL for a never-consumed row); narrowed to a plain boolean here.
     return row?.withinWindow === true
   }
 
@@ -274,24 +240,10 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    * every OTHER session must end at once, while the session presenting the
    * request that triggered the change keeps working uninterrupted.
    *
-   * Modelled directly on `revokeAllForUser` above, as it stands today: same
-   * `RETURNING session_id`, same null-filtering `!== null` type guard, same
-   * de-duplicating `Set`. The one addition is the
-   * spared-session predicate, and it MUST read `session_id IS DISTINCT FROM
-   * $2`, not `session_id != $2`. SQL's `!=` evaluates to NULL — not true —
-   * for a row whose `session_id` IS NULL, and NULL is not true, so a plain
-   * `!=` would silently exclude every non-refresh row (`password_reset`,
-   * `email_verification` — `sessionId` is only ever set on a `'refresh'`
-   * row, user-token.model.ts) from being revoked at all: those rows would
-   * survive a password change, which is exactly the gap `revokeAllForUser`
-   * already closes today for a full revocation and this method must not
-   * reopen for a partial one. `IS DISTINCT FROM` treats NULL as an ordinary
-   * comparable value — a NULL `session_id` IS DISTINCT FROM the (never-null)
-   * spared id, so it evaluates true and that row IS revoked, matching
-   * `revokeAllForUser`'s own "every purpose, not just refresh" behaviour for
-   * everything except the one session this call is told to spare. DO NOT
-   * "simplify" this back to `!=`; that is precisely the silent regression
-   * this comment exists to prevent.
+   * The spared-session predicate is `session_id IS DISTINCT FROM $2`, never
+   * `!=`: `!=` is NULL for a non-refresh row (its `session_id` is NULL), so
+   * reset and verification tokens would survive a password change.
+   * `IS DISTINCT FROM` revokes them, as `revokeAllForUser` does.
    *
    * The same mid-rotation caveat as `revokeAllForUser`, closed the same way:
    * lock the user row first. Locks its rows in id order (`lockedIds`),
@@ -327,12 +279,11 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
   }
 
   /**
-   * Revoke every still-live token a user holds FOR ONE PURPOSE. The
-   * purpose predicate is the whole point: `revokeAllForUser` above matches
-   * on `userId` alone, so using it to clear stale verification links would
-   * take the user's live refresh tokens with it and log them out of every
-   * device as a side effect of requesting an email. Locks its rows in id
-   * order (`lockedIds`), whatever the plan or the physical row layout.
+   * Revoke every still-live token a user holds for one purpose.
+   * `revokeAllForUser` matches on `userId` alone, so clearing stale
+   * verification links with it would also log the user out of every device.
+   * Locks its rows in id order (`lockedIds`), whatever the plan or the
+   * physical row layout.
    * @param userId - The user whose tokens should be revoked.
    * @param purpose - The only purpose to revoke; every other purpose is untouched.
    * @param executor - Where to run the query. Defaults to the pool.
@@ -413,9 +364,6 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    */
   protected async insertOne(values: NewUserToken, executor: DbExecutor = db): Promise<UserToken> {
     const [row] = await executor.insert(userTokenModel).values(values).returning()
-    // insert(...).values(one object).returning() always returns exactly
-    // one row when the insert does not throw; the driver's own types just
-    // cannot express "same length as input" for a single-row insert.
     if (row === undefined) throw new HttpError('Insert returned no row', 500)
     return row
   }

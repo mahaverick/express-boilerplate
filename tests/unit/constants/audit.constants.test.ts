@@ -1,7 +1,8 @@
-// tests/unit/constants/audit.constants.test.ts
-//
-// Pins the audited actions to the API contract, to audit_logs_action_check's
-// pattern and column width, and each metadata schema to its exact keys.
+/**
+ * @file Pins the audited actions to the API contract, to
+ * audit_logs_action_check's pattern and column width, and each metadata
+ * schema to its exact keys.
+ */
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import {

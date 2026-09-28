@@ -1,8 +1,10 @@
-// tests/integration/api/platform-tenants.test.ts
-//
-// GET /api/v1/platform/tenants: staff search across every customer tenant.
-// Non-staff get the app's own 404, with no rate-limit headers. Names carry a
-// per-test tag, so rows from other files in this worker never match.
+/**
+ * @file GET /api/v1/platform/tenants: staff search across every customer
+ * tenant. Non-staff get the app's own 404, with no rate-limit headers.
+ * Names carry a per-test tag, so rows from other files in this worker
+ * never match.
+ */
+
 import { randomUUID } from 'node:crypto'
 import type { Response } from 'supertest'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -107,7 +109,7 @@ describe('GET /api/v1/platform/tenants', () => {
   }
 
   describe('access', () => {
-    // First, so that before the route exists the first red line is this 404-for-200.
+    // Ordered first: before the route exists, the first red failure is this 404-for-200.
     it('admits a platform viewer, behind the 60-a-minute limiter', async () => {
       const response = await search(await createStaff('viewer'))
 
@@ -321,8 +323,7 @@ describe('GET /api/v1/platform/tenants', () => {
       expect(cursor).toBeNull()
     })
 
-    // A 255-character name is the column's limit. Emoji are 4 UTF-8 bytes
-    // each; a control character is 6 once JSON escapes it as \u00XX.
+    // A 255-character name is the tenants.name column's limit; emoji are 4 UTF-8 bytes each, and a control character becomes 6 once JSON escapes it as \u00XX.
     it.each([
       ['emoji', '\u{1F600}'],
       ['control characters', '\u{1}'],

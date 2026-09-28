@@ -1,4 +1,3 @@
-// tests/unit/middlewares/error.middleware.test.ts
 import { DrizzleQueryError } from 'drizzle-orm'
 import { type Response } from 'express'
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
@@ -33,9 +32,7 @@ function mockResponse(): { response: Response; body: () => unknown; status: Mock
 }
 
 describe('errorHandler', () => {
-  // Every 5xx path now logs — spy on logger.error for the whole suite so
-  // that logging is silenced in test output by default, and so the one test
-  // below that cares can assert on it without every other test needing to.
+  // Every 5xx path logs — spy on logger.error for the whole suite so that logging is silenced in test output by default, and so the one test below that cares can assert on it without every other test needing to.
   let loggerError: Mock<typeof logger.error>
 
   beforeEach(() => {
@@ -107,11 +104,7 @@ describe('errorHandler', () => {
   })
 
   it('does not forward a foreign error carrying its own .code property', () => {
-    // Node's own system errors (ENOENT, ECONNREFUSED, ...) and many
-    // third-party errors already carry a `.code` string. Only an HttpError's
-    // OWN, deliberately-set `code` is client-facing — forwarding any
-    // foreign error's `.code` here would leak internal detail the same way
-    // an unmasked message would.
+    // Node's own system errors (ENOENT, ECONNREFUSED, ...) and many third-party errors already carry a `.code` string. Only an HttpError's own, deliberately-set `code` is client-facing — forwarding any foreign error's `.code` here would leak internal detail the same way an unmasked message would.
     const { response, body } = mockResponse()
     errorHandler(
       Object.assign(new Error('boom'), { code: 'ECONNREFUSED' }),
@@ -132,27 +125,19 @@ describe('errorHandler', () => {
   })
 
   it('logs the original error for a non-HttpError, not just the masked message', () => {
-    // The client-facing contract (masked message, 500) is covered above.
-    // This is the other half of that same failure: a 5xx must not vanish
-    // without a trace an operator can search for and a bug report can cite.
+    // The client-facing contract (masked message, 500) is covered above; this is the other half of that same failure — a 5xx must not vanish without a trace an operator can search for and a bug report can cite.
     const { response, body, status } = mockResponse()
     const original = new Error('leaked implementation detail')
     errorHandler(original, {} as never, response, vi.fn())
 
     expect(status).toHaveBeenCalledWith(500)
     expect(body()).toMatchObject({ success: false, message: 'Internal server error' })
-    // The ORIGINAL error object is logged, not the masked message — masking
-    // is for the client; the whole point of logging is that the real cause
-    // stays recoverable server-side.
+    // The ORIGINAL error object is logged, not the masked message — masking is for the client; the whole point of logging is that the real cause stays recoverable server-side.
     expect(loggerError).toHaveBeenCalledWith('Unhandled server error', { error: original })
   })
 
   it('logs 5xx errors with the request-id from ALS context', () => {
-    // errorHandler is called directly here, with no Express request ever
-    // running requestContext (request-context.middleware.ts) ahead of it —
-    // so without wrapping in requestContextStore.run(), there is no ALS
-    // context for the logger to read a request-id from at all. This proves
-    // errorHandler's call into logger.error works correctly from inside one.
+    // errorHandler is called directly here, with no Express request ever running requestContext (request-context.middleware.ts) ahead of it, so without wrapping in requestContextStore.run() there is no ALS context for the logger to read a request-id from; this proves errorHandler's call into logger.error works correctly from inside one.
     const { response } = mockResponse()
     requestContextStore.run({ requestId: 'test-req-id' }, () => {
       errorHandler(new Error('boom'), {} as never, response, vi.fn())
@@ -198,25 +183,26 @@ describe('errorHandler', () => {
 
     errorHandler(new Error('stream write failed'), { socket: { destroy } } as never, response, next)
 
-    // Not next(error): Express's final handler console.errors the raw error,
-    // unredacted, for every NODE_ENV but 'test'.
+    // Not next(error): Express's final handler console.errors the raw error, unredacted, for every NODE_ENV but 'test'.
     expect(status).not.toHaveBeenCalled()
     expect(destroy).toHaveBeenCalledTimes(1)
     expect(next).not.toHaveBeenCalled()
   })
 
-  // A failed database write is the one 5xx that arrives carrying the data it
-  // was trying to write. drizzle-orm builds DrizzleQueryError's message as
-  // `Failed query: ${query}\nparams: ${params}` (verified against
-  // node_modules/drizzle-orm/errors.js), so `console.error(error)` used to
-  // print a registrant's email address and bcrypt hash into the log on any
-  // insert failure that is not the unique violation BaseRepository already
-  // turns into a 409 — an over-length email (22001), for instance.
-  //
-  // The real class is constructed here, not a hand-rolled look-alike: the
-  // handler matches this shape structurally (so the error contract takes no
-  // runtime dependency on the ORM), and this test is what pins that
-  // structural match to the actual class it is meant to catch.
+  /**
+   * A failed database write is the one 5xx that arrives carrying the data
+   * it was trying to write. drizzle-orm builds DrizzleQueryError's
+   * message as `Failed query: ${query}\nparams: ${params}` (verified
+   * against node_modules/drizzle-orm/errors.js), so logging the raw error
+   * would print a registrant's email address and bcrypt hash into the log
+   * on any insert failure that is not the unique violation
+   * BaseRepository already turns into a 409 — an over-length email
+   * (22001), for instance. The real class is constructed here, not a
+   * hand-rolled look-alike: the handler matches this shape structurally
+   * (so the error contract takes no runtime dependency on the ORM), and
+   * this test is what pins that structural match to the actual class it
+   * is meant to catch.
+   */
   describe('a failed database query', () => {
     const email = 'victim@example.com'
     const passwordHash = '$2b$12$abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQR'
@@ -253,11 +239,7 @@ describe('errorHandler', () => {
 
       errorHandler(failedInsert(), {} as never, response, vi.fn())
 
-      // Not a nested expect.objectContaining: vitest/jest types that
-      // matcher's return as `any`, and assigning it as an object-literal
-      // property (rather than passing it directly as an argument) trips
-      // @typescript-eslint/no-unsafe-assignment. Reading the actual call
-      // arguments back and asserting with toMatchObject keeps this typed.
+      // Not a nested expect.objectContaining: vitest/jest types that matcher's return as `any`, and assigning it as an object-literal property (rather than passing it directly as an argument) trips @typescript-eslint/no-unsafe-assignment; reading the actual call arguments back and asserting with toMatchObject keeps this typed.
       const [, meta] = loggerError.mock.calls[0] ?? []
       expect(meta?.error).toMatchObject({
         query: 'insert into "users" ("email", "password_hash") values ($1, $2) returning *',
@@ -266,10 +248,7 @@ describe('errorHandler', () => {
     })
 
     it('redacts a query-shaped error that carries neither a driver code nor a stack', () => {
-      // The defensive edges of the same path: a query error whose cause is
-      // not an object with a `code` (a dropped connection surfaces one), and
-      // one with no usable stack. Neither may fall back to logging the raw
-      // error — the message embeds the parameters either way.
+      // The defensive edges of the same path: a query error whose cause is not an object with a `code` (a dropped connection surfaces one), and one with no usable stack. Neither may fall back to logging the raw error — the message embeds the parameters either way.
       const { response } = mockResponse()
       const bare = { query: 'select 1 from "users" where "email" = $1', params: [email] }
 
@@ -280,14 +259,14 @@ describe('errorHandler', () => {
       expect(JSON.stringify(loggerError.mock.calls)).not.toContain(email)
     })
 
-    // Fix round 2 (task-2-review.md, finding 8): `stackFramesOf` used to
-    // filter with `line.trimStart().startsWith('at ')`, which drops the one
-    // signal (V8's own indentation of at least four spaces on every genuine
-    // frame) that tells a real call frame apart from a message line that
-    // merely happens to start with those two characters. A query error's
-    // own message embeds the SQL text and can be multi-line, and is not
-    // fully attacker-controlled here — but the fix is the same either way,
-    // and this pins it directly rather than by absence.
+    /**
+     * `stackFramesOf` must filter on V8's own indentation of at least
+     * four spaces on every genuine frame, the one signal that tells a
+     * real call frame apart from a message line that merely happens to
+     * start with "at ". A query error's own message embeds the SQL text
+     * and can be multi-line, and is not fully attacker-controlled here —
+     * this pins the filter directly rather than by absence.
+     */
     it('drops an unindented line that merely begins "at ", keeping only real indented call frames', () => {
       const { response } = mockResponse()
       const craftedStack = [
@@ -323,10 +302,12 @@ describe('errorHandler', () => {
     })
   })
 
-  // Express's body parser throws `http-errors` instances, not HttpError.
-  // tests/integration/api/body-parser.test.ts drives the real thing through
-  // supertest; these pin the branch behaviour directly, including the cases
-  // a real body-parser error never produces.
+  /**
+   * Express's body parser throws `http-errors` instances, not HttpError.
+   * tests/integration/api/body-parser.test.ts drives the real thing
+   * through supertest; these pin the branch behaviour directly, including
+   * the cases a real body-parser error never produces.
+   */
   describe('a foreign error carrying a status (http-errors shape)', () => {
     it('honours .status in the 4xx range and exposes an expose:true message', () => {
       const { response, body, status } = mockResponse()
@@ -355,9 +336,7 @@ describe('errorHandler', () => {
     })
 
     it('replaces the message with the reason phrase when expose is not true', () => {
-      // The whole point of the expose flag: a library error that merely
-      // happens to carry a 4xx status must not hand its internal message to
-      // the client.
+      // The whole point of the expose flag: a library error that merely happens to carry a 4xx status must not hand its internal message to the client.
       const { response, body, status } = mockResponse()
       errorHandler(
         Object.assign(new Error('pg: relation "users" does not exist'), { status: 403 }),
@@ -371,8 +350,7 @@ describe('errorHandler', () => {
     })
 
     it('does not trust a 5xx status from a foreign error', () => {
-      // Honouring it would skip the masking below and could leak an internal
-      // message; 5xx stays the handler's own decision.
+      // Honouring it would skip the masking below and could leak an internal message; 5xx stays the handler's own decision.
       const { response, body, status } = mockResponse()
       errorHandler(
         Object.assign(new Error('internal detail'), { status: 503, expose: true }),

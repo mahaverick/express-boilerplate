@@ -1,6 +1,6 @@
-// tests/unit/validators/invitation.validators.test.ts
-//
-// Pure schema checks: no database, no I/O.
+/**
+ * @file Pure schema checks: no database, no I/O.
+ */
 import { randomBytes } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { invitationTokenInputSchema } from '@/validators/invitation.validators'

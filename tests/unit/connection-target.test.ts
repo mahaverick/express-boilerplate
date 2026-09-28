@@ -1,26 +1,13 @@
-// tests/unit/connection-target.test.ts
-//
-// docker-compose.yml deliberately moves Postgres/Redis off their default
-// host ports (5433/6380) so the suite cannot silently talk to a developer's
-// own native Postgres/Redis instead of the compose stack — see that file's
-// header comment for the full reasoning. The failure mode is silent for
-// Redis specifically (any Redis answers PING), so a reversion would not
-// fail loudly the way the Postgres side would.
-//
-// WHAT THIS GUARDS, AND WHY IT IS NOT A RUNTIME CHECK. An earlier version
-// asserted `getEnv().DATABASE_URL`'s port at runtime. That is the wrong
-// invariant: CI's `services:` publish the container-default ports, so CI
-// runs against 5432/6379 and real process env wins over
-// .env.test (see tests/helpers/setup-global.ts) — the assertion failed in
-// CI with `expected '6379' to be '6380'` while passing locally, i.e. it was
-// guaranteed to be red on the first pull request.
-//
-// The property actually worth protecting belongs to committed files, not to
-// whatever environment happens to be running the suite: docker-compose.yml
-// and .env.test must agree, and must agree on a NON-default port. So this
-// reads both files off disk and compares them. It is environment-independent
-// by construction, which is why it lives under tests/unit/ and never opens a
-// socket.
+/**
+ * @file docker-compose.yml deliberately moves Postgres/Redis off their
+ * default host ports (5433/6380), so the suite cannot silently talk to a
+ * developer's own native instance instead of the compose stack — silent
+ * for Redis specifically, since any Redis answers PING. This reads
+ * docker-compose.yml and .env.test off disk and asserts they agree on a
+ * non-default port, rather than asserting on `getEnv()` at runtime: CI's
+ * `services:` publish the container-default ports, so a runtime assertion
+ * against the live environment is red on CI by construction.
+ */
 import fs from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
@@ -42,6 +29,10 @@ const envTest = read('.env.test')
  * Parsed line-by-line rather than with one multiline regex — the obvious
  * `/^\s*ports:.*?['"](\d+):(\d+)['"]/m` puts two lazy quantifiers next to
  * each other, which sonarjs/super-linear-regex flags as backtracking-prone.
+ * The same reason rules out matching the `ports:` mapping line itself
+ * (`['[<bind-address>:]<host>:<container>', ...]`) with a `(\d+):(\d+)`
+ * pattern; it is split on `:` instead, taking the segment before the
+ * always-last container port, whether or not a bind address prefixes it.
  * @param service - The compose service name, e.g. "postgres".
  * @returns The published host port, as a string.
  */
@@ -55,16 +46,9 @@ const composeHostPort = (service: string): string => {
   const end = rest.findIndex((line) => /^ {2}\S/.test(line))
   const block = end === -1 ? rest : rest.slice(0, end)
 
-  // ports: ['[<bind-address>:]<host>:<container>', ...] — the host side is
-  // the one a developer's own service can collide with. Split rather than
-  // match: any `(\d+):(\d+)` pattern trips sonarjs/super-linear-regex, and
-  // there is no reason to run a backtracking-capable matcher over a string
-  // this shaped.
   const portsLine = block.find((line) => line.trimStart().startsWith('ports:'))
   expect(portsLine, `the "${service}" service block declares a ports: mapping`).toBeDefined()
   const firstMapping = (portsLine ?? '').split(/['"]/, 3)[1] ?? ''
-  // The container port is always last; the host port is the segment right
-  // before it, whether or not a bind address prefixes the mapping.
   const segments = firstMapping.split(':')
   const host = segments.at(-2) ?? ''
   expect(host, `the "${service}" ports: mapping reads host:container`).toMatch(/^\d+$/)
@@ -89,9 +73,7 @@ describe('local connection target', () => {
   ])('$service: compose and .env.test agree on a non-default host port', (target) => {
     const published = composeHostPort(target.service)
 
-    // Both halves matter. Agreement alone would be satisfied by moving both
-    // back to the default; a non-default compose port alone would be
-    // satisfied while the suite still dialled the developer's own instance.
+    // Both halves matter: agreement alone permits reverting to the default, and a non-default compose port alone permits dialling a developer's own instance.
     expect(published).not.toBe(target.theDefault)
     expect(published).toBe(target.nonDefault)
     expect(envTestPort(target.key)).toBe(published)

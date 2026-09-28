@@ -1,8 +1,7 @@
-// src/jobs/email.job.ts
-//
-// The one place an email job's payload shape and default options are
-// defined — mirrors queue.service.ts's own "one place" framing for the
-// Queue/connection themselves.
+/**
+ * @file The one place an email job's payload shape and default options are
+ * defined.
+ */
 import { type Job, type JobsOptions } from 'bullmq'
 import { JobPriority } from '@/constants/queue.constants'
 import type { MailMessage } from '@/services/mailer.service'
@@ -10,36 +9,33 @@ import { addJob, getEmailQueue } from '@/services/queue.service'
 
 /**
  * The payload stored on an email job. `MailMessage` (mailer.service.ts) is a
- * discriminated union on `templateKey` — intersecting it with `{ userId:
- * string }` rather than flattening it into a new, hand-written shape keeps
- * that union intact, so `email.worker.ts` can call `sendMail(job.data)`
- * directly, with no `as MailMessage` cast anywhere on the path from
- * `addEmailJob` to the worker.
+ * discriminated union on `templateKey`; intersecting it with `{ userId }`
+ * keeps the union intact, so `email.worker.ts` calls `sendMail(job.data)`
+ * with no cast.
  */
 export type EmailJobData = MailMessage & { userId: string }
 
 /**
  * Default BullMQ job options for every email job, applied by `addEmailJob`
- * before any caller-supplied `opts` override them.
+ * before any caller-supplied `opts` override them. Five attempts, with
+ * exponential waits of 5s, 10s, 20s and 40s.
  *
- * `removeOnComplete: true` — delete the job from Redis immediately on
- * success. A raw verification/reset token lives in `variables` (e.g.
- * `variables.verificationUrl`), and `email_logs` (never the token itself) is
- * this codebase's audit trail — leaving a completed job sitting in Redis
- * would keep that token readable long after the email that carried it.
+ * `removeOnComplete: true`: a raw token lives in `variables` (for example
+ * `variables.verificationUrl`), so a completed job is deleted at once rather
+ * than keeping the token readable in Redis. `email_logs` is the audit trail.
  *
- * `removeOnFail: { age: 7 * 24 * 3600 }` — keep failed jobs for 7 days so an
- * operator can inspect `failedReason` before they expire. The token stays in
- * Redis only while retries are pending: once the job will not be retried,
- * the worker replaces every `...Url` value with `[redacted]`
- * (`recordPermanentFailure`, job-failure.job.ts).
+ * `removeOnFail: { age: 7 * 24 * 3600 }`: failed jobs stay 7 days so an
+ * operator can inspect `failedReason`. The token stays only while retries
+ * are pending: once the job will not be retried, the worker replaces every
+ * `…Url` and `…Token` value with `[redacted]` (`recordPermanentFailure`,
+ * job-failure.job.ts).
  */
 export const emailJobDefaults: JobsOptions = {
   priority: JobPriority.high,
   attempts: 5,
   backoff: {
     type: 'exponential',
-    delay: 5000, // 4 waits: 5s, 10s, 20s, 40s
+    delay: 5000,
   },
   removeOnComplete: true,
   removeOnFail: { age: 7 * 24 * 3600 },

@@ -1,4 +1,3 @@
-// tests/unit/validators/profile.validators.test.ts
 import { describe, expect, it } from 'vitest'
 import { updateProfileSchema } from '@/validators/profile.validators'
 

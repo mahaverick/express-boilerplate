@@ -1,12 +1,11 @@
 # Architecture
 
-This document describes how the pieces of this boilerplate fit together, and
-is explicit about what is deliberately **not** built yet — this repo ships
-the platform, not a product.
+How the pieces of this boilerplate fit together. What it does not build is
+listed in [SECURITY.md](SECURITY.md#what-this-boilerplate-does-not-implement).
 
 ## Boot sequence: `index.ts` -> `server.ts` -> `app.ts`
 
-The app is split into three files instead of one, on purpose:
+The app is split into three files:
 
 ```
 src/index.ts    entrypoint — validates the environment, then boots
@@ -14,23 +13,23 @@ src/server.ts   owns the listening socket and the shutdown sequence
 src/app.ts      builds the Express app — no listen, no side effects
 ```
 
-`createApp()` in `app.ts` returns a plain, unstarted `Express` instance.
-That is what lets `supertest` import it directly in tests without ever
-binding a port. The alternative — one large entrypoint file that both
-builds the app and starts listening — is what this repo was rebuilt away
-from.
+`createApp()` in `app.ts` returns a plain, unstarted `Express` instance, so
+tests import it without binding a port.
 
-**`index.ts`** calls `getEnv()` synchronously first, inside a `try/catch`.
-If the environment is invalid, it prints the named list of what's wrong and
-exits 1 — before anything else runs. Only once that succeeds does it
-`import('@/server')` **dynamically**. This matters: a static import at the
-top of the file would be hoisted and evaluated before `main()`'s
-`try/catch` ever ran, because ES module imports are evaluated before the
-importing module's own body. `@/server` transitively imports
-`database.service.ts`, which calls `getEnv()` again at module scope — so a
-static import would have reintroduced, one layer up, the exact failure mode
-(an uncaught stack trace from inside a dependency instead of a clean
-message) this repo exists to remove.
+**`index.ts`** first calls `getEnv()` and `assertEnvConsistent` inside a
+`try/catch`. If the environment is invalid, it prints the named list of what
+is wrong and exits 1, before anything else runs. Only then does it
+`import('@/server')` **dynamically**. A static import would be evaluated before
+`main()`'s `try/catch` ran, and `@/server` transitively imports
+`database.service.ts`, which calls `getEnv()` at module scope: an invalid
+environment would surface as a stack trace from inside a dependency instead of
+the named list.
+
+`boot()` then starts the server and routes `SIGTERM`, `SIGINT`, an unhandled
+rejection, an uncaught exception and a server `error` event through one
+shutdown handler (`createShutdownHandler`, `lifecycle.service.ts`). It runs
+`gracefulShutdown` once and exits 1 if that takes longer than
+`SHUTDOWN_TIMEOUT_MS`.
 
 With `WORKER_ENABLED`, `index.ts` then starts the Workers through
 `startWorkers()` (`worker-supervisor.service.ts`): email, notification and
@@ -44,86 +43,116 @@ for the next restart. The scheduler is stored in Redis, so one registered
 earlier keeps running meanwhile.
 
 **`server.ts`** exports `startServer(port?)` and `gracefulShutdown(server, workers?)`.
-`startServer` takes the port as a parameter rather than reading it from
-`getEnv()` internally, specifically so tests can bind an ephemeral port
-(`startServer(0)`) without the environment's memoised, already-parsed
-`APP_PORT` getting in the way. `gracefulShutdown` closes the socket first
-(so no new request can arrive), waits for it to drain, closes the Workers
-`startWorkers()` is currently running, then closes the database, Redis and
-queue clients — deliberately in that order.
+`startServer` takes the port as a parameter so tests can bind an ephemeral
+port (`startServer(0)`): `getEnv()` is memoised, so a test cannot change
+`APP_PORT` after import. `gracefulShutdown` runs in this order:
 
-**`app.ts`** wires, in order: `requestId` middleware, JSON/urlencoded body
-parsing, `GET /health`, `GET /health/ready`, the versioned API router
-(`createApiRouter()`, mounted at `/api/v1` — see "Request path: auth and
-beyond" below), a 404 catch-all, then `errorHandler`. Order is load-bearing
-— Express matches middleware and routes in registration order, and the
-error handler must be registered last to see errors from everything before
-it.
+1. readiness starts answering 503 (`markShuttingDown`), and open SSE streams
+   are ended, since they would hold the socket open;
+2. the socket closes and drains; connections still open after
+   `SERVER_DRAIN_TIMEOUT_MS` (5 s) are force-closed;
+3. the Workers close, finishing their current job, while the database and
+   Redis are still up;
+4. the database, Redis, queue and notification-subscriber clients close;
+5. OpenTelemetry flushes and shuts down, last, so no span from the steps
+   above is dropped.
+
+**`app.ts`** wires, in order: `x-powered-by` off, `trust proxy` from
+`TRUST_PROXY`, `helmet`, `cors`, `requestId`, `requestContext`, the JSON
+(1 MB) and urlencoded (100 KB) body parsers, `GET /health`,
+`GET /health/ready`, the versioned API router (`createApiRouter()` at
+`/api/v1`), a 404 catch-all, then `errorHandler`. Express matches in
+registration order, and the error handler must be last to see errors from
+everything before it.
 
 ## Request path: auth and beyond
 
 `createApiRouter()` (`src/routes/index.routes.ts`) mounts one router per
-feature under `/api/v1` — `auth.routes.ts` at `/api/v1/auth`,
-`profile.routes.ts` at `/api/v1/profile` — rather than `app.ts` growing an
-`app.use(...)` call per feature. A new feature router is one more
-`router.use(...)` line in `index.routes.ts`, never a change to `app.ts`
-itself.
+feature under `/api/v1`: `auth`, `profile`, `notifications`, `tenants`,
+`invitations` and `platform`. A new feature router is one more `router.use(...)`
+line there, never a change to `app.ts`.
 
-**Registration and login** (`POST /api/v1/auth/register`,
-`POST /api/v1/auth/login`) are open routes — no token required to reach
-them, by definition. `register` is the only route that **hashes** a
-password; `login` and `verify-email` are the only routes that **compare**
-one — both through `src/utilities/password.utilities.ts`, never bcrypt
-directly. On success,
-`login` mints an access token (`signAccessToken`) and a refresh token
-(`issueRefreshToken`), the latter set as an httpOnly cookie. See
-[SECURITY.md](SECURITY.md) for the full reasoning behind both token types,
-password hashing, user-enumeration resistance, and rate limiting.
+**Open auth routes.** `register`, `login`, `verify-email`,
+`resend-verification`, `forgot-password`, `reset-password`, `refresh` and
+`logout` need no access token. The auth router refuses any body that is not
+`application/json` with 415 (`requireJsonContentType`). `register`,
+`reset-password` and `change-password` **hash** a password; `login`,
+`verify-email` and `change-password` **compare** one. All of them go through
+`src/utilities/password.utilities.ts`, never bcrypt directly. `login` mints an
+access token (`signAccessToken`) and a refresh token (`issueRefreshToken`), set
+as an httpOnly cookie. [SECURITY.md](SECURITY.md) explains both token types,
+password hashing, user-enumeration resistance and rate limiting.
 
-**Every other authenticated route** sits behind `requireAuth`
-(`src/middlewares/auth.middleware.ts`), mounted with `router.use(requireAuth)`
-ahead of a feature's routes (see `profile.routes.ts`) rather than repeated
-per-route, so a route added later inherits the gate automatically.
-`requireAuth` verifies the bearer access token (`verifyAccessToken`) and
-then reloads the user by id — a stateless JWT alone would keep answering
-"valid" for a disabled or deleted account until the token's own expiry, so
-this trades one extra database read per authenticated request for that
-account state actually being enforced in real time.
+**Authenticated routes** sit behind `requireAuth`
+(`src/middlewares/auth.middleware.ts`). The profile, notification, tenant and
+platform routers mount it once with `router.use(requireAuth)`, so a route added
+later inherits the gate. `change-password`, `providers` and
+`POST /invitations/accept` mount it per route. `requireAuth` verifies the
+bearer access token (`verifyAccessToken`), refuses a token whose session is on
+the Redis denylist (`isSessionDenied`), then reloads the user by id. The reload
+costs one database read per authenticated request; in exchange, a disabled or
+deleted account is refused on its next request instead of when its token
+expires.
 
-**`POST /api/v1/auth/refresh`** and **`POST /api/v1/auth/logout`** are the
-odd ones out: neither requires a bearer access token (a user's access token
-has often already expired by the time either is called), and both instead
-read the refresh-token cookie directly off the raw `Cookie` header — there
-is no `cookie-parser` dependency in this codebase; the cookie name is known
-in advance (`refreshCookieSpec`, plus the legacy `refreshToken` — see
-SECURITY.md, "Cookies"), so parsing the values this API cares about by hand
-costs less than a dependency for the rest of RFC 6265 nothing here needs.
+**`POST /api/v1/auth/refresh`** and **`POST /api/v1/auth/logout`** need no
+access token, since it has often expired by the time either is called. Both
+read the refresh-token cookie off the raw `Cookie` header. There is no
+`cookie-parser`: the names are known in advance (`refreshCookieSpec`, plus the
+legacy `refreshToken`; see SECURITY.md, "Cookies").
 
 **The repository layer** (`src/repositories/`) is a thin layer over
-`src/database/models/`: `BaseRepository` owns soft-delete filtering,
-`updatedAt` maintenance, and unique-violation-to-409 translation once,
-shared by `UserRepository`, `UserTokenRepository` and `TenantRepository`,
-each of which supplies only the four concrete Drizzle queries
-`BaseRepository` cannot express generically (see `base.repository.ts`'s own
-header comment for why). Every public method it defines, including these
-inherited ones, takes a final optional `executor: DbExecutor = db`
-parameter, so any caller can run it inside its own transaction. See
-[DATABASE.md](DATABASE.md) for these models. The repository layer's other
-classes are deliberately NOT one of them — they do not extend
-`BaseRepository` at all. `EmailLogRepository` is the clearest case: the
-`email_logs` table it queries is append-only audit data, so it has no
-`updatedAt`/`deletedAt` columns for `BaseRepository` to require, nothing
-ever updates or soft-deletes a row once written, and there is no unique
-constraint on the table for a 23505-to-409 translation to have anything to
-translate. Sharing the base class here would mean inheriting `update()` and
-`softDelete()` methods whose very existence contradicts what an audit log
-is — see `email-log.model.ts` and `email-log.repository.ts`'s own header
-comments for the full reasoning. `AuthProviderRepository`,
-`NotificationRepository`, `NotificationPreferenceRepository`,
-`TenantSettingsRepository`, `TenantInvitationRepository` and
-`UserMembershipRepository` each give the same reasoning for their own
-table in their own header comment: no soft-delete concept on it, so
-nothing for `BaseRepository`'s policy to apply to.
+`src/database/models/`. `BaseRepository` owns soft-delete filtering,
+`updatedAt` maintenance and the unique-violation-to-409 translation.
+`UserRepository`, `UserTokenRepository` and `TenantRepository` extend it, each
+supplying the four queries it cannot express generically (`selectOne`,
+`insertOne`, `updateOne`, `markDeleted`). Every public method it defines takes
+a final optional `executor: DbExecutor = db` parameter, so a caller can run it
+inside its own transaction. The other repositories do not extend it, because
+their tables have no soft-delete concept for its policy to apply to:
+`email_logs` and `audit_logs` are append-only, `platform-tenant.repository.ts`
+is a read-only cross-tenant search, and the rest (auth providers,
+notifications, notification preferences, tenant settings, invitations,
+memberships) have no `deletedAt` column. See [DATABASE.md](DATABASE.md) for
+the models.
+
+## Email verification and password recovery wiring
+
+`users.email_verified_at` (`src/database/models/user.model.ts`) gates login,
+and `markEmailVerified` (`verification.service.ts`) is its only writer. It
+never moves an earlier timestamp. `profile.validators.ts` leaves `email` out of
+the profile-update allow-list, because changing an address there would carry a
+verified flag to an address nobody verified.
+
+- `POST /api/v1/auth/register` answers the same `202` whether or not the
+  address is free. For a new account it issues an `email_verification` token
+  (`user_tokens`, through `issueToken`) and enqueues a `verify_email`
+  notification; the worker mails a link to `WEB_URL/verify-email?token=…`.
+  For a taken address it mails a registration-attempt notice instead.
+- `POST /api/v1/auth/verify-email` (`verification.controller.ts`) takes the
+  token **and** the account's password, and a wrong password spends the token
+  like a right one. SECURITY.md, "Email verification", explains why.
+- `POST /api/v1/auth/resend-verification` revokes an unverified user's live
+  verification tokens and mails a new link. The response is identical for an
+  unknown, an unverified and a verified address.
+- `POST /api/v1/auth/login` refuses an account whose `email_verified_at` is
+  null through the same guard, and the same `401`, as a wrong password.
+- `POST /api/v1/auth/forgot-password` answers the same `202` for every address,
+  replying before the lookup. For an existing account it issues a
+  `password_reset` token and mails a link to `WEB_URL/reset-password?token=…`.
+- `POST /api/v1/auth/reset-password` claims that token, stores the new hash
+  under the user-row lock and revokes every session. On a never-verified account it
+  also sets `email_verified_at`, since the reset proves the same mailbox
+  control, and deletes any federated sign-in linked to it.
+- `POST /api/v1/auth/change-password` (behind `requireAuth`) checks the current
+  password and revokes every other session, or every session when the access
+  token carries no session id.
+- A Google sign-in marks the address verified too (`google-auth.service.ts`).
+
+Each route carries its own rate limiters; SECURITY.md, "Rate limiting", lists
+them. The mail goes through the notification and email workers (see CLAUDE.md,
+"Notifications"), and locally lands in Mailpit (`docker-compose.yml`). Rows
+created without `email_verified_at` cannot log in; SECURITY.md, "Email
+verification", covers backfilling them.
 
 ## Layers
 
@@ -149,38 +178,35 @@ may not import a service other than `database.service`; policies may not
 import repositories, services or `database`; and configs may not import
 controllers. A seventh boundary is enforced separately, by
 `@typescript-eslint/no-restricted-imports`: controllers may import
-`database/models` for TYPES only, never a value, so a controller reads a
-model's shape (`User`, `Notification`) through `import type` and never its
-runtime export. An eighth, core `no-restricted-imports` over `src/**`
-with `src/services/platform-*.service.ts` ignored, keeps
+`database/models` for types only (`import type`), never a value. An eighth,
+core `no-restricted-imports` over `src/**` with
+`src/services/platform-*.service.ts` ignored, keeps
 `repositories/platform-tenant.repository.ts` (every customer tenant, for
 staff search) out of every other module, so "your tenants" can never be
 served from it. `tests/unit/lint-gates.test.ts` proves each of the eight
-actually fires, against a committed violating fixture under
+fires, against a committed violating fixture under
 `tests/fixtures/lint-zones/`. `import-x/no-restricted-paths` is a
 blocklist, not an allowlist, so a "may import" cell above with no zone
-naming it — most of middlewares' own imports, services importing validator
-types, presenters importing constants — is simply unrestricted by lint,
-not separately enforced: the table states the intended shape, and only
-the six zones, the controllers' type-only models rule and the
-platform-tenant repository rule are lint-enforced. Controllers never
-import a repository or `database.service` directly — every controller
-method calls a service method and shapes the response.
+naming it (most of middlewares' own imports, services importing validator
+types, presenters importing constants) is unrestricted by lint: the table
+states the intended shape, and only the eight rules above enforce it. When
+one of them refuses an import, either the import is wrong or the table and the
+zone config change together.
 
 Every route handler is a `BaseController` (`src/controllers/base.controller.ts`)
-method. Nearly all are arrow-function class fields built through
-`this.handle(handler)`, which forwards a thrown or rejected error to
-`next()`. `handle()` never
-sends a response itself. Once `response.headersSent`, it also logs a
-`warn` — without the error object, so it can never bypass `redactedForLog`
-— before calling `next(error)`; `errorHandler` (`error.middleware.ts`) then
-logs the error redacted and destroys the socket itself, rather than
-attempting a second write. The one exception is `handleGoogleCallback`
-(`auth.controller.ts`) and `streamNotifications`
-(`notification-stream.controller.ts`), which are plain, unwrapped arrow
-fields — not routed through `handle()` — for reasons specific to a
-redirect and an SSE stream; both still call a service, so this is an
-exception to `handle()`, not to the layering above.
+method, an arrow-function class field. Nearly all are built through
+`this.handle(handler)`, which forwards a thrown or rejected error to `next()`
+and never sends a response itself. Once `response.headersSent`, it also logs a
+`warn` (without the error object, so it can never bypass `redactedForLog`)
+before calling `next(error)`; `errorHandler` (`error.middleware.ts`) then logs
+the error redacted and destroys the socket rather than attempting a second
+write. The two exceptions are `handleGoogleCallback` (`auth.controller.ts`),
+which redirects every failure to the frontend instead of answering JSON, and
+`streamNotifications` (`notification-stream.controller.ts`), an SSE stream.
+Both still call a service, so they are exceptions to `handle()`, not to the
+layering above. Each controller file exports one singleton instance
+(`export const tenantController = new TenantController()`), which its routes
+file imports.
 
 **Lock order**, binding for every transaction that locks more than one row
 set:
@@ -198,6 +224,14 @@ set:
    `tenant.repository.ts`; `lockByTenantId`,
    `tenant-settings.repository.ts`).
 
+A transaction that takes these out of order can deadlock against one that
+follows it. The order is written into the JSDoc of `lockOwners`,
+`lockMemberships` and `lockPlatformRole` (`user-membership.repository.ts`), of
+`lockTenantAccess` (`tenant-access.service.ts`), and of `lockById` and
+`lockByTenantId`. Postgres cannot enforce an application-level lock order, so
+only that convention and a deadlock regression test
+(`tests/integration/services/tenant-membership.service.test.ts`) hold it.
+
 **Lock modes.** A lock that only guards a read-then-write takes
 `FOR NO KEY UPDATE`, not `FOR UPDATE`. `FOR UPDATE` also conflicts with the
 `FOR KEY SHARE` lock that every foreign-key insert takes on the row it
@@ -210,76 +244,115 @@ modes are listed in SECURITY.md, "Password change and reset against a
 concurrent login". The two-connection tests detect blocking with
 `pg_blocking_pids` (`tests/helpers/lock-probe.ts`), not with sleeps.
 
-It's written into the JSDoc of `lockOwners`, `lockMemberships` and
-`lockPlatformRole` (`user-membership.repository.ts`), of
-`lockTenantAccess` (`tenant-access.service.ts`), and of `lockById` and
-`lockByTenantId`, and enforced only by
-convention plus a deadlock regression test
-(`tests/integration/services/tenant-membership.service.test.ts`), since
-Postgres itself has no way to enforce an application-level lock order.
-
 **Platform access.** Four services carry it. Their callers stay in the
 layers above.
 
-| Service                      | Job                                                                                                                                                                                                                                                                                                                                                                                              |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `tenant-access.service.ts`   | `lockTenantAccess(actor, tenantId, otherUserIds, tx)`: locks owners, memberships and, when the actor has no membership, the platform membership, in that order (step 4 above), returning the actor's access and the locked memberships. `resolveActorAccess(actor, tenantId, tx)` wraps it for a caller with no other memberships to lock. Membership wins; the platform tenant is members-only. |
-| `platform.service.ts`        | `getPlatformMembership` (one indexed read, no cache), `autoJoin` (viewer only, verified addresses on `PLATFORM_EMAIL_DOMAINS`), `bootstrapGrant` (the `platform:grant` script only).                                                                                                                                                                                                             |
-| `platform-tenant.service.ts` | `searchAll`: every customer tenant, for staff. The only importer of `platform-tenant.repository.ts`.                                                                                                                                                                                                                                                                                             |
-| `audit.service.ts`           | `record(entry, tx)`, in the caller's transaction, with strict per-action metadata; `recordPlatformAccess` (hourly, deduplicated in Redis); `listForTenant` and `listPlatformWide` (keyset).                                                                                                                                                                                                      |
+| Service                      | Job                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `tenant-access.service.ts`   | `lockTenantAccess(actor, tenantId, otherUserIds, mode, tx)`: locks owners, memberships and, when the actor has no membership, the platform membership, in that order (step 4 above), returning the actor's access and the locked memberships. `resolveActorAccess(actor, tenantId, tx)` wraps it for a caller with no other memberships to lock. Membership wins; the platform tenant is members-only. |
+| `platform.service.ts`        | `getPlatformMembership` (one indexed read, no cache), `autoJoin` (viewer only, verified addresses on `PLATFORM_EMAIL_DOMAINS`), `bootstrapGrant` (the `platform:grant` script only).                                                                                                                                                                                                                   |
+| `platform-tenant.service.ts` | `searchAll`: every customer tenant, for staff. The only importer of `platform-tenant.repository.ts`.                                                                                                                                                                                                                                                                                                   |
+| `audit.service.ts`           | `record(entry, tx)`, in the caller's transaction, with strict per-action metadata; `recordPlatformAccess` (hourly, deduplicated in Redis); `listForTenant` and `listPlatformWide` (keyset).                                                                                                                                                                                                            |
 
-## The B3 seam: email verification is wired up; password recovery is not
+## Directory rules
 
-`users.email_verified_at` (`src/database/models/user.model.ts`) is no
-longer a reserved column nothing writes — it is written by a real flow, and
-read by `login` as a gate. `profile.validators.ts` still deliberately
-excludes `email` from the profile-update allow-list, and the reason is now
-current rather than forward-looking: changing a verified address through
-that endpoint would leave a stale verified flag attached to an address
-nobody actually verified for the new value.
+Where new code goes, and what it must be named. `eslint-plugin-check-file` in
+[`eslint.config.mjs`](eslint.config.mjs) enforces the filename rules below, and
+`pnpm lint` fails on a misnamed file in a governed directory. This section
+mirrors that config by hand; when they disagree, the config is right and this
+section is stale.
 
-**Stated plainly, so this is not left for a reader to discover by
-grepping, the way the previous version of this section had to be:**
+### Governed directories (filename suffix enforced)
 
-- `POST /api/v1/auth/register` issues an `email_verification`-purpose token
-  (`user_tokens`, via `issueToken`) and mails a verification link on the
-  free-address branch. `user_tokens` was refresh-token-specific when the
-  previous version of this section was written — B3 Task 1 generalised it
-  with a `purpose` discriminator before Task 5 needed a home for this
-  token, so the table this section once described no longer exists in that
-  shape.
-- `POST /api/v1/auth/verify-email` (`src/controllers/verification.controller.ts`)
-  redeems that token and sets `email_verified_at`. It requires the
-  account's password alongside the token, and a wrong password consumes the
-  token exactly as a correct one would — see SECURITY.md's "Email
-  verification" section for the full reasoning, including the squatting
-  scenario the password requirement exists to defend against.
-- `POST /api/v1/auth/resend-verification` reissues a token for an
-  unverified address, revoking any still-live one first, with a response
-  identical whether the address is unknown, unverified, or already
-  verified.
-- `POST /api/v1/auth/login` refuses any account whose `email_verified_at`
-  is still null, through the same guard and the same misleading-but-
-  deliberate `401` body a wrong password produces (SECURITY.md).
-- Both new routes carry their own rate limiters — three limiters between
-  them, since `resend-verification` carries two in series — on the same
-  one-prefix-per-route convention `auth.routes.ts`'s header comment already
-  states: `rl:verify-email:` (under `REDIS_KEY_PREFIX`, like every Redis key)
-  and the two-layer
-  `rl:resend-verification-ip:` / `rl:resend-verification-email:` pair.
+Every file in a governed directory carries its role as a filename suffix.
 
-**What is still not built, and is not confused with the above:**
-forgot/reset password (B3 Task 6). A squatted, unverified address — see
-SECURITY.md's squatting scenario — has no recovery route until that lands;
-a successful reset is also where `email_verified_at` must be set, since
-clicking a reset link proves the same mailbox control a verification click
-does. Mailpit (`docker-compose.yml`) is the local SMTP sink both the
-shipped flow and Task 6 use.
+| Directory              | Required suffix   | Example                      |
+| ---------------------- | ----------------- | ---------------------------- |
+| `src/controllers/`     | `*.controller.ts` | `tenant.controller.ts`       |
+| `src/repositories/`    | `*.repository.ts` | `user.repository.ts`         |
+| `src/services/`        | `*.service.ts`    | `database.service.ts`        |
+| `src/policies/`        | `*.policy.ts`     | `tenant.policy.ts`           |
+| `src/presenters/`      | `*.presenter.ts`  | `user.presenter.ts`          |
+| `src/validators/`      | `*.validators.ts` | `auth.validators.ts`         |
+| `src/routes/`          | `*.routes.ts`     | `auth.routes.ts`             |
+| `src/middlewares/`     | `*.middleware.ts` | `error.middleware.ts`        |
+| `src/database/models/` | `*.model.ts`      | `user.model.ts`              |
+| `src/utilities/`       | `*.utilities.ts`  | `response.utilities.ts`      |
+| `src/constants/`       | `*.constants.ts`  | `global.constants.ts`        |
+| `src/configs/`         | `*.config.ts`     | `env.config.ts`              |
+| `src/jobs/`            | `*.job.ts`        | `email.job.ts`               |
+| `src/workers/`         | `*.worker.ts`     | `email.worker.ts`            |
+| `src/templates/`       | `*.template.ts`   | `password-reset.template.ts` |
 
-**A deployment upgrading with existing users must backfill
-`email_verified_at` before deploying the `login` gate above**, or every
-account created before this change is locked out simultaneously — see
-SECURITY.md for the exact statement to run and why.
+The suffix is usually the **singular** of the directory's role (`controller`,
+`service`, `model`, `config`, ...), but `src/validators/`, `src/utilities/`,
+`src/constants/` and `src/routes/` keep the **plural** (`.validators`,
+`.utilities`, `.constants`, `.routes`). Test files are exempt: the suffix rule is off under
+`tests/`, and no test file lives under `src/`.
+
+### Directories with no filename rule
+
+- `src/errors/`: error classes and Postgres error handling, `http-error.ts`
+  (`HttpError`) and `postgres-errors.ts` (`isUniqueViolation`, `redactedForLog`).
+- `src/types/`: ambient type augmentation (`express.d.ts` extending
+  `Express.Request`) and small cross-cutting types with no other home, such as
+  `actor.ts` and `lock-mode.ts`.
+- `src/scripts/`: standalone tools run through `tsx` from a `package.json`
+  script, never imported by the app (`generate-env-example.ts`,
+  `platform-grant.ts`). They live under `src/` so `tsconfig.json`'s `include`
+  and the type-aware lint rules see them.
+- `src/database/`: `migrate.ts`, the migration runner behind `pnpm db:migrate`,
+  beside `models/` and `migrations/`.
+- `src/database/migrations/`: generated by `drizzle-kit generate` and
+  **committed**; CI and deployments replay them and never regenerate them.
+  Don't hand-edit a file here except as a documented exception, and don't
+  git-ignore the directory; see [DATABASE.md](DATABASE.md).
+- `src/observability/`: `tracing.ts`, the OpenTelemetry bootstrap loaded
+  through `--import` before the app. It is a single fixed-name entrypoint, so
+  `check-file` is off here. See [Observability](#observability).
+- `scripts/` (repo root): repo tooling outside `src/`. `lint-docs.mjs`
+  (`pnpm lint:docs`), `comment-style.mjs` (the `local/comment-style` ESLint
+  rule), `history-patterns.mjs` (shared by both) and their `.d.mts` types.
+  `eslint.config.mjs` and the tests import them; the app never does. They are
+  linted without type information.
+
+### Root files
+
+`src/app.ts`, `src/server.ts` and `src/index.ts` sit directly under `src/` and
+name the three stages of the [boot sequence](#boot-sequence-indexts---serverts---appts)
+rather than a role a suffix could encode. There is only one of each.
+
+### Folder naming
+
+Every folder under `src/` must be `kebab-case`
+(`check-file/folder-naming-convention`).
+
+### No barrel files
+
+There is no `index.ts` re-export file anywhere in `src/`, and none should be
+added. Import the module directly:
+
+```ts
+import { getEnv } from '@/configs/env.config'
+```
+
+not through a barrel:
+
+```ts
+import { getEnv } from '@/configs'
+```
+
+A barrel fails `check-file/filename-naming-convention` in every governed
+directory (an `index.ts` under `src/services/` cannot end in `.service`). It
+also hides real edges from `import-x/no-cycle`: a cycle routed through a
+barrel is invisible to that rule.
+
+### Adding a new governed directory
+
+A new top-level concern under `src/` gets its naming rule in
+`check-file/filename-naming-convention` in `eslint.config.mjs` **and** a row in
+[Governed directories](#governed-directories-filename-suffix-enforced), in the
+same change.
 
 ## Configuration
 
@@ -298,49 +371,222 @@ Redis key and channel is namespaced by `REDIS_KEY_PREFIX` through
 `redisKey()`. See [DATABASE.md](DATABASE.md) for `getDatabaseUrl()`, the
 narrower sibling function `drizzle.config.ts` uses.
 
+`.env` is loaded twice over, on purpose. `pnpm dev` and `pnpm start` pass
+`--env-file-if-exists=.env` to Node, so the values reach `tracing.ts`, which
+loads before any app module. `env.config.ts` also loads `.env` with `dotenv`,
+which never overrides a key that is already set, so it only fills keys Node
+left unset; `tsx` scripts such as `pnpm db:migrate` rely on it. It is skipped
+under Vitest, whose environment `tests/helpers/setup-global.ts` assembles. The
+Docker image's `CMD` passes no env file: the image has no `.env`, and the
+orchestrator supplies the environment.
+
+### Environment variables
+
+`.env.example` is **generated** from the Zod schema in
+[`src/configs/env.config.ts`](src/configs/env.config.ts). Don't edit it by
+hand; `pnpm env:example` regenerates it, and the pre-commit hook does so when
+`env.config.ts` is staged. Required keys are blank, except `APP_ENV=local`
+and `NODE_ENV=development`, which carry a working local value. Keys with a
+default carry it. Optional keys with no default are commented out, including
+`COOKIE_SECURE` and `LOG_FORMAT`, whose defaults come from `APP_ENV`.
+
+The table is generated from the same schema: each row's text is that
+variable's `.describe()`. To change a row, change the schema and regenerate
+the table with `pnpm env:table` (see CONTRIBUTING.md).
+`tests/unit/architecture-env-table.test.ts` fails when the table differs from
+what it prints.
+
+| Variable                              | Required | Default                | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ------------------------------------- | -------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `APP_ENV`                             | **yes**  | —                      | Which deployment this is: local, dev, qa or prod. Required. COOKIE_SECURE and LOG_FORMAT default from it, and SMTP requires TLS everywhere but local.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `NODE_ENV`                            | **yes**  | —                      | Node runtime mode: development, test or production. Required. Express reads it directly, and only production hides stack traces in its built-in error handler, so every APP_ENV but local must run production. test is for the test suite.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `APP_PORT`                            | no       | `4040`                 | Port the HTTP server listens on. Defaults to 4040.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `APP_URL`                             | **yes**  | —                      | Public origin of this API. Used to build the Google OAuth callback URL (passport.config.ts) — must match a redirect URI registered in Google Cloud Console exactly, including scheme and trailing slash. http://localhost:4040 locally.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `WEB_URL`                             | **yes**  | —                      | Public origin of the frontend. Email verification links are built from it — the link points at your frontend, which POSTs the token to this API. http://localhost:5173 locally.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `DATABASE_URL`                        | **yes**  | —                      | Postgres connection URL. The compose stack publishes Postgres on localhost:5433: postgres://boilerplate:boilerplate@localhost:5433/boilerplate.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `REDIS_URL`                           | **yes**  | —                      | Redis connection URL. The compose stack publishes Redis on localhost:6380: redis://localhost:6380.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `DB_POOL_MAX`                         | no       | `10`                   | Most open connections in the Postgres pool, per process. Defaults to 10. The test suite sets 2, so its parallel workers stay under Postgres's default 100 connections.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `DB_STATEMENT_TIMEOUT_MS`             | no       | `30000`                | Milliseconds a single SQL statement may run before Postgres cancels it (statement_timeout). Defaults to 30000 (30s). 0 sends no limit, leaving the server's own setting. A statement_timeout in DATABASE_URL's query string overrides it. PgBouncer, in every pool mode, refuses a startup parameter not listed in its ignore_startup_parameters, so behind it set 0 or list statement_timeout there.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `JWT_ACCESS_SECRET`                   | **yes**  | —                      | Signs and verifies access tokens (session.service.ts). Any 32+ character string works; use `openssl rand -hex 32`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `SESSION_SECRET`                      | **yes**  | —                      | Signs the express-session cookie used during the Google OAuth round-trip (passport.config.ts). Any 32+ character string works; use `openssl rand -hex 32`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `GOOGLE_CLIENT_ID`                    | no       | —                      | Google OAuth 2.0 client ID. When absent, Google login is disabled.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `GOOGLE_CLIENT_SECRET`                | no       | —                      | Google OAuth 2.0 client secret. Required when GOOGLE_CLIENT_ID is set.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `ACCESS_TOKEN_TTL`                    | no       | `15m`                  | Access token lifetime, as an ms()-parseable duration string (e.g. "15m"). Defaults to 15m.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `REFRESH_TOKEN_TTL`                   | no       | `30d`                  | Refresh token lifetime, as an ms()-parseable duration string (e.g. "30d"). Defaults to 30d.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `SESSION_ABSOLUTE_TTL`                | no       | `30d`                  | Hard ceiling on one login session, measured from the login itself and never reset by rotation, as an ms()-parseable duration string (e.g. "30d"). Past it, refreshing fails and the user signs in again. Defaults to 30d.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `EMAIL_VERIFICATION_TTL`              | no       | `24h`                  | How long an email-verification link stays valid. Defaulted to 24h; a link the user finds the next morning should still work.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `PASSWORD_RESET_TTL`                  | no       | `1h`                   | How long a password-reset link stays valid. Defaulted to 1h — shorter than EMAIL_VERIFICATION_TTL, because redeeming it grants immediate account takeover rather than merely proving mailbox ownership.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `INVITATION_TTL`                      | no       | `7d`                   | How long a tenant invitation link stays valid, as an ms()-parseable duration string (e.g. "7d"). Resending an invitation issues a new link with a fresh lifetime. Defaults to 7d.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `TRUST_PROXY`                         | no       | `false`                | How much of X-Forwarded-For to believe. "false" (default) trusts none: correct when clients reach this app directly, WRONG behind a proxy, where every IP-keyed rate limiter then shares one bucket for the whole deployment. Behind a proxy set the NUMBER of proxies in front of this app (e.g. "1"), or a comma-separated list of trusted proxy addresses/subnets or presets ("loopback", "linklocal", "uniquelocal"). Never "true" — it is refused, because it lets any client spoof its own IP and bypass the limiters.                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `COOKIE_SECURE`                       | no       | —                      | Whether the refresh-token and OAuth session cookies carry the Secure attribute ("true" or "false"). Defaults from APP_ENV: false on local, true elsewhere. With Secure on behind a TLS-terminating proxy, TRUST_PROXY must be set, or the OAuth session cookie is never sent.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `COOKIE_DOMAIN`                       | no       | —                      | Domain attribute for the refresh-token and OAuth session cookies, e.g. "example.com" to share them with subdomains. Unset means host-only cookies, the narrowest scope. Boot refuses a value that APP_URL's host is not within, since browsers would reject the cookies. With COOKIE_SECURE on, the refresh cookie is __Secure-refreshToken when this is set and __Host-refreshToken (Path=/) when it is not, so setting or unsetting it on a live deployment signs users in again once. With COOKIE_SECURE on, an unprefixed refreshToken cookie is also read, then cleared in its host-only form and under this domain; that fallback is removed in the next major version. Within one name the API reads the most recently created cookie. Reverting to an earlier value is the exception: the browser keeps that cookie's original creation time, so the other scope's cookie reads as newer and refresh fails until the user logs in again or it expires. |
+| `CORS_ALLOWED_ORIGINS`                | no       | —                      | Extra browser origins allowed to call this API, comma-separated (e.g. "https://admin.example.com,https://shop.example.com"). WEB_URL is ALWAYS allowed and does not need listing here, and same-origin requests send no Origin header at all. Leave empty for a single-frontend deployment. Never a wildcard: this API sends credentials, and the CORS spec forbids "*" with credentials.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `PLATFORM_EMAIL_DOMAINS`              | no       | —                      | Comma-separated email domains, e.g. "example.com,example.org". A user whose verified address is on one of them joins the platform tenant as viewer, when the address is verified and at every sign-in. Viewer can see every tenant and change nothing; a higher platform role needs an explicit grant (pnpm platform:grant, or an invitation to the platform tenant). Only the exact domain after the last "@" matches, never a subdomain. Empty means nobody joins automatically.                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`         | no       | —                      | Absent means tracing is disabled; the SDK is never started.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `OTEL_SERVICE_NAME`                   | no       | `express-boilerplate`  | Service name reported in OTEL traces.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `LOG_LEVEL`                           | no       | `info`                 | Console log level: error, warn, info or debug. silent disables logging entirely (the test suite uses it).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `LOG_FORMAT`                          | no       | —                      | Console log format: json or pretty. Defaults from APP_ENV: pretty on local, json elsewhere. pretty needs the pino-pretty devDependency; without it the logger writes json.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `SLACK_WEBHOOK_URL`                   | no       | —                      | Slack Incoming Webhook URL for log alerting. When unset, no Slack transport is registered.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `SLACK_LOG_LEVEL`                     | no       | `error`                | Minimum log level that triggers a Slack notification. Defaults to error; set to warn if you want Slack alerts for warnings too.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `WORKER_ENABLED`                      | no       | `true`                 | Whether the BullMQ workers (email, notification and maintenance) start in-process alongside the HTTP server. Set to false for API-only pods behind a load balancer; a separate worker deployment sets this to true. The daily retention purge runs only where this is true.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `WORKER_CONCURRENCY`                  | no       | `5`                    | Jobs the email and notification workers each process at once, per process. Defaults to 5. The maintenance worker always runs one job at a time.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `RETENTION_TOKENS_DAYS`               | no       | `7`                    | Days to keep a user_tokens row once it has expired, or once it was revoked without ever being used (logout, reuse, password change). A token rotated away is kept until it expires, because reuse detection needs it. 0 never purges; at most 36500. Defaults to 7.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `RETENTION_INVITATIONS_DAYS`          | no       | `30`                   | Days to keep a tenant invitation after the latest of its expiry, acceptance and revocation. 0 never purges; at most 36500. Defaults to 30.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `RETENTION_EMAIL_LOGS_DAYS`           | no       | `90`                   | Days to keep an email_logs row (one per email sent or failed). 0 never purges; at most 36500. Defaults to 90.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `RETENTION_NOTIFICATIONS_READ_DAYS`   | no       | `90`                   | Days to keep a notification after it was read. 0 never purges; at most 36500. Defaults to 90.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `RETENTION_NOTIFICATIONS_UNREAD_DAYS` | no       | `365`                  | Days to keep a notification nobody read, counted from when it was created. 0 never purges; at most 36500. Defaults to 365.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `RETENTION_AUDIT_LOGS_DAYS`           | no       | `0`                    | Days to keep an audit_logs row. Defaults to 0, which keeps the audit log forever. Set a number of days, at most 36500, only where your compliance rules allow deleting audit history.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `REDIS_KEY_PREFIX`                    | no       | `express-boilerplate`  | Namespace for every Redis key and channel this app uses: BullMQ queues (`<prefix>:bull`), rate-limit counters (`<prefix>:rl`), the session denylist (`<prefix>:denylist`), OAuth sessions (`<prefix>:sess`), the platform-access audit dedupe (`<prefix>:audit`) and the notification channel (`<prefix>:notifications`). Lowercase letters, digits, ":", "_" and "-", with no trailing colon. Give each app or environment sharing one Redis its own value; changing it abandons every existing key.                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `SSE_HEARTBEAT_INTERVAL_MS`           | no       | `30000`                | Milliseconds between `:ping` heartbeat comments on an open notification SSE stream (notification-stream.controller.ts). Defaults to 30000 (30s).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `SSE_MAX_STREAMS_PER_USER`            | no       | `5`                    | Most notification SSE streams one user may hold open at once, per process. A request over the cap gets 429 too_many_streams. Defaults to 5 (several tabs and devices).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `SMTP_HOST`                           | no       | `127.0.0.1`            | SMTP server host. Defaults to 127.0.0.1, where the compose Mailpit service listens; an IP literal skips a DNS lookup on every send.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `SMTP_PORT`                           | no       | `1025`                 | SMTP server port. Defaults to 1025 — Mailpit's SMTP port.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `SMTP_USERNAME`                       | no       | —                      | SMTP username. Absent means no authentication is attempted, which is correct for Mailpit and wrong for most real providers. Set it together with SMTP_PASSWORD: boot refuses one without the other.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `SMTP_PASSWORD`                       | no       | —                      | SMTP password. Set it together with SMTP_USERNAME: boot refuses one without the other.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `MAIL_FROM`                           | no       | `no-reply@example.com` | The From address on every outbound email. Mailpit accepts any value; a real provider may require this to be a verified sender.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `APP_NAME`                            | no       | `Express Boilerplate`  | Product name in outbound email copy and notification text: verification, password reset, password changed and invitation messages (auth.service.ts, verification.service.ts, tenant-invitation.service.ts). Defaults to "Express Boilerplate".                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `SMTP_CONNECTION_TIMEOUT_MS`          | no       | `3000`                 | Milliseconds to wait for each SMTP connection attempt to establish before failing. Also the timeout for the first try of each DNS query; the resolver doubles it on each retry, and the OS-lookup fallback has no timeout. A host that resolves to several addresses can take it once per address. Boot checks that it plus SMTP_GREETING_TIMEOUT_MS, SMTP_SOCKET_TIMEOUT_MS and the 5s HTTP drain stays at least 5s under SHUTDOWN_TIMEOUT_MS; that assumes one address and is a sanity check, not a per-send deadline. nodemailer's own defaults are 2 minutes to connect and 30 seconds per DNS query.                                                                                                                                                                                                                                                                                                                                                      |
+| `SMTP_GREETING_TIMEOUT_MS`            | no       | `5000`                 | Milliseconds to wait for the SMTP server's greeting after connecting. Counts toward the shutdown budget — see SMTP_CONNECTION_TIMEOUT_MS. nodemailer's own default is 30 seconds.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `SMTP_SOCKET_TIMEOUT_MS`              | no       | `7000`                 | Milliseconds of inactivity before an open SMTP connection is closed. Counts toward the shutdown budget — see SMTP_CONNECTION_TIMEOUT_MS. nodemailer's own default is 10 minutes.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `SHUTDOWN_TIMEOUT_MS`                 | no       | `25000`                | Milliseconds graceful shutdown may take before the process exits with code 1 anyway. Defaults to 25000, under Kubernetes' default 30s termination grace period.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+
+#### `APP_ENV` and `NODE_ENV`
+
+`APP_ENV` names the deployment: `local`, `dev`, `qa` or `prod`. It has no
+default, and boot fails without it. The Docker image sets
+`NODE_ENV=production` but not `APP_ENV`, so the deployment must supply it.
+
+`NODE_ENV` is what Express itself reads; it must be `production` in every
+environment except `local`.
+
+|                                                                                           | `local`  | `dev`, `qa`, `prod` |
+| ----------------------------------------------------------------------------------------- | -------- | ------------------- |
+| `COOKIE_SECURE` when unset                                                                | `false`  | `true`              |
+| `LOG_FORMAT` when unset                                                                   | `pretty` | `json`              |
+| SMTP must upgrade to TLS                                                                  | no       | yes                 |
+| `NODE_ENV` other than `production`                                                        | allowed  | refused at boot     |
+| `SMTP_HOST` `localhost`/`127.0.0.1`, `SMTP_PORT` 1025, `MAIL_FROM` `no-reply@example.com` | allowed  | refused at boot     |
+| SMTP timeouts summing to more than `SHUTDOWN_TIMEOUT_MS` − 10000                          | warning  | refused at boot     |
+| Trace attribute `deployment.environment.name`                                             | `local`  | the `APP_ENV` value |
+
+The 10000 is the 5-second HTTP drain that runs before the in-flight send is
+awaited, plus 5 seconds of headroom for closing the database, Redis and queues and
+flushing traces. The timeouts bound each connection attempt, the greeting
+and socket inactivity, and the first try of each DNS query. They are not a
+per-send deadline: the resolver doubles the DNS timeout on each retry, the
+OS-lookup fallback has no timeout, and a host that resolves to several
+addresses can take the connection timeout once per address. The check
+assumes one address and no DNS delay, so it is a sanity check.
+
+Everywhere:
+
+- setting only one of `SMTP_USERNAME` and `SMTP_PASSWORD` is refused;
+- a `COOKIE_DOMAIN` that `APP_URL`'s host is neither equal to nor a
+  subdomain of is refused, because browsers reject every auth cookie it
+  would set;
+- a renamed variable's old name is refused, with a message naming the new
+  one;
+- `COOKIE_SECURE` resolving to `true` while `GOOGLE_CLIENT_ID` is set and
+  `TRUST_PROXY=false` logs a warning (see SECURITY.md).
+
+#### Secrets
+
+`JWT_ACCESS_SECRET` signs access tokens. `SESSION_SECRET` signs the session
+cookie of the Google OAuth round-trip. Generate each with
+`openssl rand -hex 32`, even in development.
+
+There is no refresh-token secret: refresh tokens are opaque random strings,
+not JWTs, so nothing signs one (see [SECURITY.md](SECURITY.md)).
+
+#### Invalid configuration fails before anything starts
+
+Unsetting or malforming any variable fails fast with a named list, not a
+stack trace. Dropping `JWT_ACCESS_SECRET` prints
+
+```
+Invalid environment:
+✖ Invalid input: expected string, received undefined
+  → at JWT_ACCESS_SECRET
+```
+
+and exits 1 before any socket opens. After the schema parses, `index.ts`
+runs `assertEnvConsistent`
+([`src/configs/env-consistency.config.ts`](src/configs/env-consistency.config.ts)),
+which refuses the combinations above. It lists every problem in one
+message, each naming the variable and the fix, and exits 1.
+
 ## Health checks
 
 Two endpoints, deliberately different depths:
 
-- **`GET /health`** is shallow — it never touches the database or Redis. If
+- **`GET /health`** is shallow: it never touches the database or Redis. If
   it depended on either, a transient blip in a dependency would make an
   orchestrator restart an otherwise-healthy process, turning a slow query
   into an outage.
-- **`GET /health/ready`** is deep — it checks both `isDatabaseReachable()`
-  and `isRedisReachable()` in parallel and returns 503 if either is down.
-  It is safe to fail: a failing readiness probe only removes the instance
-  from load-balancer rotation, it doesn't restart anything.
+- **`GET /health/ready`** is deep: it checks `isDatabaseReachable()`,
+  `isRedisReachable()` and `isQueueReachable()` in parallel and answers 503
+  with `"status":"not-ready"` if any is down. It also answers 503 with
+  `"status":"shutting-down"` once graceful shutdown has begun. A failing
+  readiness probe only removes the instance from load-balancer rotation; it
+  restarts nothing.
+
+Neither path is traced.
 
 ## Data layer
 
 - **Postgres**: [`src/services/database.service.ts`](src/services/database.service.ts)
   creates exactly one `postgres` client (and one Drizzle instance wrapping
   it) per process, at module scope. A second client would mean a second
-  connection pool and double the configured connection budget — a class of
-  bug that only shows up under load. Pool size is 10 outside tests, 2 in
-  tests (kept small deliberately — see the "test isolation" note in
-  MIGRATIONS.md's Vitest row).
+  connection pool and double the configured connection budget, a bug that
+  only shows up under load. The pool holds up to `DB_POOL_MAX` connections
+  (`databaseClientOptions`, `database.config.ts`), with prepared statements
+  off and `DB_STATEMENT_TIMEOUT_MS` sent as each connection's
+  `statement_timeout`. The test suite opens one pool per Vitest worker, so
+  its connection count is `maxWorkers` × `DB_POOL_MAX`: 8 workers
+  (`WORKER_COUNT`, `tests/helpers/worker-database.ts`) × 2 (`.env.test`) = 16,
+  under Postgres's default 100.
 - **Redis**: [`src/services/redis.service.ts`](src/services/redis.service.ts)
-  connects lazily, on first use — an eager connection at import time would
+  connects lazily, on first use. An eager connection at import time would
   make every unit test that transitively imports a repository open a real
-  socket, and fail outright on a machine with no Redis running. It also
-  tracks a `closed` flag explicitly: unlike the Postgres client (where
-  `sql.end()` makes every later query reject on its own), node-redis's
-  client has no built-in "permanently dead" state, so without the flag a
-  readiness probe issued after shutdown would silently reopen a socket the
-  shutdown had just closed. The client is also given a bounded
-  `reconnectStrategy` (a 5s connect timeout, giving up after a few
-  attempts): node-redis's default strategy retries forever and never
-  rejects `connect()`, which would make `isRedisReachable()` — and
-  therefore `GET /health/ready` — hang indefinitely instead of reporting
-  unreachable the moment Redis goes down.
+  socket, and fail on a machine with no Redis. It tracks a `closed` flag:
+  node-redis has no "permanently closed" state of its own (unlike Postgres,
+  where `sql.end()` makes every later query reject), so without the flag a
+  readiness probe after shutdown would reopen the socket the shutdown had just
+  closed.
+- **Queues**: [`src/services/queue.service.ts`](src/services/queue.service.ts)
+  owns BullMQ's queues and the two `ioredis` connections they run over (BullMQ
+  needs `ioredis`, which cannot share node-redis's connection). The Workers'
+  connection keeps the offline queue, which Workers need to ride out an
+  outage; the producers' connection turns it off, so an enqueue during an
+  outage rejects at once instead of holding its HTTP caller.
 
-Both expose `is*Reachable()` (not `ping*`) and `close*()`, and both
-`close*()` functions are safe to call twice.
+**Through a Redis outage.** Before a client's first `ready`, every Redis
+client gives up after a few retries, so `isRedisReachable()`,
+`isQueueReachable()` and `GET /health/ready` report unreachable instead of
+hanging at boot. After `ready`, every client retries forever with backoff
+(capped at 5 s), so an outage never leaves a dead client behind. While a client
+reconnects nothing waits for Redis: node-redis runs with
+`disableOfflineQueue`, a producer enqueue rejects, `isQueueReachable` reports
+false for a queue connection in any post-ready status but `ready`, and
+`closeQueue` disconnects instead of queueing a `QUIT`. A queue connection that
+gives up before its first `ready` is replaced on next use, and the producer's
+queues with it. Workers on it never recover by themselves: BullMQ does not
+re-initialise a connection whose init failed, and when that failure is not one
+BullMQ counts as a connection error (ECONNREFUSED, or "Connection is closed."),
+such as ECONNRESET, its fetch loop retries with no delay and starves the event
+loop. So `startWorkers()` (`worker-supervisor.service.ts`) closes them inside
+that connection's `'end'` event, before they can spin, and starts new ones on a
+fresh connection. If starting them throws, it closes any it started. At boot it
+rethrows, so the process exits 1. On a restart it cannot throw from inside
+`'end'`, so `isQueueReachable()` reports false until the next pre-ready
+reconnect restarts them or the process restarts.
+
+All three expose `is*Reachable()` and `close*()`, and each `close*()` is safe to
+call twice.
 
 ## Errors and the response envelope
 
-Every JSON response — success or error — uses the same envelope, defined
+Every JSON response, success or error, uses the same envelope, defined
 once in [`src/utilities/response.utilities.ts`](src/utilities/response.utilities.ts):
 
 ```json
@@ -351,166 +597,217 @@ once in [`src/utilities/response.utilities.ts`](src/utilities/response.utilities
 
 An error response optionally carries `code`: a single, stable,
 machine-readable token a client branches on (e.g. `ACCESS_TOKEN_EXPIRED`
-from `requireAuth`, `RATE_LIMITED` from the login/refresh limiters — see
+from `requireAuth`, `RATE_LIMITED` from every rate limiter; see
 [SECURITY.md](SECURITY.md)), independent of `errors` (field-level
-validation detail, shaped by whatever validator produced it). The two are
-deliberately separate fields rather than one overloaded one — see
-`error.middleware.ts`'s own header comment for why collapsing them would
-make a client parsing `errors` for field errors get something structurally
-different the one time `code` is also present.
+validation detail, shaped by whatever validator produced it). They are
+separate fields so that a client parsing `errors` for field errors never gets
+a different shape when `code` is also present.
 
-`HttpError` (in
-[`src/errors/http-error.ts`](src/errors/http-error.ts))
-is the exception type any handler can throw or forward to `next()` to
-produce a specific status code. `errorHandler` is the terminal middleware:
-it masks the message on a 5xx (returning `"Internal server error"`) but
-**logs the original error**, redacted (`redactedForLog`,
-[`src/errors/postgres-errors.ts`](src/errors/postgres-errors.ts)), through
-the pino `logger` facade first — masking the message from the client
-without logging it anywhere would leave an operator with nothing to search
-and a bug report with nothing to point at. A 4xx is never logged; it isn't
-a server failure.
+`HttpError` (in [`src/errors/http-error.ts`](src/errors/http-error.ts)) is the
+exception type any handler can throw or forward to `next()` to produce a
+specific status code. `errorHandler` is the terminal middleware. On a 5xx it
+masks the message (`"Internal server error"`) but **logs the original error**,
+redacted (`redactedForLog`,
+[`src/errors/postgres-errors.ts`](src/errors/postgres-errors.ts)), so an
+operator has something to search. A 4xx is never logged. A foreign error that
+carries a 4xx `status` (such as the body parser's 400 for malformed JSON or 413
+for an oversized body) keeps that status, and its message is shown only when
+the error marks it `expose`; any other status becomes 500.
 
 `errorHandler` takes four parameters and is registered last, because
-Express identifies error-handling middleware by arity — a handler with
-fewer than four parameters is silently treated as ordinary middleware that
-never sees an error. The unused fourth parameter is prefixed `_next`
-accordingly.
+Express identifies error-handling middleware by arity: a handler with
+fewer than four parameters is treated as ordinary middleware that
+never sees an error. The unused fourth parameter is named `_next`.
 
-Every response that carries no payload — a 200/202 success with no payload — uses
-`messageResponse(response, message, status?)`
+Every success with no payload uses `messageResponse(response, message, status?)`
 ([`src/utilities/response.utilities.ts`](src/utilities/response.utilities.ts)),
-which always sends `data: null`. It is the one shape used by every
-no-content endpoint, across `auth.controller.ts`, `notification.controller.ts`,
-`tenant.controller.ts` and `verification.controller.ts` — never a bare `{}`
-and never `data` omitted.
+which always sends `data: null`, never a bare `{}` and never an omitted `data`.
 
-This envelope shape (`{ success, message, statusCode, code?, errors? }`) is not RFC
-9457 `problem+json`, which is the more modern standard and the better
-choice for a greenfield API. It is kept here because this boilerplate is
-derived from an existing codebase by stripping project-specific code, and
-switching the envelope would mean rewriting every consumer that expects it.
-See [SECURITY.md](SECURITY.md) for the same trade applied to other
-inherited decisions.
+The envelope (`{ success, message, statusCode, code?, errors? }`) is not RFC
+9457 `problem+json`, the more modern standard. Switching would change what
+every client parses on every response.
 
 ## Request correlation
 
 [`src/middlewares/request-id.middleware.ts`](src/middlewares/request-id.middleware.ts)
-runs first in the chain. It honours a caller-supplied `X-Request-Id` header
-(validated against a UUID pattern before being echoed back — reflecting an
-arbitrary header into a response is how log injection starts) or generates
-one. `errorResponse()` reads the id back off the response object rather
-than accepting it as a parameter, since every caller already has the
-response.
+runs after `helmet` and `cors`, and is the first middleware that can produce or
+observe a request id; `cors` answers and ends an allowed preflight before it.
+It honours a caller-supplied `X-Request-Id` header, validated against a UUID
+pattern before being echoed back (reflecting an arbitrary header into a
+response is how log injection starts), or generates one. `errorResponse()`
+reads the id back off the response object.
+
+`requestContext` (`request-context.middleware.ts`) then opens an
+`AsyncLocalStorage` store (`request-context.service.ts`) for the request, and
+`resolveTenant` adds the tenant to it. The logger's pino `mixin` reads that
+store on every call, so each line logged during a request carries `requestId`,
+and `tenantId` once the tenant is resolved; callers never pass them. Code
+outside a request simply omits them. `mixinMergeStrategy`
+(`logger.service.ts`) makes the mixin's fields win over a caller-supplied field
+of the same name, so log meta cannot spoof `requestId`, `tenantId`, `traceId`
+or `spanId`.
+
+## Observability
+
+**Tracing.** [`src/observability/tracing.ts`](src/observability/tracing.ts)
+loads through Node's `--import`, before `index.ts`, so its instrumentations
+patch HTTP, Express, `ioredis` and pino before the app imports them. It runs
+before environment validation, so it reads `process.env` directly and cannot
+use `getEnv()` or the app's logger. When `OTEL_EXPORTER_OTLP_ENDPOINT` is unset
+it is a complete no-op: no SDK, no ESM loader hook, no spans. When set, it
+starts a `NodeSDK` that exports traces and logs over OTLP HTTP, reporting
+`service.name` (`OTEL_SERVICE_NAME`) and `deployment.environment.name` from
+`APP_ENV` (omitted when unset). It registers OTel's ESM loader hook, without
+which pino, a CommonJS module imported from ESM, is never patched.
+
+What gets spans:
+
+- incoming HTTP and Express routing, except `/health` and `/health/ready`;
+- BullMQ's Redis traffic, through `IORedisInstrumentation`. It patches
+  `ioredis` only; `redis.service.ts` uses node-redis, which no installed
+  instrumentation covers, so its calls (health checks, rate limits, the
+  denylist) get no spans;
+- not Postgres: the app uses postgres.js, and
+  `@opentelemetry/instrumentation-pg` only instruments `pg`, so database calls
+  appear as gaps in a trace.
+
+**Logs.** `logger.service.ts` builds one lazily-created pino logger. Each
+record carries `level` as a label, an ISO `timestamp`, `message`, and `source`,
+the caller's `file:line`, parsed from a stack trace on each call. The
+correlation fields come from the mixin described under
+[Request correlation](#request-correlation), plus `traceId` and `spanId` while
+a span is active. An Error-valued field is serialised as
+`{ name, message, stack }` and redacted with `redactedForLog` when it, or its
+`cause` chain up to five deep, carries a database query. The format is
+`LOG_FORMAT` when set, else `pretty` on `APP_ENV=local` and `json` elsewhere.
+`pretty` needs the `pino-pretty` devDependency; without it, as in the
+production image, the logger writes JSON.
+
+`PinoInstrumentation` sends every record to the collector as an OTel log record
+(log correlation off, since the mixin already writes `traceId`/`spanId`); the
+collector forwards logs to Loki and traces to Tempo. In Grafana a log line links
+to its trace, and a trace to its logs.
+
+**Slack.** With `SLACK_WEBHOOK_URL` set, records at or above `SLACK_LOG_LEVEL`
+also go to Slack. The destination deduplicates by `${source}:${message}`: the
+first occurrence sends at once, repeats within 60 seconds are counted, and one
+summary is sent when the window closes if any were suppressed.
 
 ## Local infrastructure
 
-`docker-compose.yml` provides Postgres, Redis, an OpenTelemetry Collector,
-Tempo (trace storage), Loki (log storage, no host port — query it through
-Grafana), Grafana (`:3100`, Tempo and Loki both pre-provisioned as data
-sources), and Mailpit (a local SMTP sink with a web UI at `:8025`) —
-everything the app needs to boot locally, none of it currently required to
-be exercised by the app itself outside the database/Redis clients. The
-collector forwards traces to Tempo and pino log records (via
-`PinoInstrumentation`) to Loki; the app can also be pointed at the
-collector directly via `OTEL_EXPORTER_OTLP_ENDPOINT` — see CLAUDE.md's
-"Observability" section for what `src/observability/tracing.ts` does and
-does not instrument, and how a Loki log line links back to its trace.
+`docker-compose.yml` runs the stack the app needs to boot locally; the app
+itself runs on the host.
+
+| Service        | Host port                        | Notes                                                                        |
+| -------------- | -------------------------------- | ---------------------------------------------------------------------------- |
+| Postgres 18    | 5433                             | User, password and database `boilerplate`; also provisions the test database |
+| Redis          | 6380                             |                                                                              |
+| OTel Collector | 4318 (OTLP HTTP), 13133 (health) | Forwards traces to Tempo and logs to Loki                                    |
+| Tempo          | 3200                             | Trace storage                                                                |
+| Loki           | none                             | Log storage; query it through Grafana                                        |
+| Grafana        | 3100                             | Anonymous admin; Tempo (default) and Loki pre-provisioned as data sources    |
+| Mailpit        | 1025 (SMTP), 8025 (web UI)       | Local SMTP sink; the app's SMTP defaults point here                          |
 
 Every published port binds `127.0.0.1` only, so no other machine on the
-network can reach the stack's services: Postgres with its fixed development
-password, Redis with no password at all, Grafana with anonymous admin, and
-Mailpit.
+network can reach Postgres with its fixed development password, Redis with no
+password, Grafana with anonymous admin, or Mailpit.
 
-**Postgres is pinned to major version 18** because generated migrations may
-use `uuidv7()` as a column default, which is built into Postgres from 18
-onward; on 17 or older, a migration referencing it fails with `function
-uuidv7() does not exist`.
+**Postgres is pinned to major version 18** because the migrations use
+`uuidv7()` as a column default, which is built into Postgres from 18; on 17 or
+older a migration fails with `function uuidv7() does not exist`.
 
-**Host ports are non-default: 5433 for Postgres, 6380 for Redis.** The two
-most commonly installed local dev services are a native Postgres and a
-native Redis, both defaulting to 5432/6379 — and on a machine running
-either, connections to `localhost:5432`/`localhost:6379` can silently hit
-that native instance instead of the compose stack. Postgres fails loudly in
-that case (wrong role/database); Redis does not — any Redis instance
-answers `PING`, so a test suite or a dev server would appear to work while
-talking to a personal, unrelated Redis. Container-internal ports remain
-5432/6379, so nothing about container-to-container URLs
-(`postgres://…@postgres:5432/…`) changes. A committed test
-(`tests/unit/connection-target.test.ts`) reads `docker-compose.yml` and
-`.env.test` off disk and asserts they agree on the non-default ports,
-specifically so a well-meaning "tidy this up" edit fails loudly instead of
-silently passing against a developer's own instance. It deliberately checks
-the committed **files**, not `getEnv()` at runtime: CI's `services:`
-publish the container-default ports, so CI runs against 5432/6379, and the
-earlier runtime version of this assertion was guaranteed to fail on the
-first pull request.
+**Host ports 5433 and 6380 are deliberate.** A native Postgres or Redis on the
+default 5432/6379 wins `localhost` connections over Docker's wildcard bind.
+Postgres then fails loudly (wrong role), but Redis fails silently: any Redis
+answers `PING`, so a dev server or the test suite would appear to work against
+a personal, unrelated instance. Container-internal ports stay 5432/6379, so
+container-to-container URLs (`postgres://…@postgres:5432/…`) are unaffected.
+`tests/unit/connection-target.test.ts` reads `docker-compose.yml` and
+`.env.test` off disk and asserts they agree on the non-default ports. It checks
+the committed files, not `getEnv()` at runtime, because CI's `services:`
+publish the default ports and CI runs against 5432/6379.
 
-The OTel Collector's health-check extension is reachable on `:13133` for
-manual verification, but the image has no shell/`curl`/`wget`, so it
-carries no Docker-level `HEALTHCHECK` — verified by direct `exec` into the
-container.
+The collector's health-check extension answers on `:13133`, but its image has
+no shell, `curl` or `wget`, so it carries no Docker `healthcheck`.
 
-## Deployment
+## Docker
 
 `Dockerfile` is a four-stage build (`base` -> `deps` -> `build` -> `runner`):
 
-- `deps` installs with `--frozen-lockfile` against a layer cached
-  independently of application code.
+- `base` installs Corepack and creates the non-root user (uid 10001).
+- `deps` installs with `--frozen-lockfile`, in a layer cached independently of
+  application code. `pnpm-workspace.yaml` and `.npmrc` are copied with the
+  lockfile, since pnpm reads its build allow-list and release-age settings
+  from them at install time.
 - `build` runs `pnpm build`, then `pnpm prune --prod --ignore-scripts`.
-  `pnpm install --prod` alone is not enough here: it unlinks dev
-  dependencies from `node_modules` but leaves their content in the pnpm
-  virtual store, so the TypeScript compiler and `drizzle-kit` would still
-  ship inside the image while appearing pruned. `prune` is the command that
-  actually removes them — verified empirically against the built image.
-- `runner` copies over only `node_modules`, `dist/`, and `package.json`,
-  starts
-  `node --enable-source-maps --import ./dist/observability/tracing.js dist/index.js`
-  (so a logged stack trace names the original `.ts` line; `tsconfig.json`
-  emits the maps), runs as a non-root user (uid 10001), and
-  declares `HEALTHCHECK NONE` —
-  the orchestrator already owns liveness/readiness via `/health` and
-  `/health/ready`; a second, Docker-level health signal would just be a
-  second opinion that can disagree with the first under load.
+  `pnpm install --prod` alone unlinks dev dependencies from `node_modules` but
+  leaves them in the pnpm virtual store; `prune` removes them, so neither the
+  TypeScript compiler nor `drizzle-kit` ships in the image.
+- `runner` sets `NODE_ENV=production`, copies only `node_modules`, `dist/` and
+  `package.json`, runs as uid 10001, and declares `HEALTHCHECK NONE`: the
+  orchestrator owns liveness and readiness through `/health` and
+  `/health/ready`, and a second health signal could disagree with them under
+  load. Its `CMD` is
+  `node --enable-source-maps --import ./dist/observability/tracing.js dist/index.js`:
+  tracing loads before the app, and a logged stack trace names the original
+  `.ts` line.
 
-## What is deliberately not here yet
+To run the image against the compose stack:
 
-An earlier plan built the platform: environment validation, the
-database/Redis clients, the app/server split, health checks, the error
-contract, the test harness and its coverage gate, git hooks, and CI. This
-plan (B2) added registration, login, JWT access + opaque refresh tokens,
-refresh rotation with reuse detection bounded by an absolute session
-lifetime, an authenticated profile endpoint, a rate limiter on every auth
-route (each with its own store prefix), a content-type gate on the auth
-router that closes forced-login CSRF, and `TRUST_PROXY` as an explicit
-deployment decision — see [SECURITY.md](SECURITY.md) for the
-security-relevant detail on all of it. It does **not** build:
+```bash
+docker build -t express-boilerplate .
+docker run --rm -p 4040:4040 --env-file .env \
+  --add-host=host.docker.internal:host-gateway \
+  -e DATABASE_URL=postgres://boilerplate:boilerplate@host.docker.internal:5433/boilerplate \
+  -e REDIS_URL=redis://host.docker.internal:6380 \
+  express-boilerplate
+```
 
-- **MFA.** `auth.middleware.ts` and `auth.controller.ts` both note it as a
-  later step-up plan; no such flow exists yet.
-- OpenAPI documentation, or a bootstrap/seed script (`pnpm bootstrap` does
-  not exist — do not run it).
+The `-e` overrides matter: `.env` says `localhost`, which inside the container
+is the container itself. `host.docker.internal` reaches the host's published
+compose ports. Without the overrides, `/health` still answers 200 (it touches
+no dependency) and `/health/ready` answers 503 within a few seconds, since
+every Redis client gives up quickly before its first `ready`.
 
-Everything else this list used to name as not-yet-built has since shipped,
-by later plans not otherwise documented in this file: forgot/reset password
-(`auth.routes.ts`'s `/forgot-password`/`/reset-password`), sessions and
-Google OAuth (`passport.config.ts`'s `express-session` usage — see
-CLAUDE.md's "OAuth" section), tenancy/RBAC (`tenant.controller.ts`,
-`tenant.routes.ts` — see CLAUDE.md's "Multi-tenancy and RBAC" section), the
-BullMQ job queue (`src/jobs/`, `src/workers/` — see CLAUDE.md's "Job queue"
-and "Notifications" sections), and OpenTelemetry SDK wiring in the app
-itself (`src/observability/tracing.ts` starts a `NodeSDK` and exports
-traces and logs — see CLAUDE.md's "Observability" section), and a daily
-data-retention purge (`src/services/retention.service.ts`, run by the
-maintenance worker — see [DATABASE.md](DATABASE.md#user_tokens-retention)
-and MIGRATIONS.md, "Upgrading to 3.2.0"). The rate
-limiters also cover the tenant, invitation and staff-search routes
-(`createRateLimiter(RATE_LIMITS.createTenant)` and
-`createRateLimiter(RATE_LIMITS.inviteTenantMember)` on `tenant.routes.ts`,
-`createRateLimiter(RATE_LIMITS.invitationPreview)` and
-`createRateLimiter(RATE_LIMITS.invitationAccept)` on `invitation.routes.ts`,
-and `createRateLimiter(RATE_LIMITS.platformSearch)` on
-`platform.routes.ts`). Every other authenticated write is limited by
-`createRateLimiter(RATE_LIMITS.authenticatedWrite)`, one instance per
-router (tenant, notification and profile), all counting under one Redis
-prefix per user.
+## Deploying
+
+A push to `main` runs [`deploy.yml`](.github/workflows/deploy.yml). It calls
+`ci.yml` as a gate (`workflow_call`) and, once that passes, builds and pushes
+`ghcr.io/<repo>:sha-<commit>` and `:main` to GHCR with an SBOM and build
+provenance attestation, then runs the `deploy` job, bound to the `production`
+environment. That job is a placeholder: no deployment target is chosen. A
+manual `workflow_dispatch` from another branch builds and pushes only the
+sha-tagged image; the `:main` tag and the `deploy` job run only from `main`.
+A `vX.Y.Z` release tag builds nothing: its `promote` job adds `:X.Y.Z`, `:X.Y`
+and `:X` to the digest `main` already built (see
+[CONTRIBUTING.md](CONTRIBUTING.md#releases)).
+
+The image needs the environment described under
+[Configuration](#configuration), including `APP_ENV`. Its `CMD` starts only the
+app; run migrations from the same image with `node dist/database/migrate.js`,
+the command `pnpm db:migrate:prod` runs.
+`WORKER_ENABLED` (default `true`) runs the API and the BullMQ Workers in one
+process. To split them, set it to `false` on API-only pods and `true` on a
+separate worker deployment that shares the Redis queues. `WORKER_CONCURRENCY`
+(default 5) sets the email and notification Workers' concurrency; the
+maintenance Worker always runs one job at a time, and the daily retention purge
+runs only where Workers run.
+
+One-time repository setup before any of this is live:
+
+- **Renovate**: install the Renovate GitHub App; see
+  [CONTRIBUTING.md](CONTRIBUTING.md#dependency-policy).
+- **Releases**: create and install the release GitHub App; see
+  [CONTRIBUTING.md](CONTRIBUTING.md#releases). `release.yml` fails without it.
+- **Merge rules** (Settings → General, then Settings → Rules): enable "Allow
+  auto-merge"; allow squash merging only, with the commit title set to the PR
+  title and the commit message left blank; and add a ruleset on `main`
+  requiring the checks `lint`, `test`, `docker`, `gitleaks` and `pr-title`.
+  Without the ruleset, `release.yml`'s fallback merges the release PR without
+  waiting for CI; without the blank squash message, each squash body carries
+  the branch's commit list, which release-please reads as extra conventional
+  commits.
+- **The `production` environment** (Settings → Environments): add protection
+  rules, at minimum required reviewers, before replacing the placeholder
+  `deploy` step with a real target. Without them, anything merged to `main`
+  deploys unreviewed.

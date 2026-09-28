@@ -1,21 +1,17 @@
-# docker-compose.yml — the local infrastructure the app requires to boot.
+# The local infrastructure the app needs to boot.
 #
 # Postgres is pinned to 18 because the migrations use uuidv7() as a column
 # default, which is built in from 18. On 17 or older the migration aborts
 # with "function uuidv7() does not exist" unless an extension is installed.
 #
-# Host ports are non-default (5433, 6380) on purpose: the two most commonly
-# installed local dev services are a native Postgres and a native Redis,
-# both of which default to 5432/6379. On a machine running either, a native
-# bind on 127.0.0.1 wins over Docker's wildcard bind for connections to
-# "localhost" — Postgres then fails loudly ("role does not exist"), but
-# Redis fails silently, since any Redis answers PING and the test suite
-# would pass against a developer's personal instance without ever touching
-# this stack. Container-internal ports stay 5432/6379 — a URL like
-# postgres://…@postgres:5432/… (container-to-container) is unaffected.
+# Host ports are 5433 and 6380 so they never meet a native Postgres or Redis
+# on 5432/6379. Connecting to a native Postgres fails loudly ("role does not
+# exist"); a native Redis fails silently, since any Redis answers PING and the
+# suite would pass against a developer's own instance. Container-internal
+# ports stay 5432/6379.
 #
 # No app service: the app runs on the host with APP_ENV=local (.env.example),
-# which is what lets it use Mailpit and the defaults below.
+# which lets it use Mailpit and the defaults below.
 #
 # Every host-side port binds 127.0.0.1 explicitly. By default Docker
 # publishes a port on every interface, and on Linux its own iptables rules
@@ -30,12 +26,9 @@ services:
       POSTGRES_DB: boilerplate
     ports: ['127.0.0.1:5433:5432']
     volumes:
-      # postgres:18+ images store data under a major-version-specific
-      # subdirectory of /var/lib/postgresql (pg_ctlcluster-compatible
-      # layout) rather than directly under /var/lib/postgresql/data as
-      # earlier images did — mounting at .../data here fails to start
-      # ("unused mount/volume", verified against this exact image/tag).
-      # Mount the parent directory instead, per the image's own guidance.
+      # postgres:18+ keeps its data in a major-version subdirectory of
+      # /var/lib/postgresql, and refuses to start with a volume at .../data,
+      # so the parent directory is mounted, as the image documents.
       - pgdata:/var/lib/postgresql
       # Runs once against an empty volume: provisions the test/test/
       # boilerplate_test role+database that .env.test already points at,
@@ -65,10 +58,8 @@ services:
     # `docker compose restart otel-collector` — `docker compose up -d` does
     # not pick up bind-mount content changes on an already-running container.
     volumes: ['./otel-collector.yaml:/etc/otel/config.yaml:ro']
-    # 13133 is the health_check extension's endpoint (see otel-collector.yaml)
-    # — exposed for manual/host-side verification. No Docker HEALTHCHECK
-    # here: the image has no shell/wget/curl to run one from inside the
-    # container (verified; see otel-collector.yaml's comment).
+    # 13133 is the health_check extension's endpoint, for checks from the
+    # host. No Docker HEALTHCHECK: the image has no shell, wget or curl.
     ports: ['127.0.0.1:4318:4318', '127.0.0.1:13133:13133']
 
   tempo:
@@ -105,12 +96,9 @@ services:
     depends_on: [tempo, loki]
 
   mailpit:
-    # Pinned, like every other service on this file — an unpinned :latest
-    # here is the one inconsistency task-2-review.md's finding 5 caught:
-    # every sibling service (postgres:18, redis:7.2-alpine) is pinned, and a
-    # silent upstream change to Mailpit's API or its readyz subcommand would
-    # otherwise turn into a red run on an unrelated change. v1.31.1 is the
-    # version this task actually developed and tested against.
+    # Pinned, with the same tag as ci.yml's service: the tests read mail back
+    # through Mailpit's HTTP API, so an upstream change to that API or to its
+    # readyz subcommand must arrive as a deliberate bump.
     image: axllent/mailpit:v1.31.1
     # --smtp-disable-rdns: Mailpit performs a reverse-DNS lookup on every
     # connecting IP by default. Inside Docker-for-Mac the lookup targets the
@@ -121,10 +109,7 @@ services:
     # refuses that host and port whenever APP_ENV is not local.
     command: ['--smtp-disable-rdns']
     ports: ['127.0.0.1:1025:1025', '127.0.0.1:8025:8025']
-    # `readyz` is the image's own subcommand for exactly this — verified
-    # against the running container (it has a working shell, `docker exec
-    # ... sh -c 'echo ok'` succeeds), so this needs none of otel-collector's
-    # "no shell to run a healthcheck from" workaround below.
+    # `readyz` is the image's own readiness subcommand.
     healthcheck:
       test: ['CMD', '/mailpit', 'readyz']
       interval: 5s

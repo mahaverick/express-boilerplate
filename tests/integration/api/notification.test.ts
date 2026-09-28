@@ -1,29 +1,15 @@
-// tests/integration/api/notification.test.ts
-//
-// Integration test against the real per-worker Postgres database (see
-// tests/helpers/worker-database.ts) — same convention as
-// tests/integration/api/profile.test.ts: every user created here is
-// deleted in afterEach, and notifications/notification_preferences cascade
-// off that delete (ON DELETE CASCADE, notification.model.ts), so nothing
-// else needs explicit cleanup.
-//
-// Authenticated requests sign a token directly with `signAccessToken`
-// rather than going through POST /api/v1/auth/login, mirroring
-// profile.test.ts's own reasoning: these tests are about what happens
-// after authentication, not about login itself.
-//
-// PUT /preferences CANNOT be exercised end-to-end for a successful upsert
-// in this file. NOTIFICATION_TYPES currently holds only 'verify_email',
-// and CONFIGURABLE_NOTIFICATION_TYPES (notification.validators.ts)
-// deliberately excludes it — so, as the task brief itself calls out, every
-// well-formed preferences update is rejected until a second notification
-// type with a disableable channel ships. The tests below cover that
-// rejection (and the ordinary validation failures alongside it); a
-// positive upsert-through-the-controller test has nothing to exercise it
-// with yet. NotificationPreferenceRepository.upsert itself already has
-// direct coverage in notification-preference.repository.test.ts, which
-// does not go through this validator and so is unaffected by the empty
-// configurable list.
+/**
+ * @file Integration test against the real per-worker Postgres database
+ * (see tests/helpers/worker-database.ts) — same convention as
+ * tests/integration/api/profile.test.ts: every user created here is
+ * deleted in afterEach, and notifications/notification_preferences
+ * cascade off that delete (ON DELETE CASCADE, notification.model.ts),
+ * so nothing else needs explicit cleanup.
+ * Authenticated requests sign a token directly with `signAccessToken`
+ * rather than going through POST /api/v1/auth/login, since these tests
+ * are about what happens after authentication, not about login itself.
+ */
+
 import { randomUUID } from 'node:crypto'
 import type { Response } from 'supertest'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -291,7 +277,7 @@ describe('/api/v1/notifications', () => {
       expect(response.status).toBe(404)
 
       const [row] = await sql`select read_at from notifications where id = ${notification.id}`
-      expect(row?.read_at).toBeNull() // the other user's request must not have touched it
+      expect(row?.read_at).toBeNull()
     })
 
     it('returns 404 for a nonexistent id', async () => {
@@ -461,12 +447,22 @@ describe('/api/v1/notifications', () => {
     })
   })
 
+  /**
+   * PUT /preferences cannot be exercised end-to-end for a successful
+   * upsert in this describe block. CONFIGURABLE_NOTIFICATION_TYPES
+   * (notification.validators.ts) is currently empty — every
+   * NOTIFICATION_TYPES entry is listed as non-disableable — so every
+   * well-formed preferences update is rejected until a type with a
+   * disableable channel ships. The tests below cover that rejection
+   * (and the ordinary validation failures alongside it); a positive
+   * upsert-through-the-controller test has nothing to exercise it
+   * with yet. NotificationPreferenceRepository.upsert itself already
+   * has direct coverage in notification-preference.repository.test.ts,
+   * which does not go through this validator and so is unaffected by
+   * the empty configurable list.
+   */
   describe('PUT /api/v1/notifications/preferences', () => {
-    // See this file's header comment: NOTIFICATION_TYPES currently has only
-    // 'verify_email', which CONFIGURABLE_NOTIFICATION_TYPES always excludes
-    // — so this is a rejection, not a bug, and is the behaviour the task
-    // brief explicitly calls for ("reject all updates until a second type
-    // ... is added").
+    // CONFIGURABLE_NOTIFICATION_TYPES is currently empty (see this describe block's own JSDoc), so this is a rejection, not a bug.
     it('rejects an update for verify_email with a clear, field-scoped message', async () => {
       const { token } = await createAuthenticatedUser()
 

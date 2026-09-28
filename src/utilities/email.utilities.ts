@@ -1,7 +1,7 @@
-// src/utilities/email.utilities.ts
-//
-// Email address helpers shared by auto-join, the invite validator and the
-// audit log, which records a domain, never a full address.
+/**
+ * @file Email address helpers shared by auto-join, the invite validator and
+ * the audit log, which records a domain, never a full address.
+ */
 
 /**
  * A lowercase dotted hostname: labels of 1-63 letters, digits and inner

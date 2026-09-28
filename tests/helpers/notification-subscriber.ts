@@ -1,9 +1,9 @@
-// tests/helpers/notification-subscriber.ts
-//
-// The notification subscriber connects lazily and asynchronously, while
-// onNotification stays synchronous. A test that emits right after its first
-// onNotification could publish before SUBSCRIBE lands; these helpers wait
-// until this process's subscriber provably receives.
+/**
+ * @file The notification subscriber connects lazily and asynchronously,
+ * while `onNotification` stays synchronous, so a test that emits right
+ * after its first `onNotification` could publish before SUBSCRIBE lands.
+ * These helpers wait until this process's subscriber provably receives.
+ */
 import { randomUUID } from 'node:crypto'
 import type { RedisClientType } from 'redis'
 import type { Notification } from '@/database/models/notification.model'

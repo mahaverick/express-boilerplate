@@ -1,9 +1,7 @@
-// src/app.ts
-//
-// Builds the app and returns it. No listen, no workers, no side effects —
-// that is what makes supertest able to import it, and it is why this is a
-// separate file from server.ts. core's single 38k index.ts is the thing this
-// split exists to avoid.
+/**
+ * @file The Express application, built without listening, workers or other
+ * side effects, so tests can import it; server.ts owns the socket.
+ */
 import cors from 'cors'
 import express, { type Express } from 'express'
 import helmet from 'helmet'
@@ -22,6 +20,14 @@ import { isRedisReachable } from '@/services/redis.service'
 
 /**
  * Build the Express application.
+ *
+ * `trust proxy` comes from TRUST_PROXY because it decides what `request.ip`,
+ * and so every IP-keyed rate limiter, sees: off behind a proxy, every client
+ * shares one bucket; on where no proxy strips X-Forwarded-For, each request
+ * can name its own IP and escape the limiters. A malformed value throws here,
+ * at boot. `/health` stays shallow so a database blip never restarts a
+ * healthy process; `/health/ready` checks every dependency, since failing it
+ * only removes the pod from rotation.
  * @returns A configured app with no listening socket.
  */
 export function createApp(): Express {
@@ -29,43 +35,12 @@ export function createApp(): Express {
 
   app.disable('x-powered-by')
 
-  // WHO THE CLIENT IS. `request.ip` is the only thing the IP-keyed rate
-  // limiters (rate-limit.middleware.ts) have to tell one caller from
-  // another, and this one line decides whether it means the socket's peer or
-  // whatever `X-Forwarded-For` claims. Both answers are wrong in the other
-  // one's deployment, and both failures are silent:
-  //
-  //   - Left off behind a proxy, `request.ip` is the proxy for every
-  //     request, so all four limiters share a single bucket across the whole
-  //     deployment — 300 refreshes per 5 minutes for every user combined,
-  //     not per client.
-  //   - Turned on where it should not be, `X-Forwarded-For` is an ordinary
-  //     request header a client writes itself, so every request can carry a
-  //     different "client IP" and get its own fresh bucket. The login
-  //     limiter simply stops applying.
-  //
-  // So it is configuration (`TRUST_PROXY`), not a literal: the value depends
-  // on the deployment and nothing in this repository can know it. See that
-  // field's comment in env.config.ts for the full hazard, and SECURITY.md
-  // for what an operator must set. A malformed value throws here, at boot,
-  // rather than being discovered later from a rate limiter that never fires.
   app.set('trust proxy', trustProxySetting(getEnv().TRUST_PROXY))
 
-  // First middleware: every response — preflights, 404s, errors — gets the
-  // security headers, not just the ones that reach a router.
+  // Security: first, so every response, including preflights, 404s and errors, gets the headers.
   app.use(helmet(helmetOptions))
 
-  // BEFORE requestId and the body parsers: for an ALLOWED origin, a
-  // preflight is an OPTIONS request that `cors` answers and ends right
-  // here, so requestId and the body parsers never run for it. For a
-  // DISALLOWED origin, `cors` withholds the grant header but does NOT end
-  // the request — it calls `next()` and the preflight falls through into
-  // the rest of the stack, landing on whatever that route does with a
-  // method it has no handler for (measured: Express's own OPTIONS
-  // auto-responder for one route, an auth check's 401 for another — it
-  // varies by route, see cors.test.ts). Either way is harmless: a browser
-  // blocks the response the moment the grant header is missing, regardless
-  // of status code.
+  // Before requestId and the body parsers: an allowed preflight ends here; a disallowed one gets no grant header.
   app.use(cors(corsOptions))
 
   app.use(requestId)
@@ -73,14 +48,10 @@ export function createApp(): Express {
   app.use(express.json({ limit: '1mb' }))
   app.use(express.urlencoded({ extended: false, limit: '100kb' }))
 
-  // Liveness: deliberately shallow. If this checked the database, a transient
-  // blip would make the orchestrator restart a healthy process — which is how
-  // a slow query becomes an outage.
   app.get('/health', (_request, response) => {
     response.json({ status: 'ok', uptime: process.uptime() })
   })
 
-  // Readiness: deep. Safe to fail — it only removes the pod from rotation.
   app.get('/health/ready', async (_request, response) => {
     // A draining pod leaves rotation before its dependencies close.
     if (isShuttingDown()) {

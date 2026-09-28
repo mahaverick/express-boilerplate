@@ -1,10 +1,10 @@
-// src/services/tenant-invitation.service.ts
-//
-// Invitations to join a tenant: invite, list, resend, revoke, preview,
-// accept. HTTP-free. Multi-step writes run in one transaction with their
-// audit entry, and every query inside one goes through its `tx`. The audit
-// metadata carries the address's domain only. Mail and the in-app notification
-// are enqueued after the write commits, fire-and-forget.
+/**
+ * @file Invitations to join a tenant: invite, list, resend, revoke, preview, accept.
+ * Multi-step writes run in one transaction with their audit entry, and every
+ * query inside one goes through its `tx`. Audit metadata carries the address's
+ * domain only; mail and the in-app notification are
+ * enqueued after the write commits, fire-and-forget.
+ */
 import { randomBytes } from 'node:crypto'
 import { getEnv } from '@/configs/env.config'
 import { INVITATION_TOKEN_BYTES, type MembershipRole } from '@/constants/tenant.constants'
@@ -86,7 +86,9 @@ export const INVITATION_EMAIL_UNVERIFIED_MESSAGE =
 export const INVITATION_NOT_FOUND_CODE = 'invitation_not_found'
 
 const INVITATION_NOT_FOUND_MESSAGE = 'Invitation not found'
-// Matches no membership: stands in for the invitee id when the address has no account.
+/**
+ * Matches no membership: stands in for the invitee id when the address has no account.
+ */
 const NIL_UUID = '00000000-0000-0000-0000-000000000000'
 const INVITER_NAME_FALLBACK = 'A teammate'
 const GRANT_REFUSED_MESSAGE = 'Insufficient permissions to grant this role'
@@ -495,8 +497,7 @@ async function acceptedEarlierBy(
  */
 export async function accept(rawToken: string, userId: string): Promise<AcceptedInvitation> {
   const tokenHash = hashToken(rawToken)
-  // Read before the transaction: this row needs no lock, and a pool query
-  // from inside a transaction can starve the pool.
+  // Before the transaction: this row needs no lock, and a pool query inside one can starve the pool.
   const user = await userRepository.findById(userId)
   if (!user?.active) throw new HttpError('Authentication required', 401)
 
@@ -507,15 +508,13 @@ export async function accept(rawToken: string, userId: string): Promise<Accepted
     assertInvitedAddress(user, valid.invitation.email)
 
     const claimed = await invitationRepository.claimForAccept(tokenHash, user.id, tx)
-    // It stopped being redeemable after the read: a concurrent accept, a
-    // revoke, a resend, expiry or a tenant soft-delete. Succeed only if this user accepted it.
+    // Unredeemable since the read (accept, revoke, resend, expiry, tenant deleted): succeed only if this user accepted.
     if (!claimed) return acceptedEarlierBy(tokenHash, user.id, tx)
 
     const membership = await userMembershipRepository.createIfAbsent(
       { userId: user.id, tenantId: claimed.tenantId, role: claimed.role },
       tx
     )
-    // The role now held: an existing member keeps theirs.
     await record(
       {
         action: 'invitation.accepted',

@@ -1,22 +1,11 @@
-// src/controllers/tenant.controller.ts
-//
-// Thirteen handlers, in the same order tenant.routes.ts mounts them:
-// create/list/get/update tenant, list/change-role/remove member,
-// list/invite/resend/revoke invitation, get/update settings. Every handler
-// assumes `requireAuth` has already run (populating
-// `request.user`) — `tenant.routes.ts` mounts it router-wide, the same
-// convention `profile.routes.ts` established. Every handler on a
-// `/tenants/:slug/...` route additionally assumes `resolveTenant` has
-// already run (populating `request.principal`) — see
-// `tenant.middleware.ts`'s own header comment for what that guarantees:
-// the caller is confirmed to have access to the tenant the route names, as
-// a member or through their platform role, with `request.principal.role`
-// holding their effective role there, before this file's code ever runs.
-//
-// Member and invitation writes pass the actor, never `principal.role`: the
-// services re-read the actor's role under lock inside their transaction and
-// apply policies/tenant.policy.ts there. The router's `requireRole(...)` is
-// only the early gate.
+/**
+ * @file Tenant, member, invitation and settings handlers, behind
+ * tenant.routes.ts's router-wide `requireAuth`; every `/tenants/:slug` handler
+ * also runs after `resolveTenant`. Writes pass the actor, never
+ * `principal.role`: the services re-read the actor's role under lock and apply
+ * policies/tenant.policy.ts there, so the router's `requireRole` is only the
+ * early gate.
+ */
 import type { Request } from 'express'
 import { BaseController } from '@/controllers/base.controller'
 import { actorFrom, authenticatedUserId, tenantPrincipal } from '@/controllers/helpers.controller'
@@ -50,12 +39,8 @@ const INVITATION_SENT_MESSAGE = 'If that address can be invited, an invitation h
  * The `:userId` route param on a member-management route, narrowed to a
  * plain string.
  *
- * `request.params.userId` types as `string | string[] | undefined`
- * (`ParamsDictionary`'s index signature allows an array value for a
- * repeated/splat param pattern) even though a plain `:userId` segment can
- * never actually produce one — same narrowing `tenant.middleware.ts`'s own
- * `tenantIdentifierFrom` already applies to `:slug`, for the identical
- * reason.
+ * `ParamsDictionary` types it `string | string[] | undefined`, though a plain
+ * `:userId` segment never produces an array.
  * @param request - The incoming request.
  * @returns The `:userId` param.
  * @throws {HttpError} 400, when the route did not supply a single string param — a routing bug, not a real request shape.
@@ -84,9 +69,8 @@ function invitationIdParameter(request: Request): string {
 class TenantController extends BaseController {
   /**
    * `POST /tenants`: create a tenant. The caller becomes its sole `'owner'`
-   * member — `TenantRepository.create` inserts the tenant, its settings row,
-   * and this owner membership atomically (tenant.repository.ts's own header
-   * comment).
+   * member: `TenantRepository.create` inserts the tenant, its settings row and
+   * this owner membership in one transaction.
    */
   createTenant = this.handle(async (request, response) => {
     const actor = actorFrom(request)
@@ -122,8 +106,8 @@ class TenantController extends BaseController {
    * `PATCH /tenants/:slug`: update a tenant's `name`/`description`/`logo`/
    * `website`. Owner/admin only — `requireRole('owner', 'admin')`
    * (tenant.routes.ts) gates this before the handler runs. `slug` cannot be
-   * changed here — see `updateTenantSchema`'s own comment for why. The
-   * service re-reads the caller's access under lock.
+   * changed here (see `updateTenantSchema`). The service re-reads the caller's
+   * access under lock.
    */
   updateTenant = this.handle(async (request, response) => {
     const principal = tenantPrincipal(request)
@@ -134,9 +118,8 @@ class TenantController extends BaseController {
 
   /**
    * `GET /tenants/:slug/members`: a tenant's members, each with their safe
-   * user info (`UserMembershipRepository.listByTenant` never joins
-   * `passwordHash` — see that method's own comment). Anyone `resolveTenant`
-   * admits may call this.
+   * user info (`UserMembershipRepository.listByTenant` never selects
+   * `passwordHash`). Anyone `resolveTenant` admits may call this.
    */
   listMembers = this.handle(async (request, response) => {
     const members = await listMembers(tenantPrincipal(request).tenantId)

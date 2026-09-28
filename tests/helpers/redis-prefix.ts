@@ -1,8 +1,9 @@
-// tests/helpers/redis-prefix.ts
-//
-// Each vitest worker namespaces its Redis keys under its own
-// REDIS_KEY_PREFIX, the same way it gets its own database. setup-global.ts
-// sets it per worker; global-setup.ts clears rate-limit counters under it.
+/**
+ * @file Each vitest worker namespaces its Redis keys under its own
+ * `REDIS_KEY_PREFIX`, the same way it gets its own database.
+ * `setup-global.ts` sets it per worker; `global-setup.ts` clears rate-limit
+ * counters under it.
+ */
 
 const WORKER_PREFIX_BASE = 'test-w'
 

@@ -1,8 +1,8 @@
-// src/validators/invitation.validators.ts
-//
-// The invitee-side input: one raw invitation token, always in a JSON body so
-// it never appears in an API URL. The controller answers a token that fails
-// this schema exactly like an unknown one.
+/**
+ * @file The invitee-side input: one raw invitation token, always in a JSON
+ * body so it never appears in an API URL. The controller answers a token that
+ * fails this schema exactly like an unknown one.
+ */
 import { z } from 'zod'
 import { INVITATION_TOKEN_LENGTH } from '@/constants/tenant.constants'
 

@@ -1,14 +1,8 @@
-// src/controllers/notification.controller.ts
-//
-// Six handlers, every one reached only through notification.routes.ts's
-// router-wide `requireAuth` (auth.middleware.ts) — the same "authenticated
-// routes assume request.user is already populated" contract
-// profile.controller.ts establishes. `authenticatedUserId`
-// (helpers.controller.ts) is a shared defensive check against a routing
-// mistake, not business logic specific to this controller.
-//
-// Ownership scoping lives in notification.service.ts: every call there goes
-// through the repository's userId-scoped methods.
+/**
+ * @file Notification handlers, behind notification.routes.ts's router-wide
+ * `requireAuth`. Ownership scoping lives in notification.service.ts: every call
+ * there goes through the repository's userId-scoped methods.
+ */
 import { BaseController } from '@/controllers/base.controller'
 import { authenticatedUserId } from '@/controllers/helpers.controller'
 import type { Notification } from '@/database/models/notification.model'
@@ -60,11 +54,8 @@ class NotificationController extends BaseController {
    * `GET /notifications`: the authenticated user's notifications, newest
    * first, one page at a time.
    *
-   * An invalid or stale `cursor` is never a 400 here: `listNotifications`
-   * (notification.service.ts) decodes it via `decodeNotificationCursor`
-   * (notification.repository.ts), which resolves a malformed value to
-   * `undefined` rather than throwing, so this handler always calls the
-   * service — no separate no-cursor branch is needed here.
+   * An invalid or stale `cursor` is never a 400: `decodeNotificationCursor`
+   * (notification.repository.ts) resolves it to no cursor, the first page.
    */
   listNotifications = this.handle(async (request, response) => {
     const userId = authenticatedUserId(request)
@@ -102,11 +93,9 @@ class NotificationController extends BaseController {
   /**
    * `DELETE /notifications/:id`: delete one notification.
    *
-   * Unlike `markRead`, `NotificationRepository.deleteOne` needs no
-   * disambiguating second lookup: it is a one-shot operation with only two
-   * outcomes — a row owned by this user existed and is now gone (`true`), or
-   * no such row existed for this user (`false`), which is unambiguously a
-   * 404.
+   * 404 when this user has no such notification. Unlike `markRead`, no second
+   * lookup is needed: `NotificationRepository.deleteOne` either deleted a row
+   * this user owns or found none.
    */
   deleteNotification = this.handle(async (request, response) => {
     const userId = authenticatedUserId(request)
@@ -130,11 +119,9 @@ class NotificationController extends BaseController {
    * authenticated user's notification preferences.
    *
    * `updatePreferencesSchema` (notification.validators.ts) is the only gate
-   * on which `notificationType` values reach `upsert` — a type outside
-   * `CONFIGURABLE_NOTIFICATION_TYPES` (today, that is every type: see that
-   * constant's own comment) fails validation with a per-field 400 before this
-   * handler's body runs at all, so there is no second check to duplicate
-   * here.
+   * on which `notificationType` values reach `upsert`: a type outside
+   * `CONFIGURABLE_NOTIFICATION_TYPES` (currently every type) fails with a
+   * per-field 400.
    */
   updatePreferences = this.handle(async (request, response) => {
     const userId = authenticatedUserId(request)

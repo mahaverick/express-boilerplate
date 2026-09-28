@@ -1,6 +1,7 @@
-// tests/integration/helpers/lock-probe.test.ts
-//
-// Real Postgres: the probe opens its own connection, as it does for every caller.
+/**
+ * @file Exercises `pollUntil` against the real Postgres: the probe opens its
+ * own connection, as it does for every caller.
+ */
 import { describe, expect, it } from 'vitest'
 import { deferred, pollUntil } from '../../helpers/lock-probe'
 import { settle } from '../../helpers/timing'

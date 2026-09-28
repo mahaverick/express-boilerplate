@@ -1,11 +1,11 @@
-// tests/unit/configs/mailer.config.test.ts
-//
-// `mailTransportOptions` is unit-tested directly, with a hand-built env
-// slice, rather than through `getMailTransporter()` — `getMailTransporter`
-// calls the memoised `getEnv()` (env.config.ts), so once any test in this
-// worker has called it, SMTP_USERNAME/SMTP_PASSWORD can never be varied
-// between cases again. Same reasoning `trustProxySetting` (env.config.ts) is
-// unit-tested as a pure function rather than through `getEnv()`.
+/**
+ * @file `mailTransportOptions` is unit-tested directly, with a hand-built
+ * env slice, rather than through `getMailTransporter()`: that calls the
+ * memoised `getEnv()` (env.config.ts), so once any test in this worker
+ * has called it, SMTP_USERNAME/SMTP_PASSWORD can never be varied between
+ * cases again — the same reasoning `trustProxySetting` (env.config.ts) is
+ * tested as a pure function for.
+ */
 import { describe, expect, it } from 'vitest'
 import { getEnv, type Env } from '@/configs/env.config'
 import { getMailTransporter, mailTransportOptions } from '@/configs/mailer.config'
@@ -46,8 +46,7 @@ describe('mailTransportOptions', () => {
     expect(options.auth).toEqual({ user: 'apikey', pass: 'secret' })
   })
 
-  // A half-set pair attempts no auth here, the same as neither being set.
-  // Refusing that configuration is a boot check's job, not this builder's.
+  // A half-set pair attempts no auth here, the same as neither being set; refusing that configuration is a boot check's job, not this builder's.
   it('omits `auth` when only SMTP_USERNAME is set, without throwing', () => {
     const options = mailTransportOptions({ ...baseEnv, SMTP_USERNAME: 'apikey' })
     expect(options.auth).toBeUndefined()
@@ -58,9 +57,7 @@ describe('mailTransportOptions', () => {
     expect(options.auth).toBeUndefined()
   })
 
-  // These bound each stage of a send to a host that stops responding
-  // (env.config.ts's comment on the SMTP timeout group), so they must always
-  // reach nodemailer, never its own defaults.
+  // These bound each stage of a send to a host that stops responding, so they must always reach nodemailer, never its own defaults.
   it('always sets connectionTimeout/greetingTimeout/socketTimeout from the _MS variables', () => {
     const options = mailTransportOptions({
       ...baseEnv,
@@ -73,8 +70,7 @@ describe('mailTransportOptions', () => {
     expect(options.socketTimeout).toBe(3456)
   })
 
-  // nodemailer's own DNS query timeout is 30 seconds, longer than the whole
-  // default shutdown budget.
+  // nodemailer's own DNS query timeout is 30 seconds, longer than the whole default shutdown budget.
   it('sets dnsTimeout from SMTP_CONNECTION_TIMEOUT_MS', () => {
     const options = mailTransportOptions({ ...baseEnv, SMTP_CONNECTION_TIMEOUT_MS: 1234 })
     expect(options.dnsTimeout).toBe(1234)
@@ -86,15 +82,13 @@ describe('getMailTransporter', () => {
     expect(getMailTransporter()).toBe(getMailTransporter())
   })
 
-  // .env.test sets APP_ENV=local, so the real, memoised transporter this
-  // process builds must not require TLS.
+  // .env.test sets APP_ENV=local, so the real, memoised transporter this process builds must not require TLS.
   it('does not require TLS in this (APP_ENV=local) process', () => {
     const options = getMailTransporter().options as { requireTLS?: boolean }
     expect(options.requireTLS).toBe(false)
   })
 
-  // getMailTransporter reads the memoised getEnv() once per worker, so the
-  // non-local branch needs a fresh module instance against a mutated env.
+  // getMailTransporter reads the memoised getEnv() once per worker, so the non-local branch needs a fresh module instance against a mutated env.
   it('requires TLS outside local, proving requiresSmtpTls is wired in', async () => {
     const productionEnv: Env = { ...getEnv(), APP_ENV: 'prod' }
     await withMutatedModule(

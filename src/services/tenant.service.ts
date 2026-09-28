@@ -1,11 +1,9 @@
-// src/services/tenant.service.ts
-//
-// Tenant reads and writes behind the `/tenants` routes, other than
-// membership changes (tenant-membership.service.ts) and invitations
-// (tenant-invitation.service.ts). Every read below except `listForUser`
-// assumes `resolveTenant` has already admitted the caller to `tenantId`; the
-// two updates re-read that access under lock. Every write records its audit
-// entry in the same transaction.
+/**
+ * @file Tenant reads and writes behind the `/tenants` routes, other than membership
+ * changes and invitations. Every read except `listForUser` assumes `resolveTenant`
+ * has admitted the caller; the two updates re-read that access under lock, and
+ * every write records its audit entry in the same transaction.
+ */
 import { isDeepStrictEqual } from 'node:util'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { NewTenant, Tenant, TenantSettings } from '@/database/models/tenant.model'
@@ -246,7 +244,6 @@ export async function updateSettings(
     if (changed.length === 0) return current
     const settings = await tenantSettingsRepository.update(tenantId, changes, tx)
     if (!settings) throw new HttpError('Tenant settings not found', 404)
-    // The settings row's key is the tenant id.
     await record(
       {
         action: 'tenant.settings_updated',

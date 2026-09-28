@@ -1,31 +1,19 @@
-// src/validators/parse.validators.ts
-//
-// Moved verbatim from auth.validators.ts — a generic zod-parsing helper
-// belongs beside every other validator schema, not inside the one file
-// that first needed it.
+/**
+ * @file `parseBody`, the generic zod parse that turns a failure into the
+ * envelope's field-level `errors`.
+ */
 import { z } from 'zod'
 import { HttpError } from '@/errors/http-error'
 
 /**
- * Parse a request body against a schema, translating a failure into the
- * envelope's field-level `errors` (errors/http-error.ts / HttpError) rather
- * than a caller having to know to look for a zod-shaped error some other
- * way.
+ * Parse request input (a body, query or params) against a schema,
+ * translating a failure into the envelope's field-level `errors`.
  *
- * Surfaces both halves of zod's flattened error: `fieldErrors` (keyed by
- * field name — unchanged from before this comment was written; every
- * existing caller reads `errors.<field>` directly and that keeps working
- * exactly as it did) and, additively, `formErrors` under `errors.formErrors`
- * whenever there is at least one. `formErrors` holds issues that name no
- * single field — a `.strict()` schema's "unrecognized key" being the
- * motivating case. Before this, that case reached the client as `errors:
- * {}`: a 400 that looks like a validation bug rather than what actually
- * happened, because the one issue that existed had nowhere to attach and was
- * silently dropped. `.strict()` is unusable without this fix — its entire
- * rejection IS a formErrors issue — even though no schema in this codebase
- * currently uses `.strict()` (see profile.validators.ts for why the
- * alternative was chosen there; this fix is what makes `.strict()` a real
- * option for whoever needs it next).
+ * Surfaces both halves of zod's flattened error: `fieldErrors`, keyed by
+ * field name, and `formErrors` under `errors.formErrors` when there is at
+ * least one. `formErrors` holds issues that name no single field, such as a
+ * strict schema's unrecognized key; without it that 400 would reach the
+ * client as `errors: {}`.
  * @param schema - The schema to validate against.
  * @param input - The raw, untrusted request body.
  * @returns The parsed, typed input.

@@ -1,8 +1,8 @@
-// src/controllers/helpers.controller.ts
-//
-// One authenticatedUserId for every controller, plus actorFrom, which
-// builds the Actor a service call takes instead of a Request, and
-// tenantPrincipal for every /tenants/:slug handler.
+/**
+ * @file Request accessors shared by every controller: the authenticated user
+ * id, the `Actor` a service call takes instead of a Request, and the tenant
+ * principal for `/tenants/:slug` handlers.
+ */
 import type { Request } from 'express'
 import { HttpError } from '@/errors/http-error'
 import type { Actor, RequestPrincipal } from '@/types/actor'

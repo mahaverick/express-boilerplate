@@ -1,8 +1,8 @@
-// tests/helpers/backdate.ts
-//
-// A create and the update after it can land in the same millisecond, and a
-// JS Date keeps only milliseconds. Moving updated_at back first gives "the
-// update bumped updatedAt" a strict `>` that cannot tie.
+/**
+ * @file Moves a row's `updated_at` into the past so a later update's
+ * timestamp cannot tie it: a create and its following update can land in
+ * the same millisecond, the finest grain a JS `Date` keeps.
+ */
 import { sql } from '@/services/database.service'
 
 type BackdatableTable = 'users' | 'tenants' | 'tenant_settings' | 'user_memberships'
@@ -20,8 +20,7 @@ export async function backdateUpdatedAt(
   table: BackdatableTable,
   key: { column: 'id' | 'tenant_id'; value: string }
 ): Promise<Date> {
-  // The shared client's own timestamp parsers are identity (drizzle does
-  // that mapping itself), so a raw query gets the column back as text.
+  // drizzle(sql) installs identity parsers on the shared client, so this raw query gets updated_at back as text, not a Date.
   const [row] = await sql<{ updated_at: string }[]>`
     update ${sql(table)} set updated_at = updated_at - interval '1 second'
     where ${sql(key.column)} = ${key.value}

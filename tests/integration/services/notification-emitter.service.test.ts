@@ -1,10 +1,11 @@
-// tests/integration/services/notification-emitter.service.test.ts
-//
-// Delivery runs through the real Redis, on this worker's own channel
-// (REDIS_KEY_PREFIX is per vitest worker). A second module graph, loaded after
-// vi.resetModules(), stands in for another replica with its own clients,
-// subscriber and EventEmitter. That graph never reaches database.service.ts
-// (the model import is type-only), so no extra Postgres pool is opened.
+/**
+ * @file Delivery runs through the real Redis, on this worker's own channel
+ * (`REDIS_KEY_PREFIX` is per vitest worker). A second module graph, loaded
+ * after `vi.resetModules()`, stands in for another replica with its own
+ * clients, subscriber and `EventEmitter`. That graph never reaches
+ * `database.service.ts` (the model import is type-only), so no extra
+ * Postgres pool is opened.
+ */
 import { randomUUID } from 'node:crypto'
 import net from 'node:net'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'

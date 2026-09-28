@@ -1,24 +1,9 @@
-// src/validators/notification.validators.ts
-//
-// Three request shapes for notification.routes.ts: a list query
-// (pagination), a path `:id` (mark-read/delete), and a preferences update
-// body. `parseBody` (parse.validators.ts) is reused for all three — it takes
-// `unknown` and only cares that its argument is a plain object a zod schema
-// can walk, so it works identically for `request.query`/`request.params` as
-// it does for `request.body`, and this file does not need a second,
-// parallel "parseQuery"/"parseParams" helper that would just be this one
-// under a different name.
-//
-// Cursor DECODING deliberately does NOT live here. NotificationRepository
-// already exports `decodeNotificationCursor` (notification.repository.ts),
-// which never throws — a malformed cursor resolves to `undefined` (first
-// page), the same "safest available behaviour" that repository's own header
-// comment argues for at the exact boundary this validator sits on (a client-
-// supplied query parameter). This file's `listNotificationsSchema` therefore
-// only checks that `cursor`, if present, is a string — reusing that decoder
-// in notification.service.ts is what keeps cursor-format knowledge in the one place
-// that already has it, instead of a second implementation here that could
-// disagree with it about what counts as a valid cursor.
+/**
+ * @file Request shapes for notification.routes.ts: the list query, the `:id`
+ * path parameter and the preferences body, each parsed with `parseBody`.
+ * Cursor decoding is not here: notification.service.ts uses the repository's
+ * `decodeNotificationCursor`, the one place that knows the format.
+ */
 import { z } from 'zod'
 import {
   DEFAULT_NOTIFICATION_PAGE_SIZE,
@@ -57,41 +42,18 @@ export const notificationIdSchema = z.object({
  */
 export type NotificationIdParameters = z.infer<typeof notificationIdSchema>
 
-// Notification types a user is allowed to configure a preference for.
-// `'verify_email'`, `'password_reset_requested'`, `'password_changed'` and
-// `'tenant_invitation'` are deliberately excluded — see notification-preference.repository.ts's
-// `NON_DISABLEABLE_EMAIL_TYPES` for the full reasoning, which is THREE
-// distinct reasons: the first two would lock a user out of their own
-// account if disabled, `'password_changed'` locks nobody out but must not be
-// silenceable by an attacker who has just taken the account over, and
-// `'tenant_invitation'` has no email on the notification path and is
-// listed to keep the two sets in step (see that set's own comment for all
-// three, in full). That set is
-// module-private to the repository and stays that way: it governs what
-// `isChannelEnabled` resolves at READ time regardless of what any row says,
-// which is a stronger, unconditional guarantee than this list. This is the
-// WRITE-side mirror of the same rule — narrower in principle (today it
-// happens to match exactly) but independently necessary, because without it
-// a client could still successfully `PUT` a `{ notificationType:
-// 'verify_email', emailEnabled: false }` row; the repository would silently
-// keep honouring email delivery regardless, but the settings UI this
-// endpoint serves would show the user a toggle that lies about its own
-// effect. KEPT IN SYNC BY HAND with that repository set — see its own
-// comment.
-//
-// NOTIFICATION_TYPES has exactly four entries today and all four are
-// excluded here, so this filter still produces an EMPTY array — there is
-// nothing left to configure until a notification type with a genuinely
-// disableable channel ships. That is not a bug to special-case away:
-// `preferenceEntrySchema` below rejects every `notificationType` with the
-// same clear, per-field message whether the configurable list has one
-// entry, several, or none, so `PUT /preferences` already answers 400
-// correctly — see the "PUT /api/v1/notifications/preferences" describe
-// block in tests/integration/api/notification.test.ts, which exercises
-// exactly this (a `verify_email` update, an empty array, and an unknown
-// type all landing on the same clear-message 400) — without this module
-// needing a separate branch for "zero configurable types" versus "some,
-// but not this one".
+/**
+ * Notification types no preference may be written for: the write-side mirror
+ * of `NON_DISABLEABLE_EMAIL_TYPES` (notification-preference.repository.ts),
+ * kept in sync by hand. That set is module-private and decides delivery at
+ * read time whatever a row says; this one stops a `PUT` from storing a toggle
+ * the settings UI would show but the repository would ignore. Two reasons
+ * apply, plus a listing-only third: `verify_email` and
+ * `password_reset_requested` would lock the user out if disabled;
+ * `password_changed` must not be silenceable by someone who has taken the
+ * account over; and `tenant_invitation` has no email on the notification path
+ * and is listed to keep the two sets the same.
+ */
 const NON_DISABLEABLE_NOTIFICATION_TYPES: ReadonlySet<string> = new Set([
   'verify_email',
   'password_reset_requested',
@@ -100,30 +62,20 @@ const NON_DISABLEABLE_NOTIFICATION_TYPES: ReadonlySet<string> = new Set([
 ])
 
 /**
- * Notification types whose preferences a caller may currently update via
- * `PUT /api/v1/notifications/preferences` — today, none (see this file's
- * header comment for why). Not consumed anywhere yet: `preferenceEntrySchema`
- * below is the only reader, via its own `.refine()`. Exported anyway, as the
- * one place this membership is computed, for whichever future consumer needs
- * to know the list ahead of a write — a settings UI wanting to render only
- * the toggles a `PUT` would actually accept, say — rather than recomputing
- * the same filter a second time.
+ * Notification types whose preferences `PUT /api/v1/notifications/preferences`
+ * accepts. Every type is non-disableable, so the list is empty and that route
+ * answers 400 for every entry; `preferenceEntrySchema` is its only reader.
  */
 export const CONFIGURABLE_NOTIFICATION_TYPES = NOTIFICATION_TYPES.filter(
   (type) => !NON_DISABLEABLE_NOTIFICATION_TYPES.has(type)
 )
 
-// `z.enum(NOTIFICATION_TYPES)` first, so the parsed type stays the full
-// `NotificationType` literal union — not widened to `string` — letting the
-// controller hand `entry.notificationType` straight to
-// `NotificationPreferenceRepository.upsert` with no cast. The configurable-
-// subset check is then a `.refine()` on top, which is what turns "not
-// configurable" into a per-field message a client can act on
-// (`preferences.<index>.notificationType`, via `parseBody`'s
-// `flattenError`) instead of zod's own generic "invalid enum value" text
-// that `z.enum(CONFIGURABLE_NOTIFICATION_TYPES)` alone would produce for
-// every rejected type — including, right now, EVERY type, since that list
-// is empty.
+/**
+ * One preference entry. `z.enum(NOTIFICATION_TYPES)` keeps the parsed type the
+ * `NotificationType` union, and the `.refine()` turns "not configurable" into
+ * a per-field message (`preferences.<index>.notificationType`) instead of
+ * zod's generic invalid-enum text.
+ */
 const preferenceEntrySchema = z.object({
   notificationType: z
     .enum(NOTIFICATION_TYPES)

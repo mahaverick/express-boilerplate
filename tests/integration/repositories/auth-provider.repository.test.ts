@@ -1,12 +1,11 @@
-// tests/integration/repositories/auth-provider.repository.test.ts
-//
-// Integration test against the real per-worker Postgres database (see
-// tests/helpers/worker-database.ts). Every user this file creates is
-// deleted in afterEach — deleting the user is enough: auth_providers.user_id
-// carries ON DELETE CASCADE (auth-provider.model.ts), so a row this file
-// never explicitly deletes is still gone once its owning user is. One test
-// below asserts that property directly, same convention
-// notification.repository.test.ts uses for its own cascade.
+/**
+ * @file Integration test against the real per-worker Postgres database (see
+ * `tests/helpers/worker-database.ts`). Every user this file creates is
+ * deleted in `afterEach` — deleting the user is enough: `auth_providers.user_id`
+ * carries `ON DELETE CASCADE` (`auth-provider.model.ts`), so a row this
+ * file never explicitly deletes is still gone once its owning user is. One
+ * test below asserts that property directly.
+ */
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
@@ -124,13 +123,12 @@ describe('AuthProviderRepository', () => {
       ).rejects.toMatchObject({ name: 'HttpError', statusCode: 409 })
     })
 
-    // The catch block's OTHER branch: `isUniqueViolation` false, so the
-    // original error propagates unchanged rather than becoming an
-    // HttpError(409) meant for a (provider, providerId) collision
-    // specifically. A foreign-key violation on `userId` (naming no real
-    // user) is a real, different failure `create`'s own transaction-free
-    // insert can hit — mirrors tenant.repository.test.ts's identical case
-    // for `TenantRepository.create`.
+    /**
+     * The catch block's other branch: `isUniqueViolation` false, so a
+     * foreign-key violation on userId propagates unchanged rather than
+     * becoming an `HttpError(409)` meant for a (provider, providerId)
+     * collision.
+     */
     it('propagates a non-collision database error unchanged, e.g. a foreign-key violation on userId', async () => {
       await expect(
         authProviderRepository.create({
@@ -155,15 +153,13 @@ describe('AuthProviderRepository', () => {
       expect(row.provider).toBe('google')
     })
 
-    // Load-bearing test for this task's own deviation from the brief:
-    // `auth_providers_provider_check` (auth-provider.model.ts) is a schema
-    // guarantee this task introduced, not something the brief asked for —
-    // same standard notification.repository.test.ts's cascade test holds
-    // itself to ("a schema guarantee this task itself introduced, not an
-    // assumption to leave unverified"). `AuthProviderRepository.create`'s
-    // parameter type already blocks an invalid `provider` at compile time,
-    // so this goes around it via a raw insert to prove the database itself
-    // — not just TypeScript — rejects it.
+    /**
+     * Load-bearing for the `auth_providers_provider_check` schema
+     * guarantee (`auth-provider.model.ts`): `AuthProviderRepository.create`'s
+     * parameter type already blocks an invalid provider at compile time,
+     * so this goes around it via a raw insert to prove the database itself
+     * rejects it too.
+     */
     it('rejects an unknown provider at the database, not just in TypeScript', async () => {
       const userId = await createUser()
       await expect(
@@ -309,9 +305,7 @@ describe('AuthProviderRepository', () => {
     })
 
     await sql`delete from users where id = ${user.id}`
-    // The user row is gone without ever being tracked in createdUserIds
-    // above — afterEach has nothing to clean up here, deliberately, since
-    // this test's own point is that the cascade already did it.
+    // Deliberately never tracked in createdUserIds: this test's own point is that the cascade already did the cleanup.
 
     const [remaining] = await sql`select * from auth_providers where id = ${row.id}`
     expect(remaining).toBeUndefined()

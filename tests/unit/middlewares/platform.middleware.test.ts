@@ -1,7 +1,7 @@
-// tests/unit/middlewares/platform.middleware.test.ts
-//
-// requirePlatformRole compares the caller's platform role with its floor:
-// staff below the floor get the same generic 404 as non-staff.
+/**
+ * @file requirePlatformRole compares the caller's platform role with its
+ * floor: staff below the floor get the same generic 404 as non-staff.
+ */
 import type { NextFunction, Request, Response } from 'express'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { MembershipRole } from '@/constants/tenant.constants'

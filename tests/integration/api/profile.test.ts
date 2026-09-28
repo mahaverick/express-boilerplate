@@ -1,19 +1,12 @@
-// tests/integration/api/profile.test.ts
-//
-// Integration test against the real per-worker Postgres database (see
-// tests/helpers/worker-database.ts) — every email used here is unique to
-// this run and every row created is deleted in afterEach, the same
-// convention tests/integration/api/auth.test.ts and
-// tests/integration/middlewares/auth.middleware.test.ts already follow.
-// This file lives under tests/integration/, never tests/unit/ — see
-// CLAUDE.md's note on why a DB-dependent test under tests/unit/ breaks
-// .husky/pre-commit whenever Docker is down.
-//
-// Authenticated requests here sign a token directly with `signAccessToken`
-// rather than going through POST /api/v1/auth/login — mirroring
-// tests/integration/middlewares/auth.middleware.test.ts's own approach —
-// since these tests are about what happens AFTER authentication, not about
-// login itself.
+/**
+ * @file Integration test against the real per-worker Postgres database
+ * (see tests/helpers/worker-database.ts) — every email used here is
+ * unique to this run and every row created is deleted in afterEach.
+ * Authenticated requests sign a token directly with `signAccessToken`
+ * rather than going through POST /api/v1/auth/login, since these tests
+ * are about what happens after authentication, not about login itself.
+ */
+
 import { randomUUID } from 'node:crypto'
 import type { Response } from 'supertest'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -29,16 +22,18 @@ import { request } from '../../helpers/request'
 const app = createApp()
 const userRepository = new UserRepository()
 
-// The API legitimately returns JSON `null` for an unset nullable column
-// (firstName/lastName) — `toEqual` must match that exact value, and
-// `undefined` would not. Mirrors tests/integration/api/auth.test.ts's own
-// disable, for the same reason.
+/**
+ * The API legitimately returns JSON `null` for an unset nullable column
+ * (firstName/lastName) — `toEqual` must match that exact value, and
+ * `undefined` would not.
+ */
 // eslint-disable-next-line unicorn/no-null -- see comment above
 const NO_NAME = null
 
-// vitest types `expect.any(...)` as `any` — see
-// tests/integration/api/auth.test.ts's own comment for why this cast exists
-// and is reused as one shared instance across every assertion below.
+/**
+ * vitest types `expect.any(...)` as `any`; reused as one shared
+ * instance across every assertion below.
+ */
 const ANY_STRING = expect.any(String) as unknown as string
 
 /**
@@ -84,6 +79,16 @@ function uniqueEmail(): string {
   return `profile-api-${randomUUID()}@example.test`
 }
 
+/**
+ * Same convention tests/integration/api/auth.test.ts and
+ * tests/integration/middlewares/auth.middleware.test.ts already
+ * follow. This file lives under tests/integration/, never
+ * tests/unit/ — see CLAUDE.md's note on why a DB-dependent test under
+ * tests/unit/ breaks .husky/pre-commit whenever Docker is down.
+ * Authenticated requests here mirror
+ * tests/integration/middlewares/auth.middleware.test.ts's own
+ * sign-a-token-directly approach.
+ */
 describe('/api/v1/profile', () => {
   const createdIds: string[] = []
 
@@ -116,10 +121,7 @@ describe('/api/v1/profile', () => {
         .set('Authorization', `Bearer ${token}`)
 
       expect(response.status).toBe(200)
-      // toEqual, not toMatchObject: a leaked passwordHash (or any other
-      // unexpected column) slips past a subset match but must fail this
-      // one — the exact-shape check is what makes this test fail if the
-      // property regresses, not just if a field is renamed.
+      // toEqual, not toMatchObject: a leaked passwordHash (or any other unexpected column) slips past a subset match but must fail this one.
       expect(envelopeOf<PublicUserBody>(response).data).toEqual({
         id: user.id,
         email: user.email,
@@ -138,18 +140,7 @@ describe('/api/v1/profile', () => {
       expect(envelopeOf<PublicUserBody>(response).success).toBe(false)
     })
 
-    // A real race, not a hypothetical one: profile.controller.ts's own
-    // `getProfile` loads the user a SECOND time (requireAuth,
-    // auth.middleware.ts, already loaded it once to authenticate the
-    // request) and 404s if that second lookup comes back empty. Simulating
-    // the row vanishing in that exact gap needs `findById` to answer
-    // truthfully once (requireAuth's own check, which must succeed or every
-    // request here 401s before reaching the controller at all) and then
-    // report "gone" from the very next call on — the real implementation
-    // stays real up to that count, `withMutatedMethod` reaches every
-    // existing `UserRepository` instance including this file's own and
-    // auth.middleware.ts's, and restores the original afterwards
-    // (tests/helpers/mutate.ts).
+    // A real race: getProfile loads the user a second time after requireAuth already loaded it once, and 404s if that second lookup comes back empty.
     it('returns 404 when the user is deleted between requireAuth loading it and the handler loading it again', async () => {
       const { token } = await createAuthenticatedUser()
       // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
@@ -200,14 +191,7 @@ describe('/api/v1/profile', () => {
       expect(response.status).toBe(401)
     })
 
-    // The `hasChanges` branch of the same race the GET test above proves —
-    // here the second lookup is `UserRepository.update`, not `findById`
-    // (toUpdateValues produced at least one column, so updateProfile takes
-    // the `userRepository.update(...)` arm of its ternary, not
-    // `findById`). `update()` itself already returns undefined for "no
-    // matching row" (base.repository.ts), so no counter is needed here —
-    // unlike `findById`, requireAuth never calls `update`, so mutating it
-    // unconditionally cannot make an earlier, unrelated lookup fail first.
+    // The hasChanges branch of the same race the GET test above proves, here via UserRepository.update; unlike findById, requireAuth never calls update, so mutating it unconditionally cannot make an earlier lookup fail first.
     it('returns 404 from an update when the user is deleted first', async () => {
       const { token } = await createAuthenticatedUser()
 
@@ -230,9 +214,7 @@ describe('/api/v1/profile', () => {
       const { user, token } = await createAuthenticatedUser()
       await userRepository.update(user.id, { firstName: 'Ada', lastName: 'Lovelace' })
 
-      // lastName omitted entirely -> left alone. firstName explicit null ->
-      // cleared. If these collapsed to the same thing, one of the two
-      // assertions below would fail.
+      // lastName omitted entirely -> left alone; firstName explicit null -> cleared. If these collapsed to the same thing, one of the two assertions below would fail.
       const response = await request(app)
         .patch('/api/v1/profile')
         .set('Authorization', `Bearer ${token}`)
@@ -246,14 +228,7 @@ describe('/api/v1/profile', () => {
       })
     })
 
-    // The property that matters: mass-assignment protection. A request that
-    // mixes a legitimate field change with the four fields this endpoint
-    // must never let a caller touch — the realistic attack shape, piggy-
-    // backing on an otherwise-ordinary profile edit. Asserting only the
-    // response would not be enough (a filtered response can still hide a
-    // write that happened underneath), so this reads the row back with raw
-    // SQL — an oracle independent of the repository under test — rather
-    // than through UserRepository.
+    // Mass-assignment protection: a request mixing a legitimate field change with fields this endpoint must never let a caller touch. Asserting only the response would not be enough (a filtered response can still hide a write underneath), so this reads the row back with raw SQL, independent of the repository under test.
     it('ignores email, id, passwordHash, and active even when supplied, and the stored row proves it', async () => {
       const originalPasswordHash = await hashPassword('OriginalPassword123!')
       const { user, token } = await createAuthenticatedUser({
@@ -275,9 +250,7 @@ describe('/api/v1/profile', () => {
 
       expect(response.status).toBe(200)
       const body = envelopeOf<PublicUserBody>(response).data
-      // The legitimate field in the same request DID take effect — this is
-      // what makes the test below meaningful rather than trivially true of
-      // a request that was rejected outright.
+      // The legitimate field in the same request did take effect — otherwise the test below would be trivially true of a request rejected outright.
       expect(body?.firstName).toBe('Updated')
       expect(body?.id).toBe(user.id)
       expect(body?.email).toBe(user.email)

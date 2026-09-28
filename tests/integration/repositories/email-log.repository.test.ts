@@ -1,8 +1,8 @@
-// tests/integration/repositories/email-log.repository.test.ts
-//
-// Integration test against the real per-worker Postgres database (see
-// tests/helpers/worker-database.ts). Every row this file creates is
-// deleted in afterEach.
+/**
+ * @file Integration test against the real per-worker Postgres database (see
+ * `tests/helpers/worker-database.ts`). Every row this file creates is
+ * deleted in `afterEach`.
+ */
 import { randomBytes, randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import { MAX_EMAIL_LENGTH } from '@/constants/auth.constants'
@@ -87,15 +87,12 @@ describe('EmailLogRepository', () => {
     expect(recorded.providerMessageId).toBeNull()
   })
 
-  // Round-1 fix to this task: a raw token (session.service.ts) hex-encoded
-  // is EXACTLY 64 characters, so an earlier version of this repository —
-  // which truncated an over-length errorCode to ERROR_CODE_MAX_LENGTH
-  // rather than normalizing it — would have written a 32-character PREFIX
-  // of a live secret into this audit table. Ruling E (task-4-brief.md)
-  // still applies (a log write must never fail an already-sent email's
-  // request), but the remedy for a mis-shaped value is replacement, not
-  // truncation: nothing that looks like a raw token may reach the table in
-  // any form, partial or whole.
+  /**
+   * A raw token (`session.service.ts`) hex-encoded is exactly 64
+   * characters, so truncating an over-length `errorCode` to
+   * `ERROR_CODE_MAX_LENGTH` (32) instead of normalizing it would write a
+   * 32-character prefix of a live secret into this table.
+   */
   it('normalizes a raw-token-shaped error code to UNKNOWN_ERROR_CODE rather than storing any part of it', async () => {
     const recipient = uniqueRecipient()
     const rawToken = randomBytes(32).toString('hex')
@@ -110,26 +107,23 @@ describe('EmailLogRepository', () => {
 
     expect(recorded.errorCode).toBe(UNKNOWN_ERROR_CODE)
 
-    // Read the table directly, not record()'s return value — the token
-    // must not have landed on disk in any form, not even as a fragment of
-    // a longer stored value.
+    // Read the table directly, not record()'s return value: the token must not have landed on disk in any form, not even as a fragment.
     const [row] = await sql`select * from email_logs where id = ${recorded.id}`
     expect(row?.error_code).toBe(UNKNOWN_ERROR_CODE)
     expect(JSON.stringify(row)).not.toContain(rawToken)
   })
 
-  // Round-2 review finding 1: the test above uses a 64-character token,
-  // which fails withErrorCodeNormalized's LENGTH check alone — it never
-  // exercises ERROR_CODE_PATTERN, because the length check short-circuits
-  // first. Deleting the regex clause from the guard entirely still passed
-  // the full suite before this test existed (see
-  // email-log-error-code-shape-mutation.test.ts for the load-bearing
-  // proof). This value is deliberately 32 characters — exactly
-  // ERROR_CODE_MAX_LENGTH, so it passes the length check and the regex
-  // clause is the ONLY thing standing between it and the database — and
-  // it is also the realistic leak: a 32-character lowercase-hex fragment
-  // is exactly what a truncated (or otherwise mis-derived) raw token would
-  // look like.
+  /**
+   * The test above uses a 64-character token, which fails
+   * `withErrorCodeNormalized`'s length check alone and never exercises
+   * `ERROR_CODE_PATTERN` (see `email-log-error-code-shape-mutation.test.ts`
+   * for the load-bearing proof that the regex clause is covered). This
+   * value is deliberately 32 characters, exactly `ERROR_CODE_MAX_LENGTH`,
+   * so it passes the length check and the regex clause is the only thing
+   * standing between it and the database — and it is also the realistic
+   * leak: a 32-character lowercase-hex fragment is exactly what a
+   * truncated or mis-derived raw token would look like.
+   */
   it('normalizes a wrong-shaped-but-within-width error code to UNKNOWN_ERROR_CODE', async () => {
     const recipient = uniqueRecipient()
     const wrongShaped = 'a1'.repeat(16) // 32 lowercase-hex characters
@@ -175,50 +169,20 @@ describe('EmailLogRepository', () => {
     expect(await emailLogRepository.findByRecipient(uniqueRecipient())).toEqual([])
   })
 
-  // Round-2 review finding 4. The version this replaced generated a raw
-  // token and a rendered body and then asserted they weren't in the table
-  // — but never actually passed either to record(); `NewEmailLog` has no
-  // field for a rendered body at all, so that assertion could not have
-  // gone red for any real defect in this repository. This version DRIVES
-  // the token through record()'s actual input, field by field, and checks
-  // the table itself.
-  //
-  // Deliberately scoped to the two fields this schema actually guards
-  // against a raw token specifically — `errorCode` (shape+width
-  // normalization) and `templateKey` (width alone, since a 64-character
-  // token cannot fit under TEMPLATE_KEY_MAX_LENGTH, 32) — not "every string
-  // field": `recipient` (MAX_EMAIL_LENGTH, 320) and `providerMessageId`
-  // (PROVIDER_MESSAGE_ID_MAX_LENGTH, 255) carry no protection AGAINST A
-  // TOKEN, confirmed empirically (a raw token passed as either lands
-  // verbatim in the table — see task-4-report.md's round-2 notes) and by
-  // design — this table's load-bearing property was never a claim about
-  // those two columns excluding a token (see email-log.model.ts's header
-  // comment, round-2 finding 3). Task 3 (task-3-brief.md's Controller
-  // addendum, item 2) gave both of them WIDTH normalization too — see the
-  // boundary tests below — but that guards against an over-width value
-  // vanishing the audit row, not against a token, since 320 and 255 are
-  // both well past 64. Writing this test against a claim the schema does
-  // not make would just be a second version of finding 4's original
-  // defect: an assertion that cannot mean what it appears to mean.
-  //
-  // The `templateKey` branch below changed shape in Task 3: it used to
-  // assert the insert REJECTS (width alone, no normalization, matching
-  // `errorCode`'s pre-Task-3 state). `EmailLogRepository.record` now
-  // normalizes an over-width `templateKey` the same way it already
-  // normalized `errorCode` — the addendum's own "unlike template_key and
-  // error_code" framing for this gap turned out to be inaccurate (this
-  // exact test, before this edit, proved the insert REJECTED for
-  // `templateKey`, and task-4-review.md's finding 2 flagged the same gap
-  // independently) — so the row is now written, with `templateKey`
-  // replaced, never the token itself, exactly like the `errorCode` branch
-  // above it.
+  /**
+   * Drives the token through `record()`'s actual input and checks the
+   * table itself. Scoped to the two fields this schema actually guards
+   * against a raw token: `errorCode` (shape+width normalization, replaced)
+   * and `templateKey` (width alone — 32 is narrower than a 64-character
+   * token — also replaced, never rejected). `recipient` (320) and
+   * `providerMessageId` (255) get width normalization too (see the
+   * boundary tests below) but carry no protection against a token
+   * specifically, since both widths are well past 64.
+   */
   it('never contains the raw token, driven through every field this schema actually guards', async () => {
     const rawToken = randomBytes(32).toString('hex') // 64 lowercase-hex characters
 
-    // errorCode: guarded by normalization — the row is written, but with
-    // errorCode replaced, never the token itself. Scoped to this test's
-    // own row (by id), not the whole table, so a concurrently-running test
-    // elsewhere can't affect this assertion.
+    // errorCode: guarded by normalization. Scoped to this test's own row (by id), not the whole table, so a concurrently-running test elsewhere can't affect this assertion.
     const errorCodeRecipient = uniqueRecipient()
     const viaErrorCode = await emailLogRepository.record({
       recipient: errorCodeRecipient,
@@ -231,10 +195,7 @@ describe('EmailLogRepository', () => {
     const [errorCodeRow] = await sql`select * from email_logs where id = ${viaErrorCode.id}`
     expect(JSON.stringify(errorCodeRow)).not.toContain(rawToken)
 
-    // templateKey: guarded by width (32, narrower than a 64-char token) —
-    // as of Task 3, normalized rather than left to reject. The row is
-    // written, with templateKey replaced by the placeholder; the token
-    // itself lands nowhere in it, in any form.
+    // templateKey: guarded by width (32, narrower than a 64-char token), normalized rather than rejected. The token itself lands nowhere in it, in any form.
     const templateKeyRecipient = uniqueRecipient()
     const viaTemplateKey = await emailLogRepository.record({
       recipient: templateKeyRecipient,
@@ -248,14 +209,13 @@ describe('EmailLogRepository', () => {
     expect(JSON.stringify(templateKeyRow)).not.toContain(rawToken)
   })
 
-  // Task 3 (task-3-brief.md's Controller addendum, item 2): width
-  // normalization for recipient/templateKey/providerMessageId. Boundaries
-  // measured against the REAL column widths (MAX_EMAIL_LENGTH,
-  // TEMPLATE_KEY_MAX_LENGTH, PROVIDER_MESSAGE_ID_MAX_LENGTH), not assumed —
-  // the exact lesson task-3-brief.md itself names: a previous task's own
-  // width was once the precise length of the secret it was meant to
-  // exclude. "Exactly N passes through unchanged; N+1 normalizes" is the
-  // only way to prove the boundary is where the code claims it is.
+  /**
+   * Width normalization for recipient/templateKey/providerMessageId, with
+   * boundaries measured against the real column widths (`MAX_EMAIL_LENGTH`,
+   * `TEMPLATE_KEY_MAX_LENGTH`, `PROVIDER_MESSAGE_ID_MAX_LENGTH`), not
+   * assumed: "exactly N passes through unchanged; N+1 normalizes" is the
+   * only way to prove the boundary is where the code claims it is.
+   */
   describe('width normalization at the exact boundary', () => {
     it('a recipient of exactly MAX_EMAIL_LENGTH characters is stored unchanged', async () => {
       const recipient = recipientOfLength(MAX_EMAIL_LENGTH)

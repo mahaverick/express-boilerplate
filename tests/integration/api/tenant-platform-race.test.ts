@@ -1,22 +1,10 @@
-// tests/integration/api/tenant-platform-race.test.ts
-//
-// A staff user's platform role is re-read under lock inside the service's
-// transaction, not taken from request.principal. Each test changes the
-// staff user's platform membership straight after resolveTenant has read
-// it, so requireRole still sees the old role; the write must be refused
-// and must change nothing. Same shape as tenant-actor-race.test.ts, hooking
-// the platform read (findPlatformRole on the pool) instead of the
-// membership read.
-//
-// The last test is DELIBERATELY red under MUTATION_PROOF=1. It also makes
-// the service's locked re-read return the role resolveTenant saw, which is
-// what a service trusting that earlier read would do, and keeps the real
-// test's assertions:
-//
-//   MUTATION_PROOF=1 pnpm exec vitest run tests/integration/api/tenant-platform-race.test.ts   # red
-//   pnpm exec vitest run tests/integration/api/tenant-platform-race.test.ts                    # green
-//
-// Staff visits write audit rows, so afterEach clears audit_logs first.
+/**
+ * @file A staff user's platform role is re-read under lock inside the
+ * service's transaction, not taken from request.principal. Same shape
+ * as tenant-actor-race.test.ts, hooking the platform read
+ * (findPlatformRole on the pool) instead of the membership read.
+ */
+
 import { randomUUID } from 'node:crypto'
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
@@ -136,6 +124,12 @@ async function rename(tenant: Tenant, token: string): Promise<{ status: number; 
   return { status: response.status, body: response.body as unknown }
 }
 
+/**
+ * Each test changes the staff user's platform membership straight
+ * after resolveTenant has read it, so requireRole still sees the old
+ * role; the write must be refused and must change nothing. Staff
+ * visits write audit rows, so afterEach clears audit_logs first.
+ */
 describe('the staff role is re-read under lock (platform role changed after resolveTenant)', () => {
   const createdTenantIds: string[] = []
   const createdUserIds: string[] = []
@@ -283,8 +277,15 @@ describe('the staff role is re-read under lock (platform role changed after reso
     expect(await storedName(tenant)).toBe('Acme Inc')
   })
 
-  // DELIBERATELY red under MUTATION_PROOF=1: the first test's own assertions,
-  // against a service that trusts resolveTenant's read.
+  /**
+   * DELIBERATELY red under MUTATION_PROOF=1: it makes the service's
+   * locked re-read return the role resolveTenant saw, which is what a
+   * service trusting that earlier read would do, and keeps the first
+   * test's own assertions.
+   *
+   *   MUTATION_PROOF=1 pnpm exec vitest run tests/integration/api/tenant-platform-race.test.ts   # red
+   *   pnpm exec vitest run tests/integration/api/tenant-platform-race.test.ts                    # green
+   */
   it.runIf(process.env.MUTATION_PROOF === '1')(
     'reproduces the stale-role test against a service that trusts the earlier read',
     async () => {

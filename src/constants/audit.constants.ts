@@ -1,7 +1,7 @@
-// src/constants/audit.constants.ts
-//
-// The fixed value sets of `audit_logs`, mirrored into its CHECK constraints,
-// and the metadata schema of every audited action.
+/**
+ * @file The fixed value sets of `audit_logs`, mirrored into its CHECK
+ * constraints, and the metadata schema of every audited action.
+ */
 import { z } from 'zod'
 import { MEMBERSHIP_ROLES } from '@/constants/tenant.constants'
 import { EMAIL_DOMAIN_PATTERN } from '@/utilities/email.utilities'
@@ -44,13 +44,17 @@ export type AuditTargetType = (typeof AUDIT_TARGET_TYPES)[number]
 
 const role = z.enum(MEMBERSHIP_ROLES)
 const id = z.string().min(1).max(36)
-// A lowercase hostname only: an address, a mixed-case value, or a token
-// (no dot) must never reach the log. The producer lowercases first.
+/**
+ * A lowercase hostname only, so no address or token can reach the log.
+ */
 const emailDomain = z.string().regex(EMAIL_DOMAIN_PATTERN)
-// Null for a stored invitation address whose domain is no hostname, so the
-// entry is still written without it.
+/**
+ * Null when a stored address has no hostname domain, so the entry is still written.
+ */
 const invitationEmailDomain = emailDomain.nullable()
-// Field names only, never their values.
+/**
+ * Field names only, never their values.
+ */
 const changedFields = z.array(z.string().regex(/^[a-z][A-Za-z\d]{0,63}$/)).max(32)
 
 /**

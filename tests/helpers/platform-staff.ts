@@ -1,8 +1,8 @@
-// tests/helpers/platform-staff.ts
-//
-// Staff are users with a membership in the seeded platform tenant. These
-// helpers read that tenant and make a user staff, for tests that exercise
-// platform access.
+/**
+ * @file Staff are users with a membership in the seeded platform tenant.
+ * These helpers read that tenant and make a user staff, for tests that
+ * exercise platform access.
+ */
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import { TenantRepository } from '@/repositories/tenant.repository'

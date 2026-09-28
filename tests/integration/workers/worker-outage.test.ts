@@ -1,10 +1,10 @@
-// tests/integration/workers/worker-outage.test.ts
-//
-// BullMQ Workers through a Redis outage, over the TCP proxy in
-// tests/helpers/redis-proxy.ts. Its own file because it mocks getEnv()'s
-// REDIS_URL, and because its first test needs a Worker connection that has
-// never been ready. Runs under its own REDIS_KEY_PREFIX, so no other Worker can
-// pick up its jobs.
+/**
+ * @file BullMQ Workers through a Redis outage, over the TCP proxy in
+ * `tests/helpers/redis-proxy.ts`. Its own file because it mocks `getEnv()`'s
+ * `REDIS_URL`, and because its first test needs a Worker connection that has
+ * never been ready. Runs under its own `REDIS_KEY_PREFIX`, so no other
+ * Worker can pick up its jobs.
+ */
 import { randomUUID } from 'node:crypto'
 import { Queue, Worker } from 'bullmq'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
@@ -39,7 +39,9 @@ vi.mock('@/configs/env.config', async (importOriginal) => {
   }
 })
 
-// retryIfFailed and run are BullMQ internals, wrapped here to observe them.
+/**
+ * `retryIfFailed` and `run` are BullMQ internals, wrapped here to observe them.
+ */
 type WorkerInternals = {
   retryIfFailed: (this: Worker, ...retryArguments: unknown[]) => Promise<unknown>
   run: (this: Worker) => Promise<void>
@@ -48,10 +50,16 @@ const workerPrototype = Worker.prototype as unknown as WorkerInternals
 const originalRetryIfFailed = workerPrototype.retryIfFailed
 const originalRun = workerPrototype.run
 
-// A spinning Worker calls retryIfFailed without end; this many calls means it spins.
+/**
+ * A spinning Worker calls `retryIfFailed` without end; this many calls means it spins.
+ */
 const SPIN_BOUND = 500
-// Starvation claim: a 50ms timer fires within this, so no fetch loop starves the event loop
-// (worker-supervisor.service.ts). Headroom: at least 10x the lag measured under the full suite.
+
+/**
+ * A 50ms timer firing within this means no fetch loop starves the event
+ * loop (`worker-supervisor.service.ts`); at least 10x the lag measured
+ * under the full suite.
+ */
 const STARVED_TIMER_MS = 200
 
 const proxy = new RedisProxy()
@@ -145,8 +153,7 @@ describe('Queue Workers through a Redis outage', () => {
         })
         try {
           observed.running = startWorkers()
-          // Past two pre-ready give-ups (about 1.2s each): a Worker that spins after
-          // its connection gives up has had a whole give-up interval to show it.
+          // Past two pre-ready give-ups (~1.2s each): a spinning Worker has had a whole give-up interval to show it.
           await waitUntil(() => losses.count >= 2, {
             message: 'the Worker connection gives up twice before its first ready',
             timeout: 10_000,
@@ -155,8 +162,7 @@ describe('Queue Workers through a Redis outage', () => {
           unsubscribe()
         }
         expect(await timerDelay()).toBeLessThan(STARVED_TIMER_MS)
-        // Healthy Workers wait BullMQ's runRetryDelay (15s default) between fetch
-        // retries; a spinning one retries with no delay, up to SPIN_BOUND (500).
+        // Healthy Workers wait BullMQ's runRetryDelay (15s default) between fetch retries; a spinning one retries with no delay, up to SPIN_BOUND.
         expect(observed.retries).toBeLessThan(50)
         expect(await isQueueReachable()).toBe(false)
 

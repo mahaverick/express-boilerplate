@@ -1,8 +1,8 @@
-// tests/integration/repositories/tenant-invitation.repository.test.ts
-//
-// Against the real per-worker Postgres database. afterEach deletes tenants
-// first (tenant_invitations.tenant_id cascades), then users
-// (invited_by/accepted_by are SET NULL).
+/**
+ * @file Against the real per-worker Postgres database. `afterEach` deletes
+ * tenants first (`tenant_invitations.tenant_id` cascades), then users
+ * (`invited_by`/`accepted_by` are `SET NULL`).
+ */
 import { randomBytes, randomUUID } from 'node:crypto'
 import { DrizzleQueryError, eq } from 'drizzle-orm'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -25,8 +25,10 @@ const invitationRepository = new TenantInvitationRepository()
 const tenantRepository = new TenantRepository()
 const userRepository = new UserRepository()
 
-// The test pool's own size (database.service.ts, `max: 2`), so both claims
-// really run at the database at once.
+/**
+ * The test pool's own size (`database.service.ts`, `max: 2`), so both
+ * claims really run at the database at once.
+ */
 const CONCURRENT_CLAIMS = 2
 const HOUR_MS = 60 * 60 * 1000
 
@@ -165,8 +167,7 @@ describe('TenantInvitationRepository', () => {
       expect(pending.map((invitation) => invitation.id)).toEqual([second.id])
     })
 
-    // An expired row still holds the partial index's slot (it cannot filter
-    // on now()); without the revoke this insert would 23505.
+    // An expired row still holds the partial index's slot (it cannot filter on now()); without the revoke this insert would 23505.
     it('replaces an expired pending invitation too', async () => {
       const { owner, tenant } = await setup()
       const email = uniqueEmail()

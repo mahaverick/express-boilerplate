@@ -1,22 +1,15 @@
-// tests/integration/repositories/user-membership.repository.test.ts
-//
-// Integration test against the real per-worker Postgres database (see
-// tests/helpers/worker-database.ts). Every tenant this file creates is
-// deleted in afterEach, tenants first — `user_memberships.tenant_id`
-// carries `ON DELETE CASCADE` (user-membership.model.ts), same convention
-// tenant.repository.test.ts's own header comment describes. Users are
-// deleted second: `user_memberships.user_id` also cascades, so deleting a
-// user takes any membership row still pointing at it (including one whose
-// tenant this file never tracked, which does not happen here, but the
-// ordering is deliberate regardless — same "delete the parent, trust the
-// cascade" convention as auth-provider.repository.test.ts).
-//
-// Every tenant here is created via `TenantRepository.create` — the only
-// way a tenant (and therefore any membership pointing at it) can exist in
-// this codebase — never a raw insert, so these fixtures are exactly what a
-// real caller would produce: a tenant with an owner membership already in
-// place, onto which this file adds further memberships directly via
-// `UserMembershipRepository.create`.
+/**
+ * @file Integration test against the real per-worker Postgres database (see
+ * `tests/helpers/worker-database.ts`). Every tenant this file creates is
+ * deleted in `afterEach`, tenants first, then users: both
+ * `user_memberships.tenant_id` and `.user_id` carry `ON DELETE CASCADE`
+ * (`user-membership.model.ts`). Every tenant here is created via
+ * `TenantRepository.create` — the only way a tenant (and therefore any
+ * membership pointing at it) can exist in this codebase — so these fixtures
+ * are exactly what a real caller would produce: a tenant with an owner
+ * membership already in place, onto which this file adds further
+ * memberships directly via `UserMembershipRepository.create`.
+ */
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import { TenantRepository } from '@/repositories/tenant.repository'
@@ -136,20 +129,18 @@ describe('UserMembershipRepository', () => {
       const owner = await createUser()
       const tenant = await createTenant(owner.id)
 
-      // owner already has a membership row, created by TenantRepository
-      // .create — this is the collision.
+      // owner already has a membership row, created by TenantRepository.create — this is the collision.
       await expect(
         userMembershipRepository.create({ userId: owner.id, tenantId: tenant.id, role: 'admin' })
       ).rejects.toMatchObject({ name: 'HttpError', statusCode: 409 })
     })
 
-    // The catch block's OTHER branch: `isUniqueViolation` false, so the
-    // original error propagates unchanged rather than becoming an
-    // HttpError(409) meant for a (userId, tenantId) collision specifically.
-    // A foreign-key violation on `userId` (naming no real user) is a real,
-    // different failure — mirrors tenant.repository.test.ts's and
-    // auth-provider.repository.test.ts's identical case for their own
-    // `create`.
+    /**
+     * The catch block's other branch: `isUniqueViolation` false, so a
+     * foreign-key violation on userId propagates unchanged rather than
+     * becoming an `HttpError(409)` meant for a (userId, tenantId)
+     * collision.
+     */
     it('propagates a non-collision database error unchanged, e.g. a foreign-key violation on userId', async () => {
       const owner = await createUser()
       const tenant = await createTenant(owner.id)
@@ -164,10 +155,7 @@ describe('UserMembershipRepository', () => {
     })
 
     it('rejects an unknown role at the database, not just in TypeScript', async () => {
-      // Load-bearing for this task's own schema guarantee
-      // (`user_memberships_role_check`, user-membership.model.ts) — same
-      // standard auth-provider.repository.test.ts's identical check holds
-      // itself to.
+      // Load-bearing for the user_memberships_role_check schema guarantee (user-membership.model.ts).
       const owner = await createUser()
       const member = await createUser()
       const tenant = await createTenant(owner.id)
@@ -213,8 +201,7 @@ describe('UserMembershipRepository', () => {
 
       const rows = await userMembershipRepository.listByTenant(tenant.id)
       expect(rows.some((row) => row.user.id === member.id)).toBe(false)
-      // The membership row itself is untouched by the user's soft-delete —
-      // only the projection excludes it.
+      // The membership row itself is untouched by the user's soft-delete; only the projection excludes it.
       const [rawMembership] =
         await sql`select * from user_memberships where user_id = ${member.id} and tenant_id = ${tenant.id}`
       expect(rawMembership).toBeDefined()
@@ -354,8 +341,7 @@ describe('UserMembershipRepository', () => {
       const third = await createUser()
       const outsider = await createUser()
       const tenant = await createTenant(owner.id)
-      // Insert in an order that is not user_id order, so the rows' physical
-      // order cannot pass for the sorted one.
+      // Insert in an order that is not user_id order, so the rows' physical order cannot pass for the sorted one.
       const insertionOrder = [third, first, second]
       for (const [index, member] of insertionOrder.entries()) {
         await userMembershipRepository.create({
@@ -427,9 +413,7 @@ describe('UserMembershipRepository', () => {
     if (!membership) throw new Error('unreachable: asserted above')
 
     await sql`delete from tenants where id = ${tenant.id}`
-    // The tenant row is gone without ever being tracked in createdTenantIds
-    // above — afterEach has nothing to clean up here, deliberately, since
-    // this test's own point is that the cascade already did it.
+    // Deliberately never tracked in createdTenantIds: this test's own point is that the cascade already did the cleanup.
 
     const [remaining] = await sql`select * from user_memberships where id = ${membership.id}`
     expect(remaining).toBeUndefined()
@@ -445,8 +429,7 @@ describe('UserMembershipRepository', () => {
     })
 
     await sql`delete from users where id = ${member.id}`
-    // member's row is gone without ever being tracked in createdUserIds
-    // above — same deliberate omission as the cascade test above.
+    // Deliberately never tracked in createdUserIds, same omission as the cascade test above.
 
     const [remaining] = await sql`select * from user_memberships where id = ${membership.id}`
     expect(remaining).toBeUndefined()

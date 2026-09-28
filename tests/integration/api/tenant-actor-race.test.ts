@@ -1,14 +1,14 @@
-// tests/integration/api/tenant-actor-race.test.ts
-//
-// The actor's own role is re-read under lock inside the service's
-// transaction, not taken from request.principal. Each test changes the
-// actor's membership straight after resolveTenant has read it, so
-// requireRole still sees the old owner role; the write must be refused
-// and must change nothing.
-//
-// The hook wraps UserMembershipRepository.findByUserAndTenant and fires
-// once, on resolveTenant's pool read of the actor. Reads inside a
-// transaction (the executor argument is set) pass through untouched.
+/**
+ * @file The actor's own role is re-read under lock inside the service's
+ * transaction, not taken from request.principal. Each test changes the
+ * actor's membership straight after resolveTenant has read it, so
+ * requireRole still sees the old owner role; the write must be refused
+ * and must change nothing. The hook wraps
+ * `UserMembershipRepository.findByUserAndTenant` and fires once, on
+ * resolveTenant's pool read of the actor; reads inside a transaction (the
+ * executor argument is set) pass through untouched.
+ */
+
 import { randomBytes, randomUUID } from 'node:crypto'
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'

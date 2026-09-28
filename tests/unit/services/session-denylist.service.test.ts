@@ -29,11 +29,7 @@ describe('session denylist', () => {
     const { denySession } = await import('@/services/session-denylist.service')
     expect(await denySession('session-abc')).toBe('denied')
 
-    // Computed from the same source the service reads (getEnv().ACCESS_TOKEN_TTL),
-    // not a hard-coded number: this asserts the ACTUAL invariant the
-    // service's own comment calls "the whole design" — not merely
-    // `> 0`, which an `EX` of 1 would also satisfy while defeating that
-    // design entirely.
+    // Computed from the same source the service reads (getEnv().ACCESS_TOKEN_TTL), not a hard-coded number — this asserts the actual TTL value, not merely `> 0`, which an `EX` of 1 would also satisfy while defeating the point of a matching TTL.
     const expectedSeconds = Math.ceil(requireDurationMs(getEnv().ACCESS_TOKEN_TTL) / MS_PER_SECOND)
     expect(redis.set).toHaveBeenCalledWith(deniedKey(), '1', {
       expiration: { type: 'EX', value: expectedSeconds },
@@ -48,9 +44,7 @@ describe('session denylist', () => {
   })
 
   it('ALLOWS when Redis is unreachable, rather than locking everyone out', async () => {
-    // Fail-open is the deliberate trade. Failing closed turns a Redis blip
-    // into a total outage; failing open returns to the pre-existing 15-minute
-    // window. The warning is what makes it visible.
+    // Fail-open is the deliberate trade: failing closed turns a Redis blip into a total outage, while failing open returns to the ordinary token-expiry window; the warning is what makes it visible.
     redis.exists.mockRejectedValue(new Error('connection refused'))
     const { isSessionDenied } = await import('@/services/session-denylist.service')
     expect(await isSessionDenied('session-abc')).toBe(false)

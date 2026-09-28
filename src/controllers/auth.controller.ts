@@ -1,14 +1,15 @@
-// src/controllers/auth.controller.ts
-//
-// HTTP only: parse the body, call auth.service / google-auth.service, and
-// shape the reply — cookies, redirects, status and envelope. The
-// enumeration and timing rules live with the work, in auth.service.ts.
+/**
+ * @file Auth handlers, HTTP only: parse the body, call auth.service or
+ * google-auth.service, and shape the reply (cookies, redirects, status and
+ * envelope). The enumeration and timing rules live in auth.service.ts.
+ */
 import type { CookieOptions, NextFunction, Request, RequestHandler, Response } from 'express'
 import passport from 'passport'
 import type { Profile as GoogleProfile } from 'passport-google-oauth20'
 import { getEnv, isCookieSecure, type Env } from '@/configs/env.config'
 import {
   GOOGLE_STRATEGY_NAME,
+  // eslint-disable-next-line sonarjs/deprecation -- the plain-http cookie name, also read as the COOKIE_SECURE fallback
   LEGACY_REFRESH_TOKEN_COOKIE_NAME,
   refreshCookieSpec,
   type RefreshCookieSpec,
@@ -123,7 +124,11 @@ function readCookie(request: Request, name: string): string | undefined {
  */
 function readRefreshTokenCookie(request: Request): string | undefined {
   const current = currentRefreshCookie(getEnv())
-  return readCookie(request, current.name) ?? readCookie(request, LEGACY_REFRESH_TOKEN_COOKIE_NAME)
+  return (
+    readCookie(request, current.name) ??
+    // eslint-disable-next-line sonarjs/deprecation -- reads the old cookie name until the next major
+    readCookie(request, LEGACY_REFRESH_TOKEN_COOKIE_NAME)
+  )
 }
 
 /**
@@ -135,6 +140,7 @@ function presentedRefreshTokens(request: Request): string[] {
   const current = currentRefreshCookie(getEnv())
   const tokens = [
     readCookie(request, current.name),
+    // eslint-disable-next-line sonarjs/deprecation -- reads the old cookie name until the next major
     readCookie(request, LEGACY_REFRESH_TOKEN_COOKIE_NAME),
   ].filter((token): token is string => token !== undefined)
   return [...new Set(tokens)]
@@ -151,6 +157,7 @@ function presentedRefreshTokens(request: Request): string[] {
  * @param env - The validated environment.
  */
 function clearLegacyRefreshCookies(request: Request, response: Response, env: Env): void {
+  // eslint-disable-next-line sonarjs/deprecation -- reads the old cookie name until the next major
   if (readCookie(request, LEGACY_REFRESH_TOKEN_COOKIE_NAME) === undefined) return
   const current = currentRefreshCookie(env)
   const forms = [refreshCookieSpec({ COOKIE_SECURE: false })]
@@ -214,8 +221,9 @@ function setRefreshTokenCookie(
  * cookie on cross-site subresource requests and cross-site unsafe (non-GET)
  * requests — the actual CSRF surface `'strict'` exists to close for every
  * other endpoint — while allowing it on this top-level GET redirect chain.
- * A legacy `refreshToken` set by an earlier OAuth callback is `'lax'` and can
- * arrive here; `setRefreshTokenCookie` clears it like any other set.
+ * A legacy `refreshToken` cookie set by the OAuth callback is `'lax'`, so
+ * this cross-site navigation can carry it here; `setRefreshTokenCookie`
+ * clears it like any other set.
  * @param request - The callback request.
  * @param response - The response to set the cookie on.
  * @param rawToken - The raw refresh token.
@@ -259,6 +267,7 @@ function clearPresentedRefreshCookie(request: Request, response: Response): void
   if (wasCurrentRead) {
     response.clearCookie(current.name, refreshCookieOptions(current, env, 'strict'))
   }
+  // eslint-disable-next-line sonarjs/deprecation -- detects plain http, where the current name is the unprefixed one
   if (!wasCurrentRead || current.name === LEGACY_REFRESH_TOKEN_COOKIE_NAME) {
     clearLegacyRefreshCookies(request, response, env)
   }
@@ -389,14 +398,14 @@ class AuthController extends BaseController {
    * that handler's comment for why not the body too. Deliberately does not
    * require a valid access token: a user wanting to log out has often just
    * watched their access token expire, and revocation only ever needs the
-   * refresh cookie.
+   * refresh cookie. When the browser holds both the current and the legacy
+   * cookie, both sessions end.
    * A missing, forged, or already-revoked token is treated identically to a
-   * live one — see `revokeRefreshToken`'s own header comment for why logout
-   * must never let a caller learn which raw value was actually live.
+   * live one — see `revokeRefreshToken`'s JSDoc for why logout must never let
+   * a caller learn which raw value was actually live.
    */
   logout = this.handle(async (request, response) => {
-    // Both cookies, when a browser still holds the legacy one: logging out
-    // ends both sessions. One at a time, since each locks the user row.
+    // One at a time: each revoke locks the user row.
     for (const rawToken of presentedRefreshTokens(request)) {
       await revokeRefreshToken(rawToken)
     }
@@ -479,10 +488,7 @@ class AuthController extends BaseController {
    * API's JSON envelope (the browser arrived by a full-page navigation).
    * `HttpError.code` is forwarded verbatim; anything else is
    * `processing_failed`; Google reporting an error or no profile is
-   * `google_auth_failed`.
-   *
-   * Not wrapped in `handle()`: every failure redirects to the frontend, and
-   * a JSON error envelope would reach a browser mid-navigation.
+   * `google_auth_failed`. Not wrapped in `handle()` for the same reason.
    * @param request - The incoming callback request, carrying Google's `code`/`state` query parameters.
    * @param response - The response.
    * @param next - Forwards a synchronous failure from `passport.authenticate` itself; every failure from the async body redirects instead.
@@ -516,9 +522,7 @@ class AuthController extends BaseController {
           }
         })()
       }
-      // `as RequestHandler`: identical cast, for the identical reason, as the
-      // `/google` redirect route's own `passport.authenticate(...)` call —
-      // see auth.routes.ts's header comment beside that cast.
+      // Same cast, for the same reason, as the `/google` route's in auth.routes.ts.
     ) as RequestHandler
 
     authenticate(request, response, next)

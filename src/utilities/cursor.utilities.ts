@@ -1,7 +1,7 @@
-// src/utilities/cursor.utilities.ts
-//
-// Opaque keyset cursors: base64url JSON, checked against a Zod schema on the
-// way back in. A cursor is client input, so decoding never throws.
+/**
+ * @file Opaque keyset cursors: base64url JSON, checked against a Zod schema on
+ * the way back in. A cursor is client input, so decoding never throws.
+ */
 import type { z } from 'zod'
 
 /**

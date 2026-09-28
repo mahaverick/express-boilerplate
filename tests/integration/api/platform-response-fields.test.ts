@@ -1,8 +1,9 @@
-// tests/integration/api/platform-response-fields.test.ts
-//
-// The platform fields on existing responses: platformRole on the profile and
-// the login user, isPlatform on the tenant list, and role, access and
-// isPlatform on the tenant detail.
+/**
+ * @file The platform fields on existing responses: platformRole on the
+ * profile and the login user, isPlatform on the tenant list, and role,
+ * access and isPlatform on the tenant detail.
+ */
+
 import { randomUUID } from 'node:crypto'
 import type { Response } from 'supertest'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -26,7 +27,9 @@ interface ApiEnvelope<TData> {
   data?: TData
 }
 
-// The platform-role lookup getPlatformMembership calls.
+/**
+ * The platform-role lookup method `UserMembershipRepository` calls.
+ */
 const PLATFORM_LOOKUP_METHOD = 'findPlatformRole' as const
 
 const app = createApp()

@@ -1,10 +1,11 @@
-// tests/integration/database/retention-indexes.test.ts
-//
-// Each retention predicate has an index that can serve it. With sequential
-// scans disabled for one transaction, the planner takes an index whenever
-// one applies, so the index's name in the plan proves it is usable. The
-// predicates are the repositories' purge predicates, written out as SQL.
-// tenant_invitations has no index on purpose (see its repository method).
+/**
+ * @file Each retention predicate has an index that can serve it. With
+ * sequential scans disabled for one transaction, the planner takes an index
+ * whenever one applies, so the index's name in the plan proves it is
+ * usable. The predicates are the repositories' own purge predicates,
+ * written out as SQL; `tenant_invitations` has no index on purpose (see its
+ * repository method).
+ */
 import { describe, expect, it } from 'vitest'
 import { sql } from '@/services/database.service'
 

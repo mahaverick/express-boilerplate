@@ -1,40 +1,11 @@
-// tests/integration/repositories/user-token-claim-atomicity.test.ts
-//
-// Proves the ONE property task-1-brief.md calls out as the reason not to
-// touch `claimOnce` casually: the check-then-write is a single atomic
-// statement, so two concurrent callers presenting the same token hash can
-// never both win the claim. This survived the claimForRotation -> claimOnce
-// rename and the added `purpose` predicate — this file exists to show that
-// with real, concurrent database traffic, not just sequential assertions
-// (which cannot observe a TOCTOU race at all: see CLAUDE.md's "Proving a
-// security behaviour is real" section).
-//
-// Two tests, same shape as tests/integration/services/token-reuse-mutation.test.ts:
-//
-//   1. Always on: CONCURRENT_CLAIMS real, truly-parallel `claimOnce` calls
-//      (matching the test-mode connection pool's own `max: 2`, so both
-//      genuinely run at the database at once rather than queueing behind
-//      each other) against ONE row. Exactly one may ever return a defined
-//      result — Postgres's own MVCC UPDATE semantics (the second statement
-//      blocks on the first's row lock, then re-evaluates its WHERE clause
-//      against the now-committed row) is what makes this deterministic,
-//      not luck or timing. Always green.
-//
-//   2. `it.runIf(process.env.MUTATION_PROOF === '1')`, DELIBERATELY red
-//      under that flag: swaps `claimOnce` for a non-atomic "select, meet,
-//      then update by id" implementation — the exact TOCTOU shape
-//      claimOnce's single-statement form exists to rule out — and
-//      reproduces test 1's own assertion against it. Both callers meet at a
-//      barrier between their SELECT and their UPDATE, so both complete
-//      their SELECT before either commits its UPDATE, every run, instead of
-//      racing to a serialised, accidentally-safe outcome.
-//
-//        MUTATION_PROOF=1 pnpm exec vitest run tests/integration/repositories/user-token-claim-atomicity.test.ts   # red
-//        pnpm exec vitest run tests/integration/repositories/user-token-claim-atomicity.test.ts                    # green
-//
-//      No file changes between the two runs — only the environment
-//      variable differs — and `git status --porcelain` stays empty
-//      throughout (tests/helpers/mutate.ts).
+/**
+ * @file Proves `claimOnce`'s check-then-write is a single atomic statement,
+ * so two concurrent callers presenting the same token hash can never both
+ * win the claim — with real, concurrent database traffic, not sequential
+ * assertions, which cannot observe a TOCTOU race at all.
+ * Two tests, same shape as
+ * `tests/integration/services/token-reuse-mutation.test.ts`.
+ */
 import { randomBytes, randomUUID } from 'node:crypto'
 import { and, eq, isNull, sql } from 'drizzle-orm'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -52,10 +23,12 @@ import { withMutatedMethod } from '../../helpers/mutate'
 const userRepository = new UserRepository()
 const userTokenRepository = new UserTokenRepository()
 
-// Matches database.service.ts's own test-mode pool size (`max: 2`) exactly,
-// so both claims below are guaranteed genuinely concurrent AT THE DATABASE
-// — not merely issued concurrently from Node and then serialised waiting
-// for a free connection.
+/**
+ * Matches `database.service.ts`'s own test-mode pool size (`max: 2`)
+ * exactly, so both claims below are guaranteed genuinely concurrent at the
+ * database, not merely issued concurrently from Node and then serialised
+ * waiting for a free connection.
+ */
 const CONCURRENT_CLAIMS = 2
 
 /**
@@ -170,6 +143,12 @@ describe('claimOnce is atomic under real concurrency', () => {
     return user.id
   }
 
+  /**
+   * Always on: races `CONCURRENT_CLAIMS` truly-parallel `claimOnce` calls
+   * (matching the test-mode pool's own `max: 2`, so both genuinely run at
+   * the database at once) against one row. Postgres's own MVCC UPDATE
+   * semantics make exactly one winner deterministic.
+   */
   it(`exactly one of ${CONCURRENT_CLAIMS} concurrent claims on the same row succeeds`, async () => {
     const userId = await createUser()
     const tokenHash = uniqueHash()
@@ -183,24 +162,26 @@ describe('claimOnce is atomic under real concurrency', () => {
     const results = await claimConcurrently(tokenHash, 'password_reset', CONCURRENT_CLAIMS)
     const claimed = results.filter((row): row is UserToken => row !== undefined)
 
-    // Not "at least one" or "at most one" — the atomicity guarantee is
-    // exactly one. asserting the count, not just non-emptiness, is what
-    // would catch a regression that let every caller win.
+    // Not "at least one" or "at most one": asserting the count, not just non-emptiness, is what would catch a regression that let every caller win.
     expect(claimed).toHaveLength(1)
 
     const finalRow = await userTokenRepository.findByHash(tokenHash)
-    // Asserted before the field checks below: `finalRow?.revokedAt` alone
-    // passes when `finalRow` is `undefined` too (undefined is not null) —
-    // this is what actually proves the row still exists and was found, not
-    // just that whatever came back (possibly nothing) lacks a null field.
+    // Asserted before the field checks below: finalRow?.revokedAt alone passes when finalRow is undefined too.
     expect(finalRow).toBeDefined()
     expect(finalRow?.revokedAt).not.toBeNull()
     expect(finalRow?.consumedAt).not.toBeNull()
   })
 
-  // DELIBERATELY red when run with MUTATION_PROOF=1 — see this file's
-  // header comment. Left unset, this test is skipped and the file is
-  // green.
+  /**
+   * Deliberately red under MUTATION_PROOF=1: swaps `claimOnce` for a
+   * non-atomic select-then-update stand-in, with both callers meeting at a
+   * barrier between their SELECT and their UPDATE, and reproduces the
+   * always-on test's own assertion against it. No file changes between the
+   * two runs (`tests/helpers/mutate.ts`).
+   *
+   *   MUTATION_PROOF=1 pnpm exec vitest run tests/integration/repositories/user-token-claim-atomicity.test.ts   # red
+   *   pnpm exec vitest run tests/integration/repositories/user-token-claim-atomicity.test.ts                    # green
+   */
   it.runIf(process.env.MUTATION_PROOF === '1')(
     `reproduces the real "exactly one of ${CONCURRENT_CLAIMS}" assertion against a non-atomic claimOnce`,
     async () => {
@@ -221,9 +202,7 @@ describe('claimOnce is atomic under real concurrency', () => {
           const results = await claimConcurrently(tokenHash, 'password_reset', CONCURRENT_CLAIMS)
           const claimed = results.filter((row): row is UserToken => row !== undefined)
 
-          // The real test's own assertion, reproduced against the mutated,
-          // non-atomic implementation — this is what goes red, not a
-          // hand-written stand-in for it.
+          // The real test's own assertion, reproduced against the mutated, non-atomic implementation — this is what goes red, not a hand-written stand-in.
           expect(claimed).toHaveLength(1)
         }
       )

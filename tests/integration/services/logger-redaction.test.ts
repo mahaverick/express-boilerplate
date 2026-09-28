@@ -1,13 +1,14 @@
-// tests/integration/services/logger-redaction.test.ts
-//
-// A real DrizzleQueryError, from a real unique-violation round trip against
-// this worker's Postgres database — not tests/helpers/query-error.ts's
-// fakeQueryError(), which stands in for one against a mocked rejection.
-// Inserted directly through db/userModel, bypassing UserRepository.create:
-// that method's translatingUniqueViolation (base.repository.ts) catches a
-// 23505 and rethrows a plain HttpError before a raw query error would ever
-// reach a logger, so going through it here would prove nothing about
-// serializeErrors.
+/**
+ * @file A real `DrizzleQueryError`, from a real unique-violation round trip
+ * against this worker's Postgres database — not
+ * `tests/helpers/query-error.ts`'s `fakeQueryError()`, which stands in for
+ * one against a mocked rejection. Inserted directly through
+ * `db`/`userModel`, bypassing `UserRepository.create`: that method's
+ * `translatingUniqueViolation` (`base.repository.ts`) catches a 23505 and
+ * rethrows a plain `HttpError` before a raw query error would ever reach a
+ * logger, so going through it here would prove nothing about
+ * `serializeErrors`.
+ */
 import { randomUUID } from 'node:crypto'
 import { Writable } from 'node:stream'
 import { DrizzleQueryError } from 'drizzle-orm'
@@ -89,18 +90,24 @@ describe('a real unique-violation query error never leaks its parameter', () => 
   })
 })
 
-// DELIBERATELY red under MUTATION_PROOF=1: each twin below reproduces one of
-// the real test's own per-record assertions above, against the same real
-// DrizzleQueryError, with redactedForLog swapped for the identity function
-// (tests/helpers/mutate.ts's withMutatedModule). A DrizzleQueryError's query
-// and params are enumerable (CLAUDE.md's own note on this), so bypassing the
-// redaction puts the email straight back into whichever record the mutation
-// reaches. Left unset, both are skipped and the file is green.
-//
-//   MUTATION_PROOF=1 pnpm exec vitest run tests/integration/services/logger-redaction.test.ts   # red
-//   pnpm exec vitest run tests/integration/services/logger-redaction.test.ts                     # green
-//
-// No file changes between the two runs; git status --porcelain stays empty.
+/**
+ * DELIBERATELY red under `MUTATION_PROOF=1`: each twin below reproduces one
+ * of the real test's own per-record assertions above, against the same
+ * real `DrizzleQueryError`, with `redactedForLog` swapped for the identity
+ * function (`tests/helpers/mutate.ts`'s `withMutatedModule`). A
+ * `DrizzleQueryError`'s `query` and `params` are enumerable (see CLAUDE.md),
+ * so bypassing the redaction puts the email straight back into whichever
+ * record the mutation reaches. Left unset, both are skipped and the file is
+ * green.
+ *
+ * ```
+ * MUTATION_PROOF=1 pnpm exec vitest run tests/integration/services/logger-redaction.test.ts   # red
+ * pnpm exec vitest run tests/integration/services/logger-redaction.test.ts                     # green
+ * ```
+ *
+ * No file changes between the two runs; `git status --porcelain` stays
+ * empty.
+ */
 describe('mutation proof: redactedForLog is what keeps the parameter out', () => {
   it.runIf(process.env.MUTATION_PROOF === '1')(
     "reproduces the direct record's own assertions against the mutated redactedForLog",

@@ -1,28 +1,9 @@
-// src/constants/rate-limit.constants.ts
-//
-// The 21 rate-limit specs this API enforces, and the key-derivation
-// functions `createRateLimiter` (rate-limit.middleware.ts) maps `keyBy` to.
-// The key-derivation functions live here, not in rate-limit.middleware.ts,
-// because `loginRateLimitKey` (the one composite key) must be constructible
-// without importing `rate-limit.middleware.ts` — that file imports
-// `RATE_LIMITS` from here, and `import-x/no-cycle` (eslint.config.mjs) is
-// `'error'` repo-wide.
-//
-// name IS the live Redis key prefix (`redisKey('rl', name)`,
-// rate-limit.middleware.ts's `limiterStore`). Changing any `name` below
-// resets that limiter's counters in every running deployment on the next
-// release — tests/unit/constants/rate-limit.constants.test.ts pins the
-// full list and order.
-//
-// Every limiter shares one 429 body/handler (rate-limit.middleware.ts's
-// `createRateLimiter`) and `standardHeaders: true` / `legacyHeaders: false`
-// — neither varies per limiter, and `message` is the identical literal on
-// twenty of these; `authenticatedWrite` names its own, since its message
-// differs from every other entry's.
-//
-// This table is the single source of truth for the per-endpoint threat
-// model: each entry below carries its own comment for why its window,
-// limit and key axis are what they are.
+/**
+ * @file The rate-limit specs this API enforces, and the key-derivation
+ * functions `createRateLimiter` (rate-limit.middleware.ts) maps `keyBy` to.
+ * The key functions live here because rate-limit.middleware.ts imports this
+ * file, and `import-x/no-cycle` is an error.
+ */
 import type { Request } from 'express'
 import { ipKeyGenerator } from 'express-rate-limit'
 
@@ -128,10 +109,9 @@ export function submittedEmailRateLimitKey(request: Request): string {
 
 /**
  * The key a user-keyed limiter counts attempts by: the authenticated
- * caller's id, or `'anonymous'` when unset. The fallback exists purely so a
- * future misordered mount (this limiter running ahead of `requireAuth`)
- * fails SAFE — every such caller collapses onto one shared, MORE restrictive
- * bucket, never a less restrictive one. Maps `keyBy: 'user'`.
+ * caller's id, or `'anonymous'` when unset, so a limiter mounted ahead of
+ * `requireAuth` fails safe onto one shared, more restrictive bucket. Maps
+ * `keyBy: 'user'`.
  * @param request - The incoming request.
  * @returns The authenticated caller's id, or `'anonymous'`.
  */
@@ -140,8 +120,11 @@ export function authenticatedUserRateLimitKey(request: Request): string {
 }
 
 /**
- * The 21 rate-limit specs this API enforces. `name` is the live Redis key
- * prefix — see this file's own header comment before changing one.
+ * The 21 rate-limit specs this API enforces, each with the reason for its
+ * window, limit and key. `name` is the live Redis key prefix
+ * (`redisKey('rl', name)`): changing one resets that limiter's counters in
+ * every deployment, and tests/unit/constants/rate-limit.constants.test.ts
+ * pins the list and order.
  */
 export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
   /**
@@ -393,11 +376,9 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
   },
   /**
    * One shared budget for every authenticated write that has no
-   * route-specific limiter of its own — a floor, not a replacement for a
-   * tighter limiter where one already exists.
-   * tests/unit/routes/route-limiters.test.ts's guard test fails a new
-   * unlimited write route rather than relying on every future PR to
-   * remember this comment.
+   * route-specific limiter of its own: a floor, not a replacement for a
+   * tighter limiter. tests/unit/routes/route-limiters.test.ts fails a write
+   * route that has no limiter.
    */
   authenticatedWrite: {
     name: 'authenticated-write',

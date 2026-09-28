@@ -1,21 +1,9 @@
-// src/middlewares/error.middleware.ts
-//
-// The envelope is core's: { success, message, statusCode, code?, errors? }.
-// RFC 9457 problem+json is the modern standard and is the better choice for
-// a new API — but switching it here would mean rewriting every ported
-// controller and the frontend's interceptors, which defeats
-// derive-and-strip. It ships as a recipe instead. See spec §13.
-//
-// `code` and `errors` are deliberately separate fields, not one overloaded
-// one. `errors` is field-level validation detail (e.g. `{ email: ['is
-// required'] }`) — shaped by whatever validator produced it, and absent
-// most of the time. `code` is a single, stable, machine-readable token (e.g.
-// `ACCESS_TOKEN_EXPIRED`) a client branches on to decide what to do next,
-// independent of whatever `errors` may or may not also be carrying for the
-// same response. Putting both in `errors` would mean a client parsing it for
-// field errors gets something structurally different the one time `code` is
-// also present, and the next caller who adds real field-level errors to a
-// response that also sets `code` would collide with it.
+/**
+ * @file The terminal error handler. It writes the envelope
+ * `{ success, message, statusCode, code?, errors? }` (see ARCHITECTURE.md for
+ * why not RFC 9457). `errors` is field-level validation detail; `code` is one
+ * stable token a client branches on, kept separate so the two never collide.
+ */
 import { STATUS_CODES } from 'node:http'
 import { type NextFunction, type Request, type Response } from 'express'
 import { HttpError } from '@/errors/http-error'
@@ -23,20 +11,14 @@ import { redactedForLog } from '@/errors/postgres-errors'
 import { logger } from '@/services/logger.service'
 import { errorResponse } from '@/utilities/response.utilities'
 
-// Express's own body parser does not throw HttpError. `express.json()` and
-// `express.urlencoded()` raise `http-errors` instances, which carry the
-// intended status on BOTH `.status` and `.statusCode`, plus `expose: true`
-// when the message is safe to return. Honouring only HttpError turned every
-// one of those into a 500: malformed JSON answered 500 instead of 400, and a
-// body over the 1mb limit answered 500 instead of 413. Worse, both then took
-// the `>= 500` branch below, so every typo'd client request wrote a
-// server-severity console.error — diluting exactly the signal that branch
-// exists to preserve.
 const CLIENT_ERROR_MIN = 400
 const CLIENT_ERROR_MAX = 499
 
 /**
- * The client-error status an arbitrary error asks for, if any.
+ * The client-error status an arbitrary error asks for, if any. Express's body
+ * parsers raise `http-errors` instances (malformed JSON is 400, an oversized
+ * body 413) with the status on `.status` and `.statusCode`; honouring it
+ * keeps a client mistake out of the 5xx log.
  *
  * Deliberately narrow: only an integer in 400-499 is honoured. A 5xx from a
  * foreign error is NOT trusted — it would skip the masking below and could
@@ -97,14 +79,7 @@ export function errorHandler(
   const httpError = error instanceof HttpError ? error : undefined
   const statusCode = httpError?.statusCode ?? clientStatusOf(error) ?? 500
 
-  // A 500 means we got it wrong, so the real message stays server-side — but
-  // "server-side" must mean somewhere, not nowhere. Masking the message from
-  // the client without logging the original anywhere leaves an operator with
-  // nothing to search and a user's bug report with nothing to point at.
-  //
-  // "Server-side" is not the same as "safe", though: a failed database write
-  // carries the values it was writing. `redactedForLog` strips those and
-  // keeps what actually makes a 500 diagnosable — see its own comment.
+  // Masked from the client, so logged here; redacted, as a failed write carries its values.
   if (statusCode >= 500) {
     logger.error('Unhandled server error', { error: redactedForLog(error) })
   }

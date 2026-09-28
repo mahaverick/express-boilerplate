@@ -13,8 +13,7 @@ const config = mergeConfig(
     test: { exclude: [...configDefaults.exclude, 'tests/integration/**'] },
   })
 )
-// Assigned after the merge: mergeConfig concatenates arrays, so passing
-// `globalSetup: []` to it would keep the base entry.
+// Assigned after the merge: mergeConfig concatenates arrays, so `globalSetup: []` would keep the base entry.
 config.test = { ...config.test, globalSetup: [] }
 
 export default config

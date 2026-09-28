@@ -1,24 +1,23 @@
-// tests/unit/repositories/notification.repository.test.ts
-//
-// Pure-logic coverage only — no database. NotificationRepository's own
-// methods all go straight to Postgres, so every behavioural test for them
-// belongs in tests/integration/repositories/notification.repository.test.ts
-// (this repo's own unit/integration split, CLAUDE.md — a test that reaches
-// the real database must live under tests/integration/, never tests/unit/,
-// regardless of what else is colocated there).
-//
-// What IS pure, and therefore testable here without Docker: the cursor
-// encoding this file exports for NotificationRepository.list to use, and
-// its inverse. encodeNotificationCursor/decodeNotificationCursor never
-// touch db — they are exported specifically so a later task's controller
-// can decode a client-supplied cursor string without hand-rolling
-// base64url/JSON handling for a value only this repository produces.
+/**
+ * @file Pure-logic coverage only — no database. NotificationRepository's
+ * own methods all go straight to Postgres, so every behavioural test
+ * for them belongs in
+ * tests/integration/repositories/notification.repository.test.ts.
+ */
 import { describe, expect, it } from 'vitest'
 import {
   decodeNotificationCursor,
   encodeNotificationCursor,
 } from '@/repositories/notification.repository'
 
+/**
+ * What is pure, and therefore testable here without Docker: the cursor
+ * encoding this file exports for NotificationRepository.list to use,
+ * and its inverse. encodeNotificationCursor/decodeNotificationCursor
+ * never touch the database — they are exported so a controller can
+ * decode a client-supplied cursor string without hand-rolling
+ * base64url/JSON handling for a value only this repository produces.
+ */
 describe('encodeNotificationCursor / decodeNotificationCursor', () => {
   it('round-trips a cursor through encode then decode unchanged', () => {
     const cursor = { createdAt: new Date('2026-01-15T10:30:00.123Z'), id: 'notif-1' }
@@ -30,8 +29,7 @@ describe('encodeNotificationCursor / decodeNotificationCursor', () => {
   })
 
   it('preserves millisecond precision through the round trip', () => {
-    // Not a round millisecond — proves the encoder doesn't accidentally
-    // truncate to whole seconds the way a careless format string could.
+    // Not a round millisecond — proves the encoder doesn't accidentally truncate to whole seconds the way a careless format string could.
     const cursor = { createdAt: new Date('2026-01-15T10:30:00.007Z'), id: 'notif-2' }
 
     const decoded = decodeNotificationCursor(encodeNotificationCursor(cursor))

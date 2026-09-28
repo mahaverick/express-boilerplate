@@ -1,12 +1,9 @@
-// tests/unit/observability/env-load-order.test.ts
-//
-// tracing.ts runs via --import, before env.config.ts's dotenv call, so an
-// OTEL_* value in .env only reaches it when Node loads .env first. `dev` and
-// `start` pass --env-file-if-exists=.env before --import. The image CMD does
-// not: the image has no .env and the orchestrator supplies the environment.
-// Checked two ways: the committed commands as text, and a spawned process
-// running those exact flags with a probe in place of the tracing module and
-// an empty entry in place of the app. No build and no network.
+/**
+ * @file tracing.ts runs via --import, before env.config.ts's dotenv
+ * call, so an OTEL_* value in .env only reaches it when Node loads
+ * .env first. Checked two ways: the committed commands as text, and a
+ * spawned process running those exact flags for real.
+ */
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -31,9 +28,14 @@ function dockerCommand(): string[] {
   return JSON.parse(line.slice('CMD '.length)) as string[]
 }
 
-// Only PATH is passed, so neither this shell's OTEL_SERVICE_NAME nor
-// Vitest's own variables reach the child. The timeout fails a hung child
-// instead of blocking the worker.
+/**
+ * Only PATH is passed, so neither this shell's OTEL_SERVICE_NAME nor
+ * Vitest's own variables reach the child. The timeout fails a hung child
+ * instead of blocking the worker.
+ * @param directory - The working directory for the spawned process.
+ * @param commandArguments - The `node` arguments to run.
+ * @returns The child's stdout.
+ */
 function run(directory: string, commandArguments: string[]): string {
   return execFileSync(process.execPath, commandArguments, {
     cwd: directory,
@@ -59,6 +61,11 @@ function expectEnvFileBeforeImport(argv: string[]): void {
   expect(argv.indexOf('--import')).toBeGreaterThan(flagAt)
 }
 
+/**
+ * `dev` and `start` pass --env-file-if-exists=.env before --import; the
+ * image CMD does not, since the image has no .env and the orchestrator
+ * supplies the environment.
+ */
 describe('launch commands name .env before the tracing --import', () => {
   it('pnpm dev', () => {
     const argv = words(scripts.dev)
@@ -70,8 +77,7 @@ describe('launch commands name .env before the tracing --import', () => {
     expectEnvFileBeforeImport(words(scripts.start))
   })
 
-  // With no .env in the image, the flag would only print a notice to stderr
-  // on every boot.
+  // With no .env in the image, the flag would only print a notice to stderr on every boot.
   it('the image CMD does not read .env', () => {
     const argv = dockerCommand()
     expect(argv).toContain('--import')
@@ -79,6 +85,7 @@ describe('launch commands name .env before the tracing --import', () => {
   })
 })
 
+// Runs a spawned process against those exact flags, with a probe in place of the tracing module and an empty entry in place of the app — no build and no network.
 describe('those flags, run for real, load .env before the --import module', () => {
   const directories: string[] = []
 
@@ -108,8 +115,7 @@ describe('those flags, run for real, load .env before the --import module', () =
     ).toBe('from-dot-env')
   })
 
-  // tsx without `watch`: watch strips only its own flags and forwards the
-  // rest to the same child launch (tsx dist/cli.mjs, removeArgvFlags).
+  // tsx without `watch`: watch strips only its own flags and forwards the rest to the same child launch (tsx dist/cli.mjs, removeArgvFlags).
   it('pnpm dev, through tsx', () => {
     const rest = words(scripts.dev).slice(2)
     const tsxCli = path.join(repoRoot, 'node_modules/tsx/dist/cli.mjs')

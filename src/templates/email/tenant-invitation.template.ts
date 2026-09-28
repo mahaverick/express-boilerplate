@@ -1,8 +1,8 @@
-// src/templates/email/tenant-invitation.template.ts
-//
-// "You've been invited to join a team". The accept link carries the raw
-// invitation token, so it never appears in the subject. Tenant and inviter
-// names are user-chosen text, so they stay out of the subject too.
+/**
+ * @file The "you've been invited to join a team" message. The accept link
+ * carries the raw invitation token, so it never appears in the subject; tenant
+ * and inviter names are user-chosen text, so they stay out of it too.
+ */
 import {
   escapeHtmlForEmail,
   requireEmailVariables,
@@ -12,7 +12,8 @@ import {
 
 /**
  * This template's entry in `EMAIL_TEMPLATE_KEYS`. `satisfies`, not an
- * annotation, so it stays the literal `MailMessage`'s union narrows on.
+ * annotation, so it keeps the literal type that `MailMessage`'s union
+ * narrows on.
  */
 export const TENANT_INVITATION_TEMPLATE_KEY = 'tenant_invitation' satisfies EmailTemplateKey
 

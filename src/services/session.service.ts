@@ -1,43 +1,11 @@
-// src/services/session.service.ts
-//
-// Access tokens are signed JWTs (jsonwebtoken) — short-lived, stateless,
-// carrying the user id (`sub`) plus the session and token ids (`sid`,
-// `jti` — see AccessTokenPayload for why each exists). Refresh tokens are
-// the opposite on
-// every axis: OPAQUE random strings (crypto.randomBytes(32)), never JWTs.
-// A JWT refresh token cannot be revoked without a server-side store anyway
-// (the whole point of a refresh token is that it MUST be revocable), so
-// signing one buys nothing but leaks its claims — issuer, subject, custom
-// fields — to anyone holding it. An opaque token carries no information at
-// all; only this module and the `user_tokens` table it's checked against
-// know what it means. See user-token.model.ts's header comment for why the
-// stored hash is SHA-256, not bcrypt.
-//
-// Rotation and reuse detection (rotateRefreshToken) are the security core
-// of this module: presenting a token AFTER the legitimate client has
-// already rotated it is reuse. Within REFRESH_REUSE_GRACE_MS of that
-// rotation, and only while the session hasn't been killed, reuse gets a
-// sibling token instead (findGraceSession) — a concurrent-refresh
-// allowance. Past the window, or once the session is killed, reuse kills
-// the entire session, not just that one token. See UserTokenRepository.
-// claimOnce for how the race that would otherwise defeat this is closed —
-// and how that same primitive now also guards email-verification and
-// password-reset tokens, scoped so one purpose's token can never be
-// claimed as another's.
-//
-// Every revocation here also denies the revoked sessions' access tokens
-// (session-denylist.service.ts, best-effort), except revokeSessionRows, whose
-// caller denies after its transaction commits. The repository only revokes
-// rows and reports which sessions it touched; it never writes Redis.
-//
-// A rotation runs in one transaction that first takes the user row FOR
-// SHARE. Logout, the kills a reused or over-age token triggers, the Google
-// account claim and password writes lock that row FOR NO KEY UPDATE before
-// their in-transaction revoke (revokeSession, revokeAllSessionsExceptCurrent
-// and revokeAllSessions' unlocked pass excepted), so a rotation either
-// commits first and its new token is revoked, or waits and then finds the
-// presented token revoked. Every bulk revoke of `user_tokens` locks its rows
-// in id order (see user-token.repository.ts's header).
+/**
+ * @file Access and refresh tokens. Access tokens are short-lived HS256 JWTs;
+ * refresh tokens are opaque random strings stored as SHA-256 hashes, since a
+ * refresh token must be revocable server-side anyway and a JWT would only leak
+ * its claims. Every revocation here also denies the revoked sessions' access
+ * tokens, best-effort, except `revokeSessionRows`, whose caller denies after commit.
+ * The repository only revokes rows and reports the sessions; it never writes Redis.
+ */
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import jwt from 'jsonwebtoken'
 import { getEnv } from '@/configs/env.config'
@@ -57,20 +25,10 @@ import { logger } from '@/services/logger.service'
 import { denySession } from '@/services/session-denylist.service'
 import { MS_PER_SECOND, requireDurationMs } from '@/utilities/duration.utilities'
 
-// jsonwebtoken's `expiresIn` option is typed against `ms`'s own
-// `StringValue` literal union — the identical narrowness
-// duration.utilities.ts exists to work around — so this module converts a
-// validated TTL to whole SECONDS (jsonwebtoken's numeric `expiresIn` unit)
-// once, here, rather than fighting that type a second time. `MS_PER_SECOND`
-// itself lives in duration.utilities.ts, not here — see that module's own
-// comment for why session-denylist.service.ts needing the same constant
-// made this its one definition.
-
-// A raw token's length in bytes before hex-encoding, for every purpose. 32
-// bytes (256 bits) hex-encodes to the 64 characters user-token.model.ts's
-// `tokenHash` column width assumes for a SHA-256 digest — deliberately the
-// same length as the hash, though the two are unrelated facts: the digest
-// is fixed by SHA-256, and the raw token's length is this constant.
+/**
+ * A raw token's length in bytes before hex-encoding, for every purpose: 256
+ * bits, 64 hex characters.
+ */
 const RAW_TOKEN_BYTES = 32
 
 const userTokenRepository = new UserTokenRepository()
@@ -110,9 +68,8 @@ export async function denySessions(sessionIds: readonly string[]): Promise<void>
 export interface AccessTokenPayload {
   sub: string
   /**
-   * The session this token belongs to. Optional ONLY so that tokens minted
-   * before this claim existed keep verifying for one release; a token
-   * without it cannot be revoked and is accepted until it expires.
+   * The session this token belongs to. Optional: a token without it still
+   * verifies, cannot be revoked, and is accepted until it expires.
    */
   sid?: string
   /**
@@ -144,10 +101,8 @@ export interface IssuedRefreshToken {
  * A freshly issued token for a non-session purpose (email verification,
  * password reset): the raw value to hand to the caller (an email link, in
  * practice), and everything about it that isn't recoverable from the raw
- * value alone. No `sessionId` — see user-token.model.ts's header comment for
- * why that field means nothing outside `'refresh'`. `purpose` excludes
- * `'refresh'` for the same reason `issueToken` itself does — see that
- * function's own comment.
+ * value alone. No `sessionId`, which means nothing outside `'refresh'`, and
+ * `purpose` excludes `'refresh'` (see `issueToken`).
  */
 export interface IssuedToken {
   raw: string
@@ -157,8 +112,8 @@ export interface IssuedToken {
 }
 
 /**
- * SHA-256 hash a raw token, hex-encoded. Deterministic on purpose — see
- * user-token.model.ts's header comment for why that rules out bcrypt.
+ * SHA-256 hash a raw token, hex-encoded. Deterministic, so a token is found
+ * by its hash; that rules out bcrypt (see user-token.model.ts).
  * @param raw - The raw token, of any purpose.
  * @returns The hex-encoded digest, as stored in `tokenHash`.
  */
@@ -175,12 +130,8 @@ function generateRawToken(): string {
 }
 
 /**
- * Generate, hash, and persist one token row — the single insert every
- * issuing path in this module goes through, so hashing, randomness, and the
- * write itself have exactly one implementation rather than one per purpose.
- * Session fields are the one thing callers still supply directly, since
- * they mean something for `'refresh'` only (user-token.model.ts) and no
- * other purpose has anything sensible to pass for them.
+ * Generate, hash, and persist one token row: the single insert every issuing
+ * path in this module goes through. Session fields apply to `'refresh'` only.
  * @param userId - The user the token belongs to.
  * @param purpose - Which of `TokenPurpose`'s three things this row is.
  * @param ttlMs - How long the token is valid for, in milliseconds.
@@ -271,11 +222,6 @@ export function verifyAccessToken(token: string): VerifyAccessTokenResult {
     if (typeof decoded === 'string' || typeof decoded.sub !== 'string') {
       return { ok: false, reason: 'invalid' }
     }
-    // Built incrementally, not as an object literal with `sid: undefined` /
-    // `jti: undefined` inline: this repo's `exactOptionalPropertyTypes`
-    // treats an optional property explicitly set to `undefined` as a type
-    // error distinct from the property being absent, so a legacy token
-    // (no `sid`/`jti` claim) must OMIT the key, not assign it `undefined`.
     const payload: AccessTokenPayload = { sub: decoded.sub }
     if (typeof decoded.sid === 'string') payload.sid = decoded.sid
     if (typeof decoded.jti === 'string') payload.jti = decoded.jti
@@ -287,7 +233,10 @@ export function verifyAccessToken(token: string): VerifyAccessTokenResult {
 }
 
 /**
- * Issue a new refresh token for a session.
+ * Issue a new refresh token for a session. This starts the session's absolute
+ * clock (`sessionStartedAt`); `rotateRefreshToken` copies it forward instead of
+ * calling this. Calling it again for an existing sessionId would restart that
+ * clock; login always mints a fresh sessionId.
  * @param userId - The user the token belongs to.
  * @param sessionId - The session (rotation-chain) id this token starts or continues.
  * @param executor - Where to insert the token row: a caller's transaction, or the pool (default).
@@ -299,14 +248,6 @@ export async function issueRefreshToken(
   executor: DbExecutor = db
 ): Promise<IssuedRefreshToken> {
   const env = getEnv()
-  // This is where a session's absolute clock starts. `rotateRefreshToken`
-  // copies the value forward rather than calling this function, so the
-  // anchor survives every rotation — see that function and the column's own
-  // comment (user-token.model.ts). Calling THIS function a second time for
-  // a sessionId that already exists would restart that clock; nothing in
-  // the application does (login always mints a fresh sessionId), and a
-  // caller that wants a second live token in one session should be aware it
-  // is also extending that session's ceiling.
   const sessionStartedAt = new Date()
 
   const { raw, expiresAt } = await createTokenRow(
@@ -322,18 +263,10 @@ export async function issueRefreshToken(
 }
 
 /**
- * Issue a new token for a purpose that has no session — email verification
- * or password reset. The shared issuing path those two purposes go through
- * (`createTokenRow`).
- *
- * `'refresh'` is excluded from `purpose` at the type level, not just by
- * convention: `issueToken` has no parameter to supply a session id, so a
- * `'refresh'` row minted through it would have `sessionId` NULL — a
- * refresh token with no rotation-chain id that `revokeAllForSession` can
- * never find and reuse detection can never contain. `issueRefreshToken`
- * (above) is the one and only entry point for `'refresh'`, precisely
- * because a session id is mandatory for it and only that function's
- * signature has one to give.
+ * Issue a new token for a purpose that has no session: email verification or
+ * password reset. `'refresh'` is excluded at the type level: minted here it
+ * would have no session id, so `revokeAllForSession` could never find it and
+ * reuse detection could never contain it. `issueRefreshToken` is its one entry point.
  * @param userId - The user the token belongs to.
  * @param purpose - Which non-session purpose to issue — `'email_verification'` or `'password_reset'`.
  * @param ttlMs - How long the token is valid for, in milliseconds.
@@ -352,16 +285,10 @@ export async function issueToken(
  * Claim a non-session token — email verification or password reset — once,
  * atomically, and only while it is still live.
  *
- * The expiry check is HERE, not in the predicate, and that is deliberate:
- * `claimOnce` (user-token.repository.ts) matches on hash, purpose and
- * `revoked_at is null` and says in its own comment that expiry is the
- * caller's job. `rotateRefreshToken` below does the same check for
- * `'refresh'`. A caller that skipped it would ship a link that is
- * redeemable forever, and no other test in this file would notice.
- *
- * The row is claimed BEFORE expiry is judged, so presenting an expired
- * token still spends it. One presentation is one attempt; a token that
- * could be retried after failing is not single-use.
+ * `claimOnce` (user-token.repository.ts) leaves expiry to its caller, so it is
+ * checked here; without it a mailed link would be redeemable forever. The row
+ * is claimed before expiry is judged, so presenting an expired token still
+ * spends it: one presentation is one attempt.
  * @param raw - The raw token presented by the caller.
  * @param purpose - The purpose it must have been issued for.
  * @returns The claimed row, or undefined when the token is unknown, of another purpose, already claimed, or expired.
@@ -429,7 +356,10 @@ async function findGraceSession(
 }
 
 /**
- * Issue the next refresh token in a session, enforcing the session's absolute lifetime.
+ * Issue the next refresh token in a session, enforcing the session's absolute
+ * lifetime. Every token in a session shares its start time, so past the ceiling
+ * all of them are; the refusal's message matches the expiry branch's, so a
+ * caller can't tell which clock ran out.
  * @param userId - The session's user.
  * @param sessionId - The session (rotation-chain) id.
  * @param sessionStartedAt - When the session began; copied forward so the absolute TTL never resets.
@@ -445,8 +375,6 @@ async function continueSession(
   const env = getEnv()
   const sessionAgeMs = Date.now() - sessionStartedAt.getTime()
   if (sessionAgeMs >= requireDurationMs(env.SESSION_ABSOLUTE_TTL)) {
-    // Every token in the session shares this start time, so all of them are past the ceiling.
-    // Same message as the expiry branch, so a caller can't tell which clock ran out.
     return { ok: false, message: 'Refresh token expired', killSessionId: sessionId }
   }
 
@@ -465,7 +393,10 @@ async function continueSession(
  * One rotation attempt under the user row lock. Every refusal is returned,
  * not thrown, so the transaction still commits the claim. A session to kill
  * is revoked after commit, under FOR NO KEY UPDATE, never in this FOR SHARE
- * transaction: upgrading here would deadlock two concurrent reuses.
+ * transaction: upgrading here would deadlock two concurrent reuses. The
+ * FOR SHARE lock waits for a password change or reset in flight; a
+ * soft-deleted user has no row to lock, and refresh() (auth.service.ts)
+ * refuses that user afterwards.
  * @param userId - The presented token's user.
  * @param tokenHash - The presented token's hash.
  * @param tx - The rotation's transaction.
@@ -476,14 +407,11 @@ async function rotateUnderUserLock(
   tokenHash: string,
   tx: DbTransaction
 ): Promise<RotationOutcome> {
-  // Waits for a password change or reset in flight. A soft-deleted user has
-  // no row to lock; refresh() in auth.service.ts refuses that user afterwards.
   await userRepository.lockById(userId, 'share', tx)
   const claimed = await userTokenRepository.claimOnce(tokenHash, 'refresh', tx)
 
   if (!claimed) {
-    // Never issued as 'refresh', or already revoked (the reuse signal).
-    // `findByHash` is purpose-agnostic; only a 'refresh' row has a session.
+    // Never issued as 'refresh', or already revoked (the reuse signal); only a 'refresh' row has a session.
     const existing = await userTokenRepository.findByHash(tokenHash, {}, tx)
     const graceSession = existing ? await findGraceSession(existing, tx) : undefined
     if (existing && graceSession) {
@@ -533,6 +461,11 @@ async function rotateUnderUserLock(
  * that holds the user row FOR SHARE, so a password change or reset cannot
  * revoke in between. A session killed by reuse or by its absolute lifetime
  * is revoked after that commit, under the user row lock, then denied.
+ * Logout, those kills, the Google account claim and password writes lock the
+ * row FOR NO KEY UPDATE before their in-transaction revoke (`revokeSession`
+ * and `revokeAllSessions`' first pass take no lock), so a rotation either
+ * commits first and its new token is revoked, or waits and finds the
+ * presented token revoked.
  * @param raw - The raw refresh token presented by the client.
  * @returns The new raw token to hand to the client, and its metadata.
  * @throws {HttpError} 401, when the token is unknown, already used outside the grace window, expired, or belongs to a session past its absolute lifetime.
@@ -644,22 +577,5 @@ export async function denySessionsAfterCommit(userId: string, sessionIds: string
  */
 export async function revokeAllSessions(userId: string): Promise<void> {
   const sessionIds = await withTransaction((tx) => revokeSessionRows(userId, {}, tx))
-  await denySessions(sessionIds)
-}
-
-/**
- * Revoke every live session belonging to a user except one, and deny each
- * revoked session's access tokens (best-effort — see `denySession`).
- * @param userId - The user whose sessions should all end, except one.
- * @param sessionId - The one session id to spare.
- * @returns Resolves once every other session's tokens are revoked and denied, best-effort.
- */
-export async function revokeAllSessionsExceptCurrent(
-  userId: string,
-  sessionId: string
-): Promise<void> {
-  const sessionIds = await withTransaction((tx) =>
-    revokeSessionRows(userId, { exceptSessionId: sessionId }, tx)
-  )
   await denySessions(sessionIds)
 }

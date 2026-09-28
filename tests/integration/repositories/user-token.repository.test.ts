@@ -1,10 +1,10 @@
-// tests/integration/repositories/user-token.repository.test.ts
-//
-// Integration test against the real per-worker Postgres database (see
-// tests/helpers/worker-database.ts). Every user row this file creates is
-// unique to this run and deleted in afterEach; deleting the user cascades
-// (ON DELETE CASCADE on user_tokens.user_id) to every token row it owns, so
-// there is nothing separate to clean up there.
+/**
+ * @file Integration test against the real per-worker Postgres database (see
+ * `tests/helpers/worker-database.ts`). Every user row this file creates is
+ * unique to this run and deleted in `afterEach`; deleting the user cascades
+ * (ON DELETE CASCADE on `user_tokens.user_id`) to every token row it owns,
+ * so there is nothing separate to clean up there.
+ */
 import { randomBytes, randomUUID } from 'node:crypto'
 import { and, eq } from 'drizzle-orm'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -106,13 +106,9 @@ describe('UserTokenRepository', () => {
     })
 
     const claimed = await userTokenRepository.claimOnce(tokenHash, 'refresh')
-    // Asserted before the field checks below: `claimed?.revokedAt` alone
-    // passes when `claimed` is `undefined` too (undefined is not null), so
-    // this is what actually proves a row came back, not just that whatever
-    // came back (possibly nothing) lacks a null field.
+    // Asserted before the field checks below: claimed?.revokedAt alone passes when claimed is undefined too.
     expect(claimed).toBeDefined()
-    // RETURNING reflects the row AFTER this UPDATE, so revokedAt/consumedAt
-    // are already set.
+    // RETURNING reflects the row after this UPDATE, so revokedAt/consumedAt are already set.
     expect(claimed?.revokedAt).not.toBeNull()
     expect(claimed?.consumedAt).not.toBeNull()
     expect(claimed?.tokenHash).toBe(tokenHash)
@@ -171,15 +167,14 @@ describe('UserTokenRepository', () => {
     expect(await userTokenRepository.wasConsumedWithin(tokenHash, 10_000)).toBe(false)
   })
 
-  // Pins the contract documented on claimOnce's own JSDoc: expiry is
-  // deliberately NOT part of this method's predicate. Folding it in would
-  // make an expired-but-unrevoked row indistinguishable, to
-  // rotateRefreshToken's `!claimed` branch, from a genuinely reused one —
-  // which would revoke an entire session family for a legitimate user
-  // whose token simply aged out (see "rejects an expired refresh token
-  // without treating it as reuse of a live session",
-  // session.service.test.ts). This is why every caller of claimOnce must
-  // check `expiresAt` on the row it gets back, itself, after claiming.
+  /**
+   * Pins `claimOnce`'s contract: expiry is deliberately not part of its
+   * predicate, so every caller must check `expiresAt` on the row it gets
+   * back itself — folding expiry in would make an expired-but-unrevoked row
+   * indistinguishable, to `rotateRefreshToken`'s `!claimed` branch, from a
+   * genuinely reused one, revoking an entire session family for a token
+   * that simply aged out.
+   */
   it("claimOnce claims an expired-but-unrevoked row — expiry is the caller's job, not the predicate's", async () => {
     const userId = await createUser()
     const tokenHash = uniqueHash()
@@ -188,8 +183,7 @@ describe('UserTokenRepository', () => {
       purpose: 'refresh',
       sessionId: randomUUID(),
       tokenHash,
-      // Already expired when created — this row was never live by an
-      // expiry-aware definition, only by claimOnce's actual one.
+      // Already expired when created: live only by claimOnce's actual predicate, not an expiry-aware one.
       expiresAt: new Date(Date.now() - 60_000),
     })
 
@@ -199,11 +193,12 @@ describe('UserTokenRepository', () => {
     expect(claimed?.revokedAt).not.toBeNull()
   })
 
-  // The test that matters most in this task (see task-1-brief.md): without
-  // this predicate, a password-reset token could be spent as an email
-  // verification, or worse, a verification token could reset a password —
-  // turning "I can receive mail at this address" into "I can take over this
-  // account."
+  /**
+   * Without this predicate, a password-reset token could be spent as an
+   * email verification, or a verification token could reset a password —
+   * turning "I can receive mail at this address" into "I can take over
+   * this account."
+   */
   it('claimOnce rejects a claim for a different purpose than the row was issued for', async () => {
     const userId = await createUser()
     const tokenHash = uniqueHash()
@@ -214,15 +209,11 @@ describe('UserTokenRepository', () => {
       expiresAt: new Date(Date.now() + 60_000),
     })
 
-    // Wrong purpose: the row exists and is still live, but must not be
-    // claimable as anything other than what it was issued for.
+    // Wrong purpose: the row exists and is still live, but must not be claimable as anything other than what it was issued for.
     const wrongPurpose = await userTokenRepository.claimOnce(tokenHash, 'email_verification')
     expect(wrongPurpose).toBeUndefined()
 
-    // The row must be UNTOUCHED by the rejected claim above — still live,
-    // still claimable under its real purpose. A claimOnce that revoked on a
-    // purpose mismatch would silently burn a legitimate token on a mere
-    // probe.
+    // The row must be untouched by the rejected claim above: a claimOnce that revoked on a purpose mismatch would silently burn a legitimate token on a mere probe.
     const stillLive = await userTokenRepository.findByHash(tokenHash)
     expect(stillLive?.revokedAt).toBeNull()
 
@@ -409,14 +400,13 @@ describe('UserTokenRepository', () => {
       expect(otherRow?.revokedAt).not.toBeNull()
     })
 
-    // THE TRAP THIS METHOD EXISTS TO CLOSE: a row with no sessionId at all
-    // (password_reset/email_verification — sessionId is only ever set on a
-    // 'refresh' row, user-token.model.ts) must still be revoked, because it
-    // does not belong to the spared session either. A predicate written
-    // with `session_id != $2` would evaluate to NULL — not true — for this
-    // exact row, silently leaving it live. If this test ever goes green for
-    // the wrong reason, it is because someone "simplified" the repository's
-    // `IS DISTINCT FROM` back to `!=`.
+    /**
+     * The trap this method exists to close: a row with no sessionId at all
+     * (sessionId is only ever set on a 'refresh' row) must still be
+     * revoked, since a predicate written with `session_id != $2` evaluates
+     * to NULL, not true, for this row, silently leaving it live if the
+     * repository's `IS DISTINCT FROM` is ever "simplified" to `!=`.
+     */
     it('revokes a row with no sessionId at all — the IS DISTINCT FROM case, not != ', async () => {
       const userId = await createUser()
       const sparedSessionId = randomUUID()
@@ -504,12 +494,11 @@ describe('UserTokenRepository', () => {
     })
   })
 
-  // `softDelete`/`markDeleted` (BaseRepository, base.repository.ts) — this
-  // file's other tests never call it, since real token lifecycle uses
-  // `claimOnce`/`revokeAllFor*` (a `revokedAt` column) rather than
-  // soft-delete. Still real, inherited public API: proven the same way
-  // tenant.repository.test.ts's own "excludes a soft-deleted tenant from
-  // findById" case proves it for a different table.
+  /**
+   * `softDelete`/`markDeleted` (`BaseRepository`) — real token lifecycle
+   * uses `claimOnce`/`revokeAllFor*` instead, but this is still real,
+   * inherited public API.
+   */
   it('softDelete sets deletedAt and excludes the row from findById by default', async () => {
     const userId = await createUser()
     const created = await userTokenRepository.create({
@@ -554,23 +543,17 @@ describe('UserTokenRepository', () => {
 
       await userTokenRepository.revokeAllForUserAndPurpose(userId, 'email_verification')
 
-      // This assertion is the entire reason the method exists.
-      // revokeAllForUser matches on userId ALONE, so calling it here would
-      // silently log the user out of every device as a side effect of them
-      // asking for a verification mail.
+      // This assertion is the entire reason the method exists: revokeAllForUser matches on userId alone, so calling it here would log the user out of every device as a side effect of requesting a verification mail.
       expect(await rotateRefreshToken(refresh.raw)).toBeDefined()
 
-      // IssuedToken (session.service.ts) carries no row id, so the
-      // verification row is identified by userId + purpose.
+      // IssuedToken (session.service.ts) carries no row id, so the verification row is identified by userId + purpose.
       const [remaining] = await db
         .select()
         .from(userTokenModel)
         .where(
           and(eq(userTokenModel.userId, userId), eq(userTokenModel.purpose, 'email_verification'))
         )
-      // Proves a row was actually found — `remaining?.revokedAt` alone
-      // passes when `remaining` is `undefined` too, which would prove
-      // nothing about revocation.
+      // Proves a row was actually found: remaining?.revokedAt alone passes when remaining is undefined too.
       expect(remaining).toBeDefined()
       expect(remaining?.revokedAt).not.toBeNull()
     })

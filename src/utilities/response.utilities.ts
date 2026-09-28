@@ -1,9 +1,8 @@
-// src/utilities/response.utilities.ts
-//
-// The single definition of the response envelope: { success, message,
-// statusCode, ... }. errorHandler (src/middlewares/error.middleware.ts)
-// delegates to errorResponse() below rather than building its own copy —
-// two definitions of the same client-facing contract is how they drift.
+/**
+ * @file The single definition of the response envelope. `errorHandler`
+ * (error.middleware.ts) delegates to `errorResponse` instead of building its
+ * own copy.
+ */
 import { type Response } from 'express'
 import { REQUEST_ID_HEADER } from '@/middlewares/request-id.middleware'
 
@@ -44,17 +43,9 @@ export function messageResponse(response: Response, message: string, status = 20
 /**
  * Send an error response with a consistent envelope.
  *
- * Unlike `successResponse`, `status` is required, not defaulted — an error
- * helper exists precisely so a caller picks the right status instead of
- * every error silently becoming a 500. The correlation id is read off the
- * response itself (set by requestId middleware, which runs before any
- * handler) rather than accepted as a parameter — every caller already has a
- * response, so passing the same id back in would just be one more thing to
- * get wrong.
- *
- * `code` and `errors` are separate, independent fields — see
- * error.middleware.ts's header comment for why they are not one overloaded
- * field.
+ * `status` is required, so a caller picks it rather than every error
+ * becoming a 500. The request id is read off the response, where the
+ * requestId middleware set it.
  * @param response - The Express response.
  * @param message - Human-readable summary of what went wrong.
  * @param status - HTTP status.

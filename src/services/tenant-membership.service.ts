@@ -1,10 +1,9 @@
-// src/services/tenant-membership.service.ts
-//
-// Membership changes that must keep a tenant owned. Each runs in one
-// transaction: lock the tenant's owners, then the actor's and the target's
-// memberships, then (for staff) the actor's platform membership; authorize
-// the actor's current effective role against the target's current role;
-// check the last-owner rule; write; record the audit entry.
+/**
+ * @file Membership changes that must keep a tenant owned. Each runs in one
+ * transaction: lock the tenant's owners, then the actor's and target's
+ * memberships, then (for staff) the actor's platform membership; authorize the
+ * actor's current role against the target's; check the last-owner rule; write; audit.
+ */
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { UserMembership } from '@/database/models/user-membership.model'
 import { HttpError } from '@/errors/http-error'

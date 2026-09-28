@@ -1,4 +1,3 @@
-// tests/unit/utilities/cursor.utilities.test.ts
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { decodeCursor, encodeCursor } from '@/utilities/cursor.utilities'

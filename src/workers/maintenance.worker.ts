@@ -1,8 +1,8 @@
-// src/workers/maintenance.worker.ts
-//
-// The Worker for the "maintenance" queue: runs the retention purge that
-// maintenance.job.ts schedules. One job at a time, whatever
-// WORKER_CONCURRENCY says: two purges at once would contend for the same rows.
+/**
+ * @file The Worker for the "maintenance" queue: runs the retention purge that
+ * maintenance.job.ts schedules, one job at a time whatever
+ * `WORKER_CONCURRENCY` says, since two purges would contend for the same rows.
+ */
 import { UnrecoverableError, Worker, type Job } from 'bullmq'
 import { isTerminalFailure, recordPermanentFailure } from '@/jobs/job-failure.job'
 import { RETENTION_PURGE_JOB } from '@/jobs/maintenance.job'
