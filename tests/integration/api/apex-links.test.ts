@@ -14,6 +14,33 @@ import { request } from '../../helpers/request'
 
 const APEX = 'http://localhost:5174'
 const WEB = 'http://localhost:5173'
+const REGISTER = '/api/v1/auth/register'
+const RESEND = '/api/v1/auth/resend-verification'
+const PASSWORD = 'correct horse battery staple'
+
+/**
+ * POST a body with `app: 'apex'` added.
+ * @param app - The app under test.
+ * @param path - The route.
+ * @param body - The request body.
+ * @returns The response.
+ */
+function postApex(app: ReturnType<typeof CreateApp>, path: string, body: Record<string, unknown>) {
+  return request(app)
+    .post(path)
+    .send({ ...body, app: 'apex' })
+}
+
+/**
+ * A response body without its per-request `requestId`, so two bodies can be compared.
+ * @param body - A parsed response body.
+ * @returns A copy with `requestId` removed.
+ */
+function withoutRequestId(body: unknown): unknown {
+  const copy: Record<string, unknown> = { ...(body as Record<string, unknown>) }
+  delete copy.requestId
+  return copy
+}
 
 /**
  * Wait for a queued notification job and return its email's link variable.
@@ -223,16 +250,57 @@ describe('links once APEX_URL is set', () => {
           .send({ email: 'nobody@example.test', app: value })
         for (const response of [register, forgot]) {
           expect(response.status).toBe(400)
-          expect(JSON.stringify(response.body)).not.toContain('evil.example')
+          const body = response.body as { errors?: Record<string, unknown> }
+          expect(body.errors).toHaveProperty('app')
+          const serialized = JSON.stringify(response.body)
+          // The message lists the valid options, so an array's element may legitimately appear there.
+          if (typeof value === 'string') expect(serialized).not.toContain(value)
+          expect(serialized).not.toContain(JSON.stringify(value))
         }
       }
     )
 
-    it('answers resend-verification with the same 202 for a bad app', async () => {
-      const response = await request(app)
-        .post('/api/v1/auth/resend-verification')
-        .send({ email: 'nobody@example.test', app: 'https://evil.example' })
-      expect(response.status).toBe(202)
+    it.each([['https://evil.example'], ['APEX'], [['apex']]])(
+      'answers resend-verification for app %j exactly like a normal resend, and queues nothing',
+      async (value) => {
+        const { expectNoJob } = await import('../../helpers/queue-jobs')
+        const { getNotificationQueue } = await import('@/services/queue.service')
+        const user = await createUser('apex-bad-resend')
+        const normal = await request(app)
+          .post('/api/v1/auth/resend-verification')
+          .send({ email: `apex-unknown-${randomUUID()}@example.test` })
+        const bad = await request(app)
+          .post('/api/v1/auth/resend-verification')
+          .send({ email: user.email, app: value })
+        expect(bad.status).toBe(202)
+        expect(withoutRequestId(bad.body)).toEqual(withoutRequestId(normal.body))
+        await expectNoJob<NotificationJobData>(
+          getNotificationQueue(),
+          (data) => data.userId === user.id && data.type === 'verify_email'
+        )
+      }
+    )
+
+    it('answers register identically for an existing and an unknown address under app apex', async () => {
+      const existing = await createUser('apex-existing')
+      const known = await postApex(app, REGISTER, { email: existing.email, password: PASSWORD })
+      const unknownEmail = `apex-register-unknown-${randomUUID()}@example.test`
+      const unknown = await postApex(app, REGISTER, { email: unknownEmail, password: PASSWORD })
+      const { UserRepository } = await import('@/repositories/user.repository')
+      const created = await new UserRepository().findByEmail(unknownEmail)
+      if (created) createdUserIds.push(created.id)
+      expect(known.status).toBe(unknown.status)
+      expect(withoutRequestId(known.body)).toEqual(withoutRequestId(unknown.body))
+    })
+
+    it('answers resend-verification identically for an existing and an unknown address under app apex', async () => {
+      const existing = await createUser('apex-resend-existing')
+      const known = await postApex(app, RESEND, { email: existing.email })
+      const unknown = await postApex(app, RESEND, {
+        email: `apex-resend-unknown-${randomUUID()}@example.test`,
+      })
+      expect(known.status).toBe(unknown.status)
+      expect(withoutRequestId(known.body)).toEqual(withoutRequestId(unknown.body))
     })
 
     it('answers forgot-password identically for a known and an unknown address under app apex', async () => {
@@ -244,7 +312,7 @@ describe('links once APEX_URL is set', () => {
         .post('/api/v1/auth/forgot-password')
         .send({ email: `apex-unknown-${randomUUID()}@example.test`, app: 'apex' })
       expect(known.status).toBe(unknown.status)
-      expect(known.body).toEqual(unknown.body)
+      expect(withoutRequestId(known.body)).toEqual(withoutRequestId(unknown.body))
     })
   })
 })
