@@ -26,7 +26,7 @@ import { db, type DbExecutor } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
 import { hashToken } from '@/services/session.service'
 import { lockActorRole } from '@/services/tenant-membership.service'
-import { buildInvitationAcceptUrl } from '@/services/verification.service'
+import { buildInvitationAcceptUrl, frontendUrl } from '@/services/verification.service'
 import { TENANT_INVITATION_TEMPLATE_KEY } from '@/templates/email/tenant-invitation.template'
 import type { Actor } from '@/types/actor'
 import { requireDurationMs } from '@/utilities/duration.utilities'
@@ -118,7 +118,7 @@ export interface AcceptedInvitation {
 interface InvitationMessageContext {
   invitation: TenantInvitation
   rawToken: string
-  tenant: { name: string; slug: string }
+  tenant: { name: string; slug: string; isPlatform: boolean }
   inviterName: string
   invitee: User | undefined
 }
@@ -207,6 +207,8 @@ async function dispatchInvitationMessages(
   notifyUser: User | undefined
 ): Promise<void> {
   const { invitation, rawToken, tenant, inviterName } = context
+  // Server-decided: staff are invited into Apex, everyone else into the customer app.
+  const acceptOrigin = frontendUrl(tenant.isPlatform ? 'apex' : 'web')
   const results = await Promise.allSettled([
     addEmailJob(
       {
@@ -216,7 +218,7 @@ async function dispatchInvitationMessages(
           tenantName: tenant.name,
           inviterName,
           role: invitation.role,
-          acceptUrl: buildInvitationAcceptUrl(rawToken),
+          acceptUrl: buildInvitationAcceptUrl(rawToken, acceptOrigin),
           expiresInDays: expiresInDays(),
           appName: getEnv().APP_NAME,
         },
@@ -248,19 +250,19 @@ async function dispatchInvitationMessages(
 }
 
 /**
- * The tenant's name and slug, for an invitation's messages.
+ * The tenant's name, slug and platform flag, for an invitation's messages.
  * @param tenantId - The tenant.
  * @param executor - Where to run the query. Defaults to the pool.
- * @returns Its name and slug.
+ * @returns Its name, slug and platform flag.
  * @throws {HttpError} 404, when the tenant is gone.
  */
 async function tenantForMessages(
   tenantId: string,
   executor: DbExecutor = db
-): Promise<{ name: string; slug: string }> {
+): Promise<{ name: string; slug: string; isPlatform: boolean }> {
   const tenant = await tenantRepository.findById(tenantId, {}, executor)
   if (!tenant) throw new HttpError('Tenant not found', 404)
-  return { name: tenant.name, slug: tenant.slug }
+  return { name: tenant.name, slug: tenant.slug, isPlatform: tenant.isPlatform }
 }
 
 /**
