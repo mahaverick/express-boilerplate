@@ -132,6 +132,29 @@ describe('the audit redact exception', () => {
     ).rejects.toThrow('audit_logs is append-only')
   })
 
+  it('refuses a redacting update that leaves the user agent in place', async () => {
+    const { id } = await insertActorRow()
+
+    await expect(
+      withSettings(
+        REDACT,
+        (tx) => tx`update audit_logs set actor_user_id = null, ip = null where id = ${id}`
+      )
+    ).rejects.toThrow('audit_logs is append-only')
+  })
+
+  it('refuses a redacting update that also rewrites the metadata', async () => {
+    const { id } = await insertActorRow()
+
+    await expect(
+      withSettings(
+        REDACT,
+        (tx) =>
+          tx`update audit_logs set actor_user_id = null, ip = null, user_agent = null, metadata = '{"reason":"rewritten"}' where id = ${id}`
+      )
+    ).rejects.toThrow('audit_logs is append-only')
+  })
+
   it('does not open DELETE', async () => {
     const { id } = await insertActorRow()
 

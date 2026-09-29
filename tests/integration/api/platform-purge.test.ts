@@ -29,10 +29,15 @@ import { request } from '../../helpers/request'
 const app = createApp()
 const tenantRepository = new TenantRepository()
 const tenantIds: string[] = []
+const mailedAddresses: string[] = []
 const REASON = 'Erasure request, ticket 9001'
 
 afterEach(async () => {
   await truncateAuditLogs()
+  if (mailedAddresses.length > 0) {
+    await sql`delete from email_logs where recipient = any(${mailedAddresses})`
+  }
+  mailedAddresses.length = 0
   if (tenantIds.length > 0) await sql`delete from tenants where id = any(${tenantIds})`
   tenantIds.length = 0
   await deleteTrackedUsers()
@@ -68,11 +73,12 @@ function purgeTenant(token: string, tenantId: string, body?: object): Promise<Re
 
 /**
  * A soft-deleted user who once acted in a tenant and was mailed.
- * @returns The user's id and email, the id of the audit entry they acted in, and of an invitation they sent.
+ * @returns The user's id and email, the tenant they acted in, the id of that audit entry, and of an invitation they sent.
  */
 async function deletedUserWithHistory(): Promise<{
   id: string
   email: string
+  tenantId: string
   auditId: string
   sentInvitationId: string
 }> {
@@ -100,7 +106,13 @@ async function deletedUserWithHistory(): Promise<{
     returning id`
   await sql`update users set deleted_at = now() where id = ${user.id}`
   if (!entry || !sent) throw new Error('fixture insert returned no row')
-  return { id: user.id, email: user.email, auditId: entry.id, sentInvitationId: sent.id }
+  return {
+    id: user.id,
+    email: user.email,
+    tenantId: tenant.id,
+    auditId: entry.id,
+    sentInvitationId: sent.id,
+  }
 }
 
 describe('POST /api/v1/platform/users/:id/purge', () => {
@@ -140,6 +152,67 @@ describe('POST /api/v1/platform/users/:id/purge', () => {
       actor_user_id: owner.id,
       metadata: { reason: REASON, emailDomain: 'example.test' },
     })
+  })
+
+  it('touches only the purged user: other actors, other recipients and the target id stay', async () => {
+    const { token } = await createTrackedStaff('owner')
+    const gone = await deletedUserWithHistory()
+    const bystander = await createTrackedUser()
+    const second = await tenantRepository.create({
+      name: 'Second Co',
+      slug: `second-${randomUUID()}`,
+      ownerId: bystander.id,
+    })
+    tenantIds.push(second.id)
+    // In a second tenant the purged user is both the actor and the target.
+    const [selfEntry] = await sql<{ id: string }[]>`
+      insert into audit_logs (actor_kind, actor_user_id, access, tenant_id, action, target_type, target_id, ip, user_agent)
+      values ('user', ${gone.id}, 'member', ${second.id}, 'user.updated', 'user', ${gone.id}, '203.0.113.10', 'Mozilla/5.0')
+      returning id`
+    const [otherEntry] = await sql<{ id: string }[]>`
+      insert into audit_logs (actor_kind, actor_user_id, access, tenant_id, action, target_type, target_id, ip, user_agent)
+      values ('user', ${bystander.id}, 'member', ${second.id}, 'user.updated', 'user', ${gone.id}, '198.51.100.4', 'curl/8')
+      returning id`
+    mailedAddresses.push(bystander.email)
+    await sql`
+      insert into email_logs (recipient, template_key, status)
+      values (${bystander.email}, 'password_reset', 'sent')`
+    if (!selfEntry || !otherEntry) throw new Error('fixture insert returned no row')
+
+    const response = await purgeUser(token, gone.id)
+
+    expect(response.status).toBe(200)
+    // Both entries they acted in, one per tenant, lose the actor; the target stays.
+    const redacted = await sql`
+      select tenant_id, actor_user_id is null and ip is null and user_agent is null as is_redacted,
+        actor_kind, target_type, target_id
+      from audit_logs where id = any(${[gone.auditId, selfEntry.id]})
+      order by tenant_id = ${second.id}`
+    expect(redacted).toEqual([
+      {
+        tenant_id: gone.tenantId,
+        is_redacted: true,
+        actor_kind: 'user',
+        target_type: 'tenant',
+        target_id: gone.tenantId,
+      },
+      {
+        tenant_id: second.id,
+        is_redacted: true,
+        actor_kind: 'user',
+        target_type: 'user',
+        target_id: gone.id,
+      },
+    ])
+    const [other] = await sql`
+      select actor_user_id, ip, user_agent, target_id from audit_logs where id = ${otherEntry.id}`
+    expect(other).toEqual({
+      actor_user_id: bystander.id,
+      ip: '198.51.100.4',
+      user_agent: 'curl/8',
+      target_id: gone.id,
+    })
+    expect(await sql`select 1 from email_logs where recipient = ${bystander.email}`).toHaveLength(1)
   })
 
   it('answers 409 for a user who is not soft-deleted', async () => {
@@ -189,6 +262,19 @@ describe('POST /api/v1/platform/tenants/:id/purge', () => {
       insert into tenant_invitations (tenant_id, email, role, token_hash, expires_at)
       values (${tenant.id}, ${inviteeEmail}, 'viewer', ${randomUUID().replaceAll('-', '')}, now() + interval '1 day')`
     await sql`update tenants set lifecycle_state = 'archived', deleted_at = now() where id = ${tenant.id}`
+    // Another tenant's entries must survive the purge untouched.
+    const neighbour = await tenantRepository.create({
+      name: 'Neighbour Co',
+      slug: `neighbour-${randomUUID()}`,
+      ownerId: member.id,
+    })
+    tenantIds.push(neighbour.id)
+    await sql`
+      insert into audit_logs (actor_kind, actor_user_id, access, tenant_id, action, target_type, target_id, ip, user_agent)
+      values ('user', ${member.id}, 'member', ${neighbour.id}, 'tenant.updated', 'tenant', ${neighbour.id}, '198.51.100.5', 'curl/8')`
+    const neighbourEntries =
+      await sql`select * from audit_logs where tenant_id = ${neighbour.id} order by id`
+    expect(neighbourEntries).toHaveLength(1)
 
     const response = await purgeTenant(token, tenant.id)
 
@@ -199,6 +285,9 @@ describe('POST /api/v1/platform/tenants/:id/purge', () => {
       0
     )
     expect(await sql`select 1 from audit_logs where tenant_id = ${tenant.id}`).toHaveLength(0)
+    expect(
+      await sql`select * from audit_logs where tenant_id = ${neighbour.id} order by id`
+    ).toEqual(neighbourEntries)
     expect(await sql`select 1 from users where id = ${member.id}`).toHaveLength(1)
     const platform = await platformTenant()
     const [purged] = await sql`
