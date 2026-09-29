@@ -275,15 +275,14 @@ export async function refresh(rawToken: string): Promise<RefreshResult> {
 }
 
 /**
- * Issue a password-reset token and mail the link, but only when `email`
- * belongs to an existing account.
- * @param email - The address submitted to `/forgot-password`.
+ * Issue a password-reset token for `user` and queue the reset mail. Rejects
+ * when the token or the job cannot be written; callers decide whether that
+ * is swallowed (forgot-password) or reported (staff password-setup).
+ * @param user - The account to reset.
  * @param app - The frontend the reset link opens.
+ * @returns Resolves once the mail job is queued.
  */
-async function sendPasswordResetMailIfRegistered(email: string, app: FrontendApp): Promise<void> {
-  const user = await userRepository.findByEmail(email)
-  if (!user) return
-
+export async function sendPasswordResetMail(user: User, app: FrontendApp): Promise<void> {
   const issued = await issueToken(
     user.id,
     'password_reset',
@@ -306,6 +305,19 @@ async function sendPasswordResetMailIfRegistered(email: string, app: FrontendApp
       },
     },
   })
+}
+
+/**
+ * Issue a password-reset token and mail the link, but only when `email`
+ * belongs to an existing, active account.
+ * @param email - The address submitted to `/forgot-password`.
+ * @param app - The frontend the reset link opens.
+ */
+async function sendPasswordResetMailIfRegistered(email: string, app: FrontendApp): Promise<void> {
+  const user = await userRepository.findByEmail(email)
+  // A deactivated account could not sign in after resetting; the caller's reply is the same either way.
+  if (!user?.active) return
+  await sendPasswordResetMail(user, app)
 }
 
 /**

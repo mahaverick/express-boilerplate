@@ -5,7 +5,9 @@
 import { z } from 'zod'
 import { PAGE_DIRECTIONS, STATS_RANGES, TENANT_STATE_FILTERS } from '@/constants/platform.constants'
 import { HttpError } from '@/errors/http-error'
+import { emailSchema, frontendAppSchema } from '@/validators/auth.validators'
 import { cursorField } from '@/validators/cursor.validators'
+import { updateProfileSchema } from '@/validators/profile.validators'
 import { normalizeMultilineText, safeText } from '@/validators/safe-text.validators'
 
 const DEFAULT_SEARCH_PAGE_SIZE = 20
@@ -180,3 +182,37 @@ export function parseIdParameter(raw: unknown, notFoundMessage: string): string 
   if (!parsed.success) throw new HttpError(notFoundMessage, 404)
   return parsed.data
 }
+
+/**
+ * `POST /platform/users`: an address, optional names, and which frontend the
+ * set-password link opens. Strict: staff never set a password or a status.
+ */
+export const newPlatformUserSchema = z.strictObject({
+  email: emailSchema,
+  firstName: updateProfileSchema.shape.firstName,
+  lastName: updateProfileSchema.shape.lastName,
+  app: frontendAppSchema,
+})
+
+/**
+ * The validated create-user body.
+ */
+export type CreatePlatformUserInput = z.infer<typeof newPlatformUserSchema>
+
+/**
+ * `PATCH /platform/users/:id`: names only (null clears one), at least one
+ * given. Strict, so a status or email field is a 400 rather than ignored.
+ */
+export const updatePlatformUserSchema = z
+  .strictObject({
+    firstName: updateProfileSchema.shape.firstName,
+    lastName: updateProfileSchema.shape.lastName,
+  })
+  .refine((input) => input.firstName !== undefined || input.lastName !== undefined, {
+    message: 'Provide firstName or lastName.',
+  })
+
+/**
+ * The validated update-user body.
+ */
+export type UpdatePlatformUserInput = z.infer<typeof updatePlatformUserSchema>

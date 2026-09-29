@@ -7,6 +7,7 @@
  */
 import { Router, type RequestHandler } from 'express'
 import { platformUserController } from '@/controllers/platform-user.controller'
+import { requireJsonContentType } from '@/middlewares/content-type.middleware'
 import { requirePlatformRole } from '@/middlewares/platform.middleware'
 
 /**
@@ -36,6 +37,34 @@ export function createPlatformUserRouter(limiters: PlatformLimiters): Router {
     requirePlatformRole('viewer'),
     limiters.searchLimiter,
     platformUserController.getUser
+  )
+  router.post(
+    '/',
+    requirePlatformRole('admin'),
+    requireJsonContentType,
+    limiters.writeLimiter,
+    platformUserController.createUser
+  )
+  router.patch(
+    '/:id',
+    requirePlatformRole('admin'),
+    requireJsonContentType,
+    limiters.writeLimiter,
+    platformUserController.updateUser
+  )
+  router.post(
+    '/:id/password-setup',
+    requirePlatformRole('admin'),
+    requireJsonContentType,
+    limiters.writeLimiter,
+    platformUserController.sendPasswordSetup
+  )
+  router.post(
+    '/:id/resend-verification',
+    requirePlatformRole('admin'),
+    requireJsonContentType,
+    limiters.writeLimiter,
+    platformUserController.resendVerification
   )
   return router
 }

@@ -41,3 +41,17 @@ describe('createPlatformUserRouter', () => {
     expect(handlers[1]).toBe(sharedSearchLimiter)
   })
 })
+
+describe('createPlatformUserRouter writes', () => {
+  it.each([
+    ['post', '/'],
+    ['patch', '/:id'],
+    ['post', '/:id/password-setup'],
+    ['post', '/:id/resend-verification'],
+  ])('%s %s: role gate, JSON gate, then the shared write limiter', (method, path) => {
+    const handlers = handlersFor(createPlatformUserRouter(limiters), method, path)
+
+    expect(handlers).toHaveLength(4)
+    expect(handlers[2]).toBe(sharedWriteLimiter)
+  })
+})
