@@ -15,10 +15,9 @@ import {
   type RefreshCookieSpec,
 } from '@/constants/auth.constants'
 import { BaseController } from '@/controllers/base.controller'
-import { authenticatedUserId } from '@/controllers/helpers.controller'
+import { authenticatedUserId, oauthAppOf } from '@/controllers/helpers.controller'
 import { HttpError } from '@/errors/http-error'
 import { redactedForLog } from '@/errors/postgres-errors'
-import { oauthAppOf } from '@/middlewares/oauth-app.middleware'
 import { toPublicAuthProviders } from '@/presenters/auth-provider.presenter'
 import { toProfileResponse } from '@/presenters/user.presenter'
 import * as authService from '@/services/auth.service'
@@ -499,8 +498,9 @@ class AuthController extends BaseController {
    * body is an immediately-invoked async function — an async callback passed
    * directly would turn a rejection into an unhandled one.
    *
-   * Every failure redirects to `/login?error=...` on the frontend that started the sign-in, never this
-   * API's JSON envelope (the browser arrived by a full-page navigation).
+   * Every failure redirects to `/login?error=...` on the frontend that
+   * started the sign-in, never this API's JSON envelope (the browser arrived
+   * by a full-page navigation).
    * `HttpError.code` is forwarded verbatim; anything else is
    * `processing_failed`; Google reporting an error or no profile is
    * `google_auth_failed`. Not wrapped in `handle()` for the same reason.

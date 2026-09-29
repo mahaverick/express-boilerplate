@@ -1,6 +1,11 @@
+/**
+ * @file Unit test for the Google callback's failure redirect: it targets the
+ * frontend that started the sign-in, without doubled slashes.
+ */
 import type { NextFunction, Request, Response } from 'express'
 import { describe, expect, it, vi } from 'vitest'
 
+// frontendUrl is mocked, so this test proves only the trailing-slash stripping.
 vi.mock('@/services/verification.service', () => ({
   frontendUrl: () => 'https://admin.example.com//',
 }))

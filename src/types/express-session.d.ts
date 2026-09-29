@@ -6,7 +6,7 @@ import type { FrontendApp } from '@/constants/frontend.constants'
 declare module 'express-session' {
   interface SessionData {
     /**
-    Which frontend started the Google sign-in, so the callback returns there.
+     * Which frontend started the Google sign-in, so the callback returns there.
      */
     oauthApp?: FrontendApp
   }
