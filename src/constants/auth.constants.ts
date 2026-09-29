@@ -142,19 +142,19 @@ export const REFRESH_REUSE_GRACE_MS = 10_000
  *   3. a token with no `sid` claim, on the two routes that need one —
  *      `requireSessionId` (notification-stream.controller.ts) and
  *      `reauthenticate` (auth.service.ts, `POST /auth/reauthenticate`);
- *   4. a step-up with no session to mark — `markSessionReauthenticated`
+ *   4. a step-up with nothing to mark — `reauthenticate` (auth.service.ts)
+ *      for a user gone or inactive, and `markSessionReauthenticated`
  *      (session.service.ts), reached from `POST /auth/reauthenticate`, for a
- *      session with no live refresh token or a user gone or inactive.
+ *      user gone or inactive or a session with no live refresh token.
  */
 export const ACCESS_TOKEN_EXPIRED_CODE = 'ACCESS_TOKEN_EXPIRED'
 
 /**
  * Machine-readable code for a request refused because its session last
  * authenticated too long ago (`requireRecentAuth`, auth.middleware.ts). The
- * 401 asks the client to confirm the user's identity (`POST
- * /auth/reauthenticate`, or a Google step-up via `GET
- * /auth/google?reauth=1`) and retry. It is not a verdict on the session, so
- * a client must not sign out on it.
+ * 401 asks the client to confirm the user's identity with `POST
+ * /auth/reauthenticate` and retry. It is not a verdict on the session, so a
+ * client must not sign out on it.
  */
 export const REAUTH_REQUIRED_CODE = 'REAUTH_REQUIRED'
 

@@ -9,20 +9,16 @@ import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
 import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
 import { UserRepository } from '@/repositories/user.repository'
-import { recordReauthentication } from '@/services/auth.service'
 import { withTransaction } from '@/services/database.service'
 import { autoJoinSafely } from '@/services/platform.service'
 import {
   denySessions,
   issueRefreshToken,
-  markSessionReauthenticated,
   revokeAllSessions,
   revokeSessionRows,
   type IssuedRefreshToken,
 } from '@/services/session.service'
 import { markEmailVerified } from '@/services/verification.service'
-import { MS_PER_SECOND } from '@/utilities/duration.utilities'
-import type { GoogleSignIn } from '@/utilities/google-id-token.utilities'
 
 const userRepository = new UserRepository()
 const authProviderRepository = new AuthProviderRepository()
@@ -212,45 +208,5 @@ export async function completeGoogleSignIn(profile: GoogleProfile): Promise<Issu
     // Re-checked under the lock, as login does: a deactivation that committed since the lookup wins.
     if (!locked?.active) throw new HttpError('Account is inactive', 401, 'google_auth_failed')
     return issueRefreshToken(user.id, randomUUID(), tx)
-  })
-}
-
-/**
- * How old an ID token's auth_time may be for a Google step-up: the round-trip
- * asked for max_age=0, so anything older means Google did not re-authenticate.
- */
-export const GOOGLE_STEP_UP_MAX_AGE_MS = 5 * 60 * 1000
-
-/**
- * Finish a Google step-up: accept it only when the Google identity
- * is linked to the user whose session started the round-trip, that user is
- * active, and the ID token says Google authenticated them within
- * GOOGLE_STEP_UP_MAX_AGE_MS. Then mark that session re-authenticated; no
- * session is started and no account is linked or created. A success and a
- * refused identity check are audited (`auth.reauthenticated`), a refusal in a
- * transaction of its own; a round-trip whose session already ended is
- * refused before any audit write.
- * @param signIn - The profile the strategy produced, with its ID token's auth time.
- * @param expected - The session stored when the round-trip started.
- * @param expected.userId - The staff user who started it.
- * @param expected.sessionId - The session to mark re-authenticated.
- * @throws {HttpError} 401 `reauth_failed` when any check fails; 401 ACCESS_TOKEN_EXPIRED when the session ended meanwhile.
- */
-export async function confirmGoogleStepUp(
-  signIn: GoogleSignIn,
-  expected: { userId: string; sessionId: string }
-): Promise<void> {
-  const link = await authProviderRepository.findByProviderAndId('google', signIn.id)
-  const user = await userRepository.findById(expected.userId)
-  const authTime = signIn.stepUpAuthTime
-  const isFresh =
-    authTime !== undefined && Date.now() - authTime * MS_PER_SECOND <= GOOGLE_STEP_UP_MAX_AGE_MS
-  if (!isFresh || link?.userId !== expected.userId || !user?.active) {
-    await withTransaction((tx) => recordReauthentication(expected.userId, 'failure', tx))
-    throw new HttpError('Google did not confirm this account just now', 401, 'reauth_failed')
-  }
-  await withTransaction(async (tx) => {
-    await markSessionReauthenticated(expected.userId, expected.sessionId, tx)
-    await recordReauthentication(expected.userId, 'success', tx)
   })
 }

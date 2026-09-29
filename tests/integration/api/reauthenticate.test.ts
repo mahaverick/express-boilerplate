@@ -13,6 +13,7 @@ import { getEnv } from '@/configs/env.config'
 import { ACCESS_TOKEN_EXPIRED_CODE } from '@/constants/auth.constants'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import { UserRepository } from '@/repositories/user.repository'
+import { reauthenticate as reauthenticateService } from '@/services/auth.service'
 import { sql } from '@/services/database.service'
 import { signAccessToken, verifyAccessToken } from '@/services/session.service'
 import { hashPassword } from '@/utilities/password.utilities'
@@ -204,6 +205,23 @@ describe('POST /api/v1/auth/reauthenticate', () => {
     expect(response.status).toBe(401)
     expect((response.body as { code?: string }).code).toBe(ACCESS_TOKEN_EXPIRED_CODE)
   })
+
+  // Over HTTP requireAuth refuses an inactive account first; this is the service's own check, for one deactivated after that.
+  it.each([
+    ['deactivated', 'update users set active = false where id = $1'],
+    ['soft-deleted', 'update users set deleted_at = now() where id = $1'],
+  ])(
+    'asks a caller whose account was %s to refresh (401 ACCESS_TOKEN_EXPIRED)',
+    async (_label, statement) => {
+      const session = await signIn('viewer')
+      await sql.unsafe(statement, [session.userId])
+
+      await expect(
+        reauthenticateService(session.userId, session.sid, { password: PASSWORD })
+      ).rejects.toMatchObject({ statusCode: 401, code: ACCESS_TOKEN_EXPIRED_CODE })
+      expect(await auditRows(session.userId)).toEqual([])
+    }
+  )
 
   it('rejects a missing password with 400', async () => {
     const session = await signIn('viewer')

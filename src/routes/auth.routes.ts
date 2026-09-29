@@ -5,13 +5,7 @@
  * amplifier, or a password oracle. `RATE_LIMITS`
  * (rate-limit.constants.ts) holds each limiter's reasoning.
  */
-import {
-  Router,
-  type NextFunction,
-  type Request,
-  type RequestHandler,
-  type Response,
-} from 'express'
+import { Router, type RequestHandler } from 'express'
 import passport from 'passport'
 import {
   configurePassport,
@@ -40,9 +34,7 @@ import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
  * it is idempotent. On both routes the limiter runs before `oauthSession`, so
  * an over-budget caller gets a 429 before a session is written to Redis. Both
  * share one `oauthSession` instance, since the callback reads the `state` the
- * redirect wrote. `?reauth=1` on `/google` is a step-up bound to the
- * caller's own live staff session (prepareGoogleStepUp): it confirms that
- * session, never starts one.
+ * redirect wrote.
  * @returns A router mounted at `/api/v1/auth` by `index.routes.ts`.
  */
 export function createAuthRouter(): Router {
@@ -106,28 +98,16 @@ export function createAuthRouter(): Router {
   if (isGoogleOAuthEnabled()) {
     configurePassport()
     const oauthSession = createOAuthSessionMiddleware()
-    // Per request: a step-up round-trip asks Google to re-authenticate the user (max_age=0) and to show the account chooser.
-    const authenticateWithGoogle = (
-      request: Request,
-      response: Response,
-      next: NextFunction
-    ): void => {
-      const isStepUp = request.session.oauthStepUp !== undefined
-      // Cast: @types/passport types authenticate() on the singleton as any.
-      const authenticate = passport.authenticate(GOOGLE_STRATEGY_NAME, {
-        scope: ['openid', 'profile', 'email'],
-        ...(isStepUp && { maxAge: 0, prompt: 'select_account' }),
-      }) as RequestHandler
-      authenticate(request, response, next)
-    }
     router.get(
       '/google',
       createRateLimiter(RATE_LIMITS.googleOAuth),
       oauthSession,
       rememberOAuthApp,
-      authController.prepareGoogleStepUp,
       passport.initialize(),
-      authenticateWithGoogle
+      // Cast: @types/passport types authenticate() on the singleton as any.
+      passport.authenticate(GOOGLE_STRATEGY_NAME, {
+        scope: ['profile', 'email'],
+      }) as RequestHandler
     )
     router.get(
       '/google/callback',

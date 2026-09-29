@@ -65,7 +65,7 @@ const FEDERATED_ONLY_MESSAGE =
   'This account signs in with Google and has no password. Use forgot-password to set one.'
 const INCORRECT_PASSWORD_MESSAGE = 'Incorrect password.'
 const REAUTH_FEDERATED_MESSAGE =
-  'This account signs in with Google and has no password. Confirm with Google instead.'
+  'This account signs in with Google and has no password. Set a password to confirm sensitive actions.'
 
 /**
  * A successful login: the user row, a signed access token and a new refresh token.
@@ -473,15 +473,14 @@ export interface ReauthenticateResult {
 }
 
 /**
- * Audit one step-up attempt in the platform tenant: both step-up paths
- * (this password route and the Google round-trip in google-auth.service.ts)
- * admit staff only, so the actor is a member there.
+ * Audit one step-up attempt in the platform tenant: `POST
+ * /auth/reauthenticate` admits staff only, so the actor is a member there.
  * @param userId - The staff member, actor and target both.
  * @param outcome - Whether the identity was confirmed.
  * @param tx - The transaction to write in.
  * @throws {HttpError} 500 when the platform tenant is missing.
  */
-export async function recordReauthentication(
+async function recordReauthentication(
   userId: string,
   outcome: 'success' | 'failure',
   tx: DbTransaction
@@ -512,13 +511,16 @@ export async function recordReauthentication(
  * the session. A success and a wrong password are audited
  * (`auth.reauthenticated`): a success in the transaction that moves the
  * time, a wrong password in a transaction of its own, since the refusal
- * writes nothing else. A passwordless account, a token without a session and
- * a rate-limited attempt are refused before any audit write.
+ * writes nothing else. A token without a session, an account gone or
+ * inactive, a passwordless account and a rate-limited attempt are refused
+ * before any audit write. A correct password on a session that ended is
+ * refused by `markSessionReauthenticated` before the success entry is
+ * written, so it leaves none.
  * @param userId - The authenticated caller.
  * @param sessionId - The caller's session (the token's `sid`); undefined for a token without one.
  * @param input - The validated `{ password }` body.
  * @returns A new access token for the same session.
- * @throws {HttpError} 401 with ACCESS_TOKEN_EXPIRED_CODE for a token without `sid` or a session that has ended; 401 when the account is gone or inactive; 400 for a passwordless account or a wrong password.
+ * @throws {HttpError} 401 with ACCESS_TOKEN_EXPIRED_CODE for a token without `sid`, an account gone or inactive, or a session that has ended; 400 for a passwordless account or a wrong password.
  */
 export async function reauthenticate(
   userId: string,
@@ -530,7 +532,7 @@ export async function reauthenticate(
   }
   const user = await userRepository.findById(userId)
   if (!user || !user.active) {
-    throw new HttpError('Account no longer exists or is inactive', 401)
+    throw new HttpError('Account no longer exists or is inactive', 401, ACCESS_TOKEN_EXPIRED_CODE)
   }
   if (!user.passwordHash) {
     throw new HttpError(REAUTH_FEDERATED_MESSAGE, 400)

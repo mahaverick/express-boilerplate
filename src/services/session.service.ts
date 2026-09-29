@@ -618,7 +618,7 @@ export async function revokeAllSessions(userId: string): Promise<void> {
 
 /**
  * Record that a session's user just proved their identity again (by password,
- * `POST /auth/reauthenticate`, or by a Google step-up round-trip): move
+ * `POST /auth/reauthenticate`): move
  * `authenticated_at` to now on every row of the session
  * (`markSessionAuthenticated`). Holds the user row FOR NO KEY UPDATE, which
  * waits for a rotation holding it FOR SHARE, so that rotation's new row
@@ -649,31 +649,4 @@ export function markSessionReauthenticated(
     return authenticatedAt
   }
   return tx ? mark(tx) : withTransaction(mark)
-}
-
-/**
- * The live session a raw refresh token belongs to: its row must be a
- * `'refresh'` token, not revoked, not expired, not soft-deleted, in a session
- * younger than `SESSION_ABSOLUTE_TTL` (the bound `continueSession` applies).
- * Reads only.
- * @param raw - The raw refresh token from the cookie.
- * @returns The session's user and id, or undefined when the token is not live.
- */
-export async function findLiveRefreshSession(
-  raw: string
-): Promise<{ userId: string; sessionId: string } | undefined> {
-  const row = await userTokenRepository.findByHash(hashToken(raw))
-  const now = Date.now()
-  if (
-    !row ||
-    row.purpose !== 'refresh' ||
-    row.revokedAt !== null ||
-    row.expiresAt.getTime() <= now ||
-    row.sessionId === null ||
-    row.sessionStartedAt === null ||
-    now - row.sessionStartedAt.getTime() >= requireDurationMs(getEnv().SESSION_ABSOLUTE_TTL)
-  ) {
-    return undefined
-  }
-  return { userId: row.userId, sessionId: row.sessionId }
 }

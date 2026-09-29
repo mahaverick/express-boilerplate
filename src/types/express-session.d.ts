@@ -9,11 +9,5 @@ declare module 'express-session' {
      * Which frontend started the Google sign-in, so the callback returns there.
      */
     oauthApp?: FrontendApp
-    /**
-     * The session a Google step-up round-trip confirms, stored when it
-     * starts (`prepareGoogleStepUp`, auth.controller.ts) and consumed by the
-     * callback. Absent on a plain sign-in.
-     */
-    oauthStepUp?: { userId: string; sessionId: string }
   }
 }
