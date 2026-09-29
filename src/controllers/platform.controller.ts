@@ -6,10 +6,13 @@ import { BaseController } from '@/controllers/base.controller'
 import { actorFrom } from '@/controllers/helpers.controller'
 import { getPlatformStats } from '@/services/platform-stats.service'
 import {
+  archiveTenant,
   createTenant,
   getTenantDetail,
+  reactivateTenant,
   reissueOwnerInvitation,
   searchAll,
+  suspendTenant,
 } from '@/services/platform-tenant.service'
 import { successResponse } from '@/utilities/response.utilities'
 import { parseBody } from '@/validators/parse.validators'
@@ -19,6 +22,7 @@ import {
   platformNewTenantSchema,
   platformStatsQuerySchema,
   platformTenantSearchSchema,
+  reasonBodySchema,
 } from '@/validators/platform.validators'
 
 /**
@@ -60,6 +64,45 @@ class PlatformController extends BaseController {
     const { email, reason } = parseBody(ownerInvitationBodySchema, request.body)
     const result = await reissueOwnerInvitation(actorFrom(request), tenantId, email, reason)
     successResponse(response, result, 'Owner invitation sent.')
+  })
+
+  /**
+   * `POST /platform/tenants/:id/suspend`.
+   */
+  suspendTenant = this.handle(async (request, response) => {
+    const tenantId = parseIdParameter(request.params.id, 'Tenant not found')
+    const { reason } = parseBody(reasonBodySchema, request.body)
+    successResponse(
+      response,
+      await suspendTenant(actorFrom(request), tenantId, reason),
+      'Tenant suspended.'
+    )
+  })
+
+  /**
+   * `POST /platform/tenants/:id/reactivate`.
+   */
+  reactivateTenant = this.handle(async (request, response) => {
+    const tenantId = parseIdParameter(request.params.id, 'Tenant not found')
+    const { reason } = parseBody(reasonBodySchema, request.body)
+    successResponse(
+      response,
+      await reactivateTenant(actorFrom(request), tenantId, reason),
+      'Tenant reactivated.'
+    )
+  })
+
+  /**
+   * `POST /platform/tenants/:id/archive`.
+   */
+  archiveTenant = this.handle(async (request, response) => {
+    const tenantId = parseIdParameter(request.params.id, 'Tenant not found')
+    const { reason } = parseBody(reasonBodySchema, request.body)
+    successResponse(
+      response,
+      await archiveTenant(actorFrom(request), tenantId, reason),
+      'Tenant archived.'
+    )
   })
 
   /**

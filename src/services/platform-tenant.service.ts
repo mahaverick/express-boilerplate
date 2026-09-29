@@ -2,6 +2,7 @@
  * @file Staff reads and writes over every customer tenant. The route has already checked the platform role; each write re-checks it under lock. The per-user "your tenants" list stays in tenant.service.ts.
  */
 import { statesFor } from '@/constants/platform.constants'
+import type { TenantLifecycleState } from '@/constants/tenant.constants'
 import { HttpError } from '@/errors/http-error'
 import {
   PlatformTenantRepository,
@@ -190,4 +191,100 @@ export async function reissueOwnerInvitation(
     return createOwnerInvitation(actor, tenantId, email, reason, tx)
   })
   return sendOwnerInvitation(dispatch)
+}
+
+/**
+ * Error code: the tenant is not in a state the transition starts from.
+ */
+export const TENANT_STATE_CONFLICT_CODE = 'tenant_state_conflict'
+
+type LifecycleAction = 'tenant.suspended' | 'tenant.reactivated' | 'tenant.archived'
+
+/**
+ * Apply one lifecycle transition, audit it, and return the tenant as it now is.
+ * @param actor - The staff user.
+ * @param tenantId - The tenant.
+ * @param from - The states the transition starts from.
+ * @param to - The new state.
+ * @param action - The audit action.
+ * @param reason - The staff-given reason, stored in the audit entry.
+ * @returns The tenant's detail after the change.
+ * @throws {HttpError} 404 when no tenant has this id or the actor lost the platform role; 409 `tenant_state_conflict` for the platform tenant or a tenant not in `from`.
+ */
+async function transition(
+  actor: Actor,
+  tenantId: string,
+  from: readonly TenantLifecycleState[],
+  to: TenantLifecycleState,
+  action: LifecycleAction,
+  reason: string
+): Promise<PlatformTenantDetail> {
+  await withTransaction(async (tx) => {
+    await assertStillPlatformRole(actor, 'admin', tx)
+    const updated = await tenantRepository.transitionLifecycle(tenantId, from, to, tx)
+    if (!updated) {
+      const current = await tenantRepository.findByIdIncludingDeleted(tenantId, tx)
+      if (!current) throw new HttpError('Tenant not found', 404)
+      const message = current.isPlatform
+        ? 'The platform tenant cannot be suspended, reactivated or archived.'
+        : `This tenant is ${current.lifecycleState}.`
+      throw new HttpError(message, 409, TENANT_STATE_CONFLICT_CODE)
+    }
+    if (to === 'archived') await invitationRepository.revokeAllPending(tenantId, tx)
+    await record(
+      { action, actor, access: 'platform', tenantId, targetId: tenantId, metadata: { reason } },
+      tx
+    )
+  })
+  return getTenantDetail(tenantId)
+}
+
+/**
+ * Suspend an active customer tenant: its members get 404 on their next request.
+ * @param actor - The staff user.
+ * @param tenantId - The tenant.
+ * @param reason - Why, for the audit log.
+ * @returns The tenant's detail.
+ * @throws {HttpError} 404 unknown; 409 platform tenant or not active.
+ */
+export function suspendTenant(
+  actor: Actor,
+  tenantId: string,
+  reason: string
+): Promise<PlatformTenantDetail> {
+  return transition(actor, tenantId, ['active'], 'suspended', 'tenant.suspended', reason)
+}
+
+/**
+ * Reactivate a suspended customer tenant. Archived is terminal.
+ * @param actor - The staff user.
+ * @param tenantId - The tenant.
+ * @param reason - Why, for the audit log.
+ * @returns The tenant's detail.
+ * @throws {HttpError} 404 unknown; 409 platform tenant or not suspended.
+ */
+export function reactivateTenant(
+  actor: Actor,
+  tenantId: string,
+  reason: string
+): Promise<PlatformTenantDetail> {
+  return transition(actor, tenantId, ['suspended'], 'active', 'tenant.reactivated', reason)
+}
+
+/**
+ * Archive an active or suspended customer tenant: soft-delete it, revoke
+ * its pending invitations and free its slug. Terminal, but not permanent:
+ * only a purge removes the row.
+ * @param actor - The staff user (platform admin or owner, recently authenticated; the route checked).
+ * @param tenantId - The tenant.
+ * @param reason - Why, for the audit log.
+ * @returns The tenant's detail.
+ * @throws {HttpError} 404 unknown; 409 platform tenant or already archived.
+ */
+export function archiveTenant(
+  actor: Actor,
+  tenantId: string,
+  reason: string
+): Promise<PlatformTenantDetail> {
+  return transition(actor, tenantId, ['active', 'suspended'], 'archived', 'tenant.archived', reason)
 }

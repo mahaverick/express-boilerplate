@@ -88,3 +88,17 @@ export function toAuditEntry(row: JoinedAuditRow): AuditEntryResponse {
 export function toPlatformAuditEntry(row: JoinedAuditRow): PlatformAuditEntryResponse {
   return { ...toAuditEntry(row), tenant: row.tenant }
 }
+
+/**
+ * An entry as a tenant member may see it: a staff-written entry
+ * (`access: 'platform'`) loses `metadata.reason`, the staff member's own
+ * note. The action, the time and who acted stay.
+ * @param entry - The entry as `toAuditEntry` shaped it.
+ * @returns The entry, without a staff reason.
+ */
+export function hideStaffReason(entry: AuditEntryResponse): AuditEntryResponse {
+  if (entry.access !== 'platform' || !Object.hasOwn(entry.metadata, 'reason')) return entry
+  const metadata = { ...entry.metadata }
+  delete metadata.reason
+  return { ...entry, metadata }
+}

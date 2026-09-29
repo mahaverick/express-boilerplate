@@ -45,6 +45,29 @@ export function createPlatformRouter(): Router {
     writeLimiter,
     platformController.reissueOwnerInvitation
   )
+  router.post(
+    '/tenants/:id/suspend',
+    requirePlatformRole('admin'),
+    requireJsonContentType,
+    requireRecentAuth(),
+    writeLimiter,
+    platformController.suspendTenant
+  )
+  router.post(
+    '/tenants/:id/reactivate',
+    requirePlatformRole('admin'),
+    requireJsonContentType,
+    writeLimiter,
+    platformController.reactivateTenant
+  )
+  router.post(
+    '/tenants/:id/archive',
+    requirePlatformRole('admin'),
+    requireJsonContentType,
+    requireRecentAuth(),
+    writeLimiter,
+    platformController.archiveTenant
+  )
   router.get(
     '/tenants/:id',
     requirePlatformRole('viewer'),

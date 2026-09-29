@@ -195,7 +195,7 @@ export class TenantInvitationRepository {
 
   /**
    * A redeemable invitation by its token hash: pending, not expired, and for
-   * a tenant that is not soft-deleted.
+   * a tenant that is not soft-deleted and is active.
    * @param tokenHash - SHA-256 hex of the raw token.
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns The invitation with its tenant and inviter, or undefined.
@@ -215,7 +215,12 @@ export class TenantInvitationRepository {
       .from(invitation)
       .innerJoin(
         tenantModel,
-        and(eq(invitation.tenantId, tenantModel.id), isNull(tenantModel.deletedAt))
+        and(
+          eq(invitation.tenantId, tenantModel.id),
+          isNull(tenantModel.deletedAt),
+          // A suspended tenant's invitations wait: reactivating makes an unexpired one work again.
+          eq(tenantModel.lifecycleState, 'active')
+        )
       )
       .leftJoin(userModel, and(eq(invitation.invitedBy, userModel.id), isNull(userModel.deletedAt)))
       .where(and(eq(invitation.tokenHash, tokenHash), redeemableCondition()))
@@ -258,10 +263,26 @@ export class TenantInvitationRepository {
   }
 
   /**
+   * Revoke every pending invitation of a tenant, for archiving it.
+   * @param tenantId - The tenant.
+   * @param tx - The transaction.
+   * @returns How many were revoked.
+   */
+  async revokeAllPending(tenantId: string, tx: DbTransaction): Promise<number> {
+    const rows = await tx
+      .update(invitation)
+      .set({ revokedAt: sql`now()`, updatedAt: sql`now()` })
+      .where(and(eq(invitation.tenantId, tenantId), pendingCondition()))
+      .returning({ id: invitation.id })
+    return rows.length
+  }
+
+  /**
    * Atomically mark a redeemable invitation accepted by `userId`. The check
    * and the write are one UPDATE, so of two concurrent claims exactly one
    * gets the row. Unlike `claimOnce`, expiry is part of the predicate, and
-   * so is the tenant not being soft-deleted.
+   * so is the tenant being live and active (a suspended tenant's invitations
+   * wait).
    * @param tokenHash - SHA-256 hex of the raw token.
    * @param userId - The accepting user.
    * @param executor - Where to run the query. Defaults to the pool.
@@ -279,7 +300,7 @@ export class TenantInvitationRepository {
         and(
           eq(invitation.tokenHash, tokenHash),
           redeemableCondition(),
-          sql`exists (select 1 from ${tenantModel} where ${tenantModel.id} = ${invitation.tenantId} and ${tenantModel.deletedAt} is null)`
+          sql`exists (select 1 from ${tenantModel} where ${tenantModel.id} = ${invitation.tenantId} and ${tenantModel.deletedAt} is null and ${tenantModel.lifecycleState} = 'active')`
         )
       )
       .returning()

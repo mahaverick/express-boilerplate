@@ -4,8 +4,12 @@
  * tenant, its settings row and its owner membership in one transaction;
  * `createWithoutOwner` writes the first two, for staff.
  */
-import { and, eq, isNull, sql, type SQL } from 'drizzle-orm'
-import { SLUG_TAKEN_CODE, type MembershipRole } from '@/constants/tenant.constants'
+import { and, eq, inArray, isNull, sql, type SQL } from 'drizzle-orm'
+import {
+  SLUG_TAKEN_CODE,
+  type MembershipRole,
+  type TenantLifecycleState,
+} from '@/constants/tenant.constants'
 import {
   tenantModel,
   tenantSettingsModel,
@@ -109,6 +113,52 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
     executor: DbExecutor = db
   ): Promise<Tenant | undefined> {
     return this.selectOne(this.scope(eq(tenantModel.slug, slug), options), executor)
+  }
+
+  /**
+   * Find a tenant by id whether or not it is soft-deleted.
+   * @param id - The tenant id.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns The tenant, or undefined when no row has this id.
+   */
+  findByIdIncludingDeleted(id: string, executor: DbExecutor = db): Promise<Tenant | undefined> {
+    return this.findById(id, { includeDeleted: true }, executor)
+  }
+
+  /**
+   * Move a customer tenant from one of `from` to `to` in one conditional
+   * UPDATE, so two racing transitions cannot both succeed. `archived` also
+   * soft-deletes the row, which frees its slug. The platform tenant never
+   * matches (and `tenants_platform_active` refuses it anyway).
+   * @param id - The tenant id.
+   * @param from - The states the tenant may be in now.
+   * @param to - The new state.
+   * @param tx - The transaction.
+   * @returns The updated tenant, or undefined when no customer tenant with this id is in `from`.
+   */
+  async transitionLifecycle(
+    id: string,
+    from: readonly TenantLifecycleState[],
+    to: TenantLifecycleState,
+    tx: DbTransaction
+  ): Promise<Tenant | undefined> {
+    const [row] = await tx
+      .update(tenantModel)
+      .set({
+        lifecycleState: to,
+        updatedAt: sql`now()`,
+        ...(to === 'archived' && { deletedAt: sql`now()` }),
+      })
+      .where(
+        and(
+          eq(tenantModel.id, id),
+          eq(tenantModel.isPlatform, false),
+          isNull(tenantModel.deletedAt),
+          inArray(tenantModel.lifecycleState, [...from])
+        )
+      )
+      .returning()
+    return row
   }
 
   /**
