@@ -4,10 +4,11 @@
  */
 import { BaseController } from '@/controllers/base.controller'
 import { getPlatformStats } from '@/services/platform-stats.service'
-import { searchAll } from '@/services/platform-tenant.service'
+import { getTenantDetail, searchAll } from '@/services/platform-tenant.service'
 import { successResponse } from '@/utilities/response.utilities'
 import { parseBody } from '@/validators/parse.validators'
 import {
+  parseIdParameter,
   platformStatsQuerySchema,
   platformTenantSearchSchema,
 } from '@/validators/platform.validators'
@@ -23,6 +24,15 @@ class PlatformController extends BaseController {
     const query = parseBody(platformTenantSearchSchema, request.query)
     const page = await searchAll(query)
     successResponse(response, page, 'Tenants retrieved.')
+  })
+
+  /**
+   * `GET /platform/tenants/:id`: one customer tenant in any lifecycle state.
+   */
+  getTenant = this.handle(async (request, response) => {
+    const tenantId = parseIdParameter(request.params.id, 'Tenant not found')
+    const tenant = await getTenantDetail(tenantId)
+    successResponse(response, tenant, 'Tenant retrieved.')
   })
 
   /**

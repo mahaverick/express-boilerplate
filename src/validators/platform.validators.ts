@@ -3,7 +3,7 @@
  * alone is a 400 rather than a match-everything search.
  */
 import { z } from 'zod'
-import { PAGE_DIRECTIONS, STATS_RANGES } from '@/constants/platform.constants'
+import { PAGE_DIRECTIONS, STATS_RANGES, TENANT_STATE_FILTERS } from '@/constants/platform.constants'
 import { HttpError } from '@/errors/http-error'
 import { cursorField } from '@/validators/cursor.validators'
 import { normalizeMultilineText, safeText } from '@/validators/safe-text.validators'
@@ -50,13 +50,31 @@ export const pageLimitField = z.coerce
   .default(DEFAULT_SEARCH_PAGE_SIZE)
 
 /**
- * `GET /api/v1/platform/tenants` query string.
+ * The `direction` query field of a keyset search: forward unless asked otherwise.
  */
-export const platformTenantSearchSchema = z.object({
-  q: searchQueryField.optional(),
-  cursor: cursorField(platformTenantCursorSchema).optional(),
-  limit: pageLimitField,
-})
+export const directionField = z.enum(PAGE_DIRECTIONS).default('next')
+
+/**
+ * `GET /api/v1/platform/tenants` query string. `direction=prev` pages back
+ * from `cursor`, so it needs one.
+ */
+export const platformTenantSearchSchema = z
+  .object({
+    q: searchQueryField.optional(),
+    state: z.enum(TENANT_STATE_FILTERS).optional(),
+    cursor: cursorField(platformTenantCursorSchema).optional(),
+    direction: directionField,
+    limit: pageLimitField,
+  })
+  .superRefine((query, context) => {
+    if (query.direction === 'prev' && query.cursor === undefined) {
+      context.addIssue({
+        code: 'custom',
+        path: ['cursor'],
+        message: 'cursor is required when direction is prev.',
+      })
+    }
+  })
 
 /**
  * The validated search query, with the cursor already decoded.
@@ -105,11 +123,6 @@ export const reasonBodySchema = z.strictObject({ reason: reasonSchema })
  * The validated `{ reason }` body.
  */
 export type ReasonBody = z.infer<typeof reasonBodySchema>
-
-/**
- * The `direction` query field of a keyset search: forward unless asked otherwise.
- */
-export const directionField = z.enum(PAGE_DIRECTIONS).default('next')
 
 /**
  * A query-string boolean: exactly `true` or `false`.

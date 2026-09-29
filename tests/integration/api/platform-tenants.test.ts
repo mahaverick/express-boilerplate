@@ -34,6 +34,7 @@ interface PlatformTenantRowBody {
 interface SearchPage {
   tenants: PlatformTenantRowBody[]
   nextCursor: string | null
+  prevCursor: string | null
 }
 
 interface ApiEnvelope<TData> {
@@ -88,7 +89,7 @@ describe('GET /api/v1/platform/tenants', () => {
   async function createUser(): Promise<{ user: User; token: string }> {
     const user = await userRepository.create({ email: `platform-api-${randomUUID()}@example.test` })
     createdUserIds.push(user.id)
-    return { user, token: signAccessToken(user, randomUUID()) }
+    return { user, token: signAccessToken(user, randomUUID(), new Date()) }
   }
 
   async function createStaff(role: MembershipRole = 'viewer'): Promise<string> {
@@ -106,6 +107,25 @@ describe('GET /api/v1/platform/tenants', () => {
     })
     createdTenantIds.push(tenant.id)
     return tenant
+  }
+
+  async function seedStates(
+    tag: string
+  ): Promise<{ live: Tenant; suspended: Tenant; archived: Tenant }> {
+    const live = await createNamedTenant(`${tag} Live`)
+    const suspended = await createNamedTenant(`${tag} Suspended`)
+    const archived = await createNamedTenant(`${tag} Archived`)
+    await sql`update tenants set lifecycle_state = 'suspended' where id = ${suspended.id}`
+    await sql`update tenants set lifecycle_state = 'archived', deleted_at = now() where id = ${archived.id}`
+    return { live, suspended, archived }
+  }
+
+  async function seedFive(tag: string): Promise<string[]> {
+    // Created out of order, so the result proves the ordering, not insertion order.
+    for (const suffix of ['c', 'a', 'e', 'b', 'd']) {
+      await createNamedTenant(`${tag} ${suffix}`)
+    }
+    return ['a', 'b', 'c', 'd', 'e'].map((suffix) => `${tag} ${suffix}`)
   }
 
   describe('access', () => {
@@ -355,6 +375,130 @@ describe('GET /api/v1/platform/tenants', () => {
 
       expect(response.status).toBe(400)
       expect((response.body as ApiEnvelope<unknown>).errors).toHaveProperty('cursor')
+    })
+  })
+
+  describe('state filter', () => {
+    it.each([
+      [undefined, ['live', 'suspended']],
+      ['active', ['live']],
+      ['suspended', ['suspended']],
+      ['archived', ['archived']],
+      ['all', ['archived', 'live', 'suspended']],
+    ] as const)('state=%s lists %j', async (state, expected) => {
+      const tag = newTag()
+      const seeded = await seedStates(tag)
+      const query: Record<string, string> = { q: tag }
+      if (state !== undefined) query.state = state
+
+      const page = pageOf(await search(await createStaff(), query))
+
+      const names = Object.fromEntries(Object.entries(seeded).map(([key, t]) => [t.id, key]))
+      const found = page.tenants.map((tenant) => names[tenant.id] ?? 'unexpected')
+      expect(found.toSorted((a, b) => a.localeCompare(b))).toEqual([...expected])
+    })
+
+    it('rejects an unknown state with 400', async () => {
+      const response = await search(await createStaff(), { state: 'deleted' })
+
+      expect(response.status).toBe(400)
+    })
+
+    it('never lists the platform tenant under state=all', async () => {
+      const platform = await platformTenant()
+
+      const page = pageOf(
+        await search(await createStaff(), { q: platform.slug, state: 'all', limit: '50' })
+      )
+
+      expect(page.tenants.map((tenant) => tenant.id)).not.toContain(platform.id)
+    })
+  })
+
+  describe('paging in both directions', () => {
+    it('has no prevCursor on the first page, and walks forward then back to the same pages', async () => {
+      const tag = newTag()
+      const names = await seedFive(tag)
+      const token = await createStaff()
+
+      const first = pageOf(await search(token, { q: tag, limit: '2' }))
+      expect(first.prevCursor).toBeNull()
+      expect(first.tenants.map((t) => t.name)).toEqual(names.slice(0, 2))
+      if (first.nextCursor === null) throw new Error('expected a second page')
+
+      const second = pageOf(await search(token, { q: tag, limit: '2', cursor: first.nextCursor }))
+      expect(second.tenants.map((t) => t.name)).toEqual(names.slice(2, 4))
+      if (second.prevCursor === null || second.nextCursor === null)
+        throw new Error('expected both cursors')
+
+      const third = pageOf(await search(token, { q: tag, limit: '2', cursor: second.nextCursor }))
+      expect(third.tenants.map((t) => t.name)).toEqual(names.slice(4))
+      expect(third.nextCursor).toBeNull()
+      if (third.prevCursor === null) throw new Error('expected a prevCursor on the last page')
+
+      const backToSecond = pageOf(
+        await search(token, { q: tag, limit: '2', cursor: third.prevCursor, direction: 'prev' })
+      )
+      expect(backToSecond.tenants.map((t) => t.name)).toEqual(names.slice(2, 4))
+      if (backToSecond.prevCursor === null) throw new Error('expected a way back to page one')
+
+      const backToFirst = pageOf(
+        await search(token, {
+          q: tag,
+          limit: '2',
+          cursor: backToSecond.prevCursor,
+          direction: 'prev',
+        })
+      )
+      expect(backToFirst.tenants.map((t) => t.name)).toEqual(names.slice(0, 2))
+      expect(backToFirst.prevCursor).toBeNull()
+      expect(backToFirst.nextCursor).not.toBeNull()
+    })
+
+    it('rejects direction=prev without a cursor with 400, naming the cursor', async () => {
+      const response = await search(await createStaff(), { direction: 'prev' })
+
+      expect(response.status).toBe(400)
+      expect((response.body as { errors?: Record<string, string[]> }).errors?.cursor).toEqual([
+        'cursor is required when direction is prev.',
+      ])
+    })
+
+    it('hands the cursor back as nextCursor when a prev page comes back empty, so the client is never stranded', async () => {
+      const tag = newTag()
+      const lowest = await createNamedTenant(`${tag} a`)
+      await createNamedTenant(`${tag} b`)
+      const cursor = encodeCursor({ sortName: lowest.name.toLowerCase(), id: lowest.id })
+
+      const empty = pageOf(
+        await search(await createStaff(), { q: tag, limit: '2', cursor, direction: 'prev' })
+      )
+
+      expect(empty.tenants).toEqual([])
+      expect(empty.prevCursor).toBeNull()
+      expect(empty.nextCursor).toBe(cursor)
+    })
+
+    it('rejects an unknown direction with 400', async () => {
+      const response = await search(await createStaff(), { direction: 'up' })
+
+      expect(response.status).toBe(400)
+    })
+
+    it('applies the state filter on every page, not only the first', async () => {
+      const tag = newTag()
+      await seedFive(tag)
+      const suspended = await createNamedTenant(`${tag} bb`)
+      await sql`update tenants set lifecycle_state = 'suspended' where id = ${suspended.id}`
+      const token = await createStaff()
+
+      const first = pageOf(await search(token, { q: tag, limit: '2', state: 'active' }))
+      if (first.nextCursor === null) throw new Error('expected a second page')
+      const second = pageOf(
+        await search(token, { q: tag, limit: '2', state: 'active', cursor: first.nextCursor })
+      )
+
+      expect([...first.tenants, ...second.tenants].map((t) => t.id)).not.toContain(suspended.id)
     })
   })
 })

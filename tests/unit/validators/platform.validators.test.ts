@@ -99,8 +99,12 @@ describe('searchQueryField and pageLimitField', () => {
     expect(pageLimitField.safeParse('0').success).toBe(false)
   })
 
-  it('leaves the tenant search schema behaving as before', () => {
-    expect(platformTenantSearchSchema.parse({ q: ' acme ' })).toEqual({ q: 'acme', limit: 20 })
+  it('parses the tenant search query with the default direction and limit', () => {
+    expect(platformTenantSearchSchema.parse({ q: ' acme ' })).toEqual({
+      q: 'acme',
+      direction: 'next',
+      limit: 20,
+    })
     expect(platformTenantSearchSchema.safeParse({ q: '  ' }).success).toBe(false)
   })
 })

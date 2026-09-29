@@ -29,6 +29,12 @@ export function createPlatformRouter(): Router {
     searchLimiter,
     platformController.searchTenants
   )
+  router.get(
+    '/tenants/:id',
+    requirePlatformRole('viewer'),
+    searchLimiter,
+    platformController.getTenant
+  )
   router.get('/stats', requirePlatformRole('viewer'), searchLimiter, platformController.getStats)
   router.get('/audit-log', requirePlatformRole('admin'), auditController.listPlatformAuditLog)
   return router
