@@ -16,6 +16,12 @@ const DAY_MS = 24 * 60 * 60 * 1000
 
 /**
  * The Overview's response body.
+ *
+ * `signups[].users` counts every non-deleted user created that day, inactive
+ * and staff included, while `totals.users` counts active users only.
+ * `emails[]` counts `email_logs` rows, which are one per delivery attempt: a
+ * mail retried after a failure and then sent adds a failed row and a sent row,
+ * so `failed` is failed attempts, not failed mails.
  */
 export interface PlatformStats {
   range: StatsRange

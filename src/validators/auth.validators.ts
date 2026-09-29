@@ -94,9 +94,11 @@ export const loginSchema = z.object({
 export type LoginInput = z.infer<typeof loginSchema>
 
 /**
- * Forgot-password request body: just an email. Malformed or well-formed,
- * known or unknown, this schema never produces a distinguishable outcome —
- * `forgotPassword` (auth.controller.ts) answers the same 202 either way.
+ * Forgot-password request body: an email and the `app` whose frontend the
+ * reset link opens. Whether the address belongs to an account never changes
+ * the outcome: `forgotPassword` (auth.controller.ts) answers the same 202 for
+ * a known and an unknown one. A malformed email or an invalid `app` is a 400
+ * that names the field and does not echo the value.
  */
 export const forgotPasswordSchema = z.object({
   email: emailSchema,

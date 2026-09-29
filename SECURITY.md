@@ -346,7 +346,7 @@ specs, each built into middleware by `createRateLimiter(spec)`
 (`src/middlewares/rate-limit.middleware.ts`). Fifteen guard the auth router
 (every route on it except `GET /providers` has at least one), five guard
 tenant creation, member invitation, invitation preview and accept, and staff
-tenant search, and `authenticatedWrite` covers every other authenticated
+tenant search and stats, and `authenticatedWrite` covers every other authenticated
 write. Paths below are under `/api/v1`; a `user` key is the authenticated
 user's id, and an `email` key is the submitted `email`, trimmed and
 lowercased.

@@ -72,7 +72,9 @@ export class PlatformStatsRepository {
 
   /**
    * Users and customer tenants created per UTC day in `[from, to)`. Days with
-   * none are absent; the service zero-fills them.
+   * none are absent; the service zero-fills them. Users are every non-deleted
+   * user created that day, inactive and staff included; `totals()` counts
+   * active users only.
    * @param from - Inclusive start, a UTC midnight.
    * @param to - Exclusive end, a UTC midnight.
    * @param executor - Where to run the queries. Defaults to the pool.
@@ -114,7 +116,9 @@ export class PlatformStatsRepository {
   }
 
   /**
-   * Emails logged per UTC day and status in `[from, to)`.
+   * Email delivery attempts logged per UTC day and status in `[from, to)`.
+   * `email_logs` holds one row per attempt (up to five per mail), so a mail
+   * retried after a failure and then sent counts once as failed and once as sent.
    * @param from - Inclusive start, a UTC midnight.
    * @param to - Exclusive end, a UTC midnight.
    * @param executor - Where to run the query. Defaults to the pool.

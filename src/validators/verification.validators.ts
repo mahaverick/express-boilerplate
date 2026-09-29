@@ -23,7 +23,9 @@ export const verifyEmailSchema = z.object({
 export type VerifyEmailInput = z.infer<typeof verifyEmailSchema>
 
 /**
- * Resend-verification request body: an address, which may or may not exist.
+ * Resend-verification request body: an address, which may or may not exist,
+ * and the `app` whose frontend the verification link opens. The controller
+ * answers the same 202 for a body that fails this schema, a bad `app` included.
  */
 export const resendVerificationSchema = z.object({ email: emailSchema, app: frontendAppSchema })
 
