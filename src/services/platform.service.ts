@@ -11,6 +11,7 @@ import type { UserMembership } from '@/database/models/user-membership.model'
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
 import { redactedForLog } from '@/errors/postgres-errors'
+import { isRoleAtLeast } from '@/policies/tenant.policy'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
@@ -22,6 +23,7 @@ import {
   type DbTransaction,
 } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
+import type { Actor } from '@/types/actor'
 import { emailDomain } from '@/utilities/email.utilities'
 
 const tenantRepository = new TenantRepository()
@@ -81,6 +83,32 @@ export async function getPlatformMembership(
   return executor
     ? userMembershipRepository.findPlatformRole(userId, executor)
     : userMembershipRepository.findPlatformRole(userId)
+}
+
+/**
+ * Refuse a staff write whose actor lost the platform role, or their account,
+ * since the route's gates read them: inside the write's transaction the
+ * actor's platform membership is re-read `FOR SHARE`, then the actor's user
+ * row `FOR SHARE`, both held until commit, so a concurrent demotion or
+ * deactivation waits for the write or is seen by it. Lock order: after any
+ * customer tenant's owner rows (as `lockTenantAccess` does) and before the
+ * target tenant's row.
+ * @param actor - The staff user.
+ * @param minimum - The platform role the route requires.
+ * @param tx - The write's transaction.
+ * @returns The actor's platform role, at least `minimum`.
+ * @throws {HttpError} 404 when the actor's platform role is now below `minimum`, as the route gate answers; 401 when the actor's account is now inactive or soft-deleted, as `requireAuth` answers.
+ */
+export async function assertStillPlatformRole(
+  actor: Actor,
+  minimum: MembershipRole,
+  tx: DbTransaction
+): Promise<MembershipRole> {
+  const role = await userMembershipRepository.lockPlatformRole(actor.userId, tx)
+  if (role === null || !isRoleAtLeast(role, minimum)) throw new HttpError('Not found', 404)
+  const actorUser = await userRepository.lockById(actor.userId, 'share', tx)
+  if (!actorUser?.active) throw new HttpError('Account no longer exists or is inactive', 401)
+  return role
 }
 
 /**

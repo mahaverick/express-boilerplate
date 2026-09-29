@@ -110,3 +110,15 @@ export const INVITATION_TOKEN_BYTES = 32
  * base64url.
  */
 export const INVITATION_TOKEN_LENGTH = 43
+
+/**
+ * `code` on the 409 for a slug a live tenant already uses, so a form can put
+ * the message on its slug field.
+ */
+export const SLUG_TAKEN_CODE = 'slug_taken'
+
+/**
+ * `code` on the 409 for an owner invitation to an address whose account is
+ * deactivated, so a form can put the message on its email field.
+ */
+export const INVITEE_DEACTIVATED_CODE = 'invitee_deactivated'

@@ -6,7 +6,8 @@ import { Router } from 'express'
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { auditController } from '@/controllers/audit.controller'
 import { platformController } from '@/controllers/platform.controller'
-import { requireAuth } from '@/middlewares/auth.middleware'
+import { requireAuth, requireRecentAuth } from '@/middlewares/auth.middleware'
+import { requireJsonContentType } from '@/middlewares/content-type.middleware'
 import { requirePlatformRole } from '@/middlewares/platform.middleware'
 import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
 import { createPlatformUserRouter } from '@/routes/platform-user.routes'
@@ -28,6 +29,21 @@ export function createPlatformRouter(): Router {
     requirePlatformRole('viewer'),
     searchLimiter,
     platformController.searchTenants
+  )
+  router.post(
+    '/tenants',
+    requirePlatformRole('admin'),
+    requireJsonContentType,
+    writeLimiter,
+    platformController.createTenant
+  )
+  router.post(
+    '/tenants/:id/owner-invitation',
+    requirePlatformRole('admin'),
+    requireJsonContentType,
+    requireRecentAuth(),
+    writeLimiter,
+    platformController.reissueOwnerInvitation
   )
   router.get(
     '/tenants/:id',

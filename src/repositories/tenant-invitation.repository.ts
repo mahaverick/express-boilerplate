@@ -326,6 +326,25 @@ export class TenantInvitationRepository {
   }
 
   /**
+   * Revoke every pending invitation of this tenant offering `role`, expired or not.
+   * @param tenantId - The tenant.
+   * @param role - The role offered.
+   * @param executor - The transaction.
+   * @returns The revoked rows, for their audit entries.
+   */
+  async revokePendingByRole(
+    tenantId: string,
+    role: MembershipRole,
+    executor: DbTransaction
+  ): Promise<TenantInvitation[]> {
+    return executor
+      .update(invitation)
+      .set({ revokedAt: sql`now()`, updatedAt: sql`now()` })
+      .where(and(eq(invitation.tenantId, tenantId), eq(invitation.role, role), pendingCondition()))
+      .returning()
+  }
+
+  /**
    * Delete up to `limit` invitations whose latest of expiry, acceptance and
    * revocation is before `cutoff`. `greatest` ignores NULLs, so a pending
    * invitation counts from its expiry. No index: the table holds one row per

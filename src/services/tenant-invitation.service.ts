@@ -7,7 +7,11 @@
  */
 import { randomBytes } from 'node:crypto'
 import { getEnv } from '@/configs/env.config'
-import { INVITATION_TOKEN_BYTES, type MembershipRole } from '@/constants/tenant.constants'
+import {
+  INVITATION_TOKEN_BYTES,
+  INVITEE_DEACTIVATED_CODE,
+  type MembershipRole,
+} from '@/constants/tenant.constants'
 import type { TenantInvitation } from '@/database/models/tenant-invitation.model'
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
@@ -22,13 +26,14 @@ import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { record } from '@/services/audit.service'
-import { db, type DbExecutor } from '@/services/database.service'
+import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
 import { hashToken } from '@/services/session.service'
 import { lockActorRole } from '@/services/tenant-membership.service'
 import { buildInvitationAcceptUrl, frontendUrl } from '@/services/verification.service'
 import { TENANT_INVITATION_TEMPLATE_KEY } from '@/templates/email/tenant-invitation.template'
 import type { Actor } from '@/types/actor'
+import type { EmailDelivery } from '@/types/email-delivery'
 import { requireDurationMs } from '@/utilities/duration.utilities'
 import { hostnameDomain } from '@/utilities/email.utilities'
 
@@ -115,7 +120,7 @@ export interface AcceptedInvitation {
 /**
  * Everything the invitation email and notification are built from.
  */
-interface InvitationMessageContext {
+export interface InvitationMessageContext {
   invitation: TenantInvitation
   rawToken: string
   tenant: { name: string; slug: string; isPlatform: boolean }
@@ -201,11 +206,12 @@ function invitationInvalid(): HttpError {
  * due. The two enqueues are independent; a failure is logged, never thrown.
  * @param context - The invitation and everything its messages need.
  * @param notifyUser - The verified invitee to notify in-app, if any.
+ * @returns Whether the email job was enqueued.
  */
 async function dispatchInvitationMessages(
   context: InvitationMessageContext,
   notifyUser: User | undefined
-): Promise<void> {
+): Promise<EmailDelivery> {
   const { invitation, rawToken, tenant, inviterName } = context
   // Server-decided: staff are invited into Apex, everyone else into the customer app.
   const acceptOrigin = frontendUrl(tenant.isPlatform ? 'apex' : 'web')
@@ -247,6 +253,7 @@ async function dispatchInvitationMessages(
       })
     }
   }
+  return { emailSent: results[0]?.status === 'fulfilled' }
 }
 
 /**
@@ -334,6 +341,101 @@ export async function invite(
       logger.error('Invitation messages failed', { error, invitationId: context.invitation.id })
     }
   )
+}
+
+/**
+ * An owner invitation written in the caller's transaction, waiting to be sent after commit.
+ */
+export interface OwnerInvitationDispatch {
+  context: InvitationMessageContext
+  notifyUser: User | undefined
+}
+
+/**
+ * Write a pending `owner` invitation for a tenant that has no owner, inside
+ * the caller's transaction, and audit it as `tenant.owner_invited`. For
+ * staff only (platform-tenant.service.ts). The caller is behind
+ * `requirePlatformRole('admin')` and has checked that the tenant is ownerless,
+ * so `canActorGrantRole` is deliberately not applied: under platform access
+ * an admin could never grant owner, and an ownerless tenant has nobody else
+ * who can.
+ * @param actor - The staff user.
+ * @param tenantId - The ownerless tenant.
+ * @param email - The address to invite, in any case. A staff member's own address is allowed; the audit entry records the invitee's account.
+ * @param reason - The staff member's reason, or null for the invitation sent when the tenant is created.
+ * @param tx - The caller's transaction.
+ * @returns What `sendOwnerInvitation` needs once the transaction commits.
+ * @throws {HttpError} 409 `invitee_deactivated` when the address belongs to a deactivated account; 409 `already_member` when it belongs to a member; 409 `invitation_conflict` from a racing duplicate.
+ */
+export async function createOwnerInvitation(
+  actor: Actor,
+  tenantId: string,
+  email: string,
+  reason: string | null,
+  tx: DbTransaction
+): Promise<OwnerInvitationDispatch> {
+  const normalizedEmail = email.trim().toLowerCase()
+  const rawToken = generateInvitationToken()
+  const invitee = await userRepository.findByEmail(normalizedEmail, {}, tx)
+  if (invitee && !invitee.active) {
+    throw new HttpError('That account is deactivated', 409, INVITEE_DEACTIVATED_CODE)
+  }
+  if (invitee && (await userMembershipRepository.findByUserAndTenant(invitee.id, tenantId, tx))) {
+    throw new HttpError(ALREADY_MEMBER_MESSAGE, 409, ALREADY_MEMBER_CODE)
+  }
+  const tenant = await tenantForMessages(tenantId, tx)
+  const inviter = await userRepository.findById(actor.userId, {}, tx)
+  const invitation = await invitationRepository.createPending(
+    {
+      tenantId,
+      email: normalizedEmail,
+      role: 'owner',
+      tokenHash: hashToken(rawToken),
+      invitedBy: actor.userId,
+      expiresAt: invitationExpiry(),
+    },
+    tx
+  )
+  await record(
+    {
+      action: 'tenant.owner_invited',
+      actor,
+      access: 'platform',
+      tenantId,
+      targetId: invitation.id,
+      metadata: {
+        emailDomain: auditEmailDomain(normalizedEmail),
+        // eslint-disable-next-line unicorn/no-null -- JSON null: the address has no account yet
+        inviteeUserId: invitee?.id ?? null,
+        reason,
+      },
+    },
+    tx
+  )
+  return {
+    context: { invitation, rawToken, tenant, inviterName: inviterDisplayName(inviter), invitee },
+    notifyUser: isNotifiable(invitee) ? invitee : undefined,
+  }
+}
+
+/**
+ * Enqueue an owner invitation's email and notification. Call after the
+ * transaction that wrote it commits. Never throws.
+ * @param dispatch - What `createOwnerInvitation` returned.
+ * @returns Whether the email job was enqueued.
+ */
+export async function sendOwnerInvitation(
+  dispatch: OwnerInvitationDispatch
+): Promise<EmailDelivery> {
+  try {
+    return await dispatchInvitationMessages(dispatch.context, dispatch.notifyUser)
+  } catch (error) {
+    logger.error('Invitation messages failed', {
+      error,
+      invitationId: dispatch.context.invitation.id,
+    })
+    return { emailSent: false }
+  }
 }
 
 /**

@@ -1,6 +1,6 @@
 /**
- * @file The staff tenant search query. `q` is trimmed first, so whitespace
- * alone is a 400 rather than a match-everything search.
+ * @file The staff request bodies and queries. Search `q` is trimmed first, so
+ * whitespace alone is a 400 rather than a match-everything search.
  */
 import { z } from 'zod'
 import { PAGE_DIRECTIONS, STATS_RANGES, TENANT_STATE_FILTERS } from '@/constants/platform.constants'
@@ -9,6 +9,7 @@ import { emailSchema, frontendAppSchema } from '@/validators/auth.validators'
 import { cursorField } from '@/validators/cursor.validators'
 import { updateProfileSchema } from '@/validators/profile.validators'
 import { normalizeMultilineText, safeText } from '@/validators/safe-text.validators'
+import { newTenantSchema } from '@/validators/tenant.validators'
 
 const DEFAULT_SEARCH_PAGE_SIZE = 20
 const MAX_SEARCH_PAGE_SIZE = 50
@@ -216,3 +217,26 @@ export const updatePlatformUserSchema = z
  * The validated update-user body.
  */
 export type UpdatePlatformUserInput = z.infer<typeof updatePlatformUserSchema>
+
+/**
+ * `POST /platform/tenants` body: the tenant's columns (no logo) and the
+ * address its owner invitation goes to. Slug rules, reserved slugs
+ * included, are the customer create path's.
+ */
+export const platformNewTenantSchema = newTenantSchema
+  .omit({ logo: true })
+  .extend({ ownerEmail: emailSchema })
+
+/**
+ * The validated create body.
+ */
+export type CreatePlatformTenantInput = z.infer<typeof platformNewTenantSchema>
+
+/**
+ * `POST /platform/tenants/:id/owner-invitation` body: the new owner's
+ * address and the staff member's reason. Strict.
+ */
+export const ownerInvitationBodySchema = z.strictObject({
+  email: emailSchema,
+  reason: reasonSchema,
+})

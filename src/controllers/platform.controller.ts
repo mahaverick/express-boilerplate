@@ -3,12 +3,20 @@
  * and `requirePlatformRole` (platform.routes.ts).
  */
 import { BaseController } from '@/controllers/base.controller'
+import { actorFrom } from '@/controllers/helpers.controller'
 import { getPlatformStats } from '@/services/platform-stats.service'
-import { getTenantDetail, searchAll } from '@/services/platform-tenant.service'
+import {
+  createTenant,
+  getTenantDetail,
+  reissueOwnerInvitation,
+  searchAll,
+} from '@/services/platform-tenant.service'
 import { successResponse } from '@/utilities/response.utilities'
 import { parseBody } from '@/validators/parse.validators'
 import {
+  ownerInvitationBodySchema,
   parseIdParameter,
+  platformNewTenantSchema,
   platformStatsQuerySchema,
   platformTenantSearchSchema,
 } from '@/validators/platform.validators'
@@ -33,6 +41,25 @@ class PlatformController extends BaseController {
     const tenantId = parseIdParameter(request.params.id, 'Tenant not found')
     const tenant = await getTenantDetail(tenantId)
     successResponse(response, tenant, 'Tenant retrieved.')
+  })
+
+  /**
+   * `POST /platform/tenants`: create a customer tenant and invite its owner.
+   */
+  createTenant = this.handle(async (request, response) => {
+    const input = parseBody(platformNewTenantSchema, request.body)
+    const result = await createTenant(actorFrom(request), input)
+    successResponse(response, result, 'Tenant created.', 201)
+  })
+
+  /**
+   * `POST /platform/tenants/:id/owner-invitation`: invite a new owner to an ownerless tenant.
+   */
+  reissueOwnerInvitation = this.handle(async (request, response) => {
+    const tenantId = parseIdParameter(request.params.id, 'Tenant not found')
+    const { email, reason } = parseBody(ownerInvitationBodySchema, request.body)
+    const result = await reissueOwnerInvitation(actorFrom(request), tenantId, email, reason)
+    successResponse(response, result, 'Owner invitation sent.')
   })
 
   /**
