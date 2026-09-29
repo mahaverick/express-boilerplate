@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/mahaverick/express-boilerplate/compare/v1.1.0...v1.2.0) (2026-09-29)
+
+
+### Features
+
+* staff directory and management API (Apex SP2) ([#67](https://github.com/mahaverick/express-boilerplate/issues/67)) ([2a0761c](https://github.com/mahaverick/express-boilerplate/commit/2a0761c94e81c30512b9809bf800c71937c0336d))
+
 ## [1.1.0](https://github.com/mahaverick/express-boilerplate/compare/v1.0.0...v1.1.0) (2026-09-29)
 
 
