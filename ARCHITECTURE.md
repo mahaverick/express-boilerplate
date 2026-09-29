@@ -70,7 +70,9 @@ everything before it.
 `createApiRouter()` (`src/routes/index.routes.ts`) mounts one router per
 feature under `/api/v1`: `auth`, `profile`, `notifications`, `tenants`,
 `invitations` and `platform`. A new feature router is one more `router.use(...)`
-line there, never a change to `app.ts`.
+line there, never a change to `app.ts`. The platform router serves
+`GET /platform/tenants` and `GET /platform/stats` (platform viewer) and
+`GET /platform/audit-log` (platform admin).
 
 **Open auth routes.** `register`, `login`, `verify-email`,
 `resend-verification`, `forgot-password`, `reset-password`, `refresh` and
@@ -518,6 +520,32 @@ runs `assertEnvConsistent`
 ([`src/configs/env-consistency.config.ts`](src/configs/env-consistency.config.ts)),
 which refuses the combinations above. It lists every problem in one
 message, each naming the variable and the fix, and exits 1.
+
+### A second frontend: Apex
+
+`APEX_URL` (optional) names the Apex staff dashboard. Links and redirects pick
+a frontend with `frontendUrl(app)` (`verification.service.ts`), where `app` is
+`'web'` or `'apex'`, never a URL. It returns `APEX_URL` for `'apex'` when that
+is set, and `WEB_URL` otherwise, so leaving `APEX_URL` unset sends every link
+to `WEB_URL`.
+
+- Invitations to the platform tenant always link to Apex; every other
+  invitation links to `WEB_URL` (`tenant-invitation.service.ts`).
+- `register`, `resend-verification` and `forgot-password` take an optional
+  `app` (default `'web'`) that picks the frontend of the verification or
+  reset link. The "address already registered" mail carries no link, so it
+  has no `app`.
+- `GET /auth/google?app=apex` stores the choice in the OAuth session
+  (`rememberOAuthApp`), and the callback redirects to that frontend
+  (`oauthAppOf`, `src/middlewares/oauth-app.middleware.ts`).
+
+`APEX_URL` is not in the CORS allow-list (`isAllowedOrigin` grants `WEB_URL`
+and `CORS_ALLOWED_ORIGINS`), so an Apex that calls this API directly from its
+own origin must be listed in `CORS_ALLOWED_ORIGINS`; one that proxies `/api`
+through its own host needs no entry. Google calls back to `APP_URL` only, so
+when Google sign-in is on (`GOOGLE_CLIENT_ID`) and the Apex host differs from
+`APP_URL`'s, `COOKIE_DOMAIN` must cover both; boot refuses otherwise
+(`apexCookieDomainProblem`, `env-consistency.config.ts`).
 
 ## Health checks
 

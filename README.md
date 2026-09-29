@@ -48,6 +48,11 @@ SESSION_SECRET=      # openssl rand -hex 32
 with a named list if a required variable is missing. Every variable is
 described in [ARCHITECTURE.md](ARCHITECTURE.md#environment-variables).
 
+`APEX_URL` is optional: set it to the origin of the Apex staff dashboard so
+platform-tenant invitations and `app: "apex"` verification, reset and Google
+sign-in links open there instead of at `WEB_URL`. See
+[A second frontend: Apex](ARCHITECTURE.md#a-second-frontend-apex).
+
 ```bash
 curl http://localhost:4040/health/ready   # {"status":"ready","checks":{...}}
 ```
