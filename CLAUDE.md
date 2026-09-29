@@ -211,19 +211,44 @@ rather than repeating them.
   an address record `hostnameDomain(email) ?? null`
   (`utilities/email.utilities.ts`). Metadata schemas are strict, so a new key
   fails until its schema lists it.
-- **`audit_logs` is append-only.** Only `retention.service.ts` may set
-  `app.audit_purge`/`app.audit_purge_before`
-  (`tests/unit/audit-purge-setting.test.ts`). Its foreign keys are RESTRICT,
-  so test cleanup calls `truncateAuditLogs()` (`tests/helpers/audit-log.ts`)
+- **`audit_logs` is append-only.** Only `retention.service.ts` and
+  `platform-purge.service.ts` may set `app.audit_purge`/`app.audit_purge_before`,
+  and only `platform-purge.service.ts` sets `app.audit_redact`
+  (`tests/unit/audit-purge-setting.test.ts`). The redact exception
+  (migration 0019) lets one UPDATE through: nulling a purged user's
+  `actor_user_id`, `ip` and `user_agent`, changing no other column. For
+  that, `audit_logs_actor_user_check` only requires a `system` entry to have
+  no actor id, so the database can't tell a redacted `user` entry from one
+  written without an actor: always pass the actor. Its foreign keys are
+  RESTRICT, so test cleanup calls `truncateAuditLogs()` (`tests/helpers/audit-log.ts`)
   before deleting a tenant or user. Don't add a `BEFORE TRUNCATE` trigger, or
   only a superuser can clean up.
-- **Staff routes answer 404, and in `platform.routes.ts` the limiter goes
-  after `requirePlatformRole`:** a limiter first would put `RateLimit-*`
-  headers on the 404 and reveal the route.
-- **`repositories/platform-tenant.repository.ts` and
-  `repositories/platform-stats.repository.ts` are imported only from
+- **Staff routes answer 404, and on every `/platform` route the role gate
+  runs first:** `requirePlatformRole`, then `requireJsonContentType`, then
+  `requireRecentAuth()` where it applies, then the limiter. A limiter or JSON
+  gate first would put `RateLimit-*` headers or a 415 on the refused call and
+  reveal the route; step-up first would answer a caller below the role 401
+  `REAUTH_REQUIRED`. A new `/platform` route needs its row in
+  `tests/integration/api/platform-route-gates.test.ts`, whose completeness
+  check fails otherwise; a new sub-router needs its mount added there too.
+- **`repositories/platform-tenant.repository.ts`,
+  `repositories/platform-stats.repository.ts` and
+  `repositories/platform-user.repository.ts` are imported only from
   `services/platform-*.service.ts`** (lint enforces it). "Your tenants" stays
   on `TenantRepository.listForUser`; don't merge the two paths.
+- **The platform tenant's member rules differ from a customer tenant's.**
+  Its members are the staff, and its member routes are how staff roles
+  change. There an owner may demote or remove another owner
+  (`canPlatformActorModifyTarget`); the last-owner guard counts active
+  owners only (`countActiveOwners`); and a role change, a removal, a resend,
+  or an invitation offering admin or owner needs step-up
+  (`requireRecentAuthOnPlatformTenant`). Keep these to the platform tenant:
+  on a customer tenant an owner acts only on their own ownership.
+- **A tenant with no active owner is the one place an admin grants owner.**
+  `POST /platform/tenants/:id/owner-invitation` (platform admin, step-up, a
+  reason) goes through `createOwnerInvitation`, which skips
+  `canActorGrantRole` because the route's gate authorizes it. Don't route
+  any other invitation through it.
 - **Auto-join grants `viewer` only.** Don't widen it: one compromised inbox on
   a `PLATFORM_EMAIL_DOMAINS` domain would get write access to every tenant.
   Don't run it before the timing-equalised credential check, which would leak
@@ -402,10 +427,15 @@ exemption.
   takes no explicit row lock (only the `FOR KEY SHARE` its inserts' foreign
   keys take) and runs its own transaction: a membership insert that does
   nothing if one exists, and an audit row. The Redis denylist is written
-  after commit and never fails the request (`denySessionsAfterCommit`). The
-  Google claim, logout and both kills take the user row `FOR NO KEY UPDATE`;
-  rotation takes it `FOR SHARE`. The kills run after the rotation commits,
-  never inside it. The full table is in
+  after commit and never fails the request (`denySessionsAfterCommit`).
+  Google sign-in, like login, issues its token under `FOR SHARE`, and both
+  re-check `active` under the lock, so a deactivation or deletion that
+  committed since the first read wins. The Google claim, logout, both kills
+  and step-up (`markSessionReauthenticated`) take the user row
+  `FOR NO KEY UPDATE`; rotation takes it `FOR SHARE`. The kills run after
+  the rotation commits, never inside it. Step-up is password-only
+  (`POST /auth/reauthenticate`, staff only); a wrong password is a 400,
+  never a 401, because clients sign out on a 401. The full table is in
   [SECURITY.md](SECURITY.md#password-change-and-reset-against-a-concurrent-login).
 
 ## Code conventions

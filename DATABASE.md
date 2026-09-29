@@ -95,7 +95,7 @@ up a new model automatically — no config change needed to add one.
 `src/database/migrations/` is **tracked**: one SQL file per migration, and
 `meta/_journal.json` records every migration in order. Everything under this
 directory is **generated** by `drizzle-kit generate`, except the hand-added
-statements in three migrations, each called out by a comment in its file:
+statements in four migrations, each called out by a comment in its file:
 
 - `0010` backfills an `'email'` `auth_providers` row for every user with a
   password.
@@ -104,6 +104,8 @@ statements in three migrations, each called out by a comment in its file:
   settings row, and adds the trigger that makes `audit_logs` append-only.
 - `0017` replaces that trigger's function so the retention purge can delete
   audit rows.
+- `0019` replaces it again so a staff user purge can null a purged user's
+  actor columns (`actor_user_id`, `ip`, `user_agent`) and nothing else.
 
 Don't hand-edit a migration otherwise, except as "Schema migrations on a live
 database" below describes, and only before that database has applied it.
@@ -317,6 +319,29 @@ second time under the lock, then run `pnpm db:migrate`.
   `ACCESS EXCLUSIVE` lock, so apply the migration in a quiet window. The
   hand-added function replacement takes only a brief lock and needs no manual
   step.
+
+- **`0019` blocks every read and write on `audit_logs`, and writes to
+  `email_logs`, until the batch commits.** Its first statement drops
+  `audit_logs_actor_user_check`, which takes an `ACCESS EXCLUSIVE` lock on
+  `audit_logs`, held while both indexes build and while the re-added CHECK
+  validates every audit row. Every audited write (tenant, member,
+  invitation and staff changes, and the hourly staff-access entries) waits
+  meanwhile. The `email_logs` index build holds a `SHARE` lock on that
+  table, which blocks mail-log writes. On a large database, run each of
+  these on its own, outside any transaction:
+
+  ```sql
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS audit_logs_target_occurred_idx ON audit_logs (target_id, occurred_at, id);
+  ```
+
+  ```sql
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS email_logs_recipient_lower_idx ON email_logs (lower(recipient));
+  ```
+
+  Then add `IF NOT EXISTS` to both `CREATE INDEX` statements in the `0019`
+  file. That leaves the CHECK's validation scan under the `ACCESS EXCLUSIVE`
+  lock, so apply the migration in a quiet window. The hand-added function
+  replacement takes only a brief lock and needs no manual step.
 
 ## Test database
 

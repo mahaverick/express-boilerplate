@@ -189,11 +189,14 @@ password write either has its new token revoked or gets 401.
 
 Every path that locks the user row:
 
-| Path                                                    | User row lock       | Why                                                               |
-| ------------------------------------------------------- | ------------------- | ----------------------------------------------------------------- |
-| Password change, password reset                         | `FOR NO KEY UPDATE` | Writes the hash and revokes sessions atomically                   |
-| Google account claim, logout, reuse kill, lifetime kill | `FOR NO KEY UPDATE` | Revokes sessions so no rotation in flight survives                |
-| Login (after the password compare), refresh rotation    | `FOR SHARE`         | Issues a token only against the hash and session state it checked |
+| Path                                                                                            | User row lock       | Why                                                                                                                                                                                                                        |
+| ----------------------------------------------------------------------------------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Password change, password reset                                                                 | `FOR NO KEY UPDATE` | Writes the hash and revokes sessions atomically                                                                                                                                                                            |
+| Google account claim, logout, reuse kill, lifetime kill                                         | `FOR NO KEY UPDATE` | Revokes sessions so no rotation in flight survives                                                                                                                                                                         |
+| Step-up (`markSessionReauthenticated`, `POST /auth/reauthenticate`)                             | `FOR NO KEY UPDATE` | Re-checks the account is active and moves the session's `authenticated_at`                                                                                                                                                 |
+| Login (after the password compare), Google sign-in (after the account lookup), refresh rotation | `FOR SHARE`         | Issues a token only against the hash, account state and session state it checked: login and Google sign-in re-check `active` under the lock, so a deactivation or deletion that committed since the first read answers 401 |
+| A staff write's actor (`assertStillPlatformRole`)                                               | `FOR SHARE`         | A deactivation of the acting staff member waits for the write or is seen by it                                                                                                                                             |
+| A staff user action's target (`lockStaffPair`)                                                  | `FOR NO KEY UPDATE` | Deactivate, reactivate, sign-out, edit and delete act on the row they read                                                                                                                                                 |
 
 Logins and rotations take `FOR SHARE`, and their `FOR SHARE` locks never
 conflict with each other. A concurrent login's `last_logged_in_at` update does
@@ -217,7 +220,8 @@ Two effects are accepted:
 - The session denylist (Redis) is written after the transaction commits. If
   that write fails, the request still succeeds: the password is changed and
   the refresh tokens are revoked. One `error` line
-  (`session denylist write failed after password change`, for a reset too)
+  (`session denylist write failed after revocation`, for a reset too, and
+  for a staff deactivation, sign-out or deletion)
   records the user id and the number of sessions not denied. The revoked
   sessions' access tokens then stay valid until they expire
   (`ACCESS_TOKEN_TTL`, 15 minutes by default). That is the same exposure as
@@ -341,39 +345,41 @@ addresses the source system already trusted.
 
 ### Rate limiting: one store prefix per limiter
 
-`RATE_LIMITS` (`src/constants/rate-limit.constants.ts`) holds 21 limiter
+`RATE_LIMITS` (`src/constants/rate-limit.constants.ts`) holds 23 limiter
 specs, each built into middleware by `createRateLimiter(spec)`
-(`src/middlewares/rate-limit.middleware.ts`). Fifteen guard the auth router
-(every route on it except `GET /providers` has at least one), five guard
-tenant creation, member invitation, invitation preview and accept, and staff
-tenant search and stats, and `authenticatedWrite` covers every other authenticated
-write. Paths below are under `/api/v1`; a `user` key is the authenticated
+(`src/middlewares/rate-limit.middleware.ts`). Sixteen guard the auth router
+(every route on it except `GET /providers` has at least one), six guard
+tenant creation, member invitation, invitation preview and accept, staff
+reads and staff writes, and `authenticatedWrite` covers every other
+authenticated write. Paths below are under `/api/v1`; a `user` key is the authenticated
 user's id, and an `email` key is the submitted `email`, trimmed and
 lowercased.
 
-| Route                                                                  | Limiter (`rl:` prefix)                    | Limit              | Key                  |
-| ---------------------------------------------------------------------- | ----------------------------------------- | ------------------ | -------------------- |
-| `POST /auth/register`                                                  | `register`                                | 100 per hour       | IP                   |
-| `POST /auth/login`, in this order                                      | `login`                                   | 5 per 15 minutes   | IP + submitted email |
-|                                                                        | `login-ip`                                | 100 per 15 minutes | IP                   |
-|                                                                        | `login-account`                           | 100 per hour       | email                |
-| `POST /auth/refresh`                                                   | `refresh`                                 | 300 per 5 minutes  | IP                   |
-| `POST /auth/logout`                                                    | `logout`                                  | 300 per 5 minutes  | IP                   |
-| `POST /auth/verify-email`                                              | `verify-email`                            | 30 per 15 minutes  | IP                   |
-| `POST /auth/resend-verification`                                       | `resend-verification-ip`                  | 5 per hour         | IP                   |
-|                                                                        | `resend-verification-email`               | 20 per hour        | email                |
-| `POST /auth/forgot-password`                                           | `forgot-password-ip`                      | 5 per hour         | IP                   |
-|                                                                        | `forgot-password-email`                   | 20 per hour        | email                |
-| `POST /auth/reset-password`                                            | `reset-password`                          | 10 per 15 minutes  | IP                   |
-| `POST /auth/change-password`                                           | `change-password`                         | 5 per 15 minutes   | user                 |
-| `GET /auth/google` (when Google sign-in is on)                         | `google-oauth`                            | 300 per 5 minutes  | IP                   |
-| `GET /auth/google/callback` (same)                                     | `google-oauth-callback`                   | 300 per 5 minutes  | IP                   |
-| `POST /tenants`                                                        | `create-tenant`                           | 20 per hour        | user                 |
-| `POST /tenants/:slug/invitations`, `POST …/invitations/:id/resend`     | `invite-tenant-member`, one shared budget | 30 per hour        | user                 |
-| `POST /invitations/preview`                                            | `invitation-preview`                      | 60 per 15 minutes  | IP                   |
-| `POST /invitations/accept` (ahead of `requireAuth`)                    | `invitation-accept`                       | 20 per 15 minutes  | IP                   |
-| `GET /platform/tenants`, `GET /platform/stats` (after the staff check) | `platform-search`, one shared budget      | 60 per minute      | user                 |
-| Every other authenticated write (below)                                | `authenticated-write`                     | 60 per minute      | user                 |
+| Route                                                                                                                                                 | Limiter (`rl:` prefix)                    | Limit              | Key                  |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- | ------------------ | -------------------- |
+| `POST /auth/register`                                                                                                                                 | `register`                                | 100 per hour       | IP                   |
+| `POST /auth/login`, in this order                                                                                                                     | `login`                                   | 5 per 15 minutes   | IP + submitted email |
+|                                                                                                                                                       | `login-ip`                                | 100 per 15 minutes | IP                   |
+|                                                                                                                                                       | `login-account`                           | 100 per hour       | email                |
+| `POST /auth/refresh`                                                                                                                                  | `refresh`                                 | 300 per 5 minutes  | IP                   |
+| `POST /auth/logout`                                                                                                                                   | `logout`                                  | 300 per 5 minutes  | IP                   |
+| `POST /auth/verify-email`                                                                                                                             | `verify-email`                            | 30 per 15 minutes  | IP                   |
+| `POST /auth/resend-verification`                                                                                                                      | `resend-verification-ip`                  | 5 per hour         | IP                   |
+|                                                                                                                                                       | `resend-verification-email`               | 20 per hour        | email                |
+| `POST /auth/forgot-password`                                                                                                                          | `forgot-password-ip`                      | 5 per hour         | IP                   |
+|                                                                                                                                                       | `forgot-password-email`                   | 20 per hour        | email                |
+| `POST /auth/reset-password`                                                                                                                           | `reset-password`                          | 10 per 15 minutes  | IP                   |
+| `POST /auth/change-password`                                                                                                                          | `change-password`                         | 5 per 15 minutes   | user                 |
+| `GET /auth/google` (when Google sign-in is on)                                                                                                        | `google-oauth`                            | 300 per 5 minutes  | IP                   |
+| `GET /auth/google/callback` (same)                                                                                                                    | `google-oauth-callback`                   | 300 per 5 minutes  | IP                   |
+| `POST /tenants`                                                                                                                                       | `create-tenant`                           | 20 per hour        | user                 |
+| `POST /tenants/:slug/invitations`, `POST …/invitations/:id/resend`                                                                                    | `invite-tenant-member`, one shared budget | 30 per hour        | user                 |
+| `POST /invitations/preview`                                                                                                                           | `invitation-preview`                      | 60 per 15 minutes  | IP                   |
+| `POST /invitations/accept` (ahead of `requireAuth`)                                                                                                   | `invitation-accept`                       | 20 per 15 minutes  | IP                   |
+| `POST /auth/reauthenticate` (after the staff check)                                                                                                   | `reauthenticate`                          | 5 per 15 minutes   | user                 |
+| `GET /platform/tenants`, `GET /platform/tenants/:id`, `GET /platform/users`, `GET /platform/users/:id`, `GET /platform/stats` (after the staff check) | `platform-search`, one shared budget      | 60 per minute      | user                 |
+| Every `/platform` write (after the staff check)                                                                                                       | `platform-write`, one shared budget       | 30 per minute      | user                 |
+| Every other authenticated write (below)                                                                                                               | `authenticated-write`                     | 60 per minute      | user                 |
 
 Each spec is backed by its **own** `SharedRateLimitStore`
 (`src/configs/rate-limit-store.config.ts`) under the key prefix `rl:<name>:`,
@@ -651,6 +657,20 @@ per-membership permission blob.
   - a platform viewer can read but gets 403 on every write;
   - no platform role can change or remove an owner;
   - only a platform owner can change an admin, or grant owner or admin.
+
+  The one exception is a tenant with **no active owner**, one that staff
+  created or whose owners are all gone or deactivated: a platform admin may
+  invite its owner (`POST /platform/tenants/:id/owner-invitation`), because
+  no member can. The re-invitation needs a recent sign-in and a reason, and
+  its audit entry records the invitee's account when the address has one,
+  so an invitation a staff member sends to their own address is visible in
+  the log.
+
+- **Staff roles live on the platform tenant.** Its members are the staff,
+  and its member routes are how staff roles change. There an owner may
+  demote or remove another owner (and, under `/platform/users`, deactivate
+  or delete one); the last-owner guard counts active owners only; and a role change, a removal, a resend, or an invitation
+  offering admin or owner needs a recent sign-in.
 - **Membership wins.** Where a staff user is also a member, only the
   membership role counts.
 - **The platform tenant is members-only.** Anyone who isn't a member of the
@@ -668,20 +688,27 @@ per-membership permission blob.
   - The list is empty by default. A compromised inbox on a listed domain gets
     read access to every customer tenant, so list only domains whose
     mailboxes you control.
-- **Discovery.** `/api/v1/platform/*` answers non-staff with the app's own
-  `404 Not found`, identical to an unknown route. The search limiter runs
-  after the role check, so a refused caller never sees `RateLimit-*` headers.
+- **Discovery.** `/api/v1/platform/*` answers non-staff, and staff below a
+  route's role, with the app's own `404 Not found`, identical to an unknown
+  route. The limiters run after the role check, so a refused caller never
+  sees `RateLimit-*` headers.
   An unauthenticated caller still gets 401, as on every authenticated router.
-- **Search and stats are separate paths.** `GET /api/v1/platform/tenants` is the only
-  reader of `repositories/platform-tenant.repository.ts`, `GET /api/v1/platform/stats` the only
-  reader of `repositories/platform-stats.repository.ts`, and a lint gate in
-  `eslint.config.mjs` keeps it that way. `GET /tenants` still lists the
+- **Cross-tenant reads are separate paths.** Only the platform services
+  read `repositories/platform-tenant.repository.ts` (staff tenant search
+  and detail), `repositories/platform-stats.repository.ts` (stats) and
+  `repositories/platform-user.repository.ts` (the staff user directory, and
+  the user purge), and a lint gate in `eslint.config.mjs` keeps it that
+  way. `GET /tenants` still lists the
   caller's memberships only. `q` matches literally: `%`, `_` and `\` are
   escaped.
 - **The audit log.** `audit_logs` records:
   - every tenant, settings, member and invitation change, in the same
     transaction as the change;
   - platform auto-joins and grants;
+  - every staff action on a user or a tenant (`user.*`, `tenant.suspended`,
+    `tenant.reactivated`, `tenant.archived`, `tenant.owner_invited`,
+    `user.purged`, `tenant.purged`) and each staff step-up
+    (`auth.reauthenticated`);
   - one `tenant.accessed_by_platform` row per staff user, tenant and hour.
     It's deduplicated in Redis; while Redis is down, every staff request
     writes one.
@@ -690,23 +717,29 @@ per-membership permission blob.
   role and the address's domain, never the address or the token.
 
   A `BEFORE UPDATE OR DELETE` trigger makes the table append-only for every
-  role, with the one retention exception below. Its foreign keys are
-  `ON DELETE RESTRICT`, so hard-deleting a user or tenant with history fails
-  instead of erasing it. `TRUNCATE` is not blocked: a role with `TRUNCATE`
+  role, with two exceptions: the retention purge below, and an owner's purge
+  (an UPDATE that only nulls a purged user's actor columns, and a DELETE of
+  a purged tenant's own entries, each inside its purge transaction). Its
+  foreign keys are `ON DELETE RESTRICT`, so a hard delete that skipped those
+  steps fails instead of erasing history. `TRUNCATE` is not blocked: a role with `TRUNCATE`
   privilege on the table — its owner by default, or a superuser — can still
   empty it, and the test suite relies on that.
 
   Retention is opt-in. `RETENTION_AUDIT_LOGS_DAYS` defaults to `0`, which
   keeps every row forever. Above 0, the daily purge deletes rows whose
-  `occurred_at` is older than that many days. The trigger raises on every
-  UPDATE. It lets a DELETE through only in a transaction that set
-  `app.audit_purge` to `on` and `app.audit_purge_before` to a cutoff after
-  the row's `occurred_at`. The purge sets both with `set_config(..., true)`,
-  so they end with its transaction. Only `retention.service.ts` names them,
-  and `tests/unit/audit-purge-setting.test.ts` fails if any other TypeScript
-  file under `src/` does. This guards against a stray `DELETE` in application
-  code. It is not a privilege boundary: any role that can run arbitrary SQL
-  can set the same two settings. Revoke `DELETE` on `audit_logs` from every
+  `occurred_at` is older than that many days. The trigger lets a DELETE
+  through only in a transaction that set `app.audit_purge` to `on` and
+  `app.audit_purge_before` to a cutoff after the row's `occurred_at` (a
+  tenant purge sets `infinity`). It lets an UPDATE through only in a
+  transaction that set `app.audit_redact` to `on`, and only when the update
+  sets `actor_user_id`, `ip` and `user_agent` to NULL and changes no other
+  column; every other UPDATE raises. Each purge sets its settings with
+  `set_config(..., true)`, so they end with its transaction. Only
+  `retention.service.ts` and `platform-purge.service.ts` name them, and
+  `tests/unit/audit-purge-setting.test.ts` fails if any other TypeScript
+  file under `src/` does. This guards against a stray `DELETE` or `UPDATE`
+  in application code. It is not a privilege boundary: any role that can
+  run arbitrary SQL can set the same settings. Revoke `DELETE` on `audit_logs` from every
   role except the one the app runs as.
 
 - **Who reads it.**
@@ -720,18 +753,82 @@ per-membership permission blob.
   (`member`, `platform` or `system`). The IP, user agent and request id are
   stored but never returned.
 
+### The staff surface is gated per route, not by its prefix
+
+Every staff route lives under `/api/v1/platform`. The prefix is only for
+organisation: it doesn't secure anything, and neither does serving Apex from
+its own host (OWASP API Security Top 10 2023, API5 Broken Function Level
+Authorization; ASVS 5.0 8.2.1 and 8.4.2). Each route names its own
+`requirePlatformRole`, which re-reads the platform role on every request,
+and non-staff and staff below the route's role get the app's 404, before
+the JSON gate, the step-up check and the limiter.
+`tests/integration/api/platform-route-gates.test.ts` holds one row per
+route, walks the platform router and its `/users` sub-router, and fails
+when the router registers a route the table lacks or mounts a sub-router
+it doesn't know. A customer-facing nginx may also refuse
+`/api/v1/platform/` as defence in depth; that's an extra layer, never the
+gate. Each successful `/platform` write also logs one `Staff write` line
+(method, path, status, actor id, and the target's type and id when the
+path names one; never the body, so never a reason or an address); the
+audit log stays the record.
+
+### Step-up for destructive staff actions
+
+Deactivating, deleting or purging a user; suspending, archiving or purging
+a tenant; re-inviting a tenant's owner; and, on the platform tenant, a role
+change, a removal, a resend or an invitation offering admin or owner need a
+sign-in within the last 10 minutes (ASVS 5.0 7.5.3). The refresh row
+records `authenticated_at` when a session starts, rotation carries it
+forward unchanged, and the access token carries it as `auth_time`.
+`requireRecentAuth` answers 401 `REAUTH_REQUIRED` when the claim is missing
+or older than `STEP_UP_MAX_AGE_MS`; it runs after the route's role gate, so
+a caller below the route's role gets the 404 whatever their sign-in age.
+`POST /auth/reauthenticate` (staff only) re-checks the password and moves
+the session's `authenticated_at` forward; a wrong password is a 400, never
+a 401, and both a success and a wrong password are audited
+(`auth.reauthenticated`). Step-up is password-only: an account with no
+password (Google-only) gets a 400 asking it to set one first. Clients must
+not sign out on `REAUTH_REQUIRED`.
+
+### Staff actions carry a reason
+
+Every staff state change records who acted, on what, and why:
+deactivate, reactivate, sign-out, delete and purge a user; suspend,
+reactivate, archive and purge a tenant; re-invite its owner. The `reason`
+(1–500 characters, safe text) is stored in the audit entry's metadata and
+shown in the platform activity log. A tenant's own members see the entry
+in their audit log, but not the staff member's reason. Staff never set a
+user's password: a staff-created account gets a single-use set-password
+link that expires after `ACCOUNT_SETUP_TTL` (ASVS 5.0 6.4.6).
+
+### Purge: the only hard delete
+
+Deleting a user or archiving a tenant is soft: the row stays and can be
+inspected. A platform owner can then purge it for good (`POST
+/platform/users/:id/purge`, `POST /platform/tenants/:id/purge`), with
+step-up and a reason. A user purge removes the row, their mail log and the
+invitations addressed to them, and erases them from the audit entries they
+acted in: `actor_user_id`, `ip` and `user_agent` become NULL, under a
+trigger exception that allows exactly that UPDATE and nothing else
+(migration 0019). The actor CHECK (`audit_logs_actor_user_check`) only
+requires a `system` entry to have no actor id, so a redacted entry keeps
+`actor_kind = 'user'` with its actor id NULL; the database can't tell a
+redacted entry from a user entry written without an actor. A tenant purge
+removes the tenant and its own audit entries. Each purge is recorded in the
+platform tenant (`user.purged`, `tenant.purged`).
+
 ## What this boilerplate does NOT implement
 
 None of these is built, except where the Status column says Partial:
 
 | Control                                               | Status              | What that means for you                                                                                                                                                                                                             |
 | ----------------------------------------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| MFA                                                   | **Not implemented** | No TOTP enrolment, no recovery codes, no step-up.                                                                                                                                                                                   |
+| MFA                                                   | **Not implemented** | No TOTP enrolment and no recovery codes. The one step-up is a password re-check before destructive staff actions; see "Step-up for destructive staff actions".                                                                      |
 | CSRF tokens                                           | **Not implemented** | See "No CSRF middleware" below — reasoning, not an oversight. The forced-login direction IS defended, by a content-type gate; see the section after it.                                                                             |
-| General-purpose rate limiting                         | **Partial**         | 21 limiters (see "Rate limiting" above). Every write route has one, at least the shared `authenticatedWrite`. There is no global limiter, and authenticated reads (profile, notifications, tenant reads, the audit logs) have none. |
+| General-purpose rate limiting                         | **Partial**         | 23 limiters (see "Rate limiting" above). Every write route has one, at least the shared `authenticatedWrite`. There is no global limiter, and authenticated reads (profile, notifications, tenant reads, the audit logs) have none. |
 | Rehash on login                                       | **Not implemented** | See "Password hashing".                                                                                                                                                                                                             |
 | Impersonation, break-glass access, row-level security | **Not implemented** | Staff act only through the platform role; see "Platform staff access and the audit log".                                                                                                                                            |
-| Audit of sign-in and credential events                | **Not implemented** | `audit_logs` records no login, logout, password change or password reset.                                                                                                                                                           |
+| Audit of sign-in and credential events                | **Partial**         | `audit_logs` records no login, logout, password change or password reset. The one sign-in event it records is a staff step-up (`auth.reauthenticated`, success or wrong password).                                                  |
 | Email change, account deletion                        | **Not implemented** | No endpoint changes a user's email or deletes their own account. `PATCH /api/v1/profile` sets only `firstName` and `lastName`.                                                                                                      |
 | OpenAPI documentation                                 | **Not implemented** | No spec is generated or served.                                                                                                                                                                                                     |
 | Seed data                                             | **Not implemented** | No seed script. `pnpm platform:grant` grants a platform role to an existing, verified user.                                                                                                                                         |
