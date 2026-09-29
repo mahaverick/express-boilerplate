@@ -3,6 +3,7 @@
  * alone is a 400 rather than a match-everything search.
  */
 import { z } from 'zod'
+import { STATS_RANGES } from '@/constants/platform.constants'
 import { cursorField } from '@/validators/cursor.validators'
 
 const DEFAULT_SEARCH_PAGE_SIZE = 20
@@ -49,3 +50,15 @@ export const platformTenantSearchSchema = z.object({
  * The validated search query, with the cursor already decoded.
  */
 export type PlatformTenantSearchQuery = z.infer<typeof platformTenantSearchSchema>
+
+/**
+ * `GET /platform/stats` query: the window, 7 days unless asked otherwise.
+ */
+export const platformStatsQuerySchema = z.object({
+  range: z.enum(STATS_RANGES).default('7d'),
+})
+
+/**
+ * The validated stats query.
+ */
+export type PlatformStatsQuery = z.infer<typeof platformStatsQuerySchema>

@@ -110,7 +110,8 @@ a final optional `executor: DbExecutor = db` parameter, so a caller can run it
 inside its own transaction. The other repositories do not extend it, because
 their tables have no soft-delete concept for its policy to apply to:
 `email_logs` and `audit_logs` are append-only, `platform-tenant.repository.ts`
-is a read-only cross-tenant search, and the rest (auth providers,
+is a read-only cross-tenant search, `platform-stats.repository.ts` holds the
+read-only Overview aggregates, and the rest (auth providers,
 notifications, notification preferences, tenant settings, invitations,
 memberships) have no `deletedAt` column. See [DATABASE.md](DATABASE.md) for
 the models.
@@ -182,7 +183,8 @@ controllers. A seventh boundary is enforced separately, by
 core `no-restricted-imports` over `src/**` with
 `src/services/platform-*.service.ts` ignored, keeps
 `repositories/platform-tenant.repository.ts` (every customer tenant, for
-staff search) out of every other module, so "your tenants" can never be
+staff search) and `repositories/platform-stats.repository.ts` (staff Overview
+aggregates) out of every other module, so "your tenants" can never be
 served from it. `tests/unit/lint-gates.test.ts` proves each of the eight
 fires, against a committed violating fixture under
 `tests/fixtures/lint-zones/`. `import-x/no-restricted-paths` is a
@@ -252,6 +254,7 @@ layers above.
 | `tenant-access.service.ts`   | `lockTenantAccess(actor, tenantId, otherUserIds, mode, tx)`: locks owners, memberships and, when the actor has no membership, the platform membership, in that order (step 4 above), returning the actor's access and the locked memberships. `resolveActorAccess(actor, tenantId, tx)` wraps it for a caller with no other memberships to lock. Membership wins; the platform tenant is members-only. |
 | `platform.service.ts`        | `getPlatformMembership` (one indexed read, no cache), `autoJoin` (viewer only, verified addresses on `PLATFORM_EMAIL_DOMAINS`), `bootstrapGrant` (the `platform:grant` script only).                                                                                                                                                                                                                   |
 | `platform-tenant.service.ts` | `searchAll`: every customer tenant, for staff. The only importer of `platform-tenant.repository.ts`.                                                                                                                                                                                                                                                                                                   |
+| `platform-stats.service.ts`  | `getPlatformStats`: totals and zero-filled per-UTC-day sign-up and email series for the staff Overview. The only importer of `platform-stats.repository.ts`.                                                                                                                                                                                                                                           |
 | `audit.service.ts`           | `record(entry, tx)`, in the caller's transaction, with strict per-action metadata; `recordPlatformAccess` (hourly, deduplicated in Redis); `listForTenant` and `listPlatformWide` (keyset).                                                                                                                                                                                                            |
 
 ## Directory rules
