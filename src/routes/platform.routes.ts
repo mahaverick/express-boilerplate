@@ -9,6 +9,7 @@ import { platformController } from '@/controllers/platform.controller'
 import { requireAuth } from '@/middlewares/auth.middleware'
 import { requirePlatformRole } from '@/middlewares/platform.middleware'
 import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
+import { createPlatformUserRouter } from '@/routes/platform-user.routes'
 
 /**
  * Build the platform routes.
@@ -19,6 +20,9 @@ export function createPlatformRouter(): Router {
   router.use(requireAuth)
   // One instance: separate ones would split the budget on the in-memory fallback.
   const searchLimiter = createRateLimiter(RATE_LIMITS.platformSearch)
+  // One instance shared by every /platform write, users' and tenants'.
+  const writeLimiter = createRateLimiter(RATE_LIMITS.platformWrite)
+  router.use('/users', createPlatformUserRouter({ searchLimiter, writeLimiter }))
   router.get(
     '/tenants',
     requirePlatformRole('viewer'),

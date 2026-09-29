@@ -20,8 +20,12 @@ const RULES: readonly WriterRule[] = [
   {
     name: 'an emailVerifiedAt object key (an insert/update value)',
     pattern: /\bemailVerifiedAt\s*:/,
-    // The column definition, and the repository primitive markEmailVerified wraps.
-    allowedIn: ['database/models/user.model.ts', 'repositories/user.repository.ts'],
+    // The column definition, the repository primitive markEmailVerified wraps, and the staff directory's read-only selection and record type.
+    allowedIn: [
+      'database/models/user.model.ts',
+      'repositories/user.repository.ts',
+      'repositories/platform-user.repository.ts',
+    ],
   },
   {
     name: 'the raw email_verified_at column name',

@@ -111,6 +111,47 @@ export type ReasonBody = z.infer<typeof reasonBodySchema>
  */
 export const directionField = z.enum(PAGE_DIRECTIONS).default('next')
 
+/**
+ * A query-string boolean: exactly `true` or `false`.
+ */
+const booleanQueryField = z.enum(['true', 'false']).transform((value) => value === 'true')
+
+/**
+ * The user search cursor's decoded shape: the last row's `lower(email)` and id.
+ */
+export const platformUserCursorSchema = z
+  .object({ sortEmail: z.string().refine(hasNoNul), id: z.uuid() })
+  .strict()
+
+/**
+ * `GET /api/v1/platform/users` query string. `direction=prev` needs a cursor:
+ * there is no "last page" to start from.
+ */
+export const platformUserSearchSchema = z
+  .object({
+    q: searchQueryField.optional(),
+    status: z.enum(['active', 'inactive', 'deleted']).optional(),
+    verified: booleanQueryField.optional(),
+    staff: booleanQueryField.optional(),
+    cursor: cursorField(platformUserCursorSchema).optional(),
+    direction: directionField,
+    limit: pageLimitField,
+  })
+  .superRefine((query, context) => {
+    if (query.direction === 'prev' && query.cursor === undefined) {
+      context.addIssue({
+        code: 'custom',
+        path: ['cursor'],
+        message: 'cursor is required when direction is prev.',
+      })
+    }
+  })
+
+/**
+ * The validated user search query, with the cursor already decoded.
+ */
+export type PlatformUserSearchQuery = z.infer<typeof platformUserSearchSchema>
+
 const idParameterSchema = z.uuid()
 
 /**
