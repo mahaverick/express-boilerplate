@@ -127,6 +127,13 @@
       "when": 1790414995077,
       "tag": "0017_retention",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1790697007806,
+      "tag": "0018_step_up_authenticated_at",
+      "breakpoints": true
     }
   ]
 }

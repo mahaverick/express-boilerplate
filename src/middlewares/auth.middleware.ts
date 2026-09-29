@@ -1,14 +1,20 @@
 /**
- * @file `requireAuth`, the gate every protected route sits behind. Later
- * middleware (`resolveTenant`) composes after it by reading `request.user`.
+ * @file `requireAuth`, the gate every protected route sits behind, and
+ * `requireRecentAuth`, the step-up gate a destructive route adds after it.
+ * Later middleware (`resolveTenant`) composes after it by reading `request.user`.
  */
 import { type NextFunction, type Request, type Response } from 'express'
-import { ACCESS_TOKEN_EXPIRED_CODE } from '@/constants/auth.constants'
+import {
+  ACCESS_TOKEN_EXPIRED_CODE,
+  REAUTH_REQUIRED_CODE,
+  STEP_UP_MAX_AGE_MS,
+} from '@/constants/auth.constants'
 import { HttpError } from '@/errors/http-error'
 import { toAuthenticatedUser, type AuthenticatedUser } from '@/presenters/user.presenter'
 import { UserRepository } from '@/repositories/user.repository'
 import { isSessionDenied } from '@/services/session-denylist.service'
 import { verifyAccessToken } from '@/services/session.service'
+import { MS_PER_SECOND } from '@/utilities/duration.utilities'
 
 const userRepository = new UserRepository()
 
@@ -117,9 +123,40 @@ export async function requireAuth(
     if (payload.exp !== undefined) {
       request.accessTokenExpiresAt = new Date(payload.exp * 1000)
     }
+    if (payload.auth_time !== undefined) {
+      request.authTime = payload.auth_time
+    }
     request.user = await loadAuthenticatedUser(payload.sub)
     next()
   } catch (error) {
     next(error)
+  }
+}
+
+/**
+ * Require that the session behind the access token authenticated within
+ * `maxAgeMs`: the step-up gate a destructive route adds (ASVS 7.5.3). Reads
+ * `request.authTime`, which `requireAuth` copies from the verified token's
+ * `auth_time`, so it must run after `requireAuth`. A token with no claim
+ * (its session predates migration 0018) counts as stale. The refusal is a
+ * 401 carrying REAUTH_REQUIRED_CODE: the client confirms the user's identity
+ * and retries. Nothing is revoked.
+ * @param maxAgeMs - The oldest authentication accepted. Defaults to STEP_UP_MAX_AGE_MS.
+ * @returns An Express middleware.
+ */
+export function requireRecentAuth(
+  maxAgeMs: number = STEP_UP_MAX_AGE_MS
+): (request: Request, response: Response, next: NextFunction) => void {
+  return (request, _response, next) => {
+    if (!request.user) {
+      next(new HttpError('Authentication required', 401))
+      return
+    }
+    const { authTime } = request
+    if (authTime === undefined || Date.now() - authTime * MS_PER_SECOND > maxAgeMs) {
+      next(new HttpError('Confirm your identity to continue', 401, REAUTH_REQUIRED_CODE))
+      return
+    }
+    next()
   }
 }

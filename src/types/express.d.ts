@@ -53,6 +53,14 @@ declare global {
        * access-token lifetime.
        */
       accessTokenExpiresAt?: Date
+
+      /**
+       * When the session behind the verified access token last
+       * authenticated, in seconds since the epoch: its `auth_time` claim,
+       * set by `requireAuth`. Absent when the token carried none.
+       * `requireRecentAuth` (auth.middleware.ts) reads it.
+       */
+      authTime?: number
     }
   }
 }

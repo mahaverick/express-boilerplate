@@ -665,4 +665,32 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
       expect(user.id).toBe(existing.id)
     })
   })
+
+  it('issues no session when the account is deactivated between lookup and issue', async () => {
+    // completeGoogleSignIn re-reads the user under its row lock before issuing.
+    const { completeGoogleSignIn } = await import('@/services/google-auth.service')
+    const { UserRepository: Users } = await import('@/repositories/user.repository')
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
+    const realUpdate = Users.prototype.update
+    const email = `google-race-${randomUUID()}@example.test`
+    const profile = googleProfile({ email, emailVerified: true })
+    const created = await completeGoogleSignIn(profile)
+    createdIds.push(created.userId)
+    await sql`delete from user_tokens where user_id = ${created.userId}`
+    const deactivating: typeof realUpdate = async function (
+      this: InstanceType<typeof Users>,
+      ...arguments_
+    ) {
+      const result = await realUpdate.apply(this, arguments_)
+      await sql`update users set active = false where id = ${created.userId}`
+      return result
+    }
+    await withMutatedMethod(Users.prototype, 'update', deactivating, async () => {
+      await expect(completeGoogleSignIn(profile)).rejects.toMatchObject({ statusCode: 401 })
+    })
+    const [row] = await sql<{ count: number }[]>`
+      select count(*)::int as count from user_tokens where user_id = ${created.userId}
+    `
+    expect(row?.count).toBe(0)
+  })
 })

@@ -1,7 +1,7 @@
 /**
- * @file The four bulk revokers lock the rows they revoke in id order,
- * whatever plan or physical row layout Postgres uses
- * (`user-token.repository.ts`'s header). Three groups of tests pin that
+ * @file The bulk writers (the four revokers and markSessionAuthenticated)
+ * lock the rows they write in id order, whatever plan or physical row layout
+ * Postgres uses (`user-token.repository.ts`'s header). Three groups of tests pin that
  * property: a race on a built physical layout, a plan-shape check, and a
  * schema guard.
  */
@@ -168,7 +168,7 @@ async function unorderedRevokeAllForUserAndPurpose(
 }
 
 /**
- * Run `run` with all four writers swapped for their unordered stand-ins.
+ * Run `run` with the four revokers swapped for their unordered stand-ins.
  * @param run - The test body.
  * @returns Resolves once `run` settles and every writer is restored.
  */
@@ -418,7 +418,7 @@ interface PlanNode {
   Plans?: PlanNode[]
 }
 
-// The sort key of the revokers' inner scan of user_tokens, however Postgres aliases it.
+// The sort key of the writers' inner scan of user_tokens, however Postgres aliases it.
 const ID_SORT_KEY = /^user_tokens(?:_\d+)?\.id$/
 
 const WRITERS: { name: string; run: (executor: DbExecutor) => Promise<unknown> }[] = [
@@ -439,6 +439,11 @@ const WRITERS: { name: string; run: (executor: DbExecutor) => Promise<unknown> }
     name: 'revokeAllForUserAndPurpose',
     run: (executor) =>
       userTokenRepository.revokeAllForUserAndPurpose(randomUUID(), 'email_verification', executor),
+  },
+  {
+    name: 'markSessionAuthenticated',
+    run: (executor) =>
+      userTokenRepository.markSessionAuthenticated(randomUUID(), randomUUID(), executor),
   },
 ]
 
@@ -535,7 +540,7 @@ async function expectIdOrderedLocking(
  * A plan-shape check that each writer's EXPLAIN output locks through a
  * LockRows node fed in id order, under every planner setting in `PLANNERS`.
  */
-describe('each bulk revoker locks through LockRows fed in id order', () => {
+describe('each bulk writer locks through LockRows fed in id order', () => {
   describe.each(PLANNERS)('under $label', ({ settings }) => {
     it.each(WRITERS)('$name', async ({ run }) => {
       await expectIdOrderedLocking(run, settings)

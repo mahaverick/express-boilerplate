@@ -206,9 +206,11 @@ async function platformRoleForLogin(userId: string): Promise<MembershipRole | nu
  * return for any of them would be a timing oracle. The message is literally
  * false for an unverified account with the right password; that is accepted.
  *
- * The token is issued in a transaction that re-reads the hash FOR SHARE. A
+ * The token is issued in a transaction that re-reads the user FOR SHARE. A
  * password change or reset still in flight is waited for, and one that
  * committed after the compare answers the same 401, so no session outlives it.
+ * A deactivation or soft delete that committed after the first read answers
+ * the same 401 there too.
  * @param input - The validated login body.
  * @returns The user, their platform role, an access token and a new refresh token.
  * @throws {HttpError} 401 'Invalid email or password'.
@@ -231,12 +233,13 @@ export async function login(input: LoginInput): Promise<LoginResult> {
   const sessionId = randomUUID()
   const refreshToken = await withTransaction(async (tx) => {
     const locked = await userRepository.lockById(user.id, 'share', tx)
-    if (locked?.passwordHash !== comparedHash) {
+    // Re-checked under the lock: a deactivation or delete that committed since the first read wins.
+    if (!locked?.active || locked.passwordHash !== comparedHash) {
       throw new HttpError('Invalid email or password', 401)
     }
     return issueRefreshToken(user.id, sessionId, tx)
   })
-  const accessToken = signAccessToken(user, sessionId)
+  const accessToken = signAccessToken(user, sessionId, refreshToken.authenticatedAt)
   const platformRole = await platformRoleForLogin(user.id)
   return { user, accessToken, refreshToken, platformRole }
 }
@@ -244,6 +247,8 @@ export async function login(input: LoginInput): Promise<LoginResult> {
 /**
  * Rotate a refresh token for a new access/refresh pair, re-checking that
  * the account is still active (as requireAuth does for every bearer request).
+ * The access token keeps the session's authentication time: refreshing is not
+ * re-authenticating.
  * @param rawToken - The raw refresh token from the cookie.
  * @returns A new access token and the rotated refresh token.
  * @throws {HttpError} 401, from rotation or when the account is gone or inactive.
@@ -254,7 +259,10 @@ export async function refresh(rawToken: string): Promise<RefreshResult> {
   if (!user || !user.active) {
     throw new HttpError('Account no longer exists or is inactive', 401)
   }
-  return { accessToken: signAccessToken(user, rotated.sessionId), refreshToken: rotated }
+  return {
+    accessToken: signAccessToken(user, rotated.sessionId, rotated.authenticatedAt),
+    refreshToken: rotated,
+  }
 }
 
 /**
