@@ -205,8 +205,10 @@ describe('tenant lifecycle', () => {
 
     const response = await act(token, randomUUID(), 'suspend')
     expect(response.status).toBe(404)
+    expect((response.body as { message?: string }).message).toBe('Tenant not found')
     const response2 = await act(token, 'nope', 'suspend')
     expect(response2.status).toBe(404)
+    expect((response2.body as { message?: string }).message).toBe('Tenant not found')
   })
 
   it('requires a reason', async () => {
