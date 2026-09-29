@@ -72,35 +72,38 @@ feature under `/api/v1`: `auth`, `profile`, `notifications`, `tenants`,
 `invitations` and `platform`. A new feature router is one more `router.use(...)`
 line there, never a change to `app.ts`.
 
-The platform router answers every OPTIONS with the unknown-route 404
-(`refusePlatformOptions`), so Express's automatic `Allow` answer never lists
-a staff route's methods; staff routes serve no cross-origin preflight of
-their own. The router serves staff reads to any platform role:
-`GET /platform/tenants` (with `state` and back-paging),
-`GET /platform/tenants/:id` (any lifecycle state), `GET /platform/users`
-(with `status=deleted` for soft-deleted users), `GET /platform/users/:id` (a
-soft-deleted user too) and `GET /platform/stats`. Platform admins also get
-`GET /platform/audit-log` (filterable by `tenantId`, `targetId`, actor,
-action and access) and every create, update and soft action: create a tenant
-and invite its owner, re-invite an owner, suspend, reactivate and archive a
-tenant, create and edit users, deactivate, reactivate, sign out and
-soft-delete users, and send set-password or verification mail. Platform
-owners also get the two hard deletes, `POST /platform/users/:id/purge` and
-`POST /platform/tenants/:id/purge`, and may act on other staff owners. Each
-route names its own `requirePlatformRole`, which answers 404 below it.
-Deactivate, delete, both purges, suspend, archive and the owner re-invitation
-also need a sign-in within the last 10 minutes (`requireRecentAuth`, 401
-`REAUTH_REQUIRED`); `POST /auth/reauthenticate` (staff only, password only)
-renews it. Staff work inside an active tenant (edit, members, invitations,
-settings) goes through the ordinary `/tenants/:slug/*` routes with the
-platform role. On the platform tenant those member routes are how staff
-roles change, with step-up on a role change, a removal, an invitation
-offering admin or owner, and a resend, and a last-owner guard that counts
-active owners only. Every successful `/platform` write that the role
-gate admitted logs one `Staff write` line (`logStaffWrites`,
-`platform.middleware.ts`: method, path, status, actor id, and the target's
-type and id when the path names one; never the body); the audit log is the
-record.
+Every authenticated OPTIONS that reaches the platform router gets the
+unknown-route 404 (`refusePlatformOptions`), so Express's automatic `Allow`
+answer never lists a staff route's methods. `cors` has already answered an
+allowed-origin preflight, and `requireAuth` refuses an OPTIONS without a
+bearer token; staff routes serve no cross-origin preflight of their own. The
+router serves staff reads to any platform role: `GET /platform/tenants` (with
+`state` and back-paging), `GET /platform/tenants/:id` (any lifecycle state),
+`GET /platform/users` (with `status=deleted` for soft-deleted users), `GET
+/platform/users/:id` (a soft-deleted user too) and `GET /platform/stats`.
+Platform admins also get `GET /platform/audit-log` (filterable by `tenantId`,
+`targetId`, actor, action and access) and every create, update and soft
+action: create a tenant and invite its owner, re-invite an owner, suspend,
+reactivate and archive a tenant, create and edit users, deactivate,
+reactivate, sign out and soft-delete users, and send set-password or
+verification mail. Platform owners also get the two hard deletes, `POST
+/platform/users/:id/purge` and `POST /platform/tenants/:id/purge`, and may act
+on other staff owners. Each route names its own `requirePlatformRole`, which
+answers 404 below it. Deactivate, delete, both purges, suspend, archive and
+the owner re-invitation also need a sign-in within the last 10 minutes
+(`requireRecentAuth`, 401 `REAUTH_REQUIRED`); `POST /auth/reauthenticate`
+(staff only, password only) renews it. A staff sign-out, deactivation or
+delete revokes every token the user holds, whatever its purpose, so an
+unredeemed verification or set-password link dies with the sessions. Staff
+work inside an active tenant (edit, members, invitations, settings) goes
+through the ordinary `/tenants/:slug/*` routes with the platform role. On the
+platform tenant those member routes are how staff roles change, with step-up
+on a role change, a removal, an invitation offering admin or owner, and a
+resend, and a last-owner guard that counts active owners only. Every
+successful `/platform` write that the role gate admitted logs one `Staff
+write` line (`logStaffWrites`, `platform.middleware.ts`: method, path, status,
+actor id, and the target's type and id when the path names one; never the
+body); the audit log is the record.
 
 **Open auth routes.** `register`, `login`, `verify-email`,
 `resend-verification`, `forgot-password`, `reset-password`, `refresh` and
@@ -617,6 +620,10 @@ to `WEB_URL`.
   `app` (default `'web'`) that picks the frontend of the verification or
   reset link. The "address already registered" mail carries no link, so it
   has no `app`.
+- Staff mail about a user (the set-password mail of `POST /platform/users`,
+  password-setup and resend-verification) takes no `app`: the server links
+  a staff target to Apex and anyone else to `WEB_URL`, so a newly created
+  user, who holds no platform role, gets a web link.
 - `GET /auth/google?app=apex` stores the choice in the OAuth session
   (`rememberOAuthApp`), and the callback redirects to that frontend
   (`oauthAppOf`, `src/controllers/helpers.controller.ts`).

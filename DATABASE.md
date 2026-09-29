@@ -327,8 +327,10 @@ second time under the lock, then run `pnpm db:migrate`.
   validates every audit row. Every audited write (tenant, member,
   invitation and staff changes, and the hourly staff-access entries) waits
   meanwhile. The `email_logs` index build holds a `SHARE` lock on that
-  table, which blocks mail-log writes. On a large database, run each of
-  these on its own, outside any transaction:
+  table, which blocks mail-log writes. On a large database, build the two
+  indexes by hand first, each on its own, outside any transaction; the
+  `0019` file creates them with `IF NOT EXISTS`, so the migration then skips
+  them and needs no edit:
 
   ```sql
   CREATE INDEX CONCURRENTLY IF NOT EXISTS audit_logs_target_occurred_idx ON audit_logs (target_id, occurred_at, id);
@@ -338,10 +340,11 @@ second time under the lock, then run `pnpm db:migrate`.
   CREATE INDEX CONCURRENTLY IF NOT EXISTS email_logs_recipient_lower_idx ON email_logs (lower(recipient));
   ```
 
-  Then add `IF NOT EXISTS` to both `CREATE INDEX` statements in the `0019`
-  file. That leaves the CHECK's validation scan under the `ACCESS EXCLUSIVE`
-  lock, so apply the migration in a quiet window. The hand-added function
-  replacement takes only a brief lock and needs no manual step.
+  The CHECK's validation scan still runs under the `ACCESS EXCLUSIVE` lock
+  (adding it `NOT VALID` and validating it later in the same batch would
+  gain nothing, since the batch is one transaction), so apply the migration
+  in a quiet window. The hand-added function replacement takes only a brief
+  lock.
 
 ## Test database
 

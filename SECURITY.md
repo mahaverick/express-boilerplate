@@ -661,7 +661,8 @@ per-membership permission blob.
   The one exception is a tenant with **no active owner**, one that staff
   created or whose owners are all gone or deactivated: a platform admin may
   invite its owner (`POST /platform/tenants/:id/owner-invitation`), because
-  no member can. The re-invitation needs a recent sign-in and a reason, and
+  no member can. Only an active tenant qualifies; a suspended or archived
+  one answers 409. The re-invitation needs a recent sign-in and a reason, and
   its audit entry records the invitee's account when the address has one,
   so an invitation a staff member sends to their own address is visible in
   the log.
@@ -744,8 +745,8 @@ per-membership permission blob.
   `tests/unit/audit-purge-setting.test.ts` fails if any other TypeScript
   file under `src/` does. This guards against a stray `DELETE` or `UPDATE`
   in application code. It is not a privilege boundary: any role that can
-  run arbitrary SQL can set the same settings. Revoke `DELETE` on
-  `audit_logs` from every role except the one the app runs as.
+  run arbitrary SQL can set the same settings. Revoke `UPDATE` and `DELETE`
+  on `audit_logs` from every role except the one the app runs as.
 
 - **Who reads it.**
   - `GET /api/v1/tenants/:slug/audit-log`: effective owners and admins, so a
@@ -812,11 +813,15 @@ link that expires after `ACCOUNT_SETUP_TTL` (ASVS 5.0 6.4.6).
 Deleting a user or archiving a tenant is soft: the row stays and can be
 inspected. A platform owner can then purge it for good (`POST
 /platform/users/:id/purge`, `POST /platform/tenants/:id/purge`), with
-step-up and a reason. A user purge removes the row, their mail log and the
-invitations addressed to them, and erases them from the audit entries they
-acted in: `actor_user_id`, `ip` and `user_agent` become NULL, under a
-trigger exception that allows exactly that UPDATE and nothing else
-(migration 0019). The actor CHECK (`audit_logs_actor_user_check`) only
+step-up and a reason. A user purge removes the row and erases them from the
+audit entries they acted in: `actor_user_id`, `ip` and `user_agent` become
+NULL, under a trigger exception that allows exactly that UPDATE and nothing
+else (migration 0019). Mail log rows and invitations hold the address and
+are matched by it alone, and a deleted user's address can be claimed again.
+So when a live account holds the address, the purge deletes none of them
+(it can't tell the purged user's from the new holder's); otherwise it
+deletes those created up to the user's deletion and keeps any written
+after. The actor CHECK (`audit_logs_actor_user_check`) only
 requires a `system` entry to have no actor id, so a redacted entry keeps
 `actor_kind = 'user'` with its actor id NULL; the database can't tell a
 redacted entry from a user entry written without an actor. A tenant purge
