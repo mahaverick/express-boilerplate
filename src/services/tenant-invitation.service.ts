@@ -48,6 +48,12 @@ const userRepository = new UserRepository()
 export const ALREADY_MEMBER_CODE = 'already_member'
 
 /**
+ * The 409 for an owner invitation to the platform tenant, whose staff are invited from Staff.
+ */
+export const PLATFORM_OWNER_INVITATION_MESSAGE =
+  'The platform tenant has no owner invitation; invite staff from Staff.'
+
+/**
  * Message for `ALREADY_MEMBER_CODE`.
  */
 export const ALREADY_MEMBER_MESSAGE = 'That person is already a member.'
@@ -365,7 +371,7 @@ export interface OwnerInvitationDispatch {
  * @param reason - The staff member's reason, or null for the invitation sent when the tenant is created.
  * @param tx - The caller's transaction.
  * @returns What `sendOwnerInvitation` needs once the transaction commits.
- * @throws {HttpError} 409 `invitee_deactivated` when the address belongs to a deactivated account; 409 `already_member` when it belongs to a member; 409 `invitation_conflict` from a racing duplicate.
+ * @throws {HttpError} 409 `invitee_deactivated` when the address belongs to a deactivated account; 409 `already_member` when it belongs to a member; 409 for the platform tenant; 409 `invitation_conflict` from a racing duplicate.
  */
 export async function createOwnerInvitation(
   actor: Actor,
@@ -384,6 +390,7 @@ export async function createOwnerInvitation(
     throw new HttpError(ALREADY_MEMBER_MESSAGE, 409, ALREADY_MEMBER_CODE)
   }
   const tenant = await tenantForMessages(tenantId, tx)
+  if (tenant.isPlatform) throw new HttpError(PLATFORM_OWNER_INVITATION_MESSAGE, 409)
   const inviter = await userRepository.findById(actor.userId, {}, tx)
   const invitation = await invitationRepository.createPending(
     {

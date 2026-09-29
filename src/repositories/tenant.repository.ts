@@ -207,7 +207,7 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
    * @param input - The tenant's initial columns.
    * @param executor - An existing transaction to compose into, or the pool (default).
    * @returns The new tenant.
-   * @throws {HttpError} 409, when the slug is taken by a live tenant.
+   * @throws {HttpError} 409 `slug_taken`, when the slug is taken by a live tenant.
    */
   async createWithoutOwner(
     input: Omit<CreateTenantInput, 'ownerId'>,

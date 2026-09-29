@@ -19,6 +19,7 @@ import { sql } from '@/services/database.service'
 import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
 import { signAccessToken } from '@/services/session.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
+import { withMutatedMethod } from '../../helpers/mutate'
 import { makeStaff, platformTenant } from '../../helpers/platform-staff'
 import { waitForInvitationEmail } from '../../helpers/queue-jobs'
 import { request } from '../../helpers/request'
@@ -291,6 +292,9 @@ describe('staff-created tenants', () => {
       const response = await reissue(token, tenant.id, `x-${randomUUID()}@example.test`)
 
       expect(response.status).toBe(409)
+      expect((response.body as { message: string }).message).toBe(
+        'This tenant already has an owner; manage it from Members.'
+      )
     })
 
     it('allows a re-issue when the only owner is deactivated, since nobody can act as owner', async () => {
@@ -358,8 +362,14 @@ describe('staff-created tenants', () => {
 
       const response = await reissue(token, tenantId, 'y@example.test')
       expect(response.status).toBe(409)
+      expect((response.body as { message: string }).message).toBe(
+        'Cannot invite an owner to a suspended tenant.'
+      )
       const response2 = await reissue(token, platform.id, 'y@example.test')
       expect(response2.status).toBe(409)
+      expect((response2.body as { message: string }).message).toBe(
+        'The platform tenant has no owner invitation; invite staff from Staff.'
+      )
     })
 
     it('answers 409 when the address already belongs to a member', async () => {
@@ -377,6 +387,53 @@ describe('staff-created tenants', () => {
 
       expect(response.status).toBe(409)
       expect((response.body as { code?: string }).code).toBe('already_member')
+    })
+
+    it('answers 409 invitee_deactivated for a deactivated account, keeping the pending invitation', async () => {
+      const { token } = await staff('admin')
+      const first = `k-${randomUUID()}@example.test`
+      const created = await create(token, { name: 'Keep', slug: newSlug(), ownerEmail: first })
+      const tenantId = (created.body as { data: CreatedBody }).data.tenant.id
+      const { user: inactive } = await createUser(true)
+      await sql`update users set active = false where id = ${inactive.id}`
+
+      const response = await reissue(token, tenantId, inactive.email)
+
+      expect(response.status).toBe(409)
+      expect(response.body as { message: string; code?: string }).toMatchObject({
+        message: 'That account is deactivated',
+        code: INVITEE_DEACTIVATED_CODE,
+      })
+      const pending = await sql<{ email: string }[]>`select email from tenant_invitations
+        where tenant_id = ${tenantId} and accepted_at is null and revoked_at is null`
+      expect(pending.map((row) => row.email)).toEqual([first])
+    })
+
+    it('answers emailSent: false when the mail cannot be queued, keeping the new invitation', async () => {
+      const { token } = await staff('admin')
+      const created = await create(token, {
+        name: 'No Mail',
+        slug: newSlug(),
+        ownerEmail: `m-${randomUUID()}@example.test`,
+      })
+      const tenantId = (created.body as { data: CreatedBody }).data.tenant.id
+      const second = `m2-${randomUUID()}@example.test`
+
+      let response: Response | undefined
+      await withMutatedMethod(
+        getEmailQueue(),
+        'add',
+        (): Promise<never> => Promise.reject(new Error('queue unavailable')),
+        async () => {
+          response = await reissue(token, tenantId, second)
+        }
+      )
+
+      expect(response?.status).toBe(200)
+      expect((response?.body as { data: { emailSent: boolean } }).data.emailSent).toBe(false)
+      const pending = await sql<{ email: string }[]>`select email from tenant_invitations
+        where tenant_id = ${tenantId} and accepted_at is null and revoked_at is null`
+      expect(pending.map((row) => row.email)).toEqual([second])
     })
 
     it('answers 404 for an unknown or malformed id', async () => {

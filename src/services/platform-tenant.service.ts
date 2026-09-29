@@ -15,7 +15,11 @@ import { UserMembershipRepository } from '@/repositories/user-membership.reposit
 import { record } from '@/services/audit.service'
 import { withTransaction } from '@/services/database.service'
 import { assertStillPlatformRole } from '@/services/platform.service'
-import { createOwnerInvitation, sendOwnerInvitation } from '@/services/tenant-invitation.service'
+import {
+  createOwnerInvitation,
+  PLATFORM_OWNER_INVITATION_MESSAGE,
+  sendOwnerInvitation,
+} from '@/services/tenant-invitation.service'
 import type { Actor } from '@/types/actor'
 import type { EmailDelivery } from '@/types/email-delivery'
 import { encodeCursor } from '@/utilities/cursor.utilities'
@@ -130,9 +134,13 @@ export async function createTenant(
 /**
  * Invite a new owner to an active customer tenant that has no active owner,
  * revoking any pending owner invitation first. An unknown tenant and the
- * platform tenant are refused before any lock. Locks follow the codebase
- * order: the tenant's owner rows, the actor's platform membership and user
- * row, then the tenant row.
+ * platform tenant are refused before any lock. The pending owner invitations
+ * are revoked before the active owners are counted, so an old invitee's
+ * accept either commits first (the revoke waits for a claim still in flight,
+ * the count then sees the new owner, and the re-issue answers 409 having
+ * written nothing) or finds its invitation revoked. Locks follow the
+ * codebase order: the tenant's owner rows, the actor's platform membership
+ * and user row, then the tenant row, then the pending owner invitations.
  * @param actor - The staff user (platform admin or owner, recently authenticated; the route checked).
  * @param tenantId - The tenant.
  * @param email - The new owner's address; a staff address is allowed.
@@ -148,12 +156,7 @@ export async function reissueOwnerInvitation(
 ): Promise<EmailDelivery> {
   const found = await tenantRepository.findById(tenantId)
   if (!found) throw new HttpError('Tenant not found', 404)
-  if (found.isPlatform) {
-    throw new HttpError(
-      'The platform tenant has no owner invitation; invite staff from Staff.',
-      409
-    )
-  }
+  if (found.isPlatform) throw new HttpError(PLATFORM_OWNER_INVITATION_MESSAGE, 409)
   const dispatch = await withTransaction(async (tx) => {
     await userMembershipRepository.lockOwners(tenantId, 'no key update', tx)
     await assertStillPlatformRole(actor, 'admin', tx)
@@ -161,10 +164,6 @@ export async function reissueOwnerInvitation(
     if (!tenant) throw new HttpError('Tenant not found', 404)
     if (tenant.lifecycleState !== 'active') {
       throw new HttpError(`Cannot invite an owner to a ${tenant.lifecycleState} tenant.`, 409)
-    }
-    // Active owners only: a deactivated owner cannot act, so the tenant needs a new one.
-    if ((await userMembershipRepository.countActiveOwners(tenantId, tx)) > 0) {
-      throw new HttpError('This tenant already has an owner; manage it from Members.', 409)
     }
     const revoked = await invitationRepository.revokePendingByRole(tenantId, 'owner', tx)
     for (const invitation of revoked) {
@@ -183,6 +182,10 @@ export async function reissueOwnerInvitation(
         },
         tx
       )
+    }
+    // After the revoke (see the JSDoc); active owners only, since a deactivated owner cannot act.
+    if ((await userMembershipRepository.countActiveOwners(tenantId, tx)) > 0) {
+      throw new HttpError('This tenant already has an owner; manage it from Members.', 409)
     }
     return createOwnerInvitation(actor, tenantId, email, reason, tx)
   })
