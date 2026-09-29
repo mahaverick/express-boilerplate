@@ -79,6 +79,12 @@ const EnvSchema = z.object({
     .describe(
       'Public origin of the frontend. Email verification links are built from it — the link points at your frontend, which POSTs the token to this API. http://localhost:5173 locally.'
     ),
+  APEX_URL: z
+    .url({ protocol: /^https?$/ })
+    .optional()
+    .describe(
+      'Public origin of the Apex staff dashboard, e.g. https://admin.example.com. When set, platform-tenant invitation links, and the verification, password-reset and Google sign-in flows started with app "apex", point here instead of WEB_URL. Unset sends every link to WEB_URL. Google sign-in from a host other than APP_URL also needs COOKIE_DOMAIN covering both.'
+    ),
 
   DATABASE_URL: z
     .url()

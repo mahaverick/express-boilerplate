@@ -3,7 +3,8 @@
  * the verification mail, verifying with token and password, resending, and
  * `markEmailVerified`, the one writer of `users.email_verified_at`.
  */
-import { getEnv } from '@/configs/env.config'
+import { getEnv, type Env } from '@/configs/env.config'
+import type { FrontendApp } from '@/constants/frontend.constants'
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
 import { redactedForLog } from '@/errors/postgres-errors'
@@ -90,6 +91,20 @@ export function buildInvitationAcceptUrl(
   webUrl: string = getEnv().WEB_URL
 ): string {
   return buildTokenUrl(INVITATION_ACCEPT_PATH, rawToken, webUrl)
+}
+
+/**
+ * The configured origin for one frontend. Always one of two configured
+ * values, never request input, so choosing `app` cannot send a link anywhere else.
+ * @param app - The frontend the link or redirect is for.
+ * @param env - The configured origins; defaults to the validated environment.
+ * @returns APEX_URL for 'apex' when it is set, WEB_URL otherwise.
+ */
+export function frontendUrl(
+  app: FrontendApp,
+  env: Pick<Env, 'WEB_URL' | 'APEX_URL'> = getEnv()
+): string {
+  return app === 'apex' && env.APEX_URL !== undefined ? env.APEX_URL : env.WEB_URL
 }
 
 /**

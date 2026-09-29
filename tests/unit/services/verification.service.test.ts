@@ -3,6 +3,7 @@ import {
   buildInvitationAcceptUrl,
   buildPasswordResetUrl,
   buildVerificationUrl,
+  frontendUrl,
 } from '@/services/verification.service'
 
 describe('buildVerificationUrl', () => {
@@ -65,5 +66,32 @@ describe('buildInvitationAcceptUrl', () => {
     expect(buildInvitationAcceptUrl('t', 'https://app.example.com/')).toBe(
       'https://app.example.com/invitations/accept?token=t'
     )
+  })
+})
+
+describe('frontendUrl', () => {
+  const web = 'https://app.example.com'
+  const apex = 'https://admin.example.com'
+
+  it('answers WEB_URL for web, whether or not APEX_URL is set', () => {
+    expect(frontendUrl('web', { WEB_URL: web, APEX_URL: undefined })).toBe(web)
+    expect(frontendUrl('web', { WEB_URL: web, APEX_URL: apex })).toBe(web)
+  })
+
+  it('answers APEX_URL for apex when it is set', () => {
+    expect(frontendUrl('apex', { WEB_URL: web, APEX_URL: apex })).toBe(apex)
+  })
+
+  it('falls back to WEB_URL for apex when APEX_URL is unset', () => {
+    expect(frontendUrl('apex', { WEB_URL: web, APEX_URL: undefined })).toBe(web)
+  })
+
+  it.each([
+    ['https://admin.example.com/', 'https://admin.example.com/reset-password?token=t'],
+    ['https://admin.example.com/apex', 'https://admin.example.com/apex/reset-password?token=t'],
+    ['https://admin.example.com/apex/', 'https://admin.example.com/apex/reset-password?token=t'],
+  ])('builds a clean link from APEX_URL %s', (configured, expected) => {
+    const base = frontendUrl('apex', { WEB_URL: web, APEX_URL: configured })
+    expect(buildPasswordResetUrl('t', base)).toBe(expected)
   })
 })

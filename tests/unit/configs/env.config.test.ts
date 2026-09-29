@@ -25,6 +25,18 @@ const valid = {
 }
 
 describe('parseEnv', () => {
+  it('leaves APEX_URL undefined when it is unset or empty', () => {
+    expect(parseEnv({ ...valid }).APEX_URL).toBeUndefined()
+    expect(parseEnv({ ...valid, APEX_URL: '' }).APEX_URL).toBeUndefined()
+  })
+
+  it('accepts an http(s) APEX_URL and refuses any other scheme', () => {
+    expect(parseEnv({ ...valid, APEX_URL: 'https://admin.example.com' }).APEX_URL).toBe(
+      'https://admin.example.com'
+    )
+    expect(() => parseEnv({ ...valid, APEX_URL: 'javascript:alert(1)' })).toThrow(/APEX_URL/)
+  })
+
   it('coerces APP_PORT from string to number', () => {
     expect(parseEnv(valid).APP_PORT).toBe(4040)
   })
