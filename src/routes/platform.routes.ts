@@ -1,6 +1,8 @@
 /**
  * @file Staff routes, mounted at `/api/v1/platform`. The role gate runs before
- * the limiter, so a refused caller sees no `RateLimit-*` headers.
+ * the limiter, so a refused caller sees no `RateLimit-*` headers, and every
+ * OPTIONS gets the unknown-route 404, so no `Allow` header lists a route's
+ * methods.
  */
 import { Router } from 'express'
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
@@ -8,7 +10,11 @@ import { auditController } from '@/controllers/audit.controller'
 import { platformController } from '@/controllers/platform.controller'
 import { requireAuth, requireRecentAuth } from '@/middlewares/auth.middleware'
 import { requireJsonContentType } from '@/middlewares/content-type.middleware'
-import { logStaffWrites, requirePlatformRole } from '@/middlewares/platform.middleware'
+import {
+  logStaffWrites,
+  refusePlatformOptions,
+  requirePlatformRole,
+} from '@/middlewares/platform.middleware'
 import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
 import { createPlatformUserRouter } from '@/routes/platform-user.routes'
 
@@ -19,6 +25,7 @@ import { createPlatformUserRouter } from '@/routes/platform-user.routes'
 export function createPlatformRouter(): Router {
   const router = Router()
   router.use(requireAuth)
+  router.use(refusePlatformOptions)
   router.use(logStaffWrites)
   // One instance: separate ones would split the budget on the in-memory fallback.
   const searchLimiter = createRateLimiter(RATE_LIMITS.platformSearch)

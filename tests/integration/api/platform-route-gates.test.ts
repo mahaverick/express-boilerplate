@@ -144,6 +144,12 @@ const ROLES_BELOW: Record<MembershipRole, MembershipRole[]> = {
   owner: ['viewer', 'editor', 'manager', 'admin'],
 }
 const ELEVEN_MINUTES_MS = 11 * 60 * 1000
+/**
+ * An origin `cors` grants nothing, so an OPTIONS carrying it passes `cors`
+ * and reaches the routers. With no Origin, or an allowed one, `cors` answers
+ * every OPTIONS itself (204, the same for every path) before any router.
+ */
+const DISALLOWED_ORIGIN = 'https://not-allowed.example'
 
 const app = createApp()
 const userRepository = new UserRepository()
@@ -152,6 +158,7 @@ const tenantRepository = new TenantRepository()
 /**
  * The mount points of the platform router's sub-routers. A sub-router mounted
  * anywhere else fails the completeness check, so its routes can't hide.
+ * The walker checks this list at every depth, a sub-router's own mounts too.
  */
 const SUB_ROUTER_MOUNTS = ['/users'] as const
 
@@ -314,6 +321,58 @@ describe('/api/v1/platform route gates', () => {
       for (const role of roles) {
         const response = await call(row, await tokenFor(role))
         expect({ role, status: response.status }).toEqual({ role, status: 404 })
+        expect(response.headers).not.toHaveProperty('ratelimit-limit')
+      }
+    }
+  )
+
+  it.each(ROUTES.filter((row) => row.method !== 'get'))(
+    '$method $path: non-staff get 404, not 415, whatever the Content-Type',
+    async (row) => {
+      const token = await tokenFor(undefined)
+      const path = `/api/v1/platform${row.path.replace(':id', () => (row.target ? ids[row.target] : ''))}`
+
+      const textPlain = await request(app)
+        [row.method](path)
+        .set('Authorization', `Bearer ${token}`)
+        .set('Content-Type', 'text/plain')
+        .send('reason=x')
+      const noBody = await request(app)[row.method](path).set('Authorization', `Bearer ${token}`)
+
+      expect([textPlain.status, noBody.status]).toEqual([404, 404])
+    }
+  )
+
+  it('answers a no-Origin OPTIONS on a platform route exactly as on an unknown path', async () => {
+    const token = await tokenFor(undefined)
+    const platform = await request(app)
+      .options('/api/v1/platform/tenants')
+      .set('Authorization', `Bearer ${token}`)
+    const unknown = await request(app)
+      .options('/api/v1/definitely-not-a-route')
+      .set('Authorization', `Bearer ${token}`)
+
+    expect(platform.status).toBe(unknown.status)
+    expect(platform.headers).not.toHaveProperty('allow')
+  })
+
+  it.each(ROUTES)(
+    '$method $path: OPTIONS gets 404 with no Allow header, for non-staff, below-role staff and $minRole alike',
+    async (row) => {
+      const path = `/api/v1/platform${row.path.replace(':id', () => (row.target ? ids[row.target] : ''))}`
+      const roles: (MembershipRole | undefined)[] = [
+        undefined,
+        ...ROLES_BELOW[row.minRole],
+        row.minRole,
+      ]
+      for (const role of roles) {
+        const response = await request(app)
+          .options(path)
+          .set('Origin', DISALLOWED_ORIGIN)
+          .set('Authorization', `Bearer ${await tokenFor(role)}`)
+        expect({ role, status: response.status }).toEqual({ role, status: 404 })
+        expect(response.headers).not.toHaveProperty('allow')
+        expect((response.body as { message?: string }).message).toBe('Not found')
       }
     }
   )

@@ -93,7 +93,7 @@ async function nextArgumentOf(
   request: object
 ): Promise<unknown> {
   const next = vi.fn()
-  await handler?.(request as Request, {} as Response, next as NextFunction)
+  await handler?.(request as Request, { locals: {} } as Response, next as NextFunction)
   expect(next).toHaveBeenCalledOnce()
   return next.mock.calls[0]?.[0]
 }

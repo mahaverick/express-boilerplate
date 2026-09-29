@@ -13,6 +13,7 @@ import {
   createTrackedStaff,
   createTrackedUser,
   deleteTrackedUsers,
+  tokenFor,
 } from '../../helpers/platform-users'
 import { request } from '../../helpers/request'
 
@@ -96,6 +97,28 @@ describe('logStaffWrites', () => {
 
     expect(refused.status).toBe(409)
     expect(read.status).toBe(200)
+    expect(info.mock.calls.some(([message]) => message === 'Staff write')).toBe(false)
+  })
+})
+
+describe('logStaffWrites and callers the role gate refuses', () => {
+  it('logs nothing for a non-staff OPTIONS or POST naming a target', async () => {
+    const outsider = await createTrackedUser()
+    const target = await createTrackedUser({ active: false })
+    const token = tokenFor(outsider)
+    const info = vi.spyOn(logger, 'info')
+
+    const options = await request(app)
+      .options(`/api/v1/platform/users/${target.id}/reactivate`)
+      // A refused origin: cors passes it on to the routers instead of answering it.
+      .set('Origin', 'https://not-allowed.example')
+      .set('Authorization', `Bearer ${token}`)
+    const post = await request(app)
+      .post(`/api/v1/platform/users/${target.id}/reactivate`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ reason: REASON })
+
+    expect([options.status, post.status]).toEqual([404, 404])
     expect(info.mock.calls.some(([message]) => message === 'Staff write')).toBe(false)
   })
 })
