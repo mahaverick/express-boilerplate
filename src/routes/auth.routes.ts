@@ -18,6 +18,7 @@ import { authController } from '@/controllers/auth.controller'
 import { verificationController } from '@/controllers/verification.controller'
 import { requireAuth } from '@/middlewares/auth.middleware'
 import { requireJsonContentType } from '@/middlewares/content-type.middleware'
+import { rememberOAuthApp } from '@/middlewares/oauth-app.middleware'
 import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
 
 /**
@@ -92,6 +93,7 @@ export function createAuthRouter(): Router {
       '/google',
       createRateLimiter(RATE_LIMITS.googleOAuth),
       oauthSession,
+      rememberOAuthApp,
       passport.initialize(),
       // Cast: @types/passport types authenticate() on the singleton as any.
       passport.authenticate(GOOGLE_STRATEGY_NAME, {
