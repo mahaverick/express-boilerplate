@@ -58,3 +58,18 @@ describe('createPlatformUserRouter writes', () => {
     expect(handlers[2]).toBe(sharedWriteLimiter)
   })
 })
+
+describe('createPlatformUserRouter lifecycle routes', () => {
+  it.each([
+    ['post', '/:id/deactivate', 5],
+    ['delete', '/:id', 5],
+    ['post', '/:id/reactivate', 4],
+    ['post', '/:id/sign-out', 4],
+  ])('%s %s: the shared write limiter sits just before the handler', (method, path, length) => {
+    const handlers = handlersFor(createPlatformUserRouter(limiters), method, path)
+
+    expect(handlers).toHaveLength(length)
+    expect(handlers[1]).toBe(requireJsonContentType)
+    expect(handlers.at(-2)).toBe(sharedWriteLimiter)
+  })
+})

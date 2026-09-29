@@ -21,6 +21,7 @@ import {
   type PlatformUserPendingInvitation,
   type PlatformUserRecord,
 } from '@/repositories/platform-user.repository'
+import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
@@ -29,8 +30,8 @@ import { record } from '@/services/audit.service'
 import { sendPasswordResetMail } from '@/services/auth.service'
 import { withTransaction, type DbExecutor, type DbTransaction } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
-import { getPlatformMembership } from '@/services/platform.service'
-import { issueToken } from '@/services/session.service'
+import { assertStillPlatformRole, getPlatformMembership } from '@/services/platform.service'
+import { denySessionsAfterCommit, issueToken, revokeSessionRows } from '@/services/session.service'
 import {
   buildPasswordResetUrl,
   frontendUrl,
@@ -53,6 +54,7 @@ const platformUserRepository = new PlatformUserRepository()
 const authProviderRepository = new AuthProviderRepository()
 const userRepository = new UserRepository()
 const tenantRepository = new TenantRepository()
+const tenantInvitationRepository = new TenantInvitationRepository()
 const userMembershipRepository = new UserMembershipRepository()
 const userTokenRepository = new UserTokenRepository()
 
@@ -234,7 +236,10 @@ interface LockedStaffPair {
  * The actor's and the target's platform roles and the target's user row,
  * locked in the order the rest of the codebase uses: the customer tenants'
  * owner rows (tenant-id order), then the platform tenant's owner rows, then
- * the actor's and target's platform memberships, then the target's user row.
+ * the actor's and target's platform memberships, then the actor's user row
+ * FOR SHARE (`assertStillPlatformRole`), then the target's user row. An actor
+ * deleted or deactivated by a transaction that held these locks first is
+ * seen here, after the wait, and refused.
  * No transaction locks the platform tenant before a customer tenant
  * (tenant-access.service.ts), so the order has no cycle.
  * @param actor - The signed-in staff user.
@@ -264,11 +269,7 @@ async function lockStaffPair(
     'no key update',
     tx
   )
-  const actorRole = memberships.find((membership) => membership.userId === actor.userId)?.role
-  if (!actorRole || !isRoleAtLeast(actorRole, minimum)) throw new HttpError('Not found', 404)
-
-  const actorUser = await userRepository.findById(actor.userId, {}, tx)
-  if (!actorUser?.active) throw new HttpError('Account no longer exists or is inactive', 401)
+  const actorRole = await assertStillPlatformRole(actor, minimum, tx)
 
   const target = await userRepository.lockById(targetUserId, 'no key update', tx)
   if (!target) throw new HttpError('User not found', 404)
@@ -502,4 +503,208 @@ export async function resendUserVerification(actor: Actor, userId: string): Prom
     userId
   )
   return delivery
+}
+
+/**
+ * Refuse removing the platform's last active owner. Unreachable through the
+ * routes' role rules (an admin is refused a staff owner by
+ * `canPlatformActorModifyTarget`, and an owner acting on another owner is
+ * an active owner who remains); kept as defence in depth.
+ * @param targetRole - The target's platform role, or null when not staff.
+ * @param otherActiveOwners - Live, active platform owners other than the target, counted under the owner lock.
+ * @param verb - Which action, for the message.
+ * @throws {HttpError} 409 when no other active owner would remain.
+ */
+export function assertPlatformOwnerRemains(
+  targetRole: MembershipRole | null,
+  otherActiveOwners: number,
+  verb: 'deactivate' | 'delete'
+): void {
+  if (targetRole === 'owner' && otherActiveOwners < 1) {
+    throw new HttpError(`Cannot ${verb} the last platform owner`, 409)
+  }
+}
+
+/**
+ * Refuse an action on the actor's own account.
+ * @param actor - The signed-in staff user.
+ * @param userId - The target.
+ * @param message - The 409 message.
+ * @throws {HttpError} 409 when they are the same user.
+ */
+function refuseSelf(actor: Actor, userId: string, message: string): void {
+  if (actor.userId === userId) throw new HttpError(message, 409)
+}
+
+/**
+ * Deactivate a user: `active = false`, every token row revoked and every
+ * pending invitation they sent revoked in the same transaction, the revoked
+ * sessions denied after commit. A racing login either committed first and
+ * loses its session here, or waits on the user row lock (its FOR SHARE
+ * re-read conflicts with this FOR NO KEY UPDATE) and sees the inactive account.
+ * @param actor - The signed-in staff admin, recently authenticated.
+ * @param userId - The user.
+ * @param reason - Why, for the audit log.
+ * @returns The updated record.
+ * @throws {HttpError} 409 self, already inactive, or the last active platform owner; 403 staff target refused; 404 unknown.
+ */
+export async function deactivateUser(
+  actor: Actor,
+  userId: string,
+  reason: string
+): Promise<PlatformUserRow> {
+  refuseSelf(actor, userId, 'You cannot deactivate your own account')
+  const revoked = await withTransaction(async (tx) => {
+    const { target, targetRole, platform } = await lockStaffPair(actor, userId, 'admin', tx)
+    if (!target.active) throw new HttpError('User is already inactive', 409)
+    assertPlatformOwnerRemains(
+      targetRole,
+      await userMembershipRepository.countActiveOwners(platform.id, tx, target.id),
+      'deactivate'
+    )
+    await userRepository.update(target.id, { active: false }, {}, tx)
+    const sessionIds = await revokeSessionRows(target.id, {}, tx)
+    // Invitations they sent would still admit people on their authority.
+    await tenantInvitationRepository.revokePendingByInviter(target.id, tx)
+    await record(
+      {
+        action: 'user.deactivated',
+        actor,
+        access: 'platform',
+        tenantId: platform.id,
+        targetId: target.id,
+        metadata: { reason },
+      },
+      tx
+    )
+    return sessionIds
+  })
+  await denySessionsAfterCommit(userId, revoked)
+  return requireRecord(userId)
+}
+
+/**
+ * Reactivate a user. Sessions ended by the deactivation stay ended.
+ * @param actor - The signed-in staff admin.
+ * @param userId - The user.
+ * @param reason - Why, for the audit log.
+ * @returns The updated record.
+ * @throws {HttpError} 409 already active; 403 staff target refused; 404 unknown.
+ */
+export async function reactivateUser(
+  actor: Actor,
+  userId: string,
+  reason: string
+): Promise<PlatformUserRow> {
+  await withTransaction(async (tx) => {
+    const { target, platform } = await lockStaffPair(actor, userId, 'admin', tx)
+    if (target.active) throw new HttpError('User is already active', 409)
+    await userRepository.update(target.id, { active: true }, {}, tx)
+    await record(
+      {
+        action: 'user.reactivated',
+        actor,
+        access: 'platform',
+        tenantId: platform.id,
+        targetId: target.id,
+        metadata: { reason },
+      },
+      tx
+    )
+  })
+  return requireRecord(userId)
+}
+
+/**
+ * End every session a user has, everywhere.
+ * @param actor - The signed-in staff admin.
+ * @param userId - The user.
+ * @param reason - Why, for the audit log.
+ * @returns Resolves once the sessions are revoked and (best-effort) denied.
+ * @throws {HttpError} 409 self; 403 staff target refused; 404 unknown.
+ */
+export async function signOutUser(actor: Actor, userId: string, reason: string): Promise<void> {
+  refuseSelf(actor, userId, 'Sign out from your profile instead')
+  const revoked = await withTransaction(async (tx) => {
+    const { target, platform } = await lockStaffPair(actor, userId, 'admin', tx)
+    const sessionIds = await revokeSessionRows(target.id, {}, tx)
+    await record(
+      {
+        action: 'user.signed_out',
+        actor,
+        access: 'platform',
+        tenantId: platform.id,
+        targetId: target.id,
+        metadata: { reason },
+      },
+      tx
+    )
+    return sessionIds
+  })
+  await denySessionsAfterCommit(userId, revoked)
+}
+
+/**
+ * Soft-delete a user and end their sessions; remove their federated provider
+ * links and revoke the invitations they sent, so the address can be reused
+ * fully, Google included (Deactivate is the way to ban). Refused while they
+ * are the last live owner of any customer tenant or the last active platform
+ * owner: those tenants' owner rows are locked first, in tenant-id order, then
+ * the platform's (see `lockStaffPair`), and the owners re-counted under the
+ * locks. A tenant the target creates after the owned-tenant read is not
+ * locked; the delete then commits and `requireAuth` refuses the deleted
+ * account from its next request.
+ * @param actor - The signed-in platform admin or owner, recently authenticated.
+ * @param userId - The user.
+ * @param reason - Why, for the audit log.
+ * @returns Resolves once the user is deleted and sessions (best-effort) denied.
+ * @throws {HttpError} 409 self or last owner (naming the tenants); 403 staff target refused; 404 unknown.
+ */
+export async function deleteUser(actor: Actor, userId: string, reason: string): Promise<void> {
+  refuseSelf(actor, userId, 'You cannot delete your own account')
+  const owned = await platformUserRepository.listOwnedTenants(userId)
+  const customerTenants = owned.filter((tenant) => !tenant.isPlatform)
+
+  const revoked = await withTransaction(async (tx) => {
+    const { target, targetRole, platform } = await lockStaffPair(
+      actor,
+      userId,
+      'admin',
+      tx,
+      customerTenants.map((tenant) => tenant.tenantId)
+    )
+    const blocking: string[] = []
+    for (const tenant of customerTenants) {
+      if ((await userMembershipRepository.countOwners(tenant.tenantId, tx)) <= 1) {
+        blocking.push(tenant.tenantName)
+      }
+    }
+    if (
+      targetRole === 'owner' &&
+      (await userMembershipRepository.countActiveOwners(platform.id, tx, target.id)) < 1
+    ) {
+      blocking.push(platform.name)
+    }
+    if (blocking.length > 0) {
+      throw new HttpError(`Cannot delete the last owner of: ${blocking.join(', ')}`, 409)
+    }
+
+    await userRepository.softDelete(target.id, tx)
+    const sessionIds = await revokeSessionRows(target.id, {}, tx)
+    await authProviderRepository.deleteFederatedForUser(target.id, tx)
+    await tenantInvitationRepository.revokePendingByInviter(target.id, tx)
+    await record(
+      {
+        action: 'user.deleted',
+        actor,
+        access: 'platform',
+        tenantId: platform.id,
+        targetId: target.id,
+        metadata: { reason },
+      },
+      tx
+    )
+    return sessionIds
+  })
+  await denySessionsAfterCommit(userId, revoked)
 }

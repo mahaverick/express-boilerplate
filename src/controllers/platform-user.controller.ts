@@ -6,18 +6,23 @@ import { BaseController } from '@/controllers/base.controller'
 import { actorFrom } from '@/controllers/helpers.controller'
 import {
   createUser,
+  deactivateUser,
+  deleteUser,
   getUserDetail,
+  reactivateUser,
   resendUserVerification,
   searchUsers,
   sendPasswordSetup,
+  signOutUser,
   updateUser,
 } from '@/services/platform-user.service'
-import { successResponse } from '@/utilities/response.utilities'
+import { messageResponse, successResponse } from '@/utilities/response.utilities'
 import { parseBody } from '@/validators/parse.validators'
 import {
   newPlatformUserSchema,
   parseIdParameter,
   platformUserSearchSchema,
+  reasonBodySchema,
   updatePlatformUserSchema,
 } from '@/validators/platform.validators'
 
@@ -80,6 +85,52 @@ class PlatformUserController extends BaseController {
     const userId = parseIdParameter(request.params.id, USER_NOT_FOUND)
     const result = await resendUserVerification(actorFrom(request), userId)
     successResponse(response, result, 'Verification link sent.')
+  })
+
+  /**
+   * `POST /platform/users/:id/deactivate`: block sign-in and end every session.
+   */
+  deactivateUser = this.handle(async (request, response) => {
+    const userId = parseIdParameter(request.params.id, USER_NOT_FOUND)
+    const { reason } = parseBody(reasonBodySchema, request.body)
+    successResponse(
+      response,
+      await deactivateUser(actorFrom(request), userId, reason),
+      'User deactivated.'
+    )
+  })
+
+  /**
+   * `POST /platform/users/:id/reactivate`: allow sign-in again.
+   */
+  reactivateUser = this.handle(async (request, response) => {
+    const userId = parseIdParameter(request.params.id, USER_NOT_FOUND)
+    const { reason } = parseBody(reasonBodySchema, request.body)
+    successResponse(
+      response,
+      await reactivateUser(actorFrom(request), userId, reason),
+      'User reactivated.'
+    )
+  })
+
+  /**
+   * `POST /platform/users/:id/sign-out`: end every session.
+   */
+  signOutUser = this.handle(async (request, response) => {
+    const userId = parseIdParameter(request.params.id, USER_NOT_FOUND)
+    const { reason } = parseBody(reasonBodySchema, request.body)
+    await signOutUser(actorFrom(request), userId, reason)
+    messageResponse(response, 'User signed out everywhere.')
+  })
+
+  /**
+   * `DELETE /platform/users/:id`: soft-delete and end every session.
+   */
+  deleteUser = this.handle(async (request, response) => {
+    const userId = parseIdParameter(request.params.id, USER_NOT_FOUND)
+    const { reason } = parseBody(reasonBodySchema, request.body)
+    await deleteUser(actorFrom(request), userId, reason)
+    messageResponse(response, 'User deleted.')
   })
 }
 

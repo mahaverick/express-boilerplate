@@ -326,6 +326,23 @@ export class TenantInvitationRepository {
   }
 
   /**
+   * Revoke every pending invitation one user sent, in any tenant: once they
+   * are deactivated or deleted, nothing should still admit people on their
+   * authority. Expired rows are included; they are pending until revoked.
+   * @param userId - The inviter.
+   * @param executor - Where to run the query; the caller's transaction.
+   * @returns How many invitations were revoked.
+   */
+  async revokePendingByInviter(userId: string, executor: DbExecutor = db): Promise<number> {
+    const rows = await executor
+      .update(invitation)
+      .set({ revokedAt: sql`now()`, updatedAt: sql`now()` })
+      .where(and(eq(invitation.invitedBy, userId), pendingCondition()))
+      .returning({ id: invitation.id })
+    return rows.length
+  }
+
+  /**
    * Revoke every pending invitation of this tenant offering `role`, expired or not.
    * @param tenantId - The tenant.
    * @param role - The role offered.

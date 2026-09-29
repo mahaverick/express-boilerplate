@@ -1,12 +1,14 @@
 /**
  * @file Staff user management, mounted at `/api/v1/platform/users` by
  * `createPlatformRouter`, behind its router-wide `requireAuth`. Each route
- * names its own role gate and runs it first, before the JSON gate and the
- * limiter, so a refused caller gets the plain 404: no 415 and no
- * `RateLimit-*` headers to show the route exists.
+ * names its own role gate and runs it first, before the JSON gate, the
+ * step-up check (deactivate and delete) and the limiter, so a refused caller
+ * gets the plain 404: no 415 and no `RateLimit-*` headers to show the route
+ * exists.
  */
 import { Router, type RequestHandler } from 'express'
 import { platformUserController } from '@/controllers/platform-user.controller'
+import { requireRecentAuth } from '@/middlewares/auth.middleware'
 import { requireJsonContentType } from '@/middlewares/content-type.middleware'
 import { requirePlatformRole } from '@/middlewares/platform.middleware'
 
@@ -65,6 +67,36 @@ export function createPlatformUserRouter(limiters: PlatformLimiters): Router {
     requireJsonContentType,
     limiters.writeLimiter,
     platformUserController.resendVerification
+  )
+  router.post(
+    '/:id/deactivate',
+    requirePlatformRole('admin'),
+    requireJsonContentType,
+    requireRecentAuth(),
+    limiters.writeLimiter,
+    platformUserController.deactivateUser
+  )
+  router.post(
+    '/:id/reactivate',
+    requirePlatformRole('admin'),
+    requireJsonContentType,
+    limiters.writeLimiter,
+    platformUserController.reactivateUser
+  )
+  router.post(
+    '/:id/sign-out',
+    requirePlatformRole('admin'),
+    requireJsonContentType,
+    limiters.writeLimiter,
+    platformUserController.signOutUser
+  )
+  router.delete(
+    '/:id',
+    requirePlatformRole('admin'),
+    requireJsonContentType,
+    requireRecentAuth(),
+    limiters.writeLimiter,
+    platformUserController.deleteUser
   )
   return router
 }

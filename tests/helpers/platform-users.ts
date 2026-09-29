@@ -65,7 +65,26 @@ export function tokenFor(user: User): string {
 }
 
 /**
- * A tracked user holding `role` in the platform tenant, with a token.
+ * A bearer token that passes the step-up check: `auth_time` is now.
+ * @param user - The user.
+ * @returns A signed access token.
+ */
+export function recentAuthTokenFor(user: User): string {
+  return signAccessToken(user, randomUUID(), new Date())
+}
+
+/**
+ * A bearer token with no `auth_time`, which the step-up check treats as stale.
+ * @param user - The user.
+ * @returns A signed access token.
+ */
+export function staleAuthTokenFor(user: User): string {
+  return signAccessToken(user, randomUUID())
+}
+
+/**
+ * A tracked user holding `role` in the platform tenant, with a token that
+ * passes the step-up check (stale cases ask for `staleAuthTokenFor`).
  * @param role - The platform role.
  * @param options - How to build the user row.
  * @returns The user and a bearer token for them.
@@ -76,7 +95,7 @@ export async function createTrackedStaff(
 ): Promise<{ user: User; token: string }> {
   const user = await createTrackedUser(options)
   await makeStaff(user.id, role)
-  return { user, token: tokenFor(user) }
+  return { user, token: recentAuthTokenFor(user) }
 }
 
 /**
