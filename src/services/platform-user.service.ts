@@ -119,7 +119,9 @@ export async function searchUsers(query: PlatformUserSearchQuery): Promise<Platf
 
 /**
  * A user and everything the staff detail page shows. A soft-deleted user is
- * returned too, with `deletedAt` set: its page offers only a purge.
+ * returned too, with `deletedAt` set: its page offers only a purge. Its
+ * `pendingInvitations` is always empty: invitations are matched by address,
+ * and a deleted user's address may now belong to another account.
  * @param userId - The user's id.
  * @returns The detail.
  * @throws {HttpError} 404 when no user has that id.
@@ -132,7 +134,7 @@ export async function getUserDetail(userId: string): Promise<PlatformUserDetail>
     userRepository.findById(userId, { includeDeleted: true }),
     authProviderRepository.findByUser(userId),
     platformUserRepository.listMemberships(userId),
-    platformUserRepository.listPendingInvitations(record.email),
+    record.deletedAt === null ? platformUserRepository.listPendingInvitations(record.email) : [],
   ])
   const present = new Set(providers.map((provider) => provider.provider))
   return {
@@ -328,7 +330,9 @@ async function requireMailableUser(userId: string): Promise<User> {
 /**
  * Create a passwordless, unverified user and mail them a set-password link.
  * The row, its `email` provider row and the audit entry commit together;
- * the mail goes after commit and never undoes the create.
+ * the mail goes after commit and never undoes the create. The link opens the
+ * web app: the new user holds no platform role, and the frontend is chosen
+ * from that role, as for the other staff mail actions.
  * @param actor - The signed-in staff admin.
  * @param input - The validated body.
  * @returns The new user and whether the mail was queued.
@@ -378,7 +382,7 @@ export async function createUser(
   }
 
   const delivery = await trySend(
-    () => sendAccountSetupMail(created, input.app),
+    () => sendAccountSetupMail(created, 'web'),
     'Account setup mail',
     created.id
   )
@@ -526,6 +530,39 @@ export function assertPlatformOwnerRemains(
 }
 
 /**
+ * Revoke every pending invitation a user sent, in any tenant, and record one
+ * `invitation.revoked` in each invitation's tenant, with platform access.
+ * @param actor - The signed-in staff user.
+ * @param inviterId - The user whose invitations go.
+ * @param tx - The action's transaction.
+ * @returns Resolves once every invitation is revoked and audited.
+ */
+async function revokeInvitationsSentBy(
+  actor: Actor,
+  inviterId: string,
+  tx: DbTransaction
+): Promise<void> {
+  const revoked = await tenantInvitationRepository.revokePendingByInviter(inviterId, tx)
+  for (const invitation of revoked) {
+    await record(
+      {
+        action: 'invitation.revoked',
+        actor,
+        access: 'platform',
+        tenantId: invitation.tenantId,
+        targetId: invitation.id,
+        metadata: {
+          role: invitation.role,
+          // eslint-disable-next-line unicorn/no-null -- stored as JSON null in the audit metadata
+          emailDomain: hostnameDomain(invitation.email) ?? null,
+        },
+      },
+      tx
+    )
+  }
+}
+
+/**
  * Refuse an action on the actor's own account.
  * @param actor - The signed-in staff user.
  * @param userId - The target.
@@ -565,7 +602,7 @@ export async function deactivateUser(
     await userRepository.update(target.id, { active: false }, {}, tx)
     const sessionIds = await revokeSessionRows(target.id, {}, tx)
     // Invitations they sent would still admit people on their authority.
-    await tenantInvitationRepository.revokePendingByInviter(target.id, tx)
+    await revokeInvitationsSentBy(actor, target.id, tx)
     await record(
       {
         action: 'user.deactivated',
@@ -651,14 +688,17 @@ export async function signOutUser(actor: Actor, userId: string, reason: string):
  * are the last live owner of any customer tenant or the last active platform
  * owner: those tenants' owner rows are locked first, in tenant-id order, then
  * the platform's (see `lockStaffPair`), and the owners re-counted under the
- * locks. A tenant the target creates after the owned-tenant read is not
- * locked; the delete then commits and `requireAuth` refuses the deleted
- * account from its next request.
+ * locks. The owned tenants are listed again under the locks, and a customer
+ * tenant missing from the locked set answers 409. A tenant the target comes
+ * to own after that second read can still be missed: creating one only
+ * key-share locks the user row, which the delete's lock does not block. The
+ * delete then commits and `requireAuth` refuses the deleted account from its
+ * next request.
  * @param actor - The signed-in platform admin or owner, recently authenticated.
  * @param userId - The user.
  * @param reason - Why, for the audit log.
  * @returns Resolves once the user is deleted and sessions (best-effort) denied.
- * @throws {HttpError} 409 self or last owner (naming the tenants); 403 staff target refused; 404 unknown.
+ * @throws {HttpError} 409 self, last owner (naming the tenants), or owned tenants changed between the two reads; 403 staff target refused; 404 unknown.
  */
 export async function deleteUser(actor: Actor, userId: string, reason: string): Promise<void> {
   refuseSelf(actor, userId, 'You cannot delete your own account')
@@ -673,6 +713,11 @@ export async function deleteUser(actor: Actor, userId: string, reason: string): 
       tx,
       customerTenants.map((tenant) => tenant.tenantId)
     )
+    const lockedIds = new Set(customerTenants.map((tenant) => tenant.tenantId))
+    const ownedNow = await platformUserRepository.listOwnedTenants(userId, tx)
+    if (ownedNow.some((tenant) => !tenant.isPlatform && !lockedIds.has(tenant.tenantId))) {
+      throw new HttpError("This user's owned tenants changed meanwhile; try again", 409)
+    }
     const blocking: string[] = []
     for (const tenant of customerTenants) {
       if ((await userMembershipRepository.countOwners(tenant.tenantId, tx)) <= 1) {
@@ -692,7 +737,7 @@ export async function deleteUser(actor: Actor, userId: string, reason: string): 
     await userRepository.softDelete(target.id, tx)
     const sessionIds = await revokeSessionRows(target.id, {}, tx)
     await authProviderRepository.deleteFederatedForUser(target.id, tx)
-    await tenantInvitationRepository.revokePendingByInviter(target.id, tx)
+    await revokeInvitationsSentBy(actor, target.id, tx)
     await record(
       {
         action: 'user.deleted',

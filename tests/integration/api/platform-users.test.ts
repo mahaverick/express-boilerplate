@@ -214,11 +214,23 @@ describe('GET /api/v1/platform/users/:id', () => {
     const { token } = await createTrackedStaff('viewer')
     const gone = await createTrackedUser()
     await sql`update users set deleted_at = now() where id = ${gone.id}`
+    // A pending invitation to the address, which may since belong to someone else.
+    const owner = await createTrackedUser()
+    const tenant = await tenantRepository.create({
+      name: 'Invites Co',
+      slug: `pu-${randomUUID()}`,
+      ownerId: owner.id,
+    })
+    createdTenantIds.push(tenant.id)
+    await sql`
+      insert into tenant_invitations (tenant_id, email, role, token_hash, expires_at)
+      values (${tenant.id}, ${gone.email}, 'viewer', ${randomUUID().replaceAll('-', '')}, now() + interval '1 day')`
 
     const response = await detail(token, gone.id)
 
     expect(response.status).toBe(200)
     expect(dataOf<{ deletedAt: string | null }>(response).deletedAt).toEqual(expect.any(String))
+    expect(dataOf<{ pendingInvitations: unknown[] }>(response).pendingInvitations).toEqual([])
   })
 
   it('lists soft-deleted users under status=deleted only', async () => {

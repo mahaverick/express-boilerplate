@@ -38,7 +38,7 @@ describe('platform-user.service mail failures', () => {
       failingEmailJob,
       () => import('@/services/platform-user.service'),
       async ({ createUser }) => {
-        const result = await createUser({ userId: admin.id }, { email, app: 'web' })
+        const result = await createUser({ userId: admin.id }, { email })
         expect(result.emailSent).toBe(false)
       }
     )

@@ -35,7 +35,10 @@ const REASON = 'Erasure request, ticket 9001'
 afterEach(async () => {
   await truncateAuditLogs()
   if (mailedAddresses.length > 0) {
-    await sql`delete from email_logs where recipient = any(${mailedAddresses})`
+    const lowered = mailedAddresses.map((address) => address.toLowerCase())
+    await sql`delete from email_logs where lower(recipient) = any(${lowered})`
+    // Invitations in the platform tenant outlive the per-test tenants' cascade.
+    await sql`delete from tenant_invitations where lower(email) = any(${lowered})`
   }
   mailedAddresses.length = 0
   if (tenantIds.length > 0) await sql`delete from tenants where id = any(${tenantIds})`
@@ -120,10 +123,10 @@ describe('POST /api/v1/platform/users/:id/purge', () => {
     const { user: owner, token } = await createTrackedStaff('owner')
     const gone = await deletedUserWithHistory()
     const platform = await platformTenant()
-    // An invitation addressed to them holds the address too.
+    // An invitation addressed to them before the deletion holds the address too.
     await sql`
-      insert into tenant_invitations (tenant_id, email, role, token_hash, expires_at)
-      values (${platform.id}, ${gone.email.toUpperCase()}, 'viewer', ${randomUUID().replaceAll('-', '')}, now() + interval '1 day')`
+      insert into tenant_invitations (tenant_id, email, role, token_hash, expires_at, created_at)
+      values (${platform.id}, ${gone.email.toUpperCase()}, 'viewer', ${randomUUID().replaceAll('-', '')}, now() + interval '1 day', now() - interval '1 hour')`
 
     const response = await purgeUser(token, gone.id)
 
@@ -213,6 +216,67 @@ describe('POST /api/v1/platform/users/:id/purge', () => {
       target_id: gone.id,
     })
     expect(await sql`select 1 from email_logs where recipient = ${bystander.email}`).toHaveLength(1)
+  })
+
+  it('leaves every address-keyed row alone when a live account now holds the address', async () => {
+    const { token } = await createTrackedStaff('owner')
+    const gone = await deletedUserWithHistory()
+    const platform = await platformTenant()
+    await sql`
+      insert into tenant_invitations (tenant_id, email, role, token_hash, expires_at, created_at)
+      values (${platform.id}, ${gone.email}, 'viewer', ${randomUUID().replaceAll('-', '')}, now() + interval '1 day', now() - interval '1 hour')`
+    mailedAddresses.push(gone.email)
+    // The address was reused: the successor's own mail and invitation.
+    const successor = await createTrackedUser({ email: gone.email.toUpperCase() })
+    mailedAddresses.push(successor.email)
+    await sql`
+      insert into email_logs (recipient, template_key, status)
+      values (${successor.email}, 'email_verification', 'sent')`
+    await sql`
+      insert into tenant_invitations (tenant_id, email, role, token_hash, expires_at)
+      values (${gone.tenantId}, ${successor.email}, 'viewer', ${randomUUID().replaceAll('-', '')}, now() + interval '1 day')`
+
+    const response = await purgeUser(token, gone.id)
+
+    expect(response.status).toBe(200)
+    expect(await sql`select 1 from users where id = ${gone.id}`).toHaveLength(0)
+    expect(await sql`select 1 from users where id = ${successor.id}`).toHaveLength(1)
+    // The purged user's rows before the deletion stay too: the database can't tell them from the successor's.
+    expect(
+      await sql`select template_key from email_logs where lower(recipient) = lower(${gone.email}) order by template_key`
+    ).toEqual([{ template_key: 'email_verification' }, { template_key: 'password_reset' }])
+    expect(
+      await sql`select tenant_id from tenant_invitations where lower(email) = lower(${gone.email}) order by created_at`
+    ).toEqual([{ tenant_id: platform.id }, { tenant_id: gone.tenantId }])
+  })
+
+  it('without a live holder, deletes the rows up to the deletion and keeps the ones after it', async () => {
+    const { token } = await createTrackedStaff('owner')
+    const gone = await deletedUserWithHistory()
+    await sql`update users set deleted_at = now() - interval '1 hour' where id = ${gone.id}`
+    await sql`update email_logs set created_at = now() - interval '2 hours' where recipient = ${gone.email}`
+    const platform = await platformTenant()
+    await sql`
+      insert into tenant_invitations (tenant_id, email, role, token_hash, expires_at, created_at)
+      values (${platform.id}, ${gone.email}, 'viewer', ${randomUUID().replaceAll('-', '')}, now() + interval '1 day', now() - interval '2 hours')`
+    // Written after the deletion: the address may since have been claimed by someone else.
+    mailedAddresses.push(gone.email)
+    await sql`
+      insert into email_logs (recipient, template_key, status)
+      values (${gone.email}, 'email_verification', 'sent')`
+    await sql`
+      insert into tenant_invitations (tenant_id, email, role, token_hash, expires_at)
+      values (${gone.tenantId}, ${gone.email}, 'viewer', ${randomUUID().replaceAll('-', '')}, now() + interval '1 day')`
+
+    const response = await purgeUser(token, gone.id)
+
+    expect(response.status).toBe(200)
+    expect(
+      await sql`select template_key from email_logs where lower(recipient) = lower(${gone.email})`
+    ).toEqual([{ template_key: 'email_verification' }])
+    expect(
+      await sql`select tenant_id from tenant_invitations where lower(email) = lower(${gone.email})`
+    ).toEqual([{ tenant_id: gone.tenantId }])
   })
 
   it('answers 409 for a user who is not soft-deleted', async () => {

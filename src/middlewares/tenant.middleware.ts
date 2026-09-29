@@ -199,8 +199,9 @@ const recentAuth = requireRecentAuth()
  * Step-up on the platform tenant only: a request that changes who holds
  * staff power (a member's role, a removal, an invitation offering admin or
  * owner, a resend) needs a recent sign-in there, as the `/platform` staff
- * actions do. Customer tenants pass straight through. Runs after
- * `resolveTenant`, which sets `request.principal`.
+ * actions do. Customer tenants pass straight through. Must run after
+ * `resolveTenant`, which sets `request.principal`; without a principal it
+ * answers 500, failing closed, since it cannot tell which tenant it guards.
  * @param isApplicable - Narrows the check to some requests on the platform tenant (e.g. by the offered role); all of them by default.
  * @returns An Express middleware.
  */
@@ -208,7 +209,11 @@ export function requireRecentAuthOnPlatformTenant(
   isApplicable: (request: Request) => boolean = () => true
 ): (request: Request, response: Response, next: NextFunction) => void {
   return (request, response, next) => {
-    if (request.principal?.isPlatformTenant !== true || !isApplicable(request)) {
+    if (request.principal === undefined) {
+      next(new HttpError('Tenant step-up check is misconfigured', 500))
+      return
+    }
+    if (!request.principal.isPlatformTenant || !isApplicable(request)) {
       next()
       return
     }

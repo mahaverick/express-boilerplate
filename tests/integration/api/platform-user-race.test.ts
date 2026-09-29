@@ -3,11 +3,15 @@
  * deleting each other (the second queues behind the first's locks, then
  * finds its own account gone and gets 401; no deadlock), an actor whose
  * account went inactive before the locks, and the last-active-platform-owner
- * guard as a pure function, since the route rules keep it unreachable.
+ * guard as a pure function, since the route rules keep it unreachable, and
+ * a delete whose target came to own a tenant after its first ownership read.
  * Seams via withMutatedMethod, no sleeps.
  */
+import { randomUUID } from 'node:crypto'
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
+import { PlatformUserRepository } from '@/repositories/platform-user.repository'
 import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'
+import { TenantRepository } from '@/repositories/tenant.repository'
 import { sql, type DbTransaction } from '@/services/database.service'
 import {
   assertPlatformOwnerRemains,
@@ -27,9 +31,15 @@ import {
 
 const REASON = 'race test'
 const DEADLOCK_TIMEOUT_MS = 10_000
+const tenantRepository = new TenantRepository()
+const createdTenantIds: string[] = []
 
 afterEach(async () => {
   await truncateAuditLogs()
+  if (createdTenantIds.length > 0) {
+    await sql`delete from tenants where id = any(${createdTenantIds})`
+    createdTenantIds.length = 0
+  }
   await deleteTrackedUsers()
 })
 
@@ -115,6 +125,38 @@ describe('an actor whose account went inactive after the route gates', () => {
     expect(row).toEqual({ active: true, deleted: false })
     const audit = await sql`select 1 from audit_logs where target_id = ${target.id}`
     expect(audit).toHaveLength(0)
+  })
+})
+
+describe('a delete whose target came to own a tenant after the first ownership read', () => {
+  it('answers 409 and deletes nothing', async () => {
+    const { user: admin } = await createTrackedStaff('admin')
+    const target = await createTrackedUser()
+    const tenant = await tenantRepository.create({
+      name: 'Late Owner Ltd',
+      slug: `race-${randomUUID()}`,
+      ownerId: target.id,
+    })
+    createdTenantIds.push(tenant.id)
+    // The first read (before any lock) misses the tenant, as if it was created just after.
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
+    const realList = PlatformUserRepository.prototype.listOwnedTenants
+    let calls = 0
+    const lateList: typeof realList = async function (this: PlatformUserRepository, ...arguments_) {
+      calls += 1
+      return calls === 1 ? [] : realList.apply(this, arguments_)
+    }
+
+    await withMutatedMethod(PlatformUserRepository.prototype, 'listOwnedTenants', lateList, () =>
+      expect(deleteUser({ userId: admin.id }, target.id, REASON)).rejects.toMatchObject({
+        statusCode: 409,
+        message: "This user's owned tenants changed meanwhile; try again",
+      })
+    )
+
+    const [row] =
+      await sql`select deleted_at is not null as deleted from users where id = ${target.id}`
+    expect(row).toEqual({ deleted: false })
   })
 })
 

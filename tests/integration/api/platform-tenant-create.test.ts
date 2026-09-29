@@ -16,6 +16,7 @@ import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
+import { reissueOwnerInvitation } from '@/services/platform-tenant.service'
 import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
 import { signAccessToken } from '@/services/session.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
@@ -370,6 +371,51 @@ describe('staff-created tenants', () => {
       expect((response2.body as { message: string }).message).toBe(
         'The platform tenant has no owner invitation; invite staff from Staff.'
       )
+    })
+
+    it('answers 409 for an archived tenant, before the transaction and inside it', async () => {
+      const { user: admin, token } = await staff('admin')
+      const created = await create(token, {
+        name: 'Gone',
+        slug: newSlug(),
+        ownerEmail: `a-${randomUUID()}@example.test`,
+      })
+      const tenantId = (created.body as { data: CreatedBody }).data.tenant.id
+      await sql`update tenants set lifecycle_state = 'archived', deleted_at = now() where id = ${tenantId}`
+
+      const response = await reissue(token, tenantId, 'z@example.test')
+      expect(response.status).toBe(409)
+      expect((response.body as { message: string }).message).toBe(
+        'Cannot invite an owner to an archived tenant.'
+      )
+
+      // Archived between the first read and the lock: the first read still sees it active.
+      // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
+      const realFind = TenantRepository.prototype.findByIdIncludingDeleted
+      let calls = 0
+      const staleFirstRead: typeof realFind = async function (
+        this: TenantRepository,
+        ...arguments_
+      ) {
+        calls += 1
+        const found = await realFind.apply(this, arguments_)
+        if (calls !== 1 || !found) return found
+        // eslint-disable-next-line unicorn/no-null -- the live row's deleted_at
+        return { ...found, lifecycleState: 'active', deletedAt: null }
+      }
+      await withMutatedMethod(
+        TenantRepository.prototype,
+        'findByIdIncludingDeleted',
+        staleFirstRead,
+        () =>
+          expect(
+            reissueOwnerInvitation({ userId: admin.id }, tenantId, 'z@example.test', 'Resend')
+          ).rejects.toMatchObject({
+            statusCode: 409,
+            message: 'Cannot invite an owner to an archived tenant.',
+          })
+      )
+      expect(calls).toBe(2)
     })
 
     it('answers 409 when the address already belongs to a member', async () => {

@@ -5,7 +5,7 @@
 import { z } from 'zod'
 import { PAGE_DIRECTIONS, STATS_RANGES, TENANT_STATE_FILTERS } from '@/constants/platform.constants'
 import { HttpError } from '@/errors/http-error'
-import { emailSchema, frontendAppSchema } from '@/validators/auth.validators'
+import { emailSchema } from '@/validators/auth.validators'
 import { cursorField } from '@/validators/cursor.validators'
 import { updateProfileSchema } from '@/validators/profile.validators'
 import { normalizeMultilineText, safeText } from '@/validators/safe-text.validators'
@@ -185,14 +185,14 @@ export function parseIdParameter(raw: unknown, notFoundMessage: string): string 
 }
 
 /**
- * `POST /platform/users`: an address, optional names, and which frontend the
- * set-password link opens. Strict: staff never set a password or a status.
+ * `POST /platform/users`: an address and optional names. Strict: staff never
+ * set a password or a status, nor pick the frontend the set-password link
+ * opens (the server does).
  */
 export const newPlatformUserSchema = z.strictObject({
   email: emailSchema,
   firstName: updateProfileSchema.shape.firstName,
   lastName: updateProfileSchema.shape.lastName,
-  app: frontendAppSchema,
 })
 
 /**

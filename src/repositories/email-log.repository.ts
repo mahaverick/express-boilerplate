@@ -189,16 +189,24 @@ export class EmailLogRepository {
   }
 
   /**
-   * Delete every log row for an address, for a user purge: the rows hold the
-   * address itself.
+   * Delete the log rows for an address written at or before a moment, for a
+   * user purge: the rows hold the address itself, and the address may have
+   * been claimed again after that moment.
    * @param email - The address, in any case.
+   * @param createdAtOrBefore - The latest `created_at` deleted (the purged user's deletion), compared to the millisecond, the precision a `Date` holds.
    * @param tx - The purge's transaction.
    * @returns How many rows were deleted.
    */
-  async deleteByRecipient(email: string, tx: DbTransaction): Promise<number> {
+  async deleteByRecipient(
+    email: string,
+    createdAtOrBefore: Date,
+    tx: DbTransaction
+  ): Promise<number> {
     const result = await tx
       .delete(emailLogModel)
-      .where(sql`lower(${emailLogModel.recipient}) = lower(${email})`)
+      .where(
+        sql`lower(${emailLogModel.recipient}) = lower(${email}) and date_trunc('milliseconds', ${emailLogModel.createdAt}) <= ${createdAtOrBefore.toISOString()}::timestamptz`
+      )
     return result.count
   }
 }

@@ -115,6 +115,19 @@ async function pendingInvitationFrom(inviterId: string): Promise<string> {
 }
 
 /**
+ * The audit entries filed against one invitation, with where they were filed.
+ * @param invitationId - The invitation.
+ * @returns Each entry's action, tenant, access, actor and metadata, oldest first.
+ */
+function invitationAudit(invitationId: string): Promise<Record<string, unknown>[]> {
+  return sql`
+    select a.action, a.tenant_id = i.tenant_id as is_in_invitation_tenant, a.access, a.actor_user_id, a.metadata
+    from audit_logs a join tenant_invitations i on i.id = a.target_id
+    where a.target_id = ${invitationId} order by a.occurred_at, a.id
+  `
+}
+
+/**
  * Whether an invitation is revoked.
  * @param invitationId - The invitation.
  * @returns True when `revoked_at` is set.
@@ -143,7 +156,7 @@ afterAll(async () => {
 
 describe('POST /api/v1/platform/users/:id/deactivate', () => {
   it('deactivates, ends every live session at once, revokes the invitations they sent and audits the reason', async () => {
-    const { token } = await createTrackedStaff('admin')
+    const { user: admin, token } = await createTrackedStaff('admin')
     const target = await createTrackedUser({ hasPassword: true })
     const session = await signIn(target)
     const sent = await pendingInvitationFrom(target.id)
@@ -152,6 +165,15 @@ describe('POST /api/v1/platform/users/:id/deactivate', () => {
 
     expect(response.status).toBe(200)
     expect(await isRevoked(sent)).toBe(true)
+    expect(await invitationAudit(sent)).toEqual([
+      {
+        action: 'invitation.revoked',
+        is_in_invitation_tenant: true,
+        access: 'platform',
+        actor_user_id: admin.id,
+        metadata: { role: 'viewer', emailDomain: 'example.test' },
+      },
+    ])
     expect((response.body as ApiEnvelope<{ active: boolean }>).data?.active).toBe(false)
     expect(await sessionStatuses(session)).toEqual({ access: 401, refresh: 401 })
     expect(await auditActions(target.id)).toEqual([
@@ -291,7 +313,7 @@ describe('POST /api/v1/platform/users/:id/sign-out', () => {
 
 describe('DELETE /api/v1/platform/users/:id', () => {
   it('soft-deletes, ends every session, frees the address fully and audits the reason', async () => {
-    const { token } = await createTrackedStaff('admin')
+    const { user: admin, token } = await createTrackedStaff('admin')
     const target = await createTrackedUser({ hasPassword: true })
     const session = await signIn(target)
     await sql`
@@ -310,6 +332,15 @@ describe('DELETE /api/v1/platform/users/:id', () => {
     `
     expect(google).toHaveLength(0)
     expect(await isRevoked(sent)).toBe(true)
+    expect(await invitationAudit(sent)).toEqual([
+      {
+        action: 'invitation.revoked',
+        is_in_invitation_tenant: true,
+        access: 'platform',
+        actor_user_id: admin.id,
+        metadata: { role: 'viewer', emailDomain: 'example.test' },
+      },
+    ])
     expect(await sessionStatuses(session)).toEqual({ access: 401, refresh: 401 })
     expect(await auditActions(target.id)).toEqual([
       { action: 'user.deleted', metadata: { reason: REASON } },

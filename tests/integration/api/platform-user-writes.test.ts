@@ -192,6 +192,10 @@ describe('POST /api/v1/platform/users', () => {
     expect(response.status).toBe(404)
     const response2 = await post(admin.token, '', { email, password: 'chosen-by-staff' })
     expect(response2.status).toBe(400)
+    // The server picks the link's frontend: a new user is not staff, so it is the web app.
+    const response3 = await post(admin.token, '', { email, app: 'apex' })
+    expect(response3.status).toBe(400)
+    expect(await sql`select 1 from users where email = ${email}`).toHaveLength(0)
   })
 })
 

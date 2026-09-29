@@ -1,6 +1,6 @@
 /**
- * @file Pure-logic coverage of resolveTenant's branching and
- * requireRole's role check, both repositories' prototype methods spied
+ * @file Pure-logic coverage of resolveTenant's branching,
+ * requireRole's role check and the platform-tenant step-up's pass-through, both repositories' prototype methods spied
  * on, no Docker/Postgres touched. Database-backed proof that
  * `enterWith` survives Express's own `next()` dispatch through a real
  * router lives in tests/integration/middlewares/tenant.middleware.test.ts.
@@ -11,7 +11,11 @@ import type { MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { UserMembership } from '@/database/models/user-membership.model'
 import { HttpError } from '@/errors/http-error'
-import { requireRole, resolveTenant } from '@/middlewares/tenant.middleware'
+import {
+  requireRecentAuthOnPlatformTenant,
+  requireRole,
+  resolveTenant,
+} from '@/middlewares/tenant.middleware'
 import type { AuthenticatedUser } from '@/presenters/user.presenter'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
@@ -499,6 +503,37 @@ describe('requireRole', () => {
     const { next, lastCallArgument } = mockNext()
 
     requireRole('admin')(request, noResponse, next)
+
+    expect(next).toHaveBeenCalledTimes(1)
+    expect(lastCallArgument()).toBeUndefined()
+  })
+})
+
+describe('requireRecentAuthOnPlatformTenant', () => {
+  it('fails closed with 500 when request.principal is missing (resolveTenant never ran)', () => {
+    const request = buildPrincipalRequest()
+    const { next, lastCallArgument } = mockNext()
+
+    requireRecentAuthOnPlatformTenant()(request, noResponse, next)
+
+    expect(next).toHaveBeenCalledTimes(1)
+    const error = lastCallArgument()
+    expect(error).toBeInstanceOf(HttpError)
+    expect((error as HttpError).statusCode).toBe(500)
+  })
+
+  it('lets a customer-tenant request through without a step-up', () => {
+    const request = {
+      principal: {
+        tenantId: 'tenant-1',
+        tenantSlug: 'acme',
+        role: 'owner',
+        isPlatformTenant: false,
+      },
+    } as unknown as Request
+    const { next, lastCallArgument } = mockNext()
+
+    requireRecentAuthOnPlatformTenant()(request, noResponse, next)
 
     expect(next).toHaveBeenCalledTimes(1)
     expect(lastCallArgument()).toBeUndefined()

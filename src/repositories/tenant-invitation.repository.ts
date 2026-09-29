@@ -362,15 +362,14 @@ export class TenantInvitationRepository {
    * authority. Expired rows are included; they are pending until revoked.
    * @param userId - The inviter.
    * @param executor - Where to run the query; the caller's transaction.
-   * @returns How many invitations were revoked.
+   * @returns The revoked rows, for their audit entries.
    */
-  async revokePendingByInviter(userId: string, executor: DbExecutor = db): Promise<number> {
-    const rows = await executor
+  revokePendingByInviter(userId: string, executor: DbExecutor = db): Promise<TenantInvitation[]> {
+    return executor
       .update(invitation)
       .set({ revokedAt: sql`now()`, updatedAt: sql`now()` })
       .where(and(eq(invitation.invitedBy, userId), pendingCondition()))
-      .returning({ id: invitation.id })
-    return rows.length
+      .returning()
   }
 
   /**
@@ -420,16 +419,20 @@ export class TenantInvitationRepository {
   }
 
   /**
-   * Delete every invitation addressed to an address, pending or not, for a
-   * user purge: each row holds the address itself.
+   * Delete the invitations addressed to an address, pending or not, created
+   * at or before a moment, for a user purge: each row holds the address
+   * itself, and the address may have been claimed again after that moment.
    * @param email - The address, in any case.
+   * @param createdAtOrBefore - The latest `created_at` deleted (the purged user's deletion), compared to the millisecond, the precision a `Date` holds.
    * @param tx - The purge's transaction.
    * @returns How many invitations were deleted.
    */
-  async deleteForEmail(email: string, tx: DbTransaction): Promise<number> {
+  async deleteForEmail(email: string, createdAtOrBefore: Date, tx: DbTransaction): Promise<number> {
     const result = await tx
       .delete(invitation)
-      .where(sql`lower(${invitation.email}) = lower(${email})`)
+      .where(
+        sql`lower(${invitation.email}) = lower(${email}) and date_trunc('milliseconds', ${invitation.createdAt}) <= ${createdAtOrBefore.toISOString()}::timestamptz`
+      )
     return result.count
   }
 }

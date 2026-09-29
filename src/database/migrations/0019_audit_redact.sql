@@ -1,6 +1,6 @@
 ALTER TABLE "audit_logs" DROP CONSTRAINT "audit_logs_actor_user_check";--> statement-breakpoint
-CREATE INDEX "audit_logs_target_occurred_idx" ON "audit_logs" USING btree ("target_id","occurred_at","id");--> statement-breakpoint
-CREATE INDEX "email_logs_recipient_lower_idx" ON "email_logs" USING btree (lower("recipient"));--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "audit_logs_target_occurred_idx" ON "audit_logs" USING btree ("target_id","occurred_at","id");--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "email_logs_recipient_lower_idx" ON "email_logs" USING btree (lower("recipient"));--> statement-breakpoint
 ALTER TABLE "audit_logs" ADD CONSTRAINT "audit_logs_actor_user_check" CHECK ("audit_logs"."actor_kind" <> 'system' or "audit_logs"."actor_user_id" is null);--> statement-breakpoint
 -- Hand-added: audit_logs stays append-only, with two narrow exits. DELETE
 -- passes only inside the retention purge's settings (0017). An UPDATE passes

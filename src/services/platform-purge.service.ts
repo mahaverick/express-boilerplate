@@ -32,9 +32,13 @@ const userRepository = new UserRepository()
 
 /**
  * Permanently delete a soft-deleted user: redact them from the audit
- * entries they acted in, delete their mail log rows and the invitations
- * addressed to them, delete the row (the rest cascades), and record
- * `user.purged` in the platform tenant.
+ * entries they acted in, delete the mail log rows and invitations addressed
+ * to their address up to their deletion, delete the row (the rest
+ * cascades), and record `user.purged` in the platform tenant. A deleted
+ * user's address can be claimed again, and those rows are keyed by the
+ * address alone: when a live account holds it now, none of them is deleted,
+ * since the database can't tell the purged user's from the new holder's.
+ * Rows written after the deletion are kept either way.
  * @param actor - The platform owner, recently authenticated.
  * @param userId - The user.
  * @param reason - Why, for the audit log.
@@ -44,15 +48,20 @@ const userRepository = new UserRepository()
 export async function purgeUser(actor: Actor, userId: string, reason: string): Promise<void> {
   const found = await platformUserRepository.findRecord(userId, { includeDeleted: true })
   if (!found) throw new HttpError('User not found', 404)
-  if (found.deletedAt === null) throw new HttpError('Delete the user before purging them', 409)
+  const { deletedAt } = found
+  if (deletedAt === null) throw new HttpError('Delete the user before purging them', 409)
 
   await withTransaction(async (tx) => {
     await assertStillPlatformRole(actor, 'owner', tx)
     await tx.execute(sql`select set_config('app.audit_redact', 'on', true)`)
     await auditLogRepository.redactActor(userId, tx)
-    await emailLogRepository.deleteByRecipient(found.email, tx)
-    // Invitations addressed to the person hold the address too, pending or not.
-    await tenantInvitationRepository.deleteForEmail(found.email, tx)
+    // Live accounts only: the purged user is soft-deleted, so any match is someone else.
+    const holder = await userRepository.findByEmail(found.email, {}, tx)
+    if (!holder) {
+      await emailLogRepository.deleteByRecipient(found.email, deletedAt, tx)
+      // Invitations addressed to the person hold the address too, pending or not.
+      await tenantInvitationRepository.deleteForEmail(found.email, deletedAt, tx)
+    }
     if (!(await userRepository.purgeDeleted(userId, tx))) {
       throw new HttpError('Delete the user before purging them', 409)
     }

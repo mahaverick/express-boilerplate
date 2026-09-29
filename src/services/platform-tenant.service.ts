@@ -3,6 +3,7 @@
  */
 import { statesFor } from '@/constants/platform.constants'
 import type { TenantLifecycleState } from '@/constants/tenant.constants'
+import type { Tenant } from '@/database/models/tenant.model'
 import { HttpError } from '@/errors/http-error'
 import {
   PlatformTenantRepository,
@@ -133,6 +134,17 @@ export async function createTenant(
 }
 
 /**
+ * Refuse an owner invitation to a tenant that is not active.
+ * @param tenant - The tenant as last read.
+ * @throws {HttpError} 409 for a suspended or archived tenant.
+ */
+function assertOwnerInvitable(tenant: Tenant): void {
+  if (tenant.lifecycleState === 'active') return
+  const article = tenant.lifecycleState === 'archived' ? 'an' : 'a'
+  throw new HttpError(`Cannot invite an owner to ${article} ${tenant.lifecycleState} tenant.`, 409)
+}
+
+/**
  * Invite a new owner to an active customer tenant that has no active owner,
  * revoking any pending owner invitation first. An unknown tenant and the
  * platform tenant are refused before any lock. The pending owner invitations
@@ -147,7 +159,7 @@ export async function createTenant(
  * @param email - The new owner's address; a staff address is allowed.
  * @param reason - Why, for the audit log.
  * @returns Whether the email was enqueued.
- * @throws {HttpError} 404 when there is no such live tenant or the actor lost the role; 401 when the actor's account is now inactive or gone; 409 for the platform tenant, a non-active tenant, a tenant that has an active owner, a deactivated invitee account (`invitee_deactivated`), or an address that belongs to a member (`already_member`).
+ * @throws {HttpError} 404 when no tenant has this id or the actor lost the role; 401 when the actor's account is now inactive or gone; 409 for the platform tenant, a suspended or archived tenant, a tenant that has an active owner, a deactivated invitee account (`invitee_deactivated`), or an address that belongs to a member (`already_member`).
  */
 export async function reissueOwnerInvitation(
   actor: Actor,
@@ -155,17 +167,21 @@ export async function reissueOwnerInvitation(
   email: string,
   reason: string
 ): Promise<EmailDelivery> {
-  const found = await tenantRepository.findById(tenantId)
+  const found = await tenantRepository.findByIdIncludingDeleted(tenantId)
   if (!found) throw new HttpError('Tenant not found', 404)
   if (found.isPlatform) throw new HttpError(PLATFORM_OWNER_INVITATION_MESSAGE, 409)
+  assertOwnerInvitable(found)
   const dispatch = await withTransaction(async (tx) => {
     await userMembershipRepository.lockOwners(tenantId, 'no key update', tx)
     await assertStillPlatformRole(actor, 'admin', tx)
     const tenant = await tenantRepository.lockById(tenantId, tx)
-    if (!tenant) throw new HttpError('Tenant not found', 404)
-    if (tenant.lifecycleState !== 'active') {
-      throw new HttpError(`Cannot invite an owner to a ${tenant.lifecycleState} tenant.`, 409)
+    if (!tenant) {
+      // lockById skips a soft-deleted row, which is an archived tenant: a 409, not a 404.
+      const current = await tenantRepository.findByIdIncludingDeleted(tenantId, tx)
+      if (current) assertOwnerInvitable(current)
+      throw new HttpError('Tenant not found', 404)
     }
+    assertOwnerInvitable(tenant)
     const revoked = await invitationRepository.revokePendingByRole(tenantId, 'owner', tx)
     for (const invitation of revoked) {
       await record(
