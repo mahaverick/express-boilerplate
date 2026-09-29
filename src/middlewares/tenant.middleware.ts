@@ -10,6 +10,7 @@ import { type MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import { HttpError } from '@/errors/http-error'
 import { redactedForLog } from '@/errors/postgres-errors'
+import { requireRecentAuth } from '@/middlewares/auth.middleware'
 import { isRoleAtLeast } from '@/policies/tenant.policy'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
@@ -190,4 +191,37 @@ export function requireRole(
     }
     next()
   }
+}
+
+const recentAuth = requireRecentAuth()
+
+/**
+ * Step-up on the platform tenant only: a request that changes who holds
+ * staff power (a member's role, a removal, an invitation offering admin or
+ * owner, a resend) needs a recent sign-in there, as the `/platform` staff
+ * actions do. Customer tenants pass straight through. Runs after
+ * `resolveTenant`, which sets `request.principal`.
+ * @param isApplicable - Narrows the check to some requests on the platform tenant (e.g. by the offered role); all of them by default.
+ * @returns An Express middleware.
+ */
+export function requireRecentAuthOnPlatformTenant(
+  isApplicable: (request: Request) => boolean = () => true
+): (request: Request, response: Response, next: NextFunction) => void {
+  return (request, response, next) => {
+    if (request.principal?.isPlatformTenant !== true || !isApplicable(request)) {
+      next()
+      return
+    }
+    recentAuth(request, response, next)
+  }
+}
+
+/**
+ * Whether an invitation request offers a role with staff power on the platform tenant.
+ * @param request - The invitation request; its body is validated later by the handler.
+ * @returns True for an offered `admin` or `owner`.
+ */
+export function isOfferingAdminOrOwner(request: Request): boolean {
+  const role: unknown = (request.body as { role?: unknown } | undefined)?.role
+  return role === 'admin' || role === 'owner'
 }

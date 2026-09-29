@@ -137,7 +137,9 @@ class TenantController extends BaseController {
     const targetUserId = targetUserIdParameter(request)
     const input = parseBody(updateMemberRoleSchema, request.body)
 
-    const updated = await changeRole(actor, principal.tenantId, targetUserId, input.role)
+    const updated = await changeRole(actor, principal.tenantId, targetUserId, input.role, {
+      isPlatformTenant: principal.isPlatformTenant,
+    })
     successResponse(response, updated, 'Member role updated.')
   })
 
@@ -153,7 +155,9 @@ class TenantController extends BaseController {
     const actor = actorFrom(request)
     const targetUserId = targetUserIdParameter(request)
 
-    await removeMember(actor, principal.tenantId, targetUserId)
+    await removeMember(actor, principal.tenantId, targetUserId, {
+      isPlatformTenant: principal.isPlatformTenant,
+    })
     messageResponse(response, 'Member removed.')
   })
 

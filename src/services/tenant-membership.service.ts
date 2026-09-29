@@ -2,12 +2,18 @@
  * @file Membership changes that must keep a tenant owned. Each runs in one
  * transaction: lock the tenant's owners, then the actor's and target's
  * memberships, then (for staff) the actor's platform membership; authorize the
- * actor's current role against the target's; check the last-owner rule; write; audit.
+ * actor's current role against the target's (on the platform tenant, the staff
+ * rule: an owner may act on another owner); check the last-owner rule (active
+ * owners on the platform tenant); write; audit.
  */
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { UserMembership } from '@/database/models/user-membership.model'
 import { HttpError } from '@/errors/http-error'
-import { canActorModifyTarget, isRoleAtLeast } from '@/policies/tenant.policy'
+import {
+  canActorModifyTarget,
+  canPlatformActorModifyTarget,
+  isRoleAtLeast,
+} from '@/policies/tenant.policy'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { record } from '@/services/audit.service'
 import { db, type DbTransaction } from '@/services/database.service'
@@ -99,6 +105,76 @@ async function assertAnotherOwnerRemains(
 }
 
 /**
+ * Options the membership writes take from the route.
+ */
+export interface MembershipWriteOptions {
+  /**
+   * The tenant is the platform tenant (`request.principal.isPlatformTenant`):
+   * its members are staff, so an owner may act on another owner and the
+   * last-owner guard counts active owners only.
+   */
+  isPlatformTenant?: boolean
+}
+
+/**
+ * The actor-to-target rule for this tenant: on the platform tenant,
+ * `canPlatformActorModifyTarget` for another member and the customer rule for
+ * oneself; `canActorModifyTarget` everywhere else.
+ * @param options - Whether the tenant is the platform tenant.
+ * @returns The rule to apply.
+ */
+function modifyRuleFor(options: MembershipWriteOptions): typeof canActorModifyTarget {
+  if (options.isPlatformTenant !== true) return canActorModifyTarget
+  // Leaving, or changing one's own role, keeps the customer rule; the platform rule never covers oneself.
+  return (actorRole, targetRole, isSelf) =>
+    isSelf
+      ? canActorModifyTarget(actorRole, targetRole, true)
+      : canPlatformActorModifyTarget(actorRole, targetRole, false)
+}
+
+/**
+ * Refuse a change that would leave the platform tenant with no live, active
+ * owner other than `targetUserId`.
+ * @param tenantId - The platform tenant.
+ * @param targetUserId - The owner being demoted or removed.
+ * @param executor - The transaction holding the owner lock.
+ * @param message - The 409 message to use.
+ * @throws {HttpError} 409 when no other active owner remains.
+ */
+async function assertAnotherActiveOwnerRemains(
+  tenantId: string,
+  targetUserId: string,
+  executor: DbTransaction,
+  message: string
+): Promise<void> {
+  const others = await userMembershipRepository.countActiveOwners(tenantId, executor, targetUserId)
+  if (others < 1) throw new HttpError(message, 409)
+}
+
+/**
+ * Apply the last-owner rule to demoting or removing an owner: live owners on a
+ * customer tenant, live and active owners other than the target on the
+ * platform tenant.
+ * @param tenantId - The tenant.
+ * @param targetUserId - The owner being demoted or removed.
+ * @param options - Whether the tenant is the platform tenant.
+ * @param executor - The transaction holding the owner lock.
+ * @param message - The 409 message to use.
+ * @throws {HttpError} 409 when the rule refuses.
+ */
+async function assertOwnerRemainsFor(
+  tenantId: string,
+  targetUserId: string,
+  options: MembershipWriteOptions,
+  executor: DbTransaction,
+  message: string
+): Promise<void> {
+  await (options.isPlatformTenant === true
+    ? assertAnotherActiveOwnerRemains(tenantId, targetUserId, executor, message)
+    : assertAnotherOwnerRemains(tenantId, executor, message))
+}
+
+/**
  * Change a member's role; demoting the last live owner is refused. The
  * actor's access is re-read under lock, so a demotion that lands after
  * `resolveTenant` still counts. Atomic against a concurrent role change or
@@ -107,14 +183,16 @@ async function assertAnotherOwnerRemains(
  * @param tenantId - The tenant.
  * @param targetUserId - The member whose role changes.
  * @param role - The new role.
+ * @param options - Pass isPlatformTenant for the platform tenant: owner-on-owner and the active-owner guard.
  * @returns The updated membership.
- * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access; 403 when the actor is no longer an owner or the matrix refuses; 404 `Member not found` when the target is not a member; 409 when the target is the last live owner and `role` is not owner.
+ * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access; 403 when the actor is no longer an owner or the matrix refuses; 404 `Member not found` when the target is not a member; 409 when the target is the last live (on the platform tenant, active) owner and `role` is not owner.
  */
 export async function changeRole(
   actor: Actor,
   tenantId: string,
   targetUserId: string,
-  role: MembershipRole
+  role: MembershipRole,
+  options: MembershipWriteOptions = {}
 ): Promise<UserMembership> {
   return db.transaction(async (tx) => {
     const { actorRole, access, target } = await lockActorAndTarget(
@@ -125,11 +203,17 @@ export async function changeRole(
       'no key update',
       tx
     )
-    if (!canActorModifyTarget(actorRole, target.role, targetUserId === actor.userId)) {
+    if (!modifyRuleFor(options)(actorRole, target.role, targetUserId === actor.userId)) {
       throw new HttpError("Insufficient permissions to change this member's role", 403)
     }
     if (role !== 'owner' && target.role === 'owner') {
-      await assertAnotherOwnerRemains(tenantId, tx, 'Cannot change role: you are the last owner')
+      await assertOwnerRemainsFor(
+        tenantId,
+        targetUserId,
+        options,
+        tx,
+        'Cannot change role: you are the last owner'
+      )
     }
     const updated = await userMembershipRepository.updateRole(target.id, role, tx)
     if (!updated) throw new HttpError('Member not found', 404)
@@ -155,12 +239,14 @@ export async function changeRole(
  * @param actor - The signed-in user removing the member.
  * @param tenantId - The tenant.
  * @param targetUserId - The member to remove.
- * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access; 403 when the actor is now below admin or the matrix refuses; 404 `Member not found` when the target is not a member; 409 when the target is the last live owner.
+ * @param options - Pass isPlatformTenant for the platform tenant: owner-on-owner and the active-owner guard.
+ * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access; 403 when the actor is now below admin or the matrix refuses; 404 `Member not found` when the target is not a member; 409 when the target is the last live (on the platform tenant, active) owner.
  */
 export async function removeMember(
   actor: Actor,
   tenantId: string,
-  targetUserId: string
+  targetUserId: string,
+  options: MembershipWriteOptions = {}
 ): Promise<void> {
   await db.transaction(async (tx) => {
     // FOR UPDATE: this transaction deletes the target's membership row.
@@ -172,11 +258,17 @@ export async function removeMember(
       'update',
       tx
     )
-    if (!canActorModifyTarget(actorRole, target.role, targetUserId === actor.userId)) {
+    if (!modifyRuleFor(options)(actorRole, target.role, targetUserId === actor.userId)) {
       throw new HttpError('Insufficient permissions to remove this member', 403)
     }
     if (target.role === 'owner') {
-      await assertAnotherOwnerRemains(tenantId, tx, 'Cannot remove the last owner')
+      await assertOwnerRemainsFor(
+        tenantId,
+        targetUserId,
+        options,
+        tx,
+        'Cannot remove the last owner'
+      )
     }
     const wasDeleted = await userMembershipRepository.delete(target.id, tx)
     if (!wasDeleted) throw new HttpError('Member not found', 404)
