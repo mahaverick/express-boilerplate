@@ -443,7 +443,12 @@ const WRITERS: { name: string; run: (executor: DbExecutor) => Promise<unknown> }
   {
     name: 'markSessionAuthenticated',
     run: (executor) =>
-      userTokenRepository.markSessionAuthenticated(randomUUID(), randomUUID(), executor),
+      userTokenRepository.markSessionAuthenticated(
+        randomUUID(),
+        randomUUID(),
+        new Date(0),
+        executor
+      ),
   },
 ]
 

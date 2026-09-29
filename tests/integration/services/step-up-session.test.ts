@@ -6,6 +6,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
+import { getEnv } from '@/configs/env.config'
 import { ACCESS_TOKEN_EXPIRED_CODE } from '@/constants/auth.constants'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
@@ -14,6 +15,7 @@ import {
   markSessionReauthenticated,
   rotateRefreshToken,
 } from '@/services/session.service'
+import { requireDurationMs } from '@/utilities/duration.utilities'
 
 const userRepository = new UserRepository()
 
@@ -170,6 +172,39 @@ describe('session authentication time', () => {
     const userId = await createUser()
     await expect(markSessionReauthenticated(userId, randomUUID())).rejects.toMatchObject({
       statusCode: 401,
+      code: ACCESS_TOKEN_EXPIRED_CODE,
+    })
+  })
+
+  it('refuses a session past its absolute lifetime, as a refresh would', async () => {
+    const userId = await createUser()
+    const sessionId = randomUUID()
+    await issueRefreshToken(userId, sessionId)
+    const lifetimeMs = requireDurationMs(getEnv().SESSION_ABSOLUTE_TTL)
+    await sql`
+      update user_tokens
+      set session_started_at = now() - make_interval(secs => ${lifetimeMs / 1000 + 60})
+      where session_id = ${sessionId}
+    `
+
+    await expect(markSessionReauthenticated(userId, sessionId)).rejects.toMatchObject({
+      statusCode: 401,
+      code: ACCESS_TOKEN_EXPIRED_CODE,
+    })
+  })
+
+  it.each([
+    ['deactivated', 'update users set active = false where id = $1'],
+    ['soft-deleted', 'update users set deleted_at = now() where id = $1'],
+  ])('refuses a %s user, even with a live session', async (_label, statement) => {
+    const userId = await createUser()
+    const sessionId = randomUUID()
+    await issueRefreshToken(userId, sessionId)
+    await sql.unsafe(statement, [userId])
+
+    await expect(markSessionReauthenticated(userId, sessionId)).rejects.toMatchObject({
+      statusCode: 401,
+      code: ACCESS_TOKEN_EXPIRED_CODE,
     })
   })
 })

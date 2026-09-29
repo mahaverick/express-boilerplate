@@ -312,27 +312,29 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    * Set `authenticated_at` to now, by the application clock (the one
    * `issueRefreshToken` stamps a new session with), on every row of one of a
    * user's sessions, provided that session still has a live refresh token
-   * (not revoked, not expired, not soft-deleted). Rows already rotated away
-   * are updated too: a grace-window replay copies its sibling's time from the
-   * row presented. One UPDATE whose EXISTS carries the liveness check, so the
+   * (not revoked, not expired, not soft-deleted) in a session started after
+   * `startedAfter`. Rows already rotated away are updated too: a grace-window
+   * replay copies its sibling's time from the row presented. One UPDATE whose EXISTS carries the liveness check, so the
    * statement locks through `lockedIds` in id order like the revokers
    * (user-token-lock-order.test.ts plans it). Lock the user row FOR NO KEY
    * UPDATE first, so a rotation holding it FOR SHARE commits its new row
    * before this statement and the row is included.
    * @param userId - The session's user; another user's session matches nothing.
    * @param sessionId - The session (rotation-chain) id.
+   * @param startedAfter - The live token's session must have started after this, by the application clock: the caller's `SESSION_ABSOLUTE_TTL` bound.
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns The time written, or undefined when the session has no live refresh token.
    */
   async markSessionAuthenticated(
     userId: string,
     sessionId: string,
+    startedAfter: Date,
     executor: DbExecutor = db
   ): Promise<Date | undefined> {
     const authenticatedAt = new Date()
     const session = sql`${userTokenModel.userId} = ${userId} and ${userTokenModel.sessionId} = ${sessionId} and ${userTokenModel.purpose} = 'refresh'`
     // Raw table name in the EXISTS: an uncorrelated InitPlan, so the plan keeps one LockRows node.
-    const liveTokenExists = sql`exists (select 1 from user_tokens live where live.user_id = ${userId} and live.session_id = ${sessionId} and live.purpose = 'refresh' and live.revoked_at is null and live.deleted_at is null and live.expires_at > now())`
+    const liveTokenExists = sql`exists (select 1 from user_tokens live where live.user_id = ${userId} and live.session_id = ${sessionId} and live.purpose = 'refresh' and live.revoked_at is null and live.deleted_at is null and live.expires_at > now() and live.session_started_at > ${startedAfter.toISOString()}::timestamptz)`
     const locked = this.lockedIds(this.scope(session), executor)
     const updated = await executor
       .update(userTokenModel)

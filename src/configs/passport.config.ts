@@ -9,6 +9,7 @@ import session, { type SessionOptions } from 'express-session'
 import passport from 'passport'
 import {
   Strategy as GoogleStrategy,
+  type GoogleCallbackParameters,
   type Profile as GoogleProfile,
   type VerifyCallback,
 } from 'passport-google-oauth20'
@@ -16,6 +17,7 @@ import { getEnv, isCookieSecure } from '@/configs/env.config'
 import { GOOGLE_STRATEGY_NAME } from '@/constants/auth.constants'
 import { logger } from '@/services/logger.service'
 import { getRedis, redisKey } from '@/services/redis.service'
+import { stepUpAuthTimeFrom, type GoogleSignIn } from '@/utilities/google-id-token.utilities'
 
 export { GOOGLE_STRATEGY_NAME } from '@/constants/auth.constants'
 
@@ -38,21 +40,54 @@ export function isGoogleOAuthEnabled(): boolean {
  * (`findOrCreateByGoogle`, google-auth.service.ts) needs the raw profile,
  * which reaches that route's custom `passport.authenticate` callback. The
  * profile never becomes `request.user`: the callback authenticates with
- * `session: false`, so Passport never calls `req.login()` with it.
+ * `session: false`, so Passport never calls `req.login()` with it. When the
+ * ID token in the token response vouches for an authentication time, it
+ * rides along as `stepUpAuthTime` for step-up (`confirmGoogleStepUp`).
+ * Five parameters: passport-oauth2 passes the token response only to a
+ * verify function of this arity.
  * @param _accessToken - Google's OAuth access token. Unused: nothing here calls the Google API again.
  * @param _refreshToken - Google's OAuth refresh token. Unused, for the same reason.
+ * @param tokenResponse - Google's token response, carrying the ID token.
  * @param profile - The authenticated user's Google profile.
- * @param done - Passport's completion callback; called with the profile itself as the "user".
+ * @param done - Passport's completion callback; called with the sign-in as the "user".
  */
 function passthroughGoogleProfile(
   _accessToken: string,
   _refreshToken: string,
+  tokenResponse: GoogleCallbackParameters,
   profile: GoogleProfile,
   done: VerifyCallback
 ): void {
+  const stepUpAuthTime = stepUpAuthTimeFrom(
+    tokenResponse,
+    profile.id,
+    getEnv().GOOGLE_CLIENT_ID ?? ''
+  )
+  const signIn: GoogleSignIn =
+    stepUpAuthTime === undefined ? profile : { ...profile, stepUpAuthTime }
   // Cast: Passport's `VerifyCallback` names `Express.User`, which this codebase types as the JWT user.
   // eslint-disable-next-line unicorn/no-null -- Passport's own Node-style callback convention uses `null` as the "no error" sentinel; `VerifyCallback` is a third-party signature this file must match exactly
-  done(null, profile as unknown as Express.User)
+  done(null, signIn as unknown as Express.User)
+}
+
+/**
+ * The Google strategy, able to send `max_age`: passport-google-oauth20's
+ * `authorizationParams` passes a fixed list of options to Google and has no
+ * `max_age`, which a step-up round-trip needs so Google re-authenticates the
+ * user and reports when (OpenID Connect Core 3.1.2.1).
+ */
+class StepUpAwareGoogleStrategy extends GoogleStrategy {
+  /**
+   * The parent's parameters, plus `max_age` when the authenticate call passes `maxAge`.
+   * @param options - The options given to `passport.authenticate`.
+   * @param options.maxAge - Seconds since the user's last Google sign-in that Google may accept; 0 makes Google authenticate them again.
+   * @returns The query parameters for Google's authorization URL.
+   */
+  override authorizationParams(options: { maxAge?: unknown }): object {
+    const query = super.authorizationParams(options) as Record<string, unknown>
+    if (typeof options.maxAge === 'number') query.max_age = options.maxAge
+    return query
+  }
 }
 
 /**
@@ -75,12 +110,12 @@ export function configurePassport(): void {
 
   passport.use(
     GOOGLE_STRATEGY_NAME,
-    new GoogleStrategy(
+    new StepUpAwareGoogleStrategy(
       {
         clientID: env.GOOGLE_CLIENT_ID,
         clientSecret: env.GOOGLE_CLIENT_SECRET,
         callbackURL: `${env.APP_URL}/api/v1/auth/google/callback`,
-        scope: ['profile', 'email'],
+        scope: ['openid', 'profile', 'email'],
         // CSRF protection: needs the OAuth session mounted before passport on both routes.
         state: true,
       },

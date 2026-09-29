@@ -617,7 +617,8 @@ export async function revokeAllSessions(userId: string): Promise<void> {
 }
 
 /**
- * Record that a session's user just proved their identity again: move
+ * Record that a session's user just proved their identity again (by password,
+ * `POST /auth/reauthenticate`, or by a Google step-up round-trip): move
  * `authenticated_at` to now on every row of the session
  * (`markSessionAuthenticated`). Holds the user row FOR NO KEY UPDATE, which
  * waits for a rotation holding it FOR SHARE, so that rotation's new row
@@ -626,7 +627,7 @@ export async function revokeAllSessions(userId: string): Promise<void> {
  * @param sessionId - The session (rotation-chain) id, from the access token's `sid`.
  * @param tx - A caller's transaction to run in, so an audit entry can commit with the change; a transaction of its own when omitted.
  * @returns The new authentication time, for the caller to sign into a fresh access token.
- * @throws {HttpError} 401 with ACCESS_TOKEN_EXPIRED_CODE when the session has no live refresh token (logged out, revoked, expired, or not this user's): the client's refresh then fails and it signs in again.
+ * @throws {HttpError} 401 with ACCESS_TOKEN_EXPIRED_CODE when the user is gone, soft-deleted or inactive, or the session has no live refresh token (logged out, revoked, expired, past SESSION_ABSOLUTE_TTL, or not this user's): the client's refresh then fails and it signs in again.
  */
 export function markSessionReauthenticated(
   userId: string,
@@ -634,14 +635,45 @@ export function markSessionReauthenticated(
   tx?: DbTransaction
 ): Promise<Date> {
   const mark = async (transaction: DbTransaction): Promise<Date> => {
-    await userRepository.lockById(userId, 'no key update', transaction)
+    const user = await userRepository.lockById(userId, 'no key update', transaction)
+    if (!user?.active) throw new HttpError('Session ended', 401, ACCESS_TOKEN_EXPIRED_CODE)
+    // The absolute lifetime, as continueSession judges it: past it, no rotation would succeed either.
+    const startedAfter = new Date(Date.now() - requireDurationMs(getEnv().SESSION_ABSOLUTE_TTL))
     const authenticatedAt = await userTokenRepository.markSessionAuthenticated(
       userId,
       sessionId,
+      startedAfter,
       transaction
     )
     if (!authenticatedAt) throw new HttpError('Session ended', 401, ACCESS_TOKEN_EXPIRED_CODE)
     return authenticatedAt
   }
   return tx ? mark(tx) : withTransaction(mark)
+}
+
+/**
+ * The live session a raw refresh token belongs to: its row must be a
+ * `'refresh'` token, not revoked, not expired, not soft-deleted, in a session
+ * younger than `SESSION_ABSOLUTE_TTL` (the bound `continueSession` applies).
+ * Reads only.
+ * @param raw - The raw refresh token from the cookie.
+ * @returns The session's user and id, or undefined when the token is not live.
+ */
+export async function findLiveRefreshSession(
+  raw: string
+): Promise<{ userId: string; sessionId: string } | undefined> {
+  const row = await userTokenRepository.findByHash(hashToken(raw))
+  const now = Date.now()
+  if (
+    !row ||
+    row.purpose !== 'refresh' ||
+    row.revokedAt !== null ||
+    row.expiresAt.getTime() <= now ||
+    row.sessionId === null ||
+    row.sessionStartedAt === null ||
+    now - row.sessionStartedAt.getTime() >= requireDurationMs(getEnv().SESSION_ABSOLUTE_TTL)
+  ) {
+    return undefined
+  }
+  return { userId: row.userId, sessionId: row.sessionId }
 }

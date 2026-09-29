@@ -21,15 +21,17 @@ import { redactedForLog } from '@/errors/postgres-errors'
 import { toPublicAuthProviders } from '@/presenters/auth-provider.presenter'
 import { toProfileResponse } from '@/presenters/user.presenter'
 import * as authService from '@/services/auth.service'
-import { completeGoogleSignIn } from '@/services/google-auth.service'
+import { completeGoogleSignIn, confirmGoogleStepUp } from '@/services/google-auth.service'
 import { logger } from '@/services/logger.service'
-import { revokeRefreshToken } from '@/services/session.service'
+import { getPlatformMembership } from '@/services/platform.service'
+import { findLiveRefreshSession, revokeRefreshToken } from '@/services/session.service'
 import { frontendUrl } from '@/services/verification.service'
 import { messageResponse, successResponse } from '@/utilities/response.utilities'
 import {
   changePasswordSchema,
   forgotPasswordSchema,
   loginSchema,
+  reauthenticateSchema,
   registerSchema,
   resetPasswordSchema,
 } from '@/validators/auth.validators'
@@ -158,6 +160,21 @@ function presentedRefreshTokens(request: Request): string[] {
     readCookie(request, LEGACY_REFRESH_TOKEN_COOKIE_NAME),
   ].filter((token): token is string => token !== undefined)
   return [...new Set(tokens)]
+}
+
+/**
+ * The session a Google step-up round-trip is confirming, read back from the
+ * OAuth session and checked, never trusted.
+ * @param request - The callback request.
+ * @returns The stored session, or undefined on a plain sign-in.
+ */
+function storedStepUp(request: Request): { userId: string; sessionId: string } | undefined {
+  const stored: unknown = (request as Partial<Request>).session?.oauthStepUp
+  if (typeof stored !== 'object' || stored === null) return undefined
+  const { userId, sessionId } = stored as Record<string, unknown>
+  return typeof userId === 'string' && typeof sessionId === 'string'
+    ? { userId, sessionId }
+    : undefined
 }
 
 /**
@@ -472,6 +489,25 @@ class AuthController extends BaseController {
   })
 
   /**
+   * `POST /auth/reauthenticate`: step-up for staff, behind `requireAuth` and
+   * `requirePlatformRole('viewer')`. Checks the password against the caller's
+   * own account, marks the session named by the token's `sid` as just
+   * authenticated, and replies with a new access token. The refresh cookie
+   * is untouched: the session is the same. See auth.service.ts's
+   * `reauthenticate` for why a wrong password is a 400.
+   */
+  reauthenticate = this.handle(async (request, response) => {
+    const input = parseBody(reauthenticateSchema, request.body)
+    const result = await authService.reauthenticate(
+      authenticatedUserId(request),
+      request.sessionId,
+      input
+    )
+
+    successResponse(response, { accessToken: result.accessToken }, 'Identity confirmed.')
+  })
+
+  /**
    * `GET /auth/providers`: which methods can sign this account in, and
    * whether it has a password. Read-only by design: unlinking is a separate
    * feature (may you remove your last way in?).
@@ -489,6 +525,45 @@ class AuthController extends BaseController {
   })
 
   /**
+   * `GET /auth/google`, before Passport: with `?reauth=1`, bind the
+   * round-trip to the browser's own live staff session. The
+   * refresh cookie is SameSite=Strict, so it arrives here (a same-site
+   * navigation from Apex) but not on Google's cross-site callback; the
+   * session it names is stored in the OAuth session for the callback. No
+   * live staff session: straight back to the frontend with
+   * `error=reauth_failed`, without reaching Google. Without `?reauth=1`, any
+   * stale binding is cleared and the sign-in proceeds as before.
+   * @param request - The `/auth/google` request, after the OAuth session middleware.
+   * @param response - The response, for the refusal redirect.
+   * @param next - Continues to Passport, or forwards an error.
+   */
+  prepareGoogleStepUp = async (
+    request: Request,
+    response: Response,
+    next: NextFunction
+  ): Promise<void> => {
+    try {
+      delete request.session.oauthStepUp
+      if (request.query.reauth !== '1') {
+        next()
+        return
+      }
+      const frontend = withoutTrailingSlashes(frontendUrl(oauthAppOf(request)))
+      const raw = readRefreshTokenCookie(request)
+      const session = raw === undefined ? undefined : await findLiveRefreshSession(raw)
+      const platformRole = session ? await getPlatformMembership(session.userId) : undefined
+      if (!session || !platformRole) {
+        response.redirect(`${frontend}/auth/callback?reauth=1&error=reauth_failed`)
+        return
+      }
+      request.session.oauthStepUp = session
+      next()
+    } catch (error) {
+      next(error)
+    }
+  }
+
+  /**
    * `GET /auth/google/callback`: handle Google's redirect back to this API
    * once the user completes (or abandons) Google's consent screen.
    *
@@ -504,18 +579,36 @@ class AuthController extends BaseController {
    * `HttpError.code` is forwarded verbatim; anything else is
    * `processing_failed`; Google reporting an error or no profile is
    * `google_auth_failed`. Not wrapped in `handle()` for the same reason.
+   * A round-trip bound by prepareGoogleStepUp takes the step-up branch
+   * instead: it confirms, never signs in, sets no cookie, and always lands on
+   * /auth/callback?reauth=1, with error=reauth_failed on any failure.
    * @param request - The incoming callback request, carrying Google's `code`/`state` query parameters.
    * @param response - The response.
    * @param next - Forwards a synchronous failure from `passport.authenticate` itself; every failure from the async body redirects instead.
    */
   handleGoogleCallback = (request: Request, response: Response, next: NextFunction): void => {
     const frontend = withoutTrailingSlashes(frontendUrl(oauthAppOf(request)))
+    const stepUp = storedStepUp(request)
 
     const authenticate = passport.authenticate(
       GOOGLE_STRATEGY_NAME,
       { session: false },
       (error: unknown, profile: GoogleProfile | false | null) => {
         void (async () => {
+          if (stepUp) {
+            delete request.session.oauthStepUp
+            try {
+              if (error || !profile)
+                throw new HttpError('Google step-up failed', 401, 'reauth_failed')
+              await confirmGoogleStepUp(profile, stepUp)
+              response.redirect(`${frontend}/auth/callback?reauth=1`)
+            } catch (innerError) {
+              logger.warn('Google step-up refused', { error: redactedForLog(innerError) })
+              response.redirect(`${frontend}/auth/callback?reauth=1&error=reauth_failed`)
+            }
+            return
+          }
+
           if (error || !profile) {
             logger.error('Google OAuth callback failed', { error })
             response.redirect(`${frontend}/login?error=google_auth_failed`)

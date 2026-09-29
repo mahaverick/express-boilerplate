@@ -72,6 +72,13 @@ const baseEnv: Env = {
 }
 
 /**
+ * One base64url-encoded JWT segment, for building an unsigned ID token.
+ * @param value - The segment's JSON value.
+ * @returns The encoded segment.
+ */
+const part = (value: unknown): string => Buffer.from(JSON.stringify(value)).toString('base64url')
+
+/**
  * The shape of `_verify`, the raw verify callback passport-oauth2 stashes on
  * a registered strategy instance — `this._verify = verify`, unwrapped, per
  * passport-oauth2/lib/strategy.js. Untyped by `@types/passport`, since it is
@@ -80,6 +87,7 @@ const baseEnv: Env = {
 type StrategyVerify = (
   accessToken: string,
   refreshToken: string,
+  tokenResponse: { id_token?: string },
   profile: import('passport-google-oauth20').Profile,
   done: VerifyCallback
 ) => void
@@ -156,8 +164,8 @@ describe('configurePassport', () => {
     ).toBeDefined()
   })
 
-  // The pass-through verify function: no database lookup, `done` called with the raw profile unchanged — that policy decision belongs to a later route, not here.
-  it('passthroughGoogleProfile hands the raw profile straight to done, with no error', () => {
+  // The pass-through verify function: no database lookup; `done` gets the raw profile, plus the ID token's auth_time when the token vouches for it.
+  it('passthroughGoogleProfile hands the raw profile straight to done when no ID token vouches for an auth time', () => {
     vi.mocked(getEnv).mockReturnValue({
       ...baseEnv,
       GOOGLE_CLIENT_ID: 'client-id',
@@ -169,12 +177,50 @@ describe('configurePassport', () => {
     const done = vi.fn()
     const profile = { id: 'google-user-id', displayName: 'Ada Lovelace' } as unknown as Parameters<
       typeof verify
-    >[2]
+    >[3]
 
-    verify('access-token', 'refresh-token', profile, done)
+    verify('access-token', 'refresh-token', {}, profile, done)
 
     // eslint-disable-next-line unicorn/no-null -- asserting against Passport's own Node-style callback convention (see passport.config.ts's own disable comment on the line this proves).
     expect(done).toHaveBeenCalledWith(null, profile)
+  })
+
+  it('passthroughGoogleProfile adds stepUpAuthTime from an ID token for this client and profile', () => {
+    vi.mocked(getEnv).mockReturnValue({
+      ...baseEnv,
+      GOOGLE_CLIENT_ID: 'client-id',
+      GOOGLE_CLIENT_SECRET: 'client-secret',
+    })
+    configurePassport()
+    const token = `${part({})}.${part({ iss: 'https://accounts.google.com', aud: 'client-id', sub: 'google-user-id', auth_time: 1_700_000_000 })}.sig`
+
+    const verify = registeredVerifyCallback()
+    const done = vi.fn()
+    const profile = { id: 'google-user-id' } as unknown as Parameters<typeof verify>[3]
+    verify('access-token', 'refresh-token', { id_token: token }, profile, done)
+
+    // eslint-disable-next-line unicorn/no-null -- Passport's Node-style "no error" sentinel
+    expect(done).toHaveBeenCalledWith(null, { id: 'google-user-id', stepUpAuthTime: 1_700_000_000 })
+  })
+
+  it('asks Google for max_age only when the authenticate call passes maxAge', () => {
+    vi.mocked(getEnv).mockReturnValue({
+      ...baseEnv,
+      GOOGLE_CLIENT_ID: 'client-id',
+      GOOGLE_CLIENT_SECRET: 'client-secret',
+    })
+    configurePassport()
+    const strategy = (
+      passport as unknown as {
+        _strategies: Record<string, { authorizationParams(options: object): object }>
+      }
+    )._strategies[GOOGLE_STRATEGY_NAME]
+
+    expect(strategy?.authorizationParams({ maxAge: 0, prompt: 'select_account' })).toMatchObject({
+      max_age: 0,
+      prompt: 'select_account',
+    })
+    expect(strategy?.authorizationParams({})).not.toHaveProperty('max_age')
   })
 })
 

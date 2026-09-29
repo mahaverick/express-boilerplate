@@ -5,7 +5,13 @@
  * amplifier, or a password oracle. `RATE_LIMITS`
  * (rate-limit.constants.ts) holds each limiter's reasoning.
  */
-import { Router, type RequestHandler } from 'express'
+import {
+  Router,
+  type NextFunction,
+  type Request,
+  type RequestHandler,
+  type Response,
+} from 'express'
 import passport from 'passport'
 import {
   configurePassport,
@@ -19,6 +25,7 @@ import { verificationController } from '@/controllers/verification.controller'
 import { requireAuth } from '@/middlewares/auth.middleware'
 import { requireJsonContentType } from '@/middlewares/content-type.middleware'
 import { rememberOAuthApp } from '@/middlewares/oauth-app.middleware'
+import { requirePlatformRole } from '@/middlewares/platform.middleware'
 import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
 
 /**
@@ -33,7 +40,9 @@ import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
  * it is idempotent. On both routes the limiter runs before `oauthSession`, so
  * an over-budget caller gets a 429 before a session is written to Redis. Both
  * share one `oauthSession` instance, since the callback reads the `state` the
- * redirect wrote.
+ * redirect wrote. `?reauth=1` on `/google` is a step-up bound to the
+ * caller's own live staff session (prepareGoogleStepUp): it confirms that
+ * session, never starts one.
  * @returns A router mounted at `/api/v1/auth` by `index.routes.ts`.
  */
 export function createAuthRouter(): Router {
@@ -82,6 +91,14 @@ export function createAuthRouter(): Router {
     createRateLimiter(RATE_LIMITS.changePassword),
     authController.changePassword
   )
+  // Staff-only step-up: the platform gate answers non-staff the unknown-route 404 before this limiter keys on request.user.id.
+  router.post(
+    '/reauthenticate',
+    requireAuth,
+    requirePlatformRole('viewer'),
+    createRateLimiter(RATE_LIMITS.reauthenticate),
+    authController.reauthenticate
+  )
 
   // No limiter: a read of the caller's own data, with no oracle to probe.
   router.get('/providers', requireAuth, authController.getAuthProviders)
@@ -89,16 +106,28 @@ export function createAuthRouter(): Router {
   if (isGoogleOAuthEnabled()) {
     configurePassport()
     const oauthSession = createOAuthSessionMiddleware()
+    // Per request: a step-up round-trip asks Google to re-authenticate the user (max_age=0) and to show the account chooser.
+    const authenticateWithGoogle = (
+      request: Request,
+      response: Response,
+      next: NextFunction
+    ): void => {
+      const isStepUp = request.session.oauthStepUp !== undefined
+      // Cast: @types/passport types authenticate() on the singleton as any.
+      const authenticate = passport.authenticate(GOOGLE_STRATEGY_NAME, {
+        scope: ['openid', 'profile', 'email'],
+        ...(isStepUp && { maxAge: 0, prompt: 'select_account' }),
+      }) as RequestHandler
+      authenticate(request, response, next)
+    }
     router.get(
       '/google',
       createRateLimiter(RATE_LIMITS.googleOAuth),
       oauthSession,
       rememberOAuthApp,
+      authController.prepareGoogleStepUp,
       passport.initialize(),
-      // Cast: @types/passport types authenticate() on the singleton as any.
-      passport.authenticate(GOOGLE_STRATEGY_NAME, {
-        scope: ['profile', 'email'],
-      }) as RequestHandler
+      authenticateWithGoogle
     )
     router.get(
       '/google/callback',
