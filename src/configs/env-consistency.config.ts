@@ -87,6 +87,26 @@ function cookieDomainProblem(env: Env): string | undefined {
 }
 
 /**
+ * Google calls back to APP_URL only. A sign-in started on an Apex host that
+ * differs from APP_URL's loses its OAuth session cookie on the way back, and
+ * its refresh cookie lands on APP_URL's host, unless COOKIE_DOMAIN covers both.
+ * @param env - The validated environment.
+ * @returns A message when that combination is configured, else undefined.
+ */
+function apexCookieDomainProblem(env: Env): string | undefined {
+  if (env.APEX_URL === undefined || env.GOOGLE_CLIENT_ID === undefined) return undefined
+  const apexHost = new URL(env.APEX_URL).hostname.toLowerCase()
+  const appHost = new URL(env.APP_URL).hostname.toLowerCase()
+  if (apexHost === appHost) return undefined
+  // Browsers strip one leading dot (RFC 6265 §5.2.3).
+  const domain = env.COOKIE_DOMAIN?.replace(/^\./, '').toLowerCase()
+  if (domain !== undefined && (apexHost === domain || apexHost.endsWith(`.${domain}`))) {
+    return undefined
+  }
+  return `APEX_URL's host ${apexHost} differs from APP_URL's host ${appHost} and Google sign-in is on (GOOGLE_CLIENT_ID), so a sign-in started in Apex loses its session on the way back. Set COOKIE_DOMAIN to a parent domain of both hosts, or serve Apex from APP_URL's host.`
+}
+
+/**
  * Refuses unsafe or stale configuration at boot; throws Error with one actionable message.
  *
  * Every problem found goes into that one message, so an operator fixes them
@@ -116,6 +136,8 @@ export function assertEnvConsistent(
 
   const domainProblem = cookieDomainProblem(env)
   if (domainProblem !== undefined) problems.push(domainProblem)
+  const apexProblem = apexCookieDomainProblem(env)
+  if (apexProblem !== undefined) problems.push(apexProblem)
 
   // Half a pair sends no auth, so every send to a provider that needs it fails silently.
   if ((env.SMTP_USERNAME === undefined) !== (env.SMTP_PASSWORD === undefined)) {
