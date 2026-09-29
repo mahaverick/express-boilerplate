@@ -60,3 +60,26 @@ export function canActorGrantRole(actorRole: MembershipRole, role: MembershipRol
   if (actorRole === 'admin') return role !== 'owner' && role !== 'admin'
   return false
 }
+
+/**
+ * `canActorModifyTarget` for the platform tenant, where the members are
+ * staff: an owner may change or remove any other staff member, another owner
+ * included, so an owner can be offboarded without the CLI; an admin acts on
+ * staff below admin only. Never on oneself: leaving the platform tenant keeps
+ * the customer-tenant rule (tenant-membership.service.ts), and every other
+ * self-action is refused by its service. The last active owner is the calling
+ * service's check.
+ * @param actorRole - The actor's platform role.
+ * @param targetRole - The target's platform role.
+ * @param isSelf - Whether the actor and the target are the same user.
+ * @returns True when the actor may act on a staff member holding `targetRole`.
+ */
+export function canPlatformActorModifyTarget(
+  actorRole: MembershipRole,
+  targetRole: MembershipRole,
+  isSelf: boolean
+): boolean {
+  if (isSelf) return false
+  if (actorRole === 'owner') return true
+  return canActorModifyTarget(actorRole, targetRole, false)
+}

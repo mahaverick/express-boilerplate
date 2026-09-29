@@ -17,18 +17,15 @@ import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
 export function createPlatformRouter(): Router {
   const router = Router()
   router.use(requireAuth)
+  // One instance: separate ones would split the budget on the in-memory fallback.
+  const searchLimiter = createRateLimiter(RATE_LIMITS.platformSearch)
   router.get(
     '/tenants',
     requirePlatformRole('viewer'),
-    createRateLimiter(RATE_LIMITS.platformSearch),
+    searchLimiter,
     platformController.searchTenants
   )
-  router.get(
-    '/stats',
-    requirePlatformRole('viewer'),
-    createRateLimiter(RATE_LIMITS.platformSearch),
-    platformController.getStats
-  )
+  router.get('/stats', requirePlatformRole('viewer'), searchLimiter, platformController.getStats)
   router.get('/audit-log', requirePlatformRole('admin'), auditController.listPlatformAuditLog)
   return router
 }

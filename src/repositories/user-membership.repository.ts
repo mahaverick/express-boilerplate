@@ -2,7 +2,7 @@
  * @file Query access to `user_memberships`. It does not extend `BaseRepository`:
  * the table has no `deletedAt`, and `delete` is a hard delete.
  */
-import { and, count, eq, inArray, isNull, sql } from 'drizzle-orm'
+import { and, count, eq, inArray, isNull, ne, sql } from 'drizzle-orm'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import { tenantModel, type Tenant } from '@/database/models/tenant.model'
 import {
@@ -279,6 +279,38 @@ export class UserMembershipRepository {
           eq(userMembershipModel.tenantId, tenantId),
           eq(userMembershipModel.role, 'owner'),
           isNull(userModel.deletedAt)
+        )
+      )
+    return row?.count ?? 0
+  }
+
+  /**
+   * How many owners of a tenant can still sign in: live AND active users.
+   * `countOwners` counts a deactivated owner; the guards that must leave
+   * someone able to act as owner (the platform last-owner guard, whether a
+   * tenant still has an owner) must not. Pass `exceptUserId` to ask "who
+   * else": the answer is then right whether or not that user is active.
+   * @param tenantId - The tenant.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @param exceptUserId - A user to leave out of the count, typically the one being demoted, removed or deleted.
+   * @returns The number of live, active owners (other than `exceptUserId`).
+   */
+  async countActiveOwners(
+    tenantId: string,
+    executor: DbExecutor = db,
+    exceptUserId?: string
+  ): Promise<number> {
+    const [row] = await executor
+      .select({ count: count() })
+      .from(userMembershipModel)
+      .innerJoin(userModel, eq(userMembershipModel.userId, userModel.id))
+      .where(
+        and(
+          eq(userMembershipModel.tenantId, tenantId),
+          eq(userMembershipModel.role, 'owner'),
+          isNull(userModel.deletedAt),
+          eq(userModel.active, true),
+          exceptUserId === undefined ? undefined : ne(userMembershipModel.userId, exceptUserId)
         )
       )
     return row?.count ?? 0

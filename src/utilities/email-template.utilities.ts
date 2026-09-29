@@ -16,6 +16,7 @@ export const EMAIL_TEMPLATE_KEYS = [
   'registration_attempt',
   'password_changed',
   'tenant_invitation',
+  'account_setup',
 ] as const
 
 /**

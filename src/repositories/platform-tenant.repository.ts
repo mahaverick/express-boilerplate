@@ -9,6 +9,7 @@ import { tenantModel } from '@/database/models/tenant.model'
 import { userMembershipModel } from '@/database/models/user-membership.model'
 import { userModel } from '@/database/models/user.model'
 import { db, type DbExecutor } from '@/services/database.service'
+import { escapeLikePattern } from '@/utilities/like-pattern.utilities'
 
 /**
  * The last row of a page: its lowercased name and id, the sort key.
@@ -45,15 +46,6 @@ export interface PlatformTenantSearchOptions {
   limit: number
   q?: string | undefined
   cursor?: PlatformTenantCursor | undefined
-}
-
-/**
- * Escape LIKE's wildcards and its escape character, so `q` matches literally.
- * @param value - The raw search text.
- * @returns The text with `\`, `%` and `_` escaped by a backslash.
- */
-function escapeLikePattern(value: string): string {
-  return value.replaceAll(/[%\\_]/g, String.raw`\$&`)
 }
 
 /**

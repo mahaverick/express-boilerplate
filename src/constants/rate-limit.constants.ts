@@ -41,7 +41,7 @@ export interface RateLimiterSpec {
 }
 
 /**
- * The 21 rate limiters this API mounts, by name.
+ * The 23 rate limiters this API defines, by name.
  */
 export type RateLimitName =
   | 'register'
@@ -65,6 +65,8 @@ export type RateLimitName =
   | 'invitationAccept'
   | 'platformSearch'
   | 'authenticatedWrite'
+  | 'platformWrite'
+  | 'reauthenticate'
 
 const RATE_LIMITED_MESSAGE = 'Too many attempts. Please try again later.'
 
@@ -386,5 +388,30 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     limit: 60,
     keyBy: 'user',
     message: 'Too many requests, please slow down',
+  },
+  /**
+   * One shared budget for every `/platform` write, keyed on the caller's id:
+   * only staff reach it, past requireAuth and requirePlatformRole. 30 a
+   * minute is ample for a person working through a support queue and bounds
+   * a script walking every user or tenant.
+   */
+  platformWrite: {
+    name: 'platform-write',
+    windowMs: 60_000,
+    limit: 30,
+    keyBy: 'user',
+    message: RATE_LIMITED_MESSAGE,
+  },
+  /**
+   * Budget of 5 per 15 minutes, keyed on the caller's id, as changePassword:
+   * `POST /auth/reauthenticate` compares a caller-supplied password against
+   * the stored hash, so it gets a password oracle's budget.
+   */
+  reauthenticate: {
+    name: 'reauthenticate',
+    windowMs: 15 * 60 * 1000,
+    limit: 5,
+    keyBy: 'user',
+    message: RATE_LIMITED_MESSAGE,
   },
 }

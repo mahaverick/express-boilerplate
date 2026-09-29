@@ -5,7 +5,12 @@
  */
 import { describe, expect, it } from 'vitest'
 import type { MembershipRole } from '@/constants/tenant.constants'
-import { canActorGrantRole, canActorModifyTarget, isRoleAtLeast } from '@/policies/tenant.policy'
+import {
+  canActorGrantRole,
+  canActorModifyTarget,
+  canPlatformActorModifyTarget,
+  isRoleAtLeast,
+} from '@/policies/tenant.policy'
 
 describe('isRoleAtLeast', () => {
   it.each<[MembershipRole, MembershipRole, boolean]>([
@@ -128,5 +133,24 @@ describe('canActorGrantRole', () => {
     ['viewer', 'viewer', false],
   ])('canActorGrantRole(actor %s, role %s) is %s', (actorRole, role, expected) => {
     expect(canActorGrantRole(actorRole, role)).toBe(expected)
+  })
+})
+
+describe('canPlatformActorModifyTarget', () => {
+  it.each<[MembershipRole, MembershipRole, boolean, boolean]>([
+    ['owner', 'owner', false, true],
+    ['owner', 'owner', true, false],
+    ['owner', 'viewer', true, false],
+    ['owner', 'admin', false, true],
+    ['owner', 'viewer', false, true],
+    ['admin', 'owner', false, false],
+    ['admin', 'admin', false, false],
+    ['admin', 'admin', true, false],
+    ['admin', 'manager', false, true],
+    ['admin', 'viewer', false, true],
+    ['manager', 'viewer', false, false],
+    ['viewer', 'viewer', false, false],
+  ])('%s acting on a staff %s (self: %s) → %s', (actor, target, isSelf, expected) => {
+    expect(canPlatformActorModifyTarget(actor, target, isSelf)).toBe(expected)
   })
 })

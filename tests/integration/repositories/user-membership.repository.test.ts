@@ -333,6 +333,33 @@ describe('UserMembershipRepository', () => {
     })
   })
 
+  describe('countActiveOwners', () => {
+    it('counts live, active owners only', async () => {
+      const active = await createUser()
+      const tenant = await createTenant(active.id)
+      const inactive = await createUser()
+      const deleted = await createUser()
+      for (const user of [inactive, deleted]) {
+        await userMembershipRepository.create({
+          userId: user.id,
+          tenantId: tenant.id,
+          role: 'owner',
+        })
+      }
+      await sql`update users set active = false where id = ${inactive.id}`
+      await sql`update users set deleted_at = now() where id = ${deleted.id}`
+
+      expect(await userMembershipRepository.countOwners(tenant.id)).toBe(2)
+      expect(await userMembershipRepository.countActiveOwners(tenant.id)).toBe(1)
+      expect(
+        await userMembershipRepository.countActiveOwners(tenant.id, undefined, active.id)
+      ).toBe(0)
+      expect(
+        await userMembershipRepository.countActiveOwners(tenant.id, undefined, inactive.id)
+      ).toBe(1)
+    })
+  })
+
   describe('lockMemberships', () => {
     it('returns only the listed members of this tenant, in user_id order', async () => {
       const owner = await createUser()

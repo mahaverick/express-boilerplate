@@ -58,6 +58,13 @@ const invitationEmailDomain = emailDomain.nullable()
 const changedFields = z.array(z.string().regex(/^[a-z][A-Za-z\d]{0,63}$/)).max(32)
 
 /**
+ * A staff member's stated reason for a state-changing action. `reasonSchema`
+ * (platform.validators.ts) trims it and refuses control and bidi characters;
+ * this re-checks only the bounds.
+ */
+const reason = z.string().min(1).max(500)
+
+/**
  * Every audited action: the kind of record it targets and the strict schema
  * its `metadata` must match. `audit.service.record` rejects anything else.
  */
@@ -106,6 +113,50 @@ export const AUDIT_ACTIONS = {
   'tenant.accessed_by_platform': {
     target: 'tenant',
     metadata: z.strictObject({ platformRole: role }),
+  },
+  'user.created': {
+    target: 'user',
+    metadata: z.strictObject({ emailDomain: invitationEmailDomain }),
+  },
+  'user.updated': { target: 'user', metadata: z.strictObject({ changed: changedFields }) },
+  'user.deactivated': { target: 'user', metadata: z.strictObject({ reason }) },
+  'user.reactivated': { target: 'user', metadata: z.strictObject({ reason }) },
+  'user.signed_out': { target: 'user', metadata: z.strictObject({ reason }) },
+  'user.password_setup_sent': {
+    target: 'user',
+    metadata: z.strictObject({ kind: z.enum(['setup', 'reset']) }),
+  },
+  'user.verification_resent': { target: 'user', metadata: z.strictObject({}) },
+  'user.deleted': { target: 'user', metadata: z.strictObject({ reason }) },
+  'tenant.suspended': { target: 'tenant', metadata: z.strictObject({ reason }) },
+  'tenant.reactivated': { target: 'tenant', metadata: z.strictObject({ reason }) },
+  'tenant.archived': { target: 'tenant', metadata: z.strictObject({ reason }) },
+  'tenant.owner_invited': {
+    target: 'invitation',
+    metadata: z.strictObject({
+      emailDomain: invitationEmailDomain,
+      // The invitee's account when the address has one, so a staff self-invitation is visible.
+      inviteeUserId: id.nullable(),
+      // Null for the invitation sent when staff create the tenant; required on a re-issue.
+      reason: reason.nullable(),
+    }),
+  },
+  'auth.reauthenticated': {
+    target: 'user',
+    metadata: z.strictObject({ outcome: z.enum(['success', 'failure']) }),
+  },
+  'user.purged': {
+    target: 'user',
+    metadata: z.strictObject({ reason, emailDomain: invitationEmailDomain }),
+  },
+  'tenant.purged': {
+    target: 'tenant',
+    metadata: z.strictObject({
+      reason,
+      name: z.string().max(255),
+      slug: z.string().max(100),
+      memberCount: z.number().int().min(0),
+    }),
   },
 } as const satisfies Record<string, { target: AuditTargetType; metadata: z.ZodType }>
 

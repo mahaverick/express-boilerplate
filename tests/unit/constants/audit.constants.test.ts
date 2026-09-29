@@ -29,13 +29,38 @@ const VALID_METADATA: Record<AuditAction, Record<string, unknown>> = {
   'platform.member.auto_joined': { userId: 'user-1', emailDomain: 'staff.example.test' },
   'platform.member.granted': { userId: 'user-1', role: 'admin', via: 'script' },
   'tenant.accessed_by_platform': { platformRole: 'viewer' },
+  'user.created': { emailDomain: 'example.test' },
+  'user.updated': { changed: ['firstName'] },
+  'user.deactivated': { reason: 'Chargeback fraud, ticket 4411' },
+  'user.reactivated': { reason: 'Cleared by support' },
+  'user.signed_out': { reason: 'Lost laptop' },
+  'user.password_setup_sent': { kind: 'setup' },
+  'user.verification_resent': {},
+  'user.deleted': { reason: 'Erasure request' },
+  'tenant.suspended': { reason: 'Unpaid invoice' },
+  'tenant.reactivated': { reason: 'Invoice paid' },
+  'tenant.archived': { reason: 'Contract ended' },
+  'tenant.owner_invited': {
+    emailDomain: 'example.test',
+    inviteeUserId: 'user-2',
+    reason: 'Customer asked us to resend',
+  },
+  'auth.reauthenticated': { outcome: 'success' },
+  'user.purged': { reason: 'Erasure request, ticket 9001', emailDomain: 'example.test' },
+  'tenant.purged': { reason: 'Contract ended', name: 'Acme Inc', slug: 'acme', memberCount: 3 },
 }
 
 const ACTIONS = Object.keys(AUDIT_ACTIONS) as AuditAction[]
 
+// An empty metadata object has no key to drop.
+const ACTIONS_WITH_METADATA_KEYS = ACTIONS.filter(
+  (action) => Object.keys(VALID_METADATA[action]).length > 0
+)
+
 describe('AUDIT_ACTIONS', () => {
   it('lists exactly the actions of the API contract', () => {
     expect(ACTIONS.toSorted((a, b) => a.localeCompare(b))).toEqual([
+      'auth.reauthenticated',
       'invitation.accepted',
       'invitation.created',
       'invitation.resent',
@@ -45,9 +70,23 @@ describe('AUDIT_ACTIONS', () => {
       'platform.member.auto_joined',
       'platform.member.granted',
       'tenant.accessed_by_platform',
+      'tenant.archived',
       'tenant.created',
+      'tenant.owner_invited',
+      'tenant.purged',
+      'tenant.reactivated',
       'tenant.settings_updated',
+      'tenant.suspended',
       'tenant.updated',
+      'user.created',
+      'user.deactivated',
+      'user.deleted',
+      'user.password_setup_sent',
+      'user.purged',
+      'user.reactivated',
+      'user.signed_out',
+      'user.updated',
+      'user.verification_resent',
     ])
   })
 
@@ -69,12 +108,75 @@ describe('AUDIT_ACTIONS', () => {
     expect(AUDIT_ACTIONS[action].metadata.safeParse(withExtra).success).toBe(false)
   })
 
-  it.each(ACTIONS)('%s rejects metadata with a key missing', (action) => {
+  it.each(ACTIONS_WITH_METADATA_KEYS)('%s rejects metadata with a key missing', (action) => {
     const [firstKey] = Object.keys(VALID_METADATA[action])
     const missing = Object.fromEntries(
       Object.entries(VALID_METADATA[action]).filter(([key]) => key !== firstKey)
     )
     expect(AUDIT_ACTIONS[action].metadata.safeParse(missing).success).toBe(false)
+  })
+
+  it.each([
+    'user.deactivated',
+    'user.reactivated',
+    'user.signed_out',
+    'user.deleted',
+    'tenant.suspended',
+    'tenant.reactivated',
+    'tenant.archived',
+    'tenant.owner_invited',
+    'user.purged',
+    'tenant.purged',
+  ] as const)('%s refuses an empty or over-long reason', (action) => {
+    const schema = AUDIT_ACTIONS[action].metadata
+    const valid = VALID_METADATA[action]
+    expect(schema.safeParse({ ...valid, reason: '' }).success).toBe(false)
+    expect(schema.safeParse({ ...valid, reason: 'x'.repeat(501) }).success).toBe(false)
+    expect(schema.safeParse({ ...valid, reason: 'x'.repeat(500) }).success).toBe(true)
+  })
+
+  it.each(['user.created', 'tenant.owner_invited', 'user.purged'] as const)(
+    '%s refuses a full address and accepts no domain',
+    (action) => {
+      const valid = VALID_METADATA[action]
+      const schema = AUDIT_ACTIONS[action].metadata
+      expect(schema.safeParse({ ...valid, emailDomain: 'ada@example.test' }).success).toBe(false)
+      // eslint-disable-next-line unicorn/no-null -- the metadata records JSON null for "no domain"
+      expect(schema.safeParse({ ...valid, emailDomain: null }).success).toBe(true)
+    }
+  )
+
+  it('lets tenant.owner_invited record no invitee account and no reason (the invitation sent at creation)', () => {
+    const schema = AUDIT_ACTIONS['tenant.owner_invited'].metadata
+    const valid = VALID_METADATA['tenant.owner_invited']
+    // eslint-disable-next-line unicorn/no-null -- JSON null: the address has no account yet
+    expect(schema.safeParse({ ...valid, inviteeUserId: null }).success).toBe(true)
+    // eslint-disable-next-line unicorn/no-null -- JSON null: created with the tenant, no reason asked
+    expect(schema.safeParse({ ...valid, reason: null }).success).toBe(true)
+  })
+
+  it('pins the closed value sets of user.password_setup_sent and auth.reauthenticated', () => {
+    expect(
+      AUDIT_ACTIONS['user.password_setup_sent'].metadata.safeParse({ kind: 'reset' }).success
+    ).toBe(true)
+    expect(
+      AUDIT_ACTIONS['user.password_setup_sent'].metadata.safeParse({ kind: 'invite' }).success
+    ).toBe(false)
+    expect(
+      AUDIT_ACTIONS['auth.reauthenticated'].metadata.safeParse({ outcome: 'failure' }).success
+    ).toBe(true)
+    expect(
+      AUDIT_ACTIONS['auth.reauthenticated'].metadata.safeParse({ outcome: 'maybe' }).success
+    ).toBe(false)
+  })
+
+  it('targets users, tenants and invitations as the plan says', () => {
+    expect(AUDIT_ACTIONS['user.deleted'].target).toBe('user')
+    expect(AUDIT_ACTIONS['auth.reauthenticated'].target).toBe('user')
+    expect(AUDIT_ACTIONS['tenant.archived'].target).toBe('tenant')
+    expect(AUDIT_ACTIONS['tenant.owner_invited'].target).toBe('invitation')
+    expect(AUDIT_ACTIONS['user.purged'].target).toBe('user')
+    expect(AUDIT_ACTIONS['tenant.purged'].target).toBe('tenant')
   })
 
   it('refuses a full address where only the domain may go', () => {

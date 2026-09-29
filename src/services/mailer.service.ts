@@ -10,6 +10,11 @@ import { redactedForLog } from '@/errors/postgres-errors'
 import { EmailLogRepository } from '@/repositories/email-log.repository'
 import { logger } from '@/services/logger.service'
 import {
+  ACCOUNT_SETUP_TEMPLATE_KEY,
+  renderAccountSetupTemplate,
+  type AccountSetupVariables,
+} from '@/templates/email/account-setup.template'
+import {
   EMAIL_VERIFICATION_TEMPLATE_KEY,
   renderEmailVerificationTemplate,
   type EmailVerificationVariables,
@@ -75,6 +80,11 @@ export type MailMessage =
       templateKey: typeof TENANT_INVITATION_TEMPLATE_KEY
       variables: TenantInvitationVariables
     }
+  | {
+      to: string
+      templateKey: typeof ACCOUNT_SETUP_TEMPLATE_KEY
+      variables: AccountSetupVariables
+    }
 
 /**
  * Render `message` against its own declared template: the only place this
@@ -104,6 +114,9 @@ function renderForMessage(message: MailMessage): RenderedEmail {
     }
     case TENANT_INVITATION_TEMPLATE_KEY: {
       return renderTenantInvitationTemplate(message.variables)
+    }
+    case ACCOUNT_SETUP_TEMPLATE_KEY: {
+      return renderAccountSetupTemplate(message.variables)
     }
     default: {
       throw new Error(
