@@ -67,7 +67,7 @@ class VerificationController extends BaseController {
       respondResendAccepted(response)
       return
     }
-    const sendMail = await verificationService.prepareResendVerification(input.email)
+    const sendMail = await verificationService.prepareResendVerification(input.email, input.app)
 
     respondResendAccepted(response)
     // Never rejects: the service logs its own failure, after the reply is sent.

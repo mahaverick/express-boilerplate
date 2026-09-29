@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { registerSchema } from '@/validators/auth.validators'
+import { forgotPasswordSchema, registerSchema } from '@/validators/auth.validators'
+import { resendVerificationSchema } from '@/validators/verification.validators'
 
 const VALID_REGISTRATION = { email: 'user@example.com', password: 'a-long-enough-password' }
 
@@ -15,4 +16,23 @@ describe('registerSchema', () => {
       ).toBe(false)
     }
   )
+})
+
+describe('the app field', () => {
+  it('defaults to web', () => {
+    expect(registerSchema.parse(VALID_REGISTRATION).app).toBe('web')
+    expect(forgotPasswordSchema.parse({ email: 'user@example.com' }).app).toBe('web')
+    expect(resendVerificationSchema.parse({ email: 'user@example.com' }).app).toBe('web')
+  })
+
+  it('accepts apex', () => {
+    expect(registerSchema.parse({ ...VALID_REGISTRATION, app: 'apex' }).app).toBe('apex')
+  })
+
+  it.each([['https://evil.example'], ['APEX'], [['apex']], [1]])('refuses %j', (value) => {
+    expect(registerSchema.safeParse({ ...VALID_REGISTRATION, app: value }).success).toBe(false)
+    expect(forgotPasswordSchema.safeParse({ email: 'user@example.com', app: value }).success).toBe(
+      false
+    )
+  })
 })

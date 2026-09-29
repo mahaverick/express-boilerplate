@@ -426,7 +426,7 @@ class AuthController extends BaseController {
 
     messageResponse(response, FORGOT_PASSWORD_RESPONSE_MESSAGE, 202)
     // Never rejects: the service logs its own failure.
-    void authService.requestPasswordReset(input.email)
+    void authService.requestPasswordReset(input.email, input.app)
   })
 
   /**

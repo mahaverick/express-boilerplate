@@ -6,7 +6,7 @@
  * answer differently for a password that was legal when it was set.
  */
 import { z } from 'zod'
-import { emailSchema } from '@/validators/auth.validators'
+import { emailSchema, frontendAppSchema } from '@/validators/auth.validators'
 
 /**
  * Verify-email request body: the raw token from the link, plus the
@@ -25,7 +25,7 @@ export type VerifyEmailInput = z.infer<typeof verifyEmailSchema>
 /**
  * Resend-verification request body: an address, which may or may not exist.
  */
-export const resendVerificationSchema = z.object({ email: emailSchema })
+export const resendVerificationSchema = z.object({ email: emailSchema, app: frontendAppSchema })
 
 /**
  * The validated shape of a resend-verification request body.

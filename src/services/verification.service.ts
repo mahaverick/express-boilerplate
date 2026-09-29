@@ -112,8 +112,9 @@ export function frontendUrl(
  * notification job — the worker fans it out into an in-app row and the
  * mail carrying the link (email is not user-disableable for this type).
  * @param user - The user to verify.
+ * @param app - The frontend the link opens; the customer app by default.
  */
-export async function sendVerificationMail(user: User): Promise<void> {
+export async function sendVerificationMail(user: User, app: FrontendApp = 'web'): Promise<void> {
   const issued = await issueToken(
     user.id,
     'email_verification',
@@ -130,7 +131,7 @@ export async function sendVerificationMail(user: User): Promise<void> {
       templateKey: EMAIL_VERIFICATION_TEMPLATE_KEY,
       variables: {
         firstName: user.firstName ?? MISSING_FIRST_NAME_FALLBACK,
-        verificationUrl: buildVerificationUrl(issued.raw),
+        verificationUrl: buildVerificationUrl(issued.raw, frontendUrl(app)),
         appName: getEnv().APP_NAME,
       },
     },
@@ -188,11 +189,12 @@ export async function verifyEmail(token: string, password: string): Promise<void
  * Revoke FIRST: the new token's row does not exist yet, so reversing the
  * order would mail a link this call had just revoked.
  * @param user - The unverified user who asked for another link.
+ * @param app - The frontend the new link opens.
  */
-async function resendVerificationMail(user: User): Promise<void> {
+async function resendVerificationMail(user: User, app: FrontendApp): Promise<void> {
   // Purpose-scoped: revokeAllForUser would also revoke refresh tokens, logging the user out everywhere.
   await userTokenRepository.revokeAllForUserAndPurpose(user.id, 'email_verification')
-  await sendVerificationMail(user)
+  await sendVerificationMail(user, app)
 }
 
 /**
@@ -200,14 +202,18 @@ async function resendVerificationMail(user: User): Promise<void> {
  * controller to start once it has responded. The lookup runs before the
  * response on every branch; the mail only for an existing, unverified user.
  * @param email - The submitted address.
+ * @param app - The frontend the mailed link opens; the customer app by default.
  * @returns A function that sends the mail when one is due; it never rejects.
  */
-export async function prepareResendVerification(email: string): Promise<() => Promise<void>> {
+export async function prepareResendVerification(
+  email: string,
+  app: FrontendApp = 'web'
+): Promise<() => Promise<void>> {
   const user = await userRepository.findByEmail(email)
   return async () => {
     if (!user || user.emailVerifiedAt) return
     try {
-      await resendVerificationMail(user)
+      await resendVerificationMail(user, app)
     } catch (error) {
       logger.error('Resend verification mail failed', { error: redactedForLog(error) })
     }

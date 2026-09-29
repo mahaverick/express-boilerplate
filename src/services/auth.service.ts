@@ -7,6 +7,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import { getEnv } from '@/configs/env.config'
+import type { FrontendApp } from '@/constants/frontend.constants'
 import { JobPriority } from '@/constants/queue.constants'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { AuthProviderRecord } from '@/database/models/auth-provider.model'
@@ -33,6 +34,7 @@ import {
 } from '@/services/session.service'
 import {
   buildPasswordResetUrl,
+  frontendUrl,
   markEmailVerified,
   MISSING_FIRST_NAME_FALLBACK,
   sendVerificationMail,
@@ -161,7 +163,7 @@ export async function register(input: RegisterInput): Promise<() => Promise<void
     const user = created
     return async () => {
       try {
-        await sendVerificationMail(user)
+        await sendVerificationMail(user, input.app)
       } catch (error) {
         logger.error('Verification mail failed', { error: redactedForLog(error) })
       }
@@ -259,8 +261,9 @@ export async function refresh(rawToken: string): Promise<RefreshResult> {
  * Issue a password-reset token and mail the link, but only when `email`
  * belongs to an existing account.
  * @param email - The address submitted to `/forgot-password`.
+ * @param app - The frontend the reset link opens.
  */
-async function sendPasswordResetMailIfRegistered(email: string): Promise<void> {
+async function sendPasswordResetMailIfRegistered(email: string, app: FrontendApp): Promise<void> {
   const user = await userRepository.findByEmail(email)
   if (!user) return
 
@@ -281,7 +284,7 @@ async function sendPasswordResetMailIfRegistered(email: string): Promise<void> {
       templateKey: PASSWORD_RESET_TEMPLATE_KEY,
       variables: {
         firstName: user.firstName ?? MISSING_FIRST_NAME_FALLBACK,
-        resetUrl: buildPasswordResetUrl(issued.raw),
+        resetUrl: buildPasswordResetUrl(issued.raw, frontendUrl(app)),
         appName: getEnv().APP_NAME,
       },
     },
@@ -293,11 +296,12 @@ async function sendPasswordResetMailIfRegistered(email: string): Promise<void> {
  * BEFORE calling this — the lookup itself would otherwise be a timing
  * oracle — so it must never reject.
  * @param email - The address submitted to `/forgot-password`.
+ * @param app - The frontend the reset link opens; the customer app by default.
  * @returns Resolves when the work is done or its failure is logged.
  */
-export async function requestPasswordReset(email: string): Promise<void> {
+export async function requestPasswordReset(email: string, app: FrontendApp = 'web'): Promise<void> {
   try {
-    await sendPasswordResetMailIfRegistered(email)
+    await sendPasswordResetMailIfRegistered(email, app)
   } catch (error) {
     logger.error('Forgot-password mail failed', { error: redactedForLog(error) })
   }
