@@ -1,7 +1,10 @@
 # One fingerprint per line (gitleaks "commit:file:rule:line"). Each entry is a
-# reviewed false positive in history that a rewrite would be needed to remove.
+# reviewed false positive in branch history that only a rewrite could remove.
 #
-# ea2c44e: a unit-test fixture `{ id_token: 'a.bm90LWpzb24.c' }` — a fake
-# three-part token whose payload is base64 "not-json". The file was deleted in
-# b02dc85 when Google step-up was dropped; it never held a real credential.
+# ea2c44e: a deleted unit-test fixture holding a fake three-part token whose
+# payload decodes to the text "not-json"; removed in b02dc85 with Google
+# step-up. It never held a real credential.
 ea2c44e38a70304d83395e18a6591ca4e2605b9f:tests/unit/utilities/google-id-token.utilities.test.ts:generic-api-key:56
+# ba79a05: the first version of this file quoted that same fake token in a
+# comment; the quote is gone, the commit remains.
+ba79a054262073ed589918914b584995db1fccb7:.gitleaksignore:generic-api-key:4
