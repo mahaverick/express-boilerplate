@@ -583,8 +583,9 @@ export function revokeSessionRows(
 }
 
 /**
- * Deny the sessions a committed password change or reset revoked. Never
- * rejects, because the change already stands. When Redis refuses, those
+ * Deny the sessions a committed revocation revoked: a password change or
+ * reset, or a staff deactivation, sign-out or deletion. Never rejects,
+ * because the revocation already stands. When Redis refuses, those
  * sessions' access tokens stay valid for up to ACCESS_TOKEN_TTL, as when the
  * denylist fails open, and one error line is logged.
  * @param userId - The user whose sessions were revoked.
@@ -595,7 +596,7 @@ export async function denySessionsAfterCommit(userId: string, sessionIds: string
   const outcomes = await Promise.all(sessionIds.map((sessionId) => denySession(sessionId)))
   const failed = outcomes.filter((outcome) => outcome === 'failed').length
   if (failed > 0) {
-    logger.error('session denylist write failed after password change', {
+    logger.error('session denylist write failed after revocation', {
       userId,
       sessionCount: failed,
     })

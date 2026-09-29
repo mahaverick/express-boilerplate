@@ -8,7 +8,7 @@ import { auditController } from '@/controllers/audit.controller'
 import { platformController } from '@/controllers/platform.controller'
 import { requireAuth, requireRecentAuth } from '@/middlewares/auth.middleware'
 import { requireJsonContentType } from '@/middlewares/content-type.middleware'
-import { requirePlatformRole } from '@/middlewares/platform.middleware'
+import { logStaffWrites, requirePlatformRole } from '@/middlewares/platform.middleware'
 import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
 import { createPlatformUserRouter } from '@/routes/platform-user.routes'
 
@@ -19,6 +19,7 @@ import { createPlatformUserRouter } from '@/routes/platform-user.routes'
 export function createPlatformRouter(): Router {
   const router = Router()
   router.use(requireAuth)
+  router.use(logStaffWrites)
   // One instance: separate ones would split the budget on the in-memory fallback.
   const searchLimiter = createRateLimiter(RATE_LIMITS.platformSearch)
   // One instance shared by every /platform write, users' and tenants'.

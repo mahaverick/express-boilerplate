@@ -43,6 +43,7 @@ export type TenantAuditLogQuery = z.infer<typeof tenantAuditLogQuerySchema>
 export const platformAuditLogQuerySchema = z.object({
   ...pageFields,
   tenantId: z.uuid('tenantId must be a valid UUID.').optional(),
+  targetId: z.uuid('targetId must be a valid UUID.').optional(),
 })
 
 /**

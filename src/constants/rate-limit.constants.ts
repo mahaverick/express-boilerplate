@@ -122,7 +122,7 @@ export function authenticatedUserRateLimitKey(request: Request): string {
 }
 
 /**
- * The 21 rate-limit specs this API enforces, each with the reason for its
+ * The 23 rate-limit specs this API enforces, each with the reason for its
  * window, limit and key. `name` is the live Redis key prefix
  * (`redisKey('rl', name)`): changing one resets that limiter's counters in
  * every deployment, and tests/unit/constants/rate-limit.constants.test.ts

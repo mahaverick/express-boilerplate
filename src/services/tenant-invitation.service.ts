@@ -621,7 +621,7 @@ export async function accept(rawToken: string, userId: string): Promise<Accepted
     assertInvitedAddress(user, valid.invitation.email)
 
     const claimed = await invitationRepository.claimForAccept(tokenHash, user.id, tx)
-    // Unredeemable since the read (accept, revoke, resend, expiry, tenant deleted): succeed only if this user accepted.
+    // Unredeemable since the read (accept, revoke, resend, expiry, tenant suspended, archived or deleted): succeed only if this user accepted.
     if (!claimed) return acceptedEarlierBy(tokenHash, user.id, tx)
 
     const membership = await userMembershipRepository.createIfAbsent(

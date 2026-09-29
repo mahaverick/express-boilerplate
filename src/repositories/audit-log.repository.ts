@@ -48,6 +48,7 @@ export interface AuditLogListOptions {
   limit: number
   cursor?: AuditLogCursor | undefined
   tenantId?: string | undefined
+  targetId?: string | undefined
   actorUserId?: string | undefined
   action?: AuditAction | undefined
   access?: AuditAccess | undefined
@@ -77,6 +78,9 @@ function conditionsFor(options: AuditLogListOptions): SQL[] {
   const conditions: SQL[] = []
   if (options.tenantId !== undefined) {
     conditions.push(eq(auditLogModel.tenantId, options.tenantId))
+  }
+  if (options.targetId !== undefined) {
+    conditions.push(eq(auditLogModel.targetId, options.targetId))
   }
   if (options.actorUserId !== undefined) {
     conditions.push(eq(auditLogModel.actorUserId, options.actorUserId))
