@@ -109,11 +109,10 @@ export interface OwnedTenant {
 }
 
 /**
- * The record columns plus the sort key, over `users` alone. The correlated
- * subqueries are built with a join, so drizzle qualifies `users.id` inside
- * them; the one-table outer select renders its own columns bare.
+ * The record columns plus the sort key, over `users` alone, with the
+ * correlated platform-role subquery the staff filter reuses.
  * @param executor - Where the query will run.
- * @returns The selection for `executor.select(...)`.
+ * @returns `columns`, the selection for `executor.select(...)`, and `platformRoleQuery`, the subquery behind its `platformRole` column.
  */
 function recordSelection(executor: DbExecutor) {
   const platformRoleQuery = executor
@@ -212,9 +211,11 @@ function cursorCondition(cursor: PlatformUserCursor, isPrevious: boolean): SQL {
 
 /**
  * The cursors either side of a page, rows already in ascending order.
- * `prevCursor` is absent on the first page; a page read from a cursor that
- * comes back empty hands that cursor back on the side it came from, so the
- * client can always step back.
+ * For `next`: `nextCursor` is set only when more rows follow; `prevCursor` is
+ * absent without a request cursor (the first page), else it is the first
+ * row's key, or the request cursor when the page is empty. For `prev`:
+ * `prevCursor` is set only when more rows precede; `nextCursor` is the last
+ * row's key, or the request cursor when the page is empty.
  * @param rows - The page's rows, ascending.
  * @param hasMore - Whether a row beyond the page exists in the read direction.
  * @param options - The search's inputs.
@@ -372,7 +373,7 @@ export class PlatformUserRepository {
 
   /**
    * The live tenants the user owns, the platform tenant included, in
-   * tenant-id order (the order the last-owner guard locks them in).
+   * tenant-id order.
    * @param userId - The user's id.
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns The owned tenants.

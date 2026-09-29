@@ -21,7 +21,9 @@ const authProviderRepository = new AuthProviderRepository()
 const userRepository = new UserRepository()
 
 /**
- * One user as the staff directory returns it.
+ * One user as the staff directory returns it. `membershipCount` counts live
+ * customer tenants only (archived tenants and the platform tenant are
+ * excluded), whereas the detail's `memberships` list includes archived ones.
  */
 export type PlatformUserRow = PlatformUserRecord
 

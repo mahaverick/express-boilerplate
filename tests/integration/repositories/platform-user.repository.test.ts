@@ -71,7 +71,7 @@ async function ids(options: Parameters<PlatformUserRepository['search']>[0]): Pr
 }
 
 describe('PlatformUserRepository.search', () => {
-  it('orders by lower(email), then id', async () => {
+  it('orders by lower(email), ignoring case', async () => {
     const tag = newTag()
     await createTrackedUser({ email: `${tag}-B@example.test` })
     await createTrackedUser({ email: `${tag}-a@example.test` })
@@ -159,6 +159,80 @@ describe('PlatformUserRepository.search', () => {
 
     const percent = await repository.search({ limit: 10, direction: 'next', q: `${tag}%` })
     expect(percent.users).toEqual([])
+  })
+
+  it('answers an empty prev page below every row with the cursor as nextCursor and no prevCursor', async () => {
+    const tag = newTag()
+    await fiveUsers(tag)
+    const below: PlatformUserCursor = { sortEmail: `${tag}-0@example.test`, id: randomUUID() }
+
+    const page = await repository.search({ limit: 2, direction: 'prev', q: tag, cursor: below })
+
+    expect(page.users).toEqual([])
+    expect(page.nextCursor).toEqual(below)
+    expect(page.prevCursor).toBeUndefined()
+  })
+
+  it('breaks a lower(email) tie by id, in both directions', async () => {
+    const tag = newTag()
+    const shared = `${tag}-tie@example.test`
+    const first = await createTrackedUser({ email: `${tag}-x1@example.test` })
+    const second = await createTrackedUser({ email: `${tag}-x2@example.test` })
+    // The unique index covers live rows only, so soft-deleted rows may share an address.
+    await sql`update users set email = ${shared}, deleted_at = now() where id = any(${[first.id, second.id]})`
+    const expected = [first.id, second.id].toSorted((a, b) => a.localeCompare(b))
+
+    expect(await ids({ limit: 10, direction: 'next', q: tag, status: 'deleted' })).toEqual(expected)
+
+    const page = await repository.search({ limit: 1, direction: 'next', q: tag, status: 'deleted' })
+    expect(page.users.map((user) => user.id)).toEqual(expected.slice(0, 1))
+    const following = await repository.search({
+      limit: 1,
+      direction: 'next',
+      q: tag,
+      status: 'deleted',
+      cursor: page.nextCursor,
+    })
+    expect(following.users.map((user) => user.id)).toEqual(expected.slice(1))
+    const back = await repository.search({
+      limit: 1,
+      direction: 'prev',
+      q: tag,
+      status: 'deleted',
+      cursor: following.prevCursor,
+    })
+    expect(back.users.map((user) => user.id)).toEqual(expected.slice(0, 1))
+  })
+
+  it('combines filters: status with staff, verified with q, and a filter under a prev cursor', async () => {
+    const tag = newTag()
+    const activeStaff = await createTrackedUser({ email: `${tag}-a@example.test` })
+    await makeStaff(activeStaff.id, 'viewer')
+    const inactiveStaff = await createTrackedUser({ email: `${tag}-b@example.test`, active: false })
+    await makeStaff(inactiveStaff.id, 'viewer')
+    await createTrackedUser({ email: `${tag}-c@example.test` })
+    const unverified = await createTrackedUser({ email: `${tag}-d@example.test`, verified: false })
+    const unverifiedStaff = await createTrackedUser({
+      email: `${tag}-e@example.test`,
+      verified: false,
+    })
+    await makeStaff(unverifiedStaff.id, 'viewer')
+
+    expect(
+      await ids({ limit: 10, direction: 'next', q: tag, status: 'active', staff: true })
+    ).toEqual([activeStaff.id, unverifiedStaff.id])
+    expect(await ids({ limit: 10, direction: 'next', q: `${tag}-d`, verified: false })).toEqual([
+      unverified.id,
+    ])
+    expect(await ids({ limit: 10, direction: 'next', q: `${tag}-a`, verified: false })).toEqual([])
+
+    const behindE: PlatformUserCursor = {
+      sortEmail: `${tag}-e@example.test`,
+      id: unverifiedStaff.id,
+    }
+    expect(
+      await ids({ limit: 10, direction: 'prev', q: tag, verified: false, cursor: behindE })
+    ).toEqual([unverified.id])
   })
 
   it('filters by status, verified and staff', async () => {
