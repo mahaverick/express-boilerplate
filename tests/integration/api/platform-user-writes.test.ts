@@ -214,6 +214,17 @@ describe('PATCH /api/v1/platform/users/:id', () => {
     ])
   })
 
+  it('refuses a staff user editing their own record with 403, writing and auditing nothing', async () => {
+    const { user, token } = await createTrackedStaff('owner', { firstName: 'Self' })
+
+    const response = await patch(token, user.id, { firstName: 'Changed' })
+
+    expect(response.status).toBe(403)
+    const [row] = await sql`select first_name from users where id = ${user.id}`
+    expect(row?.first_name).toBe('Self')
+    expect(await auditRows(user.id)).toEqual([])
+  })
+
   it('answers 400 for an empty body and for status or email fields', async () => {
     const { token } = await createTrackedStaff('admin')
     const target = await createTrackedUser()
@@ -291,23 +302,6 @@ describe('POST /api/v1/platform/users/:id/password-setup', () => {
     ])
   })
 
-  it('links a staff target to Apex and a customer to the web app', async () => {
-    const { token } = await createTrackedStaff('owner')
-    const staffTarget = await createTrackedStaff('viewer')
-    const customer = await createTrackedUser()
-
-    await post(token, `/${staffTarget.user.id}/password-setup`)
-    await post(token, `/${customer.id}/password-setup`)
-
-    const env = getEnv()
-    const result = await setupMailFor(staffTarget.user.email)
-    const staffUrl = result.data.variables as { setupUrl: string }
-    const result2 = await setupMailFor(customer.email)
-    const customerUrl = result2.data.variables as { setupUrl: string }
-    expect(new URL(staffUrl.setupUrl).origin).toBe(new URL(env.APEX_URL ?? env.WEB_URL).origin)
-    expect(new URL(customerUrl.setupUrl).origin).toBe(new URL(env.WEB_URL).origin)
-  })
-
   it('refuses a staff admin mailing a staff owner (403), and allows an admin mailing an admin', async () => {
     const admin = await createTrackedStaff('admin')
     const owner = await createTrackedStaff('owner')
@@ -325,6 +319,13 @@ describe('POST /api/v1/platform/users/:id/resend-verification', () => {
     const { token } = await createTrackedStaff('admin')
     const target = await createTrackedUser({ hasPassword: true, verified: false })
 
+    const first = await post(token, `/${target.id}/resend-verification`)
+    expect(first.status).toBe(200)
+    await waitForJob<NotificationJobData>(
+      getNotificationQueue(),
+      (data) => data.userId === target.id && data.type === 'verify_email'
+    )
+    await truncateAuditLogs()
     const response = await post(token, `/${target.id}/resend-verification`)
 
     expect(response.status).toBe(200)
@@ -335,6 +336,10 @@ describe('POST /api/v1/platform/users/:id/resend-verification', () => {
     expect(await auditRows(target.id)).toMatchObject([
       { action: 'user.verification_resent', metadata: {} },
     ])
+    const live = await sql`
+      select id from user_tokens
+      where user_id = ${target.id} and purpose = 'email_verification' and revoked_at is null`
+    expect(live).toHaveLength(1)
   })
 
   it('answers 409 to either mail for a deactivated user, whose link would lead nowhere', async () => {

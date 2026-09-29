@@ -5,6 +5,7 @@
 import type { RequestHandler, Router } from 'express'
 import { describe, expect, it } from 'vitest'
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
+import { requireJsonContentType } from '@/middlewares/content-type.middleware'
 import { createRateLimiter, RATE_LIMITER_MARK } from '@/middlewares/rate-limit.middleware'
 import { createPlatformUserRouter } from '@/routes/platform-user.routes'
 
@@ -52,6 +53,8 @@ describe('createPlatformUserRouter writes', () => {
     const handlers = handlersFor(createPlatformUserRouter(limiters), method, path)
 
     expect(handlers).toHaveLength(4)
+    expect(handlers[0]).not.toBe(requireJsonContentType)
+    expect(handlers[1]).toBe(requireJsonContentType)
     expect(handlers[2]).toBe(sharedWriteLimiter)
   })
 })

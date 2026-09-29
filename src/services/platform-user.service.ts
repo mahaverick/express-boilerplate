@@ -276,7 +276,7 @@ async function lockStaffPair(
     memberships.find((membership) => membership.userId === targetUserId)?.role ??
     // eslint-disable-next-line unicorn/no-null -- a non-staff target has no platform role
     null
-  // A self-action is refused (409) or allowed by its caller before this; the rule never covers oneself.
+  // The rule never covers oneself: a caller that must refuse a self-action does so before this, and one that allows it relies on this skip.
   if (
     targetRole !== null &&
     targetUserId !== actor.userId &&
@@ -289,7 +289,8 @@ async function lockStaffPair(
 
 /**
  * Mail-only actions on a staff target need an actor of at least the
- * target's rank; no lock, since nothing is written but the audit entry.
+ * target's rank. Unlocked: the roles are read once, and the writes that follow
+ * (token revocation, the audit entry) do not depend on them staying unchanged.
  * @param actor - The signed-in staff user.
  * @param targetUserId - The user to mail.
  * @returns The target's platform role, or null when not staff.
@@ -397,6 +398,8 @@ export async function updateUser(
   userId: string,
   input: UpdatePlatformUserInput
 ): Promise<PlatformUserRow> {
+  // Editing oneself is refused whatever the role: the self-skip in lockStaffPair would otherwise allow it.
+  if (userId === actor.userId) throw new HttpError(STAFF_TARGET_MESSAGE, 403)
   await withTransaction(async (tx) => {
     const { target, platform } = await lockStaffPair(actor, userId, 'admin', tx)
     const changes: { firstName?: string | null; lastName?: string | null } = {}
