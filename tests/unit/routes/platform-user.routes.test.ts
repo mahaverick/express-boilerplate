@@ -2,12 +2,19 @@
  * @file The role gate runs before the limiter on every platform user route:
  * a limiter first would put RateLimit-* headers on the non-staff 404.
  */
-import type { RequestHandler, Router } from 'express'
-import { describe, expect, it } from 'vitest'
+import type { NextFunction, Request, RequestHandler, Response, Router } from 'express'
+import { describe, expect, it, vi } from 'vitest'
+import { REAUTH_REQUIRED_CODE } from '@/constants/auth.constants'
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { requireJsonContentType } from '@/middlewares/content-type.middleware'
 import { createRateLimiter, RATE_LIMITER_MARK } from '@/middlewares/rate-limit.middleware'
 import { createPlatformUserRouter } from '@/routes/platform-user.routes'
+import { getPlatformMembership } from '@/services/platform.service'
+
+vi.mock('@/services/platform.service', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/services/platform.service')>()),
+  getPlatformMembership: vi.fn(),
+}))
 
 interface RouteLayer {
   route?: {
@@ -63,6 +70,7 @@ describe('createPlatformUserRouter lifecycle routes', () => {
   it.each([
     ['post', '/:id/deactivate', 5],
     ['delete', '/:id', 5],
+    ['post', '/:id/purge', 5],
     ['post', '/:id/reactivate', 4],
     ['post', '/:id/sign-out', 4],
   ])('%s %s: the shared write limiter sits just before the handler', (method, path, length) => {
@@ -71,5 +79,42 @@ describe('createPlatformUserRouter lifecycle routes', () => {
     expect(handlers).toHaveLength(length)
     expect(handlers[1]).toBe(requireJsonContentType)
     expect(handlers.at(-2)).toBe(sharedWriteLimiter)
+  })
+})
+
+/**
+ * Run one middleware and return what it passed to `next`.
+ * @param handler - The middleware.
+ * @param request - The request it sees.
+ * @returns The first argument `next` received.
+ */
+async function nextArgumentOf(
+  handler: RequestHandler | undefined,
+  request: object
+): Promise<unknown> {
+  const next = vi.fn()
+  await handler?.(request as Request, {} as Response, next as NextFunction)
+  expect(next).toHaveBeenCalledOnce()
+  return next.mock.calls[0]?.[0]
+}
+
+describe('createPlatformUserRouter purge', () => {
+  it('post /:id/purge: owner gate, JSON gate, step-up, the shared write limiter, then the handler', async () => {
+    const handlers = handlersFor(createPlatformUserRouter(limiters), 'post', '/:id/purge')
+    const lookup = vi.mocked(getPlatformMembership)
+    const user = { user: { id: 'user-1' } }
+
+    expect(handlers).toHaveLength(5)
+    lookup.mockResolvedValueOnce('admin')
+    expect(await nextArgumentOf(handlers[0], user)).toMatchObject({ statusCode: 404 })
+    lookup.mockResolvedValueOnce('owner')
+    expect(await nextArgumentOf(handlers[0], user)).toBeUndefined()
+    expect(handlers[1]).toBe(requireJsonContentType)
+    expect(await nextArgumentOf(handlers[2], user)).toMatchObject({
+      statusCode: 401,
+      code: REAUTH_REQUIRED_CODE,
+    })
+    expect(handlers[3]).toBe(sharedWriteLimiter)
+    expect(Object.hasOwn(handlers[4] ?? {}, RATE_LIMITER_MARK)).toBe(false)
   })
 })

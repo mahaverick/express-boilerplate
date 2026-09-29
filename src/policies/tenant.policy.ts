@@ -3,9 +3,9 @@
  * throws; the calling service throws the HttpError, passing the actor's role
  * as read inside its transaction. Under platform access that role is the
  * platform role, so staff face the same rules as members. Tenant
- * lifecycle changes (suspend, reactivate, archive) are staff-only, under
- * `/platform/tenants/:id/*` (platform admin); no member route changes a
- * tenant's lifecycle state.
+ * lifecycle changes (suspend, reactivate, archive, purge) are staff-only,
+ * under `/platform/tenants/:id/*` (platform admin; purge platform owner); no
+ * member route changes a tenant's lifecycle state.
  */
 import { MEMBERSHIP_ROLES, type MembershipRole } from '@/constants/tenant.constants'
 

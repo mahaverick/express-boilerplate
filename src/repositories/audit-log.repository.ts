@@ -1,7 +1,10 @@
 /**
- * @file Insert, list, and the retention purge's batch delete for `audit_logs`.
- * The table's trigger rejects every UPDATE, and every DELETE outside a transaction
- * the retention purge (retention.service.ts) has opened for it.
+ * @file Insert, list, the retention purge's batch delete, and a staff purge's
+ * redaction and tenant delete for `audit_logs`. The table's trigger rejects
+ * every UPDATE except that redaction, inside a transaction a staff purge
+ * (platform-purge.service.ts) opened for it, and every DELETE outside a
+ * transaction the retention purge (retention.service.ts) or a tenant purge
+ * opened for it.
  */
 import { and, desc, eq, inArray, sql, type SQL } from 'drizzle-orm'
 import type { AuditAccess, AuditAction } from '@/constants/audit.constants'
@@ -169,6 +172,37 @@ export class AuditLogRepository {
       .limit(limit)
       .for('update', { skipLocked: true })
     const result = await tx.delete(auditLogModel).where(inArray(auditLogModel.id, batch))
+    return result.count
+  }
+
+  /**
+   * Erase a person from the entries they acted in: `actor_user_id`, `ip`
+   * and `user_agent` become NULL; the action, target and time stay. The
+   * trigger allows this UPDATE only inside a staff purge's transaction, which
+   * sets the redact setting first (platform-purge.service.ts).
+   * @param userId - The actor being erased.
+   * @param tx - The purge's transaction.
+   * @returns How many entries were redacted.
+   */
+  async redactActor(userId: string, tx: DbTransaction): Promise<number> {
+    const result = await tx
+      .update(auditLogModel)
+      // eslint-disable-next-line unicorn/no-null -- SQL NULL is the erasure
+      .set({ actorUserId: null, ip: null, userAgent: null })
+      .where(eq(auditLogModel.actorUserId, userId))
+    return result.count
+  }
+
+  /**
+   * Delete every entry filed under one tenant, for a tenant purge. The
+   * trigger allows it only inside the purge settings
+   * (platform-purge.service.ts).
+   * @param tenantId - The tenant being purged.
+   * @param tx - The purge's transaction.
+   * @returns How many entries were deleted.
+   */
+  async deleteForTenant(tenantId: string, tx: DbTransaction): Promise<number> {
+    const result = await tx.delete(auditLogModel).where(eq(auditLogModel.tenantId, tenantId))
     return result.count
   }
 }

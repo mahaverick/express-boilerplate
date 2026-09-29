@@ -68,6 +68,14 @@ export function createPlatformRouter(): Router {
     writeLimiter,
     platformController.archiveTenant
   )
+  router.post(
+    '/tenants/:id/purge',
+    requirePlatformRole('owner'),
+    requireJsonContentType,
+    requireRecentAuth(),
+    writeLimiter,
+    platformController.purgeTenant
+  )
   router.get(
     '/tenants/:id',
     requirePlatformRole('viewer'),

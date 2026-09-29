@@ -2,7 +2,7 @@
  * @file Staff user management, mounted at `/api/v1/platform/users` by
  * `createPlatformRouter`, behind its router-wide `requireAuth`. Each route
  * names its own role gate and runs it first, before the JSON gate, the
- * step-up check (deactivate and delete) and the limiter, so a refused caller
+ * step-up check (deactivate, delete and purge) and the limiter, so a refused caller
  * gets the plain 404: no 415 and no `RateLimit-*` headers to show the route
  * exists.
  */
@@ -97,6 +97,14 @@ export function createPlatformUserRouter(limiters: PlatformLimiters): Router {
     requireRecentAuth(),
     limiters.writeLimiter,
     platformUserController.deleteUser
+  )
+  router.post(
+    '/:id/purge',
+    requirePlatformRole('owner'),
+    requireJsonContentType,
+    requireRecentAuth(),
+    limiters.writeLimiter,
+    platformUserController.purgeUser
   )
   return router
 }

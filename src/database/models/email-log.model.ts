@@ -1,7 +1,7 @@
 /**
  * @file The `email_logs` table: an append-only record of each outbound
  * email attempt that can never hold a raw token or a rendered body. Only
- * the retention purge deletes rows.
+ * the retention purge and a user purge (by recipient) delete rows.
  */
 import { sql, type InferInsertModel, type InferSelectModel } from 'drizzle-orm'
 import { check, index, pgTable, timestamp, varchar } from 'drizzle-orm/pg-core'
@@ -115,6 +115,8 @@ export const emailLogModel = pgTable(
   },
   (table) => [
     index('email_logs_created_at_idx').on(table.createdAt),
+    // A user purge deletes by address in any case; this keeps it off a table scan.
+    index('email_logs_recipient_lower_idx').on(sql`lower(${table.recipient})`),
     // sql.raw: a DDL CHECK cannot take bound parameters; the values are code constants.
     check(
       'email_logs_status_check',

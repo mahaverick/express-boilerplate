@@ -4,6 +4,7 @@
  */
 import { BaseController } from '@/controllers/base.controller'
 import { actorFrom } from '@/controllers/helpers.controller'
+import { purgeUser } from '@/services/platform-purge.service'
 import {
   createUser,
   deactivateUser,
@@ -131,6 +132,16 @@ class PlatformUserController extends BaseController {
     const { reason } = parseBody(reasonBodySchema, request.body)
     await deleteUser(actorFrom(request), userId, reason)
     messageResponse(response, 'User deleted.')
+  })
+
+  /**
+   * `POST /platform/users/:id/purge`: permanently delete a soft-deleted user.
+   */
+  purgeUser = this.handle(async (request, response) => {
+    const userId = parseIdParameter(request.params.id, USER_NOT_FOUND)
+    const { reason } = parseBody(reasonBodySchema, request.body)
+    await purgeUser(actorFrom(request), userId, reason)
+    messageResponse(response, 'User permanently deleted.')
   })
 }
 

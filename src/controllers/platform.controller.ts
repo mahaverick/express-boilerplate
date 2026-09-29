@@ -4,6 +4,7 @@
  */
 import { BaseController } from '@/controllers/base.controller'
 import { actorFrom } from '@/controllers/helpers.controller'
+import { purgeTenant } from '@/services/platform-purge.service'
 import { getPlatformStats } from '@/services/platform-stats.service'
 import {
   archiveTenant,
@@ -14,7 +15,7 @@ import {
   searchAll,
   suspendTenant,
 } from '@/services/platform-tenant.service'
-import { successResponse } from '@/utilities/response.utilities'
+import { messageResponse, successResponse } from '@/utilities/response.utilities'
 import { parseBody } from '@/validators/parse.validators'
 import {
   ownerInvitationBodySchema,
@@ -103,6 +104,16 @@ class PlatformController extends BaseController {
       await archiveTenant(actorFrom(request), tenantId, reason),
       'Tenant archived.'
     )
+  })
+
+  /**
+   * `POST /platform/tenants/:id/purge`: permanently delete an archived tenant.
+   */
+  purgeTenant = this.handle(async (request, response) => {
+    const tenantId = parseIdParameter(request.params.id, 'Tenant not found')
+    const { reason } = parseBody(reasonBodySchema, request.body)
+    await purgeTenant(actorFrom(request), tenantId, reason)
+    messageResponse(response, 'Tenant permanently deleted.')
   })
 
   /**

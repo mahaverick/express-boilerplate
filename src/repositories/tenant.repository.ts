@@ -4,7 +4,7 @@
  * tenant, its settings row and its owner membership in one transaction;
  * `createWithoutOwner` writes the first two, for staff.
  */
-import { and, eq, inArray, isNull, sql, type SQL } from 'drizzle-orm'
+import { and, eq, inArray, isNotNull, isNull, sql, type SQL } from 'drizzle-orm'
 import {
   SLUG_TAKEN_CODE,
   type MembershipRole,
@@ -327,5 +327,28 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
       .where(where)
       .returning()
     return row
+  }
+
+  /**
+   * Permanently delete an archived customer tenant. Settings, memberships
+   * and invitations cascade; `audit_logs.tenant_id` is RESTRICT, so its
+   * entries must go first.
+   * @param id - The tenant.
+   * @param tx - The purge's transaction.
+   * @returns True when an archived customer tenant was deleted.
+   */
+  async purgeArchived(id: string, tx: DbTransaction): Promise<boolean> {
+    const rows = await tx
+      .delete(tenantModel)
+      .where(
+        and(
+          eq(tenantModel.id, id),
+          eq(tenantModel.isPlatform, false),
+          eq(tenantModel.lifecycleState, 'archived'),
+          isNotNull(tenantModel.deletedAt)
+        )
+      )
+      .returning({ id: tenantModel.id })
+    return rows.length > 0
   }
 }

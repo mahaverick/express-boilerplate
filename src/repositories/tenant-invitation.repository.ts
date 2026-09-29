@@ -418,4 +418,18 @@ export class TenantInvitationRepository {
     const result = await tx.delete(invitation).where(inArray(invitation.id, batch))
     return result.count
   }
+
+  /**
+   * Delete every invitation addressed to an address, pending or not, for a
+   * user purge: each row holds the address itself.
+   * @param email - The address, in any case.
+   * @param tx - The purge's transaction.
+   * @returns How many invitations were deleted.
+   */
+  async deleteForEmail(email: string, tx: DbTransaction): Promise<number> {
+    const result = await tx
+      .delete(invitation)
+      .where(sql`lower(${invitation.email}) = lower(${email})`)
+    return result.count
+  }
 }
