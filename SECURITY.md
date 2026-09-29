@@ -346,34 +346,34 @@ specs, each built into middleware by `createRateLimiter(spec)`
 (`src/middlewares/rate-limit.middleware.ts`). Fifteen guard the auth router
 (every route on it except `GET /providers` has at least one), five guard
 tenant creation, member invitation, invitation preview and accept, and staff
-tenant search, and `authenticatedWrite` covers every other authenticated
+tenant search and stats, and `authenticatedWrite` covers every other authenticated
 write. Paths below are under `/api/v1`; a `user` key is the authenticated
 user's id, and an `email` key is the submitted `email`, trimmed and
 lowercased.
 
-| Route                                                              | Limiter (`rl:` prefix)                    | Limit              | Key                  |
-| ------------------------------------------------------------------ | ----------------------------------------- | ------------------ | -------------------- |
-| `POST /auth/register`                                              | `register`                                | 100 per hour       | IP                   |
-| `POST /auth/login`, in this order                                  | `login`                                   | 5 per 15 minutes   | IP + submitted email |
-|                                                                    | `login-ip`                                | 100 per 15 minutes | IP                   |
-|                                                                    | `login-account`                           | 100 per hour       | email                |
-| `POST /auth/refresh`                                               | `refresh`                                 | 300 per 5 minutes  | IP                   |
-| `POST /auth/logout`                                                | `logout`                                  | 300 per 5 minutes  | IP                   |
-| `POST /auth/verify-email`                                          | `verify-email`                            | 30 per 15 minutes  | IP                   |
-| `POST /auth/resend-verification`                                   | `resend-verification-ip`                  | 5 per hour         | IP                   |
-|                                                                    | `resend-verification-email`               | 20 per hour        | email                |
-| `POST /auth/forgot-password`                                       | `forgot-password-ip`                      | 5 per hour         | IP                   |
-|                                                                    | `forgot-password-email`                   | 20 per hour        | email                |
-| `POST /auth/reset-password`                                        | `reset-password`                          | 10 per 15 minutes  | IP                   |
-| `POST /auth/change-password`                                       | `change-password`                         | 5 per 15 minutes   | user                 |
-| `GET /auth/google` (when Google sign-in is on)                     | `google-oauth`                            | 300 per 5 minutes  | IP                   |
-| `GET /auth/google/callback` (same)                                 | `google-oauth-callback`                   | 300 per 5 minutes  | IP                   |
-| `POST /tenants`                                                    | `create-tenant`                           | 20 per hour        | user                 |
-| `POST /tenants/:slug/invitations`, `POST …/invitations/:id/resend` | `invite-tenant-member`, one shared budget | 30 per hour        | user                 |
-| `POST /invitations/preview`                                        | `invitation-preview`                      | 60 per 15 minutes  | IP                   |
-| `POST /invitations/accept` (ahead of `requireAuth`)                | `invitation-accept`                       | 20 per 15 minutes  | IP                   |
-| `GET /platform/tenants` (after the staff check)                    | `platform-search`                         | 60 per minute      | user                 |
-| Every other authenticated write (below)                            | `authenticated-write`                     | 60 per minute      | user                 |
+| Route                                                                  | Limiter (`rl:` prefix)                    | Limit              | Key                  |
+| ---------------------------------------------------------------------- | ----------------------------------------- | ------------------ | -------------------- |
+| `POST /auth/register`                                                  | `register`                                | 100 per hour       | IP                   |
+| `POST /auth/login`, in this order                                      | `login`                                   | 5 per 15 minutes   | IP + submitted email |
+|                                                                        | `login-ip`                                | 100 per 15 minutes | IP                   |
+|                                                                        | `login-account`                           | 100 per hour       | email                |
+| `POST /auth/refresh`                                                   | `refresh`                                 | 300 per 5 minutes  | IP                   |
+| `POST /auth/logout`                                                    | `logout`                                  | 300 per 5 minutes  | IP                   |
+| `POST /auth/verify-email`                                              | `verify-email`                            | 30 per 15 minutes  | IP                   |
+| `POST /auth/resend-verification`                                       | `resend-verification-ip`                  | 5 per hour         | IP                   |
+|                                                                        | `resend-verification-email`               | 20 per hour        | email                |
+| `POST /auth/forgot-password`                                           | `forgot-password-ip`                      | 5 per hour         | IP                   |
+|                                                                        | `forgot-password-email`                   | 20 per hour        | email                |
+| `POST /auth/reset-password`                                            | `reset-password`                          | 10 per 15 minutes  | IP                   |
+| `POST /auth/change-password`                                           | `change-password`                         | 5 per 15 minutes   | user                 |
+| `GET /auth/google` (when Google sign-in is on)                         | `google-oauth`                            | 300 per 5 minutes  | IP                   |
+| `GET /auth/google/callback` (same)                                     | `google-oauth-callback`                   | 300 per 5 minutes  | IP                   |
+| `POST /tenants`                                                        | `create-tenant`                           | 20 per hour        | user                 |
+| `POST /tenants/:slug/invitations`, `POST …/invitations/:id/resend`     | `invite-tenant-member`, one shared budget | 30 per hour        | user                 |
+| `POST /invitations/preview`                                            | `invitation-preview`                      | 60 per 15 minutes  | IP                   |
+| `POST /invitations/accept` (ahead of `requireAuth`)                    | `invitation-accept`                       | 20 per 15 minutes  | IP                   |
+| `GET /platform/tenants`, `GET /platform/stats` (after the staff check) | `platform-search`, one shared budget      | 60 per minute      | user                 |
+| Every other authenticated write (below)                                | `authenticated-write`                     | 60 per minute      | user                 |
 
 Each spec is backed by its **own** `SharedRateLimitStore`
 (`src/configs/rate-limit-store.config.ts`) under the key prefix `rl:<name>:`,
@@ -672,8 +672,9 @@ per-membership permission blob.
   `404 Not found`, identical to an unknown route. The search limiter runs
   after the role check, so a refused caller never sees `RateLimit-*` headers.
   An unauthenticated caller still gets 401, as on every authenticated router.
-- **Search is a separate path.** `GET /api/v1/platform/tenants` is the only
-  reader of `repositories/platform-tenant.repository.ts`, and a lint gate in
+- **Search and stats are separate paths.** `GET /api/v1/platform/tenants` is the only
+  reader of `repositories/platform-tenant.repository.ts`, `GET /api/v1/platform/stats` the only
+  reader of `repositories/platform-stats.repository.ts`, and a lint gate in
   `eslint.config.mjs` keeps it that way. `GET /tenants` still lists the
   caller's memberships only. `q` matches literally: `%`, `_` and `\` are
   escaped.
@@ -744,6 +745,13 @@ host is not within (`src/configs/env-consistency.config.ts`). `WEB_URL` builds
 the mailed links and the OAuth redirects, and `origin.utilities.ts` (see
 "CORS" below) decides from it whether a browser's `Origin` gets a grant. There
 is no `JWT_REFRESH_SECRET` at all (see "Authentication" above).
+
+**Frontend choice is an enum.** A request may say which frontend a link or
+OAuth redirect is for (`app: 'web' | 'apex'`), never where it goes; the
+origin comes from `WEB_URL` or `APEX_URL`. A bad `app` is a 400 on `register`
+and `forgot-password`, the usual 202 on `resend-verification`, and `'web'` on
+`/auth/google` (also for a repeated `?app=`) and for a session value read back
+at the callback.
 
 ## CORS
 

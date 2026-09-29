@@ -23,6 +23,12 @@ export function createPlatformRouter(): Router {
     createRateLimiter(RATE_LIMITS.platformSearch),
     platformController.searchTenants
   )
+  router.get(
+    '/stats',
+    requirePlatformRole('viewer'),
+    createRateLimiter(RATE_LIMITS.platformSearch),
+    platformController.getStats
+  )
   router.get('/audit-log', requirePlatformRole('admin'), auditController.listPlatformAuditLog)
   return router
 }

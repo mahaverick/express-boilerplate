@@ -220,7 +220,8 @@ rather than repeating them.
 - **Staff routes answer 404, and in `platform.routes.ts` the limiter goes
   after `requirePlatformRole`:** a limiter first would put `RateLimit-*`
   headers on the 404 and reveal the route.
-- **`repositories/platform-tenant.repository.ts` is imported only from
+- **`repositories/platform-tenant.repository.ts` and
+  `repositories/platform-stats.repository.ts` are imported only from
   `services/platform-*.service.ts`** (lint enforces it). "Your tenants" stays
   on `TenantRepository.listForUser`; don't merge the two paths.
 - **Auto-join grants `viewer` only.** Don't widen it: one compromised inbox on

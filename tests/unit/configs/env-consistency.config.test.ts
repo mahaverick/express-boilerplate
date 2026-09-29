@@ -50,6 +50,96 @@ function runChecks(
 }
 
 describe('assertEnvConsistent', () => {
+  describe('Google sign-in from Apex on another host', () => {
+    const google = {
+      GOOGLE_CLIENT_ID: 'id',
+      GOOGLE_CLIENT_SECRET: 'secret',
+      APP_URL: 'https://app.example.com',
+      WEB_URL: 'https://app.example.com',
+    }
+
+    it('refuses boot when APEX_URL is another host and COOKIE_DOMAIN is unset', () => {
+      const { error } = runChecks({ ...deployed, ...google, APEX_URL: 'https://admin.example.com' })
+      expect(error).toContain("APEX_URL's host admin.example.com")
+      expect(error).toContain('COOKIE_DOMAIN')
+    })
+
+    it('refuses boot when COOKIE_DOMAIN does not cover the Apex host', () => {
+      const { error } = runChecks({
+        ...deployed,
+        ...google,
+        APP_URL: 'https://app.example.com',
+        APEX_URL: 'https://admin.other.example',
+        COOKIE_DOMAIN: 'example.com',
+      })
+      expect(error).toContain("APEX_URL's host admin.other.example")
+    })
+
+    it('passes when COOKIE_DOMAIN covers both hosts', () => {
+      const result = runChecks({
+        ...deployed,
+        ...google,
+        APEX_URL: 'https://admin.example.com',
+        COOKIE_DOMAIN: 'example.com',
+      })
+      expect(result.error).toBeUndefined()
+    })
+
+    it('passes when COOKIE_DOMAIN has a leading dot and covers the Apex host', () => {
+      const result = runChecks({
+        ...deployed,
+        ...google,
+        APEX_URL: 'https://admin.example.com',
+        COOKIE_DOMAIN: '.example.com',
+      })
+      expect(result.error).toBeUndefined()
+    })
+
+    it('compares hosts and COOKIE_DOMAIN ignoring case', () => {
+      const result = runChecks({
+        ...deployed,
+        ...google,
+        APEX_URL: 'https://Admin.Example.COM',
+        COOKIE_DOMAIN: '.EXAMPLE.com',
+      })
+      expect(result.error).toBeUndefined()
+    })
+
+    it('refuses a leading-dot COOKIE_DOMAIN that does not cover the Apex host', () => {
+      const { error } = runChecks({
+        ...deployed,
+        ...google,
+        APEX_URL: 'https://admin.other.example',
+        COOKIE_DOMAIN: '.example.com',
+      })
+      expect(error).toContain("APEX_URL's host admin.other.example")
+    })
+
+    it('passes when Apex shares APP_URL’s host', () => {
+      const result = runChecks({
+        ...deployed,
+        ...google,
+        APEX_URL: 'https://app.example.com/admin',
+      })
+      expect(result.error).toBeUndefined()
+    })
+
+    it('passes when Google sign-in is off, whatever the hosts', () => {
+      const result = runChecks({ ...deployed, APEX_URL: 'https://admin.example.com' })
+      expect(result.error).toBeUndefined()
+    })
+
+    it('passes locally, where every origin is localhost', () => {
+      const result = runChecks({
+        ...local,
+        GOOGLE_CLIENT_ID: 'id',
+        GOOGLE_CLIENT_SECRET: 'secret',
+        APEX_URL: 'http://localhost:5174',
+      })
+      expect(result.error).toBeUndefined()
+    })
+  })
+
   it('passes a local environment on every default, with no warning', () => {
     expect(runChecks(local)).toEqual({ error: undefined, warnings: [] })
   })

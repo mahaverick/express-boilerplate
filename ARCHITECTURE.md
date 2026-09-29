@@ -70,7 +70,9 @@ everything before it.
 `createApiRouter()` (`src/routes/index.routes.ts`) mounts one router per
 feature under `/api/v1`: `auth`, `profile`, `notifications`, `tenants`,
 `invitations` and `platform`. A new feature router is one more `router.use(...)`
-line there, never a change to `app.ts`.
+line there, never a change to `app.ts`. The platform router serves
+`GET /platform/tenants` and `GET /platform/stats` (platform viewer) and
+`GET /platform/audit-log` (platform admin).
 
 **Open auth routes.** `register`, `login`, `verify-email`,
 `resend-verification`, `forgot-password`, `reset-password`, `refresh` and
@@ -110,7 +112,8 @@ a final optional `executor: DbExecutor = db` parameter, so a caller can run it
 inside its own transaction. The other repositories do not extend it, because
 their tables have no soft-delete concept for its policy to apply to:
 `email_logs` and `audit_logs` are append-only, `platform-tenant.repository.ts`
-is a read-only cross-tenant search, and the rest (auth providers,
+is a read-only cross-tenant search, `platform-stats.repository.ts` holds the
+read-only Overview aggregates, and the rest (auth providers,
 notifications, notification preferences, tenant settings, invitations,
 memberships) have no `deletedAt` column. See [DATABASE.md](DATABASE.md) for
 the models.
@@ -182,7 +185,8 @@ controllers. A seventh boundary is enforced separately, by
 core `no-restricted-imports` over `src/**` with
 `src/services/platform-*.service.ts` ignored, keeps
 `repositories/platform-tenant.repository.ts` (every customer tenant, for
-staff search) out of every other module, so "your tenants" can never be
+staff search) and `repositories/platform-stats.repository.ts` (staff Overview
+aggregates) out of every other module, so "your tenants" can never be
 served from it. `tests/unit/lint-gates.test.ts` proves each of the eight
 fires, against a committed violating fixture under
 `tests/fixtures/lint-zones/`. `import-x/no-restricted-paths` is a
@@ -252,6 +256,7 @@ layers above.
 | `tenant-access.service.ts`   | `lockTenantAccess(actor, tenantId, otherUserIds, mode, tx)`: locks owners, memberships and, when the actor has no membership, the platform membership, in that order (step 4 above), returning the actor's access and the locked memberships. `resolveActorAccess(actor, tenantId, tx)` wraps it for a caller with no other memberships to lock. Membership wins; the platform tenant is members-only. |
 | `platform.service.ts`        | `getPlatformMembership` (one indexed read, no cache), `autoJoin` (viewer only, verified addresses on `PLATFORM_EMAIL_DOMAINS`), `bootstrapGrant` (the `platform:grant` script only).                                                                                                                                                                                                                   |
 | `platform-tenant.service.ts` | `searchAll`: every customer tenant, for staff. The only importer of `platform-tenant.repository.ts`.                                                                                                                                                                                                                                                                                                   |
+| `platform-stats.service.ts`  | `getPlatformStats`: totals and zero-filled per-UTC-day sign-up and email series for the staff Overview. The only importer of `platform-stats.repository.ts`. `emails[].failed` counts failed attempts: `email_logs` has one row per attempt, so a mail retried and then sent adds both a failed and a sent row.                                                                                        |
 | `audit.service.ts`           | `record(entry, tx)`, in the caller's transaction, with strict per-action metadata; `recordPlatformAccess` (hourly, deduplicated in Redis); `listForTenant` and `listPlatformWide` (keyset).                                                                                                                                                                                                            |
 
 ## Directory rules
@@ -402,7 +407,8 @@ what it prints.
 | `NODE_ENV`                            | **yes**  | —                      | Node runtime mode: development, test or production. Required. Express reads it directly, and only production hides stack traces in its built-in error handler, so every APP_ENV but local must run production. test is for the test suite.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `APP_PORT`                            | no       | `4040`                 | Port the HTTP server listens on. Defaults to 4040.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `APP_URL`                             | **yes**  | —                      | Public origin of this API. Used to build the Google OAuth callback URL (passport.config.ts) — must match a redirect URI registered in Google Cloud Console exactly, including scheme and trailing slash. http://localhost:4040 locally.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `WEB_URL`                             | **yes**  | —                      | Public origin of the frontend. Email verification links are built from it — the link points at your frontend, which POSTs the token to this API. http://localhost:5173 locally.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `WEB_URL`                             | **yes**  | —                      | Public origin of the frontend, with no query or fragment. Email verification links are built from it — the link points at your frontend, which POSTs the token to this API. http://localhost:5173 locally.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `APEX_URL`                            | no       | —                      | Public origin of the Apex staff dashboard, e.g. https://admin.example.com, with no query or fragment. When set, platform-tenant invitation links, and the verification, password-reset and Google sign-in flows started with app "apex", point here instead of WEB_URL. Unset sends every link to WEB_URL. Google sign-in from a host other than APP_URL also needs COOKIE_DOMAIN covering both.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `DATABASE_URL`                        | **yes**  | —                      | Postgres connection URL. The compose stack publishes Postgres on localhost:5433: postgres://boilerplate:boilerplate@localhost:5433/boilerplate.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `REDIS_URL`                           | **yes**  | —                      | Redis connection URL. The compose stack publishes Redis on localhost:6380: redis://localhost:6380.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `DB_POOL_MAX`                         | no       | `10`                   | Most open connections in the Postgres pool, per process. Defaults to 10. The test suite sets 2, so its parallel workers stay under Postgres's default 100 connections.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
@@ -514,6 +520,32 @@ runs `assertEnvConsistent`
 ([`src/configs/env-consistency.config.ts`](src/configs/env-consistency.config.ts)),
 which refuses the combinations above. It lists every problem in one
 message, each naming the variable and the fix, and exits 1.
+
+### A second frontend: Apex
+
+`APEX_URL` (optional) names the Apex staff dashboard. Links and redirects pick
+a frontend with `frontendUrl(app)` (`verification.service.ts`), where `app` is
+`'web'` or `'apex'`, never a URL. It returns `APEX_URL` for `'apex'` when that
+is set, and `WEB_URL` otherwise, so leaving `APEX_URL` unset sends every link
+to `WEB_URL`.
+
+- Invitations to the platform tenant always link to Apex; every other
+  invitation links to `WEB_URL` (`tenant-invitation.service.ts`).
+- `register`, `resend-verification` and `forgot-password` take an optional
+  `app` (default `'web'`) that picks the frontend of the verification or
+  reset link. The "address already registered" mail carries no link, so it
+  has no `app`.
+- `GET /auth/google?app=apex` stores the choice in the OAuth session
+  (`rememberOAuthApp`), and the callback redirects to that frontend
+  (`oauthAppOf`, `src/controllers/helpers.controller.ts`).
+
+`APEX_URL` is not in the CORS allow-list (`isAllowedOrigin` grants `WEB_URL`
+and `CORS_ALLOWED_ORIGINS`), so an Apex that calls this API directly from its
+own origin must be listed in `CORS_ALLOWED_ORIGINS`; one that proxies `/api`
+through its own host needs no entry. Google calls back to `APP_URL` only, so
+when Google sign-in is on (`GOOGLE_CLIENT_ID`) and the Apex host differs from
+`APP_URL`'s, `COOKIE_DOMAIN` must cover both; boot refuses otherwise
+(`apexCookieDomainProblem`, `env-consistency.config.ts`).
 
 ## Health checks
 

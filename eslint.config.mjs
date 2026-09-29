@@ -235,7 +235,7 @@ export default tseslint.config(
     rules: { 'check-file/filename-naming-convention': 'off' },
   },
   {
-    // Security: the staff search reads every tenant, so only platform services import it; lint-gates.test.ts proves this fires.
+    // Security: the staff search and stats read every tenant, so only platform services import it; lint-gates.test.ts proves this fires.
     files: ['src/**/*.ts'],
     ignores: ['src/services/platform-*.service.ts'],
     rules: {
@@ -244,9 +244,14 @@ export default tseslint.config(
         {
           patterns: [
             {
-              group: ['@/repositories/platform-tenant.repository', '**/platform-tenant.repository'],
+              group: [
+                '@/repositories/platform-tenant.repository',
+                '**/platform-tenant.repository',
+                '@/repositories/platform-stats.repository',
+                '**/platform-stats.repository',
+              ],
               message:
-                'Only services/platform-*.service.ts may import repositories/platform-tenant.repository.',
+                'Only services/platform-*.service.ts may import the cross-tenant platform repositories.',
             },
           ],
         },

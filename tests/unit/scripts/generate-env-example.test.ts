@@ -16,7 +16,7 @@ describe('render', () => {
   })
 
   it('renders the description for a documented field as a comment', () => {
-    expect(output).toContain('# Public origin of the frontend.')
+    expect(output).toContain('# Public origin of the frontend, with no query or fragment.')
   })
 
   it('has no JWT_REFRESH_SECRET field at all — refresh tokens are opaque, not JWTs', () => {

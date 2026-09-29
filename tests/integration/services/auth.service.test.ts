@@ -59,7 +59,7 @@ describe('post-reply work never rejects', () => {
   it("register's follow-up for a free address resolves even when issuing the token fails", async () => {
     const email = uniqueEmail()
     createdEmails.push(email)
-    const sendFollowUpMail = await register({ email, password: VALID_PASSWORD })
+    const sendFollowUpMail = await register({ email, password: VALID_PASSWORD, app: 'web' })
     const errorSpy = vi.spyOn(logger, 'error')
 
     await withMutatedMethod(UserTokenRepository.prototype, 'create', failingQuery, async () => {
@@ -72,8 +72,8 @@ describe('post-reply work never rejects', () => {
   it("register's follow-up for a taken address resolves even when the lookup fails", async () => {
     const email = uniqueEmail()
     createdEmails.push(email)
-    await register({ email, password: VALID_PASSWORD })
-    const sendFollowUpMail = await register({ email, password: VALID_PASSWORD })
+    await register({ email, password: VALID_PASSWORD, app: 'web' })
+    const sendFollowUpMail = await register({ email, password: VALID_PASSWORD, app: 'web' })
     const errorSpy = vi.spyOn(logger, 'error')
 
     await withMutatedMethod(UserRepository.prototype, 'findByEmail', failingQuery, async () => {
@@ -96,7 +96,7 @@ describe('post-reply work never rejects', () => {
   it("prepareResendVerification's mail resolves even when issuing the token fails", async () => {
     const email = uniqueEmail()
     createdEmails.push(email)
-    await register({ email, password: VALID_PASSWORD })
+    await register({ email, password: VALID_PASSWORD, app: 'web' })
     const sendMail = await prepareResendVerification(email)
     const errorSpy = vi.spyOn(logger, 'error')
 
@@ -110,7 +110,7 @@ describe('post-reply work never rejects', () => {
   it('login answers a null platform role, and logs the failed read without its parameters', async () => {
     const email = uniqueEmail()
     createdEmails.push(email)
-    await register({ email, password: VALID_PASSWORD })
+    await register({ email, password: VALID_PASSWORD, app: 'web' })
     await sql`update users set email_verified_at = now() where lower(email) = ${email.toLowerCase()}`
     const warnSpy = vi.spyOn(logger, 'warn')
 

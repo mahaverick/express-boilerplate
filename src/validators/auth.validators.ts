@@ -12,6 +12,7 @@ import {
   MAX_PASSWORD_BYTES,
   MIN_PASSWORD_LENGTH,
 } from '@/constants/auth.constants'
+import { FRONTEND_APPS } from '@/constants/frontend.constants'
 import { safeText } from '@/validators/safe-text.validators'
 
 /**
@@ -43,6 +44,12 @@ const registrationPasswordSchema = z
   })
 
 /**
+ * Which frontend a mailed link or OAuth redirect should open. An enum, never a
+ * URL, so a request can only choose between the two configured origins.
+ */
+export const frontendAppSchema = z.enum(FRONTEND_APPS).default('web')
+
+/**
  * Registration request body: an email, a password meeting the registration
  * password policy, and optional display names.
  */
@@ -63,6 +70,7 @@ export const registerSchema = z.object({
     .max(MAX_NAME_LENGTH)
     .refine(safeText(), 'Last name contains characters that are not allowed')
     .optional(),
+  app: frontendAppSchema,
 })
 
 /**
@@ -86,12 +94,15 @@ export const loginSchema = z.object({
 export type LoginInput = z.infer<typeof loginSchema>
 
 /**
- * Forgot-password request body: just an email. Malformed or well-formed,
- * known or unknown, this schema never produces a distinguishable outcome —
- * `forgotPassword` (auth.controller.ts) answers the same 202 either way.
+ * Forgot-password request body: an email and the `app` whose frontend the
+ * reset link opens. Whether the address belongs to an account never changes
+ * the outcome: `forgotPassword` (auth.controller.ts) answers the same 202 for
+ * a known and an unknown one. A malformed email or an invalid `app` is a 400
+ * that names the field and does not echo the value.
  */
 export const forgotPasswordSchema = z.object({
   email: emailSchema,
+  app: frontendAppSchema,
 })
 
 /**

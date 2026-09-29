@@ -15,7 +15,7 @@ import {
   type RefreshCookieSpec,
 } from '@/constants/auth.constants'
 import { BaseController } from '@/controllers/base.controller'
-import { authenticatedUserId } from '@/controllers/helpers.controller'
+import { authenticatedUserId, oauthAppOf } from '@/controllers/helpers.controller'
 import { HttpError } from '@/errors/http-error'
 import { redactedForLog } from '@/errors/postgres-errors'
 import { toPublicAuthProviders } from '@/presenters/auth-provider.presenter'
@@ -24,6 +24,7 @@ import * as authService from '@/services/auth.service'
 import { completeGoogleSignIn } from '@/services/google-auth.service'
 import { logger } from '@/services/logger.service'
 import { revokeRefreshToken } from '@/services/session.service'
+import { frontendUrl } from '@/services/verification.service'
 import { messageResponse, successResponse } from '@/utilities/response.utilities'
 import {
   changePasswordSchema,
@@ -33,6 +34,19 @@ import {
   resetPasswordSchema,
 } from '@/validators/auth.validators'
 import { parseBody } from '@/validators/parse.validators'
+
+/**
+ * A URL without any trailing slashes, so `${base}/path` never doubles one.
+ * @param url - A configured frontend URL.
+ * @returns The URL with trailing slashes removed.
+ */
+function withoutTrailingSlashes(url: string): string {
+  let end = url.length
+  while (end > 0 && url[end - 1] === '/') {
+    end -= 1
+  }
+  return url.slice(0, end)
+}
 
 /**
  * The refresh cookie's name, path and domain for this deployment.
@@ -216,7 +230,7 @@ function setRefreshTokenCookie(
  * cookie's point of view — and a `'strict'` cookie set here would then be
  * withheld on the very next request too, since that next request (the
  * browser following `handleGoogleCallback`'s own redirect to
- * `${WEB_URL}/auth/callback`) is issued by a document that just loaded
+ * the frontend's `/auth/callback`) is issued by a document that just loaded
  * arriving from that same cross-site hop. `'lax'` still withholds the
  * cookie on cross-site subresource requests and cross-site unsafe (non-GET)
  * requests — the actual CSRF surface `'strict'` exists to close for every
@@ -426,7 +440,7 @@ class AuthController extends BaseController {
 
     messageResponse(response, FORGOT_PASSWORD_RESPONSE_MESSAGE, 202)
     // Never rejects: the service logs its own failure.
-    void authService.requestPasswordReset(input.email)
+    void authService.requestPasswordReset(input.email, input.app)
   })
 
   /**
@@ -484,8 +498,9 @@ class AuthController extends BaseController {
    * body is an immediately-invoked async function — an async callback passed
    * directly would turn a rejection into an unhandled one.
    *
-   * Every failure redirects to the frontend's `/login?error=...`, never this
-   * API's JSON envelope (the browser arrived by a full-page navigation).
+   * Every failure redirects to `/login?error=...` on the frontend that
+   * started the sign-in, never this API's JSON envelope (the browser arrived
+   * by a full-page navigation).
    * `HttpError.code` is forwarded verbatim; anything else is
    * `processing_failed`; Google reporting an error or no profile is
    * `google_auth_failed`. Not wrapped in `handle()` for the same reason.
@@ -494,7 +509,7 @@ class AuthController extends BaseController {
    * @param next - Forwards a synchronous failure from `passport.authenticate` itself; every failure from the async body redirects instead.
    */
   handleGoogleCallback = (request: Request, response: Response, next: NextFunction): void => {
-    const env = getEnv()
+    const frontend = withoutTrailingSlashes(frontendUrl(oauthAppOf(request)))
 
     const authenticate = passport.authenticate(
       GOOGLE_STRATEGY_NAME,
@@ -503,7 +518,7 @@ class AuthController extends BaseController {
         void (async () => {
           if (error || !profile) {
             logger.error('Google OAuth callback failed', { error })
-            response.redirect(`${env.WEB_URL}/login?error=google_auth_failed`)
+            response.redirect(`${frontend}/login?error=google_auth_failed`)
             return
           }
 
@@ -511,14 +526,14 @@ class AuthController extends BaseController {
             const refreshToken = await completeGoogleSignIn(profile)
             setOAuthRefreshTokenCookie(request, response, refreshToken.raw, refreshToken.expiresAt)
 
-            response.redirect(`${env.WEB_URL}/auth/callback`)
+            response.redirect(`${frontend}/auth/callback`)
           } catch (innerError) {
             logger.error('Google OAuth callback failed', { error: redactedForLog(innerError) })
             const code =
               innerError instanceof HttpError && innerError.code
                 ? innerError.code
                 : 'processing_failed'
-            response.redirect(`${env.WEB_URL}/login?error=${code}`)
+            response.redirect(`${frontend}/login?error=${code}`)
           }
         })()
       }

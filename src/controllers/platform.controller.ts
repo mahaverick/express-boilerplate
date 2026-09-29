@@ -3,10 +3,14 @@
  * and `requirePlatformRole` (platform.routes.ts).
  */
 import { BaseController } from '@/controllers/base.controller'
+import { getPlatformStats } from '@/services/platform-stats.service'
 import { searchAll } from '@/services/platform-tenant.service'
 import { successResponse } from '@/utilities/response.utilities'
 import { parseBody } from '@/validators/parse.validators'
-import { platformTenantSearchSchema } from '@/validators/platform.validators'
+import {
+  platformStatsQuerySchema,
+  platformTenantSearchSchema,
+} from '@/validators/platform.validators'
 
 /**
  * Handlers for `/api/v1/platform`.
@@ -19,6 +23,15 @@ class PlatformController extends BaseController {
     const query = parseBody(platformTenantSearchSchema, request.query)
     const page = await searchAll(query)
     successResponse(response, page, 'Tenants retrieved.')
+  })
+
+  /**
+   * `GET /platform/stats`: totals and daily series for the staff Overview.
+   */
+  getStats = this.handle(async (request, response) => {
+    const query = parseBody(platformStatsQuerySchema, request.query)
+    const stats = await getPlatformStats(query.range)
+    successResponse(response, stats, 'Platform stats retrieved.')
   })
 }
 
