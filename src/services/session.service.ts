@@ -9,7 +9,7 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import jwt from 'jsonwebtoken'
 import { getEnv } from '@/configs/env.config'
-import { REFRESH_REUSE_GRACE_MS } from '@/constants/auth.constants'
+import { ACCESS_TOKEN_EXPIRED_CODE, REFRESH_REUSE_GRACE_MS } from '@/constants/auth.constants'
 import type { TokenPurpose, UserToken } from '@/database/models/user-token.model'
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
@@ -83,6 +83,13 @@ export interface AccessTokenPayload {
    * itself at this moment.
    */
   exp?: number
+  /**
+   * When the session last authenticated, in seconds since the epoch (the
+   * OpenID Connect claim name). `requireRecentAuth` (auth.middleware.ts)
+   * reads it. Absent on a token whose session predates migration 0018,
+   * which that middleware treats as stale.
+   */
+  auth_time?: number
 }
 
 /**
@@ -95,6 +102,12 @@ export interface IssuedRefreshToken {
   userId: string
   sessionId: string
   expiresAt: Date
+  /**
+   * When the session last authenticated, as stored on the token's row; the
+   * caller signs it into the access token. Null only for a session that
+   * started before migration 0018.
+   */
+  authenticatedAt: Date | null
 }
 
 /**
@@ -135,8 +148,10 @@ function generateRawToken(): string {
  * @param userId - The user the token belongs to.
  * @param purpose - Which of `TokenPurpose`'s three things this row is.
  * @param ttlMs - How long the token is valid for, in milliseconds.
- * @param sessionId - The rotation-chain id, for `'refresh'`; omitted (column stays NULL — neither column has a DB default) for every other purpose.
- * @param sessionStartedAt - When that chain began, for `'refresh'`; omitted for every other purpose.
+ * @param session - For `'refresh'`: the rotation-chain id, when the chain began, and when it last authenticated. Omitted for every other purpose, leaving all three columns NULL (none has a DB default).
+ * @param session.sessionId - The rotation-chain id.
+ * @param session.sessionStartedAt - When that chain began.
+ * @param session.authenticatedAt - When it last authenticated; null for a chain from before migration 0018.
  * @param executor - Where to insert. Defaults to the pool.
  * @returns The inserted row's id, the raw token to hand back, and its expiry.
  */
@@ -144,8 +159,7 @@ async function createTokenRow(
   userId: string,
   purpose: TokenPurpose,
   ttlMs: number,
-  sessionId: string | undefined,
-  sessionStartedAt: Date | undefined,
+  session: { sessionId: string; sessionStartedAt: Date; authenticatedAt: Date | null } | undefined,
   executor: DbExecutor = db
 ): Promise<{ id: string; raw: string; expiresAt: Date }> {
   const raw = generateRawToken()
@@ -155,8 +169,9 @@ async function createTokenRow(
     {
       userId,
       purpose,
-      sessionId,
-      sessionStartedAt,
+      sessionId: session?.sessionId,
+      sessionStartedAt: session?.sessionStartedAt,
+      authenticatedAt: session?.authenticatedAt,
       tokenHash: hashToken(raw),
       expiresAt,
     },
@@ -167,14 +182,24 @@ async function createTokenRow(
 }
 
 /**
- * Sign a short-lived access token carrying a user's id.
+ * Sign a short-lived access token carrying a user's id, their session, and
+ * when that session last authenticated.
  * @param user - The authenticated user.
  * @param sessionId - The session this token belongs to.
+ * @param authenticatedAt - When the session last authenticated, signed as `auth_time`; null or omitted leaves the claim out, which step-up routes treat as stale.
  * @returns A signed JWT, expiring after `ACCESS_TOKEN_TTL`.
  */
-export function signAccessToken(user: User, sessionId: string): string {
+export function signAccessToken(
+  user: User,
+  sessionId: string,
+  // eslint-disable-next-line unicorn/no-null -- the stored column is null for a session before migration 0018
+  authenticatedAt: Date | null = null
+): string {
   const env = getEnv()
   const payload: AccessTokenPayload = { sub: user.id, sid: sessionId, jti: randomUUID() }
+  if (authenticatedAt !== null) {
+    payload.auth_time = Math.floor(authenticatedAt.getTime() / MS_PER_SECOND)
+  }
   return jwt.sign(payload, env.JWT_ACCESS_SECRET, {
     algorithm: 'HS256',
     expiresIn: Math.floor(requireDurationMs(env.ACCESS_TOKEN_TTL) / MS_PER_SECOND),
@@ -226,6 +251,7 @@ export function verifyAccessToken(token: string): VerifyAccessTokenResult {
     if (typeof decoded.sid === 'string') payload.sid = decoded.sid
     if (typeof decoded.jti === 'string') payload.jti = decoded.jti
     if (typeof decoded.exp === 'number') payload.exp = decoded.exp
+    if (typeof decoded.auth_time === 'number') payload.auth_time = decoded.auth_time
     return { ok: true, payload }
   } catch (error) {
     return { ok: false, reason: error instanceof jwt.TokenExpiredError ? 'expired' : 'invalid' }
@@ -234,9 +260,10 @@ export function verifyAccessToken(token: string): VerifyAccessTokenResult {
 
 /**
  * Issue a new refresh token for a session. This starts the session's absolute
- * clock (`sessionStartedAt`); `rotateRefreshToken` copies it forward instead of
- * calling this. Calling it again for an existing sessionId would restart that
- * clock; login always mints a fresh sessionId.
+ * clock (`sessionStartedAt`). The session's authentication time starts at the
+ * same moment. `rotateRefreshToken` copies both forward instead of calling
+ * this. Calling it again for an existing sessionId would restart both clocks;
+ * login always mints a fresh sessionId.
  * @param userId - The user the token belongs to.
  * @param sessionId - The session (rotation-chain) id this token starts or continues.
  * @param executor - Where to insert the token row: a caller's transaction, or the pool (default).
@@ -254,12 +281,11 @@ export async function issueRefreshToken(
     userId,
     'refresh',
     requireDurationMs(env.REFRESH_TOKEN_TTL),
-    sessionId,
-    sessionStartedAt,
+    { sessionId, sessionStartedAt, authenticatedAt: sessionStartedAt },
     executor
   )
 
-  return { raw, userId, sessionId, expiresAt }
+  return { raw, userId, sessionId, expiresAt, authenticatedAt: sessionStartedAt }
 }
 
 /**
@@ -277,7 +303,7 @@ export async function issueToken(
   purpose: Exclude<TokenPurpose, 'refresh'>,
   ttlMs: number
 ): Promise<IssuedToken> {
-  const { raw, expiresAt } = await createTokenRow(userId, purpose, ttlMs, undefined, undefined)
+  const { raw, expiresAt } = await createTokenRow(userId, purpose, ttlMs, undefined)
   return { raw, userId, purpose, expiresAt }
 }
 
@@ -339,7 +365,9 @@ type RotationOutcome = RotationIssued | RotationRefused
 async function findGraceSession(
   existing: UserToken,
   tx: DbTransaction
-): Promise<{ sessionId: string; sessionStartedAt: Date } | undefined> {
+): Promise<
+  { sessionId: string; sessionStartedAt: Date; authenticatedAt: Date | null } | undefined
+> {
   const { purpose, sessionId, sessionStartedAt, consumedAt, expiresAt, tokenHash } = existing
   if (purpose !== 'refresh' || sessionId === null || sessionStartedAt === null) return undefined
   // consumedAt is null for a row killed by logout/reuse revocation, never a rotation.
@@ -352,7 +380,7 @@ async function findGraceSession(
   if (expiresAt.getTime() <= Date.now()) return undefined
   // Committed kill markers only, so a sibling rotation still in flight can't look like a logout.
   if (await userTokenRepository.isSessionKilled(sessionId, tx)) return undefined
-  return { sessionId, sessionStartedAt }
+  return { sessionId, sessionStartedAt, authenticatedAt: existing.authenticatedAt }
 }
 
 /**
@@ -363,6 +391,7 @@ async function findGraceSession(
  * @param userId - The session's user.
  * @param sessionId - The session (rotation-chain) id.
  * @param sessionStartedAt - When the session began; copied forward so the absolute TTL never resets.
+ * @param authenticatedAt - When the session last authenticated; copied forward like sessionStartedAt.
  * @param tx - The rotation's transaction.
  * @returns The new row's id and token; or, past `SESSION_ABSOLUTE_TTL`, a refusal naming the session to kill.
  */
@@ -370,6 +399,7 @@ async function continueSession(
   userId: string,
   sessionId: string,
   sessionStartedAt: Date,
+  authenticatedAt: Date | null,
   tx: DbTransaction
 ): Promise<RotationOutcome> {
   const env = getEnv()
@@ -382,11 +412,10 @@ async function continueSession(
     userId,
     'refresh',
     requireDurationMs(env.REFRESH_TOKEN_TTL),
-    sessionId,
-    sessionStartedAt,
+    { sessionId, sessionStartedAt, authenticatedAt },
     tx
   )
-  return { ok: true, id, issued: { raw, userId, sessionId, expiresAt } }
+  return { ok: true, id, issued: { raw, userId, sessionId, expiresAt, authenticatedAt } }
 }
 
 /**
@@ -419,6 +448,7 @@ async function rotateUnderUserLock(
         existing.userId,
         graceSession.sessionId,
         graceSession.sessionStartedAt,
+        graceSession.authenticatedAt,
         tx
       )
     }
@@ -439,7 +469,13 @@ async function rotateUnderUserLock(
     return { ok: false, message: 'Refresh token expired' }
   }
 
-  const next = await continueSession(claimed.userId, sessionId, sessionStartedAt, tx)
+  const next = await continueSession(
+    claimed.userId,
+    sessionId,
+    sessionStartedAt,
+    claimed.authenticatedAt,
+    tx
+  )
   if (!next.ok) return next
   await userTokenRepository.update(claimed.id, { replacedById: next.id }, {}, tx)
   return next
@@ -547,8 +583,9 @@ export function revokeSessionRows(
 }
 
 /**
- * Deny the sessions a committed password change or reset revoked. Never
- * rejects, because the change already stands. When Redis refuses, those
+ * Deny the sessions a committed revocation revoked: a password change or
+ * reset, or a staff deactivation, sign-out or deletion. Never rejects,
+ * because the revocation already stands. When Redis refuses, those
  * sessions' access tokens stay valid for up to ACCESS_TOKEN_TTL, as when the
  * denylist fails open, and one error line is logged.
  * @param userId - The user whose sessions were revoked.
@@ -559,7 +596,7 @@ export async function denySessionsAfterCommit(userId: string, sessionIds: string
   const outcomes = await Promise.all(sessionIds.map((sessionId) => denySession(sessionId)))
   const failed = outcomes.filter((outcome) => outcome === 'failed').length
   if (failed > 0) {
-    logger.error('session denylist write failed after password change', {
+    logger.error('session denylist write failed after revocation', {
       userId,
       sessionCount: failed,
     })
@@ -578,4 +615,39 @@ export async function denySessionsAfterCommit(userId: string, sessionIds: string
 export async function revokeAllSessions(userId: string): Promise<void> {
   const sessionIds = await withTransaction((tx) => revokeSessionRows(userId, {}, tx))
   await denySessions(sessionIds)
+}
+
+/**
+ * Record that a session's user just proved their identity again (by password,
+ * `POST /auth/reauthenticate`): move
+ * `authenticated_at` to now on every row of the session
+ * (`markSessionAuthenticated`). Holds the user row FOR NO KEY UPDATE, which
+ * waits for a rotation holding it FOR SHARE, so that rotation's new row
+ * exists before the update and gets the new time.
+ * @param userId - The session's user.
+ * @param sessionId - The session (rotation-chain) id, from the access token's `sid`.
+ * @param tx - A caller's transaction to run in, so an audit entry can commit with the change; a transaction of its own when omitted.
+ * @returns The new authentication time, for the caller to sign into a fresh access token.
+ * @throws {HttpError} 401 with ACCESS_TOKEN_EXPIRED_CODE when the user is gone, soft-deleted or inactive, or the session has no live refresh token (logged out, revoked, expired, past SESSION_ABSOLUTE_TTL, or not this user's): the client's refresh then fails and it signs in again.
+ */
+export function markSessionReauthenticated(
+  userId: string,
+  sessionId: string,
+  tx?: DbTransaction
+): Promise<Date> {
+  const mark = async (transaction: DbTransaction): Promise<Date> => {
+    const user = await userRepository.lockById(userId, 'no key update', transaction)
+    if (!user?.active) throw new HttpError('Session ended', 401, ACCESS_TOKEN_EXPIRED_CODE)
+    // The absolute lifetime, as continueSession judges it: past it, no rotation would succeed either.
+    const startedAfter = new Date(Date.now() - requireDurationMs(getEnv().SESSION_ABSOLUTE_TTL))
+    const authenticatedAt = await userTokenRepository.markSessionAuthenticated(
+      userId,
+      sessionId,
+      startedAfter,
+      transaction
+    )
+    if (!authenticatedAt) throw new HttpError('Session ended', 401, ACCESS_TOKEN_EXPIRED_CODE)
+    return authenticatedAt
+  }
+  return tx ? mark(tx) : withTransaction(mark)
 }

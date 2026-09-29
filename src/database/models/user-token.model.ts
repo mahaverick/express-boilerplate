@@ -81,6 +81,17 @@ export const userTokenModel = pgTable(
      */
     sessionStartedAt: timestamp('session_started_at', { withTimezone: true }),
     /**
+     * When the session last proved who its user is. Set with
+     * `sessionStartedAt` when the session starts, copied forward by every
+     * rotation, and moved to now on every row of the session by
+     * `markSessionReauthenticated` (session.service.ts), so a rotation or a
+     * grace-window sibling minted from any row carries the new time. Signed
+     * into access tokens as `auth_time` for `requireRecentAuth`
+     * (auth.middleware.ts). Null outside `'refresh'`, and on rows written
+     * before migration 0018.
+     */
+    authenticatedAt: timestamp('authenticated_at', { withTimezone: true }),
+    /**
      * A SHA-256 digest in hex, never the token itself.
      */
     tokenHash: varchar('token_hash', { length: 64 }).notNull(),

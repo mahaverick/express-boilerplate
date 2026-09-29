@@ -19,6 +19,7 @@ import { verificationController } from '@/controllers/verification.controller'
 import { requireAuth } from '@/middlewares/auth.middleware'
 import { requireJsonContentType } from '@/middlewares/content-type.middleware'
 import { rememberOAuthApp } from '@/middlewares/oauth-app.middleware'
+import { requirePlatformRole } from '@/middlewares/platform.middleware'
 import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
 
 /**
@@ -81,6 +82,14 @@ export function createAuthRouter(): Router {
     requireAuth,
     createRateLimiter(RATE_LIMITS.changePassword),
     authController.changePassword
+  )
+  // Staff-only step-up: the platform gate answers non-staff the unknown-route 404 before this limiter keys on request.user.id.
+  router.post(
+    '/reauthenticate',
+    requireAuth,
+    requirePlatformRole('viewer'),
+    createRateLimiter(RATE_LIMITS.reauthenticate),
+    authController.reauthenticate
   )
 
   // No limiter: a read of the caller's own data, with no oracle to probe.

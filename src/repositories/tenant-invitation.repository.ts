@@ -4,7 +4,7 @@
  * soft-deleted tenant.
  */
 import { and, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm'
-import type { MembershipRole } from '@/constants/tenant.constants'
+import type { MembershipRole, TenantLifecycleState } from '@/constants/tenant.constants'
 import {
   tenantInvitationModel,
   type TenantInvitation,
@@ -75,11 +75,11 @@ export interface PendingInvitationSummary {
 }
 
 /**
- * An invitation with the (not soft-deleted) tenant it is for.
+ * An invitation with the (not soft-deleted) tenant it is for, and that tenant's lifecycle state.
  */
 export interface InvitationWithTenant {
   invitation: TenantInvitation
-  tenant: { id: string; name: string; slug: string }
+  tenant: { id: string; name: string; slug: string; lifecycleState: TenantLifecycleState }
 }
 
 /**
@@ -195,7 +195,7 @@ export class TenantInvitationRepository {
 
   /**
    * A redeemable invitation by its token hash: pending, not expired, and for
-   * a tenant that is not soft-deleted.
+   * a tenant that is not soft-deleted and is active.
    * @param tokenHash - SHA-256 hex of the raw token.
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns The invitation with its tenant and inviter, or undefined.
@@ -207,7 +207,12 @@ export class TenantInvitationRepository {
     const [row] = await executor
       .select({
         invitation,
-        tenant: { id: tenantModel.id, name: tenantModel.name, slug: tenantModel.slug },
+        tenant: {
+          id: tenantModel.id,
+          name: tenantModel.name,
+          slug: tenantModel.slug,
+          lifecycleState: tenantModel.lifecycleState,
+        },
         inviterId: userModel.id,
         inviterFirstName: userModel.firstName,
         inviterLastName: userModel.lastName,
@@ -215,7 +220,12 @@ export class TenantInvitationRepository {
       .from(invitation)
       .innerJoin(
         tenantModel,
-        and(eq(invitation.tenantId, tenantModel.id), isNull(tenantModel.deletedAt))
+        and(
+          eq(invitation.tenantId, tenantModel.id),
+          isNull(tenantModel.deletedAt),
+          // A suspended tenant's invitations wait: reactivating makes an unexpired one work again.
+          eq(tenantModel.lifecycleState, 'active')
+        )
       )
       .leftJoin(userModel, and(eq(invitation.invitedBy, userModel.id), isNull(userModel.deletedAt)))
       .where(and(eq(invitation.tokenHash, tokenHash), redeemableCondition()))
@@ -245,7 +255,12 @@ export class TenantInvitationRepository {
     const [row] = await executor
       .select({
         invitation,
-        tenant: { id: tenantModel.id, name: tenantModel.name, slug: tenantModel.slug },
+        tenant: {
+          id: tenantModel.id,
+          name: tenantModel.name,
+          slug: tenantModel.slug,
+          lifecycleState: tenantModel.lifecycleState,
+        },
       })
       .from(invitation)
       .innerJoin(
@@ -258,10 +273,26 @@ export class TenantInvitationRepository {
   }
 
   /**
+   * Revoke every pending invitation of a tenant, for archiving it.
+   * @param tenantId - The tenant.
+   * @param tx - The transaction.
+   * @returns How many were revoked.
+   */
+  async revokeAllPending(tenantId: string, tx: DbTransaction): Promise<number> {
+    const rows = await tx
+      .update(invitation)
+      .set({ revokedAt: sql`now()`, updatedAt: sql`now()` })
+      .where(and(eq(invitation.tenantId, tenantId), pendingCondition()))
+      .returning({ id: invitation.id })
+    return rows.length
+  }
+
+  /**
    * Atomically mark a redeemable invitation accepted by `userId`. The check
    * and the write are one UPDATE, so of two concurrent claims exactly one
    * gets the row. Unlike `claimOnce`, expiry is part of the predicate, and
-   * so is the tenant not being soft-deleted.
+   * so is the tenant being live and active (a suspended tenant's invitations
+   * wait).
    * @param tokenHash - SHA-256 hex of the raw token.
    * @param userId - The accepting user.
    * @param executor - Where to run the query. Defaults to the pool.
@@ -279,7 +310,7 @@ export class TenantInvitationRepository {
         and(
           eq(invitation.tokenHash, tokenHash),
           redeemableCondition(),
-          sql`exists (select 1 from ${tenantModel} where ${tenantModel.id} = ${invitation.tenantId} and ${tenantModel.deletedAt} is null)`
+          sql`exists (select 1 from ${tenantModel} where ${tenantModel.id} = ${invitation.tenantId} and ${tenantModel.deletedAt} is null and ${tenantModel.lifecycleState} = 'active')`
         )
       )
       .returning()
@@ -326,6 +357,41 @@ export class TenantInvitationRepository {
   }
 
   /**
+   * Revoke every pending invitation one user sent, in any tenant: once they
+   * are deactivated or deleted, nothing should still admit people on their
+   * authority. Expired rows are included; they are pending until revoked.
+   * @param userId - The inviter.
+   * @param executor - Where to run the query; the caller's transaction.
+   * @returns The revoked rows, for their audit entries.
+   */
+  revokePendingByInviter(userId: string, executor: DbExecutor = db): Promise<TenantInvitation[]> {
+    return executor
+      .update(invitation)
+      .set({ revokedAt: sql`now()`, updatedAt: sql`now()` })
+      .where(and(eq(invitation.invitedBy, userId), pendingCondition()))
+      .returning()
+  }
+
+  /**
+   * Revoke every pending invitation of this tenant offering `role`, expired or not.
+   * @param tenantId - The tenant.
+   * @param role - The role offered.
+   * @param executor - The transaction.
+   * @returns The revoked rows, for their audit entries.
+   */
+  async revokePendingByRole(
+    tenantId: string,
+    role: MembershipRole,
+    executor: DbTransaction
+  ): Promise<TenantInvitation[]> {
+    return executor
+      .update(invitation)
+      .set({ revokedAt: sql`now()`, updatedAt: sql`now()` })
+      .where(and(eq(invitation.tenantId, tenantId), eq(invitation.role, role), pendingCondition()))
+      .returning()
+  }
+
+  /**
    * Delete up to `limit` invitations whose latest of expiry, acceptance and
    * revocation is before `cutoff`. `greatest` ignores NULLs, so a pending
    * invitation counts from its expiry. No index: the table holds one row per
@@ -349,6 +415,24 @@ export class TenantInvitationRepository {
       .limit(limit)
       .for('update', { skipLocked: true })
     const result = await tx.delete(invitation).where(inArray(invitation.id, batch))
+    return result.count
+  }
+
+  /**
+   * Delete the invitations addressed to an address, pending or not, created
+   * at or before a moment, for a user purge: each row holds the address
+   * itself, and the address may have been claimed again after that moment.
+   * @param email - The address, in any case.
+   * @param createdAtOrBefore - The latest `created_at` deleted (the purged user's deletion), compared to the millisecond, the precision a `Date` holds.
+   * @param tx - The purge's transaction.
+   * @returns How many invitations were deleted.
+   */
+  async deleteForEmail(email: string, createdAtOrBefore: Date, tx: DbTransaction): Promise<number> {
+    const result = await tx
+      .delete(invitation)
+      .where(
+        sql`lower(${invitation.email}) = lower(${email}) and date_trunc('milliseconds', ${invitation.createdAt}) <= ${createdAtOrBefore.toISOString()}::timestamptz`
+      )
     return result.count
   }
 }

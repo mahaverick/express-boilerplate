@@ -1,7 +1,7 @@
 /**
  * @file Query access to `users`, on `BaseRepository`.
  */
-import { eq, sql, type SQL } from 'drizzle-orm'
+import { and, eq, isNotNull, sql, type SQL } from 'drizzle-orm'
 import { userModel, type User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
 import {
@@ -13,7 +13,7 @@ import { db, type DbExecutor, type DbTransaction } from '@/services/database.ser
 
 /**
  * Query access to the `users` table: lookup by id or email, creation,
- * update, and soft-delete. Every lookup excludes a soft-deleted user by
+ * update, soft-delete, and the purge of a soft-deleted user. Every lookup excludes a soft-deleted user by
  * default — see `BaseRepository.scope`, which `findByEmail` below is built
  * on so it can never drift from `findById`'s soft-delete behaviour.
  */
@@ -152,5 +152,21 @@ export class UserRepository extends BaseRepository<(typeof userModel)['_']['conf
       .where(where)
       .returning()
     return row
+  }
+
+  /**
+   * Permanently delete a user who is already soft-deleted. Rows that
+   * reference the user cascade or are set null by their foreign keys, except
+   * `audit_logs.actor_user_id` (RESTRICT): redact it first.
+   * @param id - The user.
+   * @param tx - The purge's transaction.
+   * @returns True when a soft-deleted row was deleted.
+   */
+  async purgeDeleted(id: string, tx: DbTransaction): Promise<boolean> {
+    const rows = await tx
+      .delete(userModel)
+      .where(and(eq(userModel.id, id), isNotNull(userModel.deletedAt)))
+      .returning({ id: userModel.id })
+    return rows.length > 0
   }
 }

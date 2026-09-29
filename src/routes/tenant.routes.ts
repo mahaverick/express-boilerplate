@@ -14,12 +14,19 @@ import { tenantController } from '@/controllers/tenant.controller'
 import { requireAuth } from '@/middlewares/auth.middleware'
 import { requireJsonContentType } from '@/middlewares/content-type.middleware'
 import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
-import { requireRole, resolveTenant } from '@/middlewares/tenant.middleware'
+import {
+  isOfferingAdminOrOwner,
+  requireRecentAuthOnPlatformTenant,
+  requireRole,
+  resolveTenant,
+} from '@/middlewares/tenant.middleware'
 
 /**
  * Build the tenant routes. `requireRole` checks the effective role, so staff
  * admins pass the owner/admin routes (the audit log included) and staff
- * viewers do not.
+ * viewers do not. On the platform tenant, member role changes, removals,
+ * admin/owner invitations and every resend also need a recent sign-in
+ * (`requireRecentAuthOnPlatformTenant`).
  * @returns A router mounted at `/api/v1/tenants` by `index.routes.ts`, every route behind `requireAuth`.
  */
 export function createTenantRouter(): Router {
@@ -53,6 +60,7 @@ export function createTenantRouter(): Router {
     writeLimiter,
     resolveTenant(),
     requireRole('owner'),
+    requireRecentAuthOnPlatformTenant(),
     tenantController.updateMemberRole
   )
   router.delete(
@@ -61,6 +69,7 @@ export function createTenantRouter(): Router {
     writeLimiter,
     resolveTenant(),
     requireRole('owner', 'admin'),
+    requireRecentAuthOnPlatformTenant(),
     tenantController.removeMember
   )
 
@@ -78,6 +87,7 @@ export function createTenantRouter(): Router {
     inviteRateLimiter,
     resolveTenant(),
     requireRole('owner', 'admin'),
+    requireRecentAuthOnPlatformTenant(isOfferingAdminOrOwner),
     tenantController.inviteMember
   )
   router.post(
@@ -86,6 +96,7 @@ export function createTenantRouter(): Router {
     inviteRateLimiter,
     resolveTenant(),
     requireRole('owner', 'admin'),
+    requireRecentAuthOnPlatformTenant(),
     tenantController.resendInvitation
   )
   router.delete(

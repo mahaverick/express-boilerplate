@@ -162,6 +162,14 @@ describe('parseEnv', () => {
     expect(() => parseEnv({ ...valid, PASSWORD_RESET_TTL: 'soon' })).toThrow(/PASSWORD_RESET_TTL/)
   })
 
+  it('defaults ACCOUNT_SETUP_TTL to 24h', () => {
+    expect(parseEnv(valid).ACCOUNT_SETUP_TTL).toBe('24h')
+  })
+
+  it('rejects an ACCOUNT_SETUP_TTL that ms() cannot parse', () => {
+    expect(() => parseEnv({ ...valid, ACCOUNT_SETUP_TTL: 'soon' })).toThrow(/ACCOUNT_SETUP_TTL/)
+  })
+
   it('defaults INVITATION_TTL to 7d', () => {
     expect(parseEnv(valid).INVITATION_TTL).toBe('7d')
   })

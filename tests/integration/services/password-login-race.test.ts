@@ -37,7 +37,7 @@ import { withMutatedMethod } from '../../helpers/mutate'
 const userRepository = new UserRepository()
 const OLD_PASSWORD = 'correct horse battery staple'
 const NEW_PASSWORD = 'a brand new secret passphrase'
-const DENYLIST_FAILURE = 'session denylist write failed after password change'
+const DENYLIST_FAILURE = 'session denylist write failed after revocation'
 /**
  * A password change hashes with bcrypt before its user lock, which is
  * CPU-bound, so the waiter probe's deadline starts at the lock; this

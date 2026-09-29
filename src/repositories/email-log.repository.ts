@@ -120,8 +120,9 @@ function normalizedForInsert(entry: NewEmailLog): NewEmailLog {
 
 /**
  * Query access to the append-only `email_logs` table: record one delivery
- * attempt, look up a recipient's rows, and purge old ones. It answers "did the
- * email send?" without putting a token or a rendered body in a log.
+ * attempt, look up a recipient's rows, purge old ones, and delete a purged
+ * user's. It answers "did the email send?" without putting a token or a
+ * rendered body in a log.
  */
 export class EmailLogRepository {
   /**
@@ -184,6 +185,28 @@ export class EmailLogRepository {
       .limit(limit)
       .for('update', { skipLocked: true })
     const result = await tx.delete(emailLogModel).where(inArray(emailLogModel.id, batch))
+    return result.count
+  }
+
+  /**
+   * Delete the log rows for an address written at or before a moment, for a
+   * user purge: the rows hold the address itself, and the address may have
+   * been claimed again after that moment.
+   * @param email - The address, in any case.
+   * @param createdAtOrBefore - The latest `created_at` deleted (the purged user's deletion), compared to the millisecond, the precision a `Date` holds.
+   * @param tx - The purge's transaction.
+   * @returns How many rows were deleted.
+   */
+  async deleteByRecipient(
+    email: string,
+    createdAtOrBefore: Date,
+    tx: DbTransaction
+  ): Promise<number> {
+    const result = await tx
+      .delete(emailLogModel)
+      .where(
+        sql`lower(${emailLogModel.recipient}) = lower(${email}) and date_trunc('milliseconds', ${emailLogModel.createdAt}) <= ${createdAtOrBefore.toISOString()}::timestamptz`
+      )
     return result.count
   }
 }

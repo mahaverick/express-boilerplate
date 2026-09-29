@@ -30,6 +30,7 @@ import {
   changePasswordSchema,
   forgotPasswordSchema,
   loginSchema,
+  reauthenticateSchema,
   registerSchema,
   resetPasswordSchema,
 } from '@/validators/auth.validators'
@@ -469,6 +470,25 @@ class AuthController extends BaseController {
     await authService.changePassword(authenticatedUserId(request), request.sessionId, input)
 
     messageResponse(response, 'Password has been changed.')
+  })
+
+  /**
+   * `POST /auth/reauthenticate`: step-up for staff, behind `requireAuth` and
+   * `requirePlatformRole('viewer')`. Checks the password against the caller's
+   * own account, marks the session named by the token's `sid` as just
+   * authenticated, and replies with a new access token. The refresh cookie
+   * is untouched: the session is the same. See auth.service.ts's
+   * `reauthenticate` for why a wrong password is a 400.
+   */
+  reauthenticate = this.handle(async (request, response) => {
+    const input = parseBody(reauthenticateSchema, request.body)
+    const result = await authService.reauthenticate(
+      authenticatedUserId(request),
+      request.sessionId,
+      input
+    )
+
+    successResponse(response, { accessToken: result.accessToken }, 'Identity confirmed.')
   })
 
   /**

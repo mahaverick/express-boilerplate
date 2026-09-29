@@ -7,6 +7,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import { getEnv } from '@/configs/env.config'
+import { ACCESS_TOKEN_EXPIRED_CODE } from '@/constants/auth.constants'
 import type { FrontendApp } from '@/constants/frontend.constants'
 import { JobPriority } from '@/constants/queue.constants'
 import type { MembershipRole } from '@/constants/tenant.constants'
@@ -17,8 +18,10 @@ import { redactedForLog } from '@/errors/postgres-errors'
 import { addEmailJob } from '@/jobs/email.job'
 import { addNotificationJob } from '@/jobs/notification.job'
 import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
+import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserRepository } from '@/repositories/user.repository'
-import { withTransaction } from '@/services/database.service'
+import { record } from '@/services/audit.service'
+import { withTransaction, type DbTransaction } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
 import { autoJoinSafely, getPlatformMembership } from '@/services/platform.service'
 import {
@@ -26,6 +29,7 @@ import {
   denySessionsAfterCommit,
   issueRefreshToken,
   issueToken,
+  markSessionReauthenticated,
   revokeAllSessions,
   revokeSessionRows,
   rotateRefreshToken,
@@ -47,16 +51,21 @@ import { getDummyHash, hashPassword, isPasswordValid } from '@/utilities/passwor
 import type {
   ChangePasswordInput,
   LoginInput,
+  ReauthenticateInput,
   RegisterInput,
   ResetPasswordInput,
 } from '@/validators/auth.validators'
 
 const userRepository = new UserRepository()
 const authProviderRepository = new AuthProviderRepository()
+const tenantRepository = new TenantRepository()
 
 const INVALID_RESET_TOKEN_MESSAGE = 'Invalid or expired reset link.'
 const FEDERATED_ONLY_MESSAGE =
   'This account signs in with Google and has no password. Use forgot-password to set one.'
+const INCORRECT_PASSWORD_MESSAGE = 'Incorrect password.'
+const REAUTH_FEDERATED_MESSAGE =
+  'This account signs in with Google and has no password. Set a password to confirm sensitive actions.'
 
 /**
  * A successful login: the user row, a signed access token and a new refresh token.
@@ -206,9 +215,11 @@ async function platformRoleForLogin(userId: string): Promise<MembershipRole | nu
  * return for any of them would be a timing oracle. The message is literally
  * false for an unverified account with the right password; that is accepted.
  *
- * The token is issued in a transaction that re-reads the hash FOR SHARE. A
+ * The token is issued in a transaction that re-reads the user FOR SHARE. A
  * password change or reset still in flight is waited for, and one that
  * committed after the compare answers the same 401, so no session outlives it.
+ * A deactivation or soft delete that committed after the first read answers
+ * the same 401 there too.
  * @param input - The validated login body.
  * @returns The user, their platform role, an access token and a new refresh token.
  * @throws {HttpError} 401 'Invalid email or password'.
@@ -231,12 +242,13 @@ export async function login(input: LoginInput): Promise<LoginResult> {
   const sessionId = randomUUID()
   const refreshToken = await withTransaction(async (tx) => {
     const locked = await userRepository.lockById(user.id, 'share', tx)
-    if (locked?.passwordHash !== comparedHash) {
+    // Re-checked under the lock: a deactivation or delete that committed since the first read wins.
+    if (!locked?.active || locked.passwordHash !== comparedHash) {
       throw new HttpError('Invalid email or password', 401)
     }
     return issueRefreshToken(user.id, sessionId, tx)
   })
-  const accessToken = signAccessToken(user, sessionId)
+  const accessToken = signAccessToken(user, sessionId, refreshToken.authenticatedAt)
   const platformRole = await platformRoleForLogin(user.id)
   return { user, accessToken, refreshToken, platformRole }
 }
@@ -244,6 +256,8 @@ export async function login(input: LoginInput): Promise<LoginResult> {
 /**
  * Rotate a refresh token for a new access/refresh pair, re-checking that
  * the account is still active (as requireAuth does for every bearer request).
+ * The access token keeps the session's authentication time: refreshing is not
+ * re-authenticating.
  * @param rawToken - The raw refresh token from the cookie.
  * @returns A new access token and the rotated refresh token.
  * @throws {HttpError} 401, from rotation or when the account is gone or inactive.
@@ -254,19 +268,21 @@ export async function refresh(rawToken: string): Promise<RefreshResult> {
   if (!user || !user.active) {
     throw new HttpError('Account no longer exists or is inactive', 401)
   }
-  return { accessToken: signAccessToken(user, rotated.sessionId), refreshToken: rotated }
+  return {
+    accessToken: signAccessToken(user, rotated.sessionId, rotated.authenticatedAt),
+    refreshToken: rotated,
+  }
 }
 
 /**
- * Issue a password-reset token and mail the link, but only when `email`
- * belongs to an existing account.
- * @param email - The address submitted to `/forgot-password`.
+ * Issue a password-reset token for `user` and queue the reset mail. Rejects
+ * when the token or the job cannot be written; callers decide whether that
+ * is swallowed (forgot-password) or reported (staff password-setup).
+ * @param user - The account to reset.
  * @param app - The frontend the reset link opens.
+ * @returns Resolves once the mail job is queued.
  */
-async function sendPasswordResetMailIfRegistered(email: string, app: FrontendApp): Promise<void> {
-  const user = await userRepository.findByEmail(email)
-  if (!user) return
-
+export async function sendPasswordResetMail(user: User, app: FrontendApp): Promise<void> {
   const issued = await issueToken(
     user.id,
     'password_reset',
@@ -289,6 +305,19 @@ async function sendPasswordResetMailIfRegistered(email: string, app: FrontendApp
       },
     },
   })
+}
+
+/**
+ * Issue a password-reset token and mail the link, but only when `email`
+ * belongs to an existing, active account.
+ * @param email - The address submitted to `/forgot-password`.
+ * @param app - The frontend the reset link opens.
+ */
+async function sendPasswordResetMailIfRegistered(email: string, app: FrontendApp): Promise<void> {
+  const user = await userRepository.findByEmail(email)
+  // A deactivated account could not sign in after resetting; the caller's reply is the same either way.
+  if (!user?.active) return
+  await sendPasswordResetMail(user, app)
 }
 
 /**
@@ -446,4 +475,89 @@ export async function getAuthProviders(userId: string): Promise<AuthProvidersRes
 
   const providers = await authProviderRepository.findByUser(userId)
   return { providers, hasPassword: user.passwordHash !== null }
+}
+
+/**
+ * A confirmed step-up: a new access token for the same session.
+ */
+export interface ReauthenticateResult {
+  accessToken: string
+}
+
+/**
+ * Audit one step-up attempt in the platform tenant: `POST
+ * /auth/reauthenticate` admits staff only, so the actor is a member there.
+ * @param userId - The staff member, actor and target both.
+ * @param outcome - Whether the identity was confirmed.
+ * @param tx - The transaction to write in.
+ * @throws {HttpError} 500 when the platform tenant is missing.
+ */
+async function recordReauthentication(
+  userId: string,
+  outcome: 'success' | 'failure',
+  tx: DbTransaction
+): Promise<void> {
+  const platform = await tenantRepository.findPlatformTenant(tx)
+  if (!platform) throw new HttpError('The platform tenant is missing', 500)
+  await record(
+    {
+      action: 'auth.reauthenticated',
+      actor: { userId },
+      access: 'member',
+      tenantId: platform.id,
+      targetId: userId,
+      metadata: { outcome },
+    },
+    tx
+  )
+}
+
+/**
+ * Confirm a signed-in staff member's identity again with their password, for
+ * step-up (`requireRecentAuth`): move the session's `authenticated_at` to now
+ * and sign a new access token carrying it. The refresh token is untouched,
+ * since the session is the same.
+ *
+ * A wrong password is a 400, never a 401: every client signs out on a
+ * non-expiry 401 that carried a token, and a mistyped password must not end
+ * the session. A success and a wrong password are audited
+ * (`auth.reauthenticated`): a success in the transaction that moves the
+ * time, a wrong password in a transaction of its own, since the refusal
+ * writes nothing else. A token without a session, an account gone or
+ * inactive, a passwordless account and a rate-limited attempt are refused
+ * before any audit write. A correct password on a session that ended is
+ * refused by `markSessionReauthenticated` before the success entry is
+ * written, so it leaves none.
+ * @param userId - The authenticated caller.
+ * @param sessionId - The caller's session (the token's `sid`); undefined for a token without one.
+ * @param input - The validated `{ password }` body.
+ * @returns A new access token for the same session.
+ * @throws {HttpError} 401 with ACCESS_TOKEN_EXPIRED_CODE for a token without `sid`, an account gone or inactive, or a session that has ended; 400 for a passwordless account or a wrong password.
+ */
+export async function reauthenticate(
+  userId: string,
+  sessionId: string | undefined,
+  input: ReauthenticateInput
+): Promise<ReauthenticateResult> {
+  if (sessionId === undefined) {
+    throw new HttpError('Session ended', 401, ACCESS_TOKEN_EXPIRED_CODE)
+  }
+  const user = await userRepository.findById(userId)
+  if (!user || !user.active) {
+    throw new HttpError('Account no longer exists or is inactive', 401, ACCESS_TOKEN_EXPIRED_CODE)
+  }
+  if (!user.passwordHash) {
+    throw new HttpError(REAUTH_FEDERATED_MESSAGE, 400)
+  }
+  if (!(await isPasswordValid(input.password, user.passwordHash))) {
+    await withTransaction((tx) => recordReauthentication(userId, 'failure', tx))
+    throw new HttpError(INCORRECT_PASSWORD_MESSAGE, 400)
+  }
+
+  const authenticatedAt = await withTransaction(async (tx) => {
+    const at = await markSessionReauthenticated(userId, sessionId, tx)
+    await recordReauthentication(userId, 'success', tx)
+    return at
+  })
+  return { accessToken: signAccessToken(user, sessionId, authenticatedAt) }
 }

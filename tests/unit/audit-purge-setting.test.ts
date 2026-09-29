@@ -1,7 +1,7 @@
 /**
- * @file audit_logs' delete trigger only lets a DELETE through inside a
- * transaction that set the purge settings. Asserts that only
- * retention.service.ts names them anywhere under src/.
+ * @file audit_logs' trigger lets a DELETE or a redacting UPDATE through only
+ * inside a transaction that set its settings. Asserts that only the retention
+ * purge and the staff purge name them anywhere under src/.
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -23,8 +23,14 @@ function sourceFilesNaming(needle: string): string[] {
     .toSorted((a, b) => a.localeCompare(b))
 }
 
-describe('the audit purge settings', () => {
-  it('are named only by the retention purge', () => {
-    expect(sourceFilesNaming('app.audit_purge')).toEqual(['src/services/retention.service.ts'])
+describe('the audit purge and redact settings', () => {
+  it('are named only by the retention purge and the staff purge', () => {
+    expect(sourceFilesNaming('app.audit_purge')).toEqual([
+      'src/services/platform-purge.service.ts',
+      'src/services/retention.service.ts',
+    ])
+    expect(sourceFilesNaming('app.audit_redact')).toEqual([
+      'src/services/platform-purge.service.ts',
+    ])
   })
 })

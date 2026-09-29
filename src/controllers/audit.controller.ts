@@ -5,7 +5,7 @@
  */
 import { BaseController } from '@/controllers/base.controller'
 import { tenantPrincipal } from '@/controllers/helpers.controller'
-import { toAuditEntry, toPlatformAuditEntry } from '@/presenters/audit.presenter'
+import { hideStaffReason, toAuditEntry, toPlatformAuditEntry } from '@/presenters/audit.presenter'
 import { listForTenant, listPlatformWide } from '@/services/audit.service'
 import { successResponse } from '@/utilities/response.utilities'
 import {
@@ -19,15 +19,20 @@ import { parseBody } from '@/validators/parse.validators'
  */
 class AuditController extends BaseController {
   /**
-   * `GET /tenants/:slug/audit-log`: this tenant's entries, newest first.
+   * `GET /tenants/:slug/audit-log`: this tenant's entries, newest first. A member
+   * does not see the reason staff gave for a staff action; staff (platform access) do.
    */
   listTenantAuditLog = this.handle(async (request, response) => {
     const principal = tenantPrincipal(request)
     const query = parseBody(tenantAuditLogQuerySchema, request.query)
     const page = await listForTenant(principal.tenantId, query)
+    const shape =
+      principal.access === 'member'
+        ? (row: (typeof page.rows)[number]) => hideStaffReason(toAuditEntry(row))
+        : toAuditEntry
     successResponse(
       response,
-      { entries: page.rows.map((row) => toAuditEntry(row)), nextCursor: page.nextCursor },
+      { entries: page.rows.map((row) => shape(row)), nextCursor: page.nextCursor },
       'Audit log retrieved.'
     )
   })

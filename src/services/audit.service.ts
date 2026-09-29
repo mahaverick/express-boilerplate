@@ -222,6 +222,7 @@ export async function listPlatformWide(query: PlatformAuditLogQuery): Promise<Au
   return listPage(
     {
       tenantId: query.tenantId,
+      targetId: query.targetId,
       action: query.action,
       actorUserId: query.actorUserId,
       access: query.access,

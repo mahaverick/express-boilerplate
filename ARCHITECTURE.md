@@ -70,9 +70,40 @@ everything before it.
 `createApiRouter()` (`src/routes/index.routes.ts`) mounts one router per
 feature under `/api/v1`: `auth`, `profile`, `notifications`, `tenants`,
 `invitations` and `platform`. A new feature router is one more `router.use(...)`
-line there, never a change to `app.ts`. The platform router serves
-`GET /platform/tenants` and `GET /platform/stats` (platform viewer) and
-`GET /platform/audit-log` (platform admin).
+line there, never a change to `app.ts`.
+
+Every authenticated OPTIONS that reaches the platform router gets the
+unknown-route 404 (`refusePlatformOptions`), so Express's automatic `Allow`
+answer never lists a staff route's methods. `cors` has already answered an
+allowed-origin preflight, and `requireAuth` refuses an OPTIONS without a
+bearer token; staff routes serve no cross-origin preflight of their own. The
+router serves staff reads to any platform role: `GET /platform/tenants` (with
+`state` and back-paging), `GET /platform/tenants/:id` (any lifecycle state),
+`GET /platform/users` (with `status=deleted` for soft-deleted users), `GET
+/platform/users/:id` (a soft-deleted user too) and `GET /platform/stats`.
+Platform admins also get `GET /platform/audit-log` (filterable by `tenantId`,
+`targetId`, actor, action and access) and every create, update and soft
+action: create a tenant and invite its owner, re-invite an owner, suspend,
+reactivate and archive a tenant, create and edit users, deactivate,
+reactivate, sign out and soft-delete users, and send set-password or
+verification mail. Platform owners also get the two hard deletes, `POST
+/platform/users/:id/purge` and `POST /platform/tenants/:id/purge`, and may act
+on other staff owners. Each route names its own `requirePlatformRole`, which
+answers 404 below it. Deactivate, delete, both purges, suspend, archive and
+the owner re-invitation also need a sign-in within the last 10 minutes
+(`requireRecentAuth`, 401 `REAUTH_REQUIRED`); `POST /auth/reauthenticate`
+(staff only, password only) renews it. A staff sign-out, deactivation or
+delete revokes every token the user holds, whatever its purpose, so an
+unredeemed verification or set-password link dies with the sessions. Staff
+work inside an active tenant (edit, members, invitations, settings) goes
+through the ordinary `/tenants/:slug/*` routes with the platform role. On the
+platform tenant those member routes are how staff roles change, with step-up
+on a role change, a removal, an invitation offering admin or owner, and a
+resend, and a last-owner guard that counts active owners only. Every
+successful `/platform` write that the role gate admitted logs one `Staff
+write` line (`logStaffWrites`, `platform.middleware.ts`: method, path, status,
+actor id, and the target's type and id when the path names one; never the
+body); the audit log is the record.
 
 **Open auth routes.** `register`, `login`, `verify-email`,
 `resend-verification`, `forgot-password`, `reset-password`, `refresh` and
@@ -88,7 +119,7 @@ password hashing, user-enumeration resistance and rate limiting.
 **Authenticated routes** sit behind `requireAuth`
 (`src/middlewares/auth.middleware.ts`). The profile, notification, tenant and
 platform routers mount it once with `router.use(requireAuth)`, so a route added
-later inherits the gate. `change-password`, `providers` and
+later inherits the gate. `change-password`, `reauthenticate`, `providers` and
 `POST /invitations/accept` mount it per route. `requireAuth` verifies the
 bearer access token (`verifyAccessToken`), refuses a token whose session is on
 the Redis denylist (`isSessionDenied`), then reloads the user by id. The reload
@@ -111,9 +142,11 @@ supplying the four queries it cannot express generically (`selectOne`,
 a final optional `executor: DbExecutor = db` parameter, so a caller can run it
 inside its own transaction. The other repositories do not extend it, because
 their tables have no soft-delete concept for its policy to apply to:
-`email_logs` and `audit_logs` are append-only, `platform-tenant.repository.ts`
-is a read-only cross-tenant search, `platform-stats.repository.ts` holds the
-read-only Overview aggregates, and the rest (auth providers,
+`email_logs` and `audit_logs` are append-only outside the retention purge and
+the staff purge, `platform-tenant.repository.ts` and
+`platform-user.repository.ts` are read-only cross-tenant searches and detail
+reads, `platform-stats.repository.ts` holds the read-only Overview
+aggregates, and the rest (auth providers,
 notifications, notification preferences, tenant settings, invitations,
 memberships) have no `deletedAt` column. See [DATABASE.md](DATABASE.md) for
 the models.
@@ -159,17 +192,17 @@ verification", covers backfilling them.
 
 ## Layers
 
-| Layer        | Directory           | Job                                                                                             | May import                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| ------------ | ------------------- | ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| routes       | `src/routes/`       | Wire middleware to controller methods.                                                          | controllers, middlewares, configs, constants                                                                                                                                                                                                                                                                                                                                                                                            |
-| middlewares  | `src/middlewares/`  | Cross-cutting request handling (auth, tenant resolution, rate limits, errors).                  | services (`resolveTenant` reads the platform role through `platform.service` and writes its staff-access entry through `audit.service`; `requirePlatformRole` reads `platform.service`), repositories (read-only lookups in `resolveTenant`/`requireAuth`), policies, presenters (e.g. `auth.middleware.ts` builds `request.user` via `toAuthenticatedUser`, `src/presenters/user.presenter.ts`), errors, configs, utilities, constants |
-| configs      | `src/configs/`      | Env and library configuration.                                                                  | services, utilities, constants                                                                                                                                                                                                                                                                                                                                                                                                          |
-| presenters   | `src/presenters/`   | Pure mappers from a database row to its wire shape.                                             | types from `database/models` and `types/`, and constants (e.g. `AuthProvider`)                                                                                                                                                                                                                                                                                                                                                          |
-| controllers  | `src/controllers/`  | Parse and validate input, call service methods, shape the response.                             | services, presenters, validators, errors, configs, utilities/response.utilities, constants, types, and `database/models` types via `import type` only                                                                                                                                                                                                                                                                                   |
-| services     | `src/services/`     | Business rules, transactions, authorization, side effects.                                      | repositories, policies, other services, workers, jobs, templates, errors, utilities, configs, constants, types, `database/models`, `database.service`, validator types (`import type`, for a validated-input shape a service signature needs)                                                                                                                                                                                           |
-| policies     | `src/policies/`     | Pure, boolean-returning authorization functions. Never throw.                                   | constants and types only                                                                                                                                                                                                                                                                                                                                                                                                                |
-| repositories | `src/repositories/` | Queries only.                                                                                   | models, `database.service`, errors, constants                                                                                                                                                                                                                                                                                                                                                                                           |
-| errors       | `src/errors/`       | Error classes and Postgres error handling (`HttpError`, `isUniqueViolation`, `redactedForLog`). | nothing under `src/`                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| Layer        | Directory           | Job                                                                                             | May import                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ------------ | ------------------- | ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| routes       | `src/routes/`       | Wire middleware to controller methods.                                                          | controllers, middlewares, configs, constants                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| middlewares  | `src/middlewares/`  | Cross-cutting request handling (auth, tenant resolution, rate limits, errors).                  | services (`resolveTenant` reads the platform role through `platform.service` and writes its staff-access entry through `audit.service`; `requirePlatformRole` reads `platform.service`; `logStaffWrites` logs through `logger.service`), repositories (read-only lookups in `resolveTenant`/`requireAuth`), policies, presenters (e.g. `auth.middleware.ts` builds `request.user` via `toAuthenticatedUser`, `src/presenters/user.presenter.ts`), errors, configs, utilities, constants |
+| configs      | `src/configs/`      | Env and library configuration.                                                                  | services, utilities, constants                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| presenters   | `src/presenters/`   | Pure mappers from a database row to its wire shape.                                             | types from `database/models` and `types/`, and constants (e.g. `AuthProvider`)                                                                                                                                                                                                                                                                                                                                                                                                          |
+| controllers  | `src/controllers/`  | Parse and validate input, call service methods, shape the response.                             | services, presenters, validators, errors, configs, utilities/response.utilities, constants, types, and `database/models` types via `import type` only                                                                                                                                                                                                                                                                                                                                   |
+| services     | `src/services/`     | Business rules, transactions, authorization, side effects.                                      | repositories, policies, other services, workers, jobs, templates, errors, utilities, configs, constants, types, `database/models`, `database.service`, validator types (`import type`, for a validated-input shape a service signature needs)                                                                                                                                                                                                                                           |
+| policies     | `src/policies/`     | Pure, boolean-returning authorization functions. Never throw.                                   | constants and types only                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| repositories | `src/repositories/` | Queries only.                                                                                   | models, `database.service`, errors, constants                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| errors       | `src/errors/`       | Error classes and Postgres error handling (`HttpError`, `isUniqueViolation`, `redactedForLog`). | nothing under `src/`                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 
 `eslint.config.mjs`'s `import-x/no-restricted-paths` turns six of this
 table's boundaries into `error`-level lint gates: controllers may not
@@ -185,8 +218,9 @@ controllers. A seventh boundary is enforced separately, by
 core `no-restricted-imports` over `src/**` with
 `src/services/platform-*.service.ts` ignored, keeps
 `repositories/platform-tenant.repository.ts` (every customer tenant, for
-staff search) and `repositories/platform-stats.repository.ts` (staff Overview
-aggregates) out of every other module, so "your tenants" can never be
+staff search), `repositories/platform-stats.repository.ts` (staff Overview
+aggregates) and `repositories/platform-user.repository.ts` (every user, for
+the staff directory) out of every other module, so "your tenants" can never be
 served from it. `tests/unit/lint-gates.test.ts` proves each of the eight
 fires, against a committed violating fixture under
 `tests/fixtures/lint-zones/`. `import-x/no-restricted-paths` is a
@@ -215,9 +249,20 @@ file imports.
 **Lock order**, binding for every transaction that locks more than one row
 set:
 
-1. the user row, for password writes, login, refresh rotation, logout,
-   the refresh kills and the Google account claim (`lockById`,
-   `user.repository.ts`); nothing takes tenant locks and then the user row;
+1. the user row, for password writes, login and Google sign-in (both
+   `FOR SHARE`), refresh rotation, logout, the refresh kills, step-up and
+   the Google account claim (`lockById`, `user.repository.ts`), none of
+   which goes on to lock a membership or tenant row. Staff writes are the
+   one place the user row comes later: they lock owner rows and platform
+   memberships first, then the actor's user row `FOR SHARE`
+   (`assertStillPlatformRole`, `platform.service.ts`) and, for a user
+   action, the target's (`lockStaffPair`, `platform-user.service.ts`).
+   Staff tenant transitions and the owner re-invitation then lock the
+   tenant row (step 5), after the actor's user row. No cycle follows:
+   no transaction that starts on the user row locks anything below it in
+   this list, and nothing that holds a tenant row goes on to lock a user
+   row (`updateTenant`, the transitions, the owner re-invitation and the
+   tenant purge lock no user row after it);
 2. the tenant's owner rows (`lockOwners`, ordered by `id`);
 3. memberships, ordered by `user_id` (`lockMemberships`);
 4. only when the actor has no membership in the tenant, the actor's
@@ -248,16 +293,55 @@ modes are listed in SECURITY.md, "Password change and reset against a
 concurrent login". The two-connection tests detect blocking with
 `pg_blocking_pids` (`tests/helpers/lock-probe.ts`), not with sleeps.
 
-**Platform access.** Four services carry it. Their callers stay in the
+**Platform access.** These services carry it. Their callers stay in the
 layers above.
 
-| Service                      | Job                                                                                                                                                                                                                                                                                                                                                                                                    |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `tenant-access.service.ts`   | `lockTenantAccess(actor, tenantId, otherUserIds, mode, tx)`: locks owners, memberships and, when the actor has no membership, the platform membership, in that order (step 4 above), returning the actor's access and the locked memberships. `resolveActorAccess(actor, tenantId, tx)` wraps it for a caller with no other memberships to lock. Membership wins; the platform tenant is members-only. |
-| `platform.service.ts`        | `getPlatformMembership` (one indexed read, no cache), `autoJoin` (viewer only, verified addresses on `PLATFORM_EMAIL_DOMAINS`), `bootstrapGrant` (the `platform:grant` script only).                                                                                                                                                                                                                   |
-| `platform-tenant.service.ts` | `searchAll`: every customer tenant, for staff. The only importer of `platform-tenant.repository.ts`.                                                                                                                                                                                                                                                                                                   |
-| `platform-stats.service.ts`  | `getPlatformStats`: totals and zero-filled per-UTC-day sign-up and email series for the staff Overview. The only importer of `platform-stats.repository.ts`. `emails[].failed` counts failed attempts: `email_logs` has one row per attempt, so a mail retried and then sent adds both a failed and a sent row.                                                                                        |
-| `audit.service.ts`           | `record(entry, tx)`, in the caller's transaction, with strict per-action metadata; `recordPlatformAccess` (hourly, deduplicated in Redis); `listForTenant` and `listPlatformWide` (keyset).                                                                                                                                                                                                            |
+| Service                        | Job                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `tenant-access.service.ts`     | `lockTenantAccess(actor, tenantId, otherUserIds, mode, tx)`: locks owners, memberships and, when the actor has no membership, the platform membership, in that order (step 4 above), returning the actor's access and the locked memberships. `resolveActorAccess(actor, tenantId, tx)` wraps it for a caller with no other memberships to lock. Membership wins; the platform tenant is members-only. |
+| `platform.service.ts`          | `getPlatformMembership` (one indexed read, no cache), `assertStillPlatformRole` (the actor's platform role re-read under lock inside a staff write, 404 below the route's role, 401 for an account gone or inactive), `autoJoin` (viewer only, verified addresses on `PLATFORM_EMAIL_DOMAINS`), `bootstrapGrant` (the `platform:grant` script only).                                                   |
+| `platform-tenant.service.ts`   | `searchAll` (state filter, keyset both ways), `getTenantDetail`, `createTenant` (no members, owner invited in the same transaction), `reissueOwnerInvitation`, `suspendTenant`/`reactivateTenant`/`archiveTenant` (one conditional UPDATE each, `transitionLifecycle`; archive also revokes pending invitations). The only importer of `platform-tenant.repository.ts`.                                |
+| `platform-user.service.ts`     | The staff user directory and user actions: search, detail, create with a set-password mail, edit, password-setup, resend-verification, deactivate, reactivate, sign-out, soft delete. State changes re-read the actor's platform role and the target under lock (`lockStaffPair`); the two mail actions check rank without a lock.                                                                     |
+| `platform-purge.service.ts`    | `purgeUser` and `purgeTenant`, the only hard deletes. With `retention.service.ts`, the only code that names the audit trigger's settings.                                                                                                                                                                                                                                                              |
+| `platform-stats.service.ts`    | `getPlatformStats`: totals and zero-filled per-UTC-day sign-up and email series for the staff Overview. The only importer of `platform-stats.repository.ts`. `emails[].failed` counts failed attempts: `email_logs` has one row per attempt, so a mail retried and then sent adds both a failed and a sent row.                                                                                        |
+| `tenant-invitation.service.ts` | Besides member invitations, `createOwnerInvitation`/`sendOwnerInvitation`: the staff-only owner invitation for a tenant with no active owner, which skips `canActorGrantRole` (the route's platform-admin gate authorizes it).                                                                                                                                                                         |
+| `audit.service.ts`             | `record(entry, tx)`, in the caller's transaction, with strict per-action metadata; `recordPlatformAccess` (hourly, deduplicated in Redis); `listForTenant` and `listPlatformWide` (keyset; the platform read also filters by `tenantId` and `targetId`, served by `audit_logs_target_occurred_idx`).                                                                                                   |
+
+`platform-user.service.ts` and `platform-purge.service.ts` are the only
+importers of `platform-user.repository.ts`.
+
+## Extending Apex
+
+Apex is a template: a product adds its own fields, states and staff actions.
+Each recipe below lists every place that must change together.
+
+- **A user or tenant field staff can see.** Add the column (model +
+  `pnpm db:migration:generate`), select it in `platform-user.repository.ts`
+  (`recordSelection`) or `platform-tenant.repository.ts` (`searchAll`,
+  `findDetail`), and mirror it in apex's `src/types/api.types.ts`. If staff
+  may edit a user field, add it to `updatePlatformUserSchema`
+  (`platform.validators.ts`, strict); a tenant field is edited through
+  `PATCH /tenants/:slug` (`updateTenantSchema`, `tenant.validators.ts`).
+  Either way, list it in `changed` in the `user.updated` / `tenant.updated`
+  audit metadata (field names only, never values).
+- **A tenant lifecycle state.** Add it to `TENANT_LIFECYCLE_STATES` (the
+  model's CHECK reads it; generate the migration that changes the CHECK),
+  decide what `statesFor` (`platform.constants.ts`) lists by default, give it
+  a transition in `platform-tenant.service.ts` (`transition` with its `from`
+  states, which calls `transitionLifecycle`) and an audit action, and decide
+  whether `resolveTenant` and invitations treat it like `suspended`.
+- **A staff action.** A POST under `/platform/users/:id/<verb>` or
+  `/platform/tenants/:id/<verb>`: `requirePlatformRole(<least role>)`,
+  `requireJsonContentType`, `requireRecentAuth()` when it is destructive,
+  then the shared `writeLimiter`. Body `reasonBodySchema` (or a strict schema
+  that includes `reason`). In the service: one transaction that re-reads the
+  actor's platform role under lock (`assertStillPlatformRole`, or
+  `lockStaffPair` for a user target), applies `canPlatformActorModifyTarget`
+  to a staff target, writes, and records an `AUDIT_ACTIONS` entry with
+  `{ reason }`. Add its row to
+  `tests/integration/api/platform-route-gates.test.ts` (the completeness
+  check fails until you do) and mirror the action in apex's
+  `src/constants/audit-actions.ts`.
 
 ## Directory rules
 
@@ -422,6 +506,7 @@ what it prints.
 | `SESSION_ABSOLUTE_TTL`                | no       | `30d`                  | Hard ceiling on one login session, measured from the login itself and never reset by rotation, as an ms()-parseable duration string (e.g. "30d"). Past it, refreshing fails and the user signs in again. Defaults to 30d.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `EMAIL_VERIFICATION_TTL`              | no       | `24h`                  | How long an email-verification link stays valid. Defaulted to 24h; a link the user finds the next morning should still work.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `PASSWORD_RESET_TTL`                  | no       | `1h`                   | How long a password-reset link stays valid. Defaulted to 1h — shorter than EMAIL_VERIFICATION_TTL, because redeeming it grants immediate account takeover rather than merely proving mailbox ownership.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `ACCOUNT_SETUP_TTL`                   | no       | `24h`                  | How long the set-password link mailed to a staff-created account stays valid. Defaulted to 24h: the recipient did not ask for the mail, so it must last until the next working day; the link is single-use either way.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `INVITATION_TTL`                      | no       | `7d`                   | How long a tenant invitation link stays valid, as an ms()-parseable duration string (e.g. "7d"). Resending an invitation issues a new link with a fresh lifetime. Defaults to 7d.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `TRUST_PROXY`                         | no       | `false`                | How much of X-Forwarded-For to believe. "false" (default) trusts none: correct when clients reach this app directly, WRONG behind a proxy, where every IP-keyed rate limiter then shares one bucket for the whole deployment. Behind a proxy set the NUMBER of proxies in front of this app (e.g. "1"), or a comma-separated list of trusted proxy addresses/subnets or presets ("loopback", "linklocal", "uniquelocal"). Never "true" — it is refused, because it lets any client spoof its own IP and bypass the limiters.                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `COOKIE_SECURE`                       | no       | —                      | Whether the refresh-token and OAuth session cookies carry the Secure attribute ("true" or "false"). Defaults from APP_ENV: false on local, true elsewhere. With Secure on behind a TLS-terminating proxy, TRUST_PROXY must be set, or the OAuth session cookie is never sent.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
@@ -535,6 +620,10 @@ to `WEB_URL`.
   `app` (default `'web'`) that picks the frontend of the verification or
   reset link. The "address already registered" mail carries no link, so it
   has no `app`.
+- Staff mail about a user (the set-password mail of `POST /platform/users`,
+  password-setup and resend-verification) takes no `app`: the server links
+  a staff target to Apex and anyone else to `WEB_URL`, so a newly created
+  user, who holds no platform role, gets a web link.
 - `GET /auth/google?app=apex` stores the choice in the OAuth session
   (`rememberOAuthApp`), and the callback redirects to that frontend
   (`oauthAppOf`, `src/controllers/helpers.controller.ts`).

@@ -185,11 +185,12 @@ export async function findOrCreateByGoogle(profile: GoogleProfile): Promise<User
  * `lastLoggedInAt`, and issue a refresh token for a fresh session.
  * An address on PLATFORM_EMAIL_DOMAINS joins the platform tenant as viewer if it has not already.
  *
- * The active check comes first, so a deactivated account never gets a
- * `user_tokens` row or a success redirect.
+ * The active check runs first and again under the user-row lock before the
+ * session is issued, so a deactivated account never gets a `user_tokens` row
+ * or a success redirect, even when the deactivation races the sign-in.
  * @param profile - The raw Google profile from the callback.
  * @returns The new session's refresh token, for the controller to set as a cookie.
- * @throws {HttpError} Any `findOrCreateByGoogle` error, or 401 `google_auth_failed` for an inactive account.
+ * @throws {HttpError} Any `findOrCreateByGoogle` error, or 401 `google_auth_failed` for an inactive or deleted account.
  */
 export async function completeGoogleSignIn(profile: GoogleProfile): Promise<IssuedRefreshToken> {
   const user = await findOrCreateByGoogle(profile)
@@ -202,5 +203,10 @@ export async function completeGoogleSignIn(profile: GoogleProfile): Promise<Issu
   // Covers users verified before their domain was listed; it never throws.
   await autoJoinSafely(user)
 
-  return issueRefreshToken(user.id, randomUUID())
+  return withTransaction(async (tx) => {
+    const locked = await userRepository.lockById(user.id, 'share', tx)
+    // Re-checked under the lock, as login does: a deactivation that committed since the lookup wins.
+    if (!locked?.active) throw new HttpError('Account is inactive', 401, 'google_auth_failed')
+    return issueRefreshToken(user.id, randomUUID(), tx)
+  })
 }

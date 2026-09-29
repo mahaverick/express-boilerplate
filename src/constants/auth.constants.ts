@@ -136,10 +136,30 @@ export const REFRESH_REUSE_GRACE_MS = 10_000
  * distinguish "try refreshing" from "log in again" without matching on
  * `message`.
  *
- * Three emitters, all meaning "no longer honoured, refresh":
+ * Four emitters, all meaning "no longer honoured, refresh":
  *   1. an expired token — `verifyBearerToken` (auth.middleware.ts);
  *   2. a denied session — `requireAuth`'s `isSessionDenied` check;
- *   3. a token with no `sid` claim — `requireSessionId`
- *      (notification-stream.controller.ts), the only place that refuses one.
+ *   3. a token with no `sid` claim, on the two routes that need one —
+ *      `requireSessionId` (notification-stream.controller.ts) and
+ *      `reauthenticate` (auth.service.ts, `POST /auth/reauthenticate`);
+ *   4. a step-up with nothing to mark — `reauthenticate` (auth.service.ts)
+ *      for a user gone or inactive, and `markSessionReauthenticated`
+ *      (session.service.ts), reached from `POST /auth/reauthenticate`, for a
+ *      user gone or inactive or a session with no live refresh token.
  */
 export const ACCESS_TOKEN_EXPIRED_CODE = 'ACCESS_TOKEN_EXPIRED'
+
+/**
+ * Machine-readable code for a request refused because its session last
+ * authenticated too long ago (`requireRecentAuth`, auth.middleware.ts). The
+ * 401 asks the client to confirm the user's identity with `POST
+ * /auth/reauthenticate` and retry. It is not a verdict on the session, so a
+ * client must not sign out on it.
+ */
+export const REAUTH_REQUIRED_CODE = 'REAUTH_REQUIRED'
+
+/**
+ * How recently a session must have authenticated to pass a step-up route
+ * (`requireRecentAuth`): 10 minutes.
+ */
+export const STEP_UP_MAX_AGE_MS = 10 * 60 * 1000

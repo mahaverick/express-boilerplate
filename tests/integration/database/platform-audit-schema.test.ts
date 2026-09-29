@@ -159,14 +159,6 @@ describe('migration 0016: audit_logs constraints', () => {
       `,
     ],
     [
-      'a user actor with no user id',
-      'audit_logs_actor_user_check',
-      (tenantId: string) => sql`
-        insert into audit_logs (actor_kind, access, tenant_id, action)
-        values ('user', 'member', ${tenantId}, 'tenant.created')
-      `,
-    ],
-    [
       'an unknown actor kind',
       'audit_logs_actor_kind_check',
       (tenantId: string) => sql`
@@ -221,6 +213,14 @@ describe('migration 0016: audit_logs constraints', () => {
       code: '23514',
       constraint_name: constraint,
     })
+  })
+
+  it('accepts a user entry with no user id, the shape a purge leaves behind', async () => {
+    const tenantId = await insertTenant()
+    await expect(sql`
+      insert into audit_logs (actor_kind, access, tenant_id, action)
+      values ('user', 'member', ${tenantId}, 'tenant.created')
+    `).resolves.toBeDefined()
   })
 })
 

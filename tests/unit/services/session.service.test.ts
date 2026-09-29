@@ -104,6 +104,34 @@ describe('verifyAccessToken', () => {
     expect(verified.payload.exp).toEqual(expect.any(Number))
     expect(verified.payload.exp).toBeGreaterThan(before)
   })
+
+  it('signs the session authentication time as auth_time, in whole seconds', () => {
+    const user = { id: 'user-1' } as User
+    const authenticatedAt = new Date('2026-09-29T10:15:30.999Z')
+    const verified = verifyAccessToken(signAccessToken(user, 'session-abc', authenticatedAt))
+    if (!verified.ok) throw new Error('unreachable')
+    expect(verified.payload.auth_time).toBe(Math.floor(authenticatedAt.getTime() / 1000))
+  })
+
+  it('omits auth_time when the session has no authentication time', () => {
+    const user = { id: 'user-1' } as User
+    // eslint-disable-next-line unicorn/no-null -- a session that predates migration 0018 carries null
+    const explicitNull = verifyAccessToken(signAccessToken(user, 'session-abc', null))
+    const omitted = verifyAccessToken(signAccessToken(user, 'session-abc'))
+    if (!explicitNull.ok || !omitted.ok) throw new Error('unreachable')
+    expect(explicitNull.payload).not.toHaveProperty('auth_time')
+    expect(omitted.payload).not.toHaveProperty('auth_time')
+  })
+
+  it('ignores an auth_time that is not a number', () => {
+    const token = jwt.sign({ sub: 'user-1', auth_time: 'yesterday' }, getEnv().JWT_ACCESS_SECRET, {
+      algorithm: 'HS256',
+      expiresIn: 900,
+    })
+    const verified = verifyAccessToken(token)
+    if (!verified.ok) throw new Error('unreachable')
+    expect(verified.payload).not.toHaveProperty('auth_time')
+  })
 })
 
 describe('hashToken', () => {

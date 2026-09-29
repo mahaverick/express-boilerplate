@@ -10,6 +10,10 @@ verification, JWT access tokens with rotating opaque refresh tokens, forgot,
 reset and change password, optional Google sign-in, multi-tenancy with roles
 and invitations, an audit log, platform staff access, in-app notifications over
 server-sent events, BullMQ jobs and a daily data-retention purge.
+Staff directory: tenant and user search, detail, create, lifecycle, account
+actions and owner-only purge under `/api/v1/platform`, role-gated per route,
+audited with a reason, destructive actions behind a recent password
+sign-in.
 [SECURITY.md](SECURITY.md#what-this-boilerplate-does-not-implement) lists what
 it does not implement.
 

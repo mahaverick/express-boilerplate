@@ -1,7 +1,9 @@
 /**
  * @file The `audit_logs` table. Append-only: the `audit_logs_immutable`
- * trigger rejects every UPDATE, and every DELETE outside a retention purge
- * transaction. Both foreign keys are RESTRICT, so no cascade reaches it.
+ * trigger rejects every UPDATE except a staff purge's redaction of the actor
+ * columns (migration 0019), and every DELETE outside a retention purge or a
+ * tenant purge. Both foreign keys are RESTRICT, so no cascade reaches it: a
+ * purge redacts or deletes first.
  */
 import { sql, type InferInsertModel, type InferSelectModel } from 'drizzle-orm'
 import { check, index, jsonb, pgTable, timestamp, varchar } from 'drizzle-orm/pg-core'
@@ -62,6 +64,7 @@ export const auditLogModel = pgTable(
     index('audit_logs_tenant_occurred_idx').on(table.tenantId, table.occurredAt, table.id),
     index('audit_logs_actor_occurred_idx').on(table.actorUserId, table.occurredAt, table.id),
     index('audit_logs_occurred_idx').on(table.occurredAt, table.id),
+    index('audit_logs_target_occurred_idx').on(table.targetId, table.occurredAt, table.id),
     // `sql.raw` is safe here: every value comes from a code-defined constant.
     check(
       'audit_logs_actor_kind_check',
@@ -71,9 +74,10 @@ export const auditLogModel = pgTable(
       'audit_logs_access_check',
       sql`${table.access} in (${sql.raw(sqlValueList(AUDIT_ACCESS_KINDS))})`
     ),
+    // A system entry never names a user. A user entry names one until a purge redacts it (0019).
     check(
       'audit_logs_actor_user_check',
-      sql`(${table.actorKind} = 'system') = (${table.actorUserId} is null)`
+      sql`${table.actorKind} <> 'system' or ${table.actorUserId} is null`
     ),
     check('audit_logs_action_check', sql`${table.action} ~ '^[a-z]+(\\.[a-z_]+)+$'`),
     check(

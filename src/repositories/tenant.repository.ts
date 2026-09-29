@@ -1,10 +1,15 @@
 /**
  * @file Query access to `tenants`. `create` overrides `BaseRepository.create`: it
  * takes `CreateTenantInput` (`NewTenant`'s columns plus `ownerId`) and writes the
- * tenant, its settings row and its owner membership in one transaction.
+ * tenant, its settings row and its owner membership in one transaction;
+ * `createWithoutOwner` writes the first two, for staff.
  */
-import { and, eq, isNull, sql, type SQL } from 'drizzle-orm'
-import type { MembershipRole } from '@/constants/tenant.constants'
+import { and, eq, inArray, isNotNull, isNull, sql, type SQL } from 'drizzle-orm'
+import {
+  SLUG_TAKEN_CODE,
+  type MembershipRole,
+  type TenantLifecycleState,
+} from '@/constants/tenant.constants'
 import {
   tenantModel,
   tenantSettingsModel,
@@ -54,6 +59,48 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
   }
 
   /**
+   * Insert the tenant row and its settings row in `tx`.
+   * @param input - The tenant's initial columns.
+   * @param tx - The transaction.
+   * @returns The new tenant.
+   */
+  private async insertTenantAndSettings(
+    input: Omit<CreateTenantInput, 'ownerId'>,
+    tx: DbTransaction
+  ): Promise<Tenant> {
+    const [tenant] = await tx
+      .insert(tenantModel)
+      .values({
+        name: input.name,
+        slug: input.slug,
+        description: input.description,
+        logo: input.logo,
+        website: input.website,
+      })
+      .returning()
+    if (!tenant) throw new HttpError('Insert returned no row', 500)
+    await tx.insert(tenantSettingsModel).values({ tenantId: tenant.id })
+    return tenant
+  }
+
+  /**
+   * Run a tenant insert, mapping a slug collision to 409.
+   * @param write - The insert.
+   * @returns The new tenant.
+   * @throws {HttpError} 409 `slug_taken`, when the slug is taken by a live tenant.
+   */
+  private async withSlugConflict(write: () => Promise<Tenant>): Promise<Tenant> {
+    try {
+      return await write()
+    } catch (error) {
+      if (isUniqueViolation(error)) {
+        throw new HttpError('A tenant with this slug already exists', 409, SLUG_TAKEN_CODE)
+      }
+      throw error
+    }
+  }
+
+  /**
    * Find a tenant by its slug.
    * @param slug - The slug to search for.
    * @param options - Soft-delete visibility options.
@@ -66,6 +113,52 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
     executor: DbExecutor = db
   ): Promise<Tenant | undefined> {
     return this.selectOne(this.scope(eq(tenantModel.slug, slug), options), executor)
+  }
+
+  /**
+   * Find a tenant by id whether or not it is soft-deleted.
+   * @param id - The tenant id.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns The tenant, or undefined when no row has this id.
+   */
+  findByIdIncludingDeleted(id: string, executor: DbExecutor = db): Promise<Tenant | undefined> {
+    return this.findById(id, { includeDeleted: true }, executor)
+  }
+
+  /**
+   * Move a customer tenant from one of `from` to `to` in one conditional
+   * UPDATE, so two racing transitions cannot both succeed. `archived` also
+   * soft-deletes the row, which frees its slug. The platform tenant never
+   * matches (and `tenants_platform_active` refuses it anyway).
+   * @param id - The tenant id.
+   * @param from - The states the tenant may be in now.
+   * @param to - The new state.
+   * @param tx - The transaction.
+   * @returns The updated tenant, or undefined when no customer tenant with this id is in `from`.
+   */
+  async transitionLifecycle(
+    id: string,
+    from: readonly TenantLifecycleState[],
+    to: TenantLifecycleState,
+    tx: DbTransaction
+  ): Promise<Tenant | undefined> {
+    const [row] = await tx
+      .update(tenantModel)
+      .set({
+        lifecycleState: to,
+        updatedAt: sql`now()`,
+        ...(to === 'archived' && { deletedAt: sql`now()` }),
+      })
+      .where(
+        and(
+          eq(tenantModel.id, id),
+          eq(tenantModel.isPlatform, false),
+          isNull(tenantModel.deletedAt),
+          inArray(tenantModel.lifecycleState, [...from])
+        )
+      )
+      .returning()
+    return row
   }
 
   /**
@@ -142,39 +235,37 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
    * @param input - The tenant's initial columns, plus `ownerId` — the user whose owner membership is created alongside it.
    * @param executor - An existing transaction to compose into, or the pool (default) to open a new transaction in.
    * @returns The newly created tenant row (not the settings or membership rows — fetch those separately via `TenantSettingsRepository.findByTenantId`/`UserMembershipRepository.findByUserAndTenant` if needed).
+   * @throws {HttpError} 409 `slug_taken`, when the slug is taken by a live tenant.
    */
   async create(input: CreateTenantInput, executor: DbExecutor = db): Promise<Tenant> {
-    try {
-      return await withTransaction(async (tx) => {
-        const [tenant] = await tx
-          .insert(tenantModel)
-          .values({
-            name: input.name,
-            slug: input.slug,
-            description: input.description,
-            logo: input.logo,
-            website: input.website,
-          })
-          .returning()
-
-        if (!tenant) throw new HttpError('Insert returned no row', 500)
-
-        await tx.insert(tenantSettingsModel).values({ tenantId: tenant.id })
-
+    return this.withSlugConflict(() =>
+      withTransaction(async (tx) => {
+        const tenant = await this.insertTenantAndSettings(input, tx)
         await tx.insert(userMembershipModel).values({
           userId: input.ownerId,
           tenantId: tenant.id,
           role: 'owner',
         })
-
         return tenant
       }, executor)
-    } catch (error) {
-      if (isUniqueViolation(error)) {
-        throw new HttpError('A tenant with this slug already exists', 409)
-      }
-      throw error
-    }
+    )
+  }
+
+  /**
+   * Create a tenant and its settings row with no members, for staff creating
+   * a tenant whose owner is then invited (platform-tenant.service.ts).
+   * @param input - The tenant's initial columns.
+   * @param executor - An existing transaction to compose into, or the pool (default).
+   * @returns The new tenant.
+   * @throws {HttpError} 409 `slug_taken`, when the slug is taken by a live tenant.
+   */
+  async createWithoutOwner(
+    input: Omit<CreateTenantInput, 'ownerId'>,
+    executor: DbExecutor = db
+  ): Promise<Tenant> {
+    return this.withSlugConflict(() =>
+      withTransaction((tx) => this.insertTenantAndSettings(input, tx), executor)
+    )
   }
 
   /**
@@ -236,5 +327,28 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
       .where(where)
       .returning()
     return row
+  }
+
+  /**
+   * Permanently delete an archived customer tenant. Settings, memberships
+   * and invitations cascade; `audit_logs.tenant_id` is RESTRICT, so its
+   * entries must go first.
+   * @param id - The tenant.
+   * @param tx - The purge's transaction.
+   * @returns True when an archived customer tenant was deleted.
+   */
+  async purgeArchived(id: string, tx: DbTransaction): Promise<boolean> {
+    const rows = await tx
+      .delete(tenantModel)
+      .where(
+        and(
+          eq(tenantModel.id, id),
+          eq(tenantModel.isPlatform, false),
+          eq(tenantModel.lifecycleState, 'archived'),
+          isNotNull(tenantModel.deletedAt)
+        )
+      )
+      .returning({ id: tenantModel.id })
+    return rows.length > 0
   }
 }

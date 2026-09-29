@@ -228,6 +228,21 @@ const EnvSchema = z.object({
       'How long a password-reset link stays valid. Defaulted to 1h — shorter than EMAIL_VERIFICATION_TTL, because redeeming it grants immediate account takeover rather than merely proving mailbox ownership.'
     ),
 
+  /**
+   * Longer than PASSWORD_RESET_TTL: the recipient of a staff-created account
+   * did not ask for the mail. The link is single-use either way.
+   */
+  ACCOUNT_SETUP_TTL: z
+    .string()
+    .default('24h')
+    .refine((value) => parseDurationMs(value) !== undefined, {
+      message:
+        'ACCOUNT_SETUP_TTL must be a duration string ms() can parse, e.g. "24h" or "86400000".',
+    })
+    .describe(
+      'How long the set-password link mailed to a staff-created account stays valid. Defaulted to 24h: the recipient did not ask for the mail, so it must last until the next working day; the link is single-use either way.'
+    ),
+
   INVITATION_TTL: z
     .string()
     .default('7d')
