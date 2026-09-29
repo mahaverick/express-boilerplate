@@ -101,8 +101,10 @@ describe('a suspended tenant', () => {
       .post('/api/v1/invitations/accept')
       .set('Authorization', `Bearer ${inviteeToken}`)
       .send({ token: rawToken })
-    expect(preview.status).not.toBe(200)
-    expect(accept.status).not.toBe(200)
+    expect(preview.status).toBe(404)
+    expect((preview.body as { code?: string }).code).toBe('invitation_invalid')
+    expect(accept.status).toBe(404)
+    expect((accept.body as { code?: string }).code).toBe('invitation_invalid')
 
     await lifecycle(staffToken, tenantId, 'reactivate')
     const later = await request(app)

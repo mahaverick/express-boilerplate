@@ -579,6 +579,19 @@ describe('tenant-invitation.service', () => {
       expect(second).toStrictEqual(first)
     })
 
+    it('answers invitation_invalid to the user who already accepted while the tenant is suspended', async () => {
+      const { owner, tenant } = await setup()
+      const invitee = await createUser()
+      const { rawToken } = await seedInvitation(tenant, owner, { email: invitee.email })
+      await accept(rawToken, invitee.id)
+      await sql`update tenants set lifecycle_state = 'suspended' where id = ${tenant.id}`
+
+      await expect(accept(rawToken, invitee.id)).rejects.toMatchObject(INVALID)
+
+      await sql`update tenants set lifecycle_state = 'active' where id = ${tenant.id}`
+      await expect(accept(rawToken, invitee.id)).resolves.toMatchObject({ role: 'editor' })
+    })
+
     it('answers invitation_invalid to anyone else once accepted', async () => {
       const { owner, tenant } = await setup()
       const invitee = await createUser()

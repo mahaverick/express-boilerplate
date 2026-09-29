@@ -376,7 +376,12 @@ describe('TenantInvitationRepository', () => {
       const found = await invitationRepository.findValidByTokenHash(invitation.tokenHash)
 
       expect(found?.invitation.id).toBe(invitation.id)
-      expect(found?.tenant).toStrictEqual({ id: tenant.id, name: 'Acme Inc', slug: tenant.slug })
+      expect(found?.tenant).toStrictEqual({
+        id: tenant.id,
+        name: 'Acme Inc',
+        slug: tenant.slug,
+        lifecycleState: 'active',
+      })
       expect(found?.invitedBy).toStrictEqual({ firstName: 'Ada', lastName: 'Lovelace' })
     })
 
@@ -437,7 +442,12 @@ describe('TenantInvitationRepository', () => {
       const found = await invitationRepository.findByTokenHash(invitation.tokenHash)
 
       expect(found?.invitation.acceptedBy).toBe(owner.id)
-      expect(found?.tenant).toStrictEqual({ id: tenant.id, name: 'Acme Inc', slug: tenant.slug })
+      expect(found?.tenant).toStrictEqual({
+        id: tenant.id,
+        name: 'Acme Inc',
+        slug: tenant.slug,
+        lifecycleState: 'active',
+      })
     })
 
     it('excludes an invitation to a soft-deleted tenant, and an unknown hash', async () => {
@@ -489,6 +499,23 @@ describe('TenantInvitationRepository', () => {
       ).toBeUndefined()
       const reloaded = await reload(invitation.id)
       expect(reloaded?.acceptedAt).toBeNull()
+    })
+
+    it("refuses a suspended tenant's invitation until it is active again", async () => {
+      const { owner, tenant } = await setup()
+      const invitee = await createUser()
+      const invitation = await createPending({ tenantId: tenant.id, invitedBy: owner.id })
+      await sql`update tenants set lifecycle_state = 'suspended' where id = ${tenant.id}`
+
+      expect(
+        await invitationRepository.claimForAccept(invitation.tokenHash, invitee.id)
+      ).toBeUndefined()
+      const unclaimed = await reload(invitation.id)
+      expect(unclaimed?.acceptedAt).toBeNull()
+
+      await sql`update tenants set lifecycle_state = 'active' where id = ${tenant.id}`
+      const claimed = await invitationRepository.claimForAccept(invitation.tokenHash, invitee.id)
+      expect(claimed?.acceptedBy).toBe(invitee.id)
     })
 
     it('keeps the claim, with acceptedBy null, once the accepting user is deleted', async () => {

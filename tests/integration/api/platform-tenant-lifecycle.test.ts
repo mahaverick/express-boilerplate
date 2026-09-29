@@ -139,6 +139,24 @@ describe('tenant lifecycle', () => {
     await act(token, tenant.id, 'suspend')
     const response = await act(token, tenant.id, 'suspend')
     expect(response.status).toBe(409)
+    expect((response.body as { message?: string }).message).toBe('This tenant is suspended.')
+  })
+
+  it('lets exactly one of two racing suspends win, with one audit row', async () => {
+    const { token } = await staff('admin')
+    const { tenant } = await tenantWithMember()
+
+    const responses = await Promise.all([
+      act(token, tenant.id, 'suspend'),
+      act(token, tenant.id, 'suspend'),
+    ])
+
+    expect(responses.map((response) => response.status).toSorted((a, b) => a - b)).toEqual([
+      200, 409,
+    ])
+    const [audit] = await sql`select count(*)::int as n from audit_logs
+      where tenant_id = ${tenant.id} and action = 'tenant.suspended'`
+    expect(audit?.n).toBe(1)
   })
 
   it('archive is terminal, soft-deletes, revokes pending invitations, audits the reason and frees the slug', async () => {

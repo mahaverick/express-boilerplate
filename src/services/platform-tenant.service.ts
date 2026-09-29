@@ -209,7 +209,7 @@ type LifecycleAction = 'tenant.suspended' | 'tenant.reactivated' | 'tenant.archi
  * @param action - The audit action.
  * @param reason - The staff-given reason, stored in the audit entry.
  * @returns The tenant's detail after the change.
- * @throws {HttpError} 404 when no tenant has this id or the actor lost the platform role; 409 `tenant_state_conflict` for the platform tenant or a tenant not in `from`.
+ * @throws {HttpError} 401 when the actor's account is gone; 404 when no tenant has this id or the actor lost the platform role; 409 `tenant_state_conflict` for the platform tenant or a tenant not in `from`.
  */
 async function transition(
   actor: Actor,
@@ -273,8 +273,8 @@ export function reactivateTenant(
 
 /**
  * Archive an active or suspended customer tenant: soft-delete it, revoke
- * its pending invitations and free its slug. Terminal, but not permanent:
- * only a purge removes the row.
+ * its pending invitations and free its slug. Terminal: no transition leaves
+ * `archived`.
  * @param actor - The staff user (platform admin or owner, recently authenticated; the route checked).
  * @param tenantId - The tenant.
  * @param reason - Why, for the audit log.

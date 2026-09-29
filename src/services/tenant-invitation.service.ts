@@ -575,7 +575,7 @@ function assertInvitedAddress(user: User, invitedEmail: string): void {
 
 /**
  * The idempotent re-accept: succeed only when this user already accepted
- * this invitation and is a member of its tenant.
+ * this invitation and is a member of its tenant, and the tenant is active.
  * @param tokenHash - SHA-256 hex of the raw token.
  * @param userId - The signed-in user.
  * @param executor - The accept transaction.
@@ -589,6 +589,8 @@ async function acceptedEarlierBy(
 ): Promise<AcceptedInvitation> {
   const found = await invitationRepository.findByTokenHash(tokenHash, executor)
   if (found?.invitation.acceptedBy !== userId) throw invitationInvalid()
+  // A suspended tenant's invitations wait, for a returning accepter too.
+  if (found.tenant.lifecycleState !== 'active') throw invitationInvalid()
   const membership = await userMembershipRepository.findByUserAndTenant(
     userId,
     found.invitation.tenantId,

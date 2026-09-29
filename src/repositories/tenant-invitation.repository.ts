@@ -4,7 +4,7 @@
  * soft-deleted tenant.
  */
 import { and, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm'
-import type { MembershipRole } from '@/constants/tenant.constants'
+import type { MembershipRole, TenantLifecycleState } from '@/constants/tenant.constants'
 import {
   tenantInvitationModel,
   type TenantInvitation,
@@ -75,11 +75,11 @@ export interface PendingInvitationSummary {
 }
 
 /**
- * An invitation with the (not soft-deleted) tenant it is for.
+ * An invitation with the (not soft-deleted) tenant it is for, and that tenant's lifecycle state.
  */
 export interface InvitationWithTenant {
   invitation: TenantInvitation
-  tenant: { id: string; name: string; slug: string }
+  tenant: { id: string; name: string; slug: string; lifecycleState: TenantLifecycleState }
 }
 
 /**
@@ -207,7 +207,12 @@ export class TenantInvitationRepository {
     const [row] = await executor
       .select({
         invitation,
-        tenant: { id: tenantModel.id, name: tenantModel.name, slug: tenantModel.slug },
+        tenant: {
+          id: tenantModel.id,
+          name: tenantModel.name,
+          slug: tenantModel.slug,
+          lifecycleState: tenantModel.lifecycleState,
+        },
         inviterId: userModel.id,
         inviterFirstName: userModel.firstName,
         inviterLastName: userModel.lastName,
@@ -250,7 +255,12 @@ export class TenantInvitationRepository {
     const [row] = await executor
       .select({
         invitation,
-        tenant: { id: tenantModel.id, name: tenantModel.name, slug: tenantModel.slug },
+        tenant: {
+          id: tenantModel.id,
+          name: tenantModel.name,
+          slug: tenantModel.slug,
+          lifecycleState: tenantModel.lifecycleState,
+        },
       })
       .from(invitation)
       .innerJoin(
