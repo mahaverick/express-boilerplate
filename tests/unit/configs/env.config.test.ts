@@ -37,6 +37,25 @@ describe('parseEnv', () => {
     expect(() => parseEnv({ ...valid, APEX_URL: 'javascript:alert(1)' })).toThrow(/APEX_URL/)
   })
 
+  it.each(['WEB_URL', 'APEX_URL'])(
+    'accepts %s with a path and refuses a query or fragment',
+    (name) => {
+      const base = 'https://admin.example.com'
+      expect(parseEnv({ ...valid, [name]: `${base}/apex/` })[name as 'WEB_URL']).toBe(
+        `${base}/apex/`
+      )
+      for (const bad of [
+        `${base}?x=1`,
+        `${base}/#top`,
+        `${base}/apex?x=1#top`,
+        `${base}/?`,
+        `${base}/#`,
+      ]) {
+        expect(() => parseEnv({ ...valid, [name]: bad }), bad).toThrow(new RegExp(name))
+      }
+    }
+  )
+
   it('coerces APP_PORT from string to number', () => {
     expect(parseEnv(valid).APP_PORT).toBe(4040)
   })

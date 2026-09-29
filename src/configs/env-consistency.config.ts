@@ -71,6 +71,20 @@ function mailpitDefaultProblems(env: Env): string[] {
 }
 
 /**
+ * Whether a browser would accept a cookie with this Domain attribute from a
+ * response by this host.
+ * @param domain - A `COOKIE_DOMAIN` value, with or without one leading dot.
+ * @param host - The responding host name.
+ * @returns True when the host equals the domain or is a subdomain of it, ignoring case.
+ */
+function isHostWithinCookieDomain(domain: string, host: string): boolean {
+  // Browsers strip one leading dot (RFC 6265 §5.2.3).
+  const bare = domain.replace(/^\./, '').toLowerCase()
+  const lowerHost = host.toLowerCase()
+  return lowerHost === bare || lowerHost.endsWith(`.${bare}`)
+}
+
+/**
  * A `COOKIE_DOMAIN` that `APP_URL`'s host is not within. Browsers reject a
  * Set-Cookie whose Domain does not domain-match the responding host, so every
  * auth cookie would be dropped in silence.
@@ -79,10 +93,8 @@ function mailpitDefaultProblems(env: Env): string[] {
  */
 function cookieDomainProblem(env: Env): string | undefined {
   if (env.COOKIE_DOMAIN === undefined) return undefined
-  // Browsers strip one leading dot (RFC 6265 §5.2.3).
-  const domain = env.COOKIE_DOMAIN.replace(/^\./, '').toLowerCase()
   const host = new URL(env.APP_URL).hostname.toLowerCase()
-  if (host === domain || host.endsWith(`.${domain}`)) return undefined
+  if (isHostWithinCookieDomain(env.COOKIE_DOMAIN, host)) return undefined
   return `COOKIE_DOMAIN is ${env.COOKIE_DOMAIN}, but APP_URL's host ${host} is not within it, so browsers reject every auth cookie. Set COOKIE_DOMAIN to ${host} or a parent domain of it, or unset it.`
 }
 
@@ -98,9 +110,7 @@ function apexCookieDomainProblem(env: Env): string | undefined {
   const apexHost = new URL(env.APEX_URL).hostname.toLowerCase()
   const appHost = new URL(env.APP_URL).hostname.toLowerCase()
   if (apexHost === appHost) return undefined
-  // Browsers strip one leading dot (RFC 6265 §5.2.3).
-  const domain = env.COOKIE_DOMAIN?.replace(/^\./, '').toLowerCase()
-  if (domain !== undefined && (apexHost === domain || apexHost.endsWith(`.${domain}`))) {
+  if (env.COOKIE_DOMAIN !== undefined && isHostWithinCookieDomain(env.COOKIE_DOMAIN, apexHost)) {
     return undefined
   }
   return `APEX_URL's host ${apexHost} differs from APP_URL's host ${appHost} and Google sign-in is on (GOOGLE_CLIENT_ID), so a sign-in started in Apex loses its session on the way back. Set COOKIE_DOMAIN to a parent domain of both hosts, or serve Apex from APP_URL's host.`

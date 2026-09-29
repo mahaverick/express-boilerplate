@@ -85,6 +85,36 @@ describe('assertEnvConsistent', () => {
       expect(result.error).toBeUndefined()
     })
 
+    it('passes when COOKIE_DOMAIN has a leading dot and covers the Apex host', () => {
+      const result = runChecks({
+        ...deployed,
+        ...google,
+        APEX_URL: 'https://admin.example.com',
+        COOKIE_DOMAIN: '.example.com',
+      })
+      expect(result.error).toBeUndefined()
+    })
+
+    it('compares hosts and COOKIE_DOMAIN ignoring case', () => {
+      const result = runChecks({
+        ...deployed,
+        ...google,
+        APEX_URL: 'https://Admin.Example.COM',
+        COOKIE_DOMAIN: '.EXAMPLE.com',
+      })
+      expect(result.error).toBeUndefined()
+    })
+
+    it('refuses a leading-dot COOKIE_DOMAIN that does not cover the Apex host', () => {
+      const { error } = runChecks({
+        ...deployed,
+        ...google,
+        APEX_URL: 'https://admin.other.example',
+        COOKIE_DOMAIN: '.example.com',
+      })
+      expect(error).toContain("APEX_URL's host admin.other.example")
+    })
+
     it('passes when Apex shares APP_URL’s host', () => {
       const result = runChecks({
         ...deployed,
