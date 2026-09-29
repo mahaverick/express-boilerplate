@@ -44,7 +44,7 @@ function utcDay(column: AnyPgColumn): SQL<string> {
  */
 export class PlatformStatsRepository {
   /**
-   * Live customer tenants, live active users, and live platform staff.
+   * Live customer tenants, live active users, and live platform staff. `staff` counts platform members regardless of `users.active`; only soft-deleted users are excluded.
    * @param executor - Where to run the queries. Defaults to the pool.
    * @returns The three totals.
    */

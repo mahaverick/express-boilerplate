@@ -13,11 +13,19 @@ import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { db, sql } from '@/services/database.service'
 import { EMAIL_VERIFICATION_TEMPLATE_KEY } from '@/templates/email/email-verification.template'
+import { makeStaff, platformTenant } from '../../helpers/platform-staff'
 
 const repository = new PlatformStatsRepository()
 const userRepository = new UserRepository()
 const tenantRepository = new TenantRepository()
 const emailLogRepository = new EmailLogRepository()
+
+function pick(
+  totals: { tenants: number; users: number; staff: number },
+  key: 'tenants' | 'users' | 'staff'
+): number {
+  return totals[key]
+}
 
 function countOf(rows: { day: string; status: string; count: number }[], status: string): number {
   return rows.find((row) => row.day === '2001-05-02' && row.status === status)?.count ?? 0
@@ -117,5 +125,68 @@ describe('PlatformStatsRepository', () => {
       },
       { isolationLevel: 'repeatable read' }
     )
+  })
+
+  it('moves each total only for the rows it should count', async () => {
+    const at = '2001-06-02T10:00:00.000Z'
+    const owner = await userCreatedAt(at)
+    let previous = await repository.totals()
+    async function delta(): Promise<{ tenants: number; users: number; staff: number }> {
+      const now = await repository.totals()
+      const change = {
+        tenants: now.tenants - previous.tenants,
+        users: now.users - previous.users,
+        staff: now.staff - previous.staff,
+      }
+      previous = now
+      return change
+    }
+    await delta()
+
+    const deletedTenant = await tenantRepository.create({
+      name: 'stats-deleted',
+      slug: `stats-${randomUUID().slice(0, 8)}`,
+      ownerId: owner,
+    })
+    tenantIds.push(deletedTenant.id)
+    await sql`update tenants set deleted_at = now() where id = ${deletedTenant.id}`
+    expect(pick(await delta(), 'tenants')).toBe(0)
+
+    await tenantCreatedAt(at, owner)
+    expect(pick(await delta(), 'tenants')).toBe(1)
+
+    const inactive = await userCreatedAt(at)
+    await sql`update users set active = false where id = ${inactive}`
+    expect(pick(await delta(), 'users')).toBe(0)
+
+    await userCreatedAt(at)
+    expect(pick(await delta(), 'users')).toBe(1)
+
+    const goneStaff = await userCreatedAt(at)
+    await makeStaff(goneStaff, 'viewer')
+    await sql`update users set deleted_at = now() where id = ${goneStaff}`
+    const afterGone = await delta()
+    expect(afterGone.staff).toBe(0)
+    expect(afterGone.users).toBe(0)
+
+    await makeStaff(await userCreatedAt(at), 'viewer')
+    expect(pick(await delta(), 'staff')).toBe(1)
+  })
+
+  it('leaves the platform tenant out of tenant sign-ups', async () => {
+    const platform = await platformTenant()
+    const day = platform.createdAt.toISOString().slice(0, 10)
+    const from = new Date(`${day}T00:00:00.000Z`)
+    const to = new Date(from.getTime() + 24 * 60 * 60 * 1000)
+    const owner = await userCreatedAt(`${day}T12:00:00.000Z`)
+    await tenantCreatedAt(`${day}T12:00:00.000Z`, owner)
+
+    const result = await repository.signupsByDay(from, to)
+    const [withPlatform] = await sql<{ count: number }[]>`
+      select count(*)::int as count from tenants
+      where deleted_at is null and created_at >= ${from.toISOString()} and created_at < ${to.toISOString()}`
+    const counted = result.tenants.find((row) => row.day === day)?.count ?? 0
+    // The platform tenant sits in this window, so it must be the one row missing.
+    expect(counted).toBe((withPlatform?.count ?? 0) - 1)
   })
 })
