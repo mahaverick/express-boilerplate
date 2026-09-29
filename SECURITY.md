@@ -351,9 +351,9 @@ specs, each built into middleware by `createRateLimiter(spec)`
 (every route on it except `GET /providers` has at least one), six guard
 tenant creation, member invitation, invitation preview and accept, staff
 reads and staff writes, and `authenticatedWrite` covers every other
-authenticated write. Paths below are under `/api/v1`; a `user` key is the authenticated
-user's id, and an `email` key is the submitted `email`, trimmed and
-lowercased.
+authenticated write. Paths below are under `/api/v1`; a `user` key is the
+authenticated user's id, and an `email` key is the submitted `email`,
+trimmed and lowercased.
 
 | Route                                                                                                                                                 | Limiter (`rl:` prefix)                    | Limit              | Key                  |
 | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- | ------------------ | -------------------- |
@@ -669,8 +669,9 @@ per-membership permission blob.
 - **Staff roles live on the platform tenant.** Its members are the staff,
   and its member routes are how staff roles change. There an owner may
   demote or remove another owner (and, under `/platform/users`, deactivate
-  or delete one); the last-owner guard counts active owners only; and a role change, a removal, a resend, or an invitation
-  offering admin or owner needs a recent sign-in.
+  or delete one); the last-owner guard counts active owners only; and a
+  role change, a removal, a resend, or an invitation offering admin or
+  owner needs a recent sign-in.
 - **Membership wins.** Where a staff user is also a member, only the
   membership role counts.
 - **The platform tenant is members-only.** Anyone who isn't a member of the
@@ -690,17 +691,21 @@ per-membership permission blob.
     mailboxes you control.
 - **Discovery.** `/api/v1/platform/*` answers non-staff, and staff below a
   route's role, with the app's own `404 Not found`, identical to an unknown
-  route. The limiters run after the role check, so a refused caller never
-  sees `RateLimit-*` headers.
-  An unauthenticated caller still gets 401, as on every authenticated router.
-- **Cross-tenant reads are separate paths.** Only the platform services
-  read `repositories/platform-tenant.repository.ts` (staff tenant search
-  and detail), `repositories/platform-stats.repository.ts` (stats) and
+  route. The JSON gate and the limiters run after the role check, so a
+  refused caller never sees a 415 or `RateLimit-*` headers. Every
+  authenticated OPTIONS that reaches the platform router gets that 404 too
+  (`refusePlatformOptions`), so Express's automatic `Allow` answer never
+  lists a route's methods. `cors` answers an OPTIONS with no `Origin` or an
+  allowed one itself, with the same 204 for every path, before any router;
+  staff routes serve no cross-origin preflight of their own. An
+  unauthenticated caller still gets 401, as on every authenticated router.
+- **Cross-tenant reads are separate paths.** Only the platform services read
+  `repositories/platform-tenant.repository.ts` (staff tenant search and
+  detail), `repositories/platform-stats.repository.ts` (stats) and
   `repositories/platform-user.repository.ts` (the staff user directory, and
-  the user purge), and a lint gate in `eslint.config.mjs` keeps it that
-  way. `GET /tenants` still lists the
-  caller's memberships only. `q` matches literally: `%`, `_` and `\` are
-  escaped.
+  the user purge), and a lint gate in `eslint.config.mjs` keeps it that way.
+  `GET /tenants` still lists the caller's memberships only. `q` matches
+  literally: `%`, `_` and `\` are escaped.
 - **The audit log.** `audit_logs` records:
   - every tenant, settings, member and invitation change, in the same
     transaction as the change;
@@ -721,9 +726,9 @@ per-membership permission blob.
   (an UPDATE that only nulls a purged user's actor columns, and a DELETE of
   a purged tenant's own entries, each inside its purge transaction). Its
   foreign keys are `ON DELETE RESTRICT`, so a hard delete that skipped those
-  steps fails instead of erasing history. `TRUNCATE` is not blocked: a role with `TRUNCATE`
-  privilege on the table — its owner by default, or a superuser — can still
-  empty it, and the test suite relies on that.
+  steps fails instead of erasing history. `TRUNCATE` is not blocked: a role
+  with `TRUNCATE` privilege on the table — its owner by default, or a
+  superuser — can still empty it, and the test suite relies on that.
 
   Retention is opt-in. `RETENTION_AUDIT_LOGS_DAYS` defaults to `0`, which
   keeps every row forever. Above 0, the daily purge deletes rows whose
@@ -739,8 +744,8 @@ per-membership permission blob.
   `tests/unit/audit-purge-setting.test.ts` fails if any other TypeScript
   file under `src/` does. This guards against a stray `DELETE` or `UPDATE`
   in application code. It is not a privilege boundary: any role that can
-  run arbitrary SQL can set the same settings. Revoke `DELETE` on `audit_logs` from every
-  role except the one the app runs as.
+  run arbitrary SQL can set the same settings. Revoke `DELETE` on
+  `audit_logs` from every role except the one the app runs as.
 
 - **Who reads it.**
   - `GET /api/v1/tenants/:slug/audit-log`: effective owners and admins, so a
@@ -767,10 +772,11 @@ route, walks the platform router and its `/users` sub-router, and fails
 when the router registers a route the table lacks or mounts a sub-router
 it doesn't know. A customer-facing nginx may also refuse
 `/api/v1/platform/` as defence in depth; that's an extra layer, never the
-gate. Each successful `/platform` write also logs one `Staff write` line
-(method, path, status, actor id, and the target's type and id when the
-path names one; never the body, so never a reason or an address); the
-audit log stays the record.
+gate. Each successful `/platform` write the role gate admitted also logs
+one `Staff write` line (method, path, status, actor id, and the target's
+type and id when the path names one; never the body, so never a reason or
+an address); a caller the gate refused can't produce one. The audit log
+stays the record.
 
 ### Step-up for destructive staff actions
 

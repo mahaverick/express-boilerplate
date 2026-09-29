@@ -212,17 +212,18 @@ rather than repeating them.
   (`utilities/email.utilities.ts`). Metadata schemas are strict, so a new key
   fails until its schema lists it.
 - **`audit_logs` is append-only.** Only `retention.service.ts` and
-  `platform-purge.service.ts` may set `app.audit_purge`/`app.audit_purge_before`,
-  and only `platform-purge.service.ts` sets `app.audit_redact`
+  `platform-purge.service.ts` may set
+  `app.audit_purge`/`app.audit_purge_before`, and only
+  `platform-purge.service.ts` sets `app.audit_redact`
   (`tests/unit/audit-purge-setting.test.ts`). The redact exception
   (migration 0019) lets one UPDATE through: nulling a purged user's
-  `actor_user_id`, `ip` and `user_agent`, changing no other column. For
-  that, `audit_logs_actor_user_check` only requires a `system` entry to have
-  no actor id, so the database can't tell a redacted `user` entry from one
+  `actor_user_id`, `ip` and `user_agent`, changing no other column. For that,
+  `audit_logs_actor_user_check` only requires a `system` entry to have no
+  actor id, so the database can't tell a redacted `user` entry from one
   written without an actor: always pass the actor. Its foreign keys are
-  RESTRICT, so test cleanup calls `truncateAuditLogs()` (`tests/helpers/audit-log.ts`)
-  before deleting a tenant or user. Don't add a `BEFORE TRUNCATE` trigger, or
-  only a superuser can clean up.
+  RESTRICT, so test cleanup calls `truncateAuditLogs()`
+  (`tests/helpers/audit-log.ts`) before deleting a tenant or user. Don't add a
+  `BEFORE TRUNCATE` trigger, or only a superuser can clean up.
 - **Staff routes answer 404, and on every `/platform` route the role gate
   runs first:** `requirePlatformRole`, then `requireJsonContentType`, then
   `requireRecentAuth()` where it applies, then the limiter. A limiter or JSON
@@ -231,6 +232,8 @@ rather than repeating them.
   `REAUTH_REQUIRED`. A new `/platform` route needs its row in
   `tests/integration/api/platform-route-gates.test.ts`, whose completeness
   check fails otherwise; a new sub-router needs its mount added there too.
+  Keep `refusePlatformOptions` ahead of every route: without it Express
+  answers OPTIONS with an `Allow` header listing the route's methods.
 - **`repositories/platform-tenant.repository.ts`,
   `repositories/platform-stats.repository.ts` and
   `repositories/platform-user.repository.ts` are imported only from

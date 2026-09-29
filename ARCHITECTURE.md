@@ -72,7 +72,10 @@ feature under `/api/v1`: `auth`, `profile`, `notifications`, `tenants`,
 `invitations` and `platform`. A new feature router is one more `router.use(...)`
 line there, never a change to `app.ts`.
 
-The platform router serves staff reads to any platform role:
+The platform router answers every OPTIONS with the unknown-route 404
+(`refusePlatformOptions`), so Express's automatic `Allow` answer never lists
+a staff route's methods; staff routes serve no cross-origin preflight of
+their own. The router serves staff reads to any platform role:
 `GET /platform/tenants` (with `state` and back-paging),
 `GET /platform/tenants/:id` (any lifecycle state), `GET /platform/users`
 (with `status=deleted` for soft-deleted users), `GET /platform/users/:id` (a
@@ -93,10 +96,11 @@ settings) goes through the ordinary `/tenants/:slug/*` routes with the
 platform role. On the platform tenant those member routes are how staff
 roles change, with step-up on a role change, a removal, an invitation
 offering admin or owner, and a resend, and a last-owner guard that counts
-active owners only. Every successful `/platform` write logs one
-`Staff write` line (`logStaffWrites`, `platform.middleware.ts`: method,
-path, status, actor id, and the target's type and id when the path names
-one; never the body); the audit log is the record.
+active owners only. Every successful `/platform` write that the role
+gate admitted logs one `Staff write` line (`logStaffWrites`,
+`platform.middleware.ts`: method, path, status, actor id, and the target's
+type and id when the path names one; never the body); the audit log is the
+record.
 
 **Open auth routes.** `register`, `login`, `verify-email`,
 `resend-verification`, `forgot-password`, `reset-password`, `refresh` and
@@ -242,16 +246,20 @@ file imports.
 **Lock order**, binding for every transaction that locks more than one row
 set:
 
-1. the user row, for password writes, login, refresh rotation, logout,
-   the refresh kills, step-up and the Google account claim (`lockById`,
-   `user.repository.ts`), none of which goes on to lock a membership or
-   tenant row. Staff writes are the one place the user row comes later:
-   they lock owner rows and platform memberships first, then the actor's
-   user row `FOR SHARE` (`assertStillPlatformRole`,
-   `platform.service.ts`) and, for a user action, the target's
-   (`lockStaffPair`, `platform-user.service.ts`). No cycle follows,
-   because no transaction that starts on the user row locks anything
-   below it in this list;
+1. the user row, for password writes, login and Google sign-in (both
+   `FOR SHARE`), refresh rotation, logout, the refresh kills, step-up and
+   the Google account claim (`lockById`, `user.repository.ts`), none of
+   which goes on to lock a membership or tenant row. Staff writes are the
+   one place the user row comes later: they lock owner rows and platform
+   memberships first, then the actor's user row `FOR SHARE`
+   (`assertStillPlatformRole`, `platform.service.ts`) and, for a user
+   action, the target's (`lockStaffPair`, `platform-user.service.ts`).
+   Staff tenant transitions and the owner re-invitation then lock the
+   tenant row (step 5), after the actor's user row. No cycle follows:
+   no transaction that starts on the user row locks anything below it in
+   this list, and nothing that holds a tenant row goes on to lock a user
+   row (`updateTenant`, the transitions, the owner re-invitation and the
+   tenant purge lock no user row after it);
 2. the tenant's owner rows (`lockOwners`, ordered by `id`);
 3. memberships, ordered by `user_id` (`lockMemberships`);
 4. only when the actor has no membership in the tenant, the actor's
@@ -314,11 +322,11 @@ Each recipe below lists every place that must change together.
   Either way, list it in `changed` in the `user.updated` / `tenant.updated`
   audit metadata (field names only, never values).
 - **A tenant lifecycle state.** Add it to `TENANT_LIFECYCLE_STATES` (the
-  model's CHECK reads it; generate the migration that changes the CHECK), decide what `statesFor`
-  (`platform.constants.ts`) lists by default, give it a transition in
-  `platform-tenant.service.ts` (`transition` with its `from` states, which
-  calls `transitionLifecycle`) and an audit action, and decide whether
-  `resolveTenant` and invitations treat it like `suspended`.
+  model's CHECK reads it; generate the migration that changes the CHECK),
+  decide what `statesFor` (`platform.constants.ts`) lists by default, give it
+  a transition in `platform-tenant.service.ts` (`transition` with its `from`
+  states, which calls `transitionLifecycle`) and an audit action, and decide
+  whether `resolveTenant` and invitations treat it like `suspended`.
 - **A staff action.** A POST under `/platform/users/:id/<verb>` or
   `/platform/tenants/:id/<verb>`: `requirePlatformRole(<least role>)`,
   `requireJsonContentType`, `requireRecentAuth()` when it is destructive,
