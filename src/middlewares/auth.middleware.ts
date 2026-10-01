@@ -14,7 +14,7 @@ import { toAuthenticatedUser, type AuthenticatedUser } from '@/presenters/user.p
 import { UserRepository } from '@/repositories/user.repository'
 import { isSessionDenied } from '@/services/session-denylist.service'
 import { verifyAccessToken } from '@/services/session.service'
-import { MS_PER_SECOND } from '@/utilities/duration.utilities'
+import { isRecentAuth } from '@/utilities/recent-auth.utilities'
 
 const userRepository = new UserRepository()
 
@@ -137,8 +137,9 @@ export async function requireAuth(
  * Require that the session behind the access token authenticated within
  * `maxAgeMs`: the step-up gate a destructive route adds (ASVS 7.5.3). Reads
  * `request.authTime`, which `requireAuth` copies from the verified token's
- * `auth_time`, so it must run after `requireAuth`. A token with no claim
- * (its session predates migration 0018) counts as stale. The refusal is a
+ * `auth_time`, so it must run after `requireAuth`. The predicate is
+ * `isRecentAuth` (recent-auth.utilities.ts), so a token with no claim
+ * counts as stale. The refusal is a
  * 401 carrying REAUTH_REQUIRED_CODE: the client confirms the user's identity
  * and retries. Nothing is revoked.
  * @param maxAgeMs - The oldest authentication accepted. Defaults to STEP_UP_MAX_AGE_MS.
@@ -152,8 +153,7 @@ export function requireRecentAuth(
       next(new HttpError('Authentication required', 401))
       return
     }
-    const { authTime } = request
-    if (authTime === undefined || Date.now() - authTime * MS_PER_SECOND > maxAgeMs) {
+    if (!isRecentAuth(request.authTime, Date.now(), maxAgeMs)) {
       next(new HttpError('Confirm your identity to continue', 401, REAUTH_REQUIRED_CODE))
       return
     }

@@ -95,7 +95,7 @@ up a new model automatically — no config change needed to add one.
 `src/database/migrations/` is **tracked**: one SQL file per migration, and
 `meta/_journal.json` records every migration in order. Everything under this
 directory is **generated** by `drizzle-kit generate`, except the hand-added
-statements in four migrations, each called out by a comment in its file:
+statements in five migrations, each called out by a comment in its file:
 
 - `0010` backfills an `'email'` `auth_providers` row for every user with a
   password.
@@ -106,6 +106,10 @@ statements in four migrations, each called out by a comment in its file:
   audit rows.
 - `0019` replaces it again so a staff user purge can null a purged user's
   actor columns (`actor_user_id`, `ip`, `user_agent`) and nothing else.
+- `0020` backfills one `email_messages` row per existing `email_logs` row
+  (reusing the attempt's id, recipient, template, status and `created_at`)
+  and points each attempt at it, and moves the `audit_logs` target-type
+  CHECK swap after that backfill.
 
 Don't hand-edit a migration otherwise, except as "Schema migrations on a live
 database" below describes, and only before that database has applied it.
@@ -345,6 +349,17 @@ second time under the lock, then run `pnpm db:migrate`.
   gain nothing, since the batch is one transaction), so apply the migration
   in a quiet window. The hand-added function replacement takes only a brief
   lock.
+
+- **`0020` blocks reads and writes on `email_logs` until its transaction
+  commits, and on `audit_logs` while its target-type CHECK is swapped.**
+  `ALTER TABLE email_logs ADD COLUMN` takes an `ACCESS EXCLUSIVE` lock that
+  the migration's transaction holds to the end, so mail recording, the
+  retention purge, a user purge and stats on `email_logs` all wait for the
+  whole backfill (the copy into `email_messages`, the update, the foreign
+  key's validation and the index build). The CHECK swap at the end takes the
+  same lock on `audit_logs` and validates every audit row. Apply it in a
+  quiet window. `email_logs` is bounded by `RETENTION_EMAIL_LOGS_DAYS`, so
+  letting retention prune first shortens the backfill.
 
 ## Test database
 

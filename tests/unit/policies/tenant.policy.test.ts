@@ -9,6 +9,7 @@ import {
   canActorGrantRole,
   canActorModifyTarget,
   canPlatformActorModifyTarget,
+  canStaffMailTarget,
   isRoleAtLeast,
 } from '@/policies/tenant.policy'
 
@@ -152,5 +153,28 @@ describe('canPlatformActorModifyTarget', () => {
     ['viewer', 'viewer', false, false],
   ])('%s acting on a staff %s (self: %s) → %s', (actor, target, isSelf, expected) => {
     expect(canPlatformActorModifyTarget(actor, target, isSelf)).toBe(expected)
+  })
+})
+
+describe('canStaffMailTarget', () => {
+  // eslint-disable-next-line unicorn/no-null -- the policy's "not staff" value
+  const NOT_STAFF = null
+  it.each<[MembershipRole, MembershipRole | null, boolean]>([
+    ['owner', NOT_STAFF, true],
+    ['owner', 'owner', true],
+    ['owner', 'admin', true],
+    ['owner', 'viewer', true],
+    ['admin', NOT_STAFF, true],
+    ['admin', 'owner', false],
+    ['admin', 'admin', true],
+    ['admin', 'manager', true],
+    ['admin', 'viewer', true],
+    ['manager', NOT_STAFF, false],
+    ['manager', 'viewer', false],
+    ['editor', NOT_STAFF, false],
+    ['viewer', NOT_STAFF, false],
+    ['viewer', 'viewer', false],
+  ])('a staff %s mailing a target whose platform role is %s → %s', (actor, target, expected) => {
+    expect(canStaffMailTarget(actor, target)).toBe(expected)
   })
 })

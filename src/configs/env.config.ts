@@ -402,7 +402,7 @@ const EnvSchema = z.object({
     .max(36_500)
     .default(90)
     .describe(
-      'Days to keep an email_logs row (one per email sent or failed). 0 never purges; at most 36500. Defaults to 90.'
+      "Days to keep email tracking rows: each email message with its send attempts (email_logs) and provider events, dated by the message's creation; an attempt row with no message is dated by its own. Suppressions never expire. 0 never purges; at most 36500. Defaults to 90."
     ),
   RETENTION_NOTIFICATIONS_READ_DAYS: z.coerce
     .number()
@@ -503,7 +503,17 @@ const EnvSchema = z.object({
     .email()
     .default('no-reply@example.com')
     .describe(
-      'The From address on every outbound email. Mailpit accepts any value; a real provider may require this to be a verified sender.'
+      'The From address of the general sender: every email whose links carry no token (password changed, registration attempt), and token emails too while MAIL_FROM_TRANSACTIONAL is unset. Mailpit accepts any value; a real provider may require this to be a verified sender.'
+    ),
+  /**
+   * No schema default: it falls back to MAIL_FROM, which `.default()` cannot
+   * read, so `senderFor` (email-sender.utilities.ts) applies the fallback.
+   */
+  MAIL_FROM_TRANSACTIONAL: z
+    .email()
+    .optional()
+    .describe(
+      'The From address of the transactional sender: every email whose link carries a token (email verification, password reset, account setup, tenant invitation). Put it on a domain whose provider click tracking is off, since a tracked link is rewritten through the provider, token included. Unset uses MAIL_FROM; outside APP_ENV=local, boot warns when the two share a domain.'
     ),
 
   APP_NAME: z
@@ -512,6 +522,31 @@ const EnvSchema = z.object({
     .default('Express Boilerplate')
     .describe(
       'Product name in outbound email copy and notification text: verification, password reset, password changed and invitation messages (auth.service.ts, verification.service.ts, tenant-invitation.service.ts). Defaults to "Express Boilerplate".'
+    ),
+
+  /**
+   * Optional: absent leaves POST /api/v1/webhooks/email/resend answering
+   * 404. Shape-checked here so a pasted API key (`re_…`) fails at boot, not
+   * as a 401 on every delivery event.
+   */
+  RESEND_WEBHOOK_SECRET: z
+    .string()
+    .regex(/^whsec_[A-Za-z\d+/]+={0,2}$/, 'must be a Resend signing secret: whsec_ then base64')
+    .optional()
+    .describe(
+      "Signing secret of the Resend webhook endpoint (Resend dashboard, Webhooks, the endpoint's signing secret: whsec_ followed by base64). Enables POST /api/v1/webhooks/email/resend, which verifies each event's Svix signature with it; absent, that route answers 404. Subscribe the endpoint to the email.* events: delivered, delivery_delayed, bounced, complained, opened, clicked, failed and suppressed."
+    ),
+  /**
+   * Not a credential: the fake adapter is registered only where
+   * `isFakeEmailWebhookAllowed` holds (APP_ENV local), so this value signs
+   * nothing that any deployed API accepts.
+   */
+  FAKE_EMAIL_WEBHOOK_SECRET: z
+    .string()
+    .min(1)
+    .default('fake-webhook')
+    .describe(
+      'Signs local fake email webhook events (`pnpm email:fire-event`), as an HMAC-SHA256 hex digest in the x-fake-signature header. Read only when APP_ENV is local, the one environment that serves POST /api/v1/webhooks/email/fake. Defaults to "fake-webhook"; not a credential.'
     ),
 
   /**
@@ -650,6 +685,17 @@ export function logFormat(env: Pick<Env, 'LOG_FORMAT' | 'APP_ENV'>): 'json' | 'p
  */
 export function requiresSmtpTls(env: Pick<Env, 'APP_ENV'>): boolean {
   return env.APP_ENV !== 'local'
+}
+
+/**
+ * Whether the fake email webhook adapter is served: on local only, which is
+ * also what the test suite runs as, so no deployed API accepts an event
+ * signed with the default `FAKE_EMAIL_WEBHOOK_SECRET`.
+ * @param env - The APP_ENV slice of the validated environment.
+ * @returns True on APP_ENV `local` only.
+ */
+export function isFakeEmailWebhookAllowed(env: Pick<Env, 'APP_ENV'>): boolean {
+  return env.APP_ENV === 'local'
 }
 
 /**

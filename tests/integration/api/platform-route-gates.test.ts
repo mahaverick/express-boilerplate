@@ -21,6 +21,11 @@ import { createPlatformRouter } from '@/routes/platform.routes'
 import { sql } from '@/services/database.service'
 import { signAccessToken } from '@/services/session.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
+import {
+  createTrackedMessage,
+  createTrackedSuppression,
+  deleteTrackedEmailRows,
+} from '../../helpers/email-messages'
 import { makeStaff } from '../../helpers/platform-staff'
 import { request } from '../../helpers/request'
 
@@ -37,7 +42,7 @@ interface GateRow {
   /**
    * Which fixture `:id` resolves to.
    */
-  target?: 'user' | 'tenant'
+  target?: 'user' | 'tenant' | 'email' | 'suppression'
 }
 
 const ROUTES: readonly GateRow[] = [
@@ -134,6 +139,38 @@ const ROUTES: readonly GateRow[] = [
     requiresStepUp: true,
     target: 'user',
   },
+  { method: 'get', path: '/emails', minRole: 'viewer', requiresStepUp: false },
+  { method: 'get', path: '/emails/health', minRole: 'viewer', requiresStepUp: false },
+  {
+    method: 'get',
+    path: '/emails/:id',
+    minRole: 'viewer',
+    requiresStepUp: false,
+    target: 'email',
+  },
+  {
+    method: 'get',
+    path: '/emails/:id/preview',
+    minRole: 'viewer',
+    requiresStepUp: false,
+    target: 'email',
+  },
+  // Step-up is per message (a platform-tenant invitation only), decided in the service.
+  {
+    method: 'post',
+    path: '/emails/:id/resend',
+    minRole: 'admin',
+    requiresStepUp: false,
+    target: 'email',
+  },
+  { method: 'get', path: '/email-suppressions', minRole: 'viewer', requiresStepUp: false },
+  {
+    method: 'post',
+    path: '/email-suppressions/:id/lift',
+    minRole: 'admin',
+    requiresStepUp: false,
+    target: 'suppression',
+  },
 ]
 
 const ROLES_BELOW: Record<MembershipRole, MembershipRole[]> = {
@@ -160,7 +197,7 @@ const tenantRepository = new TenantRepository()
  * anywhere else fails the completeness check, so its routes can't hide.
  * The walker checks this list at every depth, a sub-router's own mounts too.
  */
-const SUB_ROUTER_MOUNTS = ['/users'] as const
+const SUB_ROUTER_MOUNTS = ['/users', '/emails', '/email-suppressions'] as const
 
 interface StackLayer {
   route?: { path: string; methods: Record<string, boolean> }
@@ -218,8 +255,14 @@ function registeredRoutes(): string[] {
 const byText = (a: string, b: string): number => a.localeCompare(b)
 
 describe('the platform route walker', () => {
-  it('reads the /users sub-router under its mount', () => {
-    expect(registeredRoutes()).toContain('post /users/:id/purge')
+  it('reads the /users, /emails and /email-suppressions sub-routers under their mounts', () => {
+    expect(registeredRoutes()).toEqual(
+      expect.arrayContaining([
+        'post /users/:id/purge',
+        'get /emails/health',
+        'post /email-suppressions/:id/lift',
+      ])
+    )
   })
 
   it.each(['/extra', '/'])('throws on a sub-router mounted at %s', (mount) => {
@@ -237,7 +280,7 @@ describe('the platform route walker', () => {
 describe('/api/v1/platform route gates', () => {
   const userIds: string[] = []
   const tenantIds: string[] = []
-  const ids = { user: '', tenant: '' }
+  const ids = { user: '', tenant: '', email: '', suppression: '' }
 
   async function createUser(
     authenticatedAt: Date = new Date()
@@ -280,9 +323,18 @@ describe('/api/v1/platform route gates', () => {
     tenantIds.push(tenant.id)
     ids.user = target.id
     ids.tenant = tenant.id
+    // A security notice: its detail and preview answer 200, and a resend never reaches a delegate.
+    const message = await createTrackedMessage({
+      templateKey: 'password_changed',
+      senderClass: 'general',
+    })
+    ids.email = message.id
+    const suppression = await createTrackedSuppression(`gate-${randomUUID()}@example.test`)
+    ids.suppression = suppression.id
   })
 
   afterAll(async () => {
+    await deleteTrackedEmailRows()
     await truncateAuditLogs()
     await sql`delete from tenants where id = any(${tenantIds})`
     await sql`delete from users where id = any(${userIds})`

@@ -2,10 +2,10 @@
  * @file Pins three things a refactor could silently break: (1) every
  * limiter's Redis key prefix (the `name` field — a live counter's key
  * depends on it, so changing one resets production counters on deploy)
- * stays exactly the 23 literal strings, in order; (2) every entry's
+ * stays exactly the 25 literal strings, in order; (2) every entry's
  * `windowMs`, `limit` and `keyBy` kind match today's literal values, so a
  * budget or key-axis drift is caught even though it changes no Redis key;
- * (3) the three key-derivation functions produce byte-identical output
+ * (3) the four key-derivation functions produce byte-identical output
  * for a fixed input, so a caller mid-window (Redis already holding
  * counts keyed by the previous output) is not silently split onto a new
  * bucket.
@@ -14,6 +14,7 @@ import type { Request } from 'express'
 import { describe, expect, it } from 'vitest'
 import {
   authenticatedUserRateLimitKey,
+  emailWebhookProviderRateLimitKey,
   RATE_LIMITS,
   submittedEmailRateLimitKey,
   type RateLimitName,
@@ -43,6 +44,8 @@ const EXPECTED_NAMES_IN_ORDER = [
   'authenticated-write',
   'platform-write',
   'reauthenticate',
+  'email-webhook',
+  'email-webhook-rejected',
 ]
 
 /**
@@ -142,6 +145,20 @@ const EXPECTED_RATE_LIMITS: {
     limit: 5,
     keyBy: 'user',
   },
+  {
+    key: 'emailWebhook',
+    name: 'email-webhook',
+    windowMs: 60_000,
+    limit: 3000,
+    keyBy: 'function',
+  },
+  {
+    key: 'emailWebhookRejected',
+    name: 'email-webhook-rejected',
+    windowMs: 60_000,
+    limit: 60,
+    keyBy: 'ip',
+  },
 ]
 
 describe('RATE_LIMITS key stability', () => {
@@ -185,5 +202,18 @@ describe('RATE_LIMITS key stability', () => {
     const withoutUser = {} as unknown as Request
     expect(authenticatedUserRateLimitKey(withUser)).toBe('user-123')
     expect(authenticatedUserRateLimitKey(withoutUser)).toBe('anonymous')
+  })
+
+  it('derives the same email-webhook key: the provider path segment, ip ignored', () => {
+    const resend = { ip: '203.0.113.5', params: { provider: 'resend' } } as unknown as Request
+    const sameProviderOtherIp = {
+      ip: '198.51.100.7',
+      params: { provider: 'resend' },
+    } as unknown as Request
+    const fake = { ip: '203.0.113.5', params: { provider: 'fake' } } as unknown as Request
+    expect(emailWebhookProviderRateLimitKey(resend)).toBe('resend')
+    expect(emailWebhookProviderRateLimitKey(sameProviderOtherIp)).toBe('resend')
+    expect(emailWebhookProviderRateLimitKey(fake)).toBe('fake')
+    expect(RATE_LIMITS.emailWebhook.keyBy).toBe(emailWebhookProviderRateLimitKey)
   })
 })

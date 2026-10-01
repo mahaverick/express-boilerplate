@@ -12,7 +12,11 @@ import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
 import { redactedForLog } from '@/errors/postgres-errors'
 import { addEmailJob } from '@/jobs/email.job'
-import { canPlatformActorModifyTarget, isRoleAtLeast } from '@/policies/tenant.policy'
+import {
+  canPlatformActorModifyTarget,
+  canStaffMailTarget,
+  isRoleAtLeast,
+} from '@/policies/tenant.policy'
 import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
 import {
   PlatformUserRepository,
@@ -40,6 +44,7 @@ import {
 } from '@/services/verification.service'
 import { ACCOUNT_SETUP_TEMPLATE_KEY } from '@/templates/email/account-setup.template'
 import type { Actor } from '@/types/actor'
+import type { EmailResendOptions } from '@/types/email-context'
 import type { EmailDelivery } from '@/types/email-delivery'
 import { encodeCursor } from '@/utilities/cursor.utilities'
 import { requireDurationMs } from '@/utilities/duration.utilities'
@@ -200,10 +205,15 @@ async function trySend(
  * ACCOUNT_SETUP_TTL) and queue the `account_setup` mail. Redeeming the link
  * on /reset-password stores the password and verifies the address.
  * @param user - The account.
- * @param app - The frontend the link opens.
+ * @param app - The frontend the link opens, recorded on the message row.
+ * @param options - `resentFromId` when a staff resend re-runs this flow for an earlier message.
  * @returns Resolves once the job is queued.
  */
-async function sendAccountSetupMail(user: User, app: FrontendApp): Promise<void> {
+async function sendAccountSetupMail(
+  user: User,
+  app: FrontendApp,
+  options: EmailResendOptions = {}
+): Promise<void> {
   const issued = await issueToken(
     user.id,
     'password_reset',
@@ -220,7 +230,7 @@ async function sendAccountSetupMail(user: User, app: FrontendApp): Promise<void>
       },
     },
     user.id,
-    { priority: JobPriority.high }
+    { priority: JobPriority.high, context: { linkApp: app, ...options } }
   )
 }
 
@@ -292,7 +302,7 @@ async function lockStaffPair(
 
 /**
  * Mail-only actions on a staff target need an actor of at least the
- * target's rank. Unlocked: the roles are read once, and the writes that follow
+ * target's rank (`canStaffMailTarget`). Unlocked: the roles are read once, and the writes that follow
  * (token revocation, the audit entry) do not depend on them staying unchanged.
  * @param actor - The signed-in staff user.
  * @param targetUserId - The user to mail.
@@ -307,9 +317,7 @@ async function assertMayMail(actor: Actor, targetUserId: string): Promise<Member
   if (actorRole === null || !isRoleAtLeast(actorRole, 'admin')) {
     throw new HttpError('Not found', 404)
   }
-  if (targetRole !== null && !isRoleAtLeast(actorRole, targetRole)) {
-    throw new HttpError(STAFF_TARGET_MESSAGE, 403)
-  }
+  if (!canStaffMailTarget(actorRole, targetRole)) throw new HttpError(STAFF_TARGET_MESSAGE, 403)
   return targetRole
 }
 
@@ -432,10 +440,15 @@ export async function updateUser(
  * Apex link; anyone else a web link. The attempt is audited before the mail.
  * @param actor - The signed-in staff admin.
  * @param userId - The user to mail.
+ * @param options - `resentFromId` when a staff resend re-runs this action for an earlier message.
  * @returns Whether the mail was queued.
  * @throws {HttpError} 404 unknown user; 409 deactivated; 403 when the target outranks the actor.
  */
-export async function sendPasswordSetup(actor: Actor, userId: string): Promise<EmailDelivery> {
+export async function sendPasswordSetup(
+  actor: Actor,
+  userId: string,
+  options: EmailResendOptions = {}
+): Promise<EmailDelivery> {
   const target = await requireMailableUser(userId)
   const targetRole = await assertMayMail(actor, userId)
   const kind = target.passwordHash === null ? 'setup' : 'reset'
@@ -460,7 +473,9 @@ export async function sendPasswordSetup(actor: Actor, userId: string): Promise<E
 
   const delivery = await trySend(
     () =>
-      kind === 'setup' ? sendAccountSetupMail(target, app) : sendPasswordResetMail(target, app),
+      kind === 'setup'
+        ? sendAccountSetupMail(target, app, options)
+        : sendPasswordResetMail(target, app, options),
     'Password setup mail',
     userId
   )
@@ -471,10 +486,15 @@ export async function sendPasswordSetup(actor: Actor, userId: string): Promise<E
  * Mail a fresh verification link, revoking the earlier ones first.
  * @param actor - The signed-in staff admin.
  * @param userId - The user to mail.
+ * @param options - `resentFromId` when a staff resend re-runs this action for an earlier message.
  * @returns Whether the mail was queued.
  * @throws {HttpError} 404 unknown user; 409 deactivated; 403 target outranks the actor; 409 already verified, or no password (a verification link needs one; send a set-password link instead).
  */
-export async function resendUserVerification(actor: Actor, userId: string): Promise<EmailDelivery> {
+export async function resendUserVerification(
+  actor: Actor,
+  userId: string,
+  options: EmailResendOptions = {}
+): Promise<EmailDelivery> {
   const target = await requireMailableUser(userId)
   const targetRole = await assertMayMail(actor, userId)
   if (target.emailVerifiedAt !== null) {
@@ -502,7 +522,7 @@ export async function resendUserVerification(actor: Actor, userId: string): Prom
 
   const app: FrontendApp = targetRole === null ? 'web' : 'apex'
   const delivery = await trySend(
-    () => sendVerificationMail(target, app),
+    () => sendVerificationMail(target, app, options),
     'Verification mail',
     userId
   )

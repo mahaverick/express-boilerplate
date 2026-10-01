@@ -211,6 +211,21 @@ describe('processNotificationJob', () => {
     })
   })
 
+  it("passes the job's emailContext to addEmailJob for the message row", async () => {
+    channelEnabledSpy.mockResolvedValue(true)
+    insertSpy.mockResolvedValue(mockNotificationRow)
+    vi.mocked(emailJob.addEmailJob).mockResolvedValue({ id: 'email-job-1' } as never)
+    const email = emailVerificationMessage('user@example.com')
+    const emailContext = { linkApp: 'apex' as const, resentFromId: 'message-0' }
+
+    await processNotificationJob(mockJob({ email, emailContext }))
+
+    expect(emailJob.addEmailJob).toHaveBeenCalledWith(email, 'user-123', {
+      jobId: EXPECTED_EMAIL_JOB_ID,
+      context: emailContext,
+    })
+  })
+
   it('does not enqueue an email when the email channel is disabled', async () => {
     // in_app enabled (first call), email disabled (second call) — same per-call sequencing `isChannelEnabled` is actually invoked in by processNotificationJob: in-app is always checked first.
     channelEnabledSpy.mockResolvedValueOnce(true).mockResolvedValueOnce(false)

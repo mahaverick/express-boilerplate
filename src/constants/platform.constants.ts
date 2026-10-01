@@ -45,3 +45,14 @@ export function statesFor(filter: TenantStateFilter | undefined): TenantLifecycl
   if (filter === 'all') return [...TENANT_LIFECYCLE_STATES]
   return [filter]
 }
+
+/**
+ * The staff suppression list's state filter: suppressions in force, lifted
+ * ones, or both.
+ */
+export const EMAIL_SUPPRESSION_STATE_FILTERS = ['active', 'lifted', 'all'] as const
+
+/**
+ * One of EMAIL_SUPPRESSION_STATE_FILTERS.
+ */
+export type EmailSuppressionStateFilter = (typeof EMAIL_SUPPRESSION_STATE_FILTERS)[number]

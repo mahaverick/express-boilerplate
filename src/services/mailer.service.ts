@@ -4,6 +4,7 @@
  * answer identically whether or not the address exists, and a propagated failure
  * would turn an SMTP outage into an account-enumeration oracle.
  */
+import { getEnv } from '@/configs/env.config'
 import { getMailTransporter } from '@/configs/mailer.config'
 import { UNKNOWN_ERROR_CODE, type NewEmailLog } from '@/database/models/email-log.model'
 import { redactedForLog } from '@/errors/postgres-errors'
@@ -14,6 +15,7 @@ import {
   renderAccountSetupTemplate,
   type AccountSetupVariables,
 } from '@/templates/email/account-setup.template'
+import { EMAIL_TEMPLATE_META } from '@/templates/email/email-template-meta.template'
 import {
   EMAIL_VERIFICATION_TEMPLATE_KEY,
   renderEmailVerificationTemplate,
@@ -39,6 +41,7 @@ import {
   TENANT_INVITATION_TEMPLATE_KEY,
   type TenantInvitationVariables,
 } from '@/templates/email/tenant-invitation.template'
+import { senderFor } from '@/utilities/email-sender.utilities'
 import type { RenderedEmail } from '@/utilities/email-template.utilities'
 
 const emailLogRepository = new EmailLogRepository()
@@ -87,8 +90,20 @@ export type MailMessage =
     }
 
 /**
+ * The tracked message one send attempt belongs to: its `email_messages` id,
+ * recorded on the attempt's `email_logs` row, and the Message-ID header it
+ * goes out with, which a provider's events report back.
+ */
+export interface TrackedDelivery {
+  messageId: string
+  messageIdHeader: string
+}
+
+/**
  * Render `message` against its own declared template: the only place this
- * module produces content. A `switch`, not a lookup object, so TypeScript
+ * module produces content, used by `sendMail` and by the staff preview
+ * (platform-email.service.ts), which renders stored variables with masked
+ * links and never sends. A `switch`, not a lookup object, so TypeScript
  * narrows `message.variables` in each `case`.
  *
  * The `default` case is reachable by a caller that bypasses the type
@@ -98,7 +113,7 @@ export type MailMessage =
  * @returns The rendered subject, text, and HTML for `message`'s own template.
  * @throws {Error} When `message.variables` is missing a value its template requires (`requireEmailVariables`, email-template.utilities.ts), or when `message.templateKey` matches no known template (only reachable by bypassing `MailMessage`'s own type).
  */
-function renderForMessage(message: MailMessage): RenderedEmail {
+export function renderForMessage(message: MailMessage): RenderedEmail {
   switch (message.templateKey) {
     case EMAIL_VERIFICATION_TEMPLATE_KEY: {
       return renderEmailVerificationTemplate(message.variables)
@@ -219,30 +234,43 @@ async function recordDelivery(entry: NewEmailLog): Promise<void> {
  * question; a render throw is recorded as a failed delivery with
  * `UNKNOWN_ERROR_CODE`, like a transport rejection.
  *
+ * The From address follows the template's sender class
+ * (`EMAIL_TEMPLATE_META`, `senderFor`), never the caller: a token email
+ * always goes out from the transactional sender.
+ *
  * Recording has its own try/catch (`recordDelivery`), not one shared with the
  * send, so a log-write failure after a successful send is never recorded as a
  * failed send. Response latency never waits on SMTP: every send runs from the
  * queue in email.worker.ts. When mail is down the user gets no email and no
  * error; every attempt is in `email_logs`, and resend-verification lets them retry.
  * @param message - The email to render and send.
+ * @param delivery - The tracked message this attempt belongs to. Without it, nodemailer generates the Message-ID and the attempt row has no `message_id`.
  * @returns `'sent'` or `'failed'`, reflecting the recorded `email_logs` status — resolves once the send has been attempted and the outcome recorded, regardless of whether rendering, sending, or recording actually succeeded. Callers that need to decide whether to retry (e.g. `email.worker.ts`) read this; callers that don't can ignore it.
  */
-export async function sendMail(message: MailMessage): Promise<'sent' | 'failed'> {
+export async function sendMail(
+  message: MailMessage,
+  delivery?: TrackedDelivery
+): Promise<'sent' | 'failed'> {
+  const messageId = delivery?.messageId
   let entry: NewEmailLog
   try {
     // Inside the try: a render throw must not reveal which branch an enumeration-sensitive caller took.
     const rendered = renderForMessage(message)
+    const from = senderFor(EMAIL_TEMPLATE_META[rendered.templateKey].senderClass, getEnv())
     const info = await getMailTransporter().sendMail({
+      from,
       to: message.to,
       subject: rendered.subject,
       text: rendered.text,
       html: rendered.html,
+      ...(delivery !== undefined && { messageId: delivery.messageIdHeader }),
     })
     entry = {
       recipient: message.to,
       templateKey: rendered.templateKey,
       status: 'sent',
       providerMessageId: info.messageId,
+      messageId,
     }
   } catch (error) {
     logger.error('Mail send failed', { error: redactedMailErrorForLog(error) })
@@ -251,6 +279,7 @@ export async function sendMail(message: MailMessage): Promise<'sent' | 'failed'>
       templateKey: message.templateKey,
       status: 'failed',
       errorCode: extractErrorCode(error),
+      messageId,
     }
   }
   await recordDelivery(entry)

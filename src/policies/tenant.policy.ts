@@ -84,3 +84,22 @@ export function canPlatformActorModifyTarget(
   if (actorRole === 'owner') return true
   return canActorModifyTarget(actorRole, targetRole, false)
 }
+
+/**
+ * Whether a staff member holding `actorRole` may send account mail (a
+ * set-password, reset or verification link) to a user whose platform role
+ * is `targetRole`: the actor must be a platform admin or owner, and at least
+ * the target's rank. A non-staff target (`null`) has no rank to meet.
+ * `assertMayMail` (platform-user.service.ts) enforces it; the staff email
+ * list reads it for `canResend`.
+ * @param actorRole - The actor's platform role.
+ * @param targetRole - The target's platform role, or null when not staff.
+ * @returns True when the actor may mail the target.
+ */
+export function canStaffMailTarget(
+  actorRole: MembershipRole,
+  targetRole: MembershipRole | null
+): boolean {
+  if (!isRoleAtLeast(actorRole, 'admin')) return false
+  return targetRole === null || isRoleAtLeast(actorRole, targetRole)
+}

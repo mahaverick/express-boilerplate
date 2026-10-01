@@ -1,9 +1,11 @@
+import { randomBytes } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import {
   EnvSchemaShape,
   getDatabaseUrl,
   getEnv,
   isCookieSecure,
+  isFakeEmailWebhookAllowed,
   logFormat,
   parseEnv,
   requiresSmtpTls,
@@ -267,6 +269,20 @@ describe('SMTP configuration', () => {
 
   it('rejects a malformed MAIL_FROM', () => {
     expect(() => parseEnv({ ...valid, MAIL_FROM: 'not-an-address' })).toThrow(/MAIL_FROM/)
+  })
+
+  it('leaves MAIL_FROM_TRANSACTIONAL unset by default, so token emails use MAIL_FROM', () => {
+    expect(parseEnv(valid).MAIL_FROM_TRANSACTIONAL).toBeUndefined()
+  })
+
+  it('reads MAIL_FROM_TRANSACTIONAL, and rejects a malformed one', () => {
+    expect(
+      parseEnv({ ...valid, MAIL_FROM_TRANSACTIONAL: 'auth@mail.example.net' })
+        .MAIL_FROM_TRANSACTIONAL
+    ).toBe('auth@mail.example.net')
+    expect(() => parseEnv({ ...valid, MAIL_FROM_TRANSACTIONAL: 'not-an-address' })).toThrow(
+      /MAIL_FROM_TRANSACTIONAL/
+    )
   })
 
   // These bound the stages of a send to an SMTP host that stops responding; after the HTTP drain and one send that hangs at each stage against one address, SHUTDOWN_TIMEOUT_MS must still keep 5s for closing the database, Redis and queues and flushing traces.
@@ -596,5 +612,40 @@ describe('PLATFORM_EMAIL_DOMAINS', () => {
     expect(() => parseEnv({ ...valid, PLATFORM_EMAIL_DOMAINS: value })).toThrow(
       /PLATFORM_EMAIL_DOMAINS/
     )
+  })
+})
+
+describe('the fake email webhook', () => {
+  it('defaults FAKE_EMAIL_WEBHOOK_SECRET to fake-webhook, and an empty value takes the default', () => {
+    expect(parseEnv(valid).FAKE_EMAIL_WEBHOOK_SECRET).toBe('fake-webhook')
+    // An empty string counts as unset, so it takes the default.
+    expect(parseEnv({ ...valid, FAKE_EMAIL_WEBHOOK_SECRET: '' }).FAKE_EMAIL_WEBHOOK_SECRET).toBe(
+      'fake-webhook'
+    )
+  })
+
+  it.each([
+    ['local', true],
+    ['dev', false],
+    ['qa', false],
+    ['prod', false],
+  ] as const)('isFakeEmailWebhookAllowed on %s is %s', (appEnv, expected) => {
+    expect(isFakeEmailWebhookAllowed({ APP_ENV: appEnv })).toBe(expected)
+  })
+})
+
+describe('RESEND_WEBHOOK_SECRET', () => {
+  it('is optional', () => {
+    expect(parseEnv(valid).RESEND_WEBHOOK_SECRET).toBeUndefined()
+  })
+
+  it('accepts a whsec_ secret and refuses anything else, naming the variable', () => {
+    const secret = `whsec_${randomBytes(24).toString('base64')}`
+    expect(parseEnv({ ...valid, RESEND_WEBHOOK_SECRET: secret }).RESEND_WEBHOOK_SECRET).toBe(secret)
+    for (const wrong of [randomBytes(24).toString('base64'), 're_notasigningsecret', 'whsec_']) {
+      expect(() => parseEnv({ ...valid, RESEND_WEBHOOK_SECRET: wrong })).toThrow(
+        /RESEND_WEBHOOK_SECRET/
+      )
+    }
   })
 })

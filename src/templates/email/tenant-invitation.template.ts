@@ -7,6 +7,7 @@ import {
   escapeHtmlForEmail,
   requireEmailVariables,
   type EmailTemplateKey,
+  type EmailTemplateMeta,
   type RenderedEmail,
 } from '@/utilities/email-template.utilities'
 
@@ -46,6 +47,15 @@ export interface TenantInvitationVariables {
    * The product name, for the subject and the sign-off.
    */
   appName: string
+}
+
+/**
+ * How email tracking treats this template. Its link carries a token, so it mails from the transactional sender; a resend re-sends the same invitation with a new link. `inviterName` is not stored: it is another person's name, which that person's purge could not find here.
+ */
+export const TENANT_INVITATION_TEMPLATE_META: EmailTemplateMeta<TenantInvitationVariables> = {
+  senderClass: 'transactional',
+  previewVariables: ['tenantName', 'role', 'expiresInDays', 'appName'],
+  resendAction: 'invitation',
 }
 
 const REQUIRED_VARIABLE_NAMES: ReadonlyArray<keyof TenantInvitationVariables> = [

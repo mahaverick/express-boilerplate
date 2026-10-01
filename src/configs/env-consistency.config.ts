@@ -5,6 +5,7 @@
  */
 import { isCookieSecure, trustProxySetting, type Env } from '@/configs/env.config'
 import { SERVER_DRAIN_TIMEOUT_MS } from '@/constants/global.constants'
+import { senderDomain, senderFor } from '@/utilities/email-sender.utilities'
 
 /**
  * Retired variable names, mapped to their replacements. Setting a retired
@@ -67,7 +68,32 @@ function mailpitDefaultProblems(env: Env): string[] {
       `MAIL_FROM is ${PLACEHOLDER_MAIL_FROM}, the placeholder, but APP_ENV is ${env.APP_ENV}. Set MAIL_FROM to a sender your provider has verified.`
     )
   }
+  if (env.MAIL_FROM_TRANSACTIONAL === PLACEHOLDER_MAIL_FROM) {
+    problems.push(
+      `MAIL_FROM_TRANSACTIONAL is ${PLACEHOLDER_MAIL_FROM}, the placeholder, but APP_ENV is ${env.APP_ENV}. Set MAIL_FROM_TRANSACTIONAL to a sender your provider has verified, or unset it to use MAIL_FROM.`
+    )
+  }
   return problems
+}
+
+/**
+ * Warn when token emails go out from the general sender's domain. A
+ * provider that tracks clicks on that domain rewrites every link through
+ * itself, so it would see each verification, reset, setup and invitation
+ * token. A warning, not a refusal: many providers track no clicks at all.
+ * @param env - The validated environment, with APP_ENV other than local.
+ * @param warn - Receives the warning, when both senders share a domain.
+ */
+function warnOnSharedSenderDomain(env: Env, warn: (message: string) => void): void {
+  const domain = senderDomain(env.MAIL_FROM)
+  if (senderDomain(senderFor('transactional', env)) !== domain) return
+  const which =
+    env.MAIL_FROM_TRANSACTIONAL === undefined
+      ? 'MAIL_FROM_TRANSACTIONAL is unset, so token emails'
+      : `MAIL_FROM_TRANSACTIONAL shares MAIL_FROM's domain, so token emails`
+  warn(
+    `${which} (verification, password reset, account setup, invitations) go out from ${domain}. If your provider tracks clicks on ${domain}, it rewrites their links and sees every token. Set MAIL_FROM_TRANSACTIONAL to an address on a domain with click tracking off; see "Email tracking" in ARCHITECTURE.md.`
+  )
 }
 
 /**
@@ -142,7 +168,10 @@ export function assertEnvConsistent(
       `NODE_ENV is ${env.NODE_ENV}, but APP_ENV is ${env.APP_ENV}. Set NODE_ENV=production: outside production, Express's built-in error handler sends stack traces.`
     )
   }
-  if (!isLocal) problems.push(...mailpitDefaultProblems(env))
+  if (!isLocal) {
+    problems.push(...mailpitDefaultProblems(env))
+    warnOnSharedSenderDomain(env, warn)
+  }
 
   const domainProblem = cookieDomainProblem(env)
   if (domainProblem !== undefined) problems.push(domainProblem)

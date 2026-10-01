@@ -3,10 +3,12 @@
  * `services/platform-*.service.ts` may import this file (an eslint rule); every
  * query leaves out the platform tenant and soft-deleted rows.
  */
-import { and, count, eq, gte, isNull, lt, sql, type SQL } from 'drizzle-orm'
+import { and, count, eq, gte, isNull, lt, ne, sql, type SQL } from 'drizzle-orm'
 import type { AnyPgColumn } from 'drizzle-orm/pg-core'
+import type { EmailMessageStatus } from '@/constants/email.constants'
 import type { EmailLogStatus } from '@/database/models/email-log.model'
 import { emailLogModel } from '@/database/models/email-log.model'
+import { emailMessageModel } from '@/database/models/email-message.model'
 import { tenantModel } from '@/database/models/tenant.model'
 import { userMembershipModel } from '@/database/models/user-membership.model'
 import { userModel } from '@/database/models/user.model'
@@ -135,6 +137,35 @@ export class PlatformStatsRepository {
       .from(emailLogModel)
       .where(and(gte(emailLogModel.createdAt, from), lt(emailLogModel.createdAt, to)))
       .groupBy(day, emailLogModel.status)
+      .orderBy(day)
+  }
+
+  /**
+   * Email messages created per UTC day in `[from, to)`, by current status.
+   * One row per logical email, whatever its retries; `queued` is left out,
+   * since a queued message has not been attempted yet.
+   * @param from - Inclusive start, a UTC midnight.
+   * @param to - Exclusive end, a UTC midnight.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns One row per day and status that has any.
+   */
+  async emailMessagesByDay(
+    from: Date,
+    to: Date,
+    executor: DbExecutor = db
+  ): Promise<{ day: string; status: EmailMessageStatus; count: number }[]> {
+    const day = utcDay(emailMessageModel.createdAt)
+    return executor
+      .select({ day, status: emailMessageModel.status, count: count() })
+      .from(emailMessageModel)
+      .where(
+        and(
+          gte(emailMessageModel.createdAt, from),
+          lt(emailMessageModel.createdAt, to),
+          ne(emailMessageModel.status, 'queued')
+        )
+      )
+      .groupBy(day, emailMessageModel.status)
       .orderBy(day)
   }
 }

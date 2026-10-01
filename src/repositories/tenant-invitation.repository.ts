@@ -33,7 +33,7 @@ const NO_INVITER = null
  * expiry.
  * @returns The SQL condition.
  */
-function pendingCondition() {
+export function pendingCondition() {
   return and(isNull(invitation.acceptedAt), isNull(invitation.revokedAt))
 }
 

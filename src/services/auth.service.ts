@@ -46,6 +46,7 @@ import {
 import { PASSWORD_CHANGED_TEMPLATE_KEY } from '@/templates/email/password-changed.template'
 import { PASSWORD_RESET_TEMPLATE_KEY } from '@/templates/email/password-reset.template'
 import { REGISTRATION_ATTEMPT_TEMPLATE_KEY } from '@/templates/email/registration-attempt.template'
+import type { EmailResendOptions } from '@/types/email-context'
 import { requireDurationMs } from '@/utilities/duration.utilities'
 import { getDummyHash, hashPassword, isPasswordValid } from '@/utilities/password.utilities'
 import type {
@@ -97,7 +98,7 @@ export interface AuthProvidersResult {
  * Tell the owner of an already-registered address that someone tried to
  * register it. The holder may have been soft-deleted since the insert failed;
  * then the fallback name is used and the job's correlation id is `''`, which
- * email.job.ts uses for logging only, never as a database key.
+ * is stored as `email_messages.user_id` NULL (and used in logs).
  * @param email - The address that was submitted.
  */
 async function sendRegistrationAttemptMail(email: string): Promise<void> {
@@ -277,12 +278,18 @@ export async function refresh(rawToken: string): Promise<RefreshResult> {
 /**
  * Issue a password-reset token for `user` and queue the reset mail. Rejects
  * when the token or the job cannot be written; callers decide whether that
- * is swallowed (forgot-password) or reported (staff password-setup).
+ * is swallowed (forgot-password) or reported (staff password-setup). The
+ * mail's message row records `app` as the frontend its link opens.
  * @param user - The account to reset.
  * @param app - The frontend the reset link opens.
+ * @param options - `resentFromId` when a staff resend re-runs this flow for an earlier message.
  * @returns Resolves once the mail job is queued.
  */
-export async function sendPasswordResetMail(user: User, app: FrontendApp): Promise<void> {
+export async function sendPasswordResetMail(
+  user: User,
+  app: FrontendApp,
+  options: EmailResendOptions = {}
+): Promise<void> {
   const issued = await issueToken(
     user.id,
     'password_reset',
@@ -304,6 +311,7 @@ export async function sendPasswordResetMail(user: User, app: FrontendApp): Promi
         appName: getEnv().APP_NAME,
       },
     },
+    emailContext: { linkApp: app, ...options },
   })
 }
 

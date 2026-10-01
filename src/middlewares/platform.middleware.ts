@@ -69,11 +69,22 @@ export function refusePlatformOptions(
 const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
 
 /**
- * A staff route's target in its path: `/platform/users/<id>` or
- * `/platform/tenants/<id>`.
+ * A staff route's target in its path: `/platform/<collection>/<id>`, for
+ * each collection in `TARGET_TYPE_OF_COLLECTION`.
  */
 const STAFF_TARGET_PATH =
-  /\/platform\/(?<collection>users|tenants)\/(?<id>[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12})(?:\/|$)/i
+  /\/platform\/(?<collection>users|tenants|emails|email-suppressions)\/(?<id>[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12})(?:\/|$)/i
+
+/**
+ * The target type a staff write's log line names, per path collection: the
+ * audit log's target types, so a log line and its audit entry agree.
+ */
+const TARGET_TYPE_OF_COLLECTION: Readonly<Record<string, string>> = {
+  users: 'user',
+  tenants: 'tenant',
+  emails: 'email_message',
+  'email-suppressions': 'email_suppression',
+}
 
 /**
  * Log one structured line per successful staff write, once the response is
@@ -102,7 +113,7 @@ export function logStaffWrites(request: Request, response: Response, next: NextF
         status: response.statusCode,
         actorId: request.user?.id,
         ...(target && {
-          targetType: target.collection === 'users' ? 'user' : 'tenant',
+          targetType: TARGET_TYPE_OF_COLLECTION[target.collection?.toLowerCase() ?? ''],
           targetId: target.id,
         }),
       })

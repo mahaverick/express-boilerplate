@@ -68,7 +68,30 @@ describe('EmailLogRepository', () => {
     expect(recorded.status).toBe('sent')
     expect(recorded.providerMessageId).toBe('provider-message-id-1')
     expect(recorded.errorCode).toBeNull()
+    expect(recorded.messageId).toBeNull()
     expect(recorded.createdAt).toBeInstanceOf(Date)
+  })
+
+  it('records the message an attempt belongs to', async () => {
+    const recipient = uniqueRecipient()
+    const [message] = await sql<{ id: string }[]>`
+      insert into email_messages (recipient, template_key, sender_class, message_id_header, status)
+      values (${recipient}, 'password_reset', 'transactional', ${`<${randomUUID()}@example.test>`}, 'queued')
+      returning id
+    `
+    const messageId = message?.id ?? ''
+
+    const recorded = await emailLogRepository.record({
+      recipient,
+      templateKey: 'password_reset',
+      status: 'sent',
+      messageId,
+    })
+
+    expect(recorded.messageId).toBe(messageId)
+    // Deleting the message cascades to its attempt, so no email_logs cleanup is needed.
+    await sql`delete from email_messages where id = ${messageId}`
+    expect(await sql`select 1 from email_logs where id = ${recorded.id}`).toHaveLength(0)
   })
 
   it('records a failed send', async () => {

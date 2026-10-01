@@ -3,7 +3,7 @@
  * `BaseRepository`: a delivery log must offer no `update()` or `softDelete()`, has
  * no `updatedAt`/`deletedAt` columns, and has no unique constraint to translate.
  */
-import { asc, eq, inArray, sql } from 'drizzle-orm'
+import { and, asc, eq, inArray, isNull, or, sql } from 'drizzle-orm'
 import { MAX_EMAIL_LENGTH } from '@/constants/auth.constants'
 import {
   emailLogModel,
@@ -15,6 +15,7 @@ import {
   type EmailLog,
   type NewEmailLog,
 } from '@/database/models/email-log.model'
+import { emailMessageModel } from '@/database/models/email-message.model'
 import { HttpError } from '@/errors/http-error'
 import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
 
@@ -137,7 +138,7 @@ export class EmailLogRepository {
    * reset) still rejects; the caller, `recordDelivery` (mailer.service.ts),
    * catches it and logs it at `logger.error` through `redactedForLog`
    * (postgres-errors.ts), without failing the request.
-   * @param entry - The row to insert: recipient, templateKey, status, and whichever of providerMessageId/errorCode applies to that status.
+   * @param entry - The row to insert: recipient, templateKey, status, whichever of providerMessageId/errorCode applies to that status, and `messageId`, the `email_messages` row the attempt belongs to (null or absent for an untracked attempt).
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns The inserted row, including its generated `id` and `createdAt`.
    */
@@ -167,7 +168,11 @@ export class EmailLogRepository {
   }
 
   /**
-   * Delete up to `limit` rows created before `cutoff`.
+   * Delete up to `limit` attempt rows past retention: a row with a message
+   * goes when its message was created before `cutoff` (the group is dated by
+   * the message, so a mail's attempts go together), and a row without one,
+   * written before its message existed or by a replica older than the
+   * message table, goes by its own `created_at`.
    * Takes the batch oldest id first with FOR UPDATE SKIP LOCKED: a row a
    * request holds is left for a later run instead of waited on, so a batch
    * can come back short while matching rows remain.
@@ -177,13 +182,22 @@ export class EmailLogRepository {
    * @returns How many rows were deleted.
    */
   async purgeCreatedBefore(cutoff: Date, limit: number, tx: DbTransaction): Promise<number> {
+    const before = sql`${cutoff.toISOString()}::timestamptz`
+    const oldMessages = tx
+      .select({ id: emailMessageModel.id })
+      .from(emailMessageModel)
+      .where(sql`${emailMessageModel.createdAt} < ${before}`)
+    const oldWithoutMessage = and(
+      isNull(emailLogModel.messageId),
+      sql`${emailLogModel.createdAt} < ${before}`
+    )
     const batch = tx
       .select({ id: emailLogModel.id })
       .from(emailLogModel)
-      .where(sql`${emailLogModel.createdAt} < ${cutoff.toISOString()}::timestamptz`)
+      .where(or(oldWithoutMessage, inArray(emailLogModel.messageId, oldMessages)))
       .orderBy(emailLogModel.id)
       .limit(limit)
-      .for('update', { skipLocked: true })
+      .for('update', { of: emailLogModel, skipLocked: true })
     const result = await tx.delete(emailLogModel).where(inArray(emailLogModel.id, batch))
     return result.count
   }

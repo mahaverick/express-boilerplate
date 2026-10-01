@@ -26,6 +26,7 @@ const deployed: Record<string, string> = {
   SMTP_HOST: 'smtp.example.net',
   SMTP_PORT: '587',
   MAIL_FROM: 'hello@example.net',
+  MAIL_FROM_TRANSACTIONAL: 'auth@mail.example.net',
   TRUST_PROXY: '1',
 }
 
@@ -191,6 +192,7 @@ describe('assertEnvConsistent', () => {
       { key: 'SMTP_HOST', value: '127.0.0.1' },
       { key: 'SMTP_PORT', value: '1025' },
       { key: 'MAIL_FROM', value: 'no-reply@example.com' },
+      { key: 'MAIL_FROM_TRANSACTIONAL', value: 'no-reply@example.com' },
     ])('refuses $key=$value on prod', ({ key, value }) => {
       const { error } = runChecks({ ...deployed, [key]: value })
       expect(error).toContain(`${key} is ${value}`)
@@ -201,6 +203,42 @@ describe('assertEnvConsistent', () => {
       expect(error).toContain('SMTP_HOST is 127.0.0.1')
       expect(error).toContain('SMTP_PORT is 1025')
       expect(error).toContain('MAIL_FROM is no-reply@example.com')
+    })
+  })
+
+  describe('the transactional sender outside local', () => {
+    const withoutTransactional = Object.fromEntries(
+      Object.entries(deployed).filter(([key]) => key !== 'MAIL_FROM_TRANSACTIONAL')
+    )
+
+    it('warns, and still boots, when MAIL_FROM_TRANSACTIONAL is unset', () => {
+      const { error, warnings } = runChecks(withoutTransactional)
+      expect(error).toBeUndefined()
+      expect(warnings).toHaveLength(1)
+      expect(warnings[0]).toContain('MAIL_FROM_TRANSACTIONAL is unset')
+      expect(warnings[0]).toContain('click')
+      expect(warnings[0]).toContain('"Email tracking" in ARCHITECTURE.md')
+    })
+
+    it("warns when MAIL_FROM_TRANSACTIONAL is on MAIL_FROM's domain, in any case", () => {
+      const { error, warnings } = runChecks({
+        ...deployed,
+        MAIL_FROM_TRANSACTIONAL: 'auth@Example.NET',
+      })
+      expect(error).toBeUndefined()
+      expect(warnings).toHaveLength(1)
+      expect(warnings[0]).toContain("shares MAIL_FROM's domain")
+    })
+
+    it('is silent when the transactional sender has a domain of its own', () => {
+      expect(runChecks(deployed).warnings).toEqual([])
+    })
+
+    it('is silent on local, where both default to the placeholder', () => {
+      expect(runChecks(local).warnings).toEqual([])
+      expect(
+        runChecks({ ...local, MAIL_FROM_TRANSACTIONAL: 'no-reply@example.com' }).error
+      ).toBeUndefined()
     })
   })
 
