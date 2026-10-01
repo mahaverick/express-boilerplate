@@ -345,41 +345,43 @@ addresses the source system already trusted.
 
 ### Rate limiting: one store prefix per limiter
 
-`RATE_LIMITS` (`src/constants/rate-limit.constants.ts`) holds 23 limiter
+`RATE_LIMITS` (`src/constants/rate-limit.constants.ts`) holds 25 limiter
 specs, each built into middleware by `createRateLimiter(spec)`
 (`src/middlewares/rate-limit.middleware.ts`). Sixteen guard the auth router
 (every route on it except `GET /providers` has at least one), six guard
 tenant creation, member invitation, invitation preview and accept, staff
-reads and staff writes, and `authenticatedWrite` covers every other
+reads and staff writes, two guard the email webhook, and `authenticatedWrite` covers every other
 authenticated write. Paths below are under `/api/v1`; a `user` key is the
 authenticated user's id, and an `email` key is the submitted `email`,
 trimmed and lowercased.
 
-| Route                                                                                                                                                 | Limiter (`rl:` prefix)                    | Limit              | Key                  |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- | ------------------ | -------------------- |
-| `POST /auth/register`                                                                                                                                 | `register`                                | 100 per hour       | IP                   |
-| `POST /auth/login`, in this order                                                                                                                     | `login`                                   | 5 per 15 minutes   | IP + submitted email |
-|                                                                                                                                                       | `login-ip`                                | 100 per 15 minutes | IP                   |
-|                                                                                                                                                       | `login-account`                           | 100 per hour       | email                |
-| `POST /auth/refresh`                                                                                                                                  | `refresh`                                 | 300 per 5 minutes  | IP                   |
-| `POST /auth/logout`                                                                                                                                   | `logout`                                  | 300 per 5 minutes  | IP                   |
-| `POST /auth/verify-email`                                                                                                                             | `verify-email`                            | 30 per 15 minutes  | IP                   |
-| `POST /auth/resend-verification`                                                                                                                      | `resend-verification-ip`                  | 5 per hour         | IP                   |
-|                                                                                                                                                       | `resend-verification-email`               | 20 per hour        | email                |
-| `POST /auth/forgot-password`                                                                                                                          | `forgot-password-ip`                      | 5 per hour         | IP                   |
-|                                                                                                                                                       | `forgot-password-email`                   | 20 per hour        | email                |
-| `POST /auth/reset-password`                                                                                                                           | `reset-password`                          | 10 per 15 minutes  | IP                   |
-| `POST /auth/change-password`                                                                                                                          | `change-password`                         | 5 per 15 minutes   | user                 |
-| `GET /auth/google` (when Google sign-in is on)                                                                                                        | `google-oauth`                            | 300 per 5 minutes  | IP                   |
-| `GET /auth/google/callback` (same)                                                                                                                    | `google-oauth-callback`                   | 300 per 5 minutes  | IP                   |
-| `POST /tenants`                                                                                                                                       | `create-tenant`                           | 20 per hour        | user                 |
-| `POST /tenants/:slug/invitations`, `POST …/invitations/:id/resend`                                                                                    | `invite-tenant-member`, one shared budget | 30 per hour        | user                 |
-| `POST /invitations/preview`                                                                                                                           | `invitation-preview`                      | 60 per 15 minutes  | IP                   |
-| `POST /invitations/accept` (ahead of `requireAuth`)                                                                                                   | `invitation-accept`                       | 20 per 15 minutes  | IP                   |
-| `POST /auth/reauthenticate` (after the staff check)                                                                                                   | `reauthenticate`                          | 5 per 15 minutes   | user                 |
-| `GET /platform/tenants`, `GET /platform/tenants/:id`, `GET /platform/users`, `GET /platform/users/:id`, `GET /platform/stats` (after the staff check) | `platform-search`, one shared budget      | 60 per minute      | user                 |
-| Every `/platform` write (after the staff check)                                                                                                       | `platform-write`, one shared budget       | 30 per minute      | user                 |
-| Every other authenticated write (below)                                                                                                               | `authenticated-write`                     | 60 per minute      | user                 |
+| Route                                                                                                                                                                                                                   | Limiter (`rl:` prefix)                           | Limit              | Key                  |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ | ------------------ | -------------------- |
+| `POST /auth/register`                                                                                                                                                                                                   | `register`                                       | 100 per hour       | IP                   |
+| `POST /auth/login`, in this order                                                                                                                                                                                       | `login`                                          | 5 per 15 minutes   | IP + submitted email |
+|                                                                                                                                                                                                                         | `login-ip`                                       | 100 per 15 minutes | IP                   |
+|                                                                                                                                                                                                                         | `login-account`                                  | 100 per hour       | email                |
+| `POST /auth/refresh`                                                                                                                                                                                                    | `refresh`                                        | 300 per 5 minutes  | IP                   |
+| `POST /auth/logout`                                                                                                                                                                                                     | `logout`                                         | 300 per 5 minutes  | IP                   |
+| `POST /auth/verify-email`                                                                                                                                                                                               | `verify-email`                                   | 30 per 15 minutes  | IP                   |
+| `POST /auth/resend-verification`                                                                                                                                                                                        | `resend-verification-ip`                         | 5 per hour         | IP                   |
+|                                                                                                                                                                                                                         | `resend-verification-email`                      | 20 per hour        | email                |
+| `POST /auth/forgot-password`                                                                                                                                                                                            | `forgot-password-ip`                             | 5 per hour         | IP                   |
+|                                                                                                                                                                                                                         | `forgot-password-email`                          | 20 per hour        | email                |
+| `POST /auth/reset-password`                                                                                                                                                                                             | `reset-password`                                 | 10 per 15 minutes  | IP                   |
+| `POST /auth/change-password`                                                                                                                                                                                            | `change-password`                                | 5 per 15 minutes   | user                 |
+| `GET /auth/google` (when Google sign-in is on)                                                                                                                                                                          | `google-oauth`                                   | 300 per 5 minutes  | IP                   |
+| `GET /auth/google/callback` (same)                                                                                                                                                                                      | `google-oauth-callback`                          | 300 per 5 minutes  | IP                   |
+| `POST /tenants`                                                                                                                                                                                                         | `create-tenant`                                  | 20 per hour        | user                 |
+| `POST /tenants/:slug/invitations`, `POST …/invitations/:id/resend`                                                                                                                                                      | `invite-tenant-member`, one shared budget        | 30 per hour        | user                 |
+| `POST /invitations/preview`                                                                                                                                                                                             | `invitation-preview`                             | 60 per 15 minutes  | IP                   |
+| `POST /invitations/accept` (ahead of `requireAuth`)                                                                                                                                                                     | `invitation-accept`                              | 20 per 15 minutes  | IP                   |
+| `POST /auth/reauthenticate` (after the staff check)                                                                                                                                                                     | `reauthenticate`                                 | 5 per 15 minutes   | user                 |
+| `GET /platform/tenants`, `GET /platform/tenants/:id`, `GET /platform/users`, `GET /platform/users/:id`, `GET /platform/stats`, the `/platform/emails*` and `/platform/email-suppressions` reads (after the staff check) | `platform-search`, one shared budget             | 60 per minute      | user                 |
+| Every `/platform` write (after the staff check)                                                                                                                                                                         | `platform-write`, one shared budget              | 30 per minute      | user                 |
+| `POST /webhooks/email/:provider`, in this order (public; the provider is checked first)                                                                                                                                 | `email-webhook-rejected` (failed responses only) | 60 per minute      | IP                   |
+|                                                                                                                                                                                                                         | `email-webhook` (accepted requests only)         | 3000 per minute    | provider             |
+| Every other authenticated write (below)                                                                                                                                                                                 | `authenticated-write`                            | 60 per minute      | user                 |
 
 Each spec is backed by its **own** `SharedRateLimitStore`
 (`src/configs/rate-limit-store.config.ts`) under the key prefix `rl:<name>:`,
@@ -769,7 +771,7 @@ Authorization; ASVS 5.0 8.2.1 and 8.4.2). Each route names its own
 and non-staff and staff below the route's role get the app's 404, before
 the JSON gate, the step-up check and the limiter.
 `tests/integration/api/platform-route-gates.test.ts` holds one row per
-route, walks the platform router and its `/users` sub-router, and fails
+route, walks the platform router and its `/users`, `/emails` and `/email-suppressions` sub-routers, and fails
 when the router registers a route the table lacks or mounts a sub-router
 it doesn't know. A customer-facing nginx may also refuse
 `/api/v1/platform/` as defence in depth; that's an extra layer, never the
@@ -784,7 +786,11 @@ stays the record.
 Deactivating, deleting or purging a user; suspending, archiving or purging
 a tenant; re-inviting a tenant's owner; and, on the platform tenant, a role
 change, a removal, a resend or an invitation offering admin or owner need a
-sign-in within the last 10 minutes (ASVS 5.0 7.5.3). The refresh row
+sign-in within the last 10 minutes (ASVS 5.0 7.5.3).
+An email resend of a platform-tenant invitation
+(`POST /platform/emails/:id/resend`) needs it too: the route cannot know
+the message's tenant, so the service checks it with the same predicate,
+`isRecentAuth`. The refresh row
 records `authenticated_at` when a session starts, rotation carries it
 forward unchanged, and the access token carries it as `auth_time`.
 `requireRecentAuth` answers 401 `REAUTH_REQUIRED` when the claim is missing
@@ -801,7 +807,7 @@ not sign out on `REAUTH_REQUIRED`.
 
 Every staff state change records who acted, on what, and why:
 deactivate, reactivate, sign-out, delete and purge a user; suspend,
-reactivate, archive and purge a tenant; re-invite its owner. The `reason`
+reactivate, archive and purge a tenant; re-invite its owner; resend an email; lift an email suppression. The `reason`
 (1–500 characters, safe text) is stored in the audit entry's metadata and
 shown in the platform activity log. A tenant's own members see the entry
 in their audit log, but not the staff member's reason. Staff never set a
@@ -828,6 +834,41 @@ redacted entry from a user entry written without an actor. A tenant purge
 removes the tenant and its own audit entries. Each purge is recorded in the
 platform tenant (`user.purged`, `tenant.purged`).
 
+### Email tracking: what is stored, and what a resend can do
+
+An `email_messages` row keeps only its template's `previewVariables`, which
+can never name a `…Url` or `…Token` key: the type forbids one, the
+repository refuses one before the insert, and a check at module load covers
+every template. No rendered body, link or token is stored, and an
+invitation's inviter name is left out, so purging the inviter leaves
+nothing of theirs behind. A provider event keeps a short UPPER_SNAKE
+`detail` under a CHECK, never a raw payload or a clicked URL. The staff
+preview re-renders with every token masked.
+
+The webhook route is public, so each adapter verifies the provider's
+signature over the raw body before reading it (Resend: Svix, a 5-minute
+timestamp tolerance, a constant-time compare); a failure is a 401 logged
+without the payload. Two limiters guard it. `emailWebhook` is keyed per
+provider, not per IP, and counts only accepted requests, so a bounce storm
+from a provider's few egress addresses is not throttled into retries and
+unsigned traffic cannot spend its budget. `emailWebhookRejected` is keyed per
+IP and counts only failed responses (60 a minute), which caps forged traffic
+from one address.
+
+Token emails always go from a separate sender whose domain keeps click
+tracking off, so no provider redirector sees a live link, and no caller
+can choose the sender.
+
+A staff resend runs the action that sent the mail and issues a new token;
+it never sends a stored one, and it reaches only accounts and invitations
+the staff member could act on through that action (the rank rule for user
+mail, `canActorGrantRole` for invitations). The `canResend` flag on the
+list and detail is a hint computed with the same predicates; the endpoint
+enforces them again. The two security notices are never resent, since a
+replay would report an event that did not happen again. No mail bypasses
+the suppression list, and lifting a suppression needs an admin, a reason
+and an audit entry.
+
 ## What this boilerplate does NOT implement
 
 None of these is built, except where the Status column says Partial:
@@ -836,7 +877,7 @@ None of these is built, except where the Status column says Partial:
 | ----------------------------------------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | MFA                                                   | **Not implemented** | No TOTP enrolment and no recovery codes. The one step-up is a password re-check before destructive staff actions; see "Step-up for destructive staff actions".                                                                      |
 | CSRF tokens                                           | **Not implemented** | See "No CSRF middleware" below — reasoning, not an oversight. The forced-login direction IS defended, by a content-type gate; see the section after it.                                                                             |
-| General-purpose rate limiting                         | **Partial**         | 23 limiters (see "Rate limiting" above). Every write route has one, at least the shared `authenticatedWrite`. There is no global limiter, and authenticated reads (profile, notifications, tenant reads, the audit logs) have none. |
+| General-purpose rate limiting                         | **Partial**         | 25 limiters (see "Rate limiting" above). Every write route has one, at least the shared `authenticatedWrite`. There is no global limiter, and authenticated reads (profile, notifications, tenant reads, the audit logs) have none. |
 | Rehash on login                                       | **Not implemented** | See "Password hashing".                                                                                                                                                                                                             |
 | Impersonation, break-glass access, row-level security | **Not implemented** | Staff act only through the platform role; see "Platform staff access and the audit log".                                                                                                                                            |
 | Audit of sign-in and credential events                | **Partial**         | `audit_logs` records no login, logout, password change or password reset. The one sign-in event it records is a staff step-up (`auth.reauthenticated`, success or wrong password).                                                  |

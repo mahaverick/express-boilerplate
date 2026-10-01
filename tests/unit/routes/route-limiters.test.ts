@@ -129,6 +129,19 @@ describe('every write route carries a rate limiter', () => {
     expect(unlimited).toEqual([])
   })
 
+  it('walks the email webhook route, mounted on the app outside createApiRouter, and limits it per provider', () => {
+    const webhook = writeRoutesOf(createApp()).find(
+      (route) => route.method === 'post' && route.path === '/:provider'
+    )
+
+    expect(webhook).toBeDefined()
+    const marks = (webhook?.handlers ?? []).map(
+      (handler) => (handler as unknown as Record<symbol, unknown>)[RATE_LIMITER_MARK]
+    )
+    expect(marks).toContain(RATE_LIMITS.emailWebhook.name)
+    expect(marks).toContain(RATE_LIMITS.emailWebhookRejected.name)
+  })
+
   it('fails when a route loses its limiter — proven by removing authenticatedWrite’s marker', async () => {
     const { createRateLimiter: realCreateRateLimiter } =
       await import('@/middlewares/rate-limit.middleware')

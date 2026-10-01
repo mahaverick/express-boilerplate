@@ -80,7 +80,8 @@ unknown-route 404 before any limiter runs, and a bad signature gets 401
 `INVALID_SIGNATURE`. Two limiters guard it: `emailWebhookRejected` (60 a minute
 per IP, counting only responses of 400 or above) and `emailWebhook` (3000 a
 minute per provider, counting only accepted requests), so forged traffic
-cannot spend the budget a provider's real events need.
+cannot spend the budget a provider's real events need. See
+[Email tracking](#email-tracking).
 
 Every authenticated OPTIONS that reaches the platform router gets the
 unknown-route 404 (`refusePlatformOptions`), so Express's automatic `Allow`
@@ -90,18 +91,25 @@ bearer token; staff routes serve no cross-origin preflight of their own. The
 router serves staff reads to any platform role: `GET /platform/tenants` (with
 `state` and back-paging), `GET /platform/tenants/:id` (any lifecycle state),
 `GET /platform/users` (with `status=deleted` for soft-deleted users), `GET
-/platform/users/:id` (a soft-deleted user too) and `GET /platform/stats`.
+/platform/users/:id` (a soft-deleted user too), `GET /platform/stats`, and
+message tracking: `GET /platform/emails`, `/platform/emails/health`,
+`/platform/emails/:id` and its `/preview`, and `GET
+/platform/email-suppressions`.
 Platform admins also get `GET /platform/audit-log` (filterable by `tenantId`,
 `targetId`, actor, action and access) and every create, update and soft
 action: create a tenant and invite its owner, re-invite an owner, suspend,
 reactivate and archive a tenant, create and edit users, deactivate,
-reactivate, sign out and soft-delete users, and send set-password or
-verification mail. Platform owners also get the two hard deletes, `POST
+reactivate, sign out and soft-delete users, send set-password or
+verification mail, resend a token email through the action that sent it,
+and lift an email suppression. Platform owners also get the two hard deletes, `POST
 /platform/users/:id/purge` and `POST /platform/tenants/:id/purge`, and may act
 on other staff owners. Each route names its own `requirePlatformRole`, which
 answers 404 below it. Deactivate, delete, both purges, suspend, archive and
 the owner re-invitation also need a sign-in within the last 10 minutes
-(`requireRecentAuth`, 401 `REAUTH_REQUIRED`); `POST /auth/reauthenticate`
+(`requireRecentAuth`, 401 `REAUTH_REQUIRED`), and so does an email resend of
+a platform-tenant invitation, which the service decides per message with the
+same predicate (`isRecentAuth`, `src/utilities/recent-auth.utilities.ts`);
+`POST /auth/reauthenticate`
 (staff only, password only) renews it. A staff sign-out, deactivation or
 delete revokes every token the user holds, whatever its purpose, so an
 unredeemed verification or set-password link dies with the sessions. Staff
@@ -152,9 +160,11 @@ supplying the four queries it cannot express generically (`selectOne`,
 a final optional `executor: DbExecutor = db` parameter, so a caller can run it
 inside its own transaction. The other repositories do not extend it, because
 their tables have no soft-delete concept for its policy to apply to:
-`email_logs` and `audit_logs` are append-only outside the retention purge and
-the staff purge, `platform-tenant.repository.ts` and
-`platform-user.repository.ts` are read-only cross-tenant searches and detail
+`email_logs`, `email_events` and `audit_logs` are append-only outside the
+retention purge and the staff purge, `email_messages` changes only its status
+and `email_suppressions` only its lift,
+`platform-tenant.repository.ts`, `platform-user.repository.ts` and
+`platform-email.repository.ts` are read-only cross-tenant searches and detail
 reads, `platform-stats.repository.ts` holds the read-only Overview
 aggregates, and the rest (auth providers,
 notifications, notification preferences, tenant settings, invitations,
@@ -306,16 +316,17 @@ concurrent login". The two-connection tests detect blocking with
 **Platform access.** These services carry it. Their callers stay in the
 layers above.
 
-| Service                        | Job                                                                                                                                                                                                                                                                                                                                                                                                    |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `tenant-access.service.ts`     | `lockTenantAccess(actor, tenantId, otherUserIds, mode, tx)`: locks owners, memberships and, when the actor has no membership, the platform membership, in that order (step 4 above), returning the actor's access and the locked memberships. `resolveActorAccess(actor, tenantId, tx)` wraps it for a caller with no other memberships to lock. Membership wins; the platform tenant is members-only. |
-| `platform.service.ts`          | `getPlatformMembership` (one indexed read, no cache), `assertStillPlatformRole` (the actor's platform role re-read under lock inside a staff write, 404 below the route's role, 401 for an account gone or inactive), `autoJoin` (viewer only, verified addresses on `PLATFORM_EMAIL_DOMAINS`), `bootstrapGrant` (the `platform:grant` script only).                                                   |
-| `platform-tenant.service.ts`   | `searchAll` (state filter, keyset both ways), `getTenantDetail`, `createTenant` (no members, owner invited in the same transaction), `reissueOwnerInvitation`, `suspendTenant`/`reactivateTenant`/`archiveTenant` (one conditional UPDATE each, `transitionLifecycle`; archive also revokes pending invitations). The only importer of `platform-tenant.repository.ts`.                                |
-| `platform-user.service.ts`     | The staff user directory and user actions: search, detail, create with a set-password mail, edit, password-setup, resend-verification, deactivate, reactivate, sign-out, soft delete. State changes re-read the actor's platform role and the target under lock (`lockStaffPair`); the two mail actions check rank without a lock.                                                                     |
-| `platform-purge.service.ts`    | `purgeUser` and `purgeTenant`, the only hard deletes. With `retention.service.ts`, the only code that names the audit trigger's settings.                                                                                                                                                                                                                                                              |
-| `platform-stats.service.ts`    | `getPlatformStats`: totals and zero-filled per-UTC-day sign-up and email series for the staff Overview. The only importer of `platform-stats.repository.ts`. `emails[].failed` counts failed attempts: `email_logs` has one row per attempt, so a mail retried and then sent adds both a failed and a sent row.                                                                                        |
-| `tenant-invitation.service.ts` | Besides member invitations, `createOwnerInvitation`/`sendOwnerInvitation`: the staff-only owner invitation for a tenant with no active owner, which skips `canActorGrantRole` (the route's platform-admin gate authorizes it).                                                                                                                                                                         |
-| `audit.service.ts`             | `record(entry, tx)`, in the caller's transaction, with strict per-action metadata; `recordPlatformAccess` (hourly, deduplicated in Redis); `listForTenant` and `listPlatformWide` (keyset; the platform read also filters by `tenantId` and `targetId`, served by `audit_logs_target_occurred_idx`).                                                                                                   |
+| Service                        | Job                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tenant-access.service.ts`     | `lockTenantAccess(actor, tenantId, otherUserIds, mode, tx)`: locks owners, memberships and, when the actor has no membership, the platform membership, in that order (step 4 above), returning the actor's access and the locked memberships. `resolveActorAccess(actor, tenantId, tx)` wraps it for a caller with no other memberships to lock. Membership wins; the platform tenant is members-only.                                |
+| `platform.service.ts`          | `getPlatformMembership` (one indexed read, no cache), `assertStillPlatformRole` (the actor's platform role re-read under lock inside a staff write, 404 below the route's role, 401 for an account gone or inactive), `autoJoin` (viewer only, verified addresses on `PLATFORM_EMAIL_DOMAINS`), `bootstrapGrant` (the `platform:grant` script only).                                                                                  |
+| `platform-tenant.service.ts`   | `searchAll` (state filter, keyset both ways), `getTenantDetail`, `createTenant` (no members, owner invited in the same transaction), `reissueOwnerInvitation`, `suspendTenant`/`reactivateTenant`/`archiveTenant` (one conditional UPDATE each, `transitionLifecycle`; archive also revokes pending invitations). The only importer of `platform-tenant.repository.ts`.                                                               |
+| `platform-user.service.ts`     | The staff user directory and user actions: search, detail, create with a set-password mail, edit, password-setup, resend-verification, deactivate, reactivate, sign-out, soft delete. State changes re-read the actor's platform role and the target under lock (`lockStaffPair`); the two mail actions check rank without a lock.                                                                                                    |
+| `platform-purge.service.ts`    | `purgeUser` and `purgeTenant`, the only hard deletes. With `retention.service.ts`, the only code that names the audit trigger's settings.                                                                                                                                                                                                                                                                                             |
+| `platform-stats.service.ts`    | `getPlatformStats`: totals and zero-filled per-UTC-day sign-up and email series for the staff Overview. The only importer of `platform-stats.repository.ts`. `emails[]` (deprecated) counts send attempts: `email_logs` has one row per attempt, so a mail retried and then sent adds both a failed and a sent row. `emailMessages[]` counts messages (`email_messages`) by current status in five disjoint groups.                   |
+| `platform-email.service.ts`    | Message tracking for staff: search, detail, masked preview, health, the suppression list and lift, and resend, which delegates to resend-verification, password-setup or the invitation resend with their own gates and audit and adds `email.resent`. `canResendFor` computes the list's `canResend` hint with the same predicates (`canStaffMailTarget`, `canActorGrantRole`). The only importer of `platform-email.repository.ts`. |
+| `tenant-invitation.service.ts` | Besides member invitations, `createOwnerInvitation`/`sendOwnerInvitation`: the staff-only owner invitation for a tenant with no active owner, which skips `canActorGrantRole` (the route's platform-admin gate authorizes it).                                                                                                                                                                                                        |
+| `audit.service.ts`             | `record(entry, tx)`, in the caller's transaction, with strict per-action metadata; `recordPlatformAccess` (hourly, deduplicated in Redis); `listForTenant` and `listPlatformWide` (keyset; the platform read also filters by `tenantId` and `targetId`, served by `audit_logs_target_occurred_idx`).                                                                                                                                  |
 
 `platform-user.service.ts` and `platform-purge.service.ts` are the only
 importers of `platform-user.repository.ts`.
@@ -352,6 +363,14 @@ Each recipe below lists every place that must change together.
   `tests/integration/api/platform-route-gates.test.ts` (the completeness
   check fails until you do) and mirror the action in apex's
   `src/constants/audit-actions.ts`.
+- **An email template.** Add the template module with its variables and
+  its `…_TEMPLATE_META` (sender class, `previewVariables`, `resendAction`),
+  add its key to `EMAIL_TEMPLATE_KEYS` and `MailMessage`, and give
+  `buildPreviewMessage` (`platform-email.service.ts`) a case that masks its
+  links. A mail that carries a token must be `transactional` (the type
+  enforces it) and needs a `resendAction` that re-issues the token, or
+  `null` if it must never be resent. Mirror the key and its label in apex's
+  `EMAIL_TEMPLATES`.
 
 ## Directory rules
 
@@ -649,6 +668,32 @@ through its own host needs no entry. Google calls back to `APP_URL` only, so
 when Google sign-in is on (`GOOGLE_CLIENT_ID`) and the Apex host differs from
 `APP_URL`'s, `COOKIE_DOMAIN` must cover both; boot refuses otherwise
 (`apexCookieDomainProblem`, `env-consistency.config.ts`).
+
+## Email tracking
+
+Every outbound email is one `email_messages` row, written when the mail is
+queued: the recipient, the template, the user, tenant and invitation it is
+about, the frontend its link opens (`link_app`), the sender class, its
+`Message-ID`, and the template's non-secret `previewVariables`. Never a
+rendered body, a link or a token. Each send attempt stays an append-only
+`email_logs` row pointing at its message, and each provider event an
+`email_events` row. A status only moves to a higher rank
+(`EMAIL_STATUS_RANK`, `src/constants/email.constants.ts`), so a fast
+`delivered` event is never overwritten by the worker's `sent`; `opened` and
+`clicked` never change it. `RETENTION_EMAIL_LOGS_DAYS` purges messages,
+their attempts and their events together; suppressions never expire.
+
+Token emails (verification, password reset, account setup, invitations)
+always go from `MAIL_FROM_TRANSACTIONAL`, and the two security notices from
+`MAIL_FROM`; no caller picks the sender. Keep click tracking **off** at the
+provider for the transactional sender's domain: a tracked link is rewritten
+through the provider's redirector, which would then see every token. Left
+unset, `MAIL_FROM_TRANSACTIONAL` falls back to `MAIL_FROM`, and outside
+`local` the boot check warns when both senders share a domain.
+
+The operator guide (the Resend webhook and its secret, the two senders, the
+suppression list, the staff preview and resend, and `pnpm email:fire-event`
+for local) is [Email tracking in README.md](README.md#email-tracking).
 
 ## Health checks
 
