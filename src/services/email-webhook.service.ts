@@ -47,7 +47,8 @@ const emailSuppressionRepository = new EmailSuppressionRepository()
 
 /**
  * What one webhook request did. `received` is every event in the body;
- * each lands in exactly one of `ignored` (a type this app does not track),
+ * each lands in exactly one of `ignored` (a type this app does not track, or a malformed event: a missing
+ * field, a non-object item or an unusable Message-ID header),
  * `unmatched` (no message has its Message-ID), `duplicate` (this provider
  * event id was stored before) and `processed`. `byType` counts the
  * processed events by type.

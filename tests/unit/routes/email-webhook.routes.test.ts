@@ -28,14 +28,17 @@ function handlersFor(router: Router, method: string, path: string): RequestHandl
 }
 
 describe('createEmailWebhookRouter', () => {
-  it('runs the provider gate, the email-webhook limiter, the raw parser, then the handler', () => {
-    const [gate, limiter, parser, handler, ...rest] = handlersFor(
+  it('runs the provider gate, the rejected-request limiter, the email-webhook limiter, the raw parser, then the handler', () => {
+    const [gate, rejectedLimiter, limiter, parser, handler, ...rest] = handlersFor(
       createEmailWebhookRouter(),
       'post',
       '/:provider'
     )
 
     expect(gate).toBe(requireEnabledEmailWebhookProvider)
+    expect((rejectedLimiter as unknown as Record<symbol, unknown>)[RATE_LIMITER_MARK]).toBe(
+      'email-webhook-rejected'
+    )
     expect((limiter as unknown as Record<symbol, unknown>)[RATE_LIMITER_MARK]).toBe('email-webhook')
     expect(parser?.name).toBe('rawParser')
     expect(handler).toBe(emailWebhookController.receive)

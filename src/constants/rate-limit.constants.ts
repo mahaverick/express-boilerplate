@@ -36,13 +36,19 @@ export interface RateLimiterSpec {
    */
   keyBy: 'ip' | 'user' | 'email' | ((request: Request) => string)
   /**
+   * Which responses spend the budget: `'accepted'` skips any response with
+   * status 400 or above, `'rejected'` skips every response below 400.
+   * Absent, every request counts.
+   */
+  counts?: 'accepted' | 'rejected'
+  /**
    * The message carried in the 429 `HttpError`'s body.
    */
   message: string
 }
 
 /**
- * The 24 rate limiters this API defines, by name.
+ * The 25 rate limiters this API defines, by name.
  */
 export type RateLimitName =
   | 'register'
@@ -69,6 +75,7 @@ export type RateLimitName =
   | 'platformWrite'
   | 'reauthenticate'
   | 'emailWebhook'
+  | 'emailWebhookRejected'
 
 const RATE_LIMITED_MESSAGE = 'Too many attempts. Please try again later.'
 
@@ -138,7 +145,7 @@ export function emailWebhookProviderRateLimitKey(request: Request): string {
 }
 
 /**
- * The 24 rate-limit specs this API enforces, each with the reason for its
+ * The 25 rate-limit specs this API enforces, each with the reason for its
  * window, limit and key. `name` is the live Redis key prefix
  * (`redisKey('rl', name)`): changing one resets that limiter's counters in
  * every deployment, and tests/unit/constants/rate-limit.constants.test.ts
@@ -434,13 +441,31 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
    * 3000 a minute per provider: volume protection for a public route that
    * verifies an HMAC before any database work, generous so a bounce storm
    * after a bulk send is not answered 429 and retried. Keyed per provider,
-   * see `emailWebhookProviderRateLimitKey`.
+   * see `emailWebhookProviderRateLimitKey`. Counts only accepted requests
+   * (status below 400): the route is public, so an unsigned request from
+   * anyone must not spend the budget a provider's real events need;
+   * `emailWebhookRejected` bounds those.
    */
   emailWebhook: {
     name: 'email-webhook',
     windowMs: 60_000,
     limit: 3000,
     keyBy: emailWebhookProviderRateLimitKey,
+    counts: 'accepted',
+    message: RATE_LIMITED_MESSAGE,
+  },
+  /**
+   * 60 a minute per IP, counting only responses of 400 or above: the cap on
+   * unsigned, forged or malformed webhook traffic from one address. It runs
+   * before `emailWebhook`, and a real provider's accepted requests never
+   * spend it.
+   */
+  emailWebhookRejected: {
+    name: 'email-webhook-rejected',
+    windowMs: 60_000,
+    limit: 60,
+    keyBy: 'ip',
+    counts: 'rejected',
     message: RATE_LIMITED_MESSAGE,
   },
 }

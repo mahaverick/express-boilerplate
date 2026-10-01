@@ -3,8 +3,8 @@
  * `/api/v1/webhooks/email` ahead of the global `express.json`, so the
  * handler sees the exact bytes the provider signed. Public: no bearer token,
  * no JSON content-type gate; the signature authenticates the request. The
- * provider gate runs before the limiter, and the limiter before the body is
- * read.
+ * provider gate runs first, then the per-IP limiter on rejected requests and
+ * the per-provider limiter on accepted ones, all before the body is read.
  */
 import express, { Router } from 'express'
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
@@ -27,6 +27,7 @@ export function createEmailWebhookRouter(): Router {
   router.post(
     '/:provider',
     requireEnabledEmailWebhookProvider,
+    createRateLimiter(RATE_LIMITS.emailWebhookRejected),
     createRateLimiter(RATE_LIMITS.emailWebhook),
     express.raw({ type: '*/*', limit: EMAIL_WEBHOOK_BODY_LIMIT }),
     emailWebhookController.receive

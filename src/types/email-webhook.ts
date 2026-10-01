@@ -36,7 +36,9 @@ export interface NormalizedEmailEvent {
 
 /**
  * What an adapter read from one verified request body: the events it
- * understood, and how many it skipped as a type this app does not track.
+ * understood, and how many it skipped: a type this app does not track, or a
+ * malformed event (a missing field, a non-object item, an unusable
+ * Message-ID header).
  */
 export interface ParsedEmailWebhook {
   events: NormalizedEmailEvent[]
@@ -66,7 +68,8 @@ export interface EmailWebhookAdapter {
   /**
    * Read the events from a body `verify` accepted. Throws a
    * `WebhookPayloadError` when the body is not JSON; an event of a type the
-   * adapter does not map, or missing a field it needs, is counted in `ignored`.
+   * adapter does not map, or malformed (missing a field it needs, not an
+   * object, or with an unusable Message-ID header), is counted in `ignored`.
    */
   parse(rawBody: Buffer, headers: IncomingHttpHeaders): ParsedEmailWebhook
 }

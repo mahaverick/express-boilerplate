@@ -76,8 +76,11 @@ which `app.ts` mounts after `requestContext` and before the global
 `express.json`: a provider's signature covers the exact body bytes, so the
 route reads them with its own `express.raw` (256kb). It is public (the
 signature authenticates it); an unknown or disabled provider gets the
-unknown-route 404 before the `emailWebhook` limiter (3000 a minute per
-provider) runs, and a bad signature gets 401 `INVALID_SIGNATURE`.
+unknown-route 404 before any limiter runs, and a bad signature gets 401
+`INVALID_SIGNATURE`. Two limiters guard it: `emailWebhookRejected` (60 a minute
+per IP, counting only responses of 400 or above) and `emailWebhook` (3000 a
+minute per provider, counting only accepted requests), so forged traffic
+cannot spend the budget a provider's real events need.
 
 Every authenticated OPTIONS that reaches the platform router gets the
 unknown-route 404 (`refusePlatformOptions`), so Express's automatic `Allow`
