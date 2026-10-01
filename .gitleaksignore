@@ -8,3 +8,6 @@ ea2c44e38a70304d83395e18a6591ca4e2605b9f:tests/unit/utilities/google-id-token.ut
 # ba79a05: the first version of this file quoted that same fake token in a
 # comment; the quote is gone, the commit remains.
 ba79a054262073ed589918914b584995db1fccb7:.gitleaksignore:generic-api-key:4
+# 197aa06: a made-up base64url string in the EMAIL_DETAIL_PATTERN test that the
+# detail CHECK must refuse; never a credential.
+197aa0643627ca89af6cb34cd37d4fbf14f61cda:tests/unit/constants/email.constants.test.ts:generic-api-key:92
