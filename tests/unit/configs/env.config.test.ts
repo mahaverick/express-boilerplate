@@ -269,6 +269,20 @@ describe('SMTP configuration', () => {
     expect(() => parseEnv({ ...valid, MAIL_FROM: 'not-an-address' })).toThrow(/MAIL_FROM/)
   })
 
+  it('leaves MAIL_FROM_TRANSACTIONAL unset by default, so token emails use MAIL_FROM', () => {
+    expect(parseEnv(valid).MAIL_FROM_TRANSACTIONAL).toBeUndefined()
+  })
+
+  it('reads MAIL_FROM_TRANSACTIONAL, and rejects a malformed one', () => {
+    expect(
+      parseEnv({ ...valid, MAIL_FROM_TRANSACTIONAL: 'auth@mail.example.net' })
+        .MAIL_FROM_TRANSACTIONAL
+    ).toBe('auth@mail.example.net')
+    expect(() => parseEnv({ ...valid, MAIL_FROM_TRANSACTIONAL: 'not-an-address' })).toThrow(
+      /MAIL_FROM_TRANSACTIONAL/
+    )
+  })
+
   // These bound the stages of a send to an SMTP host that stops responding; after the HTTP drain and one send that hangs at each stage against one address, SHUTDOWN_TIMEOUT_MS must still keep 5s for closing the database, Redis and queues and flushing traces.
   it('defaults the SMTP_*_TIMEOUT_MS variables to 3000/5000/7000, inside the shutdown budget', () => {
     const parsed = parseEnv(valid)

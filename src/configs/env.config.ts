@@ -503,7 +503,17 @@ const EnvSchema = z.object({
     .email()
     .default('no-reply@example.com')
     .describe(
-      'The From address on every outbound email. Mailpit accepts any value; a real provider may require this to be a verified sender.'
+      'The From address of the general sender: every email whose links carry no token (password changed, registration attempt), and token emails too while MAIL_FROM_TRANSACTIONAL is unset. Mailpit accepts any value; a real provider may require this to be a verified sender.'
+    ),
+  /**
+   * No schema default: it falls back to MAIL_FROM, which `.default()` cannot
+   * read, so `senderFor` (email-sender.utilities.ts) applies the fallback.
+   */
+  MAIL_FROM_TRANSACTIONAL: z
+    .email()
+    .optional()
+    .describe(
+      'The From address of the transactional sender: every email whose link carries a token (email verification, password reset, account setup, tenant invitation). Put it on a domain whose provider click tracking is off, since a tracked link is rewritten through the provider, token included. Unset uses MAIL_FROM; outside APP_ENV=local, boot warns when the two share a domain.'
     ),
 
   APP_NAME: z

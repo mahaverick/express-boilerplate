@@ -16,6 +16,8 @@ export interface MailpitMessage {
 export interface MailpitMessageDetail {
   HTML: string
   Text: string
+  From: { Address: string }
+  MessageID: string
 }
 
 /**
@@ -62,9 +64,9 @@ export async function assertNoMailpitMessage(recipient: string): Promise<void> {
 }
 
 /**
- * Fetch one message's rendered parts by id.
+ * Fetch one message's rendered parts and headers by id.
  * @param id - The Mailpit message id.
- * @returns The message's HTML and plain-text bodies.
+ * @returns The message's HTML and plain-text bodies, its From address and its Message-ID.
  */
 export async function getMailpitMessage(id: string): Promise<MailpitMessageDetail> {
   const response = await fetch(`${MAILPIT_API}/message/${id}`)

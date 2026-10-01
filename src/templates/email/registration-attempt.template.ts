@@ -7,6 +7,7 @@ import {
   escapeHtmlForEmail,
   requireEmailVariables,
   type EmailTemplateKey,
+  type EmailTemplateMeta,
   type RenderedEmail,
 } from '@/utilities/email-template.utilities'
 
@@ -24,6 +25,16 @@ export const REGISTRATION_ATTEMPT_TEMPLATE_KEY = 'registration_attempt' satisfie
 export interface RegistrationAttemptVariables {
   firstName: string
   appName: string
+}
+
+/**
+ * How email tracking treats this template. No token, so the general sender. Never resent: a second copy would report a registration attempt that did not happen.
+ */
+export const REGISTRATION_ATTEMPT_TEMPLATE_META: EmailTemplateMeta<RegistrationAttemptVariables> = {
+  senderClass: 'general',
+  previewVariables: ['firstName', 'appName'],
+  // eslint-disable-next-line unicorn/no-null -- the registry's "never resent" value
+  resendAction: null,
 }
 
 const REQUIRED_VARIABLE_NAMES: ReadonlyArray<keyof RegistrationAttemptVariables> = [

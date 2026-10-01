@@ -7,6 +7,7 @@ import {
   escapeHtmlForEmail,
   requireEmailVariables,
   type EmailTemplateKey,
+  type EmailTemplateMeta,
   type RenderedEmail,
 } from '@/utilities/email-template.utilities'
 
@@ -25,6 +26,15 @@ export interface EmailVerificationVariables {
   firstName: string
   verificationUrl: string
   appName: string
+}
+
+/**
+ * How email tracking treats this template. Its link carries a token, so it mails from the transactional sender; a resend issues a new verification link.
+ */
+export const EMAIL_VERIFICATION_TEMPLATE_META: EmailTemplateMeta<EmailVerificationVariables> = {
+  senderClass: 'transactional',
+  previewVariables: ['firstName', 'appName'],
+  resendAction: 'verification',
 }
 
 const REQUIRED_VARIABLE_NAMES: ReadonlyArray<keyof EmailVerificationVariables> = [

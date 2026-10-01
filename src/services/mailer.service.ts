@@ -4,6 +4,7 @@
  * answer identically whether or not the address exists, and a propagated failure
  * would turn an SMTP outage into an account-enumeration oracle.
  */
+import { getEnv } from '@/configs/env.config'
 import { getMailTransporter } from '@/configs/mailer.config'
 import { UNKNOWN_ERROR_CODE, type NewEmailLog } from '@/database/models/email-log.model'
 import { redactedForLog } from '@/errors/postgres-errors'
@@ -14,6 +15,7 @@ import {
   renderAccountSetupTemplate,
   type AccountSetupVariables,
 } from '@/templates/email/account-setup.template'
+import { EMAIL_TEMPLATE_META } from '@/templates/email/email-template-meta.template'
 import {
   EMAIL_VERIFICATION_TEMPLATE_KEY,
   renderEmailVerificationTemplate,
@@ -39,6 +41,7 @@ import {
   TENANT_INVITATION_TEMPLATE_KEY,
   type TenantInvitationVariables,
 } from '@/templates/email/tenant-invitation.template'
+import { senderFor } from '@/utilities/email-sender.utilities'
 import type { RenderedEmail } from '@/utilities/email-template.utilities'
 
 const emailLogRepository = new EmailLogRepository()
@@ -219,6 +222,10 @@ async function recordDelivery(entry: NewEmailLog): Promise<void> {
  * question; a render throw is recorded as a failed delivery with
  * `UNKNOWN_ERROR_CODE`, like a transport rejection.
  *
+ * The From address follows the template's sender class
+ * (`EMAIL_TEMPLATE_META`, `senderFor`), never the caller: a token email
+ * always goes out from the transactional sender.
+ *
  * Recording has its own try/catch (`recordDelivery`), not one shared with the
  * send, so a log-write failure after a successful send is never recorded as a
  * failed send. Response latency never waits on SMTP: every send runs from the
@@ -232,7 +239,9 @@ export async function sendMail(message: MailMessage): Promise<'sent' | 'failed'>
   try {
     // Inside the try: a render throw must not reveal which branch an enumeration-sensitive caller took.
     const rendered = renderForMessage(message)
+    const from = senderFor(EMAIL_TEMPLATE_META[rendered.templateKey].senderClass, getEnv())
     const info = await getMailTransporter().sendMail({
+      from,
       to: message.to,
       subject: rendered.subject,
       text: rendered.text,

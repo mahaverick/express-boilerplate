@@ -7,6 +7,7 @@ import {
   escapeHtmlForEmail,
   requireEmailVariables,
   type EmailTemplateKey,
+  type EmailTemplateMeta,
   type RenderedEmail,
 } from '@/utilities/email-template.utilities'
 
@@ -25,6 +26,15 @@ export interface AccountSetupVariables {
   firstName: string
   setupUrl: string
   appName: string
+}
+
+/**
+ * How email tracking treats this template. Its link carries a token, so it mails from the transactional sender; a resend re-runs staff password setup, which sends this or `password_reset`, whichever applies then.
+ */
+export const ACCOUNT_SETUP_TEMPLATE_META: EmailTemplateMeta<AccountSetupVariables> = {
+  senderClass: 'transactional',
+  previewVariables: ['firstName', 'appName'],
+  resendAction: 'password_setup',
 }
 
 const REQUIRED_VARIABLE_NAMES: ReadonlyArray<keyof AccountSetupVariables> = [

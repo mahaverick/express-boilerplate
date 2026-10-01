@@ -1,9 +1,11 @@
 /**
  * @file Shared building blocks for the plain-function email templates under
- * src/templates/email/: HTML escaping and the missing-variable guard. Not a
- * template engine: each template is a TypeScript function building its
- * subject, text and HTML with template literals.
+ * src/templates/email/: HTML escaping, the missing-variable guard, and the
+ * shape of each template's tracking metadata. Not a template engine: each
+ * template is a TypeScript function building its subject, text and HTML with
+ * template literals.
  */
+import type { SenderClass } from '@/constants/email.constants'
 
 /**
  * The outbound email templates this app renders, from which
@@ -115,4 +117,55 @@ export function requireEmailVariables<T extends object>(
     }
   }
   return variables
+}
+
+/**
+ * The SP2 flows a staff resend can re-run. Each issues a fresh token; a
+ * token email is never replayed.
+ */
+export const RESEND_ACTIONS = ['verification', 'password_setup', 'invitation'] as const
+
+/**
+ * One of `RESEND_ACTIONS`.
+ */
+export type ResendAction = (typeof RESEND_ACTIONS)[number]
+
+/**
+ * The keys of a template's variables that carry a secret: every name ending
+ * in `Url` or `Token` (`SECRET_VARIABLE_PATTERN`, email.constants.ts).
+ */
+export type SecretKey<T> = {
+  [K in keyof T]: K extends `${string}Url` | `${string}Token` ? K : never
+}[keyof T]
+
+/**
+ * What email tracking needs to know about one template, typed against its
+ * variables so the compiler enforces two rules: a template with a secret
+ * variable must use the `transactional` sender (click tracking off), and no
+ * secret variable can be listed for storage.
+ */
+export type EmailTemplateMeta<V> = {
+  /**
+   * `transactional` exactly when the variables carry a secret.
+   */
+  senderClass: [SecretKey<V>] extends [never] ? 'general' : 'transactional'
+  /**
+   * The variables stored on the `email_messages` row and shown in a preview.
+   */
+  previewVariables: readonly Exclude<keyof V, SecretKey<V>>[]
+  /**
+   * The flow a staff resend re-runs, or null when the template must never be
+   * resent (a security notice about an event that did not recur).
+   */
+  resendAction: ResendAction | null
+}
+
+/**
+ * `EmailTemplateMeta` with its variables erased, as the registry holds it
+ * for code that looks a template up by key.
+ */
+export interface EmailTemplateMetaEntry {
+  senderClass: SenderClass
+  previewVariables: readonly string[]
+  resendAction: ResendAction | null
 }

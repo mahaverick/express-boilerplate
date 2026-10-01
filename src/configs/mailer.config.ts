@@ -49,9 +49,11 @@ export function mailTransportOptions(
  * The process's nodemailer transporter, created on first call so importing
  * this module never resolves the SMTP settings.
  *
- * `MAIL_FROM` is the transporter's message default; `sendMail`'s input
- * (mailer.service.ts) has no `from`. `requireTLS` is on outside `APP_ENV=local`
- * (`requiresSmtpTls`), keyed on APP_ENV rather than SMTP_HOST because compose
+ * `MAIL_FROM` is the transporter's message default; `sendMail`
+ * (mailer.service.ts) sets each message's `from` from its template's sender
+ * class, and a `MailMessage` has no `from` for a caller to set. `requireTLS`
+ * is on outside `APP_ENV=local` (`requiresSmtpTls`), keyed on APP_ENV rather
+ * than SMTP_HOST because compose
  * can reach Mailpit by another name; it sits on the literal, not behind a
  * spread, because `sonarjs/no-clear-text-protocols` cannot see through a
  * spread call. The return type is annotated because `ReturnType<>` of the
