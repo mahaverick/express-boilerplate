@@ -3,20 +3,22 @@
  * a message has no `updatedAt`/`deletedAt`, and its one mutable field,
  * `status`, moves only forward, through `advanceStatus` and `markSuppressed`.
  */
-import { and, eq, sql } from 'drizzle-orm'
+import { and, eq, inArray, notExists, or, sql } from 'drizzle-orm'
 import {
   EMAIL_STATUS_RANK,
   SECRET_VARIABLE_PATTERN,
   type AdvanceableEmailStatus,
   type FailureOrigin,
 } from '@/constants/email.constants'
+import { emailEventModel } from '@/database/models/email-event.model'
+import { emailLogModel } from '@/database/models/email-log.model'
 import {
   emailMessageModel,
   type EmailMessage,
   type NewEmailMessage,
 } from '@/database/models/email-message.model'
 import { HttpError } from '@/errors/http-error'
-import { db, type DbExecutor } from '@/services/database.service'
+import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
 
 /**
  * What enqueue writes: every identifying column, with the id read first
@@ -182,5 +184,91 @@ export class EmailMessageRepository {
       .where(eq(emailMessageModel.messageIdHeader, header))
       .limit(1)
     return row
+  }
+
+  /**
+   * Delete up to `limit` messages created before `cutoff` that no longer
+   * have an event or an attempt row. The retention job deletes those first
+   * (`EmailEventRepository.purgeForMessagesCreatedBefore`,
+   * `EmailLogRepository.purgeCreatedBefore`), so this delete cascades to
+   * nothing and never waits on a child row another transaction holds; a
+   * message whose child was skipped goes on a later run. Takes the batch
+   * oldest id first with FOR UPDATE SKIP LOCKED. A newer message that was
+   * resent from one of these has its `resent_from_id` set to NULL by the
+   * foreign key, which waits if a webhook is updating that newer row.
+   * @param cutoff - Messages created before this go.
+   * @param limit - The most rows one call deletes.
+   * @param tx - The batch's transaction.
+   * @returns How many rows were deleted.
+   */
+  async purgeCreatedBefore(cutoff: Date, limit: number, tx: DbTransaction): Promise<number> {
+    const eventRows = tx
+      .select({ id: emailEventModel.id })
+      .from(emailEventModel)
+      .where(eq(emailEventModel.messageId, emailMessageModel.id))
+    const attemptRows = tx
+      .select({ id: emailLogModel.id })
+      .from(emailLogModel)
+      .where(eq(emailLogModel.messageId, emailMessageModel.id))
+    const batch = tx
+      .select({ id: emailMessageModel.id })
+      .from(emailMessageModel)
+      .where(
+        and(
+          sql`${emailMessageModel.createdAt} < ${cutoff.toISOString()}::timestamptz`,
+          notExists(eventRows),
+          notExists(attemptRows)
+        )
+      )
+      .orderBy(emailMessageModel.id)
+      .limit(limit)
+      .for('update', { skipLocked: true })
+    const result = await tx.delete(emailMessageModel).where(inArray(emailMessageModel.id, batch))
+    return result.count
+  }
+
+  /**
+   * Delete a purged user's messages, for a user purge: every message whose
+   * `user_id` is theirs, and, when `byRecipient` is given, every message to
+   * their address written at or before their deletion. The caller passes
+   * `byRecipient` only when no live account holds the address now, since
+   * rows keyed by the address alone can't be told from the new holder's.
+   * Events and attempt rows cascade.
+   * @param userId - The purged user.
+   * @param byRecipient - Their address and deletion time, or undefined to delete by `user_id` only.
+   * @param byRecipient.address - The address, in any case.
+   * @param byRecipient.createdAtOrBefore - The latest `created_at` deleted, compared to the millisecond.
+   * @param tx - The purge's transaction.
+   * @returns How many messages were deleted.
+   */
+  async deleteForUser(
+    userId: string,
+    byRecipient: { address: string; createdAtOrBefore: Date } | undefined,
+    tx: DbTransaction
+  ): Promise<number> {
+    const ownedByUser = eq(emailMessageModel.userId, userId)
+    const where =
+      byRecipient === undefined
+        ? ownedByUser
+        : or(
+            ownedByUser,
+            sql`lower(${emailMessageModel.recipient}) = lower(${byRecipient.address}) and date_trunc('milliseconds', ${emailMessageModel.createdAt}) <= ${byRecipient.createdAtOrBefore.toISOString()}::timestamptz`
+          )
+    const result = await tx.delete(emailMessageModel).where(where)
+    return result.count
+  }
+
+  /**
+   * Delete a purged tenant's messages, which carry its name in `variables`
+   * (`tenantName`). Events and attempt rows cascade.
+   * @param tenantId - The purged tenant.
+   * @param tx - The purge's transaction.
+   * @returns How many messages were deleted.
+   */
+  async deleteForTenant(tenantId: string, tx: DbTransaction): Promise<number> {
+    const result = await tx
+      .delete(emailMessageModel)
+      .where(eq(emailMessageModel.tenantId, tenantId))
+    return result.count
   }
 }

@@ -402,7 +402,7 @@ const EnvSchema = z.object({
     .max(36_500)
     .default(90)
     .describe(
-      'Days to keep an email_logs row (one per email sent or failed). 0 never purges; at most 36500. Defaults to 90.'
+      "Days to keep email tracking rows: each email message with its send attempts (email_logs) and provider events, dated by the message's creation; an attempt row with no message is dated by its own. Suppressions never expire. 0 never purges; at most 36500. Defaults to 90."
     ),
   RETENTION_NOTIFICATIONS_READ_DAYS: z.coerce
     .number()

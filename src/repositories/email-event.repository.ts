@@ -2,13 +2,15 @@
  * @file Query access to the append-only `email_events` table. It does not
  * extend `BaseRepository`: an event is never updated or soft-deleted.
  */
+import { eq, inArray, sql } from 'drizzle-orm'
 import { EMAIL_DETAIL_MAX_LENGTH, EMAIL_DETAIL_PATTERN } from '@/constants/email.constants'
 import {
   emailEventModel,
   type EmailEvent,
   type NewEmailEvent,
 } from '@/database/models/email-event.model'
-import { db, type DbExecutor } from '@/services/database.service'
+import { emailMessageModel } from '@/database/models/email-message.model'
+import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
 
 /**
  * `row` with a `detail` that `email_events_detail_check` would refuse
@@ -47,5 +49,32 @@ export class EmailEventRepository {
       .onConflictDoNothing({ target: [emailEventModel.provider, emailEventModel.providerEventId] })
       .returning()
     return inserted
+  }
+
+  /**
+   * Delete up to `limit` events whose message was created before `cutoff`:
+   * the group's retention is dated by the message, not the event. Takes the
+   * batch oldest id first with FOR UPDATE SKIP LOCKED on the events only, so
+   * a message row a webhook is updating is never waited on.
+   * @param cutoff - Events of messages created before this go.
+   * @param limit - The most rows one call deletes.
+   * @param tx - The batch's transaction.
+   * @returns How many rows were deleted.
+   */
+  async purgeForMessagesCreatedBefore(
+    cutoff: Date,
+    limit: number,
+    tx: DbTransaction
+  ): Promise<number> {
+    const batch = tx
+      .select({ id: emailEventModel.id })
+      .from(emailEventModel)
+      .innerJoin(emailMessageModel, eq(emailMessageModel.id, emailEventModel.messageId))
+      .where(sql`${emailMessageModel.createdAt} < ${cutoff.toISOString()}::timestamptz`)
+      .orderBy(emailEventModel.id)
+      .limit(limit)
+      .for('update', { of: emailEventModel, skipLocked: true })
+    const result = await tx.delete(emailEventModel).where(inArray(emailEventModel.id, batch))
+    return result.count
   }
 }

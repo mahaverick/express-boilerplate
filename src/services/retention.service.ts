@@ -2,12 +2,17 @@
  * @file Deletes rows past their retention window, one rule per table, in batches
  * by primary key, each in its own short transaction, until a batch comes back
  * short. A batch skips locked rows, which the next daily run deletes; a failing
- * rule is logged and reported while the others still run.
+ * rule is logged and reported while the others still run. The email tracking
+ * tables share `RETENTION_EMAIL_LOGS_DAYS` and are dated by the message's
+ * `created_at`: events, then attempts, then the messages left with neither,
+ * so no batch cascades. Suppressions never expire.
  */
 import { sql } from 'drizzle-orm'
 import { getEnv, type Env } from '@/configs/env.config'
 import { AuditLogRepository } from '@/repositories/audit-log.repository'
+import { EmailEventRepository } from '@/repositories/email-event.repository'
 import { EmailLogRepository } from '@/repositories/email-log.repository'
+import { EmailMessageRepository } from '@/repositories/email-message.repository'
 import { NotificationRepository } from '@/repositories/notification.repository'
 import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
@@ -22,13 +27,16 @@ export const RETENTION_BATCH_SIZE = 5000
 const DAY_MS = 86_400_000
 
 const auditLogRepository = new AuditLogRepository()
+const emailEventRepository = new EmailEventRepository()
 const emailLogRepository = new EmailLogRepository()
+const emailMessageRepository = new EmailMessageRepository()
 const notificationRepository = new NotificationRepository()
 const tenantInvitationRepository = new TenantInvitationRepository()
 const userTokenRepository = new UserTokenRepository()
 
 /**
- * Each rule's window in whole days; 0 turns the rule off.
+ * Each rule's window in whole days; 0 turns the rule off. `emailLogs` covers
+ * the three email tracking rules: events, attempts and messages.
  */
 export interface RetentionDays {
   tokens: number
@@ -89,7 +97,7 @@ async function purgeAuditLogs(cutoff: Date, limit: number, tx: DbTransaction): P
 /**
  * The rules, in the order they run.
  * @param days - Each rule's window.
- * @returns One rule per table, two for notifications.
+ * @returns One rule per table, two for notifications; the three email rules share one window.
  */
 function retentionRules(days: RetentionDays): RetentionRule[] {
   return [
@@ -106,9 +114,20 @@ function retentionRules(days: RetentionDays): RetentionRule[] {
         tenantInvitationRepository.purgeSettledBefore(cutoff, limit, tx),
     },
     {
+      table: 'email_events',
+      days: days.emailLogs,
+      purge: (cutoff, limit, tx) =>
+        emailEventRepository.purgeForMessagesCreatedBefore(cutoff, limit, tx),
+    },
+    {
       table: 'email_logs',
       days: days.emailLogs,
       purge: (cutoff, limit, tx) => emailLogRepository.purgeCreatedBefore(cutoff, limit, tx),
+    },
+    {
+      table: 'email_messages',
+      days: days.emailLogs,
+      purge: (cutoff, limit, tx) => emailMessageRepository.purgeCreatedBefore(cutoff, limit, tx),
     },
     {
       table: 'notifications.read',

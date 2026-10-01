@@ -86,6 +86,24 @@ describe('retention indexes', () => {
       'user_tokens_revoked_unconsumed_idx',
       `select id from user_tokens where ${TOKEN_PREDICATE} limit 5000`,
     ],
+    [
+      'email_messages_created_at_idx',
+      `select id from email_messages where created_at < ${CUTOFF} limit 5000`,
+    ],
+    // The email group's retention finds a message's events and attempts by message_id, as do the cascades.
+    [
+      'email_events_message_id_idx',
+      `select 1 from email_events where message_id = '00000000-0000-0000-0000-000000000000'`,
+    ],
+    [
+      'email_logs_message_id_idx',
+      `select 1 from email_logs where message_id = '00000000-0000-0000-0000-000000000000'`,
+    ],
+    // The lookup the resent_from_id foreign key's ON DELETE SET NULL runs on every message delete.
+    [
+      'email_messages_resent_from_id_idx',
+      `select 1 from email_messages where resent_from_id = '00000000-0000-0000-0000-000000000000'`,
+    ],
     // The lookup the replaced_by_id foreign key's ON DELETE SET NULL runs on every delete.
     [
       'user_tokens_replaced_by_id_idx',

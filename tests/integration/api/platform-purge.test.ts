@@ -17,6 +17,7 @@ import {
   purgeUser as purgeUserAs,
 } from '@/services/platform-purge.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
+import { insertTestMessage } from '../../helpers/email-tracking'
 import { platformTenant } from '../../helpers/platform-staff'
 import {
   createTrackedStaff,
@@ -30,10 +31,18 @@ const app = createApp()
 const tenantRepository = new TenantRepository()
 const tenantIds: string[] = []
 const mailedAddresses: string[] = []
+const messageIds: string[] = []
+const suppressedAddresses: string[] = []
 const REASON = 'Erasure request, ticket 9001'
 
 afterEach(async () => {
   await truncateAuditLogs()
+  if (messageIds.length > 0) await sql`delete from email_messages where id = any(${messageIds})`
+  messageIds.length = 0
+  if (suppressedAddresses.length > 0) {
+    await sql`delete from email_suppressions where address = any(${suppressedAddresses})`
+  }
+  suppressedAddresses.length = 0
   if (mailedAddresses.length > 0) {
     const lowered = mailedAddresses.map((address) => address.toLowerCase())
     await sql`delete from email_logs where lower(recipient) = any(${lowered})`
@@ -415,5 +424,138 @@ describe('the purge actor re-check under lock', () => {
 
     expect(await sql`select 1 from users where id = ${gone.id}`).toHaveLength(1)
     expect(await sql`select 1 from tenants where id = ${tenant.id}`).toHaveLength(1)
+  })
+})
+
+/**
+ * An email message tracked for cleanup.
+ * @param recipient - Its recipient.
+ * @param options - Its owner, tenant and creation time.
+ * @param options.userId - `user_id`.
+ * @param options.tenantId - `tenant_id`.
+ * @param options.createdAt - `created_at`, ISO.
+ * @returns Its id.
+ */
+async function trackedMessage(
+  recipient: string,
+  options: { userId?: string; tenantId?: string; createdAt?: string } = {}
+): Promise<string> {
+  const message = await insertTestMessage('', { recipient, ...options })
+  messageIds.push(message.id)
+  return message.id
+}
+
+/**
+ * A suppression tracked for cleanup.
+ * @param address - The address, lowercased.
+ * @param liftedBy - Who lifted it, or undefined for an active one.
+ * @returns Its id.
+ */
+async function trackedSuppression(address: string, liftedBy?: string): Promise<string> {
+  suppressedAddresses.push(address.toLowerCase())
+  const [row] = await sql<{ id: string }[]>`
+    insert into email_suppressions (address, reason, lifted_at, lifted_by, lift_reason)
+    values (${address.toLowerCase()}, 'hard_bounce',
+      ${liftedBy === undefined ? sql`null` : sql`now()`}, ${liftedBy ?? sql`null`},
+      ${liftedBy === undefined ? sql`null` : 'Mailbox fixed'})
+    returning id`
+  if (!row) throw new Error('suppression insert returned no row')
+  return row.id
+}
+
+/**
+ * Which of `ids` still exist in email_messages.
+ * @param ids - Message ids.
+ * @returns The surviving ids, in the order given.
+ */
+async function survivingMessages(ids: string[]): Promise<string[]> {
+  const rows = await sql<{ id: string }[]>`select id from email_messages where id = any(${ids})`
+  const kept = new Set(rows.map((row) => row.id))
+  return ids.filter((id) => kept.has(id))
+}
+
+describe('email tracking rows in a purge', () => {
+  it("deletes the user's messages by address up to the deletion and by user id, clears lifted_by, and keeps every suppression", async () => {
+    const { token } = await createTrackedStaff('owner')
+    const gone = await deletedUserWithHistory()
+    await sql`update users set deleted_at = now() - interval '1 hour' where id = ${gone.id}`
+    const before = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString()
+    const toAddress = await trackedMessage(gone.email.toUpperCase(), { createdAt: before })
+    const toAccount = await trackedMessage(`elsewhere-${randomUUID()}@example.test`, {
+      userId: gone.id,
+    })
+    // Written after the deletion: the address may since belong to someone else.
+    const afterDeletion = await trackedMessage(gone.email)
+    const bystander = await trackedMessage(`bystander-${randomUUID()}@example.test`)
+    await sql`
+      insert into email_events (message_id, provider, provider_event_id, type, occurred_at)
+      values (${toAddress}, 'fake', ${randomUUID()}, 'delivered', now())`
+    const active = await trackedSuppression(gone.email)
+    const liftedByThem = await trackedSuppression(`lifted-${randomUUID()}@example.test`, gone.id)
+
+    const response = await purgeUser(token, gone.id)
+
+    expect(response.status).toBe(200)
+    expect(await survivingMessages([toAddress, toAccount, afterDeletion, bystander])).toEqual([
+      afterDeletion,
+      bystander,
+    ])
+    expect(await sql`select 1 from email_events where message_id = ${toAddress}`).toHaveLength(0)
+    expect(
+      await sql`select id, lifted_by from email_suppressions where id = any(${[active, liftedByThem]}) order by id`
+    ).toEqual(
+      [
+        // eslint-disable-next-line unicorn/no-null -- SQL NULL: an active suppression has no lifter
+        { id: active, lifted_by: null },
+        // eslint-disable-next-line unicorn/no-null -- SQL NULL: the purged lifter is forgotten
+        { id: liftedByThem, lifted_by: null },
+      ].toSorted((a, b) => a.id.localeCompare(b.id))
+    )
+  })
+
+  it('with a live holder of the address, keeps the address-keyed messages but still deletes by user id', async () => {
+    const { token } = await createTrackedStaff('owner')
+    const gone = await deletedUserWithHistory()
+    const before = new Date(Date.now() - 60 * 60 * 1000).toISOString()
+    const toAddress = await trackedMessage(gone.email, { createdAt: before })
+    const toAccount = await trackedMessage(`elsewhere-${randomUUID()}@example.test`, {
+      userId: gone.id,
+      createdAt: before,
+    })
+    await createTrackedUser({ email: gone.email.toUpperCase() })
+
+    const response = await purgeUser(token, gone.id)
+
+    expect(response.status).toBe(200)
+    expect(await survivingMessages([toAddress, toAccount])).toEqual([toAddress])
+  })
+
+  it("deletes an archived tenant's messages and leaves another tenant's", async () => {
+    const { token } = await createTrackedStaff('owner')
+    const member = await createTrackedUser()
+    const tenant = await tenantRepository.create({
+      name: 'Mailed Co',
+      slug: `mailed-${randomUUID()}`,
+      ownerId: member.id,
+    })
+    tenantIds.push(tenant.id)
+    const neighbour = await tenantRepository.create({
+      name: 'Neighbour Co',
+      slug: `neighbour-${randomUUID()}`,
+      ownerId: member.id,
+    })
+    tenantIds.push(neighbour.id)
+    const invitation = await trackedMessage(`invitee-${randomUUID()}@example.test`, {
+      tenantId: tenant.id,
+    })
+    const other = await trackedMessage(`invitee-${randomUUID()}@example.test`, {
+      tenantId: neighbour.id,
+    })
+    await sql`update tenants set lifecycle_state = 'archived', deleted_at = now() where id = ${tenant.id}`
+
+    const response = await purgeTenant(token, tenant.id)
+
+    expect(response.status).toBe(200)
+    expect(await survivingMessages([invitation, other])).toEqual([other])
   })
 })

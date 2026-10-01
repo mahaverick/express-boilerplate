@@ -9,7 +9,7 @@ import {
   emailSuppressionModel,
   type EmailSuppression,
 } from '@/database/models/email-suppression.model'
-import { db, type DbExecutor } from '@/services/database.service'
+import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
 
 /**
  * What adds a suppression: the address, why, and the event that caused it.
@@ -96,5 +96,22 @@ export class EmailSuppressionRepository {
       .where(and(eq(emailSuppressionModel.id, id), isNull(emailSuppressionModel.liftedAt)))
       .returning()
     return row
+  }
+
+  /**
+   * Forget which staff member lifted a suppression, for their user purge.
+   * The suppression itself stays: it belongs to the address, and dropping it
+   * would let mail reach a mailbox known to bounce or complain.
+   * @param userId - The purged user.
+   * @param tx - The purge's transaction.
+   * @returns How many rows changed.
+   */
+  async clearLiftedBy(userId: string, tx: DbTransaction): Promise<number> {
+    const result = await tx
+      .update(emailSuppressionModel)
+      // eslint-disable-next-line unicorn/no-null -- SQL NULL: no one is recorded as the lifter
+      .set({ liftedBy: null })
+      .where(eq(emailSuppressionModel.liftedBy, userId))
+    return result.count
   }
 }

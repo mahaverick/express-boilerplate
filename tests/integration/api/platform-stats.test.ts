@@ -19,7 +19,8 @@ import { request } from '../../helpers/request'
 interface StatsBody {
   range: string
   signups: unknown[]
-  emails: unknown[]
+  emails: Record<string, unknown>[]
+  emailMessages: Record<string, unknown>[]
   totals: Record<string, number>
 }
 
@@ -71,6 +72,22 @@ describe('GET /api/v1/platform/stats', () => {
       'users',
     ])
     expect(data.totals.staff).toBeGreaterThanOrEqual(1)
+  })
+
+  it('keeps emails[] as attempts and adds emailMessages[] in five groups, one entry per day', async () => {
+    const response = await stats(await createStaff('viewer'))
+    const data = (response.body as { data: StatsBody }).data
+    expect(data.emails).toHaveLength(7)
+    expect(Object.keys(data.emails[0] ?? {}).toSorted((a, b) => a.localeCompare(b))).toEqual([
+      'date',
+      'failed',
+      'sent',
+    ])
+    expect(data.emailMessages).toHaveLength(7)
+    expect(Object.keys(data.emailMessages[0] ?? {}).toSorted((a, b) => a.localeCompare(b))).toEqual(
+      ['complained', 'date', 'delivered', 'sent', 'suppressed', 'undelivered']
+    )
+    expect(data.emailMessages.map((day) => day.date)).toEqual(data.emails.map((day) => day.date))
   })
 
   it('answers 30 days for range=30d', async () => {

@@ -13,6 +13,7 @@ import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { db, sql } from '@/services/database.service'
 import { EMAIL_VERIFICATION_TEMPLATE_KEY } from '@/templates/email/email-verification.template'
+import { deleteTrackingRows, insertTestMessage } from '../../helpers/email-tracking'
 import { makeStaff, platformTenant } from '../../helpers/platform-staff'
 
 const repository = new PlatformStatsRepository()
@@ -31,11 +32,21 @@ function countOf(rows: { day: string; status: string; count: number }[], status:
   return rows.find((row) => row.day === '2001-05-02' && row.status === status)?.count ?? 0
 }
 
+function messageCountOf(
+  rows: { day: string; status: string; count: number }[],
+  status: string
+): number {
+  return rows.find((row) => row.day === '2001-07-02' && row.status === status)?.count ?? 0
+}
+
+const MESSAGE_PREFIX = `stats-msg-${randomUUID()}-`
+
 describe('PlatformStatsRepository', () => {
   const userIds: string[] = []
   const tenantIds: string[] = []
 
   afterEach(async () => {
+    await deleteTrackingRows(MESSAGE_PREFIX)
     if (tenantIds.length > 0) await sql`delete from tenants where id = any(${tenantIds})`
     if (userIds.length > 0) await sql`delete from users where id = any(${userIds})`
     tenantIds.length = 0
@@ -111,6 +122,37 @@ describe('PlatformStatsRepository', () => {
     const after = await repository.emailsByDay(from, to)
     expect(countOf(after, 'sent') - countOf(before, 'sent')).toBe(1)
     expect(countOf(after, 'failed') - countOf(before, 'failed')).toBe(1)
+  })
+
+  it('counts email messages by UTC day and current status, leaving queued out', async () => {
+    const from = new Date('2001-07-01T00:00:00.000Z')
+    const to = new Date('2001-07-08T00:00:00.000Z')
+    const before = await repository.emailMessagesByDay(from, to)
+    await insertTestMessage(MESSAGE_PREFIX, {
+      status: 'delivered',
+      createdAt: '2001-07-02T23:59:59.999Z',
+    })
+    await insertTestMessage(MESSAGE_PREFIX, {
+      status: 'bounced',
+      createdAt: '2001-07-02T00:00:00.000Z',
+    })
+    await insertTestMessage(MESSAGE_PREFIX, {
+      status: 'queued',
+      createdAt: '2001-07-02T12:00:00.000Z',
+    })
+    await insertTestMessage(MESSAGE_PREFIX, {
+      status: 'delivered',
+      createdAt: '2001-07-03T00:00:00.000Z',
+    })
+
+    const after = await db.transaction(async (tx) => {
+      await tx.execute(drizzleSql`set local time zone 'Asia/Kolkata'`)
+      return repository.emailMessagesByDay(from, to, tx)
+    })
+
+    expect(messageCountOf(after, 'delivered') - messageCountOf(before, 'delivered')).toBe(1)
+    expect(messageCountOf(after, 'bounced') - messageCountOf(before, 'bounced')).toBe(1)
+    expect(after.some((row) => row.status === 'queued')).toBe(false)
   })
 
   it('totals exclude the platform tenant and soft-deleted rows', async () => {

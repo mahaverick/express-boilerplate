@@ -10,6 +10,8 @@ import { sql } from 'drizzle-orm'
 import { HttpError } from '@/errors/http-error'
 import { AuditLogRepository } from '@/repositories/audit-log.repository'
 import { EmailLogRepository } from '@/repositories/email-log.repository'
+import { EmailMessageRepository } from '@/repositories/email-message.repository'
+import { EmailSuppressionRepository } from '@/repositories/email-suppression.repository'
 import { PlatformUserRepository } from '@/repositories/platform-user.repository'
 import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
@@ -24,6 +26,8 @@ import { hostnameDomain } from '@/utilities/email.utilities'
 
 const auditLogRepository = new AuditLogRepository()
 const emailLogRepository = new EmailLogRepository()
+const emailMessageRepository = new EmailMessageRepository()
+const emailSuppressionRepository = new EmailSuppressionRepository()
 const platformUserRepository = new PlatformUserRepository()
 const tenantInvitationRepository = new TenantInvitationRepository()
 const tenantRepository = new TenantRepository()
@@ -32,13 +36,17 @@ const userRepository = new UserRepository()
 
 /**
  * Permanently delete a soft-deleted user: redact them from the audit
- * entries they acted in, delete the mail log rows and invitations addressed
- * to their address up to their deletion, delete the row (the rest
+ * entries they acted in, delete the email messages (with their attempts and
+ * events) sent to their account, delete the mail log rows, email messages
+ * and invitations addressed to their address up to their deletion, forget
+ * them as the lifter of any email suppression, delete the row (the rest
  * cascades), and record `user.purged` in the platform tenant. A deleted
- * user's address can be claimed again, and those rows are keyed by the
- * address alone: when a live account holds it now, none of them is deleted,
- * since the database can't tell the purged user's from the new holder's.
- * Rows written after the deletion are kept either way.
+ * user's address can be claimed again, and the address-keyed rows are keyed
+ * by the address alone: when a live account holds it now, none of them is
+ * deleted, since the database can't tell the purged user's from the new
+ * holder's. Rows written after the deletion are kept either way. Email
+ * suppressions stay: they belong to the address, and dropping one would let
+ * mail reach a mailbox known to bounce or complain.
  * @param actor - The platform owner, recently authenticated.
  * @param userId - The user.
  * @param reason - Why, for the audit log.
@@ -62,6 +70,12 @@ export async function purgeUser(actor: Actor, userId: string, reason: string): P
       // Invitations addressed to the person hold the address too, pending or not.
       await tenantInvitationRepository.deleteForEmail(found.email, deletedAt, tx)
     }
+    await emailMessageRepository.deleteForUser(
+      userId,
+      holder ? undefined : { address: found.email, createdAtOrBefore: deletedAt },
+      tx
+    )
+    await emailSuppressionRepository.clearLiftedBy(userId, tx)
     if (!(await userRepository.purgeDeleted(userId, tx))) {
       throw new HttpError('Delete the user before purging them', 409)
     }
@@ -83,8 +97,9 @@ export async function purgeUser(actor: Actor, userId: string, reason: string): P
 
 /**
  * Permanently delete an archived customer tenant: delete its own audit
- * entries (the customer's data), then the row (settings, memberships and
- * invitations cascade), and record `tenant.purged` in the platform tenant.
+ * entries (the customer's data) and its email messages (which carry its
+ * name), then the row (settings, memberships and invitations cascade), and
+ * record `tenant.purged` in the platform tenant.
  * `memberCount` counts the members whose accounts are not soft-deleted.
  * @param actor - The platform owner, recently authenticated.
  * @param tenantId - The tenant.
@@ -106,6 +121,7 @@ export async function purgeTenant(actor: Actor, tenantId: string, reason: string
       sql`select set_config('app.audit_purge', 'on', true), set_config('app.audit_purge_before', 'infinity', true)`
     )
     await auditLogRepository.deleteForTenant(tenantId, tx)
+    await emailMessageRepository.deleteForTenant(tenantId, tx)
     if (!(await tenantRepository.purgeArchived(tenantId, tx))) {
       throw new HttpError('Archive the tenant before purging it', 409)
     }

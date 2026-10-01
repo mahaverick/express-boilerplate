@@ -19,6 +19,7 @@ import {
   type RetentionResult,
 } from '@/services/retention.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
+import { deleteTrackingRows, insertTestMessage } from '../../helpers/email-tracking'
 import { deferred, waitForWaiter } from '../../helpers/lock-probe'
 import { withMutatedMethod } from '../../helpers/mutate'
 
@@ -43,6 +44,7 @@ const createdTenantIds: string[] = []
 afterEach(async () => {
   await truncateAuditLogs()
   await sql`delete from email_logs where recipient like ${RECIPIENT_LIKE}`
+  await deleteTrackingRows(RECIPIENT_PREFIX)
   if (createdTenantIds.length > 0) {
     await sql`delete from tenants where id = any(${createdTenantIds})`
     createdTenantIds.length = 0
@@ -213,6 +215,43 @@ async function insertEmailLog(createdAt: string): Promise<string> {
     returning id
   `
   if (!row) throw new Error('email log insert returned no row')
+  return row.id
+}
+
+/**
+ * One provider event for a message.
+ * @param messageId - Its message.
+ * @param occurredAt - Its occurred_at, ISO.
+ * @returns Its id.
+ */
+async function insertEmailEvent(messageId: string, occurredAt: string): Promise<string> {
+  const [row] = await sql<{ id: string }[]>`
+    insert into email_events (message_id, provider, provider_event_id, type, occurred_at)
+    values (${messageId}, 'fake', ${randomUUID()}, 'delivered', ${occurredAt}::timestamptz)
+    returning id
+  `
+  if (!row) throw new Error('email event insert returned no row')
+  return row.id
+}
+
+/**
+ * One attempt row for a message.
+ * @param messageId - Its message.
+ * @param recipient - The message's recipient.
+ * @param createdAt - Its own created_at, ISO.
+ * @returns Its id.
+ */
+async function insertAttempt(
+  messageId: string,
+  recipient: string,
+  createdAt: string
+): Promise<string> {
+  const [row] = await sql<{ id: string }[]>`
+    insert into email_logs (recipient, template_key, status, message_id, created_at)
+    values (${recipient}, 'password_reset', 'sent', ${messageId}, ${createdAt}::timestamptz)
+    returning id
+  `
+  if (!row) throw new Error('attempt insert returned no row')
   return row.id
 }
 
@@ -449,10 +488,11 @@ describe('runRetentionPurge', () => {
     await insertAuditRow(tenantId, justOlder(DAYS.auditLogs))
 
     const first = await runRetentionPurge(NOW, DAYS)
-    expect(first.map((result) => result.deleted)).toEqual([1, 1, 1, 1, 1, 1])
+    // email_events and email_messages have nothing seeded here; the attempt row has no message.
+    expect(first.map((result) => result.deleted)).toEqual([1, 1, 0, 1, 0, 1, 1, 1])
 
     const second = await runRetentionPurge(NOW, DAYS)
-    expect(second.map((result) => result.deleted)).toEqual([0, 0, 0, 0, 0, 0])
+    expect(second.map((result) => result.deleted)).toEqual([0, 0, 0, 0, 0, 0, 0, 0])
   })
 
   it('loops in batches of RETENTION_BATCH_SIZE until a batch comes back short', async () => {
@@ -519,15 +559,8 @@ describe('runRetentionPurge', () => {
       const firstRun = runRetentionPurge(NOW, DAYS)
       expect(await waitForWaiter(holderPid, firstRun)).toBe(false)
       const first = await firstRun
-      expect(first.map((result) => result.error)).toEqual([
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-      ])
-      expect(first.map((result) => result.deleted)).toEqual([1, 1, 1, 1, 1, 1])
+      expect(first.map((result) => result.error)).toEqual(Array.from({ length: 8 }))
+      expect(first.map((result) => result.deleted)).toEqual([1, 1, 0, 1, 0, 1, 1, 1])
       expect(await surviving('user_tokens', tokens)).toEqual(heldTokens)
       expect(await surviving('tenant_invitations', invitations)).toEqual(heldInvitations)
       expect(await surviving('email_logs', emailLogs)).toEqual(heldEmailLogs)
@@ -542,7 +575,7 @@ describe('runRetentionPurge', () => {
     }
 
     const second = await runRetentionPurge(NOW, DAYS)
-    expect(second.map((result) => result.deleted)).toEqual([1, 1, 1, 1, 1, 1])
+    expect(second.map((result) => result.deleted)).toEqual([1, 1, 0, 1, 0, 1, 1, 1])
     expect(await surviving('user_tokens', tokens)).toEqual([])
     expect(await surviving('tenant_invitations', invitations)).toEqual([])
     expect(await surviving('email_logs', emailLogs)).toEqual([])
@@ -565,7 +598,9 @@ describe('runRetentionPurge', () => {
           expect(results.map((result) => result.table)).toEqual([
             'user_tokens',
             'tenant_invitations',
+            'email_events',
             'email_logs',
+            'email_messages',
             'notifications.read',
             'notifications.unread',
             'audit_logs',
@@ -599,12 +634,92 @@ describe('runRetentionPurge', () => {
       ).toEqual([
         { table: 'user_tokens', deleted: 0 },
         { table: 'tenant_invitations', deleted: 0 },
+        { table: 'email_events', deleted: 0 },
         { table: 'email_logs', deleted: 1 },
+        { table: 'email_messages', deleted: 0 },
         { table: 'notifications.read', deleted: 0 },
         { table: 'notifications.unread', deleted: 0 },
       ])
     } finally {
       loggerInfo.mockRestore()
     }
+  })
+
+  it('dates the email group by its message: an old message goes with its events and attempts, a newer one stays whole', async () => {
+    const old = await insertTestMessage(RECIPIENT_PREFIX, { createdAt: justOlder(DAYS.emailLogs) })
+    const oldEvent = await insertEmailEvent(old.id, LATER)
+    const oldAttempt = await insertAttempt(old.id, old.recipient, LATER)
+    const recent = await insertTestMessage(RECIPIENT_PREFIX, {
+      createdAt: justNewer(DAYS.emailLogs),
+    })
+    const recentEvent = await insertEmailEvent(recent.id, justNewer(DAYS.emailLogs))
+    // Backdated past the cutoff: an attempt is kept while its message is.
+    const recentAttempt = await insertAttempt(
+      recent.id,
+      recent.recipient,
+      justOlder(DAYS.emailLogs)
+    )
+
+    const results = await runRetentionPurge(NOW, DAYS)
+
+    expect(deletedBy(results, 'email_events')).toBe(1)
+    expect(deletedBy(results, 'email_logs')).toBe(1)
+    expect(deletedBy(results, 'email_messages')).toBe(1)
+    expect(await surviving('email_messages', [old.id, recent.id])).toEqual([recent.id])
+    expect(await surviving('email_events', [oldEvent, recentEvent])).toEqual([recentEvent])
+    expect(await surviving('email_logs', [oldAttempt, recentAttempt])).toEqual([recentAttempt])
+  })
+
+  it('keeps a message whose attempt is held, without waiting, and deletes both on the next run', async () => {
+    const old = await insertTestMessage(RECIPIENT_PREFIX, { createdAt: justOlder(DAYS.emailLogs) })
+    const event = await insertEmailEvent(old.id, justOlder(DAYS.emailLogs))
+    const attempt = await insertAttempt(old.id, old.recipient, justOlder(DAYS.emailLogs))
+
+    const holder = postgres(getEnv().DATABASE_URL, { max: 1 })
+    const locked = deferred<number>()
+    const release = deferred()
+    const holding = holder.begin(async (tx) => {
+      await tx`select id from email_logs where id = ${attempt} for update`
+      const [row] = await tx<{ pid: number }[]>`select pg_backend_pid() as pid`
+      if (!row) throw new Error('pg_backend_pid() returned no row')
+      locked.resolve(row.pid)
+      await release.promise
+    })
+
+    try {
+      const holderPid = await locked.promise
+      const firstRun = runRetentionPurge(NOW, DAYS)
+      expect(await waitForWaiter(holderPid, firstRun)).toBe(false)
+      const first = await firstRun
+      expect(deletedBy(first, 'email_events')).toBe(1)
+      expect(deletedBy(first, 'email_logs')).toBe(0)
+      // Its attempt is still there, so the message is left for the next run rather than cascaded.
+      expect(deletedBy(first, 'email_messages')).toBe(0)
+      expect(await surviving('email_events', [event])).toEqual([])
+      expect(await surviving('email_messages', [old.id])).toEqual([old.id])
+    } finally {
+      release.resolve()
+      await holding
+      await holder.end({ timeout: 5 })
+    }
+
+    const second = await runRetentionPurge(NOW, DAYS)
+    expect(deletedBy(second, 'email_logs')).toBe(1)
+    expect(deletedBy(second, 'email_messages')).toBe(1)
+    expect(await surviving('email_logs', [attempt])).toEqual([])
+    expect(await surviving('email_messages', [old.id])).toEqual([])
+  })
+
+  it('never expires a suppression', async () => {
+    const address = `${RECIPIENT_PREFIX}${randomUUID()}@example.test`
+    const [row] = await sql<{ id: string }[]>`
+      insert into email_suppressions (address, reason, created_at)
+      values (${address}, 'hard_bounce', ${justOlder(DAYS.auditLogs * 10)}::timestamptz)
+      returning id`
+    if (!row) throw new Error('suppression insert returned no row')
+
+    await runRetentionPurge(NOW, DAYS)
+
+    expect(await surviving('email_suppressions', [row.id])).toEqual([row.id])
   })
 })
