@@ -16,6 +16,7 @@ import { logger } from '@/services/logger.service'
 import { autoJoinSafely } from '@/services/platform.service'
 import { claimToken, issueToken } from '@/services/session.service'
 import { EMAIL_VERIFICATION_TEMPLATE_KEY } from '@/templates/email/email-verification.template'
+import type { EmailResendOptions } from '@/types/email-context'
 import { requireDurationMs } from '@/utilities/duration.utilities'
 import { getDummyHash, isPasswordValid } from '@/utilities/password.utilities'
 
@@ -111,10 +112,16 @@ export function frontendUrl(
  * Issue a verification token for a user, then enqueue a `verify_email`
  * notification job — the worker fans it out into an in-app row and the
  * mail carrying the link (email is not user-disableable for this type).
+ * The mail's message row records `app` as the frontend its link opens.
  * @param user - The user to verify.
  * @param app - The frontend the link opens; the customer app by default.
+ * @param options - `resentFromId` when a staff resend re-runs this flow for an earlier message.
  */
-export async function sendVerificationMail(user: User, app: FrontendApp = 'web'): Promise<void> {
+export async function sendVerificationMail(
+  user: User,
+  app: FrontendApp = 'web',
+  options: EmailResendOptions = {}
+): Promise<void> {
   const issued = await issueToken(
     user.id,
     'email_verification',
@@ -135,6 +142,7 @@ export async function sendVerificationMail(user: User, app: FrontendApp = 'web')
         appName: getEnv().APP_NAME,
       },
     },
+    emailContext: { linkApp: app, ...options },
   })
 }
 

@@ -12,7 +12,12 @@ import {
   recordPermanentFailure,
   scrubJobData,
 } from '@/jobs/job-failure.job'
+import * as emailMessageService from '@/services/email-message.service'
 import { logger } from '@/services/logger.service'
+
+vi.mock('@/services/email-message.service', () => ({
+  markMessageSendFailed: vi.fn(() => Promise.resolve()),
+}))
 
 interface FakeJobFields {
   attemptsMade: number
@@ -182,6 +187,51 @@ describe('recordPermanentFailure', () => {
 
     expect(loggerError.mock.calls.map(([message]) => message)).toEqual([
       "Scrubbing a failed job's data failed",
+      'job failed permanently',
+    ])
+  })
+
+  it("marks an email job's message failed, from the send, before logging", async () => {
+    const order: string[] = []
+    vi.mocked(emailMessageService.markMessageSendFailed).mockImplementation((id) => {
+      order.push(`mark ${id}`)
+      return Promise.resolve()
+    })
+    vi.spyOn(logger, 'error').mockImplementation((message) => {
+      order.push(message)
+    })
+    const job = fakeJob({ attemptsMade: 5, attempts: 5, data: { messageId: 'message-1' } })
+
+    await recordPermanentFailure('email', job, new Error('x'))
+
+    expect(order).toEqual(['mark message-1', 'job failed permanently'])
+  })
+
+  it('marks nothing for an email job with no message, or for another queue', async () => {
+    vi.mocked(emailMessageService.markMessageSendFailed).mockClear()
+    vi.spyOn(logger, 'error').mockImplementation(() => {
+      // Only the calls are asserted.
+    })
+
+    await recordPermanentFailure('email', fakeJob({ attemptsMade: 1, data: {} }), new Error('x'))
+    await recordPermanentFailure(
+      'notification',
+      fakeJob({ attemptsMade: 1, data: { messageId: 'message-1' } }),
+      new Error('x')
+    )
+
+    expect(emailMessageService.markMessageSendFailed).not.toHaveBeenCalled()
+  })
+
+  it('never rejects: a failed mark is logged, and the failure is still logged', async () => {
+    vi.mocked(emailMessageService.markMessageSendFailed).mockRejectedValue(new Error('db down'))
+    const loggerError = vi.spyOn(logger, 'error')
+    const job = fakeJob({ attemptsMade: 5, attempts: 5, data: { messageId: 'message-1' } })
+
+    await expect(recordPermanentFailure('email', job, new Error('x'))).resolves.toBeUndefined()
+
+    expect(loggerError.mock.calls.map(([message]) => message)).toEqual([
+      "Marking a failed email's message failed",
       'job failed permanently',
     ])
   })

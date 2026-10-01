@@ -33,6 +33,7 @@ import { lockActorRole } from '@/services/tenant-membership.service'
 import { buildInvitationAcceptUrl, frontendUrl } from '@/services/verification.service'
 import { TENANT_INVITATION_TEMPLATE_KEY } from '@/templates/email/tenant-invitation.template'
 import type { Actor } from '@/types/actor'
+import type { EmailResendOptions } from '@/types/email-context'
 import type { EmailDelivery } from '@/types/email-delivery'
 import { requireDurationMs } from '@/utilities/duration.utilities'
 import { hostnameDomain } from '@/utilities/email.utilities'
@@ -210,17 +211,22 @@ function invitationInvalid(): HttpError {
 /**
  * Enqueue the invitation email, and the in-app notification when one is
  * due. The two enqueues are independent; a failure is logged, never thrown.
+ * The email's message row records the tenant, the invitation and the
+ * frontend the accept link opens.
  * @param context - The invitation and everything its messages need.
  * @param notifyUser - The verified invitee to notify in-app, if any.
+ * @param options - `resentFromId` when a staff resend re-runs this for an earlier message.
  * @returns Whether the email job was enqueued.
  */
 async function dispatchInvitationMessages(
   context: InvitationMessageContext,
-  notifyUser: User | undefined
+  notifyUser: User | undefined,
+  options: EmailResendOptions = {}
 ): Promise<EmailDelivery> {
   const { invitation, rawToken, tenant, inviterName } = context
   // Server-decided: staff are invited into Apex, everyone else into the customer app.
-  const acceptOrigin = frontendUrl(tenant.isPlatform ? 'apex' : 'web')
+  const linkApp = tenant.isPlatform ? 'apex' : 'web'
+  const acceptOrigin = frontendUrl(linkApp)
   const results = await Promise.allSettled([
     addEmailJob(
       {
@@ -235,8 +241,16 @@ async function dispatchInvitationMessages(
           appName: getEnv().APP_NAME,
         },
       },
-      // Correlation only (email.job.ts): '' when the address has no account.
-      context.invitee?.id ?? ''
+      // The account the mail is for: '' (stored as NULL) when the address has none.
+      context.invitee?.id ?? '',
+      {
+        context: {
+          tenantId: invitation.tenantId,
+          invitationId: invitation.id,
+          linkApp,
+          ...options,
+        },
+      }
     ),
     ...(notifyUser
       ? [
@@ -462,9 +476,15 @@ export async function listPending(tenantId: string): Promise<PendingInvitationSu
  * @param actor - The signed-in user resending it, named in the email.
  * @param tenantId - The tenant it must belong to.
  * @param invitationId - The invitation.
+ * @param options - `resentFromId` when a staff resend re-runs this for an earlier message.
  * @throws {HttpError} 404 when the tenant is gone, before anything is written; 404 `Tenant not found` when the actor no longer has access; 403 when the actor is now below admin; 404 `invitation_not_found` when it is not pending in this tenant; 403 when the actor may not grant its role.
  */
-export async function resend(actor: Actor, tenantId: string, invitationId: string): Promise<void> {
+export async function resend(
+  actor: Actor,
+  tenantId: string,
+  invitationId: string,
+  options: EmailResendOptions = {}
+): Promise<void> {
   // Before the write, so a vanished tenant cannot leave the old link replaced and no email sent.
   const tenant = await tenantForMessages(tenantId)
   const rawToken = generateInvitationToken()
@@ -506,7 +526,7 @@ export async function resend(actor: Actor, tenantId: string, invitationId: strin
     invitee,
   }
   // eslint-disable-next-line unicorn/prefer-await -- fire-and-forget: the response must not wait on the queue
-  dispatchInvitationMessages(context, undefined).catch((error: unknown) => {
+  dispatchInvitationMessages(context, undefined, options).catch((error: unknown) => {
     logger.error('Invitation messages failed', { error, invitationId: invitation.id })
   })
 }

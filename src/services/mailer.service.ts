@@ -90,6 +90,16 @@ export type MailMessage =
     }
 
 /**
+ * The tracked message one send attempt belongs to: its `email_messages` id,
+ * recorded on the attempt's `email_logs` row, and the Message-ID header it
+ * goes out with, which a provider's events report back.
+ */
+export interface TrackedDelivery {
+  messageId: string
+  messageIdHeader: string
+}
+
+/**
  * Render `message` against its own declared template: the only place this
  * module produces content. A `switch`, not a lookup object, so TypeScript
  * narrows `message.variables` in each `case`.
@@ -232,9 +242,14 @@ async function recordDelivery(entry: NewEmailLog): Promise<void> {
  * queue in email.worker.ts. When mail is down the user gets no email and no
  * error; every attempt is in `email_logs`, and resend-verification lets them retry.
  * @param message - The email to render and send.
+ * @param delivery - The tracked message this attempt belongs to. Without it, nodemailer generates the Message-ID and the attempt row has no `message_id`.
  * @returns `'sent'` or `'failed'`, reflecting the recorded `email_logs` status — resolves once the send has been attempted and the outcome recorded, regardless of whether rendering, sending, or recording actually succeeded. Callers that need to decide whether to retry (e.g. `email.worker.ts`) read this; callers that don't can ignore it.
  */
-export async function sendMail(message: MailMessage): Promise<'sent' | 'failed'> {
+export async function sendMail(
+  message: MailMessage,
+  delivery?: TrackedDelivery
+): Promise<'sent' | 'failed'> {
+  const messageId = delivery?.messageId
   let entry: NewEmailLog
   try {
     // Inside the try: a render throw must not reveal which branch an enumeration-sensitive caller took.
@@ -246,12 +261,14 @@ export async function sendMail(message: MailMessage): Promise<'sent' | 'failed'>
       subject: rendered.subject,
       text: rendered.text,
       html: rendered.html,
+      ...(delivery !== undefined && { messageId: delivery.messageIdHeader }),
     })
     entry = {
       recipient: message.to,
       templateKey: rendered.templateKey,
       status: 'sent',
       providerMessageId: info.messageId,
+      messageId,
     }
   } catch (error) {
     logger.error('Mail send failed', { error: redactedMailErrorForLog(error) })
@@ -260,6 +277,7 @@ export async function sendMail(message: MailMessage): Promise<'sent' | 'failed'>
       templateKey: message.templateKey,
       status: 'failed',
       errorCode: extractErrorCode(error),
+      messageId,
     }
   }
   await recordDelivery(entry)

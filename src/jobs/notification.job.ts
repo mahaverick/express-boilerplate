@@ -8,6 +8,7 @@ import type { NotificationType } from '@/constants/notification.constants'
 import { JobPriority } from '@/constants/queue.constants'
 import type { MailMessage } from '@/services/mailer.service'
 import { addJob, getNotificationQueue } from '@/services/queue.service'
+import type { EmailContext } from '@/types/email-context'
 
 /**
  * The payload stored on a notification job. `email` carries the whole
@@ -46,6 +47,12 @@ export interface NotificationJobData {
    * `email.variables` never reaches Postgres, only the transient job.
    */
   email?: MailMessage
+  /**
+   * What the paired email's `email_messages` row records besides the
+   * message (the frontend its link opens, a staff resend's origin). Passed
+   * to `addEmailJob` with `email`.
+   */
+  emailContext?: EmailContext
 }
 
 /**

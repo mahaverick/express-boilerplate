@@ -1,9 +1,12 @@
 /**
  * @file What a Worker's `'failed'` handler does once a job will not be
- * retried: replace the stored payload's links and tokens, then log one error
- * line. Until then the payload keeps them, because a retry has to send them.
+ * retried: replace the stored payload's links and tokens, mark an email
+ * job's message `failed`, then log one error line. Until then the payload
+ * keeps them, because a retry has to send them.
  */
 import { UnrecoverableError, type Job } from 'bullmq'
+import { redactedForLog } from '@/errors/postgres-errors'
+import { markMessageSendFailed } from '@/services/email-message.service'
 import { logger } from '@/services/logger.service'
 
 const REDACTED = '[redacted]'
@@ -98,12 +101,37 @@ export function logPermanentFailure(queue: string, job: Job, error: Error): void
 }
 
 /**
- * Scrub a job that will not be retried, then log its failure once.
- * Never rejects: it runs from a Worker's 'failed' listener, where a rejection would be unhandled.
+ * Mark an email job's message `failed` (`failure_origin = 'send'`): every
+ * attempt failed. A job with no `messageId` has no row to mark. A failure
+ * here is logged, never thrown.
  * @param queue - The queue's name.
+ * @param job - The email job that will not be retried.
+ * @returns Resolves once the row is marked, or the failure to mark it is logged.
+ */
+async function markEmailMessageFailed(queue: string, job: Job): Promise<void> {
+  const data: unknown = job.data
+  const messageId = isRecord(data) ? data.messageId : undefined
+  if (typeof messageId !== 'string') return
+  try {
+    await markMessageSendFailed(messageId)
+  } catch (markError) {
+    logger.error("Marking a failed email's message failed", {
+      queue,
+      jobId: job.id,
+      messageId,
+      error: redactedForLog(markError),
+    })
+  }
+}
+
+/**
+ * Scrub a job that will not be retried, mark an email job's message
+ * `failed`, then log its failure once.
+ * Never rejects: it runs from a Worker's 'failed' listener, where a rejection would be unhandled.
+ * @param queue - The queue's name; `'email'` marks the job's message.
  * @param job - The job that will not be retried.
  * @param error - What its last attempt threw.
- * @returns Resolves once the scrubbed data is stored (or its failure logged) and the failure is logged.
+ * @returns Resolves once the scrubbed data is stored and the message marked (or each failure logged) and the failure is logged.
  */
 export async function recordPermanentFailure(queue: string, job: Job, error: Error): Promise<void> {
   try {
@@ -116,5 +144,6 @@ export async function recordPermanentFailure(queue: string, job: Job, error: Err
       error: scrubError,
     })
   }
+  if (queue === 'email') await markEmailMessageFailed(queue, job)
   logPermanentFailure(queue, job, error)
 }

@@ -75,10 +75,12 @@ function emailJobIdFor(job: Job<NotificationJobData>): string {
  * keyed by `notification-job-<jobId>-<jobTimestamp>` (`createOnce`, ON
  * CONFLICT DO NOTHING), so a retry never inserts or emits a second row; the
  * email is enqueued with a matching BullMQ jobId, so a retry while that job
- * is still queued adds nothing. The timestamp is in both keys because job
- * ids restart at 1 when the queue's Redis keys are flushed. One gap is
- * accepted: email jobs are removed on completion, so a retry after the email
- * was sent can send it again.
+ * is still queued adds nothing, and `addEmailJob` stores that id as the
+ * message row's `job_key`, so the retry gets the same row back. The
+ * timestamp is in both keys because job ids restart at 1 when the queue's
+ * Redis keys are flushed. One gap is accepted: email jobs are removed on
+ * completion, so a retry after the email was sent can send it again, as a
+ * second attempt on the same message.
  *
  * The row is emitted only after its insert commits, so a live stream never
  * shows a notification that `GET /api/v1/notifications` or a replay cannot.
@@ -87,7 +89,7 @@ function emailJobIdFor(job: Job<NotificationJobData>): string {
  * @throws {Error} Whatever `createOnce` or `addEmailJob` throws, uncaught, so BullMQ retries.
  */
 export async function processNotificationJob(job: Job<NotificationJobData>): Promise<void> {
-  const { userId, type, title, body, metadata, email } = job.data
+  const { userId, type, title, body, metadata, email, emailContext } = job.data
 
   const isInAppEnabled = await preferenceRepository.isChannelEnabled(userId, type, 'in_app')
   if (isInAppEnabled) {
@@ -123,7 +125,10 @@ export async function processNotificationJob(job: Job<NotificationJobData>): Pro
   const isEmailEnabled = await preferenceRepository.isChannelEnabled(userId, type, 'email')
   if (!isEmailEnabled) return
 
-  await addEmailJob(email, userId, { jobId: emailJobIdFor(job) })
+  await addEmailJob(email, userId, {
+    jobId: emailJobIdFor(job),
+    ...(emailContext !== undefined && { context: emailContext }),
+  })
 }
 
 /**
