@@ -43,6 +43,7 @@ import { tenantInvitationModel } from '@/database/models/tenant-invitation.model
 import { tenantModel } from '@/database/models/tenant.model'
 import { userMembershipModel } from '@/database/models/user-membership.model'
 import { userModel } from '@/database/models/user.model'
+import { pendingCondition } from '@/repositories/tenant-invitation.repository'
 import { db, type DbExecutor } from '@/services/database.service'
 import { escapeLikePattern } from '@/utilities/like-pattern.utilities'
 
@@ -708,12 +709,14 @@ export class PlatformEmailRepository {
   }
 
   /**
-   * Some invitations' tenants and roles, whatever their state.
+   * Some invitations' tenants and roles, only those a resend can act on:
+   * pending, as `findPendingById` defines it (neither accepted nor revoked;
+   * an expired one is still pending, and a resend re-issues it).
    * @param invitationIds - The invitations.
    * @param executor - Where to run the query. Defaults to the pool.
-   * @returns Each invitation that still exists, keyed by id.
+   * @returns Each pending invitation, keyed by id.
    */
-  async invitationsById(
+  async pendingInvitationsById(
     invitationIds: readonly string[],
     executor: DbExecutor = db
   ): Promise<Map<string, ResendInvitationRow>> {
@@ -725,15 +728,15 @@ export class PlatformEmailRepository {
         role: tenantInvitationModel.role,
       })
       .from(tenantInvitationModel)
-      .where(inArray(tenantInvitationModel.id, [...invitationIds]))
+      .where(and(inArray(tenantInvitationModel.id, [...invitationIds]), pendingCondition()))
     return new Map(rows.map((row) => [row.id, row]))
   }
 
   /**
-   * A tenant's lifecycle state and platform flag, soft-deleted tenants included.
+   * A tenant's lifecycle state and platform flag.
    * @param tenantId - The tenant.
    * @param executor - Where to run the query. Defaults to the pool.
-   * @returns The state and flag, or undefined when the tenant is gone.
+   * @returns The state and flag, or undefined when the tenant is gone or soft-deleted.
    */
   async tenantState(
     tenantId: string,
@@ -742,9 +745,34 @@ export class PlatformEmailRepository {
     const [row] = await executor
       .select({ lifecycleState: tenantModel.lifecycleState, isPlatform: tenantModel.isPlatform })
       .from(tenantModel)
-      .where(eq(tenantModel.id, tenantId))
+      .where(and(eq(tenantModel.id, tenantId), isNull(tenantModel.deletedAt)))
       .limit(1)
     return row
+  }
+
+  /**
+   * Which of some tenants are active: lifecycle `active` and not soft-deleted,
+   * the condition a resend's tenant gate applies.
+   * @param tenantIds - The tenants.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns The ids of the active ones.
+   */
+  async activeTenantIds(
+    tenantIds: readonly string[],
+    executor: DbExecutor = db
+  ): Promise<Set<string>> {
+    if (tenantIds.length === 0) return new Set()
+    const rows = await executor
+      .select({ id: tenantModel.id })
+      .from(tenantModel)
+      .where(
+        and(
+          inArray(tenantModel.id, [...tenantIds]),
+          eq(tenantModel.lifecycleState, 'active'),
+          isNull(tenantModel.deletedAt)
+        )
+      )
+    return new Set(rows.map((row) => row.id))
   }
 
   /**

@@ -152,6 +152,7 @@ function context(overrides: Partial<ResendContext> = {}): ResendContext {
     targetPlatformRoles: new Map(),
     actorMembershipRoles: new Map(),
     invitations: new Map(),
+    activeTenantIds: new Set(),
     suppressedAddresses: new Set(),
     ...overrides,
   }
@@ -230,6 +231,10 @@ describe('canResendFor', () => {
     const tenantId = randomUUID()
     const invitationId = randomUUID()
     const invitation = message({ templateKey: 'tenant_invitation', tenantId, invitationId })
+    const activeTenants = new Set([tenantId])
+    const pendingEditor = new Map([
+      [invitationId, { id: invitationId, tenantId, role: 'editor' as const }],
+    ])
 
     it('follows canActorGrantRole on the invitation role', () => {
       const editor = new Map([
@@ -239,10 +244,30 @@ describe('canResendFor', () => {
         [invitationId, { id: invitationId, tenantId, role: 'admin' as const }],
       ])
 
-      expect(canResendFor(ACTOR, invitation, context({ invitations: editor }))).toBe(true)
-      expect(canResendFor(ACTOR, invitation, context({ invitations: admin }))).toBe(false)
       expect(
-        canResendFor(ACTOR, invitation, context({ invitations: admin, actorPlatformRole: 'owner' }))
+        canResendFor(
+          ACTOR,
+          invitation,
+          context({ invitations: editor, activeTenantIds: activeTenants })
+        )
+      ).toBe(true)
+      expect(
+        canResendFor(
+          ACTOR,
+          invitation,
+          context({ invitations: admin, activeTenantIds: activeTenants })
+        )
+      ).toBe(false)
+      expect(
+        canResendFor(
+          ACTOR,
+          invitation,
+          context({
+            invitations: admin,
+            activeTenantIds: activeTenants,
+            actorPlatformRole: 'owner',
+          })
+        )
       ).toBe(true)
     })
 
@@ -256,7 +281,11 @@ describe('canResendFor', () => {
         canResendFor(
           ACTOR,
           invitation,
-          context({ invitations: admin, actorMembershipRoles: ownerThere })
+          context({
+            invitations: admin,
+            activeTenantIds: activeTenants,
+            actorMembershipRoles: ownerThere,
+          })
         )
       ).toBe(true)
     })
@@ -270,7 +299,25 @@ describe('canResendFor', () => {
       const elsewhere = new Map([
         [invitationId, { id: invitationId, tenantId: randomUUID(), role: 'viewer' as const }],
       ])
-      expect(canResendFor(ACTOR, invitation, context({ invitations: elsewhere }))).toBe(false)
+      expect(
+        canResendFor(
+          ACTOR,
+          invitation,
+          context({ invitations: elsewhere, activeTenantIds: activeTenants })
+        )
+      ).toBe(false)
+    })
+
+    it('is false when the tenant is not active, even for a pending invitation', () => {
+      // The repository returns only active, non-deleted tenants, so an absent one is suspended, archived or deleted
+      expect(canResendFor(ACTOR, invitation, context({ invitations: pendingEditor }))).toBe(false)
+      expect(
+        canResendFor(
+          ACTOR,
+          invitation,
+          context({ invitations: pendingEditor, activeTenantIds: activeTenants })
+        )
+      ).toBe(true)
     })
   })
 })

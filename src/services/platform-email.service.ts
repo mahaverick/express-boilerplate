@@ -181,9 +181,13 @@ export interface ResendContext {
    */
   actorMembershipRoles: ReadonlyMap<string, MembershipRole>
   /**
-   * The messages' invitations that still exist.
+   * The messages' invitations that are still pending.
    */
   invitations: ReadonlyMap<string, ResendInvitationRow>
+  /**
+   * The messages' tenants that are active and not soft-deleted.
+   */
+  activeTenantIds: ReadonlySet<string>
   /**
    * Lowercased recipient addresses with an active suppression.
    */
@@ -201,7 +205,9 @@ export interface ResendContext {
  * user's platform role for verification and password mail, and
  * `canActorGrantRole` on the invitation's role for an invitation, with the
  * actor's role in that tenant (membership first, as `lockTenantAccess`
- * resolves it, else the platform role).
+ * resolves it, else the platform role). An invitation also needs to be
+ * pending (not accepted or revoked) in a tenant that is active and not
+ * soft-deleted; otherwise the resend answers 404.
  * @param actor - The requesting staff member.
  * @param message - The message.
  * @param context - The page's batched lookups (`loadResendContext`).
@@ -221,7 +227,12 @@ export function canResendFor(
   if (action === 'invitation') {
     if (message.tenantId === null || message.invitationId === null) return false
     const invitation = context.invitations.get(message.invitationId)
-    if (invitation?.tenantId !== message.tenantId) return false
+    if (
+      invitation?.tenantId !== message.tenantId ||
+      !context.activeTenantIds.has(message.tenantId)
+    ) {
+      return false
+    }
     const tenantRole = context.actorMembershipRoles.get(message.tenantId) ?? actorRole
     return canActorGrantRole(tenantRole, invitation.role)
   }
@@ -236,7 +247,7 @@ export function canResendFor(
 }
 
 /**
- * Read everything `canResendFor` needs for a set of messages in five queries.
+ * Read everything `canResendFor` needs for a set of messages in six queries.
  * @param actor - The requesting staff member.
  * @param messages - The messages.
  * @returns The context.
@@ -248,19 +259,27 @@ export async function loadResendContext(
   const userIds = [...new Set(messages.flatMap((message) => message.userId ?? []))]
   const tenantIds = [...new Set(messages.flatMap((message) => message.tenantId ?? []))]
   const invitationIds = [...new Set(messages.flatMap((message) => message.invitationId ?? []))]
-  const [actorPlatformRole, targetPlatformRoles, actorMembershipRoles, invitations, suppressed] =
-    await Promise.all([
-      getPlatformMembership(actor.userId),
-      platformEmailRepository.platformRolesOf(userIds),
-      platformEmailRepository.membershipRolesIn(actor.userId, tenantIds),
-      platformEmailRepository.invitationsById(invitationIds),
-      platformEmailRepository.activeSuppressionsFor(messages.map((message) => message.recipient)),
-    ])
+  const [
+    actorPlatformRole,
+    targetPlatformRoles,
+    actorMembershipRoles,
+    invitations,
+    activeTenantIds,
+    suppressed,
+  ] = await Promise.all([
+    getPlatformMembership(actor.userId),
+    platformEmailRepository.platformRolesOf(userIds),
+    platformEmailRepository.membershipRolesIn(actor.userId, tenantIds),
+    platformEmailRepository.pendingInvitationsById(invitationIds),
+    platformEmailRepository.activeTenantIds(tenantIds),
+    platformEmailRepository.activeSuppressionsFor(messages.map((message) => message.recipient)),
+  ])
   return {
     actorPlatformRole,
     targetPlatformRoles,
     actorMembershipRoles,
     invitations,
+    activeTenantIds,
     suppressedAddresses: new Set(suppressed.keys()),
   }
 }

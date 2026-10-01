@@ -65,6 +65,33 @@ function post(token: string, path: string, body?: object): Promise<Response> {
     .send(body ?? { reason: REASON })
 }
 
+function get(token: string, path: string): Promise<Response> {
+  return request(app).get(`/api/v1/platform${path}`).set('Authorization', `Bearer ${token}`)
+}
+
+/**
+ * `canResend` for one message, from the detail and from the list row.
+ * @param token - A staff token.
+ * @param message - The message.
+ * @returns Both answers.
+ */
+async function resendHintsOf(
+  token: string,
+  message: EmailMessage
+): Promise<{ detail: boolean; list: boolean | undefined }> {
+  const detail = await get(token, `/emails/${message.id}`)
+  const page = await request(app)
+    .get('/api/v1/platform/emails')
+    .query({ q: message.recipient })
+    .set('Authorization', `Bearer ${token}`)
+  const rows = (page.body as ApiEnvelope<{ messages: { id: string; canResend: boolean }[] }>).data
+    ?.messages
+  return {
+    detail: (detail.body as ApiEnvelope<{ canResend: boolean }>).data?.canResend ?? false,
+    list: rows?.find((row) => row.id === message.id)?.canResend,
+  }
+}
+
 async function statusOf(pending: Promise<Response>): Promise<number> {
   const response = await pending
   return response.status
@@ -375,6 +402,63 @@ describe('POST /platform/emails/:id/resend: invitations', () => {
     const tenant = await customerTenant()
     const { message } = await invitationMessage(tenant)
     await sql`update tenants set lifecycle_state = 'suspended' where id = ${tenant.id}`
+
+    const response = await resend(token, message)
+
+    expect(response.status).toBe(404)
+    expect((response.body as ApiEnvelope<unknown>).message).toBe('Tenant not found')
+  })
+})
+
+describe('canResend for invitation emails', () => {
+  it('is true, in the detail and the list, for a pending invitation on an active tenant', async () => {
+    const { token } = await createTrackedStaff('admin')
+    const { message } = await invitationMessage(await customerTenant())
+
+    expect(await resendHintsOf(token, message)).toEqual({ detail: true, list: true })
+  })
+
+  it.each([
+    [
+      'accepted',
+      (id: string) => sql`update tenant_invitations set accepted_at = now() where id = ${id}`,
+    ],
+    [
+      'revoked',
+      (id: string) => sql`update tenant_invitations set revoked_at = now() where id = ${id}`,
+    ],
+  ])('is false, in the detail and the list, for a %s invitation', async (_state, change) => {
+    const { token } = await createTrackedStaff('admin')
+    const { invitationId, message } = await invitationMessage(await customerTenant())
+    await change(invitationId)
+
+    expect(await resendHintsOf(token, message)).toEqual({ detail: false, list: false })
+  })
+
+  it.each([
+    [
+      'suspended',
+      (id: string) => sql`update tenants set lifecycle_state = 'suspended' where id = ${id}`,
+    ],
+    [
+      'archived',
+      (id: string) => sql`update tenants set lifecycle_state = 'archived' where id = ${id}`,
+    ],
+    ['soft-deleted', (id: string) => sql`update tenants set deleted_at = now() where id = ${id}`],
+  ])('is false, in the detail and the list, for a %s tenant', async (_state, change) => {
+    const { token } = await createTrackedStaff('admin')
+    const tenant = await customerTenant()
+    const { message } = await invitationMessage(tenant)
+    await change(tenant.id)
+
+    expect(await resendHintsOf(token, message)).toEqual({ detail: false, list: false })
+  })
+
+  it('answers the same 404 Tenant not found for a soft-deleted tenant', async () => {
+    const { token } = await createTrackedStaff('admin')
+    const tenant = await customerTenant()
+    const { message } = await invitationMessage(tenant)
+    await sql`update tenants set deleted_at = now() where id = ${tenant.id}`
 
     const response = await resend(token, message)
 
