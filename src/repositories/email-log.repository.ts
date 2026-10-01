@@ -137,7 +137,7 @@ export class EmailLogRepository {
    * reset) still rejects; the caller, `recordDelivery` (mailer.service.ts),
    * catches it and logs it at `logger.error` through `redactedForLog`
    * (postgres-errors.ts), without failing the request.
-   * @param entry - The row to insert: recipient, templateKey, status, and whichever of providerMessageId/errorCode applies to that status.
+   * @param entry - The row to insert: recipient, templateKey, status, whichever of providerMessageId/errorCode applies to that status, and `messageId`, the `email_messages` row the attempt belongs to (null or absent for an untracked attempt).
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns The inserted row, including its generated `id` and `createdAt`.
    */

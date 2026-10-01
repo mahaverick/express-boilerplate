@@ -4,6 +4,7 @@
  */
 import { z } from 'zod'
 import { MEMBERSHIP_ROLES } from '@/constants/tenant.constants'
+import { EMAIL_TEMPLATE_KEYS } from '@/utilities/email-template.utilities'
 import { EMAIL_DOMAIN_PATTERN } from '@/utilities/email.utilities'
 
 /**
@@ -35,6 +36,8 @@ export const AUDIT_TARGET_TYPES = [
   'invitation',
   'settings',
   'user',
+  'email_message',
+  'email_suppression',
 ] as const
 
 /**
@@ -157,6 +160,18 @@ export const AUDIT_ACTIONS = {
       slug: z.string().max(100),
       memberCount: z.number().int().min(0),
     }),
+  },
+  'email.resent': {
+    target: 'email_message',
+    metadata: z.strictObject({
+      reason,
+      emailDomain: invitationEmailDomain,
+      templateKey: z.enum(EMAIL_TEMPLATE_KEYS),
+    }),
+  },
+  'email.suppression_lifted': {
+    target: 'email_suppression',
+    metadata: z.strictObject({ reason, emailDomain: invitationEmailDomain }),
   },
 } as const satisfies Record<string, { target: AuditTargetType; metadata: z.ZodType }>
 

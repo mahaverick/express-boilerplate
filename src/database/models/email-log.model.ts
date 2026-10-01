@@ -1,11 +1,14 @@
 /**
  * @file The `email_logs` table: an append-only record of each outbound
- * email attempt that can never hold a raw token or a rendered body. Only
- * the retention purge and a user purge (by recipient) delete rows.
+ * email attempt that can never hold a raw token or a rendered body.
+ * `message_id` points an attempt at its `email_messages` row when it has one.
+ * Only the retention purge, a user purge (by recipient) and a message's
+ * deletion (by cascade) delete rows.
  */
 import { sql, type InferInsertModel, type InferSelectModel } from 'drizzle-orm'
 import { check, index, pgTable, timestamp, varchar } from 'drizzle-orm/pg-core'
 import { MAX_EMAIL_LENGTH } from '@/constants/auth.constants'
+import { emailMessageModel } from '@/database/models/email-message.model'
 
 /**
  * The two things an `email_logs` row can record. `EmailLogStatus` and the
@@ -111,10 +114,19 @@ export const emailLogModel = pgTable(
      * Never a message or server response.
      */
     errorCode: varchar('error_code', { length: ERROR_CODE_MAX_LENGTH }),
+    /**
+     * The message this attempt belongs to. Nullable: a replica older than
+     * this column, or a job queued before it existed, records an attempt
+     * without one.
+     */
+    messageId: varchar('message_id', { length: 36 }).references(() => emailMessageModel.id, {
+      onDelete: 'cascade',
+    }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     index('email_logs_created_at_idx').on(table.createdAt),
+    index('email_logs_message_id_idx').on(table.messageId),
     // A user purge deletes by address in any case; this keeps it off a table scan.
     index('email_logs_recipient_lower_idx').on(sql`lower(${table.recipient})`),
     // sql.raw: a DDL CHECK cannot take bound parameters; the values are code constants.

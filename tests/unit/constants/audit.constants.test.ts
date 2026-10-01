@@ -48,6 +48,12 @@ const VALID_METADATA: Record<AuditAction, Record<string, unknown>> = {
   'auth.reauthenticated': { outcome: 'success' },
   'user.purged': { reason: 'Erasure request, ticket 9001', emailDomain: 'example.test' },
   'tenant.purged': { reason: 'Contract ended', name: 'Acme Inc', slug: 'acme', memberCount: 3 },
+  'email.resent': {
+    reason: 'Customer never got the link',
+    emailDomain: 'example.test',
+    templateKey: 'email_verification',
+  },
+  'email.suppression_lifted': { reason: 'Mailbox fixed, ticket 812', emailDomain: 'example.test' },
 }
 
 const ACTIONS = Object.keys(AUDIT_ACTIONS) as AuditAction[]
@@ -61,6 +67,8 @@ describe('AUDIT_ACTIONS', () => {
   it('lists exactly the actions of the API contract', () => {
     expect(ACTIONS.toSorted((a, b) => a.localeCompare(b))).toEqual([
       'auth.reauthenticated',
+      'email.resent',
+      'email.suppression_lifted',
       'invitation.accepted',
       'invitation.created',
       'invitation.resent',
@@ -127,6 +135,8 @@ describe('AUDIT_ACTIONS', () => {
     'tenant.owner_invited',
     'user.purged',
     'tenant.purged',
+    'email.resent',
+    'email.suppression_lifted',
   ] as const)('%s refuses an empty or over-long reason', (action) => {
     const schema = AUDIT_ACTIONS[action].metadata
     const valid = VALID_METADATA[action]
@@ -135,16 +145,19 @@ describe('AUDIT_ACTIONS', () => {
     expect(schema.safeParse({ ...valid, reason: 'x'.repeat(500) }).success).toBe(true)
   })
 
-  it.each(['user.created', 'tenant.owner_invited', 'user.purged'] as const)(
-    '%s refuses a full address and accepts no domain',
-    (action) => {
-      const valid = VALID_METADATA[action]
-      const schema = AUDIT_ACTIONS[action].metadata
-      expect(schema.safeParse({ ...valid, emailDomain: 'ada@example.test' }).success).toBe(false)
-      // eslint-disable-next-line unicorn/no-null -- the metadata records JSON null for "no domain"
-      expect(schema.safeParse({ ...valid, emailDomain: null }).success).toBe(true)
-    }
-  )
+  it.each([
+    'user.created',
+    'tenant.owner_invited',
+    'user.purged',
+    'email.resent',
+    'email.suppression_lifted',
+  ] as const)('%s refuses a full address and accepts no domain', (action) => {
+    const valid = VALID_METADATA[action]
+    const schema = AUDIT_ACTIONS[action].metadata
+    expect(schema.safeParse({ ...valid, emailDomain: 'ada@example.test' }).success).toBe(false)
+    // eslint-disable-next-line unicorn/no-null -- the metadata records JSON null for "no domain"
+    expect(schema.safeParse({ ...valid, emailDomain: null }).success).toBe(true)
+  })
 
   it('lets tenant.owner_invited record no invitee account and no reason (the invitation sent at creation)', () => {
     const schema = AUDIT_ACTIONS['tenant.owner_invited'].metadata
@@ -168,6 +181,18 @@ describe('AUDIT_ACTIONS', () => {
     expect(
       AUDIT_ACTIONS['auth.reauthenticated'].metadata.safeParse({ outcome: 'maybe' }).success
     ).toBe(false)
+  })
+
+  it('records only a known template key on email.resent', () => {
+    const schema = AUDIT_ACTIONS['email.resent'].metadata
+    const valid = VALID_METADATA['email.resent']
+    expect(schema.safeParse({ ...valid, templateKey: 'account_setup' }).success).toBe(true)
+    expect(schema.safeParse({ ...valid, templateKey: 'not_a_template' }).success).toBe(false)
+  })
+
+  it('targets email messages and suppressions', () => {
+    expect(AUDIT_ACTIONS['email.resent'].target).toBe('email_message')
+    expect(AUDIT_ACTIONS['email.suppression_lifted'].target).toBe('email_suppression')
   })
 
   it('targets users, tenants and invitations as the plan says', () => {
@@ -234,7 +259,15 @@ describe('audit value sets', () => {
   it('match the audit_logs CHECK constraints', () => {
     expect(AUDIT_ACTOR_KINDS).toEqual(['user', 'system'])
     expect(AUDIT_ACCESS_KINDS).toEqual(['member', 'platform', 'system'])
-    expect(AUDIT_TARGET_TYPES).toEqual(['tenant', 'membership', 'invitation', 'settings', 'user'])
+    expect(AUDIT_TARGET_TYPES).toEqual([
+      'tenant',
+      'membership',
+      'invitation',
+      'settings',
+      'user',
+      'email_message',
+      'email_suppression',
+    ])
   })
 
   it('dedupes platform access for one hour', () => {
