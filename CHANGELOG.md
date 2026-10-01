@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.1](https://github.com/mahaverick/express-boilerplate/compare/v1.2.0...v1.2.1) (2026-10-01)
+
+
+### Bug Fixes
+
+* **deps:** bump transitive @grpc/grpc-js past GHSA-m9gg-hp2v-232j ([#70](https://github.com/mahaverick/express-boilerplate/issues/70)) ([69ba29a](https://github.com/mahaverick/express-boilerplate/commit/69ba29aeddc9700bc74123f60dc1f4b85e51b7f1))
+
 ## [1.2.0](https://github.com/mahaverick/express-boilerplate/compare/v1.1.0...v1.2.0) (2026-09-29)
 
 
