@@ -12,7 +12,11 @@ import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
 import { redactedForLog } from '@/errors/postgres-errors'
 import { addEmailJob } from '@/jobs/email.job'
-import { canPlatformActorModifyTarget, isRoleAtLeast } from '@/policies/tenant.policy'
+import {
+  canPlatformActorModifyTarget,
+  canStaffMailTarget,
+  isRoleAtLeast,
+} from '@/policies/tenant.policy'
 import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
 import {
   PlatformUserRepository,
@@ -298,7 +302,7 @@ async function lockStaffPair(
 
 /**
  * Mail-only actions on a staff target need an actor of at least the
- * target's rank. Unlocked: the roles are read once, and the writes that follow
+ * target's rank (`canStaffMailTarget`). Unlocked: the roles are read once, and the writes that follow
  * (token revocation, the audit entry) do not depend on them staying unchanged.
  * @param actor - The signed-in staff user.
  * @param targetUserId - The user to mail.
@@ -313,9 +317,7 @@ async function assertMayMail(actor: Actor, targetUserId: string): Promise<Member
   if (actorRole === null || !isRoleAtLeast(actorRole, 'admin')) {
     throw new HttpError('Not found', 404)
   }
-  if (targetRole !== null && !isRoleAtLeast(actorRole, targetRole)) {
-    throw new HttpError(STAFF_TARGET_MESSAGE, 403)
-  }
+  if (!canStaffMailTarget(actorRole, targetRole)) throw new HttpError(STAFF_TARGET_MESSAGE, 403)
   return targetRole
 }
 

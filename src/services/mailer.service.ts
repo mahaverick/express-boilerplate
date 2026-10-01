@@ -101,7 +101,9 @@ export interface TrackedDelivery {
 
 /**
  * Render `message` against its own declared template: the only place this
- * module produces content. A `switch`, not a lookup object, so TypeScript
+ * module produces content, used by `sendMail` and by the staff preview
+ * (platform-email.service.ts), which renders stored variables with masked
+ * links and never sends. A `switch`, not a lookup object, so TypeScript
  * narrows `message.variables` in each `case`.
  *
  * The `default` case is reachable by a caller that bypasses the type
@@ -111,7 +113,7 @@ export interface TrackedDelivery {
  * @returns The rendered subject, text, and HTML for `message`'s own template.
  * @throws {Error} When `message.variables` is missing a value its template requires (`requireEmailVariables`, email-template.utilities.ts), or when `message.templateKey` matches no known template (only reachable by bypassing `MailMessage`'s own type).
  */
-function renderForMessage(message: MailMessage): RenderedEmail {
+export function renderForMessage(message: MailMessage): RenderedEmail {
   switch (message.templateKey) {
     case EMAIL_VERIFICATION_TEMPLATE_KEY: {
       return renderEmailVerificationTemplate(message.variables)

@@ -464,6 +464,37 @@ describe('lint gates actually fire', { timeout: LINT_GATE_TIMEOUT_MS }, () => {
     })
   })
 
+  describe('no-restricted-imports: repositories/platform-email.repository', () => {
+    const fixture = 'tests/fixtures/lint-zones/service-imports-platform-email-repository.ts'
+
+    it.each([
+      'src/services/email-webhook.service.ts',
+      'src/services/mailer.service.ts',
+      'src/controllers/probe.controller.ts',
+      'src/repositories/probe.repository.ts',
+    ])('rejects an import from %s', async (syntheticPath) => {
+      const source = fs.readFileSync(path.resolve(process.cwd(), fixture), 'utf8')
+      const messages = await messagesFor(syntheticPath, source)
+      const restricted = messages.find((message) => message.ruleId === 'no-restricted-imports')
+      expect(restricted?.severity).toBe(2)
+    })
+
+    it('rejects a relative import of the same module', async () => {
+      const source =
+        "import { PlatformEmailRepository } from './platform-email.repository'\n\n" +
+        'export const repository = PlatformEmailRepository\n'
+      const messages = await messagesFor('src/repositories/probe.repository.ts', source)
+      const restricted = messages.find((message) => message.ruleId === 'no-restricted-imports')
+      expect(restricted?.severity).toBe(2)
+    })
+
+    it('allows services/platform-*.service.ts', async () => {
+      const source = fs.readFileSync(path.resolve(process.cwd(), fixture), 'utf8')
+      const ids = await ruleIdsFor('src/services/platform-email.service.ts', source)
+      expect(ids).not.toContain('no-restricted-imports')
+    })
+  })
+
   describe('check-file/filename-naming-convention: policies and presenters', () => {
     const newGovernedDirectoryCases = [
       {
