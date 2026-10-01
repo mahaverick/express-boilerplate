@@ -174,6 +174,24 @@ redirector, which would then see every token. Open and click rates count
 `MAIL_FROM` mail only. Left unset it falls back to `MAIL_FROM`, and outside
 `local` the boot check warns when both senders share a domain.
 
+**Rollout order.** Deploy the workers before, or with, the API. A job the
+API enqueues at this version and an older worker picks up is sent untracked:
+its row stays `queued`, it goes from the general sender, and no suppression
+check runs. That lasts only for the deploy window.
+
+**Webhook limiter caveat.** `emailWebhookRejected` counts a request while it
+is in flight and refunds it only when it finishes under 400, so more than 60
+concurrent deliveries from one provider IP can be throttled. Providers retry,
+and the `svix-id` dedupe makes a retry exact. A wrong `TRUST_PROXY` (every
+caller seen as the proxy's IP) would put all webhook traffic in one per-IP
+bucket.
+
+**Resending an invitation from staff.** A resend through
+`/platform/emails/:id/resend` spends the staff write limiter (`platformWrite`,
+30 a minute per staff user), not the member route's `invite-tenant-member`
+budget. Every resend is admin-only, audited with a reason, and rotates the
+token.
+
 **Local.** `APP_ENV=local` (tests included) also enables a `fake` provider,
 signed with `FAKE_EMAIL_WEBHOOK_SECRET` (a local default, not a
 credential). `pnpm email:fire-event <messageId> <type> [hard|soft] [--origin

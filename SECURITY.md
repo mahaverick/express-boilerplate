@@ -855,9 +855,11 @@ unsigned traffic cannot spend its budget. `emailWebhookRejected` is keyed per
 IP and counts only failed responses (60 a minute), which caps forged traffic
 from one address.
 
-Token emails always go from a separate sender whose domain keeps click
-tracking off, so no provider redirector sees a live link, and no caller
-can choose the sender.
+Token emails always use the transactional sender class
+(`MAIL_FROM_TRANSACTIONAL`), which the operator must put on a domain with
+click tracking off so no provider redirector sees a live link; unset, it
+falls back to `MAIL_FROM` and boot warns outside local. No caller can
+choose the sender.
 
 A staff resend runs the action that sent the mail and issues a new token;
 it never sends a stored one, and it reaches only accounts and invitations
