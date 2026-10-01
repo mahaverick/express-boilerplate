@@ -89,7 +89,10 @@ describe('EMAIL_DETAIL_PATTERN', () => {
 
   it.each([
     ['lowercase hex, as a raw token is written', 'ab12'.repeat(8)],
-    ['base64url, as an invitation token is written', 'Q2xpY2tlZC1saW5r_x-y'],
+    [
+      'base64url, as an invitation token is written',
+      `${Buffer.from('Clicked-link').toString('base64url')}_x-y`,
+    ],
     ['a URL', 'HTTPS://EXAMPLE.TEST/X'],
     ['an empty string', ''],
   ])('refuses %s', (_label, detail) => {
