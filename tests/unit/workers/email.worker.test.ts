@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { EmailMessage } from '@/database/models/email-message.model'
 import type { EmailJobData } from '@/jobs/email.job'
 import * as emailMessageService from '@/services/email-message.service'
+import { logger } from '@/services/logger.service'
 import * as mailerService from '@/services/mailer.service'
 import { processEmailJob } from '@/workers/email.worker'
 
@@ -190,5 +191,28 @@ describe('processEmailJob', () => {
 
     await expect(processEmailJob(job)).resolves.toBeUndefined()
     expect(mailerService.sendMail).toHaveBeenCalled()
+  })
+
+  it('fails without the recipient address, and sends nothing, when a lookup before the send throws', async () => {
+    vi.mocked(emailMessageService.isRecipientSuppressed).mockRejectedValue(
+      new Error('query failed, params: user@example.com')
+    )
+    const loggerError = vi.spyOn(logger, 'error').mockImplementation(() => {
+      // Only the call is asserted.
+    })
+    try {
+      const rejected = expect(processEmailJob(mockJob())).rejects
+      await rejected.toThrow(expect.not.stringContaining('user@example.com'))
+      await rejected.toThrow(
+        /Email job test-job-1 failed before sending, for template email_verification/
+      )
+      expect(mailerService.sendMail).not.toHaveBeenCalled()
+      expect(loggerError).toHaveBeenCalledWith(
+        'Email job failed before sending',
+        expect.objectContaining({ jobId: 'test-job-1' })
+      )
+    } finally {
+      loggerError.mockRestore()
+    }
   })
 })

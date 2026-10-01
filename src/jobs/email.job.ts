@@ -68,7 +68,7 @@ export const emailJobDefaults: JobsOptions = {
  * @param userId - The user this email is for; `''` when there is none, stored as NULL.
  * @param options - Override default job options; `context` goes on the message row.
  * @returns The created job, or the existing one for a `jobId` already queued.
- * @throws {Error} Whatever the row insert or the queue add throws.
+ * @throws {Error} When the row insert fails, a fresh error naming only the template (the original is logged, redacted: it can carry the address); whatever the queue add throws.
  */
 export async function addEmailJob(
   message: MailMessage,
@@ -76,7 +76,18 @@ export async function addEmailJob(
   options: EmailJobOptions = {}
 ): Promise<Job<EmailJobData>> {
   const { context, ...jobOptions } = options
-  const tracked = await createQueuedMessage(message, userId, { context, jobKey: jobOptions.jobId })
+  let tracked: Awaited<ReturnType<typeof createQueuedMessage>>
+  try {
+    tracked = await createQueuedMessage(message, userId, { context, jobKey: jobOptions.jobId })
+  } catch (error) {
+    // A query error's message carries its bound parameters (the address), and a notification job's failure reason is stored in Redis.
+    logger.error('Creating an email message failed', {
+      error: redactedForLog(error),
+      templateKey: message.templateKey,
+    })
+    // eslint-disable-next-line preserve-caught-error -- the original is deliberately not attached: it carries the address
+    throw new Error(`Creating the message row for a ${message.templateKey} email failed`)
+  }
   try {
     return await addJob(
       getEmailQueue(),

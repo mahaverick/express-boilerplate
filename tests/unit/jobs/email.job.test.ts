@@ -72,8 +72,24 @@ describe('addEmailJob', () => {
 
   it('adds no job, and rejects, when the row cannot be created', async () => {
     vi.mocked(emailMessageService.createQueuedMessage).mockRejectedValue(new Error('db down'))
-    await expect(addEmailJob(message, '')).rejects.toThrow('db down')
+    await expect(addEmailJob(message, '')).rejects.toThrow()
     expect(queueService.addJob).not.toHaveBeenCalled()
+  })
+
+  it('rejects without the recipient address when the insert error carries it', async () => {
+    vi.mocked(emailMessageService.createQueuedMessage).mockRejectedValue(
+      new Error('insert failed, params: user@example.com')
+    )
+    const loggerError = vi.spyOn(logger, 'error').mockImplementation(() => {
+      // Only the call is asserted.
+    })
+    try {
+      const rejected = expect(addEmailJob(message, 'user-1')).rejects
+      await rejected.toThrow(expect.not.stringContaining('user@example.com'))
+      await rejected.toThrow(/password_reset/)
+    } finally {
+      loggerError.mockRestore()
+    }
   })
 
   it('marks the row failed at enqueue, and still rejects, when the add fails', async () => {

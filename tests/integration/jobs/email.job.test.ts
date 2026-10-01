@@ -179,7 +179,7 @@ describe('addEmailJob', () => {
       'createQueued',
       failingCall,
       async () => {
-        await expect(addEmailJob(message, '')).rejects.toThrow('unavailable')
+        await expect(addEmailJob(message, '')).rejects.toThrow(/Creating the message row/)
       }
     )
 

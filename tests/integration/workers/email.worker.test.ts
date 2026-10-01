@@ -331,6 +331,33 @@ describe('email.worker', () => {
     createdRecipients.push(recipient)
   }, 15_000)
 
+  it("keeps the recipient out of BullMQ's failedReason and stacktrace when a lookup before the send fails", async () => {
+    const recipient = uniqueRecipient('lookup-failure')
+    createdRecipients.push(recipient)
+    const failWithAddress = (): Promise<never> =>
+      Promise.reject(new Error(`query failed, params: ${recipient}`))
+
+    await withMutatedMethod(
+      EmailSuppressionRepository.prototype,
+      'findActive',
+      failWithAddress,
+      async () => {
+        const job = await addEmailJob(passwordResetMessage(recipient), 'user-lookup-failure', {
+          attempts: 1,
+        })
+        if (!job.id) throw new Error('expected addEmailJob to assign a job id')
+
+        await expect(waitForJobSettled(worker, job.id)).resolves.toBe('failed')
+
+        const failedJob = await getEmailQueue().getJob(job.id)
+        expect(failedJob?.failedReason).toContain(job.id)
+        expect(failedJob?.failedReason).not.toContain(recipient)
+        expect(JSON.stringify(failedJob?.stacktrace)).not.toContain(recipient)
+      }
+    )
+    await assertNoMailpitMessage(recipient)
+  }, 15_000)
+
   it('scrubs the stored job and logs one error only after its last attempt', async () => {
     const transporter = getMailTransporter()
     const recipient = uniqueRecipient('scrub')

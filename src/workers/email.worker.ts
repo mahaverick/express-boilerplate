@@ -63,23 +63,37 @@ async function createMessageForUntrackedJob(job: Job<EmailJobData>): Promise<Ema
  * never throws: a retry after a real send would send the email again.
  * @param job - The BullMQ job to process; `job.data` is a `MailMessage` (discriminated union) plus `userId` and `messageId`.
  * @returns Resolves once the email has been sent or skipped; rejects (so BullMQ retries) when `sendMail` reports `'failed'`, or when a lookup before the send fails.
- * @throws {Error} When `sendMail` resolves to `'failed'` — deliberately carries only `job.id` and `templateKey`, never the recipient address, since BullMQ persists this message in `failedReason` (Redis).
+ * @throws {Error} When `sendMail` resolves to `'failed'`, or when the lookup, row creation, suppression check or suppressed mark before it throws (the original error is logged, redacted). Either message carries only `job.id` and `templateKey`, never the recipient address, since BullMQ persists it in `failedReason` (Redis).
  */
 export async function processEmailJob(job: Job<EmailJobData>): Promise<void> {
   const { messageId, templateKey } = job.data
-  const message =
-    messageId === undefined ? await createMessageForUntrackedJob(job) : await findMessage(messageId)
-  if (message === undefined) {
-    logger.info('Email job skipped: its message no longer exists', { jobId: job.id, templateKey })
-    return
-  }
-  if (await isRecipientSuppressed(job.data.to)) {
-    await markMessageSuppressed(message.id)
-    logger.info('Email job skipped: the recipient is suppressed', {
+  let message: EmailMessage | undefined
+  try {
+    message =
+      messageId === undefined
+        ? await createMessageForUntrackedJob(job)
+        : await findMessage(messageId)
+    if (message !== undefined && (await isRecipientSuppressed(job.data.to))) {
+      await markMessageSuppressed(message.id)
+      logger.info('Email job skipped: the recipient is suppressed', {
+        jobId: job.id,
+        templateKey,
+        messageId: message.id,
+      })
+      return
+    }
+  } catch (error) {
+    // A query error's message carries its bound parameters (the address); BullMQ keeps this message in Redis.
+    logger.error('Email job failed before sending', {
+      error: redactedForLog(error),
       jobId: job.id,
       templateKey,
-      messageId: message.id,
     })
+    // eslint-disable-next-line preserve-caught-error -- the original is deliberately not attached: it carries the address
+    throw new Error(`Email job ${job.id} failed before sending, for template ${templateKey}`)
+  }
+  if (message === undefined) {
+    logger.info('Email job skipped: its message no longer exists', { jobId: job.id, templateKey })
     return
   }
 
