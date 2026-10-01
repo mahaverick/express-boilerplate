@@ -196,7 +196,8 @@ export interface ResendContext {
  * enforce, which the resend endpoint still runs. True only when the actor
  * is a platform admin or owner, the template has a resend action, the row
  * carries the ids that action needs, the recipient is not suppressed, and
- * the action's own actor check passes: `canStaffMailTarget` against the
+ * the user (for user-targeted mail) is active and, for verification, not
+ * yet verified, and the action's own actor check passes: `canStaffMailTarget` against the
  * user's platform role for verification and password mail, and
  * `canActorGrantRole` on the invitation's role for an invitation, with the
  * actor's role in that tenant (membership first, as `lockTenantAccess`
@@ -227,6 +228,9 @@ export function canResendFor(
   if (message.userId === null || message.user === null || message.user.deletedAt !== null) {
     return false
   }
+  // A deactivated user, or a verification resend to a verified one, is a certain 409
+  if (!message.user.isActive) return false
+  if (action === 'verification' && message.user.isVerified) return false
   // eslint-disable-next-line unicorn/no-null -- a non-staff user has no platform role
   return canStaffMailTarget(actorRole, context.targetPlatformRoles.get(message.userId) ?? null)
 }
@@ -630,7 +634,9 @@ function resendTargetOf(
  * or `password_reset` by the user's state now, which may differ from the
  * original. The delegated action's gates, errors and audit entry apply
  * unchanged; this adds an `email.resent` entry with the reason once it
- * succeeds. Checks, in order: the message exists; its template is in the
+ * succeeds. That entry is written after, and separately from, the delegated
+ * action's commit: if it fails the call answers 500 though the mail was
+ * queued, and a retry rotates the token again. Checks, in order: the message exists; its template is in the
  * registry; it has a resend action and the ids it needs; the recipient is
  * not suppressed; for an invitation, its tenant is active (the member
  * route's `resolveTenant` gate) and, on the platform tenant, the caller

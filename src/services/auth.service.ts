@@ -98,7 +98,7 @@ export interface AuthProvidersResult {
  * Tell the owner of an already-registered address that someone tried to
  * register it. The holder may have been soft-deleted since the insert failed;
  * then the fallback name is used and the job's correlation id is `''`, which
- * email.job.ts uses for logging only, never as a database key.
+ * is stored as `email_messages.user_id` NULL (and used in logs).
  * @param email - The address that was submitted.
  */
 async function sendRegistrationAttemptMail(email: string): Promise<void> {

@@ -276,6 +276,42 @@ describe('canResend', () => {
     }
   )
 
+  it.each([
+    ['a verification resend to a verified user', 'email_verification', {}],
+    ['a set-password resend to a deactivated user', 'account_setup', { active: false }],
+    [
+      'a verification resend to a deactivated user',
+      'email_verification',
+      { active: false, verified: false },
+    ],
+  ])('is false, in the detail and the list, for %s', async (_label, templateKey, userOptions) => {
+    const { token } = await createTrackedStaff('admin')
+    const tag = tagged()
+    const user = await createTrackedUser({ email: `${tag}@example.test`, ...userOptions })
+    const message = await createTrackedMessage({
+      recipient: user.email,
+      userId: user.id,
+      templateKey,
+    })
+
+    const page = dataOf<PageBody>(await get(token, '/emails', { q: tag }))
+
+    expect(await canResendAs(token, message.id)).toBe(false)
+    expect(page.messages.find((row) => row.id === message.id)?.canResend).toBe(false)
+  })
+
+  it('is true for a verification resend to an unverified, active user', async () => {
+    const { token } = await createTrackedStaff('admin')
+    const user = await createTrackedUser({ verified: false })
+    const message = await createTrackedMessage({
+      recipient: user.email,
+      userId: user.id,
+      templateKey: 'email_verification',
+    })
+
+    expect(await canResendAs(token, message.id)).toBe(true)
+  })
+
   it('agrees between the list and the detail', async () => {
     const { token } = await createTrackedStaff('admin')
     const tag = tagged()

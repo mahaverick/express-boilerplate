@@ -135,6 +135,8 @@ function message(overrides: Partial<PlatformEmailRecord> = {}): PlatformEmailRec
       firstName: 'Ada',
       // eslint-disable-next-line unicorn/no-null -- no last name
       lastName: null,
+      isActive: true,
+      isVerified: true,
       // eslint-disable-next-line unicorn/no-null -- a live user
       deletedAt: null,
     },
@@ -188,6 +190,28 @@ describe('canResendFor', () => {
     if (gone.user) gone.user.deletedAt = new Date()
     expect(canResendFor(ACTOR, gone, context())).toBe(false)
   })
+
+  it('is false for a verification resend to an already-verified user, true while unverified', () => {
+    const verified = message({ templateKey: 'email_verification' })
+    expect(canResendFor(ACTOR, verified, context())).toBe(false)
+    const unverified = message({ templateKey: 'email_verification' })
+    if (unverified.user) unverified.user.isVerified = false
+    expect(canResendFor(ACTOR, unverified, context())).toBe(true)
+  })
+
+  it('is true for a set-password resend to a verified user', () => {
+    expect(canResendFor(ACTOR, message({ templateKey: 'password_reset' }), context())).toBe(true)
+  })
+
+  it.each(['email_verification', 'account_setup', 'password_reset'])(
+    'is false for %s to a deactivated user',
+    (templateKey) => {
+      const inactive = message({ templateKey })
+      // Unverified too, so only `isActive` can refuse
+      if (inactive.user) Object.assign(inactive.user, { isActive: false, isVerified: false })
+      expect(canResendFor(ACTOR, inactive, context())).toBe(false)
+    }
+  )
 
   it('is false when the target outranks the actor, true for an owner', () => {
     const staffOwner = message()

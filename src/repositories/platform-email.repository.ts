@@ -63,6 +63,8 @@ export interface EmailUserRow {
   email: string
   firstName: string | null
   lastName: string | null
+  isActive: boolean
+  isVerified: boolean
   deletedAt: Date | null
 }
 
@@ -348,6 +350,8 @@ function toPage<TRow extends { sortAt: string; id: string }>(
  * @param row.email - Their address.
  * @param row.firstName - Their first name.
  * @param row.lastName - Their last name.
+ * @param row.isActive - Whether the account is active.
+ * @param row.isVerified - Whether they have verified their address.
  * @param row.deletedAt - When they were soft-deleted.
  * @returns The user, or null.
  */
@@ -356,6 +360,8 @@ function userOrNull(row: {
   email: string | null
   firstName: string | null
   lastName: string | null
+  isActive: boolean | null
+  isVerified: boolean
   deletedAt: Date | null
 }): EmailUserRow | null {
   if (row.id === null || row.email === null) {
@@ -367,6 +373,8 @@ function userOrNull(row: {
     email: row.email,
     firstName: row.firstName,
     lastName: row.lastName,
+    isActive: row.isActive ?? true,
+    isVerified: row.isVerified,
     deletedAt: row.deletedAt,
   }
 }
@@ -390,6 +398,8 @@ const messageColumns = {
   joinedUserEmail: userModel.email,
   joinedUserFirstName: userModel.firstName,
   joinedUserLastName: userModel.lastName,
+  joinedUserActive: userModel.active,
+  joinedUserVerifiedAt: userModel.emailVerifiedAt,
   joinedUserDeletedAt: userModel.deletedAt,
   joinedTenantId: tenantModel.id,
   joinedTenantName: tenantModel.name,
@@ -426,6 +436,8 @@ function toRecord(row: MessageSelection): PlatformEmailRecord & { sortAt: string
     joinedUserEmail,
     joinedUserFirstName,
     joinedUserLastName,
+    joinedUserActive,
+    joinedUserVerifiedAt,
     joinedUserDeletedAt,
     joinedTenantId,
     joinedTenantName,
@@ -439,6 +451,8 @@ function toRecord(row: MessageSelection): PlatformEmailRecord & { sortAt: string
       email: joinedUserEmail,
       firstName: joinedUserFirstName,
       lastName: joinedUserLastName,
+      isActive: joinedUserActive,
+      isVerified: joinedUserVerifiedAt !== null,
       deletedAt: joinedUserDeletedAt,
     }),
     tenant:
@@ -924,6 +938,8 @@ function selectSuppressions(executor: DbExecutor) {
       lifterEmail: userModel.email,
       lifterFirstName: userModel.firstName,
       lifterLastName: userModel.lastName,
+      lifterActive: userModel.active,
+      lifterVerifiedAt: userModel.emailVerifiedAt,
       lifterDeletedAt: userModel.deletedAt,
     })
     .from(emailSuppressionModel)
@@ -940,7 +956,16 @@ function selectSuppressions(executor: DbExecutor) {
 function toSuppressionRecord(
   row: Awaited<ReturnType<typeof selectSuppressions>>[number]
 ): PlatformSuppressionRecord & { sortAt: string } {
-  const { lifterId, lifterEmail, lifterFirstName, lifterLastName, lifterDeletedAt, ...rest } = row
+  const {
+    lifterId,
+    lifterEmail,
+    lifterFirstName,
+    lifterLastName,
+    lifterActive,
+    lifterVerifiedAt,
+    lifterDeletedAt,
+    ...rest
+  } = row
   return {
     ...rest,
     liftedBy: userOrNull({
@@ -948,6 +973,8 @@ function toSuppressionRecord(
       email: lifterEmail,
       firstName: lifterFirstName,
       lastName: lifterLastName,
+      isActive: lifterActive,
+      isVerified: lifterVerifiedAt !== null,
       deletedAt: lifterDeletedAt,
     }),
   }
