@@ -31,7 +31,8 @@ export interface RateLimiterSpec {
    * default key generator (IP only), `'user'` uses
    * `authenticatedUserRateLimitKey`, `'email'` uses
    * `submittedEmailRateLimitKey`, and a function is a custom key generator
-   * — used only by `login`'s composite ip+email key.
+   * — used by `login`'s composite ip+email key and `emailWebhook`'s
+   * per-provider key.
    */
   keyBy: 'ip' | 'user' | 'email' | ((request: Request) => string)
   /**
@@ -41,7 +42,7 @@ export interface RateLimiterSpec {
 }
 
 /**
- * The 23 rate limiters this API defines, by name.
+ * The 24 rate limiters this API defines, by name.
  */
 export type RateLimitName =
   | 'register'
@@ -67,6 +68,7 @@ export type RateLimitName =
   | 'authenticatedWrite'
   | 'platformWrite'
   | 'reauthenticate'
+  | 'emailWebhook'
 
 const RATE_LIMITED_MESSAGE = 'Too many attempts. Please try again later.'
 
@@ -122,7 +124,21 @@ export function authenticatedUserRateLimitKey(request: Request): string {
 }
 
 /**
- * The 23 rate-limit specs this API enforces, each with the reason for its
+ * The key `emailWebhook`'s limiter counts requests by: the `:provider` path
+ * segment alone, never the IP. A provider posts from a few shared egress
+ * addresses, so an IP key would mix providers' budgets and throttle a
+ * bounce storm into retries. The route checks that the provider is enabled
+ * before this limiter runs, so the key space is the enabled adapters.
+ * @param request - The incoming request.
+ * @returns The provider name, or an empty string when the route has none.
+ */
+export function emailWebhookProviderRateLimitKey(request: Request): string {
+  const { provider } = request.params
+  return typeof provider === 'string' ? provider : ''
+}
+
+/**
+ * The 24 rate-limit specs this API enforces, each with the reason for its
  * window, limit and key. `name` is the live Redis key prefix
  * (`redisKey('rl', name)`): changing one resets that limiter's counters in
  * every deployment, and tests/unit/constants/rate-limit.constants.test.ts
@@ -412,6 +428,19 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     windowMs: 15 * 60 * 1000,
     limit: 5,
     keyBy: 'user',
+    message: RATE_LIMITED_MESSAGE,
+  },
+  /**
+   * 3000 a minute per provider: volume protection for a public route that
+   * verifies an HMAC before any database work, generous so a bounce storm
+   * after a bulk send is not answered 429 and retried. Keyed per provider,
+   * see `emailWebhookProviderRateLimitKey`.
+   */
+  emailWebhook: {
+    name: 'email-webhook',
+    windowMs: 60_000,
+    limit: 3000,
+    keyBy: emailWebhookProviderRateLimitKey,
     message: RATE_LIMITED_MESSAGE,
   },
 }

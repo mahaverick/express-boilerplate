@@ -1,7 +1,8 @@
 /**
  * @file The single mount point for every versioned feature router; app.ts
- * mounts it under `/api/v1`. It builds a router rather than re-exporting, so
- * it is not a barrel.
+ * mounts it under `/api/v1`. The one exception is the email webhook router,
+ * which app.ts mounts itself ahead of the global JSON parser. It builds a
+ * router rather than re-exporting, so it is not a barrel.
  */
 import { Router } from 'express'
 import { createAuthRouter } from '@/routes/auth.routes'

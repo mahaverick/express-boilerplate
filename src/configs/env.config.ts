@@ -525,6 +525,19 @@ const EnvSchema = z.object({
     ),
 
   /**
+   * Not a credential: the fake adapter is registered only where
+   * `isFakeEmailWebhookAllowed` holds (APP_ENV local), so this value signs
+   * nothing that any deployed API accepts.
+   */
+  FAKE_EMAIL_WEBHOOK_SECRET: z
+    .string()
+    .min(1)
+    .default('fake-webhook')
+    .describe(
+      'Signs local fake email webhook events (`pnpm email:fire-event`), as an HMAC-SHA256 hex digest in the x-fake-signature header. Read only when APP_ENV is local, the one environment that serves POST /api/v1/webhooks/email/fake. Defaults to "fake-webhook"; not a credential.'
+    ),
+
+  /**
    * Per-stage bounds, not a per-send deadline: DNS retries double this
    * timeout, the OS-lookup fallback has none, and a multi-address host can take
    * it once per address. No HTTP response waits on SMTP (sends run in
@@ -660,6 +673,17 @@ export function logFormat(env: Pick<Env, 'LOG_FORMAT' | 'APP_ENV'>): 'json' | 'p
  */
 export function requiresSmtpTls(env: Pick<Env, 'APP_ENV'>): boolean {
   return env.APP_ENV !== 'local'
+}
+
+/**
+ * Whether the fake email webhook adapter is served: on local only, which is
+ * also what the test suite runs as, so no deployed API accepts an event
+ * signed with the default `FAKE_EMAIL_WEBHOOK_SECRET`.
+ * @param env - The APP_ENV slice of the validated environment.
+ * @returns True on APP_ENV `local` only.
+ */
+export function isFakeEmailWebhookAllowed(env: Pick<Env, 'APP_ENV'>): boolean {
+  return env.APP_ENV === 'local'
 }
 
 /**

@@ -12,6 +12,7 @@ import { HttpError } from '@/errors/http-error'
 import { errorHandler } from '@/middlewares/error.middleware'
 import { requestContext } from '@/middlewares/request-context.middleware'
 import { requestId } from '@/middlewares/request-id.middleware'
+import { createEmailWebhookRouter } from '@/routes/email-webhook.routes'
 import { createApiRouter } from '@/routes/index.routes'
 import { isDatabaseReachable } from '@/services/database.service'
 import { isShuttingDown } from '@/services/lifecycle.service'
@@ -45,6 +46,8 @@ export function createApp(): Express {
 
   app.use(requestId)
   app.use(requestContext)
+  // Before the body parsers: a webhook signature covers the exact bytes, which express.json would consume.
+  app.use('/api/v1/webhooks/email', createEmailWebhookRouter())
   app.use(express.json({ limit: '1mb' }))
   app.use(express.urlencoded({ extended: false, limit: '100kb' }))
 

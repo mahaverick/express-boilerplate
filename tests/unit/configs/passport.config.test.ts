@@ -65,6 +65,7 @@ const baseEnv: Env = {
   SMTP_PORT: 1025,
   MAIL_FROM: 'no-reply@example.com',
   APP_NAME: 'Test App',
+  FAKE_EMAIL_WEBHOOK_SECRET: 'fake-webhook',
   SMTP_CONNECTION_TIMEOUT_MS: 5000,
   SMTP_GREETING_TIMEOUT_MS: 5000,
   SMTP_SOCKET_TIMEOUT_MS: 10_000,

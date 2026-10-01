@@ -35,6 +35,7 @@
     "db:migrate": "tsx src/database/migrate.ts",
     "db:migrate:prod": "node dist/database/migrate.js",
     "platform:grant": "tsx --env-file-if-exists=.env src/scripts/platform-grant.ts",
+    "email:fire-event": "tsx --env-file-if-exists=.env src/scripts/email-fire-event.ts",
     "test": "vitest run",
     "test:unit": "vitest run --config vitest.unit.config.ts",
     "test:watch": "vitest watch",

@@ -4,6 +4,7 @@ import {
   getDatabaseUrl,
   getEnv,
   isCookieSecure,
+  isFakeEmailWebhookAllowed,
   logFormat,
   parseEnv,
   requiresSmtpTls,
@@ -610,5 +611,24 @@ describe('PLATFORM_EMAIL_DOMAINS', () => {
     expect(() => parseEnv({ ...valid, PLATFORM_EMAIL_DOMAINS: value })).toThrow(
       /PLATFORM_EMAIL_DOMAINS/
     )
+  })
+})
+
+describe('the fake email webhook', () => {
+  it('defaults FAKE_EMAIL_WEBHOOK_SECRET to fake-webhook, and an empty value takes the default', () => {
+    expect(parseEnv(valid).FAKE_EMAIL_WEBHOOK_SECRET).toBe('fake-webhook')
+    // An empty string counts as unset, so it takes the default.
+    expect(parseEnv({ ...valid, FAKE_EMAIL_WEBHOOK_SECRET: '' }).FAKE_EMAIL_WEBHOOK_SECRET).toBe(
+      'fake-webhook'
+    )
+  })
+
+  it.each([
+    ['local', true],
+    ['dev', false],
+    ['qa', false],
+    ['prod', false],
+  ] as const)('isFakeEmailWebhookAllowed on %s is %s', (appEnv, expected) => {
+    expect(isFakeEmailWebhookAllowed({ APP_ENV: appEnv })).toBe(expected)
   })
 })
