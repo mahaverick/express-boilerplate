@@ -1,10 +1,13 @@
 /**
- * @file The staff email routes: the role gate first on every route, then
- * the shared search limiter. `/health` is registered before `/:id`.
+ * @file The staff email routes: the role gate first on every route, the
+ * shared search limiter on reads, the JSON gate then the shared write
+ * limiter on writes, and no `requireRecentAuth` on resend (the service
+ * decides step-up per message). `/health` is registered before `/:id`.
  */
 import type { RequestHandler, Router } from 'express'
 import { describe, expect, it } from 'vitest'
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
+import { requireJsonContentType } from '@/middlewares/content-type.middleware'
 import { createRateLimiter, RATE_LIMITER_MARK } from '@/middlewares/rate-limit.middleware'
 import {
   createPlatformEmailRouter,
@@ -49,6 +52,15 @@ describe('createPlatformEmailRouter', () => {
     expect(handlers[1]).toBe(sharedSearchLimiter)
   })
 
+  it('post /:id/resend: role gate, JSON gate, the shared write limiter, the handler; no step-up gate', () => {
+    const handlers = handlersFor(createPlatformEmailRouter(limiters), 'post', '/:id/resend')
+
+    expect(handlers).toHaveLength(4)
+    expect(Object.hasOwn(handlers[0] ?? {}, RATE_LIMITER_MARK)).toBe(false)
+    expect(handlers[1]).toBe(requireJsonContentType)
+    expect(handlers[2]).toBe(sharedWriteLimiter)
+  })
+
   it('registers /health before /:id, so "health" is never parsed as an id', () => {
     const paths = layersOf(createPlatformEmailRouter(limiters)).map((layer) => layer.route?.path)
 
@@ -62,5 +74,18 @@ describe('createPlatformEmailSuppressionRouter', () => {
 
     expect(handlers).toHaveLength(3)
     expect(handlers[1]).toBe(sharedSearchLimiter)
+  })
+
+  it('post /:id/lift: role gate, JSON gate, then the shared write limiter', () => {
+    const handlers = handlersFor(
+      createPlatformEmailSuppressionRouter(limiters),
+      'post',
+      '/:id/lift'
+    )
+
+    expect(handlers).toHaveLength(4)
+    expect(Object.hasOwn(handlers[0] ?? {}, RATE_LIMITER_MARK)).toBe(false)
+    expect(handlers[1]).toBe(requireJsonContentType)
+    expect(handlers[2]).toBe(sharedWriteLimiter)
   })
 })

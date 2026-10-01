@@ -7,6 +7,7 @@
  * action's own gates, errors and audit entry. The only importer of
  * `platform-email.repository.ts`.
  */
+import { REAUTH_REQUIRED_CODE } from '@/constants/auth.constants'
 import {
   EMAIL_MESSAGE_GROUPS,
   type EmailMessageGroup,
@@ -16,6 +17,7 @@ import type { StatsRange } from '@/constants/platform.constants'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import { HttpError } from '@/errors/http-error'
 import { canActorGrantRole, canStaffMailTarget, isRoleAtLeast } from '@/policies/tenant.policy'
+import { EmailSuppressionRepository } from '@/repositories/email-suppression.repository'
 import {
   PlatformEmailRepository,
   type EmailPageCursor,
@@ -24,9 +26,17 @@ import {
   type PlatformSuppressionRecord,
   type ResendInvitationRow,
 } from '@/repositories/platform-email.repository'
+import { record } from '@/services/audit.service'
+import { withTransaction } from '@/services/database.service'
 import { renderForMessage, type MailMessage } from '@/services/mailer.service'
 import { utcDays } from '@/services/platform-stats.service'
-import { getPlatformMembership } from '@/services/platform.service'
+import {
+  platformTenantOrThrow,
+  resendUserVerification,
+  sendPasswordSetup,
+} from '@/services/platform-user.service'
+import { assertStillPlatformRole, getPlatformMembership } from '@/services/platform.service'
+import { resend as resendInvitation } from '@/services/tenant-invitation.service'
 import {
   buildInvitationAcceptUrl,
   buildPasswordResetUrl,
@@ -35,6 +45,7 @@ import {
 } from '@/services/verification.service'
 import { EMAIL_TEMPLATE_META } from '@/templates/email/email-template-meta.template'
 import type { Actor } from '@/types/actor'
+import type { EmailDelivery } from '@/types/email-delivery'
 import type {
   EmailGroupCounts,
   EmailHealth,
@@ -53,12 +64,15 @@ import {
   type EmailTemplateKey,
   type ResendAction,
 } from '@/utilities/email-template.utilities'
+import { hostnameDomain } from '@/utilities/email.utilities'
+import { isRecentAuth } from '@/utilities/recent-auth.utilities'
 import type {
   PlatformEmailSearchQuery,
   PlatformSuppressionSearchQuery,
 } from '@/validators/platform-email.validators'
 
 const platformEmailRepository = new PlatformEmailRepository()
+const emailSuppressionRepository = new EmailSuppressionRepository()
 
 /**
  * What a preview shows in place of a link's token.
@@ -75,7 +89,24 @@ export const INVITER_NAME_PLACEHOLDER = 'A teammate'
  */
 export const TEMPLATE_UNAVAILABLE_CODE = 'template_unavailable'
 
+/**
+ * Error code: the message cannot be resent (a security notice, or a row
+ * without the ids its action needs).
+ */
+export const NOT_RESENDABLE_CODE = 'not_resendable'
+
+/**
+ * Error code: the recipient's address is suppressed.
+ */
+export const RECIPIENT_SUPPRESSED_CODE = 'recipient_suppressed'
+
+/**
+ * Error code: the suppression was lifted already.
+ */
+export const ALREADY_LIFTED_CODE = 'already_lifted'
+
 const EMAIL_NOT_FOUND = 'Email not found'
+const SUPPRESSION_NOT_FOUND = 'Suppression not found'
 const DAY_MS = 24 * 60 * 60 * 1000
 const BREAKDOWN_LIMIT = 10
 const GROUP_NAMES = Object.keys(EMAIL_MESSAGE_GROUPS) as EmailMessageGroup[]
@@ -567,4 +598,171 @@ export async function searchSuppressions(
     nextCursor: encodeEmailCursor(page.nextCursor),
     prevCursor: encodeEmailCursor(page.prevCursor),
   }
+}
+
+/**
+ * Which user or invitation a resend acts on, or a 409 when the row lacks it.
+ * @param action - The template's resend action.
+ * @param message - The message.
+ * @returns The target ids.
+ * @throws {HttpError} 409 `not_resendable` when a needed id is missing (a row backfilled from before tracking, or a purged link).
+ */
+function resendTargetOf(
+  action: ResendAction,
+  message: PlatformEmailRecord
+):
+  | { action: 'verification' | 'password_setup'; userId: string }
+  | { action: 'invitation'; tenantId: string; invitationId: string } {
+  if (action === 'invitation') {
+    if (message.tenantId !== null && message.invitationId !== null) {
+      return { action, tenantId: message.tenantId, invitationId: message.invitationId }
+    }
+  } else if (message.userId !== null) {
+    return { action, userId: message.userId }
+  }
+  throw new HttpError('This email cannot be resent', 409, NOT_RESENDABLE_CODE)
+}
+
+/**
+ * Resend a token email by running the action that sent it, which issues a
+ * fresh token: resend-verification or password-setup for the user, or the
+ * invitation resend for the invitation. Password-setup sends `account_setup`
+ * or `password_reset` by the user's state now, which may differ from the
+ * original. The delegated action's gates, errors and audit entry apply
+ * unchanged; this adds an `email.resent` entry with the reason once it
+ * succeeds. Checks, in order: the message exists; its template is in the
+ * registry; it has a resend action and the ids it needs; the recipient is
+ * not suppressed; for an invitation, its tenant is active (the member
+ * route's `resolveTenant` gate) and, on the platform tenant, the caller
+ * signed in within the step-up window.
+ * @param actor - The signed-in staff admin.
+ * @param id - The message id.
+ * @param reason - Why, for the audit log.
+ * @param authTime - The access token's `auth_time` (`request.authTime`).
+ * @param now - The current time in ms; injectable for tests.
+ * @returns `emailSent` when the delegated action reports it; empty for an invitation, whose mail is queued without waiting.
+ * @throws {HttpError} 404 unknown message, or an invitation's tenant not active; 409 `template_unavailable`, `not_resendable` or `recipient_suppressed`; 401 `REAUTH_REQUIRED` for a platform-tenant invitation with a stale sign-in; and whatever the delegated action throws.
+ */
+export async function resendEmail(
+  actor: Actor,
+  id: string,
+  reason: string,
+  authTime: number | undefined,
+  now: number = Date.now()
+): Promise<Partial<EmailDelivery>> {
+  const message = await requireMessage(id)
+  if (!isKnownTemplateKey(message.templateKey)) {
+    throw new HttpError(
+      'This email template is no longer available',
+      409,
+      TEMPLATE_UNAVAILABLE_CODE
+    )
+  }
+  // Captured once narrowed: the audit entry is written in a callback, where a property's narrowing does not reach.
+  const templateKey = message.templateKey
+  const action = EMAIL_TEMPLATE_META[templateKey].resendAction
+  if (action === null) {
+    throw new HttpError('Security notices are never resent', 409, NOT_RESENDABLE_CODE)
+  }
+  const target = resendTargetOf(action, message)
+  if (await emailSuppressionRepository.findActive(message.recipient)) {
+    throw new HttpError(
+      'This address is suppressed; lift the suppression first',
+      409,
+      RECIPIENT_SUPPRESSED_CODE
+    )
+  }
+  const options = { resentFromId: message.id }
+
+  let delivery: Partial<EmailDelivery> = {}
+  switch (target.action) {
+    case 'verification': {
+      delivery = await resendUserVerification(actor, target.userId, options)
+      break
+    }
+    case 'password_setup': {
+      delivery = await sendPasswordSetup(actor, target.userId, options)
+      break
+    }
+    case 'invitation': {
+      const tenant = await platformEmailRepository.tenantState(target.tenantId)
+      if (tenant?.lifecycleState !== 'active') throw new HttpError('Tenant not found', 404)
+      if (tenant.isPlatform && !isRecentAuth(authTime, now)) {
+        throw new HttpError('Confirm your identity to continue', 401, REAUTH_REQUIRED_CODE)
+      }
+      await resendInvitation(actor, target.tenantId, target.invitationId, options)
+      break
+    }
+  }
+
+  // No role re-check here: the delegate enforced it and queued the mail, so the reason is recorded whatever happens to the role now.
+  await withTransaction(async (tx) => {
+    const platform = await platformTenantOrThrow(tx)
+    await record(
+      {
+        action: 'email.resent',
+        actor,
+        access: 'platform',
+        tenantId: platform.id,
+        targetId: message.id,
+        metadata: {
+          reason,
+          // eslint-disable-next-line unicorn/no-null -- stored as JSON null in the audit metadata
+          emailDomain: hostnameDomain(message.recipient) ?? null,
+          templateKey,
+        },
+      },
+      tx
+    )
+  })
+  return delivery
+}
+
+/**
+ * Lift an active suppression, so sends to the address go out again. One
+ * conditional UPDATE decides a race between two lifts; the loser gets 409.
+ * The actor's platform role is re-read under lock first, as every staff write does.
+ * @param actor - The signed-in staff admin.
+ * @param id - The suppression id.
+ * @param reason - Why, stored on the row and in the audit entry.
+ * @returns The lifted suppression.
+ * @throws {HttpError} 404 unknown suppression; 409 `already_lifted`.
+ */
+export async function liftSuppression(
+  actor: Actor,
+  id: string,
+  reason: string
+): Promise<EmailSuppressionView> {
+  await withTransaction(async (tx) => {
+    await assertStillPlatformRole(actor, 'admin', tx)
+    const lifted = await emailSuppressionRepository.lift(
+      id,
+      { liftedBy: actor.userId, liftReason: reason },
+      tx
+    )
+    if (!lifted) {
+      const existing = await platformEmailRepository.findSuppression(id, tx)
+      if (!existing) throw new HttpError(SUPPRESSION_NOT_FOUND, 404)
+      throw new HttpError('This suppression was lifted already', 409, ALREADY_LIFTED_CODE)
+    }
+    const platform = await platformTenantOrThrow(tx)
+    await record(
+      {
+        action: 'email.suppression_lifted',
+        actor,
+        access: 'platform',
+        tenantId: platform.id,
+        targetId: lifted.id,
+        metadata: {
+          reason,
+          // eslint-disable-next-line unicorn/no-null -- stored as JSON null in the audit metadata
+          emailDomain: hostnameDomain(lifted.address) ?? null,
+        },
+      },
+      tx
+    )
+  })
+  const view = await platformEmailRepository.findSuppression(id)
+  if (!view) throw new HttpError(SUPPRESSION_NOT_FOUND, 404)
+  return toSuppressionView(view)
 }

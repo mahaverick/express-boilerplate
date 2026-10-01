@@ -8,7 +8,9 @@ import { actorFrom } from '@/controllers/helpers.controller'
 import {
   getEmailDetail,
   getEmailHealth,
+  liftSuppression,
   previewEmail,
+  resendEmail,
   searchEmails,
   searchSuppressions,
 } from '@/services/platform-email.service'
@@ -19,12 +21,17 @@ import {
   platformEmailSearchSchema,
   platformSuppressionSearchSchema,
 } from '@/validators/platform-email.validators'
-import { parseIdParameter } from '@/validators/platform.validators'
+import { parseIdParameter, reasonBodySchema } from '@/validators/platform.validators'
 
 /**
  * The 404 a malformed or unknown message id answers.
  */
 const EMAIL_NOT_FOUND = 'Email not found'
+
+/**
+ * The 404 a malformed or unknown suppression id answers.
+ */
+const SUPPRESSION_NOT_FOUND = 'Suppression not found'
 
 /**
  * Handlers for the staff email routes.
@@ -63,11 +70,34 @@ class PlatformEmailController extends BaseController {
   })
 
   /**
+   * `POST /platform/emails/:id/resend`: run the action that sent it again. 202: the mail is queued, not sent.
+   */
+  resendEmail = this.handle(async (request, response) => {
+    const id = parseIdParameter(request.params.id, EMAIL_NOT_FOUND)
+    const { reason } = parseBody(reasonBodySchema, request.body)
+    const result = await resendEmail(actorFrom(request), id, reason, request.authTime)
+    successResponse(response, result, 'Resend requested.', 202)
+  })
+
+  /**
    * `GET /platform/email-suppressions`: search suppressions, newest first.
    */
   searchSuppressions = this.handle(async (request, response) => {
     const query = parseBody(platformSuppressionSearchSchema, request.query)
     successResponse(response, await searchSuppressions(query), 'Suppressions retrieved.')
+  })
+
+  /**
+   * `POST /platform/email-suppressions/:id/lift`: let mail reach the address again.
+   */
+  liftSuppression = this.handle(async (request, response) => {
+    const id = parseIdParameter(request.params.id, SUPPRESSION_NOT_FOUND)
+    const { reason } = parseBody(reasonBodySchema, request.body)
+    successResponse(
+      response,
+      await liftSuppression(actorFrom(request), id, reason),
+      'Suppression lifted.'
+    )
   })
 }
 

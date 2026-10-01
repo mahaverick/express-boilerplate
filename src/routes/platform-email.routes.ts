@@ -3,11 +3,14 @@
  * `/api/v1/platform/emails`, and `createPlatformEmailSuppressionRouter`, at
  * `/api/v1/platform/email-suppressions`, both by `createPlatformRouter`
  * behind its router-wide `requireAuth`. Each route names its own role gate
- * and runs it first, before the limiter, so a refused caller gets the
- * plain 404 with no `RateLimit-*` headers.
+ * and runs it first, before the JSON gate and the limiter, so a refused
+ * caller gets the plain 404. The resend route has no `requireRecentAuth`:
+ * only a resend of a platform-tenant invitation needs a recent sign-in, and
+ * the service decides that per message.
  */
 import { Router } from 'express'
 import { platformEmailController } from '@/controllers/platform-email.controller'
+import { requireJsonContentType } from '@/middlewares/content-type.middleware'
 import { requirePlatformRole } from '@/middlewares/platform.middleware'
 import type { PlatformLimiters } from '@/routes/platform-user.routes'
 
@@ -43,6 +46,13 @@ export function createPlatformEmailRouter(limiters: PlatformLimiters): Router {
     limiters.searchLimiter,
     platformEmailController.previewEmail
   )
+  router.post(
+    '/:id/resend',
+    requirePlatformRole('admin'),
+    requireJsonContentType,
+    limiters.writeLimiter,
+    platformEmailController.resendEmail
+  )
   return router
 }
 
@@ -58,6 +68,13 @@ export function createPlatformEmailSuppressionRouter(limiters: PlatformLimiters)
     requirePlatformRole('viewer'),
     limiters.searchLimiter,
     platformEmailController.searchSuppressions
+  )
+  router.post(
+    '/:id/lift',
+    requirePlatformRole('admin'),
+    requireJsonContentType,
+    limiters.writeLimiter,
+    platformEmailController.liftSuppression
   )
   return router
 }

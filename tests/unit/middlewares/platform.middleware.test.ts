@@ -82,13 +82,19 @@ const TARGET_ID = '0b9c8f36-3c55-4d7e-9a0f-2f3c1d5e6a7b'
  * @param method - The request method.
  * @param status - The status the response finishes with.
  * @param isAdmitted - Whether the role gate marked the response.
+ * @param originalUrl - The request path and query.
  * @returns The 'Staff write' calls logged.
  */
-function logged(method: string, status: number, isAdmitted: boolean): unknown[][] {
+function logged(
+  method: string,
+  status: number,
+  isAdmitted: boolean,
+  originalUrl = `/api/v1/platform/users/${TARGET_ID}/reactivate?x=1`
+): unknown[][] {
   const info = vi.spyOn(logger, 'info').mockImplementation(() => {})
   const request = {
     method,
-    originalUrl: `/api/v1/platform/users/${TARGET_ID}/reactivate?x=1`,
+    originalUrl,
     user: { id: 'actor-1' },
   } as unknown as Request
   const finishListeners: (() => void)[] = []
@@ -126,6 +132,15 @@ describe('logStaffWrites', () => {
         },
       ],
     ])
+  })
+
+  it.each([
+    ['tenants', 'suspend', 'tenant'],
+    ['emails', 'resend', 'email_message'],
+    ['email-suppressions', 'lift', 'email_suppression'],
+  ])('names a /platform/%s/:id target as %s → %s', (collection, verb, targetType) => {
+    const [call] = logged('POST', 202, true, `/api/v1/platform/${collection}/${TARGET_ID}/${verb}`)
+    expect(call?.[1]).toMatchObject({ targetType, targetId: TARGET_ID })
   })
 
   it('logs nothing for a write the role gate did not admit, even a 2xx', () => {
