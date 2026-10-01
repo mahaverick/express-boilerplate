@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0](https://github.com/mahaverick/express-boilerplate/compare/v1.2.1...v1.3.0) (2026-10-01)
+
+
+### Features
+
+* message tracking (Apex SP3) ([#69](https://github.com/mahaverick/express-boilerplate/issues/69)) ([e839e89](https://github.com/mahaverick/express-boilerplate/commit/e839e89627eb3b2aa013c9f0b672c57a9b8e25ba))
+
 ## [1.2.1](https://github.com/mahaverick/express-boilerplate/compare/v1.2.0...v1.2.1) (2026-10-01)
 
 
