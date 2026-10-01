@@ -350,20 +350,16 @@ second time under the lock, then run `pnpm db:migrate`.
   in a quiet window. The hand-added function replacement takes only a brief
   lock.
 
-- **`0020` blocks writes to `email_logs` until the batch commits, and every
-  read and write on `audit_logs` while its target-type CHECK is swapped.**
-  The backfill copies every `email_logs` row into `email_messages` and then
-  updates every `email_logs` row, so mail-log writes wait for both, for the
-  foreign key's validation and for `email_logs_message_id_idx` to build. The
-  CHECK swap at the end takes an `ACCESS EXCLUSIVE` lock on `audit_logs` and
-  validates every audit row. The table's size is bounded by
-  `RETENTION_EMAIL_LOGS_DAYS`; on a large database, build the index by hand
-  first, on its own, outside any transaction (the `0020` file creates it with
-  `IF NOT EXISTS`), and apply the migration in a quiet window:
-
-  ```sql
-  CREATE INDEX CONCURRENTLY IF NOT EXISTS email_logs_message_id_idx ON email_logs (message_id);
-  ```
+- **`0020` blocks reads and writes on `email_logs` until its transaction
+  commits, and on `audit_logs` while its target-type CHECK is swapped.**
+  `ALTER TABLE email_logs ADD COLUMN` takes an `ACCESS EXCLUSIVE` lock that
+  the migration's transaction holds to the end, so mail recording, the
+  retention purge, a user purge and stats on `email_logs` all wait for the
+  whole backfill (the copy into `email_messages`, the update, the foreign
+  key's validation and the index build). The CHECK swap at the end takes the
+  same lock on `audit_logs` and validates every audit row. Apply it in a
+  quiet window. `email_logs` is bounded by `RETENTION_EMAIL_LOGS_DAYS`, so
+  letting retention prune first shortens the backfill.
 
 ## Test database
 

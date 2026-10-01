@@ -85,7 +85,7 @@ CREATE INDEX "email_messages_resent_from_id_idx" ON "email_messages" USING btree
 CREATE INDEX "email_messages_created_at_idx" ON "email_messages" USING btree ("created_at");--> statement-breakpoint
 CREATE UNIQUE INDEX "email_suppressions_active_address_unique" ON "email_suppressions" USING btree ("address") WHERE "email_suppressions"."lifted_at" is null;--> statement-breakpoint
 ALTER TABLE "email_logs" ADD CONSTRAINT "email_logs_message_id_email_messages_id_fk" FOREIGN KEY ("message_id") REFERENCES "public"."email_messages"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "email_logs_message_id_idx" ON "email_logs" USING btree ("message_id");--> statement-breakpoint
+CREATE INDEX "email_logs_message_id_idx" ON "email_logs" USING btree ("message_id");--> statement-breakpoint
 -- Hand-ordered: the audit target-type CHECK is swapped last, after the backfill.
 ALTER TABLE "audit_logs" DROP CONSTRAINT "audit_logs_target_type_check";--> statement-breakpoint
 ALTER TABLE "audit_logs" ADD CONSTRAINT "audit_logs_target_type_check" CHECK ("audit_logs"."target_type" is null or "audit_logs"."target_type" in ('tenant', 'membership', 'invitation', 'settings', 'user', 'email_message', 'email_suppression'));
