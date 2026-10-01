@@ -525,6 +525,18 @@ const EnvSchema = z.object({
     ),
 
   /**
+   * Optional: absent leaves POST /api/v1/webhooks/email/resend answering
+   * 404. Shape-checked here so a pasted API key (`re_…`) fails at boot, not
+   * as a 401 on every delivery event.
+   */
+  RESEND_WEBHOOK_SECRET: z
+    .string()
+    .regex(/^whsec_[A-Za-z\d+/]+={0,2}$/, 'must be a Resend signing secret: whsec_ then base64')
+    .optional()
+    .describe(
+      "Signing secret of the Resend webhook endpoint (Resend dashboard, Webhooks, the endpoint's signing secret: whsec_ followed by base64). Enables POST /api/v1/webhooks/email/resend, which verifies each event's Svix signature with it; absent, that route answers 404. Subscribe the endpoint to the email.* events: delivered, delivery_delayed, bounced, complained, opened, clicked, failed and suppressed."
+    ),
+  /**
    * Not a credential: the fake adapter is registered only where
    * `isFakeEmailWebhookAllowed` holds (APP_ENV local), so this value signs
    * nothing that any deployed API accepts.

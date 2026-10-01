@@ -24,6 +24,7 @@ import { EmailMessageRepository } from '@/repositories/email-message.repository'
 import { EmailSuppressionRepository } from '@/repositories/email-suppression.repository'
 import { withTransaction, type DbTransaction } from '@/services/database.service'
 import { createFakeEmailWebhookAdapter } from '@/services/email-webhook-fake.service'
+import { createResendEmailWebhookAdapter } from '@/services/email-webhook-resend.service'
 import { logger } from '@/services/logger.service'
 import type {
   EmailWebhookAdapter,
@@ -73,16 +74,22 @@ export interface StatusChange {
 /**
  * The environment the registry reads.
  */
-export type EmailWebhookEnv = Pick<Env, 'APP_ENV' | 'FAKE_EMAIL_WEBHOOK_SECRET'>
+export type EmailWebhookEnv = Pick<
+  Env,
+  'APP_ENV' | 'FAKE_EMAIL_WEBHOOK_SECRET' | 'RESEND_WEBHOOK_SECRET'
+>
 
 /**
- * Every adapter this environment registers, enabled or not. The fake adapter
+ * Every adapter this environment registers, enabled or not. Resend is
+ * always registered and enabled by `RESEND_WEBHOOK_SECRET`; the fake adapter
  * is registered only where `isFakeEmailWebhookAllowed` holds.
  * @param env - The validated environment.
  * @returns The registered adapters.
  */
 export function emailWebhookAdapters(env: EmailWebhookEnv): EmailWebhookAdapter[] {
-  const adapters: EmailWebhookAdapter[] = []
+  const adapters: EmailWebhookAdapter[] = [
+    createResendEmailWebhookAdapter({ secret: env.RESEND_WEBHOOK_SECRET }),
+  ]
   if (isFakeEmailWebhookAllowed(env)) {
     adapters.push(createFakeEmailWebhookAdapter({ secret: env.FAKE_EMAIL_WEBHOOK_SECRET }))
   }

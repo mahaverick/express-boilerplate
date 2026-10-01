@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import {
   EnvSchemaShape,
@@ -630,5 +631,21 @@ describe('the fake email webhook', () => {
     ['prod', false],
   ] as const)('isFakeEmailWebhookAllowed on %s is %s', (appEnv, expected) => {
     expect(isFakeEmailWebhookAllowed({ APP_ENV: appEnv })).toBe(expected)
+  })
+})
+
+describe('RESEND_WEBHOOK_SECRET', () => {
+  it('is optional', () => {
+    expect(parseEnv(valid).RESEND_WEBHOOK_SECRET).toBeUndefined()
+  })
+
+  it('accepts a whsec_ secret and refuses anything else, naming the variable', () => {
+    const secret = `whsec_${randomBytes(24).toString('base64')}`
+    expect(parseEnv({ ...valid, RESEND_WEBHOOK_SECRET: secret }).RESEND_WEBHOOK_SECRET).toBe(secret)
+    for (const wrong of [randomBytes(24).toString('base64'), 're_notasigningsecret', 'whsec_']) {
+      expect(() => parseEnv({ ...valid, RESEND_WEBHOOK_SECRET: wrong })).toThrow(
+        /RESEND_WEBHOOK_SECRET/
+      )
+    }
   })
 })

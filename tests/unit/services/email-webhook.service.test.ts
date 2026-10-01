@@ -4,6 +4,7 @@
  * transaction runs against Postgres in
  * tests/integration/api/email-webhook.test.ts.
  */
+import { randomBytes } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import type { AppEnv } from '@/configs/env.config'
 import {
@@ -42,6 +43,18 @@ describe('emailWebhookAdapters', () => {
     )
     expect(getEmailWebhookAdapter('fake', envFor(appEnv))).toBeUndefined()
   })
+
+  it.each(['local', 'dev', 'qa', 'prod'] as const)(
+    'registers Resend on %s, enabled only by RESEND_WEBHOOK_SECRET',
+    (appEnv) => {
+      const secret = `whsec_${randomBytes(24).toString('base64')}`
+      expect(getEmailWebhookAdapter('resend', envFor(appEnv))).toBeUndefined()
+      expect(
+        getEmailWebhookAdapter('resend', { ...envFor(appEnv), RESEND_WEBHOOK_SECRET: secret })
+          ?.provider
+      ).toBe('resend')
+    }
+  )
 
   it.each(['', 'nope', 'FAKE', 'constructor'])('has no adapter for %j', (provider) => {
     expect(getEmailWebhookAdapter(provider, envFor('local'))).toBeUndefined()
