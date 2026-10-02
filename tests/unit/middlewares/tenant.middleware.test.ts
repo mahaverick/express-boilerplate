@@ -43,6 +43,13 @@ const mockTenant: Tenant = {
   website: null,
   lifecycleState: 'active',
   isPlatform: false,
+  onboardingTracked: false,
+  // eslint-disable-next-line unicorn/no-null -- an untracked tenant has no onboarding clock.
+  onboardingStartedAt: null,
+  // eslint-disable-next-line unicorn/no-null -- see comment above.
+  onboardingDismissedAt: null,
+  // eslint-disable-next-line unicorn/no-null -- see comment above.
+  onboardingDismissedBy: null,
   // eslint-disable-next-line unicorn/no-null -- Tenant.deletedAt is a `Date | null` soft-delete column.
   deletedAt: null,
   createdAt: new Date('2026-01-01T00:00:00Z'),

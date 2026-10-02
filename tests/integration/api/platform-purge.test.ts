@@ -559,3 +559,71 @@ describe('email tracking rows in a purge', () => {
     expect(await survivingMessages([invitation, other])).toEqual([other])
   })
 })
+
+describe('onboarding rows in a purge', () => {
+  it("removes the user's member-step rows and clears completed_by and onboarding_dismissed_by", async () => {
+    const { token } = await createTrackedStaff('owner')
+    const gone = await deletedUserWithHistory()
+    const [memberRow] = await sql<{ id: string }[]>`
+      insert into onboarding_completions (tenant_id, user_id, step_key, source, completed_by)
+      values (${gone.tenantId}, ${gone.id}, 'read_getting_started', 'customer', ${gone.id})
+      returning id`
+    const [staffRow] = await sql<{ id: string }[]>`
+      insert into onboarding_completions (tenant_id, step_key, source, completed_by, reason)
+      values (${gone.tenantId}, 'configure_settings', 'staff', ${gone.id}, 'On a call')
+      returning id`
+    await sql`
+      update tenants set onboarding_dismissed_at = now(), onboarding_dismissed_by = ${gone.id}
+      where id = ${gone.tenantId}`
+    if (!memberRow || !staffRow) throw new Error('fixture insert returned no row')
+
+    const response = await purgeUser(token, gone.id)
+
+    expect(response.status).toBe(200)
+    expect(await sql`select 1 from onboarding_completions where id = ${memberRow.id}`).toHaveLength(
+      0
+    )
+    const [kept] =
+      await sql`select completed_by from onboarding_completions where id = ${staffRow.id}`
+    // eslint-disable-next-line unicorn/no-null -- the foreign key sets it to SQL NULL
+    expect(kept).toEqual({ completed_by: null })
+    const [tenant] = await sql`
+      select onboarding_dismissed_by, onboarding_dismissed_at is not null as is_dismissed
+      from tenants where id = ${gone.tenantId}`
+    // eslint-disable-next-line unicorn/no-null -- the foreign key sets it to SQL NULL
+    expect(tenant).toEqual({ onboarding_dismissed_by: null, is_dismissed: true })
+  })
+
+  it("removes an archived tenant's completions and leaves another tenant's", async () => {
+    const { token } = await createTrackedStaff('owner')
+    const member = await createTrackedUser()
+    const tenant = await tenantRepository.create({
+      name: 'Onboarded Co',
+      slug: `onboarded-${randomUUID()}`,
+      ownerId: member.id,
+    })
+    tenantIds.push(tenant.id)
+    const neighbour = await tenantRepository.create({
+      name: 'Neighbour Co',
+      slug: `neighbour-${randomUUID()}`,
+      ownerId: member.id,
+    })
+    tenantIds.push(neighbour.id)
+    for (const tenantId of [tenant.id, neighbour.id]) {
+      await sql`
+        insert into onboarding_completions (tenant_id, step_key, source)
+        values (${tenantId}, 'invite_teammate', 'auto')`
+    }
+    await sql`update tenants set lifecycle_state = 'archived', deleted_at = now() where id = ${tenant.id}`
+
+    const response = await purgeTenant(token, tenant.id)
+
+    expect(response.status).toBe(200)
+    expect(
+      await sql`select 1 from onboarding_completions where tenant_id = ${tenant.id}`
+    ).toHaveLength(0)
+    expect(
+      await sql`select 1 from onboarding_completions where tenant_id = ${neighbour.id}`
+    ).toHaveLength(1)
+  })
+})

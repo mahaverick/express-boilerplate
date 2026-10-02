@@ -54,6 +54,18 @@ const VALID_METADATA: Record<AuditAction, Record<string, unknown>> = {
     templateKey: 'email_verification',
   },
   'email.suppression_lifted': { reason: 'Mailbox fixed, ticket 812', emailDomain: 'example.test' },
+  'onboarding.dismissed': {},
+  'onboarding.undismissed': {},
+  'onboarding.step_completed': {
+    reason: 'Customer configured it on a call',
+    stepKey: 'configure_settings',
+  },
+  'onboarding.reminder_sent': {
+    reason: 'Stuck for two weeks',
+    recipientCount: 2,
+    emailDomains: ['example.test', 'acme.example'],
+    messageIds: ['message-1', 'message-2'],
+  },
 }
 
 const ACTIONS = Object.keys(AUDIT_ACTIONS) as AuditAction[]
@@ -75,6 +87,10 @@ describe('AUDIT_ACTIONS', () => {
       'invitation.revoked',
       'member.removed',
       'member.role_changed',
+      'onboarding.dismissed',
+      'onboarding.reminder_sent',
+      'onboarding.step_completed',
+      'onboarding.undismissed',
       'platform.member.auto_joined',
       'platform.member.granted',
       'tenant.accessed_by_platform',
@@ -137,6 +153,8 @@ describe('AUDIT_ACTIONS', () => {
     'tenant.purged',
     'email.resent',
     'email.suppression_lifted',
+    'onboarding.step_completed',
+    'onboarding.reminder_sent',
   ] as const)('%s refuses an empty or over-long reason', (action) => {
     const schema = AUDIT_ACTIONS[action].metadata
     const valid = VALID_METADATA[action]
@@ -193,6 +211,30 @@ describe('AUDIT_ACTIONS', () => {
   it('targets email messages and suppressions', () => {
     expect(AUDIT_ACTIONS['email.resent'].target).toBe('email_message')
     expect(AUDIT_ACTIONS['email.suppression_lifted'].target).toBe('email_suppression')
+  })
+
+  it('files every onboarding action against the tenant', () => {
+    expect(AUDIT_ACTIONS['onboarding.dismissed'].target).toBe('tenant')
+    expect(AUDIT_ACTIONS['onboarding.undismissed'].target).toBe('tenant')
+    expect(AUDIT_ACTIONS['onboarding.step_completed'].target).toBe('tenant')
+    expect(AUDIT_ACTIONS['onboarding.reminder_sent'].target).toBe('tenant')
+  })
+
+  it.each(['Configure_Settings', 'configure-settings', `k${'a'.repeat(64)}`])(
+    'onboarding.step_completed refuses the step key %j',
+    (stepKey) => {
+      const schema = AUDIT_ACTIONS['onboarding.step_completed'].metadata
+      const valid = VALID_METADATA['onboarding.step_completed']
+      expect(schema.safeParse({ ...valid, stepKey }).success).toBe(false)
+    }
+  )
+
+  it('onboarding.reminder_sent records domains only, never an address', () => {
+    const schema = AUDIT_ACTIONS['onboarding.reminder_sent'].metadata
+    const valid = VALID_METADATA['onboarding.reminder_sent']
+    expect(schema.safeParse({ ...valid, emailDomains: ['ada@example.test'] }).success).toBe(false)
+    expect(schema.safeParse({ ...valid, emailDomains: [], messageIds: [] }).success).toBe(true)
+    expect(schema.safeParse({ ...valid, recipientCount: -1 }).success).toBe(false)
   })
 
   it('targets users, tenants and invitations as the plan says', () => {

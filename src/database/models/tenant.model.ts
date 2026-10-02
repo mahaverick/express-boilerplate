@@ -15,6 +15,7 @@ import {
   varchar,
 } from 'drizzle-orm/pg-core'
 import { TENANT_LIFECYCLE_STATES } from '@/constants/tenant.constants'
+import { userModel } from '@/database/models/user.model'
 
 /**
  * `TENANT_LIFECYCLE_STATES` as a literal SQL value list, outside the CHECK's
@@ -62,6 +63,25 @@ export const tenantModel = pgTable(
      * The one staff tenant. `tenants_single_platform` allows at most one row.
      */
     isPlatform: boolean('is_platform').notNull().default(false),
+    /**
+     * Whether onboarding is tracked for this tenant. False by default, so a
+     * tenant created before onboarding existed stays untracked; both create
+     * paths set it (tenant.repository.ts). Never true for the platform tenant.
+     */
+    onboardingTracked: boolean('onboarding_tracked').notNull().default(false),
+    /**
+     * When the onboarding clock started: at creation for a customer-created
+     * tenant, at the first owner's accept for a staff-created one. No default.
+     */
+    onboardingStartedAt: timestamp('onboarding_started_at', { withTimezone: true }),
+    onboardingDismissedAt: timestamp('onboarding_dismissed_at', { withTimezone: true }),
+    /**
+     * The owner who dismissed the checklist; null once that user is purged.
+     */
+    onboardingDismissedBy: varchar('onboarding_dismissed_by', { length: 36 }).references(
+      () => userModel.id,
+      { onDelete: 'set null' }
+    ),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -80,6 +100,10 @@ export const tenantModel = pgTable(
     check(
       'tenants_platform_active',
       sql`not ${table.isPlatform} or (${table.lifecycleState} = 'active' and ${table.deletedAt} is null)`
+    ),
+    check(
+      'tenants_platform_untracked',
+      sql`not ${table.isPlatform} or not ${table.onboardingTracked}`
     ),
     index('tenants_name_trgm_idx')
       .using('gin', sql`lower(${table.name}) gin_trgm_ops`)

@@ -3,6 +3,10 @@
  * constraints, and the metadata schema of every audited action.
  */
 import { z } from 'zod'
+import {
+  ONBOARDING_STEP_KEY_MAX_LENGTH,
+  ONBOARDING_STEP_KEY_PATTERN,
+} from '@/constants/onboarding.constants'
 import { MEMBERSHIP_ROLES } from '@/constants/tenant.constants'
 import { EMAIL_TEMPLATE_KEYS } from '@/utilities/email-template.utilities'
 import { EMAIL_DOMAIN_PATTERN } from '@/utilities/email.utilities'
@@ -66,6 +70,17 @@ const changedFields = z.array(z.string().regex(/^[a-z][A-Za-z\d]{0,63}$/)).max(3
  * this re-checks only the bounds.
  */
 const reason = z.string().min(1).max(500)
+
+/**
+ * An onboarding step key, in the registry's shape.
+ */
+const stepKey = z.string().max(ONBOARDING_STEP_KEY_MAX_LENGTH).regex(ONBOARDING_STEP_KEY_PATTERN)
+
+/**
+ * The most reminder emails one entry lists: one per active owner, bounded so
+ * a runaway list cannot bloat the row.
+ */
+const MAX_REMINDER_RECIPIENTS = 1000
 
 /**
  * Every audited action: the kind of record it targets and the strict schema
@@ -172,6 +187,21 @@ export const AUDIT_ACTIONS = {
   'email.suppression_lifted': {
     target: 'email_suppression',
     metadata: z.strictObject({ reason, emailDomain: invitationEmailDomain }),
+  },
+  'onboarding.dismissed': { target: 'tenant', metadata: z.strictObject({}) },
+  'onboarding.undismissed': { target: 'tenant', metadata: z.strictObject({}) },
+  'onboarding.step_completed': {
+    target: 'tenant',
+    metadata: z.strictObject({ reason, stepKey }),
+  },
+  'onboarding.reminder_sent': {
+    target: 'tenant',
+    metadata: z.strictObject({
+      reason,
+      recipientCount: z.number().int().min(0).max(MAX_REMINDER_RECIPIENTS),
+      emailDomains: z.array(emailDomain).max(MAX_REMINDER_RECIPIENTS),
+      messageIds: z.array(id).max(MAX_REMINDER_RECIPIENTS),
+    }),
   },
 } as const satisfies Record<string, { target: AuditTargetType; metadata: z.ZodType }>
 

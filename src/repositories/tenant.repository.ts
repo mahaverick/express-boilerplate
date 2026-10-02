@@ -59,13 +59,18 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
   }
 
   /**
-   * Insert the tenant row and its settings row in `tx`.
+   * Insert the tenant row and its settings row in `tx`. Every tenant created
+   * here is tracked for onboarding; its clock starts now when it has an owner
+   * already, and otherwise when the first owner accepts (`startOnboarding`).
    * @param input - The tenant's initial columns.
+   * @param onboarding - Whether the onboarding clock starts at creation.
+   * @param onboarding.isStarted - True when the tenant is created with its owner.
    * @param tx - The transaction.
    * @returns The new tenant.
    */
   private async insertTenantAndSettings(
     input: Omit<CreateTenantInput, 'ownerId'>,
+    onboarding: { isStarted: boolean },
     tx: DbTransaction
   ): Promise<Tenant> {
     const [tenant] = await tx
@@ -76,6 +81,9 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
         description: input.description,
         logo: input.logo,
         website: input.website,
+        onboardingTracked: true,
+        // now() is the transaction's start, so it equals created_at.
+        ...(onboarding.isStarted && { onboardingStartedAt: sql`now()` }),
       })
       .returning()
     if (!tenant) throw new HttpError('Insert returned no row', 500)
@@ -240,7 +248,7 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
   async create(input: CreateTenantInput, executor: DbExecutor = db): Promise<Tenant> {
     return this.withSlugConflict(() =>
       withTransaction(async (tx) => {
-        const tenant = await this.insertTenantAndSettings(input, tx)
+        const tenant = await this.insertTenantAndSettings(input, { isStarted: true }, tx)
         await tx.insert(userMembershipModel).values({
           userId: input.ownerId,
           tenantId: tenant.id,
@@ -264,8 +272,58 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
     executor: DbExecutor = db
   ): Promise<Tenant> {
     return this.withSlugConflict(() =>
-      withTransaction((tx) => this.insertTenantAndSettings(input, tx), executor)
+      withTransaction(
+        (tx) => this.insertTenantAndSettings(input, { isStarted: false }, tx),
+        executor
+      )
     )
+  }
+
+  /**
+   * Start a tracked tenant's onboarding clock, once: a tenant already started,
+   * or not tracked, is left alone. `updatedAt` is not touched, since the
+   * tenant's own fields did not change.
+   * @param tenantId - The tenant.
+   * @param at - When the clock starts.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns True when this call started the clock.
+   */
+  async startOnboarding(tenantId: string, at: Date, executor: DbExecutor = db): Promise<boolean> {
+    const rows = await executor
+      .update(tenantModel)
+      .set({ onboardingStartedAt: at })
+      .where(
+        and(
+          eq(tenantModel.id, tenantId),
+          eq(tenantModel.onboardingTracked, true),
+          isNull(tenantModel.onboardingStartedAt)
+        )
+      )
+      .returning({ id: tenantModel.id })
+    return rows.length > 0
+  }
+
+  /**
+   * Record or clear the onboarding checklist's dismissal. The caller checks
+   * the current state under its lock. `updatedAt` is not touched.
+   * @param tenantId - The tenant.
+   * @param by - The owner dismissing it, or null to clear.
+   * @param at - When it was dismissed, or null to clear.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns The updated tenant, or undefined when no live tenant has this id.
+   */
+  async setOnboardingDismissed(
+    tenantId: string,
+    by: string | null,
+    at: Date | null,
+    executor: DbExecutor = db
+  ): Promise<Tenant | undefined> {
+    const [row] = await executor
+      .update(tenantModel)
+      .set({ onboardingDismissedBy: by, onboardingDismissedAt: at })
+      .where(this.scope(eq(tenantModel.id, tenantId)))
+      .returning()
+    return row
   }
 
   /**
