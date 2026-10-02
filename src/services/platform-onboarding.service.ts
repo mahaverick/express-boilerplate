@@ -17,6 +17,7 @@ import {
   type OnboardingRange,
   type OnboardingState,
   type OnboardingStep,
+  type OnboardingTrigger,
 } from '@/constants/onboarding.constants'
 import type { OnboardingTenantStateFilter } from '@/constants/platform.constants'
 import type { TenantLifecycleState } from '@/constants/tenant.constants'
@@ -889,41 +890,61 @@ export interface OnboardingReconcileResult {
 }
 
 /**
- * The tenant steps whose automatic trigger the database still shows for one
- * tenant: `tenant_settings_updated` from a settings change after creation,
- * `teammate_invited` from a non-owner invitation on file or a second live
- * member, `teammate_joined` from a second live member.
- * @param candidate - What the reconcile read about the tenant.
- * @param candidate.hasSettingsChange - Its settings changed after it was created.
- * @param candidate.hasTeammateInvitation - It has a non-owner invitation on file.
- * @param candidate.memberCount - Its live members.
- * @returns The step keys, in registry order per trigger.
+ * A tenant step the reconcile restores, dated by the event that proves it.
  */
-export function reconcileStepKeysOf(candidate: {
-  hasSettingsChange: boolean
-  hasTeammateInvitation: boolean
-  memberCount: number
-}): string[] {
-  const hasTeammate = candidate.memberCount > 1
-  const triggers = [
-    ...(candidate.hasSettingsChange ? (['tenant_settings_updated'] as const) : []),
-    ...(hasTeammate || candidate.hasTeammateInvitation ? (['teammate_invited'] as const) : []),
-    ...(hasTeammate ? (['teammate_joined'] as const) : []),
+export interface ReconcileCompletion {
+  stepKey: string
+  completedAt: Date
+}
+
+/**
+ * The tenant steps whose automatic trigger is provably on file for one
+ * tenant, each dated when it happened: `tenant_settings_updated` at the
+ * earliest member settings save, `teammate_invited` at the earliest member
+ * teammate invitation, and `teammate_joined` when the second member joined,
+ * or at the clock's start when that came later (the first owner's accept
+ * on a staff-created tenant completes it then).
+ * @param candidate - What the reconcile read about the tenant.
+ * @param candidate.startedAt - When its onboarding clock started.
+ * @param candidate.settingsUpdatedAt - Its earliest member settings save since then, or null.
+ * @param candidate.teammateInvitedAt - Its earliest member teammate invitation since then, or null.
+ * @param candidate.secondJoinAt - When its second member joined, or null.
+ * @returns The steps and their times, in registry order per trigger.
+ */
+export function reconcileCompletionsOf(candidate: {
+  startedAt: Date
+  settingsUpdatedAt: Date | null
+  teammateInvitedAt: Date | null
+  secondJoinAt: Date | null
+}): ReconcileCompletion[] {
+  const joinedAt =
+    candidate.secondJoinAt &&
+    new Date(Math.max(candidate.secondJoinAt.getTime(), candidate.startedAt.getTime()))
+  const triggers: [OnboardingTrigger, Date | null][] = [
+    ['tenant_settings_updated', candidate.settingsUpdatedAt],
+    ['teammate_invited', candidate.teammateInvitedAt],
+    ['teammate_joined', joinedAt],
   ]
-  return triggers.flatMap((trigger) =>
-    stepsForTrigger(trigger)
-      .filter((step) => step.scope === 'tenant')
-      .map((step) => step.key)
+  return triggers.flatMap(([trigger, at]) =>
+    at === null
+      ? []
+      : stepsForTrigger(trigger)
+          .filter((step) => step.scope === 'tenant')
+          .map((step) => ({ stepKey: step.key, completedAt: at }))
   )
 }
 
 /**
- * Re-derive the automatic tenant steps of every live, tracked, started
- * customer tenant from what the database still shows, best effort, for
- * when a subscriber failed after its request committed: each step
- * `reconcileStepKeysOf` finds is completed as `auto` through
- * `completeOnboardingStep`, which leaves one already done alone. A failure
- * is logged and counted, and the sweep goes on. For `pnpm onboarding:reconcile`.
+ * Re-complete the automatic tenant steps of every live, tracked, started
+ * customer tenant from what members provably did, for when a subscriber
+ * failed after its request committed: each step `reconcileCompletionsOf`
+ * finds is completed as `auto` through `completeOnboardingStep`, stamped
+ * with its source event's time, and one already done is left alone. Only
+ * member actions count: a settings save or an invitation by staff through
+ * platform access is never credited. Best effort: it reads the audit log,
+ * so an entry pruned by `RETENTION_AUDIT_LOGS_DAYS` leaves no trace (a
+ * join falls back to its membership row). A failure is logged and counted,
+ * and the sweep goes on. For `pnpm onboarding:reconcile`.
  * @returns What it did.
  */
 export async function reconcileOnboarding(): Promise<OnboardingReconcileResult> {
@@ -931,12 +952,13 @@ export async function reconcileOnboarding(): Promise<OnboardingReconcileResult> 
   let stepsRestored = 0
   let failures = 0
   for (const candidate of candidates) {
-    for (const stepKey of reconcileStepKeysOf(candidate)) {
+    for (const { stepKey, completedAt } of reconcileCompletionsOf(candidate)) {
       try {
         const completion = await completeOnboardingStep({
           tenantId: candidate.tenantId,
           stepKey,
           source: 'auto',
+          completedAt,
         })
         if (completion !== undefined) stepsRestored += 1
       } catch (error) {

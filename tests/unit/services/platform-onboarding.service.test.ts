@@ -1,7 +1,8 @@
 /**
  * @file The pure parts of the staff onboarding service: the registry as
  * keys, the stuck cut-off, the next required step, days stuck, the
- * reminder rule and the recipients' domains. No database.
+ * reminder rule, the recipients' domains and the reconcile's dated steps.
+ * No database.
  */
 import { describe, expect, it } from 'vitest'
 import type { OnboardingStep } from '@/constants/onboarding.constants'
@@ -9,6 +10,7 @@ import {
   daysStuckOf,
   emailDomainsOf,
   nextRequiredStep,
+  reconcileCompletionsOf,
   registryKeysOf,
   REMINDER_INTERVAL_MS,
   reminderBlockOf,
@@ -160,5 +162,41 @@ describe('emailDomainsOf', () => {
     expect(
       emailDomainsOf(['ada@Example.test', 'grace@other.test', 'linus@example.test', 'no-domain'])
     ).toEqual(['example.test', 'other.test'])
+  })
+})
+
+describe('reconcileCompletionsOf', () => {
+  const startedAt = new Date('2026-09-01T00:00:00.000Z')
+  const nothing = {
+    startedAt,
+    settingsUpdatedAt: NONE,
+    teammateInvitedAt: NONE,
+    secondJoinAt: NONE,
+  }
+
+  it('restores nothing when nothing is on file', () => {
+    expect(reconcileCompletionsOf(nothing)).toEqual([])
+  })
+
+  it('dates each default tenant step by its source event', () => {
+    const settingsUpdatedAt = new Date('2026-09-02T00:00:00.000Z')
+    const teammateInvitedAt = new Date('2026-09-03T00:00:00.000Z')
+    const secondJoinAt = new Date('2026-09-04T00:00:00.000Z')
+
+    expect(
+      reconcileCompletionsOf({ startedAt, settingsUpdatedAt, teammateInvitedAt, secondJoinAt })
+    ).toEqual([
+      { stepKey: 'configure_settings', completedAt: settingsUpdatedAt },
+      { stepKey: 'invite_teammate', completedAt: teammateInvitedAt },
+      { stepKey: 'teammate_joined', completedAt: secondJoinAt },
+    ])
+  })
+
+  it('dates teammate_joined at the start when the second member joined before the clock started', () => {
+    const secondJoinAt = new Date(startedAt.getTime() - DAY_MS)
+
+    expect(reconcileCompletionsOf({ ...nothing, secondJoinAt })).toEqual([
+      { stepKey: 'teammate_joined', completedAt: startedAt },
+    ])
   })
 })

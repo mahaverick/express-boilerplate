@@ -16,8 +16,7 @@ import type { PageDirection } from '@/constants/platform.constants'
 import type { MembershipRole, TenantLifecycleState } from '@/constants/tenant.constants'
 import { auditLogModel } from '@/database/models/audit-log.model'
 import { onboardingCompletionModel } from '@/database/models/onboarding-completion.model'
-import { tenantInvitationModel } from '@/database/models/tenant-invitation.model'
-import { tenantModel, tenantSettingsModel } from '@/database/models/tenant.model'
+import { tenantModel } from '@/database/models/tenant.model'
 import { userMembershipModel } from '@/database/models/user-membership.model'
 import { userModel } from '@/database/models/user.model'
 import { db, type DbExecutor } from '@/services/database.service'
@@ -150,13 +149,25 @@ export interface OnboardingFunnelCounts {
 }
 
 /**
- * What the reconcile reads about one tracked, started tenant.
+ * What the reconcile reads about one tracked, started tenant: when each
+ * automatic trigger provably first happened, or null when nothing on file
+ * proves it.
  */
 export interface OnboardingReconcileRow {
   tenantId: string
-  hasSettingsChange: boolean
-  hasTeammateInvitation: boolean
-  memberCount: number
+  startedAt: Date
+  /**
+   * The earliest `tenant.settings_updated` entry with member access, at or after the start.
+   */
+  settingsUpdatedAt: Date | null
+  /**
+   * The earliest `invitation.created` entry with member access, at or after the start.
+   */
+  teammateInvitedAt: Date | null
+  /**
+   * When the tenant's second member joined, whenever that was.
+   */
+  secondJoinAt: Date | null
 }
 
 /**
@@ -713,36 +724,60 @@ export class PlatformOnboardingRepository {
 
   /**
    * What the reconcile re-derives from, for every live, tracked, started
-   * customer tenant: whether its settings changed after it was created,
-   * whether it has a non-owner invitation still on file (settled ones are
-   * purged after `RETENTION_INVITATIONS_DAYS`), and its live member count.
+   * customer tenant, read only from records of what members did: the
+   * earliest member-access `tenant.settings_updated` and `invitation.created`
+   * audit entries at or after the clock's start (staff acting through
+   * platform access record `access = 'platform'`, so they never count), and
+   * when the second member joined. A join is dated by its
+   * `invitation.accepted` entry (always member access; its target is the
+   * membership) and, when retention has pruned that entry, by the
+   * membership's `created_at`; a membership with neither is gone and cannot
+   * be counted. Every membership but a tenant's first comes from an accept,
+   * since members join by invitation only. Bounded by audit retention
+   * (`RETENTION_AUDIT_LOGS_DAYS`; 0 keeps entries forever).
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns One row per tenant.
    */
   async reconcileCandidates(executor: DbExecutor = db): Promise<OnboardingReconcileRow[]> {
-    const teammateInvitation = executor
-      .select({ id: tenantInvitationModel.id })
-      .from(tenantInvitationModel)
-      .where(
-        and(
-          eq(tenantInvitationModel.tenantId, tenantModel.id),
-          sql`${tenantInvitationModel.role} <> 'owner'`
-        )
-      )
-    const liveMembers = executor
-      .select({ count: sql<number>`count(*)::int` })
-      .from(userMembershipModel)
-      .innerJoin(userModel, eq(userModel.id, userMembershipModel.userId))
-      .where(and(eq(userMembershipModel.tenantId, tenantModel.id), isNull(userModel.deletedAt)))
-    return executor
+    // Spelled out: drizzle renders a one-table select's columns unqualified, binding them inside.
+    const earliestMemberEntry = (action: 'tenant.settings_updated' | 'invitation.created') =>
+      sql<Date | null>`(
+        select min(entry.occurred_at) from audit_logs entry
+        where entry.tenant_id = "tenants"."id"
+          and entry.action = ${action}
+          and entry.access = 'member'
+          and entry.occurred_at >= "tenants"."onboarding_started_at"
+      )`.mapWith(auditLogModel.occurredAt)
+    // One join time per membership: its accept entry's when on file (rank 0), else its row's.
+    const secondJoinAt = sql<Date | null>`(
+      select joins.joined_at from (
+        select distinct on (dated.membership_id) dated.membership_id, dated.joined_at
+        from (
+          select membership.id as membership_id, membership.created_at as joined_at, 1 as rank
+          from user_memberships membership
+          where membership.tenant_id = "tenants"."id"
+          union all
+          select entry.target_id, entry.occurred_at, 0
+          from audit_logs entry
+          where entry.tenant_id = "tenants"."id"
+            and entry.action = 'invitation.accepted'
+            and entry.access = 'member'
+            and entry.target_id is not null
+        ) dated
+        order by dated.membership_id, dated.rank
+      ) joins
+      order by joins.joined_at
+      offset 1 limit 1
+    )`.mapWith(userMembershipModel.createdAt)
+    const rows = await executor
       .select({
         tenantId: tenantModel.id,
-        hasSettingsChange: sql<boolean>`${tenantSettingsModel.updatedAt} > ${tenantModel.createdAt}`,
-        hasTeammateInvitation: sql<boolean>`exists ${teammateInvitation}`,
-        memberCount: sql<number>`(${liveMembers})`.mapWith(Number),
+        startedAt: tenantModel.onboardingStartedAt,
+        settingsUpdatedAt: earliestMemberEntry('tenant.settings_updated'),
+        teammateInvitedAt: earliestMemberEntry('invitation.created'),
+        secondJoinAt,
       })
       .from(tenantModel)
-      .innerJoin(tenantSettingsModel, eq(tenantSettingsModel.tenantId, tenantModel.id))
       .where(
         and(
           eq(tenantModel.isPlatform, false),
@@ -751,5 +786,6 @@ export class PlatformOnboardingRepository {
           sql`${tenantModel.onboardingStartedAt} is not null`
         )
       )
+    return rows.flatMap((row) => (row.startedAt ? [{ ...row, startedAt: row.startedAt }] : []))
   }
 }

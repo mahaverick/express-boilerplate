@@ -1,11 +1,12 @@
 /**
- * @file `pnpm onboarding:reconcile`: re-derive the default automatic
- * onboarding steps of every tracked tenant from what the database still
- * shows (`reconcileOnboarding`, platform-onboarding.service.ts), for when
- * a subscriber failed after its request committed. Best effort: settled
- * invitations are purged after `RETENTION_INVITATIONS_DAYS`, so an old
- * invitation leaves no trace. Prints counts only, never a tenant or an
- * address.
+ * @file `pnpm onboarding:reconcile`: re-complete the default automatic
+ * onboarding steps of every tracked, started tenant from what members
+ * provably did (`reconcileOnboarding`, platform-onboarding.service.ts),
+ * each dated when it happened, for when a subscriber failed after its
+ * request committed. Staff actions through platform access never count.
+ * Best effort: it reads the audit log, so an entry pruned under
+ * `RETENTION_AUDIT_LOGS_DAYS` leaves no trace. Prints counts only, never a
+ * tenant or an address.
  */
 import { fileURLToPath } from 'node:url'
 import { closeDatabase } from '@/services/database.service'

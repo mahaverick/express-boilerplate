@@ -90,6 +90,12 @@ export interface CompleteOnboardingStepInput {
    * Required for `staff`.
    */
   reason?: string | undefined
+  /**
+   * When the step was done. Only the reconcile passes it, to date a
+   * restored step by the event that proves it; every live path leaves it
+   * out and the row is stamped now.
+   */
+  completedAt?: Date | undefined
 }
 
 /**
@@ -141,6 +147,7 @@ export async function completeOnboardingStep(
       source: input.source,
       completedBy: input.source === 'auto' ? undefined : input.completedBy,
       reason: input.reason,
+      completedAt: input.completedAt,
     },
     executor
   )

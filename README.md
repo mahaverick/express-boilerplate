@@ -310,13 +310,19 @@ affected email row is marked failed, and the response says `emailSent:
 false`.
 
 **`pnpm onboarding:reconcile`.** Subscribers run after the request commits
-and never fail it; one that fails only logs. The reconcile script re-derives
-the default automatic tenant steps of every live, tracked, started
-customer tenant (one still `awaiting_owner` is skipped) from what the database
-still shows: `configure_settings` from a settings change after creation,
-`invite_teammate` from a non-owner invitation still on file or a second
-member, `teammate_joined` from a second member. It is best effort:
-settled invitations are purged after `RETENTION_INVITATIONS_DAYS`.
+and never fail it; one that fails only logs. The reconcile script
+re-completes the default automatic tenant steps of every live, tracked,
+started customer tenant (one still `awaiting_owner` is skipped) from what
+members provably did, each stamped with the time it happened:
+`configure_settings` from the earliest settings save audited with member
+access, `invite_teammate` from the earliest teammate invitation audited with
+member access (both since the clock started), and `teammate_joined` from the
+second member's join (its `invitation.accepted` entry, else its membership's
+`created_at`), or the clock's start when that came later. Settings saves and
+invitations by staff through platform access are never credited. It is best
+effort: it reads the audit log, so entries pruned under
+`RETENTION_AUDIT_LOGS_DAYS` (0, the default, keeps them forever) leave no
+trace, and a restored old event leaves a stuck tenant stuck.
 
 ## Make this yours
 
