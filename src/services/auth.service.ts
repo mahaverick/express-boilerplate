@@ -22,6 +22,7 @@ import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { record } from '@/services/audit.service'
 import { withTransaction, type DbTransaction } from '@/services/database.service'
+import { emitDomainEvent } from '@/services/domain-events.service'
 import { logger } from '@/services/logger.service'
 import { autoJoinSafely, getPlatformMembership } from '@/services/platform.service'
 import {
@@ -134,9 +135,11 @@ function isAddressTaken(error: unknown): boolean {
  * A free and a taken address get the same reply; only the mail differs. The
  * user row and its 'email' provider row commit together or not at all.
  * `providerId` is lowercased here as well as by `emailSchema`, so this
- * insert stays correct if that schema changes.
+ * insert stays correct if that schema changes. `user_signed_up` is emitted
+ * inside the returned follow-up, after the reply: emitting it before would
+ * make a free address measurably slower to answer than a taken one.
  * @param input - The validated registration body.
- * @returns The follow-up mail, for the controller to start after replying; it never rejects.
+ * @returns The follow-up work (the sign-up event and the mail), for the controller to start after replying; it never rejects.
  */
 export async function register(input: RegisterInput): Promise<() => Promise<void>> {
   const passwordHash = await hashPassword(input.password)
@@ -172,6 +175,13 @@ export async function register(input: RegisterInput): Promise<() => Promise<void
   if (created) {
     const user = created
     return async () => {
+      // Never rejects: a failing subscriber is logged by the seam.
+      await emitDomainEvent({
+        type: 'user_signed_up',
+        userId: user.id,
+        method: 'password',
+        at: user.createdAt,
+      })
       try {
         await sendVerificationMail(user, input.app)
       } catch (error) {
@@ -251,6 +261,12 @@ export async function login(input: LoginInput): Promise<LoginResult> {
   })
   const accessToken = signAccessToken(user, sessionId, refreshToken.authenticatedAt)
   const platformRole = await platformRoleForLogin(user.id)
+  await emitDomainEvent({
+    type: 'user_signed_in',
+    userId: user.id,
+    method: 'password',
+    at: new Date(),
+  })
   return { user, accessToken, refreshToken, platformRole }
 }
 
@@ -384,6 +400,7 @@ export async function resetPassword(input: ResetPasswordInput): Promise<void> {
     return revokeSessionRows(user.id, {}, tx)
   })
   await denySessionsAfterCommit(user.id, revokedSessionIds)
+  await emitDomainEvent({ type: 'password_reset_completed', userId: user.id, at: new Date() })
 }
 
 /**
@@ -443,6 +460,7 @@ export async function changePassword(
     return revokeSessionRows(user.id, revokeOptions, tx)
   })
   await denySessionsAfterCommit(user.id, revokedSessionIds)
+  await emitDomainEvent({ type: 'password_changed', userId: user.id, at: new Date() })
 
   const notificationJob = addNotificationJob({
     userId: user.id,

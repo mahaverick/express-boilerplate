@@ -2,8 +2,10 @@
  * @file The analytics event builder, which is pure apart from one warn log:
  * audit action mapping and renames, the event-name collision rule, the
  * common properties, `has_reason`, the tenant group and staff-status rows,
- * snake_case keys, and the PII guard, property-tested over metadata
- * generated from every audit action's own schema.
+ * product and email events, the one property shape both sources of
+ * `onboarding_step_completed` share, snake_case keys, and the PII guard,
+ * property-tested over metadata generated from every audit action's own
+ * schema.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { z } from 'zod'
@@ -26,11 +28,15 @@ import type { AuditLog } from '@/database/models/audit-log.model'
 import {
   auditEventName,
   buildAuditEvents,
+  buildEmailEvent,
+  buildProductEvent,
   buildTenantGroupIdentify,
+  commonProperties,
   scrubPiiProperties,
   toSnakeCaseKeys,
 } from '@/services/analytics/analytics-event-builder.service'
 import { logger } from '@/services/logger.service'
+import type { ProductDomainEvent } from '@/types/domain-event'
 import { EMAIL_TEMPLATE_KEYS } from '@/utilities/email-template.utilities'
 
 const OCCURRED_AT = new Date('2026-10-02T09:00:00.000Z')
@@ -548,5 +554,301 @@ describe('the PII guard over every audit action', () => {
         expect(typeof event.properties.has_reason).toBe('boolean')
       }
     }
+  })
+})
+
+describe('buildProductEvent', () => {
+  const person = {
+    isStaff: true,
+    platformRole: 'viewer' as const,
+    isEmailVerified: true,
+    authProvider: 'google' as const,
+    createdAt: OCCURRED_AT,
+  }
+
+  it("gives a sign-up its method, invitation flag and the user's server-owned person properties", () => {
+    const row = buildProductEvent(
+      { type: 'user_signed_up', userId: ACTOR_ID, method: 'google', at: OCCURRED_AT },
+      TRACE,
+      'member',
+      { person, isViaInvitation: true }
+    )
+
+    expect(row).toEqual({
+      event: 'user_signed_up',
+      distinctId: ACTOR_ID,
+      occurredAt: OCCURRED_AT,
+      properties: {
+        method: 'google',
+        via_invitation: true,
+        $set: {
+          is_staff: true,
+          platform_role: 'viewer',
+          email_verified: true,
+          auth_provider: 'google',
+        },
+        $set_once: { created_at: OCCURRED_AT.toISOString() },
+        source: 'product',
+        access: 'member',
+        app: 'api',
+        trace_id: TRACE.traceId,
+        span_id: TRACE.spanId,
+        $session_id: TRACE.posthogSessionId,
+      },
+    })
+  })
+
+  it('defaults via_invitation to false and leaves person properties off when none were read', () => {
+    const row = buildProductEvent(
+      { type: 'user_signed_up', userId: ACTOR_ID, method: 'password', at: OCCURRED_AT },
+      {}
+    )
+    expect(row.properties).toMatchObject({ method: 'password', via_invitation: false })
+    expect(row.properties).not.toHaveProperty('$set')
+    expect(row.properties).not.toHaveProperty('$set_once')
+  })
+
+  it('gives a sign-in its method and person properties, but no invitation flag', () => {
+    const row = buildProductEvent(
+      { type: 'user_signed_in', userId: ACTOR_ID, method: 'password', at: OCCURRED_AT },
+      {},
+      'member',
+      { person: { ...person, authProvider: 'password' } }
+    )
+    expect(row.properties).toMatchObject({
+      method: 'password',
+      $set: { auth_provider: 'password' },
+    })
+    expect(row.properties).not.toHaveProperty('via_invitation')
+  })
+
+  it.each([
+    'user_signed_out',
+    'password_changed',
+    'password_reset_completed',
+    'email_verified',
+  ] as const)('sends %s as the user with only the common properties and no group', (type) => {
+    const row = buildProductEvent({ type, userId: ACTOR_ID, at: OCCURRED_AT }, {})
+    expect(row).toEqual({
+      event: type,
+      distinctId: ACTOR_ID,
+      occurredAt: OCCURRED_AT,
+      properties: { source: 'product', access: 'member', app: 'api' },
+    })
+  })
+
+  it('never sets person properties on an event other than a sign-up or sign-in', () => {
+    const row = buildProductEvent(
+      { type: 'password_changed', userId: ACTOR_ID, at: OCCURRED_AT },
+      {},
+      'member',
+      { person }
+    )
+    expect(row.properties).not.toHaveProperty('$set')
+  })
+
+  it('sends an onboarding completion in its tenant group as the member who completed it', () => {
+    const row = buildProductEvent(
+      {
+        type: 'onboarding_step_completed',
+        tenantId: TENANT_ID,
+        userId: ACTOR_ID,
+        stepKey: 'configure_settings',
+        how: 'auto',
+        required: true,
+        at: OCCURRED_AT,
+      },
+      {}
+    )
+    expect(row).toEqual({
+      event: 'onboarding_step_completed',
+      distinctId: ACTOR_ID,
+      occurredAt: OCCURRED_AT,
+      properties: {
+        step_key: 'configure_settings',
+        how: 'auto',
+        required: true,
+        source: 'product',
+        access: 'member',
+        app: 'api',
+        $groups: { tenant: TENANT_ID },
+      },
+    })
+  })
+
+  it('sends a reconciled completion, which has no user, as a system event', () => {
+    const row = buildProductEvent(
+      {
+        type: 'onboarding_step_completed',
+        tenantId: TENANT_ID,
+        userId: NONE,
+        stepKey: 'invite_teammate',
+        how: 'auto',
+        required: true,
+        at: OCCURRED_AT,
+      },
+      {}
+    )
+    expect(row).toMatchObject({
+      distinctId: 'system',
+      properties: { access: 'system', $process_person_profile: false },
+    })
+  })
+
+  it('gives every product event snake_case keys only', () => {
+    const events: ProductDomainEvent[] = [
+      { type: 'user_signed_up', userId: ACTOR_ID, method: 'password', at: OCCURRED_AT },
+      { type: 'user_signed_in', userId: ACTOR_ID, method: 'google', at: OCCURRED_AT },
+      { type: 'user_signed_out', userId: ACTOR_ID, at: OCCURRED_AT },
+      { type: 'password_changed', userId: ACTOR_ID, at: OCCURRED_AT },
+      { type: 'password_reset_completed', userId: ACTOR_ID, at: OCCURRED_AT },
+      { type: 'email_verified', userId: ACTOR_ID, at: OCCURRED_AT },
+      {
+        type: 'onboarding_step_completed',
+        tenantId: TENANT_ID,
+        userId: ACTOR_ID,
+        stepKey: 'read_getting_started',
+        how: 'manual',
+        required: false,
+        at: OCCURRED_AT,
+      },
+    ]
+    expect(
+      events.map((event) => event.type).toSorted((left, right) => left.localeCompare(right))
+    ).toEqual([...PRODUCT_EVENTS].toSorted((left, right) => left.localeCompare(right)))
+    for (const event of events) {
+      const row = buildProductEvent(event, TRACE, 'member', { person, isViaInvitation: false })
+      for (const key of Object.keys(row.properties)) expect(key).toMatch(SNAKE_KEY)
+    }
+  })
+})
+
+describe('onboarding_step_completed from both sources', () => {
+  it('shares one snake_case property shape: step_key, how, required', () => {
+    const common = new Set(
+      Object.keys(
+        commonProperties({
+          source: 'audit',
+          access: 'platform',
+          distinctId: ACTOR_ID,
+          tenantId: TENANT_ID,
+          context: TRACE,
+        })
+      )
+    )
+    const [audited] = buildAuditEvents(
+      auditRow(
+        'onboarding.step_completed',
+        { reason: 'Done on a call', stepKey: 'invite_teammate' },
+        { access: 'platform' }
+      ),
+      TRACE
+    )
+    const product = buildProductEvent(
+      {
+        type: 'onboarding_step_completed',
+        tenantId: TENANT_ID,
+        userId: ACTOR_ID,
+        stepKey: 'invite_teammate',
+        how: 'manual',
+        required: true,
+        at: OCCURRED_AT,
+      },
+      TRACE
+    )
+    const own = (properties: Record<string, unknown>, extra: string[]): string[] =>
+      Object.keys(properties)
+        .filter((key) => !common.has(key) && !extra.includes(key))
+        .toSorted((left, right) => left.localeCompare(right))
+
+    expect(audited?.event).toBe(product.event)
+    expect(own(audited?.properties ?? {}, ['target_type', 'target_id', 'has_reason'])).toEqual([
+      'how',
+      'required',
+      'step_key',
+    ])
+    expect(own(product.properties, [])).toEqual(['how', 'required', 'step_key'])
+    expect(audited?.properties).toMatchObject({
+      step_key: 'invite_teammate',
+      how: 'manual',
+      required: true,
+    })
+  })
+})
+
+describe('buildEmailEvent', () => {
+  it("sends a stored event as the message's user, in its tenant, with no recipient or detail", () => {
+    const row = buildEmailEvent(
+      {
+        type: 'bounced',
+        messageId: TARGET_ID,
+        templateKey: 'tenant_invitation',
+        userId: ACTOR_ID,
+        tenantId: TENANT_ID,
+        bounceKind: 'hard',
+        occurredAt: OCCURRED_AT,
+      },
+      { traceId: TRACE.traceId, spanId: TRACE.spanId }
+    )
+    expect(row).toEqual({
+      event: 'email_bounced',
+      distinctId: ACTOR_ID,
+      occurredAt: OCCURRED_AT,
+      properties: {
+        template_key: 'tenant_invitation',
+        message_id: TARGET_ID,
+        bounce_kind: 'hard',
+        source: 'email',
+        access: 'system',
+        app: 'api',
+        $groups: { tenant: TENANT_ID },
+        trace_id: TRACE.traceId,
+        span_id: TRACE.spanId,
+      },
+    })
+  })
+
+  it('sends a message with no user as a system event without a group or bounce kind', () => {
+    const row = buildEmailEvent(
+      {
+        type: 'delivered',
+        messageId: TARGET_ID,
+        templateKey: 'registration_attempt',
+        userId: NONE,
+        tenantId: NONE,
+        bounceKind: NONE,
+        occurredAt: OCCURRED_AT,
+      },
+      {}
+    )
+    expect(row).toEqual({
+      event: 'email_delivered',
+      distinctId: 'system',
+      occurredAt: OCCURRED_AT,
+      properties: {
+        template_key: 'registration_attempt',
+        message_id: TARGET_ID,
+        source: 'email',
+        access: 'system',
+        app: 'api',
+        $process_person_profile: false,
+      },
+    })
+  })
+
+  it.each(EMAIL_EVENT_TYPES)('names a %s event email_<type>', (type) => {
+    const row = buildEmailEvent(
+      {
+        type,
+        messageId: TARGET_ID,
+        templateKey: 'email_verification',
+        userId: NONE,
+        tenantId: NONE,
+        bounceKind: NONE,
+        occurredAt: OCCURRED_AT,
+      },
+      {}
+    )
+    expect(row.event).toBe(`${EMAIL_EVENT_PREFIX}${type}`)
   })
 })

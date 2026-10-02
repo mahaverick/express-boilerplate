@@ -6,9 +6,11 @@
  * request committed. Staff actions through platform access never count.
  * Best effort: it reads the audit log, so an entry pruned under
  * `RETENTION_AUDIT_LOGS_DAYS` leaves no trace. Prints counts only, never a
- * tenant or an address.
+ * tenant or an address. It registers the analytics forwarder, so each
+ * restored step reaches the analytics outbox as a server app's would.
  */
 import { fileURLToPath } from 'node:url'
+import { registerAnalyticsSubscribers } from '@/services/analytics/analytics-forwarder.service'
 import { closeDatabase } from '@/services/database.service'
 import { reconcileOnboarding } from '@/services/platform-onboarding.service'
 
@@ -22,6 +24,7 @@ const USAGE = 'Usage: pnpm onboarding:reconcile'
 export async function runOnboardingReconcile(argv: readonly string[]): Promise<number> {
   try {
     if (argv.some((argument) => argument !== '--')) throw new Error(USAGE)
+    registerAnalyticsSubscribers()
     const result = await reconcileOnboarding()
     process.stdout.write(
       `Checked ${result.tenantsChecked} tenants; restored ${result.stepsRestored} steps.\n`

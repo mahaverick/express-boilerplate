@@ -194,6 +194,23 @@ export class TenantInvitationRepository {
   }
 
   /**
+   * Whether any tenant holds a redeemable (pending, unexpired) invitation
+   * for an address, compared case-insensitively. For analytics only: it
+   * tells whether a new account's address had been invited.
+   * @param email - The address, in any case.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns True when at least one such invitation exists.
+   */
+  async hasRedeemableForEmail(email: string, executor: DbExecutor = db): Promise<boolean> {
+    const [row] = await executor
+      .select({ id: invitation.id })
+      .from(invitation)
+      .where(and(sql`lower(${invitation.email}) = lower(${email})`, redeemableCondition()))
+      .limit(1)
+    return row !== undefined
+  }
+
+  /**
    * A redeemable invitation by its token hash: pending, not expired, and for
    * a tenant that is not soft-deleted and is active.
    * @param tokenHash - SHA-256 hex of the raw token.

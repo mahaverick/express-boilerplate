@@ -43,6 +43,7 @@ import { logger } from '@/services/logger.service'
 import type { MailMessage } from '@/services/mailer.service'
 import {
   completeOnboardingStep,
+  emitStepCompleted,
   MEMBER_STEP_CODE,
   NOT_TRACKED_CODE,
 } from '@/services/onboarding.service'
@@ -944,7 +945,8 @@ export function reconcileCompletionsOf(candidate: {
  * platform access is never credited. Best effort: it reads the audit log,
  * so an entry pruned by `RETENTION_AUDIT_LOGS_DAYS` leaves no trace (a
  * join falls back to its membership row). A failure is logged and counted,
- * and the sweep goes on. For `pnpm onboarding:reconcile`.
+ * and the sweep goes on. Each restored step emits `onboarding_step_completed`
+ * with no user, dated when it happened. For `pnpm onboarding:reconcile`.
  * @returns What it did.
  */
 export async function reconcileOnboarding(): Promise<OnboardingReconcileResult> {
@@ -960,7 +962,11 @@ export async function reconcileOnboarding(): Promise<OnboardingReconcileResult> 
           source: 'auto',
           completedAt,
         })
-        if (completion !== undefined) stepsRestored += 1
+        if (completion !== undefined) {
+          stepsRestored += 1
+          // eslint-disable-next-line unicorn/no-null -- the event's "no user": the reconcile acts for nobody
+          await emitStepCompleted(completion, 'auto', null)
+        }
       } catch (error) {
         failures += 1
         logger.error('Reconciling an onboarding step failed', {

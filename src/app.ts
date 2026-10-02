@@ -15,6 +15,7 @@ import { requestContext } from '@/middlewares/request-context.middleware'
 import { requestId } from '@/middlewares/request-id.middleware'
 import { createEmailWebhookRouter } from '@/routes/email-webhook.routes'
 import { createApiRouter } from '@/routes/index.routes'
+import { registerAnalyticsSubscribers } from '@/services/analytics/analytics-forwarder.service'
 import { isDatabaseReachable } from '@/services/database.service'
 import { isShuttingDown } from '@/services/lifecycle.service'
 import { registerOnboardingSubscribers } from '@/services/onboarding.service'
@@ -31,12 +32,14 @@ import { isRedisReachable } from '@/services/redis.service'
  * at boot. `/health` stays shallow so a database blip never restarts a
  * healthy process; `/health/ready` checks every dependency, since failing it
  * only removes the pod from rotation. It also registers the domain-event
- * subscribers (`registerOnboardingSubscribers`), which is idempotent.
+ * subscribers (`registerOnboardingSubscribers`, `registerAnalyticsSubscribers`),
+ * which is idempotent.
  * @returns A configured app with no listening socket.
  */
 export function createApp(): Express {
   // Here, not in index.ts, so every test that builds the app has the subscribers too.
   registerOnboardingSubscribers()
+  registerAnalyticsSubscribers()
 
   const app = express()
 

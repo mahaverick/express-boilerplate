@@ -1,7 +1,7 @@
 /**
  * @file Every PII rule of the analytics pipeline, in one place: pure
- * functions from an audit row (and, later, product and email events) to the
- * outbox rows sent to PostHog. Every property key is snake_case; every
+ * functions from an audit row, a product domain event or a stored email
+ * event to the outbox rows sent to PostHog. Every property key is snake_case; every
  * server event carries `source`, `access`, `app: 'api'`, the tenant group
  * when there is one, and the trace and browser session that caused it.
  * `scrubPiiProperties` drops banned keys and address-shaped values from the
@@ -10,6 +10,7 @@
  */
 import {
   AUDIT_EVENT_RENAMES,
+  EMAIL_EVENT_PREFIX,
   PII_PROPERTY_KEYS,
   SYSTEM_DISTINCT_ID,
 } from '@/constants/analytics.constants'
@@ -21,9 +22,13 @@ import { logger } from '@/services/logger.service'
 import type {
   AnalyticsContext,
   AuditEventExtras,
+  EmailEventInput,
+  ProductEventExtras,
+  ServerPersonProperties,
   StaffStatusSnapshot,
   TenantGroupSnapshot,
 } from '@/types/analytics'
+import type { DomainEventAccess, ProductDomainEvent } from '@/types/domain-event'
 
 /**
  * Where a server event came from.
@@ -308,4 +313,122 @@ export function buildAuditEvents(
     rows.push(buildStaffStatusSet(extras.staffStatus, context, entry.access, entry.occurredAt))
   }
   return rows
+}
+
+/**
+ * The event-specific properties of a product event: only its typed fields,
+ * in snake_case.
+ * @param event - The product event.
+ * @param isViaInvitation - For a sign-up, whether an invitation was waiting.
+ * @returns The properties, not yet scrubbed.
+ */
+function productProperties(
+  event: ProductDomainEvent,
+  isViaInvitation: boolean
+): Record<string, unknown> {
+  switch (event.type) {
+    case 'user_signed_up': {
+      return { method: event.method, via_invitation: isViaInvitation }
+    }
+    case 'user_signed_in': {
+      return { method: event.method }
+    }
+    case 'onboarding_step_completed': {
+      return { step_key: event.stepKey, how: event.how, required: event.required }
+    }
+    default: {
+      return {}
+    }
+  }
+}
+
+/**
+ * The `$set` and `$set_once` a sign-up or sign-in carries for its own user.
+ * @param person - The user's server-owned properties.
+ * @returns The two person-property maps.
+ */
+function personProperties(person: ServerPersonProperties): Record<string, unknown> {
+  return {
+    $set: {
+      is_staff: person.isStaff,
+      platform_role: person.platformRole,
+      email_verified: person.isEmailVerified,
+      auth_provider: person.authProvider,
+    },
+    $set_once: { created_at: person.createdAt.toISOString() },
+  }
+}
+
+/**
+ * The outbox row for one product domain event. A user-level event belongs
+ * to its user and joins no group; an onboarding completion joins its
+ * tenant, and one with no user (the reconcile) is a system event.
+ * @param event - The product event, as emitted after commit.
+ * @param context - The trace and session it happened in.
+ * @param access - How the actor reached the tenant (`member` for a user-level event).
+ * @param extras - Person properties and the invitation flag, for a sign-up or sign-in.
+ * @returns The row.
+ */
+export function buildProductEvent(
+  event: ProductDomainEvent,
+  context: AnalyticsContext,
+  access: DomainEventAccess = 'member',
+  extras: ProductEventExtras = {}
+): NewAnalyticsOutboxRow {
+  const distinctId = event.userId ?? SYSTEM_DISTINCT_ID
+  const tenantId = event.type === 'onboarding_step_completed' ? event.tenantId : undefined
+  const isPersonEvent = event.type === 'user_signed_up' || event.type === 'user_signed_in'
+  return {
+    event: event.type,
+    distinctId,
+    occurredAt: event.at,
+    properties: {
+      ...scrubbed(event.type, productProperties(event, extras.isViaInvitation ?? false)),
+      ...(isPersonEvent && extras.person && personProperties(extras.person)),
+      ...commonProperties({
+        source: 'product',
+        access: distinctId === SYSTEM_DISTINCT_ID ? 'system' : access,
+        distinctId,
+        tenantId,
+        context,
+      }),
+    },
+  }
+}
+
+/**
+ * The outbox row for one stored email event, `email_<type>`. It belongs to
+ * the message's user, or is a system event when the message has none, and
+ * joins the message's tenant when it has one. It never carries the
+ * recipient, subject or provider detail.
+ * @param input - The stored event and its message's ids and template.
+ * @param context - The trace of the webhook request.
+ * @returns The row.
+ */
+export function buildEmailEvent(
+  input: EmailEventInput,
+  context: AnalyticsContext
+): NewAnalyticsOutboxRow {
+  const event = `${EMAIL_EVENT_PREFIX}${input.type}`
+  const distinctId = input.userId ?? SYSTEM_DISTINCT_ID
+  const own: Record<string, unknown> = {
+    template_key: input.templateKey,
+    message_id: input.messageId,
+  }
+  if (input.bounceKind !== null) own.bounce_kind = input.bounceKind
+  return {
+    event,
+    distinctId,
+    occurredAt: input.occurredAt,
+    properties: {
+      ...scrubbed(event, own),
+      ...commonProperties({
+        source: 'email',
+        access: 'system',
+        distinctId,
+        tenantId: input.tenantId ?? undefined,
+        context,
+      }),
+    },
+  }
 }

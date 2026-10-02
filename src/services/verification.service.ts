@@ -12,6 +12,7 @@ import { addNotificationJob } from '@/jobs/notification.job'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { db, type DbExecutor } from '@/services/database.service'
+import { emitDomainEvent } from '@/services/domain-events.service'
 import { logger } from '@/services/logger.service'
 import { autoJoinSafely } from '@/services/platform.service'
 import { claimToken, issueToken } from '@/services/session.service'
@@ -169,7 +170,9 @@ export async function markEmailVerified(userId: string, executor: DbExecutor = d
  *
  * Claim FIRST, compare SECOND: one presentation is one attempt, so a wrong
  * password spends the token. The dummy hash runs when there is no user, so
- * an unknown token costs the same bcrypt time as a real one.
+ * an unknown token costs the same bcrypt time as a real one. A link that
+ * verifies a still-unverified account emits `email_verified`; one for an
+ * account already verified emits nothing.
  * @param token - The raw verification token.
  * @param password - The account's password.
  * @returns Resolves once the account is verified (or already was).
@@ -190,6 +193,9 @@ export async function verifyEmail(token: string, password: string): Promise<void
   await markEmailVerified(user.id)
   // Revoke the other links, or a token read out of an older mail still works.
   await userTokenRepository.revokeAllForUserAndPurpose(user.id, 'email_verification')
+  if (user.emailVerifiedAt === null) {
+    await emitDomainEvent({ type: 'email_verified', userId: user.id, at: new Date() })
+  }
 }
 
 /**

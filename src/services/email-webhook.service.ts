@@ -5,7 +5,9 @@
  * Message-ID header, stored once per provider event id, moves the message's
  * status only upwards (`EmailMessageRepository.advanceStatus`), and a hard
  * bounce or complaint suppresses the address. A provider's retry of a
- * request that failed part-way is therefore applied exactly once.
+ * request that failed part-way is therefore applied exactly once. Each
+ * stored event is also written to the analytics outbox in the same
+ * transaction, in a savepoint that never fails the request.
  */
 import type { IncomingHttpHeaders } from 'node:http'
 import { getEnv, isFakeEmailWebhookAllowed, type Env } from '@/configs/env.config'
@@ -22,6 +24,9 @@ import { WebhookPayloadError, WebhookSignatureError } from '@/errors/webhook-err
 import { EmailEventRepository } from '@/repositories/email-event.repository'
 import { EmailMessageRepository } from '@/repositories/email-message.repository'
 import { EmailSuppressionRepository } from '@/repositories/email-suppression.repository'
+import { currentAnalyticsContext } from '@/services/analytics/analytics-context.service'
+import { buildEmailEvent } from '@/services/analytics/analytics-event-builder.service'
+import { enqueueAnalytics } from '@/services/analytics/analytics-outbox.service'
 import { withTransaction, type DbTransaction } from '@/services/database.service'
 import { createFakeEmailWebhookAdapter } from '@/services/email-webhook-fake.service'
 import { createResendEmailWebhookAdapter } from '@/services/email-webhook-resend.service'
@@ -252,6 +257,23 @@ async function applyEvent(
       tx
     )
   }
+  await enqueueAnalytics(
+    [
+      buildEmailEvent(
+        {
+          type: stored.type,
+          messageId: message.id,
+          templateKey: message.templateKey,
+          userId: message.userId,
+          tenantId: message.tenantId,
+          bounceKind: stored.bounceKind,
+          occurredAt: stored.occurredAt,
+        },
+        currentAnalyticsContext()
+      ),
+    ],
+    tx
+  )
   result.processed += 1
   result.byType[event.type] = (result.byType[event.type] ?? 0) + 1
 }

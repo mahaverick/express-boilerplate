@@ -21,6 +21,7 @@ import {
   type DbExecutor,
   type DbTransaction,
 } from '@/services/database.service'
+import { emitDomainEvent } from '@/services/domain-events.service'
 import { logger } from '@/services/logger.service'
 import { denySession } from '@/services/session-denylist.service'
 import { MS_PER_SECOND, requireDurationMs } from '@/utilities/duration.utilities'
@@ -551,13 +552,18 @@ export async function revokeSession(sessionId: string): Promise<void> {
  * whoever calls it, not a way to test whether a given token string is
  * still live — exactly the same reasoning `rotateRefreshToken` (this
  * module) and login (auth.service.ts) already apply to their own callers.
+ * A token that was not yet revoked emits `user_signed_out` after the
+ * revoke, on the matched branch only, which already takes longer than a
+ * miss; a replayed, revoked token emits nothing, so one sign-out counts once.
  * @param raw - The raw refresh token presented by the client.
  * @returns Resolves once the token's session (if any matched) is revoked and its access tokens are denied, best-effort.
  */
 export async function revokeRefreshToken(raw: string): Promise<void> {
   const existing = await userTokenRepository.findByHash(hashToken(raw))
-  if (existing && existing.sessionId !== null) {
-    await revokeSessionUnderUserLock(existing.userId, existing.sessionId)
+  if (!existing || existing.sessionId === null) return
+  await revokeSessionUnderUserLock(existing.userId, existing.sessionId)
+  if (existing.revokedAt === null) {
+    await emitDomainEvent({ type: 'user_signed_out', userId: existing.userId, at: new Date() })
   }
 }
 
