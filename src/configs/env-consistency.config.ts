@@ -143,6 +143,28 @@ function apexCookieDomainProblem(env: Env): string | undefined {
 }
 
 /**
+ * Warn when analytics is on outside local and test but no proxy hop is
+ * trusted. The analytics proxy forwards `request.ip` to PostHog as the
+ * browser's address: with `TRUST_PROXY` false that is the frontend proxy's, so
+ * PostHog's GeoIP is wrong and its cookieless hash merges different people.
+ * @param env - The validated environment.
+ * @param warn - Receives the warning.
+ */
+function warnOnUntrustedProxyForAnalytics(env: Env, warn: (message: string) => void): void {
+  if (
+    env.APP_ENV === 'local' ||
+    env.NODE_ENV === 'test' ||
+    env.POSTHOG_PROJECT_KEY === undefined ||
+    trustProxySetting(env.TRUST_PROXY) !== false
+  ) {
+    return
+  }
+  warn(
+    'POSTHOG_PROJECT_KEY is set and TRUST_PROXY is false. The analytics proxy sends every browser event to PostHog with the address of the proxy in front of this app, so GeoIP is wrong for everyone and, with cookieless hashing, different people merge. Set TRUST_PROXY to the number of proxies in front of this app, counting every hop (the frontend nginx and the load balancer).'
+  )
+}
+
+/**
  * Refuses unsafe or stale configuration at boot; throws Error with one actionable message.
  *
  * Every problem found goes into that one message, so an operator fixes them
@@ -209,6 +231,8 @@ export function assertEnvConsistent(
       'Auth cookies are Secure (COOKIE_SECURE, on by default outside local) and TRUST_PROXY is false. Behind a TLS-terminating proxy, express-session then sees plain HTTP and never sends the OAuth session cookie, so Google login fails. Set TRUST_PROXY to the number of proxies in front of this app.'
     )
   }
+
+  warnOnUntrustedProxyForAnalytics(env, warn)
 
   if (problems.length === 0) return
   const list = problems.map((problem) => `  - ${problem}`).join('\n')

@@ -325,6 +325,31 @@ describe('assertEnvConsistent', () => {
     })
   })
 
+  describe('PostHog without TRUST_PROXY', () => {
+    const posthog = { POSTHOG_PROJECT_KEY: 'phc_test_key_not_real' }
+
+    it('warns, and still boots, outside local', () => {
+      const { error, warnings } = runChecks({ ...deployed, ...posthog, TRUST_PROXY: 'false' })
+      expect(error).toBeUndefined()
+      expect(warnings).toHaveLength(1)
+      expect(warnings[0]).toContain('POSTHOG_PROJECT_KEY is set and TRUST_PROXY is false')
+    })
+
+    it.each([
+      { name: 'TRUST_PROXY is set', source: { ...deployed, ...posthog, TRUST_PROXY: '1' } },
+      { name: 'analytics is off', source: { ...deployed, TRUST_PROXY: 'false' } },
+      { name: 'APP_ENV is local', source: { ...local, ...posthog, TRUST_PROXY: 'false' } },
+      {
+        name: 'NODE_ENV is test',
+        source: { ...deployed, ...posthog, NODE_ENV: 'test', TRUST_PROXY: 'false' },
+      },
+    ])('stays quiet when $name', ({ source }) => {
+      expect(
+        runChecks(source).warnings.filter((warning) => warning.includes('POSTHOG_PROJECT_KEY'))
+      ).toEqual([])
+    })
+  })
+
   describe('COOKIE_DOMAIN against APP_URL', () => {
     const api = { APP_URL: 'https://api.example.com' }
 
