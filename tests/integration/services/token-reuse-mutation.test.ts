@@ -112,7 +112,7 @@ describe('mutation-test harness, proven on reuse detection', () => {
     await withMutatedMethod(
       UserTokenRepository.prototype,
       'revokeAllForSession',
-      async () => {},
+      () => Promise.resolve(0),
       async () => {
         await expect(rotateRefreshToken(issued.raw)).rejects.toMatchObject({ statusCode: 401 })
 
@@ -161,7 +161,7 @@ describe('mutation-test harness, proven on reuse detection', () => {
       await withMutatedMethod(
         UserTokenRepository.prototype,
         'revokeAllForSession',
-        async () => {},
+        () => Promise.resolve(0),
         async () => {
           const issued = await issueRefreshToken(userId, sessionId)
           const rotated = await rotateRefreshToken(issued.raw)

@@ -281,6 +281,31 @@ describe('user_signed_out', () => {
       expect.objectContaining({ event: 'user_signed_out', distinctId: user.id }),
     ])
   })
+
+  it('is written once when two sign-outs race on one cookie', async () => {
+    const user = await passwordUser()
+    const { refreshToken } = await login({ email: user.email, password: TEST_PASSWORD })
+    await clearOutbox()
+
+    await Promise.all([
+      revokeRefreshToken(refreshToken.raw),
+      revokeRefreshToken(refreshToken.raw),
+      revokeRefreshToken(refreshToken.raw),
+    ])
+
+    expect(await outboxRowsOf('user_signed_out')).toHaveLength(1)
+  })
+
+  it('is not written for a session that had already lapsed', async () => {
+    const user = await passwordUser()
+    const { refreshToken } = await login({ email: user.email, password: TEST_PASSWORD })
+    await sql`update user_tokens set expires_at = now() - interval '1 hour' where user_id = ${user.id}`
+    await clearOutbox()
+
+    await revokeRefreshToken(refreshToken.raw)
+
+    expect(await outboxRowsOf('user_signed_out')).toEqual([])
+  })
 })
 
 describe('password events', () => {
@@ -329,6 +354,19 @@ describe('email_verified', () => {
     expect(await outboxRows()).toEqual([
       expect.objectContaining({ event: 'email_verified', distinctId: user.id }),
     ])
+  })
+
+  it('is written once when two live links verify at the same moment', async () => {
+    const user = await createTrackedUser({ hasPassword: true, verified: false })
+    const first = await issueToken(user.id, 'email_verification', 60_000)
+    const second = await issueToken(user.id, 'email_verification', 60_000)
+
+    await Promise.all([
+      verifyEmail(first.raw, TEST_PASSWORD),
+      verifyEmail(second.raw, TEST_PASSWORD),
+    ])
+
+    expect(await outboxRowsOf('email_verified')).toHaveLength(1)
   })
 })
 

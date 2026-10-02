@@ -164,8 +164,9 @@ function holdAfterRevoke(
     this: UserTokenRepository,
     ...parameters
   ) {
-    await realSession.apply(this, parameters)
+    const revoked = await realSession.apply(this, parameters)
     await holdIfArmed()
+    return revoked
   }
   return [
     (run) => withMutatedMethod(UserTokenRepository.prototype, 'revokeAllForUser', holdingAll, run),

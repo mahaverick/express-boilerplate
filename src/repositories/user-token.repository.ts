@@ -169,19 +169,21 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    * order (`lockedIds`), whatever the plan or the physical row layout.
    * @param sessionId - The session id shared by every token in the chain.
    * @param executor - Where to run the query. Defaults to the pool.
-   * @returns Resolves once every matching row is revoked.
+   * @returns How many rows this call revoked: zero when another revoke got there first.
    */
-  async revokeAllForSession(sessionId: string, executor: DbExecutor = db): Promise<void> {
+  async revokeAllForSession(sessionId: string, executor: DbExecutor = db): Promise<number> {
     const locked = this.lockedIds(
       this.scope(
         sql`${userTokenModel.sessionId} = ${sessionId} and ${userTokenModel.revokedAt} is null`
       ),
       executor
     )
-    await executor
+    const revoked = await executor
       .update(userTokenModel)
       .set(this.touched({ revokedAt: sql`now()` }))
       .where(inArray(userTokenModel.id, locked))
+      .returning({ id: userTokenModel.id })
+    return revoked.length
   }
 
   /**

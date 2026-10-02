@@ -91,18 +91,20 @@ function distinctSessionIds(rows: { sessionId: string | null }[]): string[] {
  * A `revokeAllForSession` stand-in that updates by its predicate directly.
  * @param sessionId - The session.
  * @param executor - Where to run the query.
- * @returns Resolves once the rows are revoked.
+ * @returns How many rows were revoked.
  */
 async function unorderedRevokeAllForSession(
   sessionId: string,
   executor: DbExecutor = db
-): Promise<void> {
-  await executor
+): Promise<number> {
+  const revoked = await executor
     .update(userTokenModel)
     .set(revokedNow())
     .where(
       sql`${userTokenModel.sessionId} = ${sessionId} and ${userTokenModel.revokedAt} is null and ${userTokenModel.deletedAt} is null`
     )
+    .returning({ id: userTokenModel.id })
+  return revoked.length
 }
 
 /**
