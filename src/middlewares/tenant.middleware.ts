@@ -2,8 +2,9 @@
  * @file The tenant-scoping seam: `resolveTenant` (after `requireAuth` on every
  * `/tenants/:slug/*` route) confirms the caller's access to the tenant the
  * route names and attaches it to the request; `requireRole` (after
- * `resolveTenant`) gates on the role it found. Both are factories, called
- * where a router is assembled.
+ * `resolveTenant`) gates on the role it found, and `requireMembership` on how
+ * the caller reached the tenant. All are factories, called where a router is
+ * assembled.
  */
 import { type NextFunction, type Request, type Response } from 'express'
 import { type MembershipRole } from '@/constants/tenant.constants'
@@ -191,6 +192,37 @@ export function requireRole(
     }
     next()
   }
+}
+
+/**
+ * The middleware `requireMembership` returns — see its JSDoc.
+ * @param request - The incoming request.
+ * @param _response - Unused.
+ * @param next - Continues the chain, or forwards the 404.
+ */
+function admitMembersOnly(request: Request, _response: Response, next: NextFunction): void {
+  if (request.principal?.access !== 'member') {
+    next(new HttpError('Tenant not found', 404))
+    return
+  }
+  next()
+}
+
+/**
+ * Admit only a caller who reached the tenant through a membership, refusing
+ * staff who reached it through their platform role with the same 404 a
+ * non-member gets. For an action only a member can take for themselves
+ * (dismissing the checklist, ticking their own step): `requireRole` alone
+ * would admit a platform role. Must run after `resolveTenant`; without a
+ * principal it answers 404, failing safe.
+ * @returns An Express middleware.
+ */
+export function requireMembership(): (
+  request: Request,
+  response: Response,
+  next: NextFunction
+) => void {
+  return admitMembersOnly
 }
 
 const recentAuth = requireRecentAuth()

@@ -1,9 +1,9 @@
 /**
  * @file Onboarding: the single writer of completions (`completeOnboardingStep`),
  * the derived state every reader shares (`deriveOnboardingState`), the
- * customer's view, and the domain-event subscriber that completes `auto`
- * steps. Actions staff take through platform access never count as customer
- * progress.
+ * customer's view and writes, and the domain-event subscriber that completes
+ * `auto` steps. Actions staff take through platform access never count as
+ * customer progress, and only members write through the customer API.
  */
 import { getEnv } from '@/configs/env.config'
 import {
@@ -15,14 +15,23 @@ import {
   type OnboardingStep,
   type OnboardingTrigger,
 } from '@/constants/onboarding.constants'
+import type { MembershipRole } from '@/constants/tenant.constants'
 import type { OnboardingCompletion } from '@/database/models/onboarding-completion.model'
 import type { Tenant } from '@/database/models/tenant.model'
 import { HttpError } from '@/errors/http-error'
 import { OnboardingCompletionRepository } from '@/repositories/onboarding-completion.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
-import { db, type DbExecutor } from '@/services/database.service'
+import { record } from '@/services/audit.service'
+import {
+  db,
+  withTransaction,
+  type DbExecutor,
+  type DbTransaction,
+} from '@/services/database.service'
 import { subscribeDomainEvent } from '@/services/domain-events.service'
+import { lockActorRole } from '@/services/tenant-membership.service'
+import type { Actor } from '@/types/actor'
 import type { DomainEventContext, DomainEventOf } from '@/types/domain-event'
 import type { CustomerOnboardingState, TenantOnboardingView } from '@/types/onboarding'
 
@@ -51,6 +60,16 @@ export const MEMBER_STEP_CODE = 'member_step'
  * Error code: a tenant step was asked to complete for one member.
  */
 export const SCOPE_MISMATCH_CODE = 'scope_mismatch'
+
+/**
+ * Error code: a customer tried to tick a step that completes on its own.
+ */
+export const NOT_MANUAL_CODE = 'not_manual'
+
+/**
+ * Error code: dismissing a dismissed checklist, or restoring one that is not dismissed.
+ */
+export const DISMISS_STATE_CODE = 'dismiss_state'
 
 /**
  * What `completeOnboardingStep` records.
@@ -439,4 +458,145 @@ export function registerOnboardingSubscribers(): void {
   subscribeDomainEvent('tenant_settings_updated', onTenantSettingsUpdated)
   subscribeDomainEvent('teammate_invited', onTeammateInvited)
   subscribeDomainEvent('invitation_accepted', onInvitationAccepted)
+}
+
+/**
+ * Re-read the actor's access under lock and refuse anyone who is not a
+ * member at `minimum` or above: staff acting through platform access get
+ * the 404 a non-member gets.
+ * @param actor - The signed-in user.
+ * @param tenantId - The tenant.
+ * @param minimum - The lowest membership role admitted.
+ * @param tx - The transaction to hold the locks in.
+ * @throws {HttpError} 404 `Tenant not found` when the actor is not a member; 403 when their role is below `minimum`.
+ */
+async function lockMemberAccess(
+  actor: Actor,
+  tenantId: string,
+  minimum: MembershipRole,
+  tx: DbTransaction
+): Promise<void> {
+  const { access } = await lockActorRole(actor, tenantId, minimum, tx)
+  if (access !== 'member') throw new HttpError('Tenant not found', 404)
+}
+
+/**
+ * Tick a manual step as a member: a member step completes for the actor
+ * (any member), a tenant step for the tenant (admin or owner). Ticking a done
+ * step again changes nothing. A dismissed tenant still records.
+ * @param actor - The signed-in member.
+ * @param tenantId - The tenant.
+ * @param stepKey - The step.
+ * @returns The onboarding as the actor now sees it.
+ * @throws {HttpError} 404 `onboarding_step_not_found` for an unknown key; 409 `not_manual` for a step that completes on its own; 404 `Tenant not found` when the actor is not a member; 403 for a tenant step below admin; 409 `not_tracked` when the tenant's onboarding is untracked or waits for its first owner.
+ */
+export async function completeStepAsMember(
+  actor: Actor,
+  tenantId: string,
+  stepKey: string
+): Promise<TenantOnboardingView> {
+  const step = onboardingStepByKey(stepKey)
+  if (!step) throw new HttpError('Onboarding step not found', 404, ONBOARDING_STEP_NOT_FOUND_CODE)
+  if (step.completion.kind !== 'manual') {
+    throw new HttpError('This step completes on its own.', 409, NOT_MANUAL_CODE)
+  }
+  await withTransaction(async (tx) => {
+    await lockMemberAccess(actor, tenantId, step.scope === 'member' ? 'viewer' : 'admin', tx)
+    await completeOnboardingStep(
+      {
+        tenantId,
+        userId: step.scope === 'member' ? actor.userId : undefined,
+        stepKey: step.key,
+        source: 'customer',
+        completedBy: actor.userId,
+      },
+      tx
+    )
+  })
+  return getTenantOnboarding(tenantId, { userId: actor.userId })
+}
+
+/**
+ * Lock the tenant after the actor's access, and refuse one whose onboarding
+ * is not running.
+ * @param tenantId - The tenant.
+ * @param tx - The transaction.
+ * @returns The locked tenant.
+ * @throws {HttpError} 404 when the tenant is gone; 409 `not_tracked` when its onboarding is untracked or waits for its first owner.
+ */
+async function lockRunningTenant(tenantId: string, tx: DbTransaction): Promise<Tenant> {
+  const tenant = await tenantRepository.lockById(tenantId, tx)
+  if (!tenant) throw new HttpError('Tenant not found', 404)
+  if (!isOnboardingStarted(tenant)) {
+    throw new HttpError('Onboarding is not tracked for this tenant.', 409, NOT_TRACKED_CODE)
+  }
+  return tenant
+}
+
+/**
+ * Dismiss the checklist, as an owner by membership, and audit it in the same
+ * transaction. A dismissed tenant is shown to staff as dismissed, not stuck.
+ * @param actor - The signed-in owner.
+ * @param tenantId - The tenant.
+ * @returns The onboarding as the actor now sees it.
+ * @throws {HttpError} 404 `Tenant not found` when the actor is not a member; 403 below owner; 409 `not_tracked`; 409 `dismiss_state` when it is already dismissed.
+ */
+export async function dismissOnboarding(
+  actor: Actor,
+  tenantId: string
+): Promise<TenantOnboardingView> {
+  await withTransaction(async (tx) => {
+    await lockMemberAccess(actor, tenantId, 'owner', tx)
+    const tenant = await lockRunningTenant(tenantId, tx)
+    if (tenant.onboardingDismissedAt !== null) {
+      throw new HttpError('Getting started is already dismissed.', 409, DISMISS_STATE_CODE)
+    }
+    await tenantRepository.setOnboardingDismissed(tenantId, actor.userId, new Date(), tx)
+    await record(
+      {
+        action: 'onboarding.dismissed',
+        actor,
+        access: 'member',
+        tenantId,
+        targetId: tenantId,
+        metadata: {},
+      },
+      tx
+    )
+  })
+  return getTenantOnboarding(tenantId, { userId: actor.userId })
+}
+
+/**
+ * Undo a dismissal, as an owner by membership, and audit it in the same transaction.
+ * @param actor - The signed-in owner.
+ * @param tenantId - The tenant.
+ * @returns The onboarding as the actor now sees it.
+ * @throws {HttpError} 404 `Tenant not found` when the actor is not a member; 403 below owner; 409 `not_tracked`; 409 `dismiss_state` when it is not dismissed.
+ */
+export async function undismissOnboarding(
+  actor: Actor,
+  tenantId: string
+): Promise<TenantOnboardingView> {
+  await withTransaction(async (tx) => {
+    await lockMemberAccess(actor, tenantId, 'owner', tx)
+    const tenant = await lockRunningTenant(tenantId, tx)
+    if (tenant.onboardingDismissedAt === null) {
+      throw new HttpError('Getting started is not dismissed.', 409, DISMISS_STATE_CODE)
+    }
+    // eslint-disable-next-line unicorn/no-null -- null clears the dismissal
+    await tenantRepository.setOnboardingDismissed(tenantId, null, null, tx)
+    await record(
+      {
+        action: 'onboarding.undismissed',
+        actor,
+        access: 'member',
+        tenantId,
+        targetId: tenantId,
+        metadata: {},
+      },
+      tx
+    )
+  })
+  return getTenantOnboarding(tenantId, { userId: actor.userId })
 }

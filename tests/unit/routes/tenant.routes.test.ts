@@ -58,6 +58,9 @@ describe('createTenantRouter', () => {
       ['delete', '/:slug/members/:userId'],
       ['delete', '/:slug/invitations/:id'],
       ['patch', '/:slug/settings'],
+      ['post', '/:slug/onboarding/steps/:key/complete'],
+      ['post', '/:slug/onboarding/dismiss'],
+      ['post', '/:slug/onboarding/undismiss'],
     ]
 
     // Position 1: right after requireJsonContentType, same convention the invite/resend test above establishes.
