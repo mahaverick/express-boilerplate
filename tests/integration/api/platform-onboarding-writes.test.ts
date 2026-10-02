@@ -15,9 +15,11 @@ import { createApp } from '@/app'
 import { getEnv } from '@/configs/env.config'
 import { onboardingStepByKey } from '@/constants/onboarding.constants'
 import type { EmailJobData } from '@/jobs/email.job'
-import { sql } from '@/services/database.service'
+import { PlatformOnboardingRepository } from '@/repositories/platform-onboarding.repository'
+import { sql, type DbTransaction } from '@/services/database.service'
 import { closeQueue, getEmailQueue } from '@/services/queue.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
+import { backendPid, deferred, untilSignalled, waitForWaiter } from '../../helpers/lock-probe'
 import { withMutatedMethod } from '../../helpers/mutate'
 import {
   addCompletion,
@@ -62,6 +64,8 @@ interface MessageRow {
 const app = createApp()
 const byText = (a: string, b: string): number => a.localeCompare(b)
 const REASON = 'Agreed on the onboarding call'
+// A test that waits on a lock gets room for the probe's own 5-second deadline.
+const LOCK_WAIT_TIMEOUT_MS = 10_000
 
 function post(token: string, path: string, body?: object): Promise<Response> {
   return request(app)
@@ -76,6 +80,16 @@ function complete(token: string, tenantId: string, stepKey: string, body?: objec
 
 function remind(token: string, tenantId: string, body?: object) {
   return post(token, `/tenants/${tenantId}/onboarding/remind`, body)
+}
+
+/**
+ * A reminder request already on the wire: supertest sends only once awaited.
+ * @param token - The staff bearer token.
+ * @param tenantId - The tenant.
+ * @returns The response.
+ */
+async function sentNow(token: string, tenantId: string): Promise<Response> {
+  return await remind(token, tenantId)
 }
 
 function codeOf(response: Response): string | undefined {
@@ -463,23 +477,55 @@ describe('POST /platform/tenants/:id/onboarding/remind', () => {
     expect(body?.text).toContain(`/tenants/${tenant.slug}`)
   })
 
-  it('lets one of two racing reminders through and refuses the other, within the test pool', async () => {
-    const { token } = await createTrackedStaff('admin')
-    const { tenant } = await createOnboardingTenant({ startedAt: daysAgo(10) })
-    await addMember(tenant, 'owner')
+  it(
+    "makes a second reminder wait on the first one's tenant lock, then refuses it reminded_recently",
+    async () => {
+      const { token } = await createTrackedStaff('admin')
+      const { tenant } = await createOnboardingTenant({ startedAt: daysAgo(10) })
+      await addMember(tenant, 'owner')
 
-    // DB_POOL_MAX is 2 here, so a reminder that took a second connection mid-transaction would hang.
-    const responses = await Promise.all([remind(token, tenant.id), remind(token, tenant.id)])
+      // Pause the first reminder in its transaction, tenant row held, before it reads the limit (pool of 2).
+      const reached = deferred<number>()
+      const release = deferred()
+      // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
+      const realLatest = PlatformOnboardingRepository.prototype.latestReminderAt
+      let calls = 0
+      const pausingLatest: typeof realLatest = async function (
+        this: PlatformOnboardingRepository,
+        ...arguments_
+      ) {
+        calls += 1
+        if (calls === 1) {
+          reached.resolve(await backendPid(arguments_[1] as DbTransaction))
+          await release.promise
+        }
+        return realLatest.apply(this, arguments_)
+      }
 
-    expect(responses.map((response) => response.status).toSorted((a, b) => a - b)).toEqual([
-      200, 409,
-    ])
-    const refused = responses.find((response) => response.status === 409)
-    expect(refused && codeOf(refused)).toBe('reminded_recently')
-    expect(await auditRows(tenant.id, 'onboarding.reminder_sent')).toHaveLength(1)
-    expect(await messagesFor(tenant.id)).toHaveLength(2)
-    expect(await reminderJobsFor(tenant.id)).toHaveLength(2)
-  })
+      let responses: Response[] = []
+      await withMutatedMethod(
+        PlatformOnboardingRepository.prototype,
+        'latestReminderAt',
+        pausingLatest,
+        async () => {
+          const first = sentNow(token, tenant.id)
+          const firstPid = await untilSignalled(reached.promise, first, 'first reminder')
+          const second = sentNow(token, tenant.id)
+          // Both hold the actor's rows FOR SHARE, so the tenant row is the only lock it can queue on.
+          expect(await waitForWaiter(firstPid, second)).toBe(true)
+          release.resolve()
+          responses = await Promise.all([first, second])
+        }
+      )
+
+      expect(responses.map((response) => response.status)).toEqual([200, 409])
+      expect(responses[1] && codeOf(responses[1])).toBe('reminded_recently')
+      expect(await auditRows(tenant.id, 'onboarding.reminder_sent')).toHaveLength(1)
+      expect(await messagesFor(tenant.id)).toHaveLength(2)
+      expect(await reminderJobsFor(tenant.id)).toHaveLength(2)
+    },
+    LOCK_WAIT_TIMEOUT_MS
+  )
 
   it('sends reminders to two tenants at once, within the test pool', async () => {
     const { token } = await createTrackedStaff('admin')
