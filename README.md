@@ -266,15 +266,17 @@ dismiss the checklist and bring it back.
 
 **Adding a step.** Add an entry to `ONBOARDING_STEPS`; the load-time check
 refuses a duplicate or non-snake_case key and a trigger mapped to two steps
-of one scope. Then either map it to a trigger (`completion: { kind: 'auto',
-on: '<trigger>' }`, one of `ONBOARDING_TRIGGERS`), add the trigger to the
-`DomainEvent` union and the subscriber in `onboarding.service.ts` if it is
-new, and call `emitDomainEvent` from the service that does the work, after
-its transaction commits; or call `completeOnboardingStep` directly from
-product code, which is the way to complete an automatic member step.
-`completeOnboardingStep` is the single writer and is idempotent. Mirror
-nothing in the apps: both render what `GET /tenants/:slug/onboarding` and
-the staff endpoints return.
+of one scope. An `auto` step, of either scope, completes from its trigger: a
+value of `ONBOARDING_TRIGGERS` that a subscriber in `onboarding.service.ts`
+maps from a `DomainEvent` (`teammate_joined`, for one, comes from the
+`invitation_accepted` event), and a member step completes for the event's
+subject user. For a new trigger, add the value to `ONBOARDING_TRIGGERS`,
+add the event to the `DomainEvent` union if it is new, subscribe to it, and
+call `emitDomainEvent` from the service that does the work, after its
+transaction commits. Product code can also call `completeOnboardingStep`
+directly (a member step needs the `userId`). `completeOnboardingStep` is the
+single writer and is idempotent. Mirror nothing in the apps: both render
+what `GET /tenants/:slug/onboarding` and the staff endpoints return.
 
 **Only tenants created after this release are tracked.** Existing tenants
 have `onboarding_tracked = false` and show as not tracked. A tenant staff
@@ -309,7 +311,8 @@ false`.
 
 **`pnpm onboarding:reconcile`.** Subscribers run after the request commits
 and never fail it; one that fails only logs. The reconcile script re-derives
-the default automatic steps of every tracked tenant from what the database
+the default automatic tenant steps of every live, tracked, started
+customer tenant (one still `awaiting_owner` is skipped) from what the database
 still shows: `configure_settings` from a settings change after creation,
 `invite_teammate` from a non-owner invitation still on file or a second
 member, `teammate_joined` from a second member. It is best effort:
