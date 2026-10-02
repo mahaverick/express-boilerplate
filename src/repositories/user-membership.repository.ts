@@ -169,7 +169,7 @@ export class UserMembershipRepository {
   /**
    * Add a member to a tenant, failing if they already belong to it.
    *
-   * Members of a customer tenant join through `createIfAbsent` (invitation
+   * Members of a customer tenant join through `insertIfAbsent` (invitation
    * accept), and tenant creation inserts its owner itself. The one
    * application caller is `platform.service.bootstrapGrant`, for a user with
    * no platform membership yet. Tests use it to set up memberships.
@@ -313,6 +313,45 @@ export class UserMembershipRepository {
           exceptUserId === undefined ? undefined : ne(userMembershipModel.userId, exceptUserId)
         )
       )
+    return row?.count ?? 0
+  }
+
+  /**
+   * The user ids of a tenant's owners who can still sign in (live AND
+   * active), the owners whose member-step completions count for the tenant
+   * (onboarding.service.ts).
+   * @param tenantId - The tenant.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns The ids, in no guaranteed order.
+   */
+  async listActiveOwnerIds(tenantId: string, executor: DbExecutor = db): Promise<string[]> {
+    const rows = await executor
+      .select({ userId: userMembershipModel.userId })
+      .from(userMembershipModel)
+      .innerJoin(userModel, eq(userMembershipModel.userId, userModel.id))
+      .where(
+        and(
+          eq(userMembershipModel.tenantId, tenantId),
+          eq(userMembershipModel.role, 'owner'),
+          isNull(userModel.deletedAt),
+          eq(userModel.active, true)
+        )
+      )
+    return rows.map((row) => row.userId)
+  }
+
+  /**
+   * How many membership rows a tenant has, whatever their users' state:
+   * an accept uses it to tell whether the member it just added is the first.
+   * @param tenantId - The tenant.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns The number of rows.
+   */
+  async countMemberships(tenantId: string, executor: DbExecutor = db): Promise<number> {
+    const [row] = await executor
+      .select({ count: count() })
+      .from(userMembershipModel)
+      .where(eq(userMembershipModel.tenantId, tenantId))
     return row?.count ?? 0
   }
 

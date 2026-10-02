@@ -361,6 +361,21 @@ second time under the lock, then run `pnpm db:migrate`.
   quiet window. `email_logs` is bounded by `RETENTION_EMAIL_LOGS_DAYS`, so
   letting retention prune first shortens the backfill.
 
+- **`0021` holds `tenants` briefly.** Its four `ADD COLUMN`s are
+  metadata-only (the one default is a constant, so no row is rewritten),
+  but each takes an `ACCESS EXCLUSIVE` lock on `tenants` for the rest of the
+  migration's transaction, which also validates the new
+  `onboarding_dismissed_by` foreign key and the `tenants_platform_untracked`
+  CHECK by scanning `tenants` once. `onboarding_completions` is new and
+  empty, so its indexes build instantly. Every request that resolves a
+  tenant waits for that scan; on a large `tenants` table apply it in a quiet
+  window. Its three new foreign keys to `users` (`onboarding_dismissed_by`,
+  and `onboarding_completions.user_id` and `completed_by`) also take
+  `SHARE ROW EXCLUSIVE` on `users` until the transaction commits, so every
+  write to a user row (login's `last_logged_in_at` update, a registration, a
+  profile change) waits for the migration too; reads, including `FOR SHARE`
+  and `FOR NO KEY UPDATE` locks, do not.
+
 ## Test database
 
 `docker/postgres/init.sql` runs once, automatically, the first time the

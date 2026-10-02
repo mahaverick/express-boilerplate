@@ -171,7 +171,37 @@ const ROUTES: readonly GateRow[] = [
     requiresStepUp: false,
     target: 'suppression',
   },
+  { method: 'get', path: '/onboarding/funnel', minRole: 'viewer', requiresStepUp: false },
+  { method: 'get', path: '/onboarding/tenants', minRole: 'viewer', requiresStepUp: false },
+  {
+    method: 'get',
+    path: '/tenants/:id/onboarding',
+    minRole: 'viewer',
+    requiresStepUp: false,
+    target: 'tenant',
+  },
+  // No step-up: neither a reminder nor a manual completion grants access.
+  {
+    method: 'post',
+    path: '/tenants/:id/onboarding/steps/:key/complete',
+    minRole: 'admin',
+    requiresStepUp: false,
+    target: 'tenant',
+  },
+  {
+    method: 'post',
+    path: '/tenants/:id/onboarding/remind',
+    minRole: 'admin',
+    requiresStepUp: false,
+    target: 'tenant',
+  },
 ]
+
+/**
+ * The step `:key` resolves to: a real tenant step, so an admitted call
+ * reaches body validation rather than the unknown-step 404.
+ */
+const STEP_KEY = 'configure_settings'
 
 const ROLES_BELOW: Record<MembershipRole, MembershipRole[]> = {
   viewer: [],
@@ -197,7 +227,13 @@ const tenantRepository = new TenantRepository()
  * anywhere else fails the completeness check, so its routes can't hide.
  * The walker checks this list at every depth, a sub-router's own mounts too.
  */
-const SUB_ROUTER_MOUNTS = ['/users', '/emails', '/email-suppressions'] as const
+const SUB_ROUTER_MOUNTS = [
+  '/users',
+  '/emails',
+  '/email-suppressions',
+  '/onboarding',
+  '/tenants/:id/onboarding',
+] as const
 
 interface StackLayer {
   route?: { path: string; methods: Record<string, boolean> }
@@ -255,12 +291,14 @@ function registeredRoutes(): string[] {
 const byText = (a: string, b: string): number => a.localeCompare(b)
 
 describe('the platform route walker', () => {
-  it('reads the /users, /emails and /email-suppressions sub-routers under their mounts', () => {
+  it('reads every sub-router under its mount, the one mounted on a tenant path included', () => {
     expect(registeredRoutes()).toEqual(
       expect.arrayContaining([
         'post /users/:id/purge',
         'get /emails/health',
         'post /email-suppressions/:id/lift',
+        'get /onboarding/funnel',
+        'get /tenants/:id/onboarding',
       ])
     )
   })
@@ -302,9 +340,13 @@ describe('/api/v1/platform route gates', () => {
     return token
   }
 
-  function call(row: GateRow, token?: string): Promise<Response> {
+  function pathOf(row: GateRow): string {
     const id = row.target ? ids[row.target] : ''
-    const path = `/api/v1/platform${row.path.replace(':id', () => id)}`
+    return `/api/v1/platform${row.path.replace(':id', () => id).replace(':key', () => STEP_KEY)}`
+  }
+
+  function call(row: GateRow, token?: string): Promise<Response> {
+    const path = pathOf(row)
     // An empty JSON body: enough to pass the content-type gate and fail validation, never to act.
     const pending = request(app)[row.method](path).set('Content-Type', 'application/json')
     const authed = token ? pending.set('Authorization', `Bearer ${token}`) : pending
@@ -382,7 +424,7 @@ describe('/api/v1/platform route gates', () => {
     '$method $path: non-staff get 404, not 415, whatever the Content-Type',
     async (row) => {
       const token = await tokenFor(undefined)
-      const path = `/api/v1/platform${row.path.replace(':id', () => (row.target ? ids[row.target] : ''))}`
+      const path = pathOf(row)
 
       const textPlain = await request(app)
         [row.method](path)
@@ -411,7 +453,7 @@ describe('/api/v1/platform route gates', () => {
   it.each(ROUTES)(
     '$method $path: OPTIONS gets 404 with no Allow header, for non-staff, below-role staff and $minRole alike',
     async (row) => {
-      const path = `/api/v1/platform${row.path.replace(':id', () => (row.target ? ids[row.target] : ''))}`
+      const path = pathOf(row)
       const roles: (MembershipRole | undefined)[] = [
         undefined,
         ...ROLES_BELOW[row.minRole],

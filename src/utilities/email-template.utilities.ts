@@ -19,6 +19,7 @@ export const EMAIL_TEMPLATE_KEYS = [
   'password_changed',
   'tenant_invitation',
   'account_setup',
+  'onboarding_reminder',
 ] as const
 
 /**
@@ -155,7 +156,8 @@ export type EmailTemplateMeta<V> = {
   previewVariables: readonly Exclude<keyof V, SecretKey<V>>[]
   /**
    * The flow a staff resend re-runs, or null when the template must never be
-   * resent (a security notice about an event that did not recur).
+   * resent: a security notice about an event that did not recur, or an
+   * onboarding reminder, which staff send afresh instead.
    */
   resendAction: ResendAction | null
 }

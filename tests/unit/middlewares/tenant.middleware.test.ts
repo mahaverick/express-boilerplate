@@ -12,6 +12,7 @@ import type { Tenant } from '@/database/models/tenant.model'
 import type { UserMembership } from '@/database/models/user-membership.model'
 import { HttpError } from '@/errors/http-error'
 import {
+  requireMembership,
   requireRecentAuthOnPlatformTenant,
   requireRole,
   resolveTenant,
@@ -43,6 +44,13 @@ const mockTenant: Tenant = {
   website: null,
   lifecycleState: 'active',
   isPlatform: false,
+  onboardingTracked: false,
+  // eslint-disable-next-line unicorn/no-null -- an untracked tenant has no onboarding clock.
+  onboardingStartedAt: null,
+  // eslint-disable-next-line unicorn/no-null -- see comment above.
+  onboardingDismissedAt: null,
+  // eslint-disable-next-line unicorn/no-null -- see comment above.
+  onboardingDismissedBy: null,
   // eslint-disable-next-line unicorn/no-null -- Tenant.deletedAt is a `Date | null` soft-delete column.
   deletedAt: null,
   createdAt: new Date('2026-01-01T00:00:00Z'),
@@ -506,6 +514,44 @@ describe('requireRole', () => {
 
     expect(next).toHaveBeenCalledTimes(1)
     expect(lastCallArgument()).toBeUndefined()
+  })
+})
+
+describe('requireMembership', () => {
+  it('lets a member through', () => {
+    const request = { principal: memberPrincipal('viewer') } as unknown as Request
+    const { next, lastCallArgument } = mockNext()
+
+    requireMembership()(request, noResponse, next)
+
+    expect(next).toHaveBeenCalledTimes(1)
+    expect(lastCallArgument()).toBeUndefined()
+  })
+
+  it('refuses staff reaching the tenant through a platform role, even an owner, with 404', () => {
+    const principal: RequestPrincipal = {
+      ...memberPrincipal('owner'),
+      // eslint-disable-next-line unicorn/no-null -- staff reach this tenant with no membership
+      memberRole: null,
+      platformRole: 'owner',
+      access: 'platform',
+    }
+    const request = { principal } as unknown as Request
+    const { next, lastCallArgument } = mockNext()
+
+    requireMembership()(request, noResponse, next)
+
+    const error = lastCallArgument()
+    expect(error).toBeInstanceOf(HttpError)
+    expect(error).toMatchObject({ statusCode: 404, message: 'Tenant not found' })
+  })
+
+  it('refuses with 404 when request.principal is missing (resolveTenant never ran)', () => {
+    const { next, lastCallArgument } = mockNext()
+
+    requireMembership()(buildPrincipalRequest(), noResponse, next)
+
+    expect((lastCallArgument() as HttpError).statusCode).toBe(404)
   })
 })
 

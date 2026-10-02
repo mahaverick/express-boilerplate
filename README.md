@@ -18,6 +18,9 @@ Message tracking: a delivery timeline per email fed by provider webhooks
 (Resend, and a fake one for local), deliverability health, masked
 previews, resend through the flow that sent the mail, and an automatic
 suppression list; see [Email tracking](#email-tracking).
+Onboarding: a code-defined steps registry with per-tenant and per-member
+progress, a customer checklist API, and a staff funnel, stuck-tenant list,
+reminders and manual completion; see [Onboarding](#onboarding).
 [SECURITY.md](SECURITY.md#what-this-boilerplate-does-not-implement) lists what
 it does not implement.
 
@@ -115,6 +118,7 @@ refuses a non-JSON body with 415. See
 | `pnpm db:migrate:prod`              | The same, as `node dist/database/migrate.js`; run that in the prod image.                  |
 | `pnpm platform:grant -- <e> <role>` | Gives a platform-tenant role; see below.                                                   |
 | `pnpm email:fire-event <id> <type>` | Signs and posts a fake provider event (local only); see [Email tracking](#email-tracking). |
+| `pnpm onboarding:reconcile`         | Re-derives tracked tenants' automatic onboarding steps; see [Onboarding](#onboarding).     |
 | `pnpm commit`                       | Interactive conventional-commit prompt.                                                    |
 
 `pnpm platform:grant -- <email> <role>` gives an existing user with a verified
@@ -246,6 +250,83 @@ the member routes' 404, and one to the platform tenant needs a sign-in
 within the last 10 minutes (401 `REAUTH_REQUIRED`), as the member route
 does.
 
+## Onboarding
+
+Onboarding steps are an extension point, not product logic: the registry is
+`ONBOARDING_STEPS` in `src/constants/onboarding.constants.ts`, served to both
+apps (neither keeps its own copy). Each step has a snake_case `key`, a
+`title` and `description`, a `scope` (`tenant`, done once for the tenant, or
+`member`, done by each person), a `completion` (`auto` on a trigger, or
+`manual`, ticked by the customer) and `required`. Steps display in registry
+order and complete in any order. A tenant is **complete** once every
+required step is done (a member step counts once any active owner has done
+it), and **stuck** when it is not complete, not dismissed, and has made no
+progress for `ONBOARDING_STUCK_AFTER_DAYS` (default 7) or more. An owner can
+dismiss the checklist and bring it back.
+
+**Adding a step.** Add an entry to `ONBOARDING_STEPS`; the load-time check
+refuses a duplicate or non-snake_case key and a trigger mapped to two steps
+of one scope. An `auto` step, of either scope, completes from its trigger: a
+value of `ONBOARDING_TRIGGERS` that a subscriber in `onboarding.service.ts`
+maps from a `DomainEvent` (`teammate_joined`, for one, comes from the
+`invitation_accepted` event), and a member step completes for the event's
+subject user. For a new trigger, add the value to `ONBOARDING_TRIGGERS`,
+add the event to the `DomainEvent` union if it is new, subscribe to it, and
+call `emitDomainEvent` from the service that does the work, after its
+transaction commits. Product code can also call `completeOnboardingStep`
+directly (a member step needs the `userId`). `completeOnboardingStep` is the
+single writer and is idempotent. Mirror nothing in the apps: both render
+what `GET /tenants/:slug/onboarding` and the staff endpoints return.
+
+**Only tenants created after this release are tracked.** Existing tenants
+have `onboarding_tracked = false` and show as not tracked. A tenant staff
+create waits for its first owner to accept (`awaiting_owner`, never stuck)
+before its clock starts; until then its members see it as `not_tracked`, with
+no checklist. When that accept starts the clock and other members had
+already joined, `teammate_joined` completes then. Actions staff take through
+platform access (an
+`access: 'platform'` request on a customer route) never count as customer
+progress.
+
+**Staff.** `GET /platform/onboarding/funnel?range=7d|30d|90d` (default 30d)
+counts, over the active tracked tenants whose onboarding started in the
+range, each step's completions and how many of them staff made, and the
+cohort by state. `GET /platform/onboarding/tenants?state=` lists the active
+tracked tenants in one state (`stuck` by default, longest stuck first; the
+others newest first; `awaiting_owner` included) with cursor paging, and
+`GET /platform/tenants/:id/onboarding` returns one tenant's onboarding in
+any lifecycle state: each step with who completed it (staff completions
+with their reason), each member step's per-member status, the reminder
+history, and whether a reminder may go now. `GET /platform/stats` counts
+stuck tenants in `totals.stuckTenants`. Platform admins may mark a tenant
+step complete (`POST /platform/tenants/:id/onboarding/steps/:key/complete`,
+with a reason) and send a reminder (`POST
+/platform/tenants/:id/onboarding/remind`, with a reason): one
+`onboarding_reminder` email to each active owner, tracked like every other
+email, at most one per tenant per 24 hours (409 `reminded_recently` with
+`errors.retryAfter`). Both are refused on a suspended or archived tenant
+(409 `tenant_state_conflict`) and audited in the tenant itself with platform
+access, so the customer's Activity tab shows them. The reminder writes the
+owners' email rows and its audit entry in one transaction and queues the
+sends after it commits; if queueing fails, the audit entry stays, the
+affected email row is marked failed, and the response says `emailSent:
+false`.
+
+**`pnpm onboarding:reconcile`.** Subscribers run after the request commits
+and never fail it; one that fails only logs. The reconcile script
+re-completes the default automatic tenant steps of every live, tracked,
+started customer tenant (one still `awaiting_owner` is skipped) from what
+members provably did, each stamped with the time it happened:
+`configure_settings` from the earliest settings save audited with member
+access, `invite_teammate` from the earliest teammate invitation audited with
+member access (both since the clock started), and `teammate_joined` from the
+second member's join (its `invitation.accepted` entry, else its membership's
+`created_at`), or the clock's start when that came later. Settings saves and
+invitations by staff through platform access are never credited. It is best
+effort: it reads the audit log, so entries pruned under
+`RETENTION_AUDIT_LOGS_DAYS` (0, the default, keeps them forever) leave no
+trace, and a restored old event leaves a stuck tenant stuck.
+
 ## Make this yours
 
 This is a template. Before the first real commit on a project generated from
@@ -267,15 +348,15 @@ No gate enforces this list.
 
 ## Documentation index
 
-| Doc                                | Owns                                                                              |
-| ---------------------------------- | --------------------------------------------------------------------------------- |
-| [README.md](README.md)             | Quick start, scripts, email tracking setup, making the template yours, this index |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | Boot, layers, directory rules, configuration and env vars, Docker, deploying      |
-| [DATABASE.md](DATABASE.md)         | Client, models, migrations, test database, live schema changes                    |
-| [SECURITY.md](SECURITY.md)         | Reporting, supported versions, what is and is not implemented                     |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | Hooks, commits, CI, releases, dependency policy, docs to update                   |
-| [CLAUDE.md](CLAUDE.md)             | Rules and gotchas for anyone changing the code                                    |
-| [AGENTS.md](AGENTS.md)             | Agent entry point, pointing at CLAUDE.md and this index                           |
+| Doc                                | Owns                                                                                          |
+| ---------------------------------- | --------------------------------------------------------------------------------------------- |
+| [README.md](README.md)             | Quick start, scripts, email tracking setup, onboarding, making the template yours, this index |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Boot, layers, directory rules, configuration and env vars, Docker, deploying                  |
+| [DATABASE.md](DATABASE.md)         | Client, models, migrations, test database, live schema changes                                |
+| [SECURITY.md](SECURITY.md)         | Reporting, supported versions, what is and is not implemented                                 |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Hooks, commits, CI, releases, dependency policy, docs to update                               |
+| [CLAUDE.md](CLAUDE.md)             | Rules and gotchas for anyone changing the code                                                |
+| [AGENTS.md](AGENTS.md)             | Agent entry point, pointing at CLAUDE.md and this index                                       |
 
 ## License
 

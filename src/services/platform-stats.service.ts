@@ -13,6 +13,7 @@ import {
   type DayCount,
   type PlatformTotals,
 } from '@/repositories/platform-stats.repository'
+import { countStuckTenants } from '@/services/platform-onboarding.service'
 
 const platformStatsRepository = new PlatformStatsRepository()
 
@@ -34,10 +35,12 @@ export type EmailMessageDay = { date: string } & Record<EmailMessageGroup, numbe
  * and staff included, while `totals.users` counts active users only.
  * `emailMessages[]` counts logical emails by their current status; with no
  * provider webhook configured every successful send stays in `sent`.
+ * `totals.stuckTenants` counts the active, tracked tenants whose onboarding
+ * is stuck now, whatever the range.
  */
 export interface PlatformStats {
   range: StatsRange
-  totals: PlatformTotals
+  totals: PlatformTotals & { stuckTenants: number }
   signups: { date: string; users: number; tenants: number }[]
   /**
    * `email_logs` rows, which are one per delivery attempt: a mail retried
@@ -117,15 +120,16 @@ function byDay(rows: readonly DayCount[]): Map<string, number> {
  * The Overview for one range.
  * @param range - The window.
  * @param now - The current instant; injectable for tests.
- * @returns Totals, and one zero-filled entry per day for sign-ups, email attempts and email messages.
+ * @returns Totals (the stuck-tenant count included), and one zero-filled entry per day for sign-ups, email attempts and email messages.
  */
 export async function getPlatformStats(
   range: StatsRange,
   now: Date = new Date()
 ): Promise<PlatformStats> {
   const { from, to, days } = utcDays(range, now)
-  const [totals, signups, emails, messages] = await Promise.all([
+  const [totals, stuckTenants, signups, emails, messages] = await Promise.all([
     platformStatsRepository.totals(),
+    countStuckTenants(now),
     platformStatsRepository.signupsByDay(from, to),
     platformStatsRepository.emailsByDay(from, to),
     platformStatsRepository.emailMessagesByDay(from, to),
@@ -136,7 +140,7 @@ export async function getPlatformStats(
   const failed = byDay(emails.filter((row) => row.status === 'failed'))
   return {
     range,
-    totals,
+    totals: { ...totals, stuckTenants },
     signups: days.map((date) => ({
       date,
       users: users.get(date) ?? 0,

@@ -10,12 +10,14 @@
 import { Router } from 'express'
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { auditController } from '@/controllers/audit.controller'
+import { onboardingController } from '@/controllers/onboarding.controller'
 import { tenantController } from '@/controllers/tenant.controller'
 import { requireAuth } from '@/middlewares/auth.middleware'
 import { requireJsonContentType } from '@/middlewares/content-type.middleware'
 import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
 import {
   isOfferingAdminOrOwner,
+  requireMembership,
   requireRecentAuthOnPlatformTenant,
   requireRole,
   resolveTenant,
@@ -24,7 +26,8 @@ import {
 /**
  * Build the tenant routes. `requireRole` checks the effective role, so staff
  * admins pass the owner/admin routes (the audit log included) and staff
- * viewers do not. On the platform tenant, member role changes, removals,
+ * viewers do not. The onboarding writes add `requireMembership`, so no
+ * platform role acts on them. On the platform tenant, member role changes, removals,
  * admin/owner invitations and every resend also need a recent sign-in
  * (`requireRecentAuthOnPlatformTenant`).
  * @returns A router mounted at `/api/v1/tenants` by `index.routes.ts`, every route behind `requireAuth`.
@@ -116,6 +119,35 @@ export function createTenantRouter(): Router {
     resolveTenant(),
     requireRole('owner', 'admin'),
     tenantController.updateSettings
+  )
+
+  // Staff may read onboarding; only members may act on it, and only member owners dismiss.
+  router.get('/:slug/onboarding', resolveTenant(), onboardingController.getOnboarding)
+  router.post(
+    '/:slug/onboarding/steps/:key/complete',
+    requireJsonContentType,
+    writeLimiter,
+    resolveTenant(),
+    requireMembership(),
+    onboardingController.completeStep
+  )
+  router.post(
+    '/:slug/onboarding/dismiss',
+    requireJsonContentType,
+    writeLimiter,
+    resolveTenant(),
+    requireMembership(),
+    requireRole('owner'),
+    onboardingController.dismiss
+  )
+  router.post(
+    '/:slug/onboarding/undismiss',
+    requireJsonContentType,
+    writeLimiter,
+    resolveTenant(),
+    requireMembership(),
+    requireRole('owner'),
+    onboardingController.undismiss
   )
 
   router.get(

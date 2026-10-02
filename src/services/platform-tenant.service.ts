@@ -16,6 +16,7 @@ import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { record } from '@/services/audit.service'
 import { withTransaction } from '@/services/database.service'
+import { emitDomainEvent } from '@/services/domain-events.service'
 import { assertStillPlatformRole } from '@/services/platform.service'
 import {
   createOwnerInvitation,
@@ -97,8 +98,9 @@ export async function getTenantDetail(tenantId: string): Promise<PlatformTenantD
 /**
  * Create a customer tenant with no members, and invite its owner, in one
  * transaction audited with platform access. The staff creator does not
- * join it. The email is enqueued after commit; a failure to enqueue it
- * leaves the tenant and its pending invitation in place.
+ * join it. After commit it emits `tenant_created` (with platform access and
+ * no owner), then enqueues the email; a failure to enqueue it leaves the
+ * tenant and its pending invitation in place.
  * @param actor - The staff user (platform admin or owner; the route checked).
  * @param input - The validated body.
  * @returns The new tenant's detail, and whether the email was enqueued.
@@ -109,7 +111,7 @@ export async function createTenant(
   input: CreatePlatformTenantInput
 ): Promise<{ tenant: PlatformTenantDetail } & EmailDelivery> {
   const { ownerEmail, ...columns } = input
-  const { tenantId, dispatch } = await withTransaction(async (tx) => {
+  const { tenantId, createdAt, dispatch } = await withTransaction(async (tx) => {
     await assertStillPlatformRole(actor, 'admin', tx)
     const tenant = await tenantRepository.createWithoutOwner(columns, tx)
     await record(
@@ -125,10 +127,16 @@ export async function createTenant(
     )
     return {
       tenantId: tenant.id,
+      createdAt: tenant.createdAt,
       // eslint-disable-next-line unicorn/no-null -- no reason is asked when staff create the tenant
       dispatch: await createOwnerInvitation(actor, tenant.id, ownerEmail, null, tx),
     }
   })
+  await emitDomainEvent(
+    // eslint-disable-next-line unicorn/no-null -- the tenant has no owner until one accepts
+    { type: 'tenant_created', tenantId, ownerId: null, at: createdAt },
+    { access: 'platform' }
+  )
   const delivery = await sendOwnerInvitation(dispatch)
   return { tenant: await getTenantDetail(tenantId), emailSent: delivery.emailSent }
 }

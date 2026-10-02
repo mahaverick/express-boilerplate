@@ -46,10 +46,13 @@ describe('addEmailJob', () => {
     const context = { linkApp: 'apex' as const, resentFromId: 'message-0' }
     await addEmailJob(message, 'user-1', { jobId: 'notification-email-7-1', context })
 
-    expect(emailMessageService.createQueuedMessage).toHaveBeenCalledWith(message, 'user-1', {
-      context,
-      jobKey: 'notification-email-7-1',
-    })
+    // No executor: the row is written on the pool.
+    expect(emailMessageService.createQueuedMessage).toHaveBeenCalledWith(
+      message,
+      'user-1',
+      { context, jobKey: 'notification-email-7-1' },
+      undefined
+    )
     expect(queueService.addJob).toHaveBeenCalledWith(
       { name: 'email' },
       'password_reset',

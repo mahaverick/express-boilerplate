@@ -1,6 +1,7 @@
 /**
  * @file Values shared by the platform validators and services.
  */
+import type { OnboardingState } from '@/constants/onboarding.constants'
 import { TENANT_LIFECYCLE_STATES, type TenantLifecycleState } from '@/constants/tenant.constants'
 
 /**
@@ -56,3 +57,21 @@ export const EMAIL_SUPPRESSION_STATE_FILTERS = ['active', 'lifted', 'all'] as co
  * One of EMAIL_SUPPRESSION_STATE_FILTERS.
  */
 export type EmailSuppressionStateFilter = (typeof EMAIL_SUPPRESSION_STATE_FILTERS)[number]
+
+/**
+ * The staff onboarding list's state filter: every state a tracked tenant
+ * can be in. `not_tracked` is left out, since the list covers tracked
+ * tenants only.
+ */
+export const ONBOARDING_TENANT_STATE_FILTERS = [
+  'stuck',
+  'in_progress',
+  'awaiting_owner',
+  'complete',
+  'dismissed',
+] as const satisfies readonly OnboardingState[]
+
+/**
+ * One of ONBOARDING_TENANT_STATE_FILTERS.
+ */
+export type OnboardingTenantStateFilter = (typeof ONBOARDING_TENANT_STATE_FILTERS)[number]

@@ -93,7 +93,7 @@ describe('EmailTemplateKey', () => {
    */
   it('a template key outside EMAIL_TEMPLATE_KEYS is a compile error', () => {
     const wrapper: { templateKey: EmailTemplateKey } = {
-      // @ts-expect-error — EmailTemplateKey is closed to the six literals in EMAIL_TEMPLATE_KEYS; a typo (hyphen instead of underscore) must fail to compile, not silently produce a key nothing ever renders under.
+      // @ts-expect-error — EmailTemplateKey is closed to the literals in EMAIL_TEMPLATE_KEYS; a typo (hyphen instead of underscore) must fail to compile, not silently produce a key nothing ever renders under.
       templateKey: 'password-reset',
     }
     // A real assertion, not a throwaway — see tests/unit/database/models/user-token.model.test.ts's own comment on why the compile-time check needs one genuine read of the value.

@@ -13,7 +13,9 @@ import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { signAccessToken } from '@/services/session.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
+import { createOnboardingTenant, daysAgo, deleteOnboardingTenants } from '../../helpers/onboarding'
 import { makeStaff } from '../../helpers/platform-staff'
+import { deleteTrackedUsers } from '../../helpers/platform-users'
 import { request } from '../../helpers/request'
 
 interface StatsBody {
@@ -39,6 +41,8 @@ describe('GET /api/v1/platform/stats', () => {
 
   afterEach(async () => {
     await truncateAuditLogs()
+    await deleteOnboardingTenants()
+    await deleteTrackedUsers()
     if (createdUserIds.length === 0) return
     await sql`delete from users where id = any(${createdUserIds})`
     createdUserIds.length = 0
@@ -68,6 +72,7 @@ describe('GET /api/v1/platform/stats', () => {
     expect(data.emails).toHaveLength(7)
     expect(Object.keys(data.totals).toSorted((a, b) => a.localeCompare(b))).toEqual([
       'staff',
+      'stuckTenants',
       'tenants',
       'users',
     ])
@@ -88,6 +93,23 @@ describe('GET /api/v1/platform/stats', () => {
       ['complained', 'date', 'delivered', 'sent', 'suppressed', 'undelivered']
     )
     expect(data.emailMessages.map((day) => day.date)).toEqual(data.emails.map((day) => day.date))
+  })
+
+  it('counts a stuck tenant in totals.stuckTenants, whatever the range', async () => {
+    const token = await createStaff('viewer')
+    const stuckNow = async (range = '7d'): Promise<number> => {
+      const response = await stats(token, { range })
+      return (response.body as { data: StatsBody }).data.totals.stuckTenants ?? 0
+    }
+    const before = await stuckNow()
+    await createOnboardingTenant({ startedAt: daysAgo(10) })
+    await createOnboardingTenant({ startedAt: daysAgo(1) })
+
+    const week = await stuckNow()
+    const month = await stuckNow('30d')
+
+    expect(week - before).toBe(1)
+    expect(month).toBe(week)
   })
 
   it('answers 30 days for range=30d', async () => {

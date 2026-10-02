@@ -71,6 +71,11 @@ rather than repeating them.
   directly.** Work a controller starts with `void` after replying wraps itself
   in `try`/`catch` and never rejects; anything that can reject runs before the
   reply, where `BaseController.handle()` forwards it to `next()`.
+- **Never call `addEmailJob()` inside a transaction:** it takes its own pool
+  connection, so as many concurrent callers as `DB_POOL_MAX` deadlock. A write
+  that must commit the message row with its own writes calls
+  `createTrackedEmail(…, tx)` inside and `enqueueTrackedEmail()` after commit,
+  as `sendOnboardingReminder` does.
 - **A worker's `failed` handler must never reject:** an unhandled rejection
   exits the process. A retryable attempt logs `warn`; the last one calls
   `recordPermanentFailure` (`src/jobs/job-failure.job.ts`), which scrubs every
@@ -235,8 +240,10 @@ rather than repeating them.
   Keep `refusePlatformOptions` ahead of every route: without it Express
   answers OPTIONS with an `Allow` header listing the route's methods.
 - **`repositories/platform-tenant.repository.ts`,
-  `repositories/platform-stats.repository.ts` and
-  `repositories/platform-user.repository.ts` are imported only from
+  `repositories/platform-stats.repository.ts`,
+  `repositories/platform-user.repository.ts`,
+  `repositories/platform-email.repository.ts` and
+  `repositories/platform-onboarding.repository.ts` are imported only from
   `services/platform-*.service.ts`** (lint enforces it). "Your tenants" stays
   on `TenantRepository.listForUser`; don't merge the two paths.
 - **The platform tenant's member rules differ from a customer tenant's.**

@@ -38,6 +38,12 @@ const SAMPLE_VARIABLES: {
     appName: 'App',
   },
   account_setup: { firstName: 'Ada', setupUrl: 'https://x.test/s', appName: 'App' },
+  onboarding_reminder: {
+    tenantName: 'Acme',
+    appName: 'App',
+    nextStep: 'Invite a teammate',
+    overviewLink: 'https://x.test/tenants/acme',
+  },
 }
 
 describe('EMAIL_TEMPLATE_META', () => {
@@ -81,6 +87,12 @@ describe('EMAIL_TEMPLATE_META', () => {
         // eslint-disable-next-line unicorn/no-null -- the registry's "never resent" value
         resendAction: null,
       },
+      onboarding_reminder: {
+        senderClass: 'general',
+        previewVariables: ['tenantName', 'appName', 'nextStep', 'overviewLink'],
+        // eslint-disable-next-line unicorn/no-null -- the registry's "never resent" value
+        resendAction: null,
+      },
     })
   })
 
@@ -107,6 +119,12 @@ describe('EMAIL_TEMPLATE_META', () => {
   it('offers no resend for the two security notices', () => {
     expect(EMAIL_TEMPLATE_META.password_changed.resendAction).toBeNull()
     expect(EMAIL_TEMPLATE_META.registration_attempt.resendAction).toBeNull()
+  })
+
+  it('stores every onboarding reminder variable: its link carries no token', () => {
+    expect(EMAIL_TEMPLATE_META.onboarding_reminder.previewVariables).toContain('overviewLink')
+    expect(SECRET_VARIABLE_PATTERN.test('overviewLink')).toBe(false)
+    expect(EMAIL_TEMPLATE_META.onboarding_reminder.resendAction).toBeNull()
   })
 })
 

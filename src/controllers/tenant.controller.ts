@@ -10,7 +10,7 @@ import type { Request } from 'express'
 import { BaseController } from '@/controllers/base.controller'
 import { actorFrom, authenticatedUserId, tenantPrincipal } from '@/controllers/helpers.controller'
 import { HttpError } from '@/errors/http-error'
-import { toTenantDetail, toTenantListRow } from '@/presenters/tenant.presenter'
+import { toPublicTenant, toTenantDetail, toTenantListRow } from '@/presenters/tenant.presenter'
 import { invite, listPending, resend, revoke } from '@/services/tenant-invitation.service'
 import { changeRole, removeMember } from '@/services/tenant-membership.service'
 import {
@@ -76,7 +76,7 @@ class TenantController extends BaseController {
     const actor = actorFrom(request)
     const input = parseBody(newTenantSchema, request.body)
     const tenant = await createTenant(actor, input)
-    successResponse(response, tenant, 'Tenant created.', 201)
+    successResponse(response, toPublicTenant(tenant), 'Tenant created.', 201)
   })
 
   /**
@@ -113,7 +113,7 @@ class TenantController extends BaseController {
     const principal = tenantPrincipal(request)
     const input = parseBody(updateTenantSchema, request.body)
     const tenant = await updateTenant(actorFrom(request), principal.tenantId, input)
-    successResponse(response, tenant, 'Tenant updated.')
+    successResponse(response, toPublicTenant(tenant), 'Tenant updated.')
   })
 
   /**
