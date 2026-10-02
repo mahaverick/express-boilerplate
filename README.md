@@ -21,6 +21,10 @@ suppression list; see [Email tracking](#email-tracking).
 Onboarding: a code-defined steps registry with per-tenant and per-member
 progress, a customer checklist API, and a staff funnel, stuck-tenant list,
 reminders and manual completion; see [Onboarding](#onboarding).
+Usage analytics: every audited action, a short list of product events and
+every email tracking event go to PostHog through a transactional outbox
+that never blocks or fails a request, and `/api/v1/collect` proxies the
+frontends' posthog-js; see [Analytics (PostHog)](#analytics-posthog).
 [SECURITY.md](SECURITY.md#what-this-boilerplate-does-not-implement) lists what
 it does not implement.
 
@@ -119,6 +123,7 @@ refuses a non-JSON body with 415. See
 | `pnpm platform:grant -- <e> <role>` | Gives a platform-tenant role; see below.                                                   |
 | `pnpm email:fire-event <id> <type>` | Signs and posts a fake provider event (local only); see [Email tracking](#email-tracking). |
 | `pnpm onboarding:reconcile`         | Re-derives tracked tenants' automatic onboarding steps; see [Onboarding](#onboarding).     |
+| `pnpm analytics:backfill-groups`    | Sends every tenant's PostHog group properties; see [Analytics](#analytics-posthog).        |
 | `pnpm commit`                       | Interactive conventional-commit prompt.                                                    |
 
 `pnpm platform:grant -- <email> <role>` gives an existing user with a verified
@@ -327,6 +332,71 @@ effort: it reads the audit log, so entries pruned under
 `RETENTION_AUDIT_LOGS_DAYS` (0, the default, keeps them forever) leave no
 trace, and a restored old event leaves a stuck tenant stuck.
 
+## Analytics (PostHog)
+
+Analytics is off until `POSTHOG_PROJECT_KEY` is set: no outbox row is
+written, no analytics Worker starts, and `/api/v1/collect/*` answers 503
+`service_unavailable`. Server events and the browser share one PostHog
+project per environment, keyed by user id (`distinct_id`) and the `tenant`
+group.
+
+**Turning it on, once per environment:**
+
+1. Create a PostHog project for the environment and enable group analytics
+   with the group type `tenant` (index 0).
+2. Set `POSTHOG_PROJECT_KEY`, and `POSTHOG_HOST` when the project is not on
+   the US cloud (`https://eu.i.posthog.com` for the EU one). The assets host
+   follows the ingest host's region; `POSTHOG_ASSETS_HOST` overrides it.
+   Set the same key as the `POSTHOG_KEY` container env var of react and apex.
+3. Deploy, then run `pnpm analytics:backfill-groups` once, so tenants that
+   existed before carry their name, status and creation date. It sends
+   straight to PostHog and exits 1 if PostHog refuses a batch; a second run
+   is harmless.
+4. If react runs with the container env `ANALYTICS_CONSENT_MODE=required`, enable
+   "Cookieless server hash mode" in the project settings.
+
+**What the server sends.** Every audit action, as its name with `_` for
+`.` (`invitation.created` becomes `invitation_created`, and the
+staff-forced `user.signed_out` becomes `user_sessions_revoked`), with its
+metadata in snake_case, a free-text `reason` reduced to `has_reason`, and a
+tenant's `name` and `slug` left out;
+the product events `user_signed_up`, `user_signed_in`, `user_signed_out`,
+`password_changed`, `password_reset_completed`, `email_verified` and
+`onboarding_step_completed`; and each email tracking event as `email_<type>`
+(`email_delivered`, `email_opened`, ...). Each carries `source` (`audit`,
+`product` or `email`), `access`, `app: 'api'`, `$groups.tenant` when it
+belongs to a tenant, and the request's `trace_id` and `span_id`, so
+PostHog's events line up with the API's traces. No name, address, reason,
+subject or recipient is ever sent; the tenant's name goes only into the
+tenant group's properties.
+
+**How it is delivered.** The request that causes an event writes one
+`analytics_outbox` row in its own transaction (in a savepoint, so a failed
+insert never fails the request) and never calls PostHog. The analytics
+Worker drains the outbox every `ANALYTICS_DRAIN_INTERVAL_MS` (5 s) in batches
+of `ANALYTICS_DRAIN_BATCH_SIZE` (500) and deletes a row only once PostHog
+acknowledged it. While PostHog is down or slow, rows wait and are retried
+with a backoff of up to 10 minutes; rows still undelivered after
+`ANALYTICS_OUTBOX_RETENTION_DAYS` (7) are dropped by the daily retention
+purge with a `warn` log (`analyticsOutboxDropped`). A row PostHog rejects
+alone three times is dropped with an `error` log naming its event and id.
+An answer about the endpoint rather than the batch (401, 403, 404, 405, 407
+or 408, so a wrong `POSTHOG_PROJECT_KEY` or `POSTHOG_HOST`) is never counted
+against a row: the rows wait and are retried, and each drain logs one `error`
+naming those two variables.
+A resend after a crash carries the same `uuid`, so PostHog shows the event
+once.
+
+**The proxy.** posthog-js in react and apex sends to `/api/v1/collect`, the
+API's own origin, so ad blockers and the CSP's `connect-src 'self'` leave it
+alone. Requests stream through unread, the browser's cookies and bearer
+token are stripped, and PostHog sees the client's real `User-Agent` and the
+address, host, protocol and port Express resolved (`X-Forwarded-*` are
+overwritten, never taken from the client). PostHog's `Set-Cookie` and
+`Access-Control-*` response headers are dropped, and an upstream that stays
+silent for 30 s is answered 504. It has its own limiter
+(`analytics-proxy`, 3000 a minute per IP) and no traces.
+
 ## Make this yours
 
 This is a template. Before the first real commit on a project generated from
@@ -348,15 +418,15 @@ No gate enforces this list.
 
 ## Documentation index
 
-| Doc                                | Owns                                                                                          |
-| ---------------------------------- | --------------------------------------------------------------------------------------------- |
-| [README.md](README.md)             | Quick start, scripts, email tracking setup, onboarding, making the template yours, this index |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | Boot, layers, directory rules, configuration and env vars, Docker, deploying                  |
-| [DATABASE.md](DATABASE.md)         | Client, models, migrations, test database, live schema changes                                |
-| [SECURITY.md](SECURITY.md)         | Reporting, supported versions, what is and is not implemented                                 |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | Hooks, commits, CI, releases, dependency policy, docs to update                               |
-| [CLAUDE.md](CLAUDE.md)             | Rules and gotchas for anyone changing the code                                                |
-| [AGENTS.md](AGENTS.md)             | Agent entry point, pointing at CLAUDE.md and this index                                       |
+| Doc                                | Owns                                                                                                           |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| [README.md](README.md)             | Quick start, scripts, email tracking setup, onboarding, analytics setup, making the template yours, this index |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Boot, layers, directory rules, configuration and env vars, Docker, deploying                                   |
+| [DATABASE.md](DATABASE.md)         | Client, models, migrations, test database, live schema changes                                                 |
+| [SECURITY.md](SECURITY.md)         | Reporting, supported versions, what is and is not implemented                                                  |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Hooks, commits, CI, releases, dependency policy, docs to update                                                |
+| [CLAUDE.md](CLAUDE.md)             | Rules and gotchas for anyone changing the code                                                                 |
+| [AGENTS.md](AGENTS.md)             | Agent entry point, pointing at CLAUDE.md and this index                                                        |
 
 ## License
 

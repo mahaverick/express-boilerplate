@@ -33,10 +33,12 @@ shutdown handler (`createShutdownHandler`, `lifecycle.service.ts`). It runs
 
 With `WORKER_ENABLED`, `index.ts` then starts the Workers through
 `startWorkers()` (`worker-supervisor.service.ts`): email, notification and
-maintenance. Each time the supervisor starts a worker generation (boot is
-the first) it also registers the daily retention schedule
-(`ensureRetentionSchedule`, `src/jobs/maintenance.job.ts`). A failed
-registration logs a `warn` and is retried with the next generation. A new
+maintenance, and analytics when `POSTHOG_PROJECT_KEY` is set. Each time the
+supervisor starts a worker generation (boot is the first) it also registers
+the daily retention schedule (`ensureRetentionSchedule`,
+`src/jobs/maintenance.job.ts`) and, with analytics on, the analytics drain
+schedule (`ensureAnalyticsDrainSchedule`, `src/jobs/analytics.job.ts`). A
+failed registration logs a `warn` and is retried with the next generation. A new
 generation starts only when a worker connection gives up before its first
 ready, so a registration that fails while the Workers stay healthy waits
 for the next restart. The scheduler is stored in Redis, so one registered
@@ -58,8 +60,11 @@ port (`startServer(0)`): `getEnv()` is memoised, so a test cannot change
    above is dropped.
 
 **`app.ts`** wires, in order: `x-powered-by` off, `trust proxy` from
-`TRUST_PROXY`, `helmet`, `cors`, `requestId`, `requestContext`, the JSON
-(1 MB) and urlencoded (100 KB) body parsers, `GET /health`,
+`TRUST_PROXY`, `helmet`, `cors`, `requestId`, `requestContext`, the email
+webhook router (`/api/v1/webhooks/email`) and the analytics proxy
+(`/api/v1/collect`, behind its own limiter), both ahead of the JSON (1 MB)
+and urlencoded (100 KB) body parsers, which would consume or refuse their
+bodies, then `GET /health`,
 `GET /health/ready`, the versioned API router (`createApiRouter()` at
 `/api/v1`), a 404 catch-all, then `errorHandler`. Express matches in
 registration order, and the error handler must be last to see errors from
@@ -715,6 +720,64 @@ The operator guide (the Resend webhook and its secret, the two senders, the
 suppression list, the staff preview and resend, and `pnpm email:fire-event`
 for local) is [Email tracking in README.md](README.md#email-tracking).
 
+## Analytics
+
+Server events reach PostHog through a transactional outbox, and browser
+events through a proxy; no request ever calls PostHog.
+
+```
+request ── service transaction ── audit insert ── savepoint: analytics_outbox insert
+        ├─ after commit: product domain event ─── analytics_outbox insert (pool)
+        └─ email webhook transaction ─────────── savepoint: analytics_outbox insert
+
+analytics Worker, every ANALYTICS_DRAIN_INTERVAL_MS, concurrency 1
+  claimBatch: one autocommit UPDATE … FOR UPDATE SKIP LOCKED, 60 s lease
+  (connection released) ── POST <POSTHOG_HOST>/batch/ (10 s timeout)
+  ack: delete · retry (no answer, 429, 5xx, 401/403/404/405/407/408): keep, lease and backoff
+  rejected (400, 413, 415, 422, other 4xx): bisect; a row refused alone counts a rejection, dropped at 3
+
+browser posthog-js ── /api/v1/collect/* ── analytics-proxy limiter ── stream ── ingest or assets host
+```
+
+- **Writes** go only through `enqueueAnalytics` and, for an audit entry,
+  `enqueueAuditAnalytics` (`src/services/analytics/analytics-outbox.service.ts`):
+  a savepoint inside a transaction, a plain insert on the pool, a `warn` and
+  nothing more on failure. The audit hook in `writeEntry` (`audit.service.ts`)
+  covers every audited action; product events come from domain-event
+  subscribers (`analytics-forwarder.service.ts`); email events from
+  `processEmailWebhook`. The builder (`analytics-event-builder.service.ts`)
+  holds every PII rule.
+- **The drain** (`drainAnalyticsOutbox`,
+  `src/services/analytics/analytics-drain.service.ts`) claims in one
+  statement, so its connection is back in the pool before the HTTP call:
+  a hanging PostHog never holds one. The lease and `SKIP LOCKED` keep two
+  replicas' drains apart. Retryable failures only grow `attempts`, which sets
+  the backoff (`least(2^attempts × 5 s, 600 s)` after the lease); during an
+  outage of any length only the retention rule (`analytics_outbox`,
+  `ANALYTICS_OUTBOX_RETENTION_DAYS`) removes rows. A rejected batch is split
+  in halves until the refused row is alone; the first retryable answer ends
+  the drain, so an outage costs one timeout per tick. The endpoint-level
+  4xx answers (401, 403, 404, 405, 407, 408) are retryable, never a
+  rejection, so a wrong key or host drops nothing; the drain logs one `error`
+  per tick naming `POSTHOG_PROJECT_KEY` and `POSTHOG_HOST`.
+- **At least once, shown once.** A row is deleted after PostHog acknowledged
+  it, so a crash between the two resends it with the same `uuid` (the row
+  id), `timestamp`, `event` and `distinct_id`, which PostHog deduplicates on.
+- **The proxy** (`src/routes/analytics-proxy.routes.ts`) sends `/static/*`
+  and `/array/*` to the assets host and everything else to the ingest host,
+  streaming bodies untouched. It removes `Cookie` and `Authorization`, so the
+  refresh cookie (`Path=/`) never reaches PostHog, and overwrites
+  `X-Forwarded-For` (`request.ip`), `-Host`, `-Proto` and `-Port`. It strips
+  PostHog's `Set-Cookie` and `Access-Control-*` response headers, and answers
+  504 when PostHog stays silent for 30 s. Without `POSTHOG_PROJECT_KEY` it answers
+  503 `service_unavailable`.
+- **Groups.** A tenant's `name`, `status` and `created_at` reach PostHog only
+  as `$groupidentify` properties: from the audit hook when a tenant is
+  created or changes state, and from `pnpm analytics:backfill-groups` for
+  tenants that existed before.
+
+The operator steps are in [Analytics (PostHog) in README.md](README.md#analytics-posthog).
+
 ## Health checks
 
 Two endpoints, deliberately different depths:
@@ -862,7 +925,9 @@ which pino, a CommonJS module imported from ESM, is never patched.
 
 What gets spans:
 
-- incoming HTTP and Express routing, except `/health` and `/health/ready`;
+- incoming HTTP and Express routing, except `/health`, `/health/ready` and
+  everything under `/api/v1/collect/` (the PostHog proxy, one request per
+  browser event batch or replay chunk);
 - BullMQ's Redis traffic, through `IORedisInstrumentation`. It patches
   `ioredis` only; `redis.service.ts` uses node-redis, which no installed
   instrumentation covers, so its calls (health checks, rate limits, the
@@ -990,8 +1055,8 @@ the command `pnpm db:migrate:prod` runs.
 process. To split them, set it to `false` on API-only pods and `true` on a
 separate worker deployment that shares the Redis queues. `WORKER_CONCURRENCY`
 (default 5) sets the email and notification Workers' concurrency; the
-maintenance Worker always runs one job at a time, and the daily retention purge
-runs only where Workers run.
+maintenance and analytics Workers always run one job at a time, and the daily
+retention purge and the analytics drain run only where Workers run.
 
 One-time repository setup before any of this is live:
 
