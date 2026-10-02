@@ -369,7 +369,12 @@ second time under the lock, then run `pnpm db:migrate`.
   CHECK by scanning `tenants` once. `onboarding_completions` is new and
   empty, so its indexes build instantly. Every request that resolves a
   tenant waits for that scan; on a large `tenants` table apply it in a quiet
-  window.
+  window. Its three new foreign keys to `users` (`onboarding_dismissed_by`,
+  and `onboarding_completions.user_id` and `completed_by`) also take
+  `SHARE ROW EXCLUSIVE` on `users` until the transaction commits, so every
+  write to a user row (login's `last_logged_in_at` update, a registration, a
+  profile change) waits for the migration too; reads, including `FOR SHARE`
+  and `FOR NO KEY UPDATE` locks, do not.
 
 ## Test database
 
