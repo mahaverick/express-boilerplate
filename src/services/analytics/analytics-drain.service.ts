@@ -14,7 +14,11 @@ import {
 } from '@/constants/analytics.constants'
 import type { AnalyticsOutboxRow } from '@/database/models/analytics-outbox.model'
 import { analyticsOutboxRepository } from '@/repositories/analytics-outbox.repository'
-import { sendBatch, toPosthogBatchEvent } from '@/services/analytics/posthog-batch.service'
+import {
+  ENDPOINT_LEVEL_STATUSES,
+  sendBatch,
+  toPosthogBatchEvent,
+} from '@/services/analytics/posthog-batch.service'
 import { logger } from '@/services/logger.service'
 
 /**
@@ -114,6 +118,14 @@ export async function drainAnalyticsOutbox(now: Date = new Date()): Promise<Drai
   if (rows.length > 0) await deliver(rows, tally)
 
   if (tally.acked.length > 0) await analyticsOutboxRepository.deleteByIds(tally.acked)
+  if (tally.lastRetryStatus !== undefined && ENDPOINT_LEVEL_STATUSES.has(tally.lastRetryStatus)) {
+    logger.error(
+      'PostHog refused the analytics endpoint; check POSTHOG_PROJECT_KEY and POSTHOG_HOST',
+      {
+        status: tally.lastRetryStatus,
+      }
+    )
+  }
   if (tally.retried > 0) {
     logger.warn('analytics batch deferred', {
       rows: tally.retried,

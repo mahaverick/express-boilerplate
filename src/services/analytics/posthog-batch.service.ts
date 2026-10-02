@@ -24,12 +24,19 @@ export interface PosthogBatchEvent {
 
 /**
  * How PostHog answered a batch: `ack` (2xx, every event accepted), `retry`
- * (no answer, a timeout, 429 or 5xx: send the same events again later) or
- * `rejected` (any other status: the batch itself is refused, and sending it
+ * (no answer, a timeout, 429, 5xx or an endpoint-level 4xx: send the same events again later) or
+ * `rejected` (any other 4xx: the batch itself is refused, and sending it
  * again unchanged would be refused again).
  */
 export type SendResult =
   { kind: 'ack' } | { kind: 'retry'; status?: number } | { kind: 'rejected'; status: number }
+
+/**
+ * 4xx statuses that describe the endpoint or the credentials, not the batch:
+ * unauthorized, forbidden, not found, method not allowed, proxy auth required
+ * and request timeout.
+ */
+export const ENDPOINT_LEVEL_STATUSES: ReadonlySet<number> = new Set([401, 403, 404, 405, 407, 408])
 
 /**
  * The `/batch/` form of an outbox row.
@@ -51,12 +58,17 @@ export function toPosthogBatchEvent(
 /**
  * Classify a PostHog response status.
  * @param status - The HTTP status PostHog answered with.
- * @returns `ack` for 2xx; `rejected` for a 4xx other than 429; `retry` for
- *   everything else (429, 5xx, and a 1xx or 3xx `fetch` did not resolve).
+ * @returns `ack` for 2xx; `rejected` for a 4xx that is not endpoint-level
+ *   (400, 413, 415, 422 and the like: the batch is at fault); `retry` for
+ *   everything else (429, 5xx, a 1xx or 3xx `fetch` did not resolve, and the
+ *   endpoint-level 4xx: a bad key or host fails every batch, so it is no
+ *   verdict on these rows).
  */
 export function classifyStatus(status: number): SendResult {
   if (status >= 200 && status < 300) return { kind: 'ack' }
-  if (status !== 429 && status >= 400 && status < 500) return { kind: 'rejected', status }
+  if (status !== 429 && status >= 400 && status < 500 && !ENDPOINT_LEVEL_STATUSES.has(status)) {
+    return { kind: 'rejected', status }
+  }
   return { kind: 'retry', status }
 }
 

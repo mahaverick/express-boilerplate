@@ -318,6 +318,32 @@ describe('drainAnalyticsOutbox', () => {
     expect(await outboxRows()).toEqual([])
   })
 
+  it('keeps every row through a refused key or host, logging one error per tick, then sends them', async () => {
+    await seed('key_a', 'key_b', 'key_c')
+    posthog().respondWith(401)
+    const error = vi.spyOn(logger, 'error')
+    const start = Date.now()
+
+    for (let tick = 0; tick < 4; tick += 1) {
+      await expect(
+        drainAnalyticsOutbox(new Date(start + tick * PAST_LEASE_AND_BACKOFF_MS))
+      ).resolves.toEqual({ sent: 0, retried: 3, rejected: 0, dropped: 0 })
+    }
+    expect(error).toHaveBeenCalledTimes(4)
+    expect(error).toHaveBeenCalledWith(
+      'PostHog refused the analytics endpoint; check POSTHOG_PROJECT_KEY and POSTHOG_HOST',
+      { status: 401 }
+    )
+    const rows = await outboxRows()
+    expect(rows.map((row) => row.rejections)).toEqual([0, 0, 0])
+
+    posthog().respondWith(200)
+    await expect(
+      drainAnalyticsOutbox(new Date(start + 4 * PAST_LEASE_AND_BACKOFF_MS))
+    ).resolves.toMatchObject({ sent: 3 })
+    expect(await outboxRows()).toEqual([])
+  })
+
   it('stops the bisect at the first retryable answer and leaves every unsent row leased', async () => {
     await seed('good_a', 'poison', 'good_c', 'good_d')
     posthog().onBatch((events) => {

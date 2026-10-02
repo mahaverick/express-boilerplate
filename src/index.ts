@@ -3,6 +3,7 @@
  * signal handling and workers. Excluded from coverage as signal wiring;
  * tests/unit/index.test.ts spawns it to prove boot refuses a bad environment.
  */
+import { isAnalyticsEnabled } from '@/configs/analytics.config'
 import { assertEnvConsistent } from '@/configs/env-consistency.config'
 import { getEnv } from '@/configs/env.config'
 // Static, unlike `@/server`: constructing the logger is lazy and calls no getEnv().
@@ -62,7 +63,11 @@ async function boot(): Promise<void> {
   if (isShuttingDown()) return
   // Throws if a Worker fails to start: boot() rejects, and the unhandledRejection handler exits 1.
   workers.supervised = startWorkers()
-  logger.info('Workers started (email, notification, maintenance)')
+  logger.info(
+    isAnalyticsEnabled()
+      ? 'Workers started (email, notification, maintenance, analytics)'
+      : 'Workers started (email, notification, maintenance)'
+  )
 }
 
 /**
