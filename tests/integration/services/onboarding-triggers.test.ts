@@ -2,7 +2,8 @@
  * @file Each onboarding trigger through the real services, with the
  * subscribers createApp() registers: tenant creation on both paths, the
  * first owner's accept (completing teammate_joined when others joined
- * while the tenant waited), a teammate's accept, teammate invitations (and the
+ * while the tenant waited), a teammate's accept, a first member's accept
+ * on a started tenant (which completes nothing), teammate invitations (and the
  * owner invitation and resend, which don't count), changed and no-op
  * settings saves, staff acting through platform access, and a throwing
  * subscriber that must not fail its request.
@@ -17,7 +18,11 @@ import { OnboardingCompletionRepository } from '@/repositories/onboarding-comple
 import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { db, sql, withTransaction } from '@/services/database.service'
-import { resetDomainEventSubscribers, subscribeDomainEvent } from '@/services/domain-events.service'
+import {
+  emitDomainEvent,
+  resetDomainEventSubscribers,
+  subscribeDomainEvent,
+} from '@/services/domain-events.service'
 import { registerOnboardingSubscribers } from '@/services/onboarding.service'
 import { createTenant as createTenantAsStaff } from '@/services/platform-tenant.service'
 import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
@@ -188,6 +193,25 @@ describe('accepting an invitation', () => {
     const reread = await tenantRepository.findById(tenantId)
     expect(reread?.onboardingStartedAt).toBeInstanceOf(Date)
     expect(await completedKeys(tenantId)).toEqual(['teammate_joined'])
+  })
+
+  it("a first member's accept on a started tenant completes nothing", async () => {
+    const { owner, tenant } = await customerTenant()
+
+    // Fabricated: no real accept is a started tenant's first member, so only this pins the guard.
+    await emitDomainEvent(
+      {
+        type: 'invitation_accepted',
+        tenantId: tenant.id,
+        userId: owner.id,
+        role: 'viewer',
+        wasFirstMember: true,
+        at: new Date(),
+      },
+      { access: 'member' }
+    )
+
+    expect(await completedKeys(tenant.id)).toEqual([])
   })
 
   it('a teammate joining a started tenant completes teammate_joined', async () => {
