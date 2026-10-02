@@ -384,7 +384,7 @@ describe('email_* from the email webhook', () => {
     })
     createdTenantIds.push(tenant.id)
     const message = await insertTestMessage(PREFIX, {
-      templateKey: 'tenant_invitation',
+      templateKey: 'onboarding_reminder',
       userId: user.id,
       tenantId: tenant.id,
     })
@@ -407,7 +407,7 @@ describe('email_* from the email webhook', () => {
       properties: {
         source: 'email',
         access: 'system',
-        template_key: 'tenant_invitation',
+        template_key: 'onboarding_reminder',
         message_id: message.id,
         bounce_kind: 'soft',
         $groups: { tenant: tenant.id },

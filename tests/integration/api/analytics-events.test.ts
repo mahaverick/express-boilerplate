@@ -152,9 +152,13 @@ async function waitForOutboxRow(event: string, distinctId: string): Promise<void
 /**
  * Register, verify and sign in a user through the API, each under its own trace.
  * @param email - The address.
+ * @param sessionId - A browser session to send on the sign-in as `X-POSTHOG-SESSION-ID`.
  * @returns The user id, the access token and each step's trace id.
  */
-async function signUpVerifyAndSignIn(email: string): Promise<{
+async function signUpVerifyAndSignIn(
+  email: string,
+  sessionId?: string
+): Promise<{
   userId: string
   accessToken: string
   traces: { signUp: string; verify: string; signIn: string }
@@ -180,9 +184,9 @@ async function signUpVerifyAndSignIn(email: string): Promise<{
   )
   expect(verify.status).toBe(200)
 
-  const signIn = await traced(
-    request(app).post('/api/v1/auth/login').send({ email, password: PASSWORD })
-  )
+  const signInRequest = request(app).post('/api/v1/auth/login')
+  if (sessionId !== undefined) void signInRequest.set('X-POSTHOG-SESSION-ID', sessionId)
+  const signIn = await traced(signInRequest.send({ email, password: PASSWORD }))
   expect(signIn.status).toBe(200)
   const accessToken = (signIn.body as { data: { accessToken: string } }).data.accessToken
   return {
@@ -382,13 +386,48 @@ describe('sign up, sign in, create a tenant, invite, sign up through the invitat
   )
 })
 
+describe('browser session attribution', () => {
+  it(
+    'puts $session_id on the user’s own events, including the sign-in, and never on the tenant group row',
+    async () => {
+      const { app } = running()
+      const signInSession = randomUUID()
+      const apiSession = randomUUID()
+      const owner = await signUpVerifyAndSignIn(
+        `analytics-session-${randomUUID()}@example.test`,
+        signInSession
+      )
+      const tenantCreation = await traced(
+        request(app)
+          .post('/api/v1/tenants')
+          .set('Authorization', `Bearer ${owner.accessToken}`)
+          .set('X-POSTHOG-SESSION-ID', apiSession)
+          .send({ name: 'Session Workspace', slug: `session-${randomUUID().slice(0, 8)}` })
+      )
+      expect(tenantCreation.status).toBe(201)
+      state.tenantIds.push((tenantCreation.body as { data: { id: string } }).data.id)
+
+      const events = await drainAll()
+      // The sign-in has no authenticated user yet, so its session is the user's own.
+      expect(eventsOf(events, owner.traces.signIn)[0]?.properties.$session_id).toBe(signInSession)
+      const [created, groupIdentify] = eventsOf(events, tenantCreation.traceId)
+      expect(created?.event).toBe('tenant_created')
+      expect(created?.properties.$session_id).toBe(apiSession)
+      expect(groupIdentify?.event).toBe('$groupidentify')
+      expect(groupIdentify?.properties).not.toHaveProperty('$session_id')
+      expect(groupIdentify?.properties).not.toHaveProperty('$process_person_profile')
+    },
+    FLOW_TIMEOUT_MS
+  )
+})
+
 describe('email webhook events', () => {
   it('sends one email_<type> per stored event, with the template, message, user and tenant, never the recipient', async () => {
     const { app } = running()
     const userId = randomUUID()
     const tenantId = randomUUID()
     const message = await insertTestMessage(TRACKING_PREFIX, {
-      templateKey: 'tenant_invitation',
+      templateKey: 'onboarding_reminder',
       userId,
       tenantId,
     })
@@ -419,7 +458,7 @@ describe('email webhook events', () => {
     ])
     expect(events[0]?.properties).toMatchObject({
       source: 'email',
-      template_key: 'tenant_invitation',
+      template_key: 'onboarding_reminder',
       message_id: message.id,
       $groups: { tenant: tenantId },
     })

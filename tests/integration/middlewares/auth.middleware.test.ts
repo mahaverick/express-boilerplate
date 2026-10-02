@@ -20,6 +20,7 @@ import { HttpError } from '@/errors/http-error'
 import { requireAuth } from '@/middlewares/auth.middleware'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
+import { requestContextStore } from '@/services/request-context.service'
 import { denySession } from '@/services/session-denylist.service'
 import { signAccessToken } from '@/services/session.service'
 import { withMutatedModule } from '../../helpers/mutate'
@@ -145,6 +146,22 @@ describe('requireAuth', () => {
       firstName: user.firstName,
       lastName: user.lastName,
     })
+  })
+
+  it('puts the authenticated user id in the request context, and none when auth fails', async () => {
+    const user = await createUser()
+    const token = signAccessToken(user, randomUUID())
+    const context = { requestId: randomUUID() }
+    await requestContextStore.run(context, () =>
+      requireAuth(buildRequest(`Bearer ${token}`), noResponse, mockNext().next)
+    )
+    expect(context).toMatchObject({ userId: user.id })
+
+    const rejected = { requestId: randomUUID() }
+    await requestContextStore.run(rejected, () =>
+      requireAuth(buildRequest('Bearer not-a-real-jwt'), noResponse, mockNext().next)
+    )
+    expect(rejected).not.toHaveProperty('userId')
   })
 
   /**

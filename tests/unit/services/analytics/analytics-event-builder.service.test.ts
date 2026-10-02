@@ -47,6 +47,7 @@ const TRACE = {
   traceId: '0af7651916cd43dd8448eb211c80319c',
   spanId: 'b7ad6b7169203331',
   posthogSessionId: '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b',
+  userId: ACTOR_ID,
 }
 const PII_NAME = 'Pii Probe'
 const PII_EMAIL = 'pii-probe@example.test'
@@ -270,8 +271,6 @@ describe('buildAuditEvents', () => {
         app: 'api',
         trace_id: TRACE.traceId,
         span_id: TRACE.spanId,
-        $session_id: TRACE.posthogSessionId,
-        $process_person_profile: false,
         $group_type: 'tenant',
         $group_key: TENANT_ID,
         $group_set: { name: PII_NAME, status: 'active', created_at: OCCURRED_AT.toISOString() },
@@ -339,6 +338,101 @@ describe('buildAuditEvents', () => {
     })
     expect(optional?.properties).toMatchObject({ required: false })
     expect(removed?.properties).toMatchObject({ required: false })
+  })
+})
+
+describe('session attribution', () => {
+  const session = { posthogSessionId: TRACE.posthogSessionId }
+
+  it('adds $session_id to the actor own audit event', () => {
+    const [row] = buildAuditEvents(auditRow('tenant.updated', { changed: ['name'] }), {
+      ...session,
+      userId: ACTOR_ID,
+    })
+    expect(row?.properties).toMatchObject({ $session_id: TRACE.posthogSessionId })
+  })
+
+  it('omits $session_id from a staff $set for another user', () => {
+    const rows = buildAuditEvents(
+      auditRow('member.removed', { userId: TARGET_ID, role: 'admin', self: false }),
+      { ...session, userId: ACTOR_ID },
+      { staffStatus: { userId: TARGET_ID, platformRole: NONE } }
+    )
+    expect(rows[0]?.properties).toHaveProperty('$session_id')
+    expect(rows[1]?.event).toBe('$set')
+    expect(rows[1]?.properties).not.toHaveProperty('$session_id')
+  })
+
+  it('adds $session_id to a staff $set for the actor', () => {
+    const rows = buildAuditEvents(
+      auditRow('invitation.accepted', { role: 'viewer' }),
+      { ...session, userId: ACTOR_ID },
+      { staffStatus: { userId: ACTOR_ID, platformRole: 'viewer' } }
+    )
+    expect(rows[1]?.event).toBe('$set')
+    expect(rows[1]?.properties).toHaveProperty('$session_id', TRACE.posthogSessionId)
+  })
+
+  it('never adds $session_id to a $groupidentify, and sends no person-profile flag', () => {
+    const row = buildTenantGroupIdentify(
+      { id: TENANT_ID, name: 'Acme', status: 'active', createdAt: OCCURRED_AT, isPlatform: false },
+      { ...session, userId: ACTOR_ID },
+      'audit',
+      'member',
+      OCCURRED_AT
+    )
+    expect(row.properties).not.toHaveProperty('$session_id')
+    expect(row.properties).not.toHaveProperty('$process_person_profile')
+  })
+
+  it('omits $session_id from a system row inside a user request', () => {
+    const [row] = buildAuditEvents(
+      auditRow(
+        'platform.member.auto_joined',
+        { userId: TARGET_ID, role: 'viewer' },
+        { actorKind: 'system', actorUserId: NONE, access: 'system' }
+      ),
+      { ...session, userId: ACTOR_ID }
+    )
+    expect(row?.distinctId).toBe('system')
+    expect(row?.properties).not.toHaveProperty('$session_id')
+  })
+
+  it('omits $session_id from an event whose distinct id is not the request user', () => {
+    const properties = commonProperties({
+      source: 'product',
+      access: 'member',
+      distinctId: TARGET_ID,
+      context: { ...session, userId: ACTOR_ID },
+    })
+    expect(properties).not.toHaveProperty('$session_id')
+  })
+
+  it('omits $session_id from an unauthenticated event that is not a sign-in', () => {
+    const row = buildProductEvent(
+      { type: 'password_reset_completed', userId: TARGET_ID, at: OCCURRED_AT },
+      session
+    )
+    expect(row.properties).not.toHaveProperty('$session_id')
+  })
+
+  it.each(['user_signed_in', 'user_signed_up'] as const)(
+    'adds $session_id to %s when the request has no authenticated user',
+    (type) => {
+      const row = buildProductEvent(
+        { type, userId: TARGET_ID, method: 'password', at: OCCURRED_AT },
+        session
+      )
+      expect(row.properties).toHaveProperty('$session_id', TRACE.posthogSessionId)
+    }
+  )
+
+  it('omits $session_id from a sign-in made while another user is authenticated', () => {
+    const row = buildProductEvent(
+      { type: 'user_signed_in', userId: TARGET_ID, method: 'password', at: OCCURRED_AT },
+      { ...session, userId: ACTOR_ID }
+    )
+    expect(row.properties).not.toHaveProperty('$session_id')
   })
 })
 
@@ -782,7 +876,7 @@ describe('buildEmailEvent', () => {
       {
         type: 'bounced',
         messageId: TARGET_ID,
-        templateKey: 'tenant_invitation',
+        templateKey: 'onboarding_reminder',
         userId: ACTOR_ID,
         tenantId: TENANT_ID,
         bounceKind: 'hard',
@@ -795,7 +889,7 @@ describe('buildEmailEvent', () => {
       distinctId: ACTOR_ID,
       occurredAt: OCCURRED_AT,
       properties: {
-        template_key: 'tenant_invitation',
+        template_key: 'onboarding_reminder',
         message_id: TARGET_ID,
         bounce_kind: 'hard',
         source: 'email',
@@ -806,6 +900,43 @@ describe('buildEmailEvent', () => {
         span_id: TRACE.spanId,
       },
     })
+  })
+
+  it('sends an invitation email event with tenant_id as a plain property and no group', () => {
+    const row = buildEmailEvent(
+      {
+        type: 'delivered',
+        messageId: TARGET_ID,
+        templateKey: 'tenant_invitation',
+        userId: ACTOR_ID,
+        tenantId: TENANT_ID,
+        bounceKind: NONE,
+        occurredAt: OCCURRED_AT,
+      },
+      {}
+    )
+    expect(row.properties).toMatchObject({
+      template_key: 'tenant_invitation',
+      tenant_id: TENANT_ID,
+    })
+    expect(row.properties).not.toHaveProperty('$groups')
+  })
+
+  it('sends an invitation email event with no tenant without a tenant_id', () => {
+    const row = buildEmailEvent(
+      {
+        type: 'delivered',
+        messageId: TARGET_ID,
+        templateKey: 'tenant_invitation',
+        userId: ACTOR_ID,
+        tenantId: NONE,
+        bounceKind: NONE,
+        occurredAt: OCCURRED_AT,
+      },
+      {}
+    )
+    expect(row.properties).not.toHaveProperty('tenant_id')
+    expect(row.properties).not.toHaveProperty('$groups')
   })
 
   it('sends a message with no user as a system event without a group or bounce kind', () => {

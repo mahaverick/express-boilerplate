@@ -12,6 +12,7 @@ import {
 import { HttpError } from '@/errors/http-error'
 import { toAuthenticatedUser, type AuthenticatedUser } from '@/presenters/user.presenter'
 import { UserRepository } from '@/repositories/user.repository'
+import { requestContextStore } from '@/services/request-context.service'
 import { isSessionDenied } from '@/services/session-denylist.service'
 import { verifyAccessToken } from '@/services/session.service'
 import { isRecentAuth } from '@/utilities/recent-auth.utilities'
@@ -127,6 +128,8 @@ export async function requireAuth(
       request.authTime = payload.auth_time
     }
     request.user = await loadAuthenticatedUser(payload.sub)
+    const context = requestContextStore.getStore()
+    if (context) context.userId = request.user.id
     next()
   } catch (error) {
     next(error)

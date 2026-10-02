@@ -38,6 +38,11 @@ export interface RequestContext {
    * is a UUID (posthog-session.middleware.ts).
    */
   posthogSessionId?: string
+  /**
+   * The authenticated user's id, set by `requireAuth` once the token and
+   * user check out. Absent on a request that has not authenticated (yet).
+   */
+  userId?: string
   tenant?: TenantContext
 }
 

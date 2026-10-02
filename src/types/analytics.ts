@@ -8,13 +8,18 @@ import type { SignInMethod } from '@/types/domain-event'
 
 /**
  * What links a server event to its request: the active OTel span, and the
- * browser's PostHog session from `X-POSTHOG-SESSION-ID`. Each is absent
- * when there is none.
+ * browser's PostHog session from `X-POSTHOG-SESSION-ID`, and the
+ * authenticated user who sent it. Each is absent when there is none.
  */
 export interface AnalyticsContext {
   traceId?: string
   spanId?: string
   posthogSessionId?: string
+  /**
+   * The authenticated user of the request; the session id belongs to this
+   * user's browser, so only events of this user may carry it.
+   */
+  userId?: string
 }
 
 /**

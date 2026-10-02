@@ -357,6 +357,13 @@ group.
    is harmless.
 4. If react runs with the container env `ANALYTICS_CONSENT_MODE=required`, enable
    "Cookieless server hash mode" in the project settings.
+5. Set `TRUST_PROXY` to the number of proxies in front of this app, counting
+   every hop (the frontend's nginx and the load balancer). The analytics
+   proxy forwards `request.ip` to PostHog; with `TRUST_PROXY=false` behind
+   a proxy that is the proxy's address, so GeoIP is wrong for everyone and, in
+   cookieless mode, PostHog's hash merges different people. Boot warns when
+   `POSTHOG_PROJECT_KEY` is set, `TRUST_PROXY` is false and `APP_ENV` is not
+   `local`.
 
 **What the server sends.** Every audit action, as its name with `_` for
 `.` (`invitation.created` becomes `invitation_created`, and the
@@ -376,8 +383,12 @@ tenant's name goes only into the tenant group's properties, which a
 `$groupidentify` event sends when a tenant is created, updated or changes
 state. The exception is an address's domain: invitation, auto-join, user and
 email audit events carry `email_domain` (`onboarding_reminder_sent` carries
-`email_domains`). `distinct_id` and `$session_id` are pseudonymous
-identifiers. A purge does not reach PostHog: see
+`email_domains`). A tenant invitation's email events carry `tenant_id` as a
+plain property and join no group, because the recipient is not a member.
+`distinct_id` and `$session_id` are pseudonymous identifiers. `$session_id`
+is sent only on an event of the user whose browser sent it (a sign-in or
+sign-up counts, as the user is not authenticated yet); `$groupidentify`, a
+`$set` for another user and `system` events never carry it. A purge does not reach PostHog: see
 [SECURITY.md](SECURITY.md#purge-the-only-hard-delete) for what stays there.
 
 **How it is delivered.** The request that causes an event writes one

@@ -110,7 +110,6 @@ describe('backfillTenantGroups', () => {
           source: 'backfill',
           access: 'system',
           app: 'api',
-          $process_person_profile: false,
           $group_type: 'tenant',
           $group_key: active.id,
           $group_set: {

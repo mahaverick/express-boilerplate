@@ -29,6 +29,7 @@ import type {
   TenantGroupSnapshot,
 } from '@/types/analytics'
 import type { DomainEventAccess, ProductDomainEvent } from '@/types/domain-event'
+import type { EmailTemplateKey } from '@/utilities/email-template.utilities'
 
 /**
  * Where a server event came from: `backfill` is `pnpm analytics:backfill-groups`
@@ -50,6 +51,12 @@ const PII_KEYS: ReadonlySet<string> = new Set(PII_PROPERTY_KEYS)
  * The PostHog group type every tenant event joins.
  */
 const TENANT_GROUP_TYPE = 'tenant'
+
+/**
+ * The template whose recipient is not a tenant member yet (and may never be),
+ * so its email events must not join the tenant group.
+ */
+const INVITATION_TEMPLATE_KEY: EmailTemplateKey = 'tenant_invitation'
 
 /**
  * Convert one camelCase key to snake_case.
@@ -141,6 +148,11 @@ interface CommonInput {
   access: AuditAccess
   distinctId: string
   tenantId?: string | undefined
+  /**
+   * Whether the event is the user's own sign-in or sign-up. Such a request
+   * has no authenticated user yet, so the browser's session is theirs.
+   */
+  isOwnSignIn?: boolean
   context: AnalyticsContext
 }
 
@@ -148,8 +160,10 @@ interface CommonInput {
  * The properties every server event carries.
  * @param input - The event's source, access, distinct id, tenant and context.
  * @returns `source`, `access`, `app`, `$groups` (with a tenant), `trace_id`
- * and `span_id` (with a span), `$session_id` (with a browser session), and
- * `$process_person_profile: false` for the system distinct id.
+ * and `span_id` (with a span), `$session_id` (with a browser session that
+ * is this distinct id's: the request's authenticated user, or the user
+ * signing in or up), and `$process_person_profile: false` for the system
+ * distinct id.
  */
 export function commonProperties(input: CommonInput): Record<string, unknown> {
   const properties: Record<string, unknown> = {
@@ -160,7 +174,11 @@ export function commonProperties(input: CommonInput): Record<string, unknown> {
   if (input.tenantId !== undefined) properties.$groups = { [TENANT_GROUP_TYPE]: input.tenantId }
   if (input.context.traceId !== undefined) properties.trace_id = input.context.traceId
   if (input.context.spanId !== undefined) properties.span_id = input.context.spanId
-  if (input.context.posthogSessionId !== undefined) {
+  const isSessionTheirs =
+    input.context.userId === undefined
+      ? input.isOwnSignIn === true
+      : input.context.userId === input.distinctId
+  if (isSessionTheirs && input.context.posthogSessionId !== undefined) {
     properties.$session_id = input.context.posthogSessionId
   }
   if (input.distinctId === SYSTEM_DISTINCT_ID) properties.$process_person_profile = false
@@ -210,9 +228,10 @@ function auditProperties(entry: AuditLog): Record<string, unknown> {
 /**
  * The `$groupidentify` row that sets a tenant group's properties, as
  * posthog-node's `groupIdentify` sends it: `distinct_id` is
- * `$tenant_<id>`, and no person is created for it.
+ * `$tenant_<id>`, with no `$process_person_profile` flag. It carries the
+ * trace but never a browser session: the row is the tenant's, not the actor's.
  * @param tenant - The tenant as it now is.
- * @param context - The trace and session to link it to.
+ * @param context - The trace to link it to.
  * @param source - What prompted it.
  * @param access - How the actor reached the tenant.
  * @param occurredAt - When it happened.
@@ -225,12 +244,14 @@ export function buildTenantGroupIdentify(
   access: AuditAccess,
   occurredAt: Date
 ): NewAnalyticsOutboxRow {
+  const common = commonProperties({ source, access, distinctId: SYSTEM_DISTINCT_ID, context })
+  delete common.$process_person_profile
   return {
     event: '$groupidentify',
     distinctId: `$${TENANT_GROUP_TYPE}_${tenant.id}`,
     occurredAt,
     properties: {
-      ...commonProperties({ source, access, distinctId: SYSTEM_DISTINCT_ID, context }),
+      ...common,
       $group_type: TENANT_GROUP_TYPE,
       $group_key: tenant.id,
       $group_set: {
@@ -391,6 +412,7 @@ export function buildProductEvent(
         access: distinctId === SYSTEM_DISTINCT_ID ? 'system' : access,
         distinctId,
         tenantId,
+        isOwnSignIn: isPersonEvent,
         context,
       }),
     },
@@ -400,8 +422,9 @@ export function buildProductEvent(
 /**
  * The outbox row for one stored email event, `email_<type>`. It belongs to
  * the message's user, or is a system event when the message has none, and
- * joins the message's tenant when it has one. It never carries the
- * recipient, subject or provider detail.
+ * joins the message's tenant when it has one, except an invitation's, whose
+ * recipient is not a member: that one gets `tenant_id` as a plain property.
+ * It never carries the recipient, subject or provider detail.
  * @param input - The stored event and its message's ids and template.
  * @param context - The trace of the webhook request.
  * @returns The row.
@@ -417,6 +440,8 @@ export function buildEmailEvent(
     message_id: input.messageId,
   }
   if (input.bounceKind !== null) own.bounce_kind = input.bounceKind
+  const isInvitation = input.templateKey === INVITATION_TEMPLATE_KEY
+  if (isInvitation && input.tenantId !== null) own.tenant_id = input.tenantId
   return {
     event,
     distinctId,
@@ -427,7 +452,7 @@ export function buildEmailEvent(
         source: 'email',
         access: 'system',
         distinctId,
-        tenantId: input.tenantId ?? undefined,
+        tenantId: isInvitation ? undefined : (input.tenantId ?? undefined),
         context,
       }),
     },

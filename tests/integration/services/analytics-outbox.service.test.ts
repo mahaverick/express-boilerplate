@@ -212,10 +212,12 @@ describe('record forwards an audit entry to the outbox', () => {
     const { userId, tenantId } = await ownerAndTenant()
     const span = trace.wrapSpanContext(SPAN_CONTEXT)
 
-    await requestContextStore.run({ requestId: 'req-outbox-1', posthogSessionId: SESSION_ID }, () =>
-      context.with(trace.setSpan(context.active(), span), () =>
-        withTransaction((tx) => record(tenantUpdated(userId, tenantId), tx))
-      )
+    await requestContextStore.run(
+      { requestId: 'req-outbox-1', posthogSessionId: SESSION_ID, userId },
+      () =>
+        context.with(trace.setSpan(context.active(), span), () =>
+          withTransaction((tx) => record(tenantUpdated(userId, tenantId), tx))
+        )
     )
 
     const [row] = await outboxRowsOf('tenant_updated')

@@ -8,8 +8,8 @@ import type { AnalyticsContext } from '@/types/analytics'
 
 /**
  * The current analytics context: the active span's trace and span ids when
- * its context is valid, and the request's PostHog session id when the
- * browser sent one. Outside a request and a span, it is empty.
+ * its context is valid, the request's PostHog session id when the browser
+ * sent one, and the request's authenticated user id. Outside a request and a span, it is empty.
  * @returns The context; absent fields are omitted, never undefined.
  */
 export function currentAnalyticsContext(): AnalyticsContext {
@@ -19,7 +19,8 @@ export function currentAnalyticsContext(): AnalyticsContext {
     context.traceId = spanContext.traceId
     context.spanId = spanContext.spanId
   }
-  const sessionId = requestContextStore.getStore()?.posthogSessionId
-  if (sessionId !== undefined) context.posthogSessionId = sessionId
+  const store = requestContextStore.getStore()
+  if (store?.posthogSessionId !== undefined) context.posthogSessionId = store.posthogSessionId
+  if (store?.userId !== undefined) context.userId = store.userId
   return context
 }

@@ -64,6 +64,12 @@ describe('currentAnalyticsContext', () => {
     })
   })
 
+  it("copies the request's authenticated user id", () => {
+    expect(
+      requestContextStore.run({ requestId: 'req-3', userId: 'user-1' }, currentAnalyticsContext)
+    ).toEqual({ userId: 'user-1' })
+  })
+
   it('omits the session id when the request carried none', () => {
     expect(requestContextStore.run({ requestId: 'req-2' }, currentAnalyticsContext)).toEqual({})
   })
