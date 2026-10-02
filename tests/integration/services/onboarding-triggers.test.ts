@@ -1,7 +1,8 @@
 /**
  * @file Each onboarding trigger through the real services, with the
  * subscribers createApp() registers: tenant creation on both paths, the
- * first owner's accept, a teammate's accept, teammate invitations (and the
+ * first owner's accept (completing teammate_joined when others joined
+ * while the tenant waited), a teammate's accept, teammate invitations (and the
  * owner invitation and resend, which don't count), changed and no-op
  * settings saves, staff acting through platform access, and a throwing
  * subscriber that must not fail its request.
@@ -172,6 +173,21 @@ describe('accepting an invitation', () => {
     const reread = await tenantRepository.findById(tenantId)
     expect(reread?.onboardingStartedAt).toBeInstanceOf(Date)
     expect(await completedKeys(tenantId)).toEqual([])
+  })
+
+  it("the first owner's accept completes teammate_joined when a member joined while the tenant waited", async () => {
+    const { tenantId, staff, ownerEmail, ownerToken } = await staffTenant()
+    const early = await createTrackedUser()
+    const { rawToken } = await seedInvitation(tenantId, staff, early.email, 'viewer')
+    await accept(rawToken, early.id)
+    expect(await completedKeys(tenantId)).toEqual([])
+    const owner = await createTrackedUser({ email: ownerEmail })
+
+    await accept(ownerToken, owner.id)
+
+    const reread = await tenantRepository.findById(tenantId)
+    expect(reread?.onboardingStartedAt).toBeInstanceOf(Date)
+    expect(await completedKeys(tenantId)).toEqual(['teammate_joined'])
   })
 
   it('a teammate joining a started tenant completes teammate_joined', async () => {

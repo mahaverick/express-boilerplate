@@ -282,7 +282,9 @@ what `GET /tenants/:slug/onboarding` and the staff endpoints return.
 have `onboarding_tracked = false` and show as not tracked. A tenant staff
 create waits for its first owner to accept (`awaiting_owner`, never stuck)
 before its clock starts; until then its members see it as `not_tracked`, with
-no checklist. Actions staff take through platform access (an
+no checklist. When that accept starts the clock and other members had
+already joined, `teammate_joined` completes then. Actions staff take through
+platform access (an
 `access: 'platform'` request on a customer route) never count as customer
 progress.
 

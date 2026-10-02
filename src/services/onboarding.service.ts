@@ -444,7 +444,10 @@ async function onTeammateInvited(
 /**
  * `invitation_accepted`: an owner joining a tracked tenant that waits for one
  * starts its clock; anyone joining a started tenant who is not its first
- * member completes the `teammate_joined` steps.
+ * member completes the `teammate_joined` steps. When the owner whose accept
+ * starts the clock was not the first member (others joined while the tenant
+ * waited), `teammate_joined` completes then too. The tenant is re-read after
+ * the start, so an accept that lost the race to start it still counts.
  * @param event - The event.
  * @param context - Its context.
  */
@@ -455,7 +458,11 @@ async function onInvitationAccepted(
   const tenant = await countedTenant(event.tenantId, context)
   if (!tenant?.onboardingTracked) return
   if (tenant.onboardingStartedAt === null) {
-    if (event.role === 'owner') await tenantRepository.startOnboarding(tenant.id, event.at)
+    if (event.role !== 'owner') return
+    await tenantRepository.startOnboarding(tenant.id, event.at)
+    if (event.wasFirstMember) return
+    const started = await tenantRepository.findById(tenant.id)
+    if (started) await completeTriggeredSteps('teammate_joined', started, event.userId)
     return
   }
   if (!event.wasFirstMember) await completeTriggeredSteps('teammate_joined', tenant, event.userId)
