@@ -7,6 +7,7 @@
 import { SECRET_VARIABLE_PATTERN } from '@/constants/email.constants'
 import { ACCOUNT_SETUP_TEMPLATE_META } from '@/templates/email/account-setup.template'
 import { EMAIL_VERIFICATION_TEMPLATE_META } from '@/templates/email/email-verification.template'
+import { ONBOARDING_REMINDER_TEMPLATE_META } from '@/templates/email/onboarding-reminder.template'
 import { PASSWORD_CHANGED_TEMPLATE_META } from '@/templates/email/password-changed.template'
 import { PASSWORD_RESET_TEMPLATE_META } from '@/templates/email/password-reset.template'
 import { REGISTRATION_ATTEMPT_TEMPLATE_META } from '@/templates/email/registration-attempt.template'
@@ -50,4 +51,5 @@ export const EMAIL_TEMPLATE_META: Readonly<Record<EmailTemplateKey, EmailTemplat
     password_changed: PASSWORD_CHANGED_TEMPLATE_META,
     tenant_invitation: TENANT_INVITATION_TEMPLATE_META,
     account_setup: ACCOUNT_SETUP_TEMPLATE_META,
+    onboarding_reminder: ONBOARDING_REMINDER_TEMPLATE_META,
   })

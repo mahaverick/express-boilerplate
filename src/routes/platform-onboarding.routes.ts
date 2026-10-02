@@ -9,6 +9,7 @@
  */
 import { Router } from 'express'
 import { platformOnboardingController } from '@/controllers/platform-onboarding.controller'
+import { requireJsonContentType } from '@/middlewares/content-type.middleware'
 import { requirePlatformRole } from '@/middlewares/platform.middleware'
 import type { PlatformLimiters } from '@/routes/platform-user.routes'
 
@@ -47,6 +48,20 @@ export function createPlatformTenantOnboardingRouter(limiters: PlatformLimiters)
     requirePlatformRole('viewer'),
     limiters.searchLimiter,
     platformOnboardingController.getTenantOnboarding
+  )
+  router.post(
+    '/steps/:key/complete',
+    requirePlatformRole('admin'),
+    requireJsonContentType,
+    limiters.writeLimiter,
+    platformOnboardingController.completeStep
+  )
+  router.post(
+    '/remind',
+    requirePlatformRole('admin'),
+    requireJsonContentType,
+    limiters.writeLimiter,
+    platformOnboardingController.sendReminder
   )
   return router
 }

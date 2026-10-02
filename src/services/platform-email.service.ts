@@ -90,7 +90,8 @@ export const INVITER_NAME_PLACEHOLDER = 'A teammate'
 export const TEMPLATE_UNAVAILABLE_CODE = 'template_unavailable'
 
 /**
- * Error code: the message cannot be resent (a security notice, or a row
+ * Error code: the message cannot be resent (a template with no resend
+ * action, such as a security notice or an onboarding reminder, or a row
  * without the ids its action needs).
  */
 export const NOT_RESENDABLE_CODE = 'not_resendable'
@@ -469,6 +470,19 @@ export function buildPreviewMessage(
           },
         }
       }
+      case 'onboarding_reminder': {
+        return {
+          to,
+          templateKey,
+          variables: {
+            tenantName: fill('tenantName'),
+            appName: fill('appName'),
+            nextStep: fill('nextStep'),
+            // Carries no token, so it is stored and shown as it was sent.
+            overviewLink: fill('overviewLink'),
+          },
+        }
+      }
       case 'password_changed':
       case 'registration_attempt': {
         return {
@@ -687,7 +701,7 @@ export async function resendEmail(
   const templateKey = message.templateKey
   const action = EMAIL_TEMPLATE_META[templateKey].resendAction
   if (action === null) {
-    throw new HttpError('Security notices are never resent', 409, NOT_RESENDABLE_CODE)
+    throw new HttpError('This email is never resent', 409, NOT_RESENDABLE_CODE)
   }
   const target = resendTargetOf(action, message)
   if (await emailSuppressionRepository.findActive(message.recipient)) {

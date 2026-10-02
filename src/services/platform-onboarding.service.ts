@@ -1,22 +1,29 @@
 /**
- * @file Staff onboarding reads, behind `/platform/onboarding*` and
- * `/platform/tenants/:id/onboarding`: the funnel, the per-state tenant
- * list, one tenant's onboarding, and the Overview's stuck count. The routes
- * check the caller's platform role before any of this runs. Progress is
- * derived by `platform-onboarding.repository.ts` from `ONBOARDING_STEPS`
- * and `ONBOARDING_STUCK_AFTER_DAYS`; this file shapes it. The only importer
- * of that repository.
+ * @file Staff onboarding, behind `/platform/onboarding*` and
+ * `/platform/tenants/:id/onboarding*`: the funnel, the per-state tenant
+ * list, one tenant's onboarding, the Overview's stuck count, marking a
+ * tenant step complete, sending a reminder, and the reconcile script's
+ * sweep. The routes check the caller's platform role before any of this
+ * runs; each write re-checks it under lock. Progress is derived by
+ * `platform-onboarding.repository.ts` from `ONBOARDING_STEPS` and
+ * `ONBOARDING_STUCK_AFTER_DAYS`; this file shapes it. The only importer of
+ * that repository.
  */
 import { getEnv } from '@/configs/env.config'
 import {
   ONBOARDING_STEPS,
+  onboardingStepByKey,
+  stepsForTrigger,
   type OnboardingRange,
   type OnboardingState,
   type OnboardingStep,
 } from '@/constants/onboarding.constants'
 import type { OnboardingTenantStateFilter } from '@/constants/platform.constants'
 import type { TenantLifecycleState } from '@/constants/tenant.constants'
+import type { Tenant } from '@/database/models/tenant.model'
 import { HttpError } from '@/errors/http-error'
+import { redactedForLog } from '@/errors/postgres-errors'
+import { createTrackedEmail, enqueueTrackedEmail } from '@/jobs/email.job'
 import {
   PlatformOnboardingRepository,
   type OnboardingCompletionRow,
@@ -28,12 +35,30 @@ import {
   type OnboardingReminderRow,
   type OnboardingUserRow,
 } from '@/repositories/platform-onboarding.repository'
+import { TenantRepository } from '@/repositories/tenant.repository'
+import { record } from '@/services/audit.service'
+import { withTransaction, type DbTransaction } from '@/services/database.service'
+import { logger } from '@/services/logger.service'
+import type { MailMessage } from '@/services/mailer.service'
+import {
+  completeOnboardingStep,
+  MEMBER_STEP_CODE,
+  NOT_TRACKED_CODE,
+} from '@/services/onboarding.service'
+import { TENANT_STATE_CONFLICT_CODE } from '@/services/platform-tenant.service'
+import { assertStillPlatformRole } from '@/services/platform.service'
+import {
+  ONBOARDING_REMINDER_TEMPLATE_KEY,
+  type OnboardingReminderVariables,
+} from '@/templates/email/onboarding-reminder.template'
+import type { Actor } from '@/types/actor'
 import type {
   OnboardingFunnel,
   OnboardingMemberStatus,
   OnboardingPerson,
   OnboardingReminderAvailability,
   OnboardingReminderBlock,
+  OnboardingReminderResult,
   OnboardingReminderView,
   OnboardingStepDetail,
   OnboardingStepSummary,
@@ -43,9 +68,14 @@ import type {
 } from '@/types/platform-onboarding'
 import { encodeCursor } from '@/utilities/cursor.utilities'
 import { hostnameDomain } from '@/utilities/email.utilities'
-import type { OnboardingTenantSearchQuery } from '@/validators/platform-onboarding.validators'
+import {
+  STEP_NOT_FOUND_CODE,
+  STEP_NOT_FOUND_MESSAGE,
+  type OnboardingTenantSearchQuery,
+} from '@/validators/platform-onboarding.validators'
 
 const platformOnboardingRepository = new PlatformOnboardingRepository()
+const tenantRepository = new TenantRepository()
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -544,4 +574,380 @@ export async function getTenantOnboardingDetail(
     reminder,
     reminders: reminders.map((row) => reminderViewOf(row)),
   }
+}
+
+/**
+ * Error code: the step is complete already.
+ */
+export const ALREADY_COMPLETE_CODE = 'already_complete'
+
+/**
+ * Error code: a reminder goes only while onboarding is in progress or stuck.
+ */
+export const NOT_IN_PROGRESS_CODE = 'not_in_progress'
+
+/**
+ * Error code: the tenant has no active owner to remind.
+ */
+export const NO_OWNER_CODE = 'no_owner'
+
+/**
+ * Error code: a reminder went less than 24 hours ago. The 409 carries
+ * `errors.retryAfter`, the ISO time the next one may go.
+ */
+export const REMINDED_RECENTLY_CODE = 'reminded_recently'
+
+/**
+ * The customer app's overview page of a tenant: the reminder's one link.
+ * It carries no token.
+ * @param slug - The tenant's slug.
+ * @param webUrl - The customer app's origin; defaults to the configured `WEB_URL`.
+ * @returns The absolute URL.
+ */
+export function buildTenantOverviewLink(slug: string, webUrl: string = getEnv().WEB_URL): string {
+  const base = webUrl.endsWith('/') ? webUrl : `${webUrl}/`
+  return new URL(`tenants/${encodeURIComponent(slug)}`, base).href
+}
+
+/**
+ * Lock a customer tenant's row for a staff onboarding write, refusing one
+ * that is not active. Lock order: after the actor's platform membership and
+ * user row (`assertStillPlatformRole`), as the lifecycle transitions take it.
+ * @param tenantId - The tenant.
+ * @param tx - The write's transaction.
+ * @returns The locked tenant.
+ * @throws {HttpError} 404 when there is no such customer tenant (the platform tenant included); 409 `tenant_state_conflict` when it is suspended or archived.
+ */
+async function lockActiveCustomerTenant(tenantId: string, tx: DbTransaction): Promise<Tenant> {
+  const locked = await tenantRepository.lockById(tenantId, tx)
+  // lockById skips a soft-deleted row, which is an archived tenant: a 409, not a 404.
+  const tenant = locked ?? (await tenantRepository.findByIdIncludingDeleted(tenantId, tx))
+  if (!tenant || tenant.isPlatform) throw new HttpError(TENANT_NOT_FOUND, 404)
+  if (locked === undefined || locked.lifecycleState !== 'active') {
+    throw new HttpError(`This tenant is ${tenant.lifecycleState}.`, 409, TENANT_STATE_CONFLICT_CODE)
+  }
+  return locked
+}
+
+/**
+ * Mark a tenant step complete as staff, with a reason: a `staff` completion
+ * by the actor, through `completeOnboardingStep`, and an
+ * `onboarding.step_completed` entry filed in the tenant with platform
+ * access, both in one transaction that holds the tenant row. A dismissed
+ * tenant still records.
+ * @param actor - The staff user (platform admin or owner; the route checked).
+ * @param tenantId - The tenant.
+ * @param stepKey - The registry step.
+ * @param reason - Why, stored on the completion and in the audit entry.
+ * @param now - The current instant, for the detail returned; injectable for tests.
+ * @returns The tenant's onboarding as it now is.
+ * @throws {HttpError} 404 for an unknown step, an unknown tenant or the platform tenant, or an actor who lost the role; 401 when the actor's account is now inactive or gone; 409 `tenant_state_conflict` (suspended or archived), `member_step` (staff complete tenant steps only), `not_tracked` (untracked, or awaiting its first owner) or `already_complete`.
+ */
+export async function completeTenantStep(
+  actor: Actor,
+  tenantId: string,
+  stepKey: string,
+  reason: string,
+  now: Date = new Date()
+): Promise<TenantOnboardingDetail> {
+  const step = onboardingStepByKey(stepKey)
+  if (!step) throw new HttpError(STEP_NOT_FOUND_MESSAGE, 404, STEP_NOT_FOUND_CODE)
+  await withTransaction(async (tx) => {
+    await assertStillPlatformRole(actor, 'admin', tx)
+    const tenant = await lockActiveCustomerTenant(tenantId, tx)
+    if (step.scope === 'member') {
+      throw new HttpError('Each member completes this step for themselves.', 409, MEMBER_STEP_CODE)
+    }
+    if (!tenant.onboardingTracked || tenant.onboardingStartedAt === null) {
+      throw new HttpError(
+        'Onboarding is not tracked for this tenant, or its owner has not joined yet.',
+        409,
+        NOT_TRACKED_CODE
+      )
+    }
+    const completion = await completeOnboardingStep(
+      { tenantId, stepKey, source: 'staff', completedBy: actor.userId, reason },
+      tx
+    )
+    if (completion === undefined) {
+      throw new HttpError('This step is complete already.', 409, ALREADY_COMPLETE_CODE)
+    }
+    await record(
+      {
+        action: 'onboarding.step_completed',
+        actor,
+        access: 'platform',
+        tenantId,
+        targetId: tenantId,
+        metadata: { reason, stepKey },
+      },
+      tx
+    )
+  })
+  return getTenantOnboardingDetail(tenantId, now)
+}
+
+/**
+ * The 409 for a reminder that cannot go, by `reminderBlockOf`'s block.
+ * @param block - Why it cannot go, and when the next may.
+ * @param block.blockedBy - The block.
+ * @param block.nextAllowedAt - When the 24-hour limit ends, for `reminded_recently`.
+ * @returns The error to throw.
+ */
+function reminderRefusal(block: {
+  blockedBy: OnboardingReminderBlock
+  nextAllowedAt: Date | null
+}): HttpError {
+  switch (block.blockedBy) {
+    case 'tenant_state_conflict': {
+      return new HttpError('This tenant is not active.', 409, TENANT_STATE_CONFLICT_CODE)
+    }
+    case 'not_in_progress': {
+      return new HttpError(
+        'A reminder goes only while onboarding is in progress or stuck.',
+        409,
+        NOT_IN_PROGRESS_CODE
+      )
+    }
+    case 'no_owner': {
+      return new HttpError('This tenant has no active owner to remind.', 409, NO_OWNER_CODE)
+    }
+    case 'reminded_recently': {
+      const retryAfter = block.nextAllowedAt?.toISOString()
+      return new HttpError(
+        `A reminder went less than 24 hours ago; the next can go after ${retryAfter ?? 'a day'}.`,
+        409,
+        REMINDED_RECENTLY_CODE,
+        { retryAfter }
+      )
+    }
+  }
+}
+
+/**
+ * One reminder whose `email_messages` row is written and whose job is not
+ * queued yet.
+ */
+interface PendingReminder {
+  message: MailMessage
+  userId: string
+  messageId: string
+}
+
+/**
+ * Write one reminder's `email_messages` row per owner, in the caller's
+ * transaction, with the tenant as context, so SP3 tracks it, a suppressed
+ * address is skipped by the worker, and the staff preview renders it.
+ * @param owners - The active owners.
+ * @param variables - The template's variables, the same for each.
+ * @param tenantId - The tenant, stored on each message row.
+ * @param tx - The reminder's transaction.
+ * @returns The reminders to enqueue once it commits.
+ */
+async function createReminderMessages(
+  owners: readonly OnboardingUserRow[],
+  variables: OnboardingReminderVariables,
+  tenantId: string,
+  tx: DbTransaction
+): Promise<PendingReminder[]> {
+  const pending: PendingReminder[] = []
+  for (const owner of owners) {
+    const message: MailMessage = {
+      to: owner.email,
+      templateKey: ONBOARDING_REMINDER_TEMPLATE_KEY,
+      variables,
+    }
+    const row = await createTrackedEmail(message, owner.id, { context: { tenantId } }, tx)
+    pending.push({ message, userId: owner.id, messageId: row.id })
+  }
+  return pending
+}
+
+/**
+ * Enqueue the reminders' jobs, after their rows committed. A failed enqueue
+ * is logged (its row is marked failed, as SP3's Emails page shows) and the
+ * rest still go.
+ * @param pending - The reminders.
+ * @param tenantId - The tenant, for the log.
+ * @returns How many were enqueued.
+ */
+async function enqueueReminders(
+  pending: readonly PendingReminder[],
+  tenantId: string
+): Promise<number> {
+  let enqueued = 0
+  for (const reminder of pending) {
+    try {
+      await enqueueTrackedEmail(reminder.message, reminder.userId, reminder.messageId)
+      enqueued += 1
+    } catch (error) {
+      logger.error('Queueing an onboarding reminder failed', {
+        error: redactedForLog(error),
+        tenantId,
+        messageId: reminder.messageId,
+      })
+    }
+  }
+  return enqueued
+}
+
+/**
+ * Email the tenant's active owners an `onboarding_reminder`, with a reason,
+ * audited as `onboarding.reminder_sent` in the tenant with platform access
+ * (`{ reason, recipientCount, emailDomains, messageIds }`, never an
+ * address). One transaction holds the tenant row from the checks through
+ * the owners' `email_messages` rows to the audit entry, so a second
+ * reminder racing this one waits and then sees this entry: the 24-hour
+ * limit reads the latest `onboarding.reminder_sent` entry, and only a held
+ * lock makes that read race-safe. The jobs are enqueued after commit, so
+ * the transaction never waits on a second pool connection and the worker
+ * never dequeues a job whose row is not committed. The rule is
+ * `reminderBlockOf`'s, the one the tenant tab shows. A job that fails to
+ * enqueue leaves its row `failed` and the entry in place, and answers
+ * `emailSent: false`.
+ * @param actor - The staff user (platform admin or owner; the route checked).
+ * @param tenantId - The tenant.
+ * @param reason - Why, for the audit log.
+ * @param now - The current instant; injectable for tests.
+ * @returns Whether every owner's email was queued, and how many active owners it addressed.
+ * @throws {HttpError} 404 for an unknown tenant or the platform tenant, or an actor who lost the role; 401 when the actor's account is now inactive or gone; 409 `tenant_state_conflict`, `not_in_progress`, `no_owner`, or `reminded_recently` with `errors.retryAfter`.
+ */
+export async function sendOnboardingReminder(
+  actor: Actor,
+  tenantId: string,
+  reason: string,
+  now: Date = new Date()
+): Promise<OnboardingReminderResult> {
+  const pending = await withTransaction(async (tx) => {
+    await assertStillPlatformRole(actor, 'admin', tx)
+    const tenant = await lockActiveCustomerTenant(tenantId, tx)
+    const progress = await platformOnboardingRepository.findProgress(
+      tenantId,
+      progressOptionsAt(now),
+      tx
+    )
+    if (!progress) throw new HttpError(TENANT_NOT_FOUND, 404)
+    const owners = await platformOnboardingRepository.activeOwners([tenantId], tx)
+    const lastSentAt = await platformOnboardingRepository.latestReminderAt(tenantId, tx)
+    const block = reminderBlockOf({
+      lifecycleState: tenant.lifecycleState,
+      state: progress.state,
+      ownerCount: owners.length,
+      // eslint-disable-next-line unicorn/no-null -- the rule's "never reminded"
+      lastSentAt: lastSentAt ?? null,
+      now,
+    })
+    if (block.blockedBy !== null) {
+      throw reminderRefusal({ blockedBy: block.blockedBy, nextAllowedAt: block.nextAllowedAt })
+    }
+    // In progress or stuck means a required step is still open.
+    const nextStep = nextRequiredStep(progress.doneKeys)
+    if (nextStep === undefined) {
+      throw reminderRefusal({ blockedBy: 'not_in_progress', nextAllowedAt: block.nextAllowedAt })
+    }
+    const messages = await createReminderMessages(
+      owners,
+      {
+        tenantName: tenant.name,
+        appName: getEnv().APP_NAME,
+        nextStep: nextStep.title,
+        overviewLink: buildTenantOverviewLink(tenant.slug),
+      },
+      tenantId,
+      tx
+    )
+    await record(
+      {
+        action: 'onboarding.reminder_sent',
+        actor,
+        access: 'platform',
+        tenantId,
+        targetId: tenantId,
+        metadata: {
+          reason,
+          recipientCount: owners.length,
+          emailDomains: emailDomainsOf(owners.map((owner) => owner.email)),
+          messageIds: messages.map((message) => message.messageId),
+        },
+      },
+      tx
+    )
+    return messages
+  })
+  const enqueued = await enqueueReminders(pending, tenantId)
+  return { emailSent: enqueued === pending.length, recipientCount: pending.length }
+}
+
+/**
+ * What a reconcile did: the tenants it read, the completions it added, and
+ * the ones it could not.
+ */
+export interface OnboardingReconcileResult {
+  tenantsChecked: number
+  stepsRestored: number
+  failures: number
+}
+
+/**
+ * The tenant steps whose automatic trigger the database still shows for one
+ * tenant: `tenant_settings_updated` from a settings change after creation,
+ * `teammate_invited` from a non-owner invitation on file or a second live
+ * member, `teammate_joined` from a second live member.
+ * @param candidate - What the reconcile read about the tenant.
+ * @param candidate.hasSettingsChange - Its settings changed after it was created.
+ * @param candidate.hasTeammateInvitation - It has a non-owner invitation on file.
+ * @param candidate.memberCount - Its live members.
+ * @returns The step keys, in registry order per trigger.
+ */
+export function reconcileStepKeysOf(candidate: {
+  hasSettingsChange: boolean
+  hasTeammateInvitation: boolean
+  memberCount: number
+}): string[] {
+  const hasTeammate = candidate.memberCount > 1
+  const triggers = [
+    ...(candidate.hasSettingsChange ? (['tenant_settings_updated'] as const) : []),
+    ...(hasTeammate || candidate.hasTeammateInvitation ? (['teammate_invited'] as const) : []),
+    ...(hasTeammate ? (['teammate_joined'] as const) : []),
+  ]
+  return triggers.flatMap((trigger) =>
+    stepsForTrigger(trigger)
+      .filter((step) => step.scope === 'tenant')
+      .map((step) => step.key)
+  )
+}
+
+/**
+ * Re-derive the automatic tenant steps of every live, tracked, started
+ * customer tenant from what the database still shows, best effort, for
+ * when a subscriber failed after its request committed: each step
+ * `reconcileStepKeysOf` finds is completed as `auto` through
+ * `completeOnboardingStep`, which leaves one already done alone. A failure
+ * is logged and counted, and the sweep goes on. For `pnpm onboarding:reconcile`.
+ * @returns What it did.
+ */
+export async function reconcileOnboarding(): Promise<OnboardingReconcileResult> {
+  const candidates = await platformOnboardingRepository.reconcileCandidates()
+  let stepsRestored = 0
+  let failures = 0
+  for (const candidate of candidates) {
+    for (const stepKey of reconcileStepKeysOf(candidate)) {
+      try {
+        const completion = await completeOnboardingStep({
+          tenantId: candidate.tenantId,
+          stepKey,
+          source: 'auto',
+        })
+        if (completion !== undefined) stepsRestored += 1
+      } catch (error) {
+        failures += 1
+        logger.error('Reconciling an onboarding step failed', {
+          error: redactedForLog(error),
+          tenantId: candidate.tenantId,
+          stepKey,
+        })
+      }
+    }
+  }
+  return { tenantsChecked: candidates.length, stepsRestored, failures }
 }

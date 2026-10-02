@@ -22,6 +22,11 @@ import {
   type EmailVerificationVariables,
 } from '@/templates/email/email-verification.template'
 import {
+  ONBOARDING_REMINDER_TEMPLATE_KEY,
+  renderOnboardingReminderTemplate,
+  type OnboardingReminderVariables,
+} from '@/templates/email/onboarding-reminder.template'
+import {
   PASSWORD_CHANGED_TEMPLATE_KEY,
   renderPasswordChangedTemplate,
   type PasswordChangedVariables,
@@ -88,6 +93,11 @@ export type MailMessage =
       templateKey: typeof ACCOUNT_SETUP_TEMPLATE_KEY
       variables: AccountSetupVariables
     }
+  | {
+      to: string
+      templateKey: typeof ONBOARDING_REMINDER_TEMPLATE_KEY
+      variables: OnboardingReminderVariables
+    }
 
 /**
  * The tracked message one send attempt belongs to: its `email_messages` id,
@@ -132,6 +142,9 @@ export function renderForMessage(message: MailMessage): RenderedEmail {
     }
     case ACCOUNT_SETUP_TEMPLATE_KEY: {
       return renderAccountSetupTemplate(message.variables)
+    }
+    case ONBOARDING_REMINDER_TEMPLATE_KEY: {
+      return renderOnboardingReminderTemplate(message.variables)
     }
     default: {
       throw new Error(

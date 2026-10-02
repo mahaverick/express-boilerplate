@@ -132,7 +132,7 @@ describe('MailMessage', () => {
   it('a template key outside EmailTemplateKey is a compile error', () => {
     const invalid: MailMessage = {
       to: 'user@example.test',
-      // @ts-expect-error — templateKey is closed to EmailTemplateKey's three literals; a typo (hyphen instead of underscore) must fail to compile, not silently build a message logged under a key no template ever renders. TS reports the error on the property's own line, so the directive sits directly above it.
+      // @ts-expect-error — templateKey is closed to EmailTemplateKey's literals; a typo (hyphen instead of underscore) must fail to compile, not silently build a message logged under a key no template ever renders. TS reports the error on the property's own line, so the directive sits directly above it.
       templateKey: 'password-reset',
       variables: validPasswordResetVariables,
     }

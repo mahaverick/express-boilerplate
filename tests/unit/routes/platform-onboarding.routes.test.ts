@@ -1,10 +1,12 @@
 /**
  * @file The staff onboarding routes: the role gate first on every route,
- * then the shared search limiter on reads. No route takes a step-up gate.
+ * then the shared search limiter on reads, and the JSON gate then the
+ * shared write limiter on writes. No route takes a step-up gate.
  */
 import type { RequestHandler, Router } from 'express'
 import { describe, expect, it } from 'vitest'
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
+import { requireJsonContentType } from '@/middlewares/content-type.middleware'
 import { createRateLimiter, RATE_LIMITER_MARK } from '@/middlewares/rate-limit.middleware'
 import {
   createPlatformOnboardingRouter,
@@ -52,4 +54,19 @@ describe('createPlatformTenantOnboardingRouter', () => {
     expect(Object.hasOwn(handlers[0] ?? {}, RATE_LIMITER_MARK)).toBe(false)
     expect(handlers[1]).toBe(sharedSearchLimiter)
   })
+
+  it.each([
+    ['post', '/steps/:key/complete'],
+    ['post', '/remind'],
+  ])(
+    '%s %s: role gate, JSON gate, the shared write limiter, the handler; no step-up gate',
+    (method, path) => {
+      const handlers = handlersFor(createPlatformTenantOnboardingRouter(limiters), method, path)
+
+      expect(handlers).toHaveLength(4)
+      expect(Object.hasOwn(handlers[0] ?? {}, RATE_LIMITER_MARK)).toBe(false)
+      expect(handlers[1]).toBe(requireJsonContentType)
+      expect(handlers[2]).toBe(sharedWriteLimiter)
+    }
+  )
 })

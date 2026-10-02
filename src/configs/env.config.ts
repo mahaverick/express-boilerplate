@@ -530,7 +530,7 @@ const EnvSchema = z.object({
     .min(1)
     .default('Express Boilerplate')
     .describe(
-      'Product name in outbound email copy and notification text: verification, password reset, password changed and invitation messages (auth.service.ts, verification.service.ts, tenant-invitation.service.ts). Defaults to "Express Boilerplate".'
+      'Product name in outbound email copy and notification text: verification, password reset, password changed, invitation and onboarding reminder messages (auth.service.ts, verification.service.ts, tenant-invitation.service.ts, platform-onboarding.service.ts). Defaults to "Express Boilerplate".'
     ),
 
   /**

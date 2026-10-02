@@ -8,6 +8,7 @@ import { getEnv } from '@/configs/env.config'
 import type { EmailMessage } from '@/database/models/email-message.model'
 import { EmailMessageRepository } from '@/repositories/email-message.repository'
 import { EmailSuppressionRepository } from '@/repositories/email-suppression.repository'
+import { db, type DbExecutor } from '@/services/database.service'
 import type { MailMessage } from '@/services/mailer.service'
 import { EMAIL_TEMPLATE_META } from '@/templates/email/email-template-meta.template'
 import type { EmailContext } from '@/types/email-context'
@@ -54,32 +55,37 @@ function storedVariables(message: MailMessage): Record<string, string> {
  * @param message - The email.
  * @param userId - The account it is for; `''` when there is none, stored as NULL.
  * @param origin - The caller's context and fixed job id, if any.
+ * @param executor - Where to run the queries: a transaction, so the row commits with the caller's own writes. Defaults to the pool.
  * @returns The message row.
  * @throws {Error} Whatever the id read or the insert throws.
  */
 export async function createQueuedMessage(
   message: MailMessage,
   userId: string,
-  origin: NewMessageOrigin = {}
+  origin: NewMessageOrigin = {},
+  executor: DbExecutor = db
 ): Promise<EmailMessage> {
   const { context = {}, jobKey } = origin
   const { senderClass } = EMAIL_TEMPLATE_META[message.templateKey]
   const domain = senderDomain(senderFor(senderClass, getEnv()))
-  const id = await messageRepository.nextId()
-  return messageRepository.createQueued({
-    id,
-    recipient: message.to,
-    templateKey: message.templateKey,
-    userId: userId === '' ? undefined : userId,
-    tenantId: context.tenantId,
-    invitationId: context.invitationId,
-    linkApp: context.linkApp,
-    senderClass,
-    messageIdHeader: `<${id}@${domain}>`,
-    jobKey,
-    variables: storedVariables(message),
-    resentFromId: context.resentFromId,
-  })
+  const id = await messageRepository.nextId(executor)
+  return messageRepository.createQueued(
+    {
+      id,
+      recipient: message.to,
+      templateKey: message.templateKey,
+      userId: userId === '' ? undefined : userId,
+      tenantId: context.tenantId,
+      invitationId: context.invitationId,
+      linkApp: context.linkApp,
+      senderClass,
+      messageIdHeader: `<${id}@${domain}>`,
+      jobKey,
+      variables: storedVariables(message),
+      resentFromId: context.resentFromId,
+    },
+    executor
+  )
 }
 
 /**

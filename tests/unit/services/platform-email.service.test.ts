@@ -97,6 +97,21 @@ describe('buildPreviewMessage', () => {
     expect(isPartial).toBe(true)
   })
 
+  it('shows an onboarding reminder as sent: its stored link, not partial', () => {
+    const stored = {
+      tenantName: 'Acme Rockets',
+      appName: 'Acme',
+      nextStep: 'Invite a teammate',
+      overviewLink: 'https://web.example.test/tenants/acme-rockets',
+    }
+    const { message, isPartial } = buildPreviewMessage('onboarding_reminder', stored, ORIGIN)
+    const rendered = renderForMessage(message)
+
+    expect(isPartial).toBe(false)
+    expect(rendered.text).toContain('https://web.example.test/tenants/acme-rockets')
+    expect(rendered.text).toContain('Invite a teammate')
+  })
+
   it('ignores a non-string stored value', () => {
     const { isPartial } = buildPreviewMessage(
       'registration_attempt',
@@ -171,7 +186,7 @@ describe('canResendFor', () => {
     }
   )
 
-  it.each(['password_changed', 'registration_attempt', 'retired_template'])(
+  it.each(['password_changed', 'registration_attempt', 'onboarding_reminder', 'retired_template'])(
     'is false for %s (no resend action)',
     (templateKey) => {
       expect(canResendFor(ACTOR, message({ templateKey }), context())).toBe(false)

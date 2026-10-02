@@ -4,8 +4,14 @@
  */
 import { type Job, type JobsOptions } from 'bullmq'
 import { JobPriority } from '@/constants/queue.constants'
+import type { EmailMessage } from '@/database/models/email-message.model'
 import { redactedForLog } from '@/errors/postgres-errors'
-import { createQueuedMessage, markMessageEnqueueFailed } from '@/services/email-message.service'
+import type { DbExecutor } from '@/services/database.service'
+import {
+  createQueuedMessage,
+  markMessageEnqueueFailed,
+  type NewMessageOrigin,
+} from '@/services/email-message.service'
 import { logger } from '@/services/logger.service'
 import type { MailMessage } from '@/services/mailer.service'
 import { addJob, getEmailQueue } from '@/services/queue.service'
@@ -54,6 +60,75 @@ export const emailJobDefaults: JobsOptions = {
 }
 
 /**
+ * Create the email's `email_messages` row in `queued`, without enqueueing
+ * its job. `addEmailJob` runs it on the pool; a caller that must commit the
+ * row with its own writes runs it in that transaction and calls
+ * `enqueueTrackedEmail` once the transaction has committed, so the worker
+ * never dequeues a job whose row it cannot see yet.
+ * @param message - The MailMessage.
+ * @param userId - The user this email is for; `''` when there is none, stored as NULL.
+ * @param origin - The context stored on the row, and the fixed job id, if any.
+ * @param executor - Where to run the insert: the caller's transaction, or omitted for the pool.
+ * @returns The message row.
+ * @throws {Error} A fresh error naming only the template (the original is logged, redacted: it can carry the address).
+ */
+export async function createTrackedEmail(
+  message: MailMessage,
+  userId: string,
+  origin: NewMessageOrigin = {},
+  executor?: DbExecutor
+): Promise<EmailMessage> {
+  try {
+    return await createQueuedMessage(message, userId, origin, executor)
+  } catch (error) {
+    // A query error's message carries its bound parameters (the address), and a notification job's failure reason is stored in Redis.
+    logger.error('Creating an email message failed', {
+      error: redactedForLog(error),
+      templateKey: message.templateKey,
+    })
+    // eslint-disable-next-line preserve-caught-error -- the original is deliberately not attached: it carries the address
+    throw new Error(`Creating the message row for a ${message.templateKey} email failed`)
+  }
+}
+
+/**
+ * Enqueue the job for a message row `createTrackedEmail` created. When the
+ * add fails the row is marked `failed` with `failure_origin = 'enqueue'`
+ * first, unless that write fails too, which is logged.
+ * @param message - The MailMessage the row was created for.
+ * @param userId - The user this email is for; `''` when there is none.
+ * @param messageId - The row's id.
+ * @param jobOptions - Override default job options.
+ * @returns The created job, or the existing one for a `jobId` already queued.
+ * @throws {Error} Whatever the queue add throws.
+ */
+export async function enqueueTrackedEmail(
+  message: MailMessage,
+  userId: string,
+  messageId: string,
+  jobOptions: Partial<JobsOptions> = {}
+): Promise<Job<EmailJobData>> {
+  try {
+    return await addJob(
+      getEmailQueue(),
+      message.templateKey,
+      { ...message, userId, messageId },
+      { ...emailJobDefaults, ...jobOptions }
+    )
+  } catch (error) {
+    try {
+      await markMessageEnqueueFailed(messageId)
+    } catch (markError) {
+      logger.error('Marking an unqueued email failed', {
+        error: redactedForLog(markError),
+        messageId,
+      })
+    }
+    throw error
+  }
+}
+
+/**
  * Create the email's `email_messages` row, then enqueue its job carrying
  * the row's id. With `options.jobId` (the notification path), the id is
  * also the row's `job_key`: a retried enqueue gets the same row back and
@@ -76,34 +151,6 @@ export async function addEmailJob(
   options: EmailJobOptions = {}
 ): Promise<Job<EmailJobData>> {
   const { context, ...jobOptions } = options
-  let tracked: Awaited<ReturnType<typeof createQueuedMessage>>
-  try {
-    tracked = await createQueuedMessage(message, userId, { context, jobKey: jobOptions.jobId })
-  } catch (error) {
-    // A query error's message carries its bound parameters (the address), and a notification job's failure reason is stored in Redis.
-    logger.error('Creating an email message failed', {
-      error: redactedForLog(error),
-      templateKey: message.templateKey,
-    })
-    // eslint-disable-next-line preserve-caught-error -- the original is deliberately not attached: it carries the address
-    throw new Error(`Creating the message row for a ${message.templateKey} email failed`)
-  }
-  try {
-    return await addJob(
-      getEmailQueue(),
-      message.templateKey,
-      { ...message, userId, messageId: tracked.id },
-      { ...emailJobDefaults, ...jobOptions }
-    )
-  } catch (error) {
-    try {
-      await markMessageEnqueueFailed(tracked.id)
-    } catch (markError) {
-      logger.error('Marking an unqueued email failed', {
-        error: redactedForLog(markError),
-        messageId: tracked.id,
-      })
-    }
-    throw error
-  }
+  const tracked = await createTrackedEmail(message, userId, { context, jobKey: jobOptions.jobId })
+  return enqueueTrackedEmail(message, userId, tracked.id, jobOptions)
 }

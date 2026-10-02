@@ -468,8 +468,8 @@ describe('canResend for invitation emails', () => {
 })
 
 describe('POST /platform/emails/:id/resend: refusals before delegating', () => {
-  it.each(['password_changed', 'registration_attempt'])(
-    'answers 409 not_resendable for the security notice %s',
+  it.each(['password_changed', 'registration_attempt', 'onboarding_reminder'])(
+    'answers 409 not_resendable for %s, which has no resend action',
     async (templateKey) => {
       const { token } = await createTrackedStaff('owner')
       const user = await createTrackedUser()
