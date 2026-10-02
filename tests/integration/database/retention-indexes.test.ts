@@ -109,6 +109,11 @@ describe('retention indexes', () => {
       'user_tokens_replaced_by_id_idx',
       `select 1 from user_tokens where replaced_by_id = '00000000-0000-0000-0000-000000000000'`,
     ],
+    // The claim index's second column, reached by a skip scan over claimed_until.
+    [
+      'analytics_outbox_claim_idx',
+      `select id from analytics_outbox where occurred_at < ${CUTOFF} order by occurred_at limit 5000`,
+    ],
   ])('%s serves its purge predicate', async (index, query, hidden?: readonly string[]) => {
     expect(await planFor(query, hidden)).toContain(index)
   })

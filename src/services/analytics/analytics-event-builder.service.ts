@@ -31,9 +31,10 @@ import type {
 import type { DomainEventAccess, ProductDomainEvent } from '@/types/domain-event'
 
 /**
- * Where a server event came from.
+ * Where a server event came from: `backfill` is `pnpm analytics:backfill-groups`
+ * (analytics-backfill.service.ts), which sends tenant groups directly.
  */
-export type AnalyticsSource = 'audit' | 'product' | 'email'
+export type AnalyticsSource = 'audit' | 'product' | 'email' | 'backfill'
 
 /**
  * The audit metadata keys never copied onto an event: `reason` becomes

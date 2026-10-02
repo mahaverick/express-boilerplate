@@ -367,7 +367,7 @@ const EnvSchema = z.object({
     .stringbool()
     .default(true)
     .describe(
-      'Whether the BullMQ workers (email, notification and maintenance) start in-process alongside the HTTP server. Set to false for API-only pods behind a load balancer; a separate worker deployment sets this to true. The daily retention purge runs only where this is true.'
+      'Whether the BullMQ workers (email, notification and maintenance, plus analytics when POSTHOG_PROJECT_KEY is set) start in-process alongside the HTTP server. Set to false for API-only pods behind a load balancer; a separate worker deployment sets this to true. The daily retention purge and the analytics drain run only where this is true.'
     ),
   WORKER_CONCURRENCY: z.coerce
     .number()
@@ -375,7 +375,7 @@ const EnvSchema = z.object({
     .positive()
     .default(5)
     .describe(
-      'Jobs the email and notification workers each process at once, per process. Defaults to 5. The maintenance worker always runs one job at a time.'
+      'Jobs the email and notification workers each process at once, per process. Defaults to 5. The maintenance and analytics workers always run one job at a time.'
     ),
   RETENTION_TOKENS_DAYS: z.coerce
     .number()

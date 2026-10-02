@@ -28,6 +28,7 @@ describe('retention.service', () => {
       RETENTION_NOTIFICATIONS_READ_DAYS: '4',
       RETENTION_NOTIFICATIONS_UNREAD_DAYS: '5',
       RETENTION_AUDIT_LOGS_DAYS: '6',
+      ANALYTICS_OUTBOX_RETENTION_DAYS: '8',
     })
     expect(retentionDays(env)).toEqual({
       tokens: 1,
@@ -36,6 +37,7 @@ describe('retention.service', () => {
       notificationsRead: 4,
       notificationsUnread: 5,
       auditLogs: 6,
+      analyticsOutbox: 8,
     })
   })
 })
