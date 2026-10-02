@@ -427,6 +427,22 @@ describe('session attribution', () => {
     }
   )
 
+  it('adds $session_id to the user’s own user_signed_out when no user is authenticated', () => {
+    const row = buildProductEvent(
+      { type: 'user_signed_out', userId: TARGET_ID, at: OCCURRED_AT },
+      session
+    )
+    expect(row.properties).toHaveProperty('$session_id', TRACE.posthogSessionId)
+  })
+
+  it('omits $session_id from a user_signed_out sent while another user is authenticated', () => {
+    const row = buildProductEvent(
+      { type: 'user_signed_out', userId: TARGET_ID, at: OCCURRED_AT },
+      { ...session, userId: ACTOR_ID }
+    )
+    expect(row.properties).not.toHaveProperty('$session_id')
+  })
+
   it('omits $session_id from a sign-in made while another user is authenticated', () => {
     const row = buildProductEvent(
       { type: 'user_signed_in', userId: TARGET_ID, method: 'password', at: OCCURRED_AT },

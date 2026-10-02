@@ -19,6 +19,7 @@ import { onboardingStepByKey } from '@/constants/onboarding.constants'
 import type { NewAnalyticsOutboxRow } from '@/database/models/analytics-outbox.model'
 import type { AuditLog } from '@/database/models/audit-log.model'
 import { logger } from '@/services/logger.service'
+import { TENANT_INVITATION_TEMPLATE_KEY } from '@/templates/email/tenant-invitation.template'
 import type {
   AnalyticsContext,
   AuditEventExtras,
@@ -29,7 +30,6 @@ import type {
   TenantGroupSnapshot,
 } from '@/types/analytics'
 import type { DomainEventAccess, ProductDomainEvent } from '@/types/domain-event'
-import type { EmailTemplateKey } from '@/utilities/email-template.utilities'
 
 /**
  * Where a server event came from: `backfill` is `pnpm analytics:backfill-groups`
@@ -51,12 +51,6 @@ const PII_KEYS: ReadonlySet<string> = new Set(PII_PROPERTY_KEYS)
  * The PostHog group type every tenant event joins.
  */
 const TENANT_GROUP_TYPE = 'tenant'
-
-/**
- * The template whose recipient is not a tenant member yet (and may never be),
- * so its email events must not join the tenant group.
- */
-const INVITATION_TEMPLATE_KEY: EmailTemplateKey = 'tenant_invitation'
 
 /**
  * Convert one camelCase key to snake_case.
@@ -149,10 +143,12 @@ interface CommonInput {
   distinctId: string
   tenantId?: string | undefined
   /**
-   * Whether the event is the user's own sign-in or sign-up. Such a request
-   * has no authenticated user yet, so the browser's session is theirs.
+   * Whether the event is the user's own sign-in, sign-up or sign-out. Such a
+   * request has no authenticated user (sign-in and sign-up have none yet;
+   * sign-out is authenticated by the refresh cookie), so the browser's
+   * session is theirs.
    */
-  isOwnSignIn?: boolean
+  isOwnSessionEvent?: boolean
   context: AnalyticsContext
 }
 
@@ -162,7 +158,7 @@ interface CommonInput {
  * @returns `source`, `access`, `app`, `$groups` (with a tenant), `trace_id`
  * and `span_id` (with a span), `$session_id` (with a browser session that
  * is this distinct id's: the request's authenticated user, or the user
- * signing in or up), and `$process_person_profile: false` for the system
+ * signing in, up or out), and `$process_person_profile: false` for the system
  * distinct id.
  */
 export function commonProperties(input: CommonInput): Record<string, unknown> {
@@ -176,7 +172,7 @@ export function commonProperties(input: CommonInput): Record<string, unknown> {
   if (input.context.spanId !== undefined) properties.span_id = input.context.spanId
   const isSessionTheirs =
     input.context.userId === undefined
-      ? input.isOwnSignIn === true
+      ? input.isOwnSessionEvent === true
       : input.context.userId === input.distinctId
   if (isSessionTheirs && input.context.posthogSessionId !== undefined) {
     properties.$session_id = input.context.posthogSessionId
@@ -244,11 +240,11 @@ export function buildTenantGroupIdentify(
   access: AuditAccess,
   occurredAt: Date
 ): NewAnalyticsOutboxRow {
-  const common = commonProperties({ source, access, distinctId: SYSTEM_DISTINCT_ID, context })
-  delete common.$process_person_profile
+  const distinctId = `$${TENANT_GROUP_TYPE}_${tenant.id}`
+  const common = commonProperties({ source, access, distinctId, context })
   return {
     event: '$groupidentify',
-    distinctId: `$${TENANT_GROUP_TYPE}_${tenant.id}`,
+    distinctId,
     occurredAt,
     properties: {
       ...common,
@@ -400,6 +396,7 @@ export function buildProductEvent(
   const distinctId = event.userId ?? SYSTEM_DISTINCT_ID
   const tenantId = event.type === 'onboarding_step_completed' ? event.tenantId : undefined
   const isPersonEvent = event.type === 'user_signed_up' || event.type === 'user_signed_in'
+  const isOwnSessionEvent = isPersonEvent || event.type === 'user_signed_out'
   return {
     event: event.type,
     distinctId,
@@ -412,7 +409,7 @@ export function buildProductEvent(
         access: distinctId === SYSTEM_DISTINCT_ID ? 'system' : access,
         distinctId,
         tenantId,
-        isOwnSignIn: isPersonEvent,
+        isOwnSessionEvent,
         context,
       }),
     },
@@ -440,7 +437,7 @@ export function buildEmailEvent(
     message_id: input.messageId,
   }
   if (input.bounceKind !== null) own.bounce_kind = input.bounceKind
-  const isInvitation = input.templateKey === INVITATION_TEMPLATE_KEY
+  const isInvitation = input.templateKey === TENANT_INVITATION_TEMPLATE_KEY
   if (isInvitation && input.tenantId !== null) own.tenant_id = input.tenantId
   return {
     event,

@@ -51,6 +51,7 @@ const { startFakePosthog } = await import('../../helpers/fake-posthog')
 const { withMutatedMethod } = await import('../../helpers/mutate')
 const { waitForInvitationEmail, waitForVerificationToken } =
   await import('../../helpers/queue-jobs')
+const { testRefreshCookie } = await import('../../helpers/refresh-cookie')
 const { request } = await import('../../helpers/request')
 const { waitUntil } = await import('../../helpers/timing')
 
@@ -69,6 +70,7 @@ const TRACKING_PREFIX = `analytics-events-${randomUUID()}-`
 // Six bcrypt operations at cost 12 (two hashes, four compares) and nine requests: three times a single-login test's work, so three times the suite's 20 s.
 const FLOW_TIMEOUT_MS = 60_000
 
+const { name: REFRESH_TOKEN_COOKIE_NAME } = testRefreshCookie()
 const userRepository = new UserRepository()
 const state: {
   posthog?: FakePosthog
@@ -91,13 +93,20 @@ function running(): { posthog: FakePosthog; app: Express } {
  * @param test - The request, before it is sent.
  * @returns The trace id the server span is parented on, and the response.
  */
-async function traced(test: Test): Promise<{ traceId: string; status: number; body: unknown }> {
+async function traced(
+  test: Test
+): Promise<{ traceId: string; status: number; body: unknown; cookies: string[] }> {
   const traceId = randomBytes(16).toString('hex')
   const response = await test.set(
     'traceparent',
     `00-${traceId}-${randomBytes(8).toString('hex')}-01`
   )
-  return { traceId, status: response.status, body: response.body as unknown }
+  return {
+    traceId,
+    status: response.status,
+    body: response.body as unknown,
+    cookies: (response.headers['set-cookie'] as string[] | undefined) ?? [],
+  }
 }
 
 /**
@@ -153,7 +162,7 @@ async function waitForOutboxRow(event: string, distinctId: string): Promise<void
  * Register, verify and sign in a user through the API, each under its own trace.
  * @param email - The address.
  * @param sessionId - A browser session to send on the sign-in as `X-POSTHOG-SESSION-ID`.
- * @returns The user id, the access token and each step's trace id.
+ * @returns The user id, the access token, the refresh cookie and each step's trace id.
  */
 async function signUpVerifyAndSignIn(
   email: string,
@@ -161,6 +170,7 @@ async function signUpVerifyAndSignIn(
 ): Promise<{
   userId: string
   accessToken: string
+  refreshCookie: string
   traces: { signUp: string; verify: string; signIn: string }
 }> {
   const { app } = running()
@@ -189,9 +199,14 @@ async function signUpVerifyAndSignIn(
   const signIn = await traced(signInRequest.send({ email, password: PASSWORD }))
   expect(signIn.status).toBe(200)
   const accessToken = (signIn.body as { data: { accessToken: string } }).data.accessToken
+  const refreshCookie = signIn.cookies.find((cookie) =>
+    cookie.startsWith(`${REFRESH_TOKEN_COOKIE_NAME}=`)
+  )
+  if (refreshCookie === undefined) throw new Error('sign-in set no refresh cookie')
   return {
     userId: user.id,
     accessToken,
+    refreshCookie,
     traces: { signUp: signUp.traceId, verify: verify.traceId, signIn: signIn.traceId },
   }
 }
@@ -416,6 +431,55 @@ describe('browser session attribution', () => {
       expect(groupIdentify?.event).toBe('$groupidentify')
       expect(groupIdentify?.properties).not.toHaveProperty('$session_id')
       expect(groupIdentify?.properties).not.toHaveProperty('$process_person_profile')
+    },
+    FLOW_TIMEOUT_MS
+  )
+
+  it(
+    'keeps the session through a :slug route and on the user’s own sign-out',
+    async () => {
+      const { app } = running()
+      const owner = await signUpVerifyAndSignIn(`analytics-slug-${randomUUID()}@example.test`)
+      const slug = `slug-${randomUUID().slice(0, 8)}`
+      const tenantCreation = await traced(
+        request(app)
+          .post('/api/v1/tenants')
+          .set('Authorization', `Bearer ${owner.accessToken}`)
+          .send({ name: 'Slug Workspace', slug })
+      )
+      expect(tenantCreation.status).toBe(201)
+      state.tenantIds.push((tenantCreation.body as { data: { id: string } }).data.id)
+
+      // resolveTenant replaces the request store with enterWith; the user must survive it.
+      const slugSession = randomUUID()
+      const invite = await traced(
+        request(app)
+          .post(`/api/v1/tenants/${slug}/invitations`)
+          .set('Authorization', `Bearer ${owner.accessToken}`)
+          .set('X-POSTHOG-SESSION-ID', slugSession)
+          .send({ email: `analytics-slug-invitee-${randomUUID()}@example.test`, role: 'editor' })
+      )
+      expect(invite.status).toBe(202)
+
+      // Logout has no access token: the refresh cookie identifies the user.
+      const signOutSession = randomUUID()
+      const signOut = await traced(
+        request(app)
+          .post('/api/v1/auth/logout')
+          .set('Cookie', owner.refreshCookie)
+          .set('X-POSTHOG-SESSION-ID', signOutSession)
+      )
+      expect(signOut.status).toBe(200)
+
+      const events = await drainAll()
+      const [invitationCreated] = eventsOf(events, invite.traceId)
+      expect(invitationCreated?.event).toBe('invitation_created')
+      expect(invitationCreated?.distinct_id).toBe(owner.userId)
+      expect(invitationCreated?.properties.$session_id).toBe(slugSession)
+      const [signedOut] = eventsOf(events, signOut.traceId)
+      expect(signedOut?.event).toBe('user_signed_out')
+      expect(signedOut?.distinct_id).toBe(owner.userId)
+      expect(signedOut?.properties.$session_id).toBe(signOutSession)
     },
     FLOW_TIMEOUT_MS
   )

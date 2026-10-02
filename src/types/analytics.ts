@@ -16,8 +16,9 @@ export interface AnalyticsContext {
   spanId?: string
   posthogSessionId?: string
   /**
-   * The authenticated user of the request; the session id belongs to this
-   * user's browser, so only events of this user may carry it.
+   * The authenticated user of the request. When present, only this user's
+   * events may carry the browser session id; without one, only the user's
+   * own sign-in, sign-up and sign-out may.
    */
   userId?: string
 }

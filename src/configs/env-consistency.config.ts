@@ -3,7 +3,7 @@
  * outside `EnvSchema` because an object-level `.refine()` would break
  * `getDatabaseUrl()`'s `.pick()`.
  */
-import { isCookieSecure, trustProxySetting, type Env } from '@/configs/env.config'
+import { isCookieSecure, isProxyTrustOff, type Env } from '@/configs/env.config'
 import { SERVER_DRAIN_TIMEOUT_MS } from '@/constants/global.constants'
 import { senderDomain, senderFor } from '@/utilities/email-sender.utilities'
 
@@ -153,9 +153,8 @@ function apexCookieDomainProblem(env: Env): string | undefined {
 function warnOnUntrustedProxyForAnalytics(env: Env, warn: (message: string) => void): void {
   if (
     env.APP_ENV === 'local' ||
-    env.NODE_ENV === 'test' ||
     env.POSTHOG_PROJECT_KEY === undefined ||
-    trustProxySetting(env.TRUST_PROXY) !== false
+    !isProxyTrustOff(env.TRUST_PROXY)
   ) {
     return
   }
@@ -225,7 +224,7 @@ export function assertEnvConsistent(
   if (
     isCookieSecure(env) &&
     env.GOOGLE_CLIENT_ID !== undefined &&
-    trustProxySetting(env.TRUST_PROXY) === false
+    isProxyTrustOff(env.TRUST_PROXY)
   ) {
     warn(
       'Auth cookies are Secure (COOKIE_SECURE, on by default outside local) and TRUST_PROXY is false. Behind a TLS-terminating proxy, express-session then sees plain HTTP and never sends the OAuth session cookie, so Google login fails. Set TRUST_PROXY to the number of proxies in front of this app.'

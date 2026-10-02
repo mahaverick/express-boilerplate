@@ -724,6 +724,17 @@ export function trustProxySetting(value: string): boolean | number | string {
 }
 
 /**
+ * Whether `TRUST_PROXY` makes Express trust no proxy hop: `false` and a hop
+ * count of `0` are the same to it.
+ * @param value - The validated `TRUST_PROXY` value.
+ * @returns True when the client address is the direct peer's.
+ */
+export function isProxyTrustOff(value: string): boolean {
+  const setting = trustProxySetting(value)
+  return setting === false || setting === 0
+}
+
+/**
  * Whether the auth cookies (refresh token, OAuth session) carry `Secure`.
  *
  * An explicit COOKIE_SECURE wins; otherwise every APP_ENV but `local` is secure.

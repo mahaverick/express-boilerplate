@@ -386,8 +386,8 @@ email audit events carry `email_domain` (`onboarding_reminder_sent` carries
 `email_domains`). A tenant invitation's email events carry `tenant_id` as a
 plain property and join no group, because the recipient is not a member.
 `distinct_id` and `$session_id` are pseudonymous identifiers. `$session_id`
-is sent only on an event of the user whose browser sent it (a sign-in or
-sign-up counts, as the user is not authenticated yet); `$groupidentify`, a
+is sent only on an event of the user whose browser sent it (a sign-in,
+sign-up or sign-out counts, as the request carries no access token); `$groupidentify`, a
 `$set` for another user and `system` events never carry it. A purge does not reach PostHog: see
 [SECURITY.md](SECURITY.md#purge-the-only-hard-delete) for what stays there.
 
