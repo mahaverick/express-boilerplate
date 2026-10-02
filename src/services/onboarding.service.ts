@@ -295,12 +295,16 @@ function stateOf(
 }
 
 /**
- * The state as a customer sees it: `stuck` and `awaiting_owner` are staff concepts.
+ * The state as a customer sees it: `stuck` and `awaiting_owner` are staff
+ * concepts. A stuck tenant is in progress; one awaiting its owner is not
+ * tracked yet, so a member who joined before the owner sees no checklist
+ * (its writes answer 409 `not_tracked` until the owner accepts).
  * @param state - The derived state.
  * @returns The customer's state.
  */
 function customerStateOf(state: OnboardingState): CustomerOnboardingState {
-  if (state === 'stuck' || state === 'awaiting_owner') return 'in_progress'
+  if (state === 'stuck') return 'in_progress'
+  if (state === 'awaiting_owner') return 'not_tracked'
   return state
 }
 

@@ -159,6 +159,20 @@ describe('GET /tenants/:slug/onboarding', () => {
     })
   })
 
+  it('shows a member of a tenant awaiting its first owner not_tracked, with nothing to do', async () => {
+    const waiting = await tenantRepository.createWithoutOwner({
+      name: 'Waiting Co',
+      slug: `waiting-${randomUUID()}`,
+    })
+    tenantIds.push(waiting.id)
+    const viewerToken = await memberToken(waiting, 'viewer')
+
+    const response = await readOnboarding(waiting, viewerToken)
+
+    expect(response.status).toBe(200)
+    expect(viewOf(response)).toMatchObject({ state: 'not_tracked', requiredDone: 0 })
+  })
+
   it('answers 404 to a non-member', async () => {
     const { tenant } = await ownedTenant()
     const outsider = await createTrackedUser()

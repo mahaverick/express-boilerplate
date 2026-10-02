@@ -215,7 +215,7 @@ describe('getTenantOnboarding', () => {
     })
   })
 
-  it('reports stuck and awaiting_owner to the customer as in_progress, and untracked as not_tracked', async () => {
+  it('reports stuck to the customer as in_progress, and awaiting_owner and untracked as not_tracked', async () => {
     const { owner, tenant } = await startedTenant()
     const waiting = await tenantRepository.createWithoutOwner({
       name: 'Waiting Co',
@@ -231,7 +231,7 @@ describe('getTenantOnboarding', () => {
     const untracked = await getTenantOnboarding(tenant.id, { userId: owner.id })
 
     expect(stuck.state).toBe('in_progress')
-    expect(awaiting.state).toBe('in_progress')
+    expect(awaiting.state).toBe('not_tracked')
     expect(untracked.state).toBe('not_tracked')
   })
 

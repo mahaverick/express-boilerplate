@@ -281,7 +281,8 @@ what `GET /tenants/:slug/onboarding` and the staff endpoints return.
 **Only tenants created after this release are tracked.** Existing tenants
 have `onboarding_tracked = false` and show as not tracked. A tenant staff
 create waits for its first owner to accept (`awaiting_owner`, never stuck)
-before its clock starts. Actions staff take through platform access (an
+before its clock starts; until then its members see it as `not_tracked`, with
+no checklist. Actions staff take through platform access (an
 `access: 'platform'` request on a customer route) never count as customer
 progress.
 

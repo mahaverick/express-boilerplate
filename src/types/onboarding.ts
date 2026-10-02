@@ -10,7 +10,8 @@ import type {
 
 /**
  * The states a customer sees. `stuck` and `awaiting_owner` are staff
- * concepts, reported to the customer as `in_progress`.
+ * concepts: a stuck tenant is reported as `in_progress`, and one awaiting
+ * its first owner as `not_tracked`, since its clock has not started.
  */
 export type CustomerOnboardingState = Extract<
   OnboardingState,
