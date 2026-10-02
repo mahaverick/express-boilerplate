@@ -16,6 +16,7 @@ import { createEmailWebhookRouter } from '@/routes/email-webhook.routes'
 import { createApiRouter } from '@/routes/index.routes'
 import { isDatabaseReachable } from '@/services/database.service'
 import { isShuttingDown } from '@/services/lifecycle.service'
+import { registerOnboardingSubscribers } from '@/services/onboarding.service'
 import { isQueueReachable } from '@/services/queue.service'
 import { isRedisReachable } from '@/services/redis.service'
 
@@ -28,10 +29,14 @@ import { isRedisReachable } from '@/services/redis.service'
  * can name its own IP and escape the limiters. A malformed value throws here,
  * at boot. `/health` stays shallow so a database blip never restarts a
  * healthy process; `/health/ready` checks every dependency, since failing it
- * only removes the pod from rotation.
+ * only removes the pod from rotation. It also registers the domain-event
+ * subscribers (`registerOnboardingSubscribers`), which is idempotent.
  * @returns A configured app with no listening socket.
  */
 export function createApp(): Express {
+  // Here, not in index.ts, so every test that builds the app has the subscribers too.
+  registerOnboardingSubscribers()
+
   const app = express()
 
   app.disable('x-powered-by')

@@ -3,7 +3,8 @@
  * Multi-step writes run in one transaction with their audit entry, and every
  * query inside one goes through its `tx`. Audit metadata carries the address's
  * domain only; mail and the in-app notification are
- * enqueued after the write commits, fire-and-forget.
+ * enqueued after the write commits, fire-and-forget. A teammate invitation
+ * and a claimed accept emit their domain event after commit.
  */
 import { randomBytes } from 'node:crypto'
 import { getEnv } from '@/configs/env.config'
@@ -27,12 +28,14 @@ import { UserMembershipRepository } from '@/repositories/user-membership.reposit
 import { UserRepository } from '@/repositories/user.repository'
 import { record } from '@/services/audit.service'
 import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
+import { emitDomainEvent } from '@/services/domain-events.service'
 import { logger } from '@/services/logger.service'
 import { hashToken } from '@/services/session.service'
 import { lockActorRole } from '@/services/tenant-membership.service'
 import { buildInvitationAcceptUrl, frontendUrl } from '@/services/verification.service'
 import { TENANT_INVITATION_TEMPLATE_KEY } from '@/templates/email/tenant-invitation.template'
 import type { Actor } from '@/types/actor'
+import type { DomainEventOf } from '@/types/domain-event'
 import type { EmailResendOptions } from '@/types/email-context'
 import type { EmailDelivery } from '@/types/email-delivery'
 import { requireDurationMs } from '@/utilities/duration.utilities'
@@ -122,6 +125,15 @@ export interface InvitationPreview {
 export interface AcceptedInvitation {
   tenant: { name: string; slug: string }
   role: MembershipRole
+}
+
+/**
+ * What an accept's transaction settles: the answer, and the membership it
+ * added, when it added one.
+ */
+interface AcceptOutcome {
+  accepted: AcceptedInvitation
+  joined?: DomainEventOf<'invitation_accepted'>
 }
 
 /**
@@ -296,7 +308,9 @@ async function tenantForMessages(
  * Invite an address to a tenant. Answers the same way whether or not the
  * address has an account; only an existing member is refused. The actor's
  * role is re-read under lock first, so the grant check runs before any
- * lookup of the address and holds until the invitation is written.
+ * lookup of the address and holds until the invitation is written. After
+ * commit it emits `teammate_invited` with the access the actor used; the
+ * staff owner invitation and `resend` emit nothing.
  * @param actor - The signed-in user sending the invitation.
  * @param tenantId - The tenant.
  * @param email - The address to invite, in any case.
@@ -312,7 +326,7 @@ export async function invite(
   const normalizedEmail = email.trim().toLowerCase()
   const rawToken = generateInvitationToken()
 
-  const context: InvitationMessageContext = await db.transaction(async (tx) => {
+  const { context, access } = await db.transaction(async (tx) => {
     const { role: actorRole, access } = await lockActorRole(actor, tenantId, 'admin', tx)
     if (!canActorGrantRole(actorRole, role)) throw new HttpError(GRANT_REFUSED_MESSAGE, 403)
 
@@ -351,7 +365,14 @@ export async function invite(
       },
       tx
     )
-    return { invitation, rawToken, tenant, inviterName: inviterDisplayName(inviter), invitee }
+    const written: InvitationMessageContext = {
+      invitation,
+      rawToken,
+      tenant,
+      inviterName: inviterDisplayName(inviter),
+      invitee,
+    }
+    return { context: written, access }
   })
 
   const { invitee } = context
@@ -360,6 +381,15 @@ export async function invite(
     (error: unknown) => {
       logger.error('Invitation messages failed', { error, invitationId: context.invitation.id })
     }
+  )
+  await emitDomainEvent(
+    {
+      type: 'teammate_invited',
+      tenantId,
+      actorId: actor.userId,
+      at: context.invitation.createdAt,
+    },
+    { access }
   )
 }
 
@@ -623,6 +653,9 @@ async function acceptedEarlierBy(
 /**
  * Accept an invitation as the signed-in user. Only the owner of the
  * verified invited address may accept; a second accept by them succeeds.
+ * A claimed accept that adds a membership emits `invitation_accepted` after
+ * commit, saying whether the tenant had no member before; an accept that
+ * finds the user already a member, or a repeat accept, emits nothing.
  * @param rawToken - The raw token from the link.
  * @param userId - The signed-in user.
  * @returns The tenant and the role the user now holds (an existing membership's role is kept).
@@ -634,20 +667,20 @@ export async function accept(rawToken: string, userId: string): Promise<Accepted
   const user = await userRepository.findById(userId)
   if (!user?.active) throw new HttpError('Authentication required', 401)
 
-  return db.transaction(async (tx) => {
+  const outcome = await db.transaction(async (tx): Promise<AcceptOutcome> => {
     const valid = await invitationRepository.findValidByTokenHash(tokenHash, tx)
-    if (!valid) return acceptedEarlierBy(tokenHash, user.id, tx)
+    if (!valid) return { accepted: await acceptedEarlierBy(tokenHash, user.id, tx) }
 
     assertInvitedAddress(user, valid.invitation.email)
 
     const claimed = await invitationRepository.claimForAccept(tokenHash, user.id, tx)
     // Unredeemable since the read (accept, revoke, resend, expiry, tenant suspended, archived or deleted): succeed only if this user accepted.
-    if (!claimed) return acceptedEarlierBy(tokenHash, user.id, tx)
+    if (!claimed) return { accepted: await acceptedEarlierBy(tokenHash, user.id, tx) }
 
-    const membership = await userMembershipRepository.createIfAbsent(
-      { userId: user.id, tenantId: claimed.tenantId, role: claimed.role },
-      tx
-    )
+    const row = { userId: user.id, tenantId: claimed.tenantId, role: claimed.role }
+    const inserted = await userMembershipRepository.insertIfAbsent(row, tx)
+    // An existing membership keeps its role; createIfAbsent reads it back.
+    const membership = inserted ?? (await userMembershipRepository.createIfAbsent(row, tx))
     await record(
       {
         action: 'invitation.accepted',
@@ -659,9 +692,24 @@ export async function accept(rawToken: string, userId: string): Promise<Accepted
       },
       tx
     )
-    return {
+    const accepted = {
       tenant: { name: valid.tenant.name, slug: valid.tenant.slug },
       role: membership.role,
     }
+    if (!inserted) return { accepted }
+    const memberCount = await userMembershipRepository.countMemberships(claimed.tenantId, tx)
+    return {
+      accepted,
+      joined: {
+        type: 'invitation_accepted',
+        tenantId: claimed.tenantId,
+        userId: user.id,
+        role: inserted.role,
+        wasFirstMember: memberCount === 1,
+        at: inserted.createdAt,
+      },
+    }
   })
+  if (outcome.joined) await emitDomainEvent(outcome.joined, { access: 'member' })
+  return outcome.accepted
 }

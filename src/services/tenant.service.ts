@@ -16,6 +16,7 @@ import {
 } from '@/repositories/user-membership.repository'
 import { record } from '@/services/audit.service'
 import { withTransaction } from '@/services/database.service'
+import { emitDomainEvent } from '@/services/domain-events.service'
 import { lockActorRole } from '@/services/tenant-membership.service'
 import type { Actor } from '@/types/actor'
 import type {
@@ -107,14 +108,14 @@ function changedFields<TValues extends object>(
 
 /**
  * Create a tenant with its settings row and the actor as sole owner, and
- * audit it, in one transaction.
+ * audit it, in one transaction; then emit `tenant_created`.
  * @param actor - The creating user, who becomes the owner.
  * @param input - The validated create body.
  * @returns The new tenant row.
  * @throws {HttpError} 409, when the slug is taken.
  */
 export async function createTenant(actor: Actor, input: CreateTenantInput): Promise<Tenant> {
-  return withTransaction(async (tx) => {
+  const created = await withTransaction(async (tx) => {
     const tenant = await tenantRepository.create({ ...input, ownerId: actor.userId }, tx)
     // The creator is the owner from this write on, so they act as a member.
     await record(
@@ -130,6 +131,16 @@ export async function createTenant(actor: Actor, input: CreateTenantInput): Prom
     )
     return tenant
   })
+  await emitDomainEvent(
+    {
+      type: 'tenant_created',
+      tenantId: created.id,
+      ownerId: actor.userId,
+      at: created.createdAt,
+    },
+    { access: 'member' }
+  )
+  return created
 }
 
 /**
@@ -223,7 +234,9 @@ export async function getSettings(tenantId: string): Promise<TenantSettings> {
  * actor's access is re-read under lock first; the settings row is locked
  * after it. Only the fields whose value differs from the row are written and
  * audited. When none differs, the write and the audit entry are skipped,
- * `updatedAt` stays as it was, and the current row is returned.
+ * `updatedAt` stays as it was, and the current row is returned. A real
+ * change emits `tenant_settings_updated` after commit, with the access the
+ * actor used.
  * @param actor - The signed-in user making the change.
  * @param tenantId - The tenant.
  * @param input - The validated PATCH body.
@@ -236,12 +249,12 @@ export async function updateSettings(
   input: UpdateTenantSettingsInput
 ): Promise<TenantSettings> {
   const values = toSettingsUpdateValues(input)
-  return withTransaction(async (tx) => {
+  const outcome = await withTransaction(async (tx) => {
     const { access } = await lockActorRole(actor, tenantId, 'admin', tx)
     const current = await tenantSettingsRepository.lockByTenantId(tenantId, tx)
     if (!current) throw new HttpError('Tenant settings not found', 404)
     const { changes, changed } = changedFields(values, current)
-    if (changed.length === 0) return current
+    if (changed.length === 0) return { settings: current, access, isChanged: false }
     const settings = await tenantSettingsRepository.update(tenantId, changes, tx)
     if (!settings) throw new HttpError('Tenant settings not found', 404)
     await record(
@@ -255,6 +268,18 @@ export async function updateSettings(
       },
       tx
     )
-    return settings
+    return { settings, access, isChanged: true }
   })
+  if (outcome.isChanged) {
+    await emitDomainEvent(
+      {
+        type: 'tenant_settings_updated',
+        tenantId,
+        actorId: actor.userId,
+        at: outcome.settings.updatedAt,
+      },
+      { access: outcome.access }
+    )
+  }
+  return outcome.settings
 }

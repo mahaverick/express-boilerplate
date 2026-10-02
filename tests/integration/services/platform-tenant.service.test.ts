@@ -157,22 +157,22 @@ describe('owner re-issue vs the old invitee accepting', () => {
     const reached = deferred<number>()
     const release = deferred()
     // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
-    const realCreate = UserMembershipRepository.prototype.createIfAbsent
-    const pausingCreate: typeof realCreate = async function (
+    const realInsert = UserMembershipRepository.prototype.insertIfAbsent
+    const pausingInsert: typeof realInsert = async function (
       this: UserMembershipRepository,
       ...arguments_
     ) {
-      const created = await realCreate.apply(this, arguments_)
+      const inserted = await realInsert.apply(this, arguments_)
       reached.resolve(await backendPid(arguments_[1] as DbTransaction))
       await release.promise
-      return created
+      return inserted
     }
 
     let outcomes: PromiseSettledResult<unknown>[] = []
     await withMutatedMethod(
       UserMembershipRepository.prototype,
-      'createIfAbsent',
-      pausingCreate,
+      'insertIfAbsent',
+      pausingInsert,
       async () => {
         const accepting = accept(rawToken, invitee.id)
         const acceptPid = await untilSignalled(reached.promise, accepting, 'accept')

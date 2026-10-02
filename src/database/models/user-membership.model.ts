@@ -18,7 +18,7 @@ const MEMBERSHIP_ROLE_SQL_LIST = MEMBERSHIP_ROLES.map((role) => `'${role}'`).joi
  * The `user_memberships` table: one row per (user, tenant) pair, carrying
  * that user's role within that tenant. `TenantRepository.create()` inserts
  * the creator's `'owner'` row with the tenant; an accepted invitation adds
- * one through `createIfAbsent` (tenant-invitation.service.ts), and
+ * one through `insertIfAbsent` (tenant-invitation.service.ts), and
  * platform.service.ts adds platform-tenant rows by auto-join
  * (`insertIfAbsent`) and by explicit grant (`create`). Removing a member is
  * a hard delete, so `UserMembershipRepository` does not extend

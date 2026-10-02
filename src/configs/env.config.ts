@@ -431,6 +431,15 @@ const EnvSchema = z.object({
     .describe(
       'Days to keep an audit_logs row. Defaults to 0, which keeps the audit log forever. Set a number of days, at most 36500, only where your compliance rules allow deleting audit history.'
     ),
+  ONBOARDING_STUCK_AFTER_DAYS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(36_500)
+    .default(7)
+    .describe(
+      'Days without onboarding progress after which a tracked tenant that is not complete or dismissed counts as stuck in the staff funnel and lists. At least 1, at most 36500. Defaults to 7.'
+    ),
   /**
    * `redisKey()` (redis.service.ts) joins this and each part with `:`, so a
    * trailing colon would double it.

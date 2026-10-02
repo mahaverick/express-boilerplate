@@ -433,6 +433,27 @@ describe('RETENTION_* days', () => {
   })
 })
 
+describe('ONBOARDING_STUCK_AFTER_DAYS', () => {
+  it('defaults to 7', () => {
+    expect(parseEnv(valid).ONBOARDING_STUCK_AFTER_DAYS).toBe(7)
+  })
+
+  it('coerces a whole number of days from 1 to 36500', () => {
+    expect(
+      parseEnv({ ...valid, ONBOARDING_STUCK_AFTER_DAYS: '1' }).ONBOARDING_STUCK_AFTER_DAYS
+    ).toBe(1)
+    expect(
+      parseEnv({ ...valid, ONBOARDING_STUCK_AFTER_DAYS: '36500' }).ONBOARDING_STUCK_AFTER_DAYS
+    ).toBe(36_500)
+  })
+
+  it.each(['0', '-1', '1.5', '36501', 'seven'])('rejects %s, naming the variable', (value) => {
+    expect(() => parseEnv({ ...valid, ONBOARDING_STUCK_AFTER_DAYS: value })).toThrow(
+      'ONBOARDING_STUCK_AFTER_DAYS'
+    )
+  })
+})
+
 describe('trustProxySetting', () => {
   it('maps "false" to the boolean Express understands, not the string', () => {
     // A non-empty string is truthy, and Express reads a string as an address list, so passing "false" through unconverted would mean "trust the proxy at the address named `false`", which proxy-addr rejects at boot.
