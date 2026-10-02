@@ -19,18 +19,22 @@ export interface ProfileWithPlatformRole {
 }
 
 /**
+ * The user columns a validated `PATCH /profile` body may write.
+ */
+type ProfileUpdateValues = Partial<Pick<NewUser, 'firstName' | 'lastName' | 'analyticsOptOut'>>
+
+/**
  * The user columns a validated `PATCH /profile` body writes. `Object.hasOwn`,
  * not `!== undefined`: an omitted key leaves the column alone, an explicit
- * `null` clears it.
+ * `null` clears a name.
  * @param input - The validated body.
  * @returns Only the columns the caller supplied.
  */
-function toUpdateValues(
-  input: UpdateProfileInput
-): Partial<Pick<NewUser, 'firstName' | 'lastName'>> {
-  const values: Partial<Pick<NewUser, 'firstName' | 'lastName'>> = {}
+function toUpdateValues(input: UpdateProfileInput): ProfileUpdateValues {
+  const values: ProfileUpdateValues = {}
   if (Object.hasOwn(input, 'firstName')) values.firstName = input.firstName
   if (Object.hasOwn(input, 'lastName')) values.lastName = input.lastName
+  if (input.analyticsOptOut !== undefined) values.analyticsOptOut = input.analyticsOptOut
   return values
 }
 
@@ -47,8 +51,9 @@ export async function getProfile(userId: string): Promise<ProfileWithPlatformRol
 }
 
 /**
- * Update the user's first or last name. A body with no recognised field
- * skips the write, so `updatedAt` is not bumped for a no-op.
+ * Update the user's first or last name, or their browser analytics opt-out.
+ * A body with no recognised field skips the write, so `updatedAt` is not
+ * bumped for a no-op.
  * @param userId - The authenticated user.
  * @param input - The validated PATCH body.
  * @returns The row after the update and the user's platform role.

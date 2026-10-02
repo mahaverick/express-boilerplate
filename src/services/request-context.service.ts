@@ -33,6 +33,11 @@ export interface RequestContext {
    * The raw `User-Agent` header.
    */
   userAgent?: string
+  /**
+   * The browser's PostHog session id, from `X-POSTHOG-SESSION-ID`, when it
+   * is a UUID (posthog-session.middleware.ts).
+   */
+  posthogSessionId?: string
   tenant?: TenantContext
 }
 

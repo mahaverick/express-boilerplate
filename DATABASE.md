@@ -40,7 +40,8 @@ two tables authentication rests on:
   rows that are not soft-deleted, via a partial `lower(email)` index, not a
   plain unique constraint), a nullable `password_hash` (null for a user who
   signs in only with Google), `first_name`/`last_name`, `active`,
-  `email_verified_at`, `last_logged_in_at`, and the
+  `email_verified_at`, `last_logged_in_at`, `analytics_opt_out` (the user
+  turned off browser analytics; server events ignore it), and the
   `deleted_at`/`created_at`/`updated_at` trio every soft-deletable table
   carries.
 - **`user-token.model.ts`** — the `user_tokens` table: one row per issued or
@@ -375,6 +376,13 @@ second time under the lock, then run `pnpm db:migrate`.
   write to a user row (login's `last_logged_in_at` update, a registration, a
   profile change) waits for the migration too; reads, including `FOR SHARE`
   and `FOR NO KEY UPDATE` locks, do not.
+
+- **`0022` holds `users` briefly.** Its `ADD COLUMN analytics_opt_out` is
+  metadata-only (the default is a constant, so no row is rewritten), but it
+  takes an `ACCESS EXCLUSIVE` lock on `users` until the migration's
+  transaction commits, so every request that reads a user waits for it.
+  `analytics_outbox` is new and empty, and has no foreign key, so its index
+  builds instantly.
 
 ## Test database
 

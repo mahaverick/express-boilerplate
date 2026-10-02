@@ -33,6 +33,20 @@ describe('CORS', () => {
     )
   })
 
+  it('allows the trace and PostHog session headers the frontends set on every API call', async () => {
+    const response = await request(app)
+      .options('/api/v1/profile')
+      .set('Origin', allowedOrigin)
+      .set('Access-Control-Request-Method', 'GET')
+      .set('Access-Control-Request-Headers', 'authorization,traceparent,x-posthog-session-id')
+
+    expect(response.status).toBe(204)
+    const allowed = response.headers['access-control-allow-headers']?.toLowerCase() ?? ''
+    expect(allowed.split(',')).toEqual(
+      expect.arrayContaining(['traceparent', 'x-posthog-session-id'])
+    )
+  })
+
   it('grants PUT, not just the hand-picked verbs an earlier config listed', async () => {
     // cors.config.ts sets no `methods` list, so PUT reaches the grant only through `cors`'s own default method list.
     const response = await request(app)

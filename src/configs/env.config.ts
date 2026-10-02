@@ -440,6 +440,64 @@ const EnvSchema = z.object({
     .describe(
       'Days without onboarding progress after which a tracked tenant that is not complete or dismissed counts as stuck in the staff funnel and lists. At least 1, at most 36500. Defaults to 7.'
     ),
+
+  /**
+   * Optional: absent leaves analytics inert. No outbox rows are written, the
+   * drainer never starts, and /api/v1/collect answers 503
+   * (analytics.config.ts `isAnalyticsEnabled`).
+   */
+  POSTHOG_PROJECT_KEY: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      'PostHog project API key (phc_…) of the project this environment reports to. Unset disables analytics entirely: no events are recorded, none are sent, and /api/v1/collect answers 503. Use one project per environment, shared with the frontends.'
+    ),
+  POSTHOG_HOST: z
+    .url({ protocol: /^https?$/ })
+    .refine(hasNoQueryOrFragment, NO_QUERY_OR_FRAGMENT)
+    .default('https://us.i.posthog.com')
+    .describe(
+      'PostHog ingest host that server events are sent to and /api/v1/collect forwards to, with no trailing path. Defaults to https://us.i.posthog.com; an EU project uses https://eu.i.posthog.com.'
+    ),
+  /**
+   * No schema default: it derives from POSTHOG_HOST, which `.default()` cannot
+   * read, so `posthogAssetsHost` (analytics.config.ts) applies it.
+   */
+  POSTHOG_ASSETS_HOST: z
+    .url({ protocol: /^https?$/ })
+    .refine(hasNoQueryOrFragment, NO_QUERY_OR_FRAGMENT)
+    .optional()
+    .describe(
+      'PostHog assets host that /api/v1/collect/static and /api/v1/collect/array forward to. Unset derives it from POSTHOG_HOST: https://eu-assets.i.posthog.com for an eu. host, otherwise https://us-assets.i.posthog.com. Tests point it at a fake.'
+    ),
+  ANALYTICS_OUTBOX_RETENTION_DAYS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(365)
+    .default(7)
+    .describe(
+      'Days an analytics event may wait in the outbox, while PostHog is unreachable or refuses it, before it is dropped unsent with a warning. At least 1, at most 365. Defaults to 7.'
+    ),
+  ANALYTICS_DRAIN_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .min(1000)
+    .max(600_000)
+    .default(5000)
+    .describe(
+      'Milliseconds between analytics outbox drains, each of which sends one batch to PostHog. At least 1000, at most 600000. Defaults to 5000.'
+    ),
+  ANALYTICS_DRAIN_BATCH_SIZE: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(1000)
+    .default(500)
+    .describe(
+      'Most analytics events one drain claims and sends in one PostHog batch. At least 1, at most 1000. Defaults to 500.'
+    ),
   /**
    * `redisKey()` (redis.service.ts) joins this and each part with `:`, so a
    * trailing colon would double it.

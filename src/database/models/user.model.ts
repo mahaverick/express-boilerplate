@@ -34,6 +34,11 @@ export const userModel = pgTable(
     active: boolean('active').notNull().default(true),
     emailVerifiedAt: timestamp('email_verified_at', { withTimezone: true }),
     lastLoggedInAt: timestamp('last_logged_in_at', { withTimezone: true }),
+    /**
+     * The user turned off browser analytics (`PATCH /profile`). The frontends
+     * read it and stop capturing; server events are unaffected.
+     */
+    analyticsOptOut: boolean('analytics_opt_out').notNull().default(false),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

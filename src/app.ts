@@ -10,6 +10,7 @@ import { getEnv, trustProxySetting } from '@/configs/env.config'
 import { helmetOptions } from '@/configs/helmet.config'
 import { HttpError } from '@/errors/http-error'
 import { errorHandler } from '@/middlewares/error.middleware'
+import { posthogSession } from '@/middlewares/posthog-session.middleware'
 import { requestContext } from '@/middlewares/request-context.middleware'
 import { requestId } from '@/middlewares/request-id.middleware'
 import { createEmailWebhookRouter } from '@/routes/email-webhook.routes'
@@ -51,6 +52,7 @@ export function createApp(): Express {
 
   app.use(requestId)
   app.use(requestContext)
+  app.use(posthogSession)
   // Before the body parsers: a webhook signature covers the exact bytes, which express.json would consume.
   app.use('/api/v1/webhooks/email', createEmailWebhookRouter())
   app.use(express.json({ limit: '1mb' }))

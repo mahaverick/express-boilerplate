@@ -22,8 +22,8 @@ const optionalNameField = z
   .optional()
 
 /**
- * `PATCH /api/v1/profile` request body: the only two fields this endpoint
- * lets a caller change.
+ * `PATCH /api/v1/profile` request body: the only fields this endpoint lets a
+ * caller change, the two names and the browser analytics opt-out.
  *
  * Not strict: an unrecognised key (`email`, `id`, `passwordHash`, `active`)
  * is stripped, not rejected, so a client that PATCHes back the whole object
@@ -34,6 +34,7 @@ const optionalNameField = z
 export const updateProfileSchema = z.object({
   firstName: optionalNameField,
   lastName: optionalNameField,
+  analyticsOptOut: z.boolean().optional(),
 })
 
 /**

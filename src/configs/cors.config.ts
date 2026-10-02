@@ -9,6 +9,9 @@ import { isAllowedOrigin } from '@/utilities/origin.utilities'
  * warning about it. No `methods` list: `cors`'s default covers every verb
  * this API registers and cannot drift as routes are added. `X-Request-Id` is
  * exposed so a cross-origin client can report the id this API logs.
+ * `traceparent` and `X-POSTHOG-SESSION-ID` are set by the frontends' own
+ * axios interceptor, so a cross-origin frontend can link a server event to
+ * its trace and its browser session.
  */
 export const corsOptions: CorsOptions = {
   origin: (origin, callback) => {
@@ -18,7 +21,13 @@ export const corsOptions: CorsOptions = {
   },
   credentials: true,
   // Without Last-Event-ID a cross-origin SSE client silently loses replay on reconnect.
-  allowedHeaders: ['Authorization', 'Content-Type', 'Last-Event-ID'],
+  allowedHeaders: [
+    'Authorization',
+    'Content-Type',
+    'Last-Event-ID',
+    'traceparent',
+    'X-POSTHOG-SESSION-ID',
+  ],
   exposedHeaders: ['X-Request-Id'],
   // Chrome caps preflight caching at 600s; Authorization makes every call preflight.
   maxAge: 600,

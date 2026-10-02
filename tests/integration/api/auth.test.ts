@@ -533,6 +533,7 @@ describe('POST /api/v1/auth/register and /login', () => {
           lastName: NO_NAME,
           createdAt: ANY_STRING,
           platformRole: NO_NAME,
+          analyticsOptOut: false,
         },
         accessToken: ANY_STRING,
       })

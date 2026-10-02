@@ -454,6 +454,53 @@ describe('ONBOARDING_STUCK_AFTER_DAYS', () => {
   })
 })
 
+describe('PostHog analytics variables', () => {
+  it('leaves analytics unconfigured by default, with the US ingest host and the outbox defaults', () => {
+    const env = parseEnv(valid)
+    expect(env.POSTHOG_PROJECT_KEY).toBeUndefined()
+    expect(env.POSTHOG_ASSETS_HOST).toBeUndefined()
+    expect(env.POSTHOG_HOST).toBe('https://us.i.posthog.com')
+    expect(env.ANALYTICS_OUTBOX_RETENTION_DAYS).toBe(7)
+    expect(env.ANALYTICS_DRAIN_INTERVAL_MS).toBe(5000)
+    expect(env.ANALYTICS_DRAIN_BATCH_SIZE).toBe(500)
+  })
+
+  it('treats an empty project key as unset', () => {
+    expect(parseEnv({ ...valid, POSTHOG_PROJECT_KEY: '' }).POSTHOG_PROJECT_KEY).toBeUndefined()
+  })
+
+  it('accepts an http host, so tests can point both hosts at a local fake', () => {
+    const env = parseEnv({
+      ...valid,
+      POSTHOG_HOST: 'http://127.0.0.1:9100',
+      POSTHOG_ASSETS_HOST: 'http://127.0.0.1:9100',
+    })
+    expect(env.POSTHOG_HOST).toBe('http://127.0.0.1:9100')
+    expect(env.POSTHOG_ASSETS_HOST).toBe('http://127.0.0.1:9100')
+  })
+
+  it.each(['POSTHOG_HOST', 'POSTHOG_ASSETS_HOST'])(
+    'refuses a %s that is not an http(s) URL, or carries a query or fragment',
+    (name) => {
+      for (const value of ['us.i.posthog.com', 'mailto:ops@example.test', 'https://x.test/?a=1']) {
+        expect(() => parseEnv({ ...valid, [name]: value })).toThrow(name)
+      }
+    }
+  )
+
+  it.each([
+    ['ANALYTICS_OUTBOX_RETENTION_DAYS', '1', '365', ['0', '366', '1.5', 'seven']],
+    ['ANALYTICS_DRAIN_INTERVAL_MS', '1000', '600000', ['999', '600001', '1.5']],
+    ['ANALYTICS_DRAIN_BATCH_SIZE', '1', '1000', ['0', '1001', '1.5']],
+  ] as const)('bounds %s to [%s, %s]', (name, low, high, rejected) => {
+    expect(parseEnv({ ...valid, [name]: low })[name]).toBe(Number(low))
+    expect(parseEnv({ ...valid, [name]: high })[name]).toBe(Number(high))
+    for (const value of rejected) {
+      expect(() => parseEnv({ ...valid, [name]: value })).toThrow(name)
+    }
+  })
+})
+
 describe('trustProxySetting', () => {
   it('maps "false" to the boolean Express understands, not the string', () => {
     // A non-empty string is truthy, and Express reads a string as an address list, so passing "false" through unconverted would mean "trust the proxy at the address named `false`", which proxy-addr rejects at boot.
