@@ -734,7 +734,8 @@ analytics Worker, every ANALYTICS_DRAIN_INTERVAL_MS, concurrency 1
   claimBatch: one autocommit UPDATE … FOR UPDATE SKIP LOCKED, 60 s lease
   (connection released) ── POST <POSTHOG_HOST>/batch/ (10 s timeout)
   ack: delete · retry (no answer, 429, 5xx, 401/403/404/405/407/408): keep, lease and backoff
-  rejected (400, 413, 415, 422, other 4xx): bisect; a row refused alone counts a rejection, dropped at 3
+  rejected (400, 413, 415, 422, other 4xx): bisect; a row refused alone counts a rejection, dropped at 3;
+  a batch and both its halves rejected: endpoint fault, rows kept, one error
 
 browser posthog-js ── /api/v1/collect/* ── analytics-proxy limiter ── stream ── ingest or assets host
 ```
@@ -755,14 +756,18 @@ browser posthog-js ── /api/v1/collect/* ── analytics-proxy limiter ─�
   the backoff (`least(2^attempts × 5 s, 600 s)` after the lease); during an
   outage of any length only the retention rule (`analytics_outbox`,
   `ANALYTICS_OUTBOX_RETENTION_DAYS`) removes rows. A rejected batch is split
-  in halves until the refused row is alone; the first retryable answer ends
-  the drain, so an outage costs one timeout per tick. The endpoint-level
+  in halves until the refused row is alone, unless both of its halves are
+  rejected as well: PostHog is then refusing everything, so no row is counted,
+  the rows are kept and the drain logs one `error` with the status; the first
+  retryable answer ends the drain, so an outage costs one timeout per tick. The endpoint-level
   4xx answers (401, 403, 404, 405, 407, 408) are retryable, never a
   rejection, so a wrong key or host drops nothing; the drain logs one `error`
   per tick naming `POSTHOG_PROJECT_KEY` and `POSTHOG_HOST`.
-- **At least once, shown once.** A row is deleted after PostHog acknowledged
+- **At least once.** A row is deleted after PostHog acknowledged
   it, so a crash between the two resends it with the same `uuid` (the row
-  id), `timestamp`, `event` and `distinct_id`, which PostHog deduplicates on.
+  id), `timestamp`, `event` and `distinct_id`. PostHog deduplicates on `uuid`
+  eventually and without a guarantee (ClickHouse merges), so a consumer that
+  needs exactness dedupes by `uuid`.
 - **The proxy** (`src/routes/analytics-proxy.routes.ts`) sends `/static/*`
   and `/array/*` to the assets host and everything else to the ingest host,
   streaming bodies untouched. It removes `Cookie` and `Authorization`, so the
@@ -773,7 +778,7 @@ browser posthog-js ── /api/v1/collect/* ── analytics-proxy limiter ─�
   503 `service_unavailable`.
 - **Groups.** A tenant's `name`, `status` and `created_at` reach PostHog only
   as `$groupidentify` properties: from the audit hook when a tenant is
-  created or changes state, and from `pnpm analytics:backfill-groups` for
+  created, updated or changes state, and from `pnpm analytics:backfill-groups` for
   tenants that existed before.
 
 The operator steps are in [Analytics (PostHog) in README.md](README.md#analytics-posthog).

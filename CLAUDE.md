@@ -112,7 +112,7 @@ rather than repeating them.
   row and nothing else. See [ARCHITECTURE.md](ARCHITECTURE.md#analytics).
 - **Outbox writes go only through `enqueueAnalytics`, or
   `enqueueAuditAnalytics` for an audit entry** (`analytics-outbox.service.ts`),
-  never `analyticsOutboxRepository.insert` directly: it is the savepoint
+  never the repository directly: they are the savepoint
   inside a transaction and the `try`/`catch` on the pool that keep a failed
   insert from failing the user's action.
 - **New audit actions forward automatically,** as the action with `.`

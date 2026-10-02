@@ -348,6 +348,9 @@ group.
    the US cloud (`https://eu.i.posthog.com` for the EU one). The assets host
    follows the ingest host's region; `POSTHOG_ASSETS_HOST` overrides it.
    Set the same key as the `POSTHOG_KEY` container env var of react and apex.
+   A deployment that runs its workers in separate pods must give those pods
+   `POSTHOG_PROJECT_KEY` too: without it no analytics Worker starts there, rows
+   accumulate and are pruned after the retention window with only a `warn` log.
 3. Deploy, then run `pnpm analytics:backfill-groups` once, so tenants that
    existed before carry their name, status and creation date. It sends
    straight to PostHog and exits 1 if PostHog refuses a batch; a second run
@@ -365,10 +368,17 @@ the product events `user_signed_up`, `user_signed_in`, `user_signed_out`,
 `onboarding_step_completed`; and each email tracking event as `email_<type>`
 (`email_delivered`, `email_opened`, ...). Each carries `source` (`audit`,
 `product` or `email`), `access`, `app: 'api'`, `$groups.tenant` when it
-belongs to a tenant, and the request's `trace_id` and `span_id`, so
-PostHog's events line up with the API's traces. No name, address, reason,
-subject or recipient is ever sent; the tenant's name goes only into the
-tenant group's properties.
+belongs to a tenant, and, only when tracing is on
+(`OTEL_EXPORTER_OTLP_ENDPOINT` set), the request's `trace_id` and `span_id`,
+so PostHog's events line up with the API's traces; with tracing off they carry
+neither. No name, full address, reason, subject or recipient is ever sent; the
+tenant's name goes only into the tenant group's properties, which a
+`$groupidentify` event sends when a tenant is created, updated or changes
+state. The exception is an address's domain: invitation, auto-join, user and
+email audit events carry `email_domain` (`onboarding_reminder_sent` carries
+`email_domains`). `distinct_id` and `$session_id` are pseudonymous
+identifiers. A purge does not reach PostHog: see
+[SECURITY.md](SECURITY.md#purge-the-only-hard-delete) for what stays there.
 
 **How it is delivered.** The request that causes an event writes one
 `analytics_outbox` row in its own transaction (in a savepoint, so a failed
@@ -380,22 +390,31 @@ with a backoff of up to 10 minutes; rows still undelivered after
 `ANALYTICS_OUTBOX_RETENTION_DAYS` (7) are dropped by the daily retention
 purge with a `warn` log (`analyticsOutboxDropped`). A row PostHog rejects
 alone three times is dropped with an `error` log naming its event and id.
+If PostHog refuses a claimed batch and both of its halves, it is treated as
+a fault of the endpoint, not of any row: no row is counted, the rows wait and
+are retried, and the drain logs one `error` with the status only.
 An answer about the endpoint rather than the batch (401, 403, 404, 405, 407
 or 408, so a wrong `POSTHOG_PROJECT_KEY` or `POSTHOG_HOST`) is never counted
 against a row: the rows wait and are retried, and each drain logs one `error`
 naming those two variables.
-A resend after a crash carries the same `uuid`, so PostHog shows the event
-once.
+A resend after a crash carries the same `uuid`; PostHog deduplicates on it
+eventually and without a guarantee, so a consumer that needs exactness dedupes
+by `uuid`.
 
 **The proxy.** posthog-js in react and apex sends to `/api/v1/collect`, the
 API's own origin, so ad blockers and the CSP's `connect-src 'self'` leave it
 alone. Requests stream through unread, the browser's cookies and bearer
 token are stripped, and PostHog sees the client's real `User-Agent` and the
-address, host, protocol and port Express resolved (`X-Forwarded-*` are
-overwritten, never taken from the client). PostHog's `Set-Cookie` and
+address, host, protocol and port of the request (`X-Forwarded-*` are
+overwritten, never taken from the client: `-For` and `-Proto` follow `trust
+proxy`, `-Host` is the request's `Host` header and `-Port` is the listener's
+local port). PostHog's `Set-Cookie` and
 `Access-Control-*` response headers are dropped, and an upstream that stays
 silent for 30 s is answered 504. It has its own limiter
-(`analytics-proxy`, 3000 a minute per IP) and no traces.
+(`analytics-proxy`, 3000 a minute per IP) and no traces. helmet sets
+`Cross-Origin-Resource-Policy: same-site`, so a frontend on a different
+_site_ from the API cannot load `/api/v1/collect/static/*` scripts; the same
+origin through the frontends' nginx, as shipped, is unaffected.
 
 ## Make this yours
 

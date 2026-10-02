@@ -838,6 +838,13 @@ redacted entry from a user entry written without an actor. A tenant purge
 removes the tenant and its own audit entries. Each purge is recorded in the
 platform tenant (`user.purged`, `tenant.purged`).
 
+**A purge does not reach PostHog.** Deleting from PostHog is a later
+sub-project; until then these stay there after a purge: a purged tenant's
+name in its group's `$group_set` properties; a purged user's events and
+person profile (`is_staff`, `platform_role`, `created_at`), keyed by their
+id; and the `user_purged` event's `email_domain`. If you need them gone, delete
+them in PostHog yourself.
+
 ### Email tracking: what is stored, and what a resend can do
 
 An `email_messages` row keeps only its template's `previewVariables`, which
@@ -897,9 +904,15 @@ proxies the browsers' posthog-js traffic; without it, neither happens.
   configured PostHog ingest and assets hosts, under its own per-IP limiter
   (`analytics-proxy`, 3000 a minute). Bodies stream unread and unbounded,
   as replay chunks need; PostHog bounds what it accepts.
-- **Server events carry ids, never personal data.** Names, addresses, staff
-  reasons, email subjects, recipients and provider details never go into an
-  event; the tenant name goes only into the tenant group's properties.
+- **Server events carry ids, never names or addresses.** Names, full
+  addresses, staff reasons, email subjects, recipients and provider details
+  never go into an event; the tenant name goes only into the tenant group's
+  properties. The one exception is an address's domain: invitation, auto-join,
+  user and email audit events carry `email_domain`, and
+  `onboarding_reminder_sent` carries `email_domains`. `distinct_id` (a user id)
+  and `$session_id` are pseudonymous identifiers, not anonymous ones: they
+  identify a person to anyone who can look the id up. A purge leaves them in
+  PostHog (see "Purge: the only hard delete").
 - **Accepted risk: a client chooses its own trace ids.** The API parents a
   request's span on the `traceparent` header the frontends send, and events
   carry that `trace_id`. A trace id is a correlation key only and never
