@@ -512,7 +512,7 @@ const EnvSchema = z.object({
     .email()
     .default('no-reply@example.com')
     .describe(
-      'The From address of the general sender: every email whose links carry no token (password changed, registration attempt), and token emails too while MAIL_FROM_TRANSACTIONAL is unset. Mailpit accepts any value; a real provider may require this to be a verified sender.'
+      'The From address of the general sender: every email whose links carry no token (password changed, registration attempt, onboarding reminder), and token emails too while MAIL_FROM_TRANSACTIONAL is unset. Mailpit accepts any value; a real provider may require this to be a verified sender.'
     ),
   /**
    * No schema default: it falls back to MAIL_FROM, which `.default()` cannot

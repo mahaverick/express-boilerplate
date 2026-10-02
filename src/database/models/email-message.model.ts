@@ -83,7 +83,7 @@ export const emailMessageModel = pgTable(
      */
     invitationId: varchar('invitation_id', { length: 36 }),
     /**
-     * Which frontend the token link opened; null for a template with no link.
+     * Which frontend the token link opened; null for a template with no token link.
      */
     linkApp: varchar('link_app', { length: 8 }).$type<FrontendApp>(),
     senderClass: varchar('sender_class', { length: 16 }).$type<SenderClass>().notNull(),

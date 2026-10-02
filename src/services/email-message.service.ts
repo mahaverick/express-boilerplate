@@ -1,8 +1,9 @@
 /**
- * @file The `email_messages` row that tracks one logical email: created at
- * enqueue (or by the worker, for a job queued before tracking existed) and
- * moved forward by the email worker. Stored variables are only the
- * template's `previewVariables`, so no link or token reaches the row.
+ * @file The `email_messages` row that tracks one logical email: created
+ * before its job is enqueued (in the caller's transaction when it has one),
+ * or by the worker for a job queued before tracking existed, and moved
+ * forward by the email worker. Stored variables are only the template's
+ * `previewVariables`, so no token reaches the row; a stored link carries none.
  */
 import { getEnv } from '@/configs/env.config'
 import type { EmailMessage } from '@/database/models/email-message.model'
