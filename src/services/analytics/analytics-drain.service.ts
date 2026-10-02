@@ -43,20 +43,81 @@ interface Tally {
   retried: number
   lastRetryStatus: number | undefined
   lastRejectedStatus: number | undefined
+  systemicRejection: boolean
 }
 
 /**
- * Send `rows` as one batch; when PostHog rejects a batch of more than one
- * row, send each half the same way, so the rows it accepts are delivered and
- * only a row it refuses alone counts as rejected. The first `retry` stops
- * the whole drain: PostHog is down or slow, and every further send would
- * wait out the timeout inside the lease.
+ * What `sendBatch` answered.
+ */
+type BatchResult = Awaited<ReturnType<typeof sendBatch>>
+
+/**
+ * Send `rows` to PostHog as one batch.
+ * @param rows - The rows to send.
+ * @returns PostHog's answer.
+ */
+function send(rows: AnalyticsOutboxRow[]): Promise<BatchResult> {
+  return sendBatch(rows.map((row) => toPosthogBatchEvent(row)))
+}
+
+/**
+ * Probe both halves of a claimed batch PostHog refused: the second is sent
+ * only when the first is refused too, because a half that PostHog accepts
+ * shows the fault is in a row.
+ * @param halves - The two halves of the claimed batch.
+ * @returns Each half's answer once sent; `undefined` for a half not sent.
+ */
+async function probeHalves(
+  halves: AnalyticsOutboxRow[][]
+): Promise<Array<BatchResult | undefined>> {
+  const first = await send(halves[0] ?? [])
+  if (first.kind !== 'rejected') return [first, undefined]
+  return [first, await send(halves[1] ?? [])]
+}
+
+/**
+ * Settle the halves after one ended the drain: a half already acknowledged is
+ * delivered, every other half waits for the lease.
+ * @param halves - The halves after the one that stopped the drain.
+ * @param answers - Each of those halves' answers, if it was already sent.
+ * @param tally - Accumulates each row's outcome.
+ */
+function settleUnsent(
+  halves: AnalyticsOutboxRow[][],
+  answers: Array<BatchResult | undefined>,
+  tally: Tally
+): void {
+  for (const [index, rest] of halves.entries()) {
+    const answer = answers[index]
+    if (answer?.kind === 'ack') tally.acked.push(...rest.map((row) => row.id))
+    else tally.retried += rest.length
+    if (answer?.kind === 'retry') tally.lastRetryStatus = answer.status
+  }
+}
+
+/**
+ * Send `rows` as one batch, or take `known`, the answer already received for
+ * exactly these rows. When PostHog rejects a batch of more than one row, send
+ * each half the same way, so the rows it accepts are delivered and only a row
+ * it refuses alone counts as rejected. The first `retry` stops the whole
+ * drain: PostHog is down or slow, and every further send would wait out the
+ * timeout inside the lease. So does a claimed batch refused together with
+ * both of its halves: PostHog is refusing everything, which is a fault of the
+ * endpoint and not of a row, so no row is counted and every row waits for
+ * the lease.
  * @param rows - The rows to send, oldest first.
  * @param tally - Accumulates each row's outcome.
- * @returns `'stop'` once a send answered `retry`, otherwise `'continue'`.
+ * @param isTopLevel - Whether `rows` is the whole claimed batch.
+ * @param known - The answer already received for `rows`, if any.
+ * @returns `'stop'` once a send answered `retry` or the whole batch was refused, otherwise `'continue'`.
  */
-async function deliver(rows: AnalyticsOutboxRow[], tally: Tally): Promise<'continue' | 'stop'> {
-  const result = await sendBatch(rows.map((row) => toPosthogBatchEvent(row)))
+async function deliver(
+  rows: AnalyticsOutboxRow[],
+  tally: Tally,
+  isTopLevel = false,
+  known?: BatchResult
+): Promise<'continue' | 'stop'> {
+  const result = known ?? (await send(rows))
   if (result.kind === 'ack') {
     tally.acked.push(...rows.map((row) => row.id))
     return 'continue'
@@ -73,10 +134,15 @@ async function deliver(rows: AnalyticsOutboxRow[], tally: Tally): Promise<'conti
   }
   const middle = Math.ceil(rows.length / 2)
   const halves = [rows.slice(0, middle), rows.slice(middle)]
+  const answers = isTopLevel ? await probeHalves(halves) : []
+  if (answers[1]?.kind === 'rejected') {
+    tally.retried += rows.length
+    tally.systemicRejection = true
+    return 'stop'
+  }
   for (const [index, half] of halves.entries()) {
-    if ((await deliver(half, tally)) === 'stop') {
-      // The halves not yet sent wait for the lease, like the one that answered retry.
-      tally.retried += halves.slice(index + 1).reduce((total, rest) => total + rest.length, 0)
+    if ((await deliver(half, tally, false, answers[index])) === 'stop') {
+      settleUnsent(halves.slice(index + 1), answers.slice(index + 1), tally)
       return 'stop'
     }
   }
@@ -92,7 +158,9 @@ async function deliver(rows: AnalyticsOutboxRow[], tally: Tally): Promise<'conti
  * sends them with no database connection held. Acknowledged rows are
  * deleted; rows PostHog refused alone get one more rejection, and a row at
  * `ANALYTICS_POISON_REJECTIONS` is deleted with an `error` log naming only
- * its event and id; every other row keeps its lease and is claimed again
+ * its event and id. A claimed batch PostHog refuses together with both of its
+ * halves counts against no row; it logs one `error` with the status only.
+ * Every other row keeps its lease and is claimed again
  * once the lease and its backoff have passed. `attempts` never deletes a row.
  * @param now - The clock the lease and backoff are measured against. Defaults to now.
  * @returns How many rows were sent, retried, rejected and dropped.
@@ -114,8 +182,9 @@ export async function drainAnalyticsOutbox(now: Date = new Date()): Promise<Drai
     retried: 0,
     lastRetryStatus: undefined,
     lastRejectedStatus: undefined,
+    systemicRejection: false,
   }
-  if (rows.length > 0) await deliver(rows, tally)
+  if (rows.length > 0) await deliver(rows, tally, true)
 
   if (tally.acked.length > 0) await analyticsOutboxRepository.deleteByIds(tally.acked)
   if (tally.lastRetryStatus !== undefined && ENDPOINT_LEVEL_STATUSES.has(tally.lastRetryStatus)) {
@@ -124,6 +193,12 @@ export async function drainAnalyticsOutbox(now: Date = new Date()): Promise<Drai
       {
         status: tally.lastRetryStatus,
       }
+    )
+  }
+  if (tally.systemicRejection) {
+    logger.error(
+      'PostHog rejected every part of a batch; treating it as an endpoint fault and keeping the rows',
+      { status: tally.lastRejectedStatus }
     )
   }
   if (tally.retried > 0) {

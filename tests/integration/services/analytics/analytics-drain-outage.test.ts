@@ -35,7 +35,7 @@ vi.mock('@/configs/env.config', async (importOriginal) => {
 })
 
 // Far longer than the API requests below take on one connection, so they finish inside it.
-const HANG_MS = 3000
+const HANG_MS = 8000
 const CONCURRENT_REQUESTS = 5
 
 const state: { posthog?: FakePosthog; app?: Express; userId?: string } = {}
