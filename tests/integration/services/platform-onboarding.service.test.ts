@@ -9,6 +9,7 @@
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import { getEnv } from '@/configs/env.config'
+import type { OnboardingState } from '@/constants/onboarding.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import { OnboardingCompletionRepository } from '@/repositories/onboarding-completion.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
@@ -431,8 +432,11 @@ describe('parity with the customer read', () => {
         completedAt: isoOf(derived.completedAt),
         lastProgressAt: isoOf(derived.lastProgressAt),
       })
-      const customerState =
-        staff.state === 'stuck' || staff.state === 'awaiting_owner' ? 'in_progress' : staff.state
+      const customerByStaffState: Partial<Record<OnboardingState, OnboardingState>> = {
+        stuck: 'in_progress',
+        awaiting_owner: 'not_tracked',
+      }
+      const customerState = customerByStaffState[staff.state] ?? staff.state
       expect(customer.state).toBe(customerState)
       expect(customer.completedAt).toBe(isoOf(staff.completedAt))
       states.push(staff.state)
