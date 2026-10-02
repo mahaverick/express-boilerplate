@@ -32,10 +32,11 @@ export type AnalyticsSource = 'audit' | 'product' | 'email'
 
 /**
  * The audit metadata keys never copied onto an event: `reason` becomes
- * `has_reason`, and `name` (a tenant's name) reaches PostHog only through
- * the tenant group's `$group_set`.
+ * `has_reason`, `name` (a tenant's name) reaches PostHog only through the
+ * tenant group's `$group_set`, and `slug` is dropped because it is usually
+ * derived from the tenant's name.
  */
-const AUDIT_METADATA_OMITTED_KEYS: ReadonlySet<string> = new Set(['reason', 'name'])
+const AUDIT_METADATA_OMITTED_KEYS: ReadonlySet<string> = new Set(['reason', 'name', 'slug'])
 
 const PII_KEYS: ReadonlySet<string> = new Set(PII_PROPERTY_KEYS)
 
@@ -173,7 +174,7 @@ export function auditEventName(action: AuditAction): string {
 
 /**
  * The event-specific properties of an audit row: its target, its metadata
- * in snake_case without `reason` (as `has_reason`) and `name`, and, for a
+ * in snake_case without `reason` (as `has_reason`), `name` and `slug`, and, for a
  * staff onboarding completion, the `how` and `required` every
  * `onboarding_step_completed` carries.
  * @param entry - The inserted audit row.

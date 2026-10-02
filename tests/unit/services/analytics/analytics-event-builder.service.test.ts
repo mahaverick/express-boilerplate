@@ -51,6 +51,10 @@ const PII_KEYS: ReadonlySet<string> = new Set(PII_PROPERTY_KEYS)
  * in an event can only mean that field leaked.
  */
 const BANNED_FIELD_PROBE = 'Banned Field Probe'
+/**
+ * Text only a `slug` field is given: a tenant slug must never reach an event.
+ */
+const SLUG_PROBE = 'slug-probe-co'
 // eslint-disable-next-line unicorn/no-null -- audit_logs columns are nullable, and the row type says so
 const NONE = null
 
@@ -247,7 +251,8 @@ describe('buildAuditEvents', () => {
     )
 
     expect(rows).toHaveLength(2)
-    expect(rows[0]?.properties).toMatchObject({ slug: 'probe-co' })
+    expect(rows[0]?.properties).not.toHaveProperty('slug')
+    expect(JSON.stringify(rows[0])).not.toContain('probe-co')
     expect(JSON.stringify(rows[0])).not.toContain(PII_NAME)
     expect(rows[1]).toEqual({
       event: '$groupidentify',
@@ -391,11 +396,14 @@ describe('scrubPiiProperties', () => {
   it('logs the dropped keys of a built event at warn, never their values', () => {
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
 
-    buildAuditEvents(auditRow('tenant.created', { name: 'Acme', slug: PII_EMAIL }), {})
+    buildAuditEvents(
+      auditRow('platform.member.auto_joined', { userId: TARGET_ID, emailDomain: PII_EMAIL }),
+      {}
+    )
 
     expect(warn).toHaveBeenCalledWith('Analytics properties dropped by the PII guard', {
-      event: 'tenant_created',
-      droppedKeys: ['slug'],
+      event: 'platform_member_auto_joined',
+      droppedKeys: ['email_domain'],
     })
     expect(JSON.stringify(warn.mock.calls)).not.toContain(PII_EMAIL)
   })
@@ -415,6 +423,18 @@ function seededRandom(seed: number): () => number {
     mixed ^= mixed + Math.imul(mixed ^ (mixed >>> 7), 61 | mixed)
     return ((mixed ^ (mixed >>> 14)) >>> 0) / 4_294_967_296
   }
+}
+
+/**
+ * A seed derived from an action's name, so each action draws the same
+ * samples whether or not the others run.
+ * @param action - The audit action.
+ * @returns A 32-bit seed.
+ */
+function seedOf(action: string): number {
+  let hash = 2_166_136_261
+  for (const char of action) hash = Math.imul(hash ^ char.codePointAt(0)!, 16_777_619)
+  return hash >>> 0
 }
 
 /**
@@ -460,6 +480,17 @@ const BANNED_FIELD_CANDIDATES: readonly unknown[] = [
 ]
 
 /**
+ * The candidates for one metadata field: a slug and a banned field each get
+ * probe text of their own.
+ * @param key - The metadata key.
+ * @returns The candidate values.
+ */
+function candidatesFor(key: string): readonly unknown[] {
+  if (key === 'slug') return [SLUG_PROBE]
+  return PII_KEYS.has(key) ? BANNED_FIELD_CANDIDATES : CANDIDATES
+}
+
+/**
  * Up to `count` metadata objects that `schema` accepts, each field drawn
  * from the candidates its own schema accepts (a banned field from its own
  * candidates).
@@ -476,12 +507,7 @@ function sampleMetadata(
   const shape = (schema as unknown as { shape: Record<string, z.ZodType> }).shape
   const options = Object.entries(shape).map(
     ([key, field]) =>
-      [
-        key,
-        (PII_KEYS.has(key) ? BANNED_FIELD_CANDIDATES : CANDIDATES).filter(
-          (candidate) => field.safeParse(candidate).success
-        ),
-      ] as const
+      [key, candidatesFor(key).filter((candidate) => field.safeParse(candidate).success)] as const
   )
   const samples: Record<string, unknown>[] = []
   for (let index = 0; index < count; index += 1) {
@@ -494,11 +520,11 @@ function sampleMetadata(
 }
 
 describe('the PII guard over every audit action', () => {
-  const random = seededRandom(20_261_002)
   const accesses: AuditAccess[] = ['member', 'platform', 'system']
 
   it.each(AUDIT_ACTION_NAMES)('%s: no banned key, no address, snake_case keys only', (action) => {
     vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    const random = seededRandom(seedOf(action))
     const samples = sampleMetadata(AUDIT_ACTIONS[action].metadata, random, 50)
 
     // A schema the generator cannot satisfy would otherwise pass by testing nothing.
@@ -516,6 +542,7 @@ describe('the PII guard over every audit action', () => {
       const sent = JSON.stringify(event)
       expect(sent).not.toContain(PII_EMAIL)
       expect(sent).not.toContain(BANNED_FIELD_PROBE)
+      expect(sent).not.toContain(SLUG_PROBE)
       expect(event.properties).toMatchObject({ source: 'audit', app: 'api' })
       if (Object.hasOwn(metadata, 'reason')) {
         expect(typeof event.properties.has_reason).toBe('boolean')
