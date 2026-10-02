@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.0](https://github.com/mahaverick/express-boilerplate/compare/v1.3.0...v1.4.0) (2026-10-02)
+
+
+### Features
+
+* onboarding funnel (Apex SP4) ([#73](https://github.com/mahaverick/express-boilerplate/issues/73)) ([a1947ad](https://github.com/mahaverick/express-boilerplate/commit/a1947adcf5a5e69f9b376ba27681c6b8c4d6f46a))
+
 ## [1.3.0](https://github.com/mahaverick/express-boilerplate/compare/v1.2.1...v1.3.0) (2026-10-01)
 
 
