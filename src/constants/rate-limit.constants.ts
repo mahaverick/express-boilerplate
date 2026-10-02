@@ -48,7 +48,7 @@ export interface RateLimiterSpec {
 }
 
 /**
- * The 25 rate limiters this API defines, by name.
+ * The 26 rate limiters this API defines, by name.
  */
 export type RateLimitName =
   | 'register'
@@ -76,6 +76,7 @@ export type RateLimitName =
   | 'reauthenticate'
   | 'emailWebhook'
   | 'emailWebhookRejected'
+  | 'analyticsProxy'
 
 const RATE_LIMITED_MESSAGE = 'Too many attempts. Please try again later.'
 
@@ -145,7 +146,7 @@ export function emailWebhookProviderRateLimitKey(request: Request): string {
 }
 
 /**
- * The 25 rate-limit specs this API enforces, each with the reason for its
+ * The 26 rate-limit specs this API enforces, each with the reason for its
  * window, limit and key. `name` is the live Redis key prefix
  * (`redisKey('rl', name)`): changing one resets that limiter's counters in
  * every deployment, and tests/unit/constants/rate-limit.constants.test.ts
@@ -466,6 +467,24 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     limit: 60,
     keyBy: 'ip',
     counts: 'rejected',
+    message: RATE_LIMITED_MESSAGE,
+  },
+  /**
+   * 3000 a minute per IP for `/api/v1/collect`, the PostHog proxy, and no
+   * other limiter counts those requests. From posthog-js 1.435: one active
+   * tab flushes its event queue every 3 s and replay snapshots ride the same
+   * queue under their own batch key, so at most 20 event and 20 snapshot
+   * POSTs a minute; heatmaps flush every 5 s (12); flags, identify and the
+   * lazily loaded bundles add a few per page load. About 60 a minute per
+   * active tab, so 3000 is 50 busy tabs behind one office NAT address. It
+   * bounds a client using the proxy as a relay; it is not a security
+   * boundary, and PostHog meters its own ingestion.
+   */
+  analyticsProxy: {
+    name: 'analytics-proxy',
+    windowMs: 60_000,
+    limit: 3000,
+    keyBy: 'ip',
     message: RATE_LIMITED_MESSAGE,
   },
 }

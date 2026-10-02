@@ -12,7 +12,10 @@ import { register } from 'node:module'
 import { OTLPLogExporter } from '@opentelemetry/exporter-logs-otlp-http'
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http'
 import { ExpressInstrumentation } from '@opentelemetry/instrumentation-express'
-import { HttpInstrumentation } from '@opentelemetry/instrumentation-http'
+import {
+  HttpInstrumentation,
+  type HttpInstrumentationConfig,
+} from '@opentelemetry/instrumentation-http'
 import { IORedisInstrumentation } from '@opentelemetry/instrumentation-ioredis'
 import { PinoInstrumentation } from '@opentelemetry/instrumentation-pino'
 import { resourceFromAttributes } from '@opentelemetry/resources'
@@ -30,6 +33,34 @@ if (process.env.OTEL_EXPORTER_OTLP_ENDPOINT) {
  * Health probes fire every few seconds and produce nothing worth a trace.
  */
 const IGNORED_INCOMING_PATHS = new Set(['/health', '/health/ready'])
+
+/**
+ * The PostHog proxy (analytics-proxy.routes.ts) carries every browser event
+ * and replay chunk: a trace per request would outnumber the API's own.
+ */
+const IGNORED_INCOMING_PATH_PREFIXES = ['/api/v1/collect/']
+
+/**
+ * Whether an incoming request gets no trace: an exact health path, or a path
+ * under an ignored prefix. The query string is ignored.
+ * @param url - The request's URL as Node received it (path and query).
+ * @returns True when the request should not be traced.
+ */
+export function isIgnoredIncomingPath(url: string | undefined): boolean {
+  const path = (url ?? '').split('?', 1)[0] ?? ''
+  return (
+    IGNORED_INCOMING_PATHS.has(path) ||
+    IGNORED_INCOMING_PATH_PREFIXES.some((prefix) => path.startsWith(prefix))
+  )
+}
+
+/**
+ * The HTTP instrumentation's configuration: which incoming requests get no span.
+ */
+export const HTTP_INSTRUMENTATION_CONFIG: HttpInstrumentationConfig = {
+  ignoreIncomingRequestHook: (request: IncomingMessage): boolean =>
+    isIgnoredIncomingPath(request.url),
+}
 
 /**
  * Resource attributes for this process's traces and logs.
@@ -67,10 +98,7 @@ function buildSdk(endpoint: string): NodeSDK {
       new BatchLogRecordProcessor({ exporter: new OTLPLogExporter({ url: `${baseUrl}/v1/logs` }) }),
     ],
     instrumentations: [
-      new HttpInstrumentation({
-        ignoreIncomingRequestHook: (request: IncomingMessage): boolean =>
-          IGNORED_INCOMING_PATHS.has((request.url ?? '').split('?', 1)[0] ?? ''),
-      }),
+      new HttpInstrumentation(HTTP_INSTRUMENTATION_CONFIG),
       new ExpressInstrumentation(),
       new IORedisInstrumentation(),
       new PinoInstrumentation({ disableLogCorrelation: true }),
