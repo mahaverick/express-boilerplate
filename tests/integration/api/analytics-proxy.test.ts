@@ -9,11 +9,12 @@
  * this file through a mocked `getEnv()`.
  */
 import { createHash, randomBytes } from 'node:crypto'
-import type { Express } from 'express'
+import express, { type Express } from 'express'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createApp } from '@/app'
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { RATE_LIMITER_MARK } from '@/middlewares/rate-limit.middleware'
+import { createAnalyticsProxyRouter } from '@/routes/analytics-proxy.routes'
 import { logger } from '@/services/logger.service'
 import { startFakePosthog, type FakePosthog } from '../../helpers/fake-posthog'
 import { request } from '../../helpers/request'
@@ -67,6 +68,7 @@ afterEach(() => {
   posthog.requests.length = 0
   posthog.batches.length = 0
   posthog.respondWith(200)
+  posthog.respondWithHeaders({})
 })
 
 afterAll(async () => {
@@ -180,6 +182,23 @@ describe('what PostHog sees of the client', () => {
     expect(posthog.requests[0]?.headers['x-forwarded-proto']).toBe('http')
   })
 
+  it('overwrites a spoofed X-Forwarded-Host, -Proto and -Port with what Express saw', async () => {
+    const { app, posthog } = running()
+
+    await request(app)
+      .post('/api/v1/collect/e/')
+      .set('x-forwarded-host', 'evil.example')
+      .set('x-forwarded-proto', 'https')
+      .set('x-forwarded-port', '8443')
+      .send('x')
+
+    const headers = posthog.requests[0]?.headers
+    expect(headers?.['x-forwarded-host']).toMatch(/^127\.0\.0\.1:\d+$/)
+    expect(headers?.['x-forwarded-proto']).toBe('http')
+    expect(headers?.['x-forwarded-port']).toMatch(/^\d+$/)
+    expect(headers?.['x-forwarded-port']).not.toBe('8443')
+  })
+
   it('never forwards the browser’s cookies or bearer token', async () => {
     const { app, posthog } = running()
 
@@ -192,6 +211,35 @@ describe('what PostHog sees of the client', () => {
     const [received] = posthog.requests
     expect(received?.headers.cookie).toBeUndefined()
     expect(received?.headers.authorization).toBeUndefined()
+  })
+})
+
+describe('what the browser sees of PostHog', () => {
+  it('never receives an upstream Set-Cookie', async () => {
+    const { app, posthog } = running()
+    posthog.respondWithHeaders({ 'set-cookie': '__Host-refreshToken=evil; Path=/; Secure' })
+
+    const response = await request(app).post('/api/v1/collect/e/').send('x')
+
+    expect(response.status).toBe(200)
+    expect(response.headers['set-cookie']).toBeUndefined()
+  })
+
+  it('keeps the app’s CORS grant over an upstream Access-Control-Allow-Origin', async () => {
+    const { app, posthog } = running()
+    const allowedOrigin = process.env.WEB_URL ?? 'http://localhost:5173'
+    posthog.respondWithHeaders({
+      'access-control-allow-origin': '*',
+      'access-control-allow-credentials': 'false',
+    })
+
+    const response = await request(app)
+      .post('/api/v1/collect/e/')
+      .set('origin', allowedOrigin)
+      .send('x')
+
+    expect(response.headers['access-control-allow-origin']).toBe(allowedOrigin)
+    expect(response.headers['access-control-allow-credentials']).toBe('true')
   })
 })
 
@@ -213,6 +261,28 @@ describe('the proxy’s limiter', () => {
     const response = await request(app).post('/api/v1/collect/e/').send('x')
 
     expect(response.headers['ratelimit-limit']).toBe(String(RATE_LIMITS.analyticsProxy.limit))
+  })
+})
+
+describe('a silent PostHog', () => {
+  it('answers 504 once the upstream timeout passes and logs it at warn', async () => {
+    const { posthog } = running()
+    const slowApp = express()
+    slowApp.use('/api/v1/collect', createAnalyticsProxyRouter(200))
+    posthog.hang(5000)
+    const warn = vi.spyOn(logger, 'warn')
+
+    try {
+      const response = await request(slowApp).post('/api/v1/collect/e/').send('x')
+
+      expect(response.status).toBe(504)
+      expect(warn).toHaveBeenCalledWith('Analytics proxy upstream failed', {
+        error: expect.anything() as unknown,
+      })
+    } finally {
+      warn.mockRestore()
+      posthog.hang(0)
+    }
   })
 })
 

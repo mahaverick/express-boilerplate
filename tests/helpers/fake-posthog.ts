@@ -58,6 +58,10 @@ export interface FakePosthog {
    */
   hang: (ms: number) => void
   /**
+   * Extra headers on every later answer; pass an empty object to stop.
+   */
+  respondWithHeaders: (headers: Record<string, string>) => void
+  /**
    * Stop listening, end held requests and close every connection.
    */
   close: () => Promise<void>
@@ -97,8 +101,9 @@ export async function startFakePosthog(): Promise<FakePosthog> {
     status: number
     responder: BatchResponder | undefined
     hangMs: number
+    headers: Record<string, string>
     isClosed: boolean
-  } = { status: 200, responder: undefined, hangMs: 0, isClosed: false }
+  } = { status: 200, responder: undefined, hangMs: 0, headers: {}, isClosed: false }
   const batches: PosthogBatchEvent[][] = []
   const requests: FakePosthogRequest[] = []
   const sockets = new Set<Socket>()
@@ -118,7 +123,7 @@ export async function startFakePosthog(): Promise<FakePosthog> {
       const answer = (): void => {
         held.delete(response)
         if (response.writableEnded) return
-        response.writeHead(status, { 'content-type': 'application/json' })
+        response.writeHead(status, { 'content-type': 'application/json', ...state.headers })
         response.end(JSON.stringify({ status: status < 300 ? 1 : 0, path }))
       }
       if (state.hangMs > 0 && !state.isClosed) {
@@ -147,6 +152,9 @@ export async function startFakePosthog(): Promise<FakePosthog> {
     },
     hang: (ms) => {
       state.hangMs = ms
+    },
+    respondWithHeaders: (headers) => {
+      state.headers = headers
     },
     close: async () => {
       state.isClosed = true
