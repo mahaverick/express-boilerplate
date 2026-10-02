@@ -20,6 +20,10 @@ import {
   createPlatformEmailRouter,
   createPlatformEmailSuppressionRouter,
 } from '@/routes/platform-email.routes'
+import {
+  createPlatformOnboardingRouter,
+  createPlatformTenantOnboardingRouter,
+} from '@/routes/platform-onboarding.routes'
 import { createPlatformUserRouter } from '@/routes/platform-user.routes'
 
 /**
@@ -33,13 +37,18 @@ export function createPlatformRouter(): Router {
   router.use(logStaffWrites)
   // One instance: separate ones would split the budget on the in-memory fallback.
   const searchLimiter = createRateLimiter(RATE_LIMITS.platformSearch)
-  // One instance shared by every /platform write: users', tenants' and emails'.
+  // One instance shared by every /platform write: users', tenants', emails' and onboarding's.
   const writeLimiter = createRateLimiter(RATE_LIMITS.platformWrite)
   router.use('/users', createPlatformUserRouter({ searchLimiter, writeLimiter }))
   router.use('/emails', createPlatformEmailRouter({ searchLimiter, writeLimiter }))
   router.use(
     '/email-suppressions',
     createPlatformEmailSuppressionRouter({ searchLimiter, writeLimiter })
+  )
+  router.use('/onboarding', createPlatformOnboardingRouter({ searchLimiter, writeLimiter }))
+  router.use(
+    '/tenants/:id/onboarding',
+    createPlatformTenantOnboardingRouter({ searchLimiter, writeLimiter })
   )
   router.get(
     '/tenants',

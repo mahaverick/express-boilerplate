@@ -171,6 +171,15 @@ const ROUTES: readonly GateRow[] = [
     requiresStepUp: false,
     target: 'suppression',
   },
+  { method: 'get', path: '/onboarding/funnel', minRole: 'viewer', requiresStepUp: false },
+  { method: 'get', path: '/onboarding/tenants', minRole: 'viewer', requiresStepUp: false },
+  {
+    method: 'get',
+    path: '/tenants/:id/onboarding',
+    minRole: 'viewer',
+    requiresStepUp: false,
+    target: 'tenant',
+  },
 ]
 
 const ROLES_BELOW: Record<MembershipRole, MembershipRole[]> = {
@@ -197,7 +206,13 @@ const tenantRepository = new TenantRepository()
  * anywhere else fails the completeness check, so its routes can't hide.
  * The walker checks this list at every depth, a sub-router's own mounts too.
  */
-const SUB_ROUTER_MOUNTS = ['/users', '/emails', '/email-suppressions'] as const
+const SUB_ROUTER_MOUNTS = [
+  '/users',
+  '/emails',
+  '/email-suppressions',
+  '/onboarding',
+  '/tenants/:id/onboarding',
+] as const
 
 interface StackLayer {
   route?: { path: string; methods: Record<string, boolean> }
@@ -255,12 +270,14 @@ function registeredRoutes(): string[] {
 const byText = (a: string, b: string): number => a.localeCompare(b)
 
 describe('the platform route walker', () => {
-  it('reads the /users, /emails and /email-suppressions sub-routers under their mounts', () => {
+  it('reads every sub-router under its mount, the one mounted on a tenant path included', () => {
     expect(registeredRoutes()).toEqual(
       expect.arrayContaining([
         'post /users/:id/purge',
         'get /emails/health',
         'post /email-suppressions/:id/lift',
+        'get /onboarding/funnel',
+        'get /tenants/:id/onboarding',
       ])
     )
   })
