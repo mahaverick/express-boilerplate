@@ -401,9 +401,11 @@ with a backoff of up to 10 minutes; rows still undelivered after
 `ANALYTICS_OUTBOX_RETENTION_DAYS` (7) are dropped by the daily retention
 purge with a `warn` log (`analyticsOutboxDropped`). A row PostHog rejects
 alone three times is dropped with an `error` log naming its event and id.
-If PostHog refuses a claimed batch and both of its halves, it is treated as
-a fault of the endpoint, not of any row: no row is counted, the rows wait and
-are retried, and the drain logs one `error` with the status only.
+If PostHog refuses a claimed batch, both of its halves, and the first row of
+each half sent alone, it is treated as a fault of the endpoint, not of any
+row: no row is counted, the rows wait and are retried, and the drain logs one
+`error` with the status only. If it accepts either lone row, the batch is
+split as usual and only the rows it refuses alone are counted.
 An answer about the endpoint rather than the batch (401, 403, 404, 405, 407
 or 408, so a wrong `POSTHOG_PROJECT_KEY` or `POSTHOG_HOST`) is never counted
 against a row: the rows wait and are retried, and each drain logs one `error`

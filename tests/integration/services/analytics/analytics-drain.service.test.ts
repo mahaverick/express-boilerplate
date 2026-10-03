@@ -3,8 +3,10 @@
  * fake PostHog: acknowledged rows are deleted, a retryable answer keeps every
  * row through an outage of any length, a lease that expires is resent, two
  * drainers never claim one row, and a rejected batch is bisected down to the
- * row PostHog refuses, which is dropped at its third rejection, unless it refuses every part of the batch, which keeps every row. Analytics is
- * enabled for this file only, through a mocked `getEnv()`.
+ * row PostHog refuses, which is dropped at its third rejection, unless it
+ * refuses every part of the batch and a lone row of each half, which keeps
+ * every row. Analytics is enabled for this file only, through a mocked
+ * `getEnv()`.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -381,8 +383,15 @@ describe('drainAnalyticsOutbox', () => {
       ).resolves.toEqual({ sent: 0, retried: 5, rejected: 0, dropped: 0 })
     }
 
-    // Three sends a tick: the batch and its two halves, never a further split.
-    expect(posthog().batches).toHaveLength(12)
+    // Five sends a tick: the batch, its two halves and each half's first row alone, never a further split.
+    expect(posthog().batches).toHaveLength(20)
+    expect(batchEvents().slice(0, 5)).toEqual([
+      ['row_a', 'row_b', 'row_c', 'row_d', 'row_e'],
+      ['row_a', 'row_b', 'row_c'],
+      ['row_d', 'row_e'],
+      ['row_a'],
+      ['row_d'],
+    ])
     expect(error).toHaveBeenCalledTimes(4)
     expect(error).toHaveBeenCalledWith(
       'PostHog rejected every part of a batch; treating it as an endpoint fault and keeping the rows',
@@ -396,5 +405,145 @@ describe('drainAnalyticsOutbox', () => {
       drainAnalyticsOutbox(new Date(start + 4 * PAST_LEASE_AND_BACKOFF_MS))
     ).resolves.toMatchObject({ sent: 5 })
     expect(await outboxRows()).toEqual([])
+  })
+
+  it('stops at a retryable second half without bisecting the refused first half', async () => {
+    await seed('good_a', 'poison', 'good_c', 'good_d')
+    posthog().onBatch((events) => {
+      if (hasPoison(events)) return 400
+      return events.length === 2 ? 503 : undefined
+    })
+    const markRejected = vi.spyOn(analyticsOutboxRepository, 'markRejected')
+
+    await expect(drainAnalyticsOutbox()).resolves.toEqual({
+      sent: 0,
+      retried: 4,
+      rejected: 0,
+      dropped: 0,
+    })
+
+    expect(batchEvents()).toEqual([
+      ['good_a', 'poison', 'good_c', 'good_d'],
+      ['good_a', 'poison'],
+      ['good_c', 'good_d'],
+    ])
+    expect(markRejected).not.toHaveBeenCalled()
+    const rows = await outboxRows()
+    expect(rows).toHaveLength(4)
+    expect(rows.map((row) => row.rejections)).toEqual([0, 0, 0, 0])
+    expect(rows.every((row) => row.claimed_until !== null)).toBe(true)
+  })
+
+  it('delivers the good rows when each half holds a refused row, without calling it an endpoint fault', async () => {
+    const ids = await seed('poison', 'good_b', 'good_c', 'good_d', 'poison', 'good_f')
+    posthog().onBatch((events) => (hasPoison(events) ? 400 : undefined))
+    const error = vi.spyOn(logger, 'error')
+
+    await expect(drainAnalyticsOutbox()).resolves.toEqual({
+      sent: 4,
+      retried: 0,
+      rejected: 2,
+      dropped: 0,
+    })
+
+    expect(batchEvents()).toEqual([
+      ['poison', 'good_b', 'good_c', 'good_d', 'poison', 'good_f'],
+      ['poison', 'good_b', 'good_c'],
+      ['good_d', 'poison', 'good_f'],
+      ['poison'],
+      ['good_d'],
+      ['good_b', 'good_c'],
+      ['poison', 'good_f'],
+      ['poison'],
+      ['good_f'],
+    ])
+    expect(error).not.toHaveBeenCalled()
+    expect(await outboxRows()).toEqual([
+      { id: ids[0], attempts: 1, rejections: 1, claimed_until: NOT_LEASED },
+      { id: ids[4], attempts: 1, rejections: 1, claimed_until: NOT_LEASED },
+    ])
+  })
+
+  it('still treats a refusal of every body, lone rows included, as an endpoint fault', async () => {
+    await seed('row_a', 'row_b', 'row_c', 'row_d')
+    posthog().respondWith(400)
+    const error = vi.spyOn(logger, 'error')
+    const markRejected = vi.spyOn(analyticsOutboxRepository, 'markRejected')
+    const deleteByIds = vi.spyOn(analyticsOutboxRepository, 'deleteByIds')
+
+    await expect(drainAnalyticsOutbox()).resolves.toEqual({
+      sent: 0,
+      retried: 4,
+      rejected: 0,
+      dropped: 0,
+    })
+
+    expect(batchEvents()).toEqual([
+      ['row_a', 'row_b', 'row_c', 'row_d'],
+      ['row_a', 'row_b'],
+      ['row_c', 'row_d'],
+      ['row_a'],
+      ['row_c'],
+    ])
+    expect(error).toHaveBeenCalledExactlyOnceWith(
+      'PostHog rejected every part of a batch; treating it as an endpoint fault and keeping the rows',
+      { status: 400 }
+    )
+    expect(markRejected).not.toHaveBeenCalled()
+    expect(deleteByIds).not.toHaveBeenCalled()
+    const rows = await outboxRows()
+    expect(rows.map((row) => row.rejections)).toEqual([0, 0, 0, 0])
+  })
+
+  it('keeps every row when a lone row of a refused half answers retry', async () => {
+    await seed('row_a', 'row_b', 'row_c', 'row_d')
+    posthog().onBatch((events) => (events.length === 1 ? 503 : 400))
+    const error = vi.spyOn(logger, 'error')
+    const markRejected = vi.spyOn(analyticsOutboxRepository, 'markRejected')
+
+    await expect(drainAnalyticsOutbox()).resolves.toEqual({
+      sent: 0,
+      retried: 4,
+      rejected: 0,
+      dropped: 0,
+    })
+
+    expect(batchEvents()).toEqual([
+      ['row_a', 'row_b', 'row_c', 'row_d'],
+      ['row_a', 'row_b'],
+      ['row_c', 'row_d'],
+      ['row_a'],
+    ])
+    expect(error).not.toHaveBeenCalled()
+    expect(markRejected).not.toHaveBeenCalled()
+    const rows = await outboxRows()
+    expect(rows.map((row) => row.rejections)).toEqual([0, 0, 0, 0])
+    expect(rows.every((row) => row.claimed_until !== null)).toBe(true)
+  })
+
+  it("delivers the first half's acknowledged lone row when the second half's lone row answers retry", async () => {
+    const ids = await seed('row_a', 'row_b', 'row_c', 'row_d')
+    posthog().onBatch((events) => {
+      if (events.length > 1) return 400
+      return events[0]?.event === 'row_a' ? undefined : 503
+    })
+
+    await expect(drainAnalyticsOutbox()).resolves.toEqual({
+      sent: 1,
+      retried: 3,
+      rejected: 0,
+      dropped: 0,
+    })
+
+    expect(batchEvents()).toEqual([
+      ['row_a', 'row_b', 'row_c', 'row_d'],
+      ['row_a', 'row_b'],
+      ['row_c', 'row_d'],
+      ['row_a'],
+      ['row_c'],
+    ])
+    const rows = await outboxRows()
+    expect(rows.map((row) => row.id)).toEqual(ids.slice(1))
+    expect(rows.map((row) => row.rejections)).toEqual([0, 0, 0])
   })
 })
