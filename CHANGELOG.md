@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.5.0](https://github.com/mahaverick/express-boilerplate/compare/v1.4.0...v1.5.0) (2026-10-03)
+
+
+### Features
+
+* posthog event pipeline (outbox, drainer, /collect proxy) ([#75](https://github.com/mahaverick/express-boilerplate/issues/75)) ([4f7f806](https://github.com/mahaverick/express-boilerplate/commit/4f7f806fbce7323e94cdb393430e50d1672ef337))
+
+
+### Bug Fixes
+
+* **analytics:** keep good rows flowing when posthog refuses part of a batch ([#77](https://github.com/mahaverick/express-boilerplate/issues/77)) ([0327de9](https://github.com/mahaverick/express-boilerplate/commit/0327de9ebd3b2d4f83c7ff95c6b89df574d29b16))
+
 ## [1.4.0](https://github.com/mahaverick/express-boilerplate/compare/v1.3.0...v1.4.0) (2026-10-02)
 
 
