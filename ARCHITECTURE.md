@@ -735,7 +735,8 @@ analytics Worker, every ANALYTICS_DRAIN_INTERVAL_MS, concurrency 1
   (connection released) ── POST <POSTHOG_HOST>/batch/ (10 s timeout)
   ack: delete · retry (no answer, 429, 5xx, 401/403/404/405/407/408): keep, lease and backoff
   rejected (400, 413, 415, 422, other 4xx): bisect; a row refused alone counts a rejection, dropped at 3;
-  a batch and both its halves rejected: endpoint fault, rows kept, one error
+  a batch and both its halves rejected: each half's first row sent alone; both refused:
+  endpoint fault, rows kept, one error; either accepted: settle those rows, bisect the rest
 
 browser posthog-js ── /api/v1/collect/* ── analytics-proxy limiter ── stream ── ingest or assets host
 ```
@@ -756,10 +757,14 @@ browser posthog-js ── /api/v1/collect/* ── analytics-proxy limiter ─�
   the backoff (`least(2^attempts × 5 s, 600 s)` after the lease); during an
   outage of any length only the retention rule (`analytics_outbox`,
   `ANALYTICS_OUTBOX_RETENTION_DAYS`) removes rows. A rejected batch is split
-  in halves until the refused row is alone, unless both of its halves are
-  rejected as well: PostHog is then refusing everything, so no row is counted,
-  the rows are kept and the drain logs one `error` with the status; the first
-  retryable answer ends the drain, so an outage costs one timeout per tick. The endpoint-level
+  in halves until the refused row is alone. When both of its halves are
+  rejected as well, the first row of each half is sent alone: if PostHog
+  refuses both it is refusing everything, so no row is counted, the rows are
+  kept and the drain logs one `error` with the status; if it accepts either,
+  each lone row is settled by its answer and the rest of each half is split
+  as usual, so a refused row in each half does not hold back the others. The
+  first retryable answer ends the drain, so an outage costs one timeout per
+  tick. The endpoint-level
   4xx answers (401, 403, 404, 405, 407, 408) are retryable, never a
   rejection, so a wrong key or host drops nothing; the drain logs one `error`
   per tick naming `POSTHOG_PROJECT_KEY` and `POSTHOG_HOST`.

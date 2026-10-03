@@ -26,3 +26,11 @@ allowBuilds:
   unrs-resolver: true
 # Minutes (3 days). Matches renovate.json.
 minimumReleaseAge: 4320
+auditConfig:
+  ignoreGhsas:
+    # braces <=3.0.3 stack exhaustion on deeply nested brace patterns; no
+    # patched version yet. Reached only via http-proxy-middleware > micromatch,
+    # which runs when a proxy is given a glob pathFilter. The /collect proxy
+    # passes none (default '/'), and braces parses patterns, never request
+    # paths. Remove once braces ships a fix.
+    - GHSA-vfj7-8cjw-p6xm

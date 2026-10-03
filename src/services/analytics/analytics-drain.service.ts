@@ -76,10 +76,10 @@ async function probeHalves(
 }
 
 /**
- * Settle the halves after one ended the drain: a half already acknowledged is
- * delivered, every other half waits for the lease.
- * @param halves - The halves after the one that stopped the drain.
- * @param answers - Each of those halves' answers, if it was already sent.
+ * Settle the parts of a batch after one ended the drain: a part already
+ * acknowledged is delivered, every other part waits for the lease.
+ * @param halves - The parts after the one that stopped the drain.
+ * @param answers - Each of those parts' answers, if it was already sent.
  * @param tally - Accumulates each row's outcome.
  */
 function settleUnsent(
@@ -96,15 +96,65 @@ function settleUnsent(
 }
 
 /**
+ * Settle a claimed batch PostHog refused together with both of its halves.
+ * Each half's first row is sent alone (a half of one row was already refused
+ * alone). If PostHog refuses both, it is refusing everything, which is a fault
+ * of the endpoint and not of a row: no row is counted and every row waits for
+ * the lease. If it accepts either, the endpoint takes rows: each lone row is
+ * settled by its answer and the rest of each half is delivered as usual. A
+ * `retry` to a lone row stops the drain before any row is counted: a lone row
+ * already acknowledged is delivered, and every other row waits for the lease.
+ * A `retry` while a remainder is delivered stops the drain too, and every row
+ * not yet settled waits for the lease.
+ * @param halves - The two halves of the claimed batch.
+ * @param answers - Each half's answer, both `rejected`.
+ * @param tally - Accumulates each row's outcome.
+ * @returns `'stop'` once a send answered `retry` or the endpoint refused every row, otherwise `'continue'`.
+ */
+async function deliverRefusedHalves(
+  halves: AnalyticsOutboxRow[][],
+  answers: Array<BatchResult | undefined>,
+  tally: Tally
+): Promise<'continue' | 'stop'> {
+  const leads: BatchResult[] = []
+  for (const [index, half] of halves.entries()) {
+    const lead = (half.length === 1 ? answers[index] : undefined) ?? (await send(half.slice(0, 1)))
+    leads.push(lead)
+    if (lead.kind === 'retry') break
+  }
+  if (leads.length === halves.length && leads.every((lead) => lead.kind === 'rejected')) {
+    tally.retried += halves.flat().length
+    tally.systemicRejection = true
+    return 'stop'
+  }
+  // Each lone row first, settled by the answer it already has, then the rest of each half.
+  const parts = [
+    ...halves.map((half) => half.slice(0, 1)),
+    ...halves.map((half) => half.slice(1)),
+  ].filter((part) => part.length > 0)
+  if (leads.at(-1)?.kind === 'retry') {
+    // A lone row refused before the retry is not counted: no answer this drain shows the endpoint takes rows.
+    settleUnsent(parts, leads, tally)
+    return 'stop'
+  }
+  for (const [index, part] of parts.entries()) {
+    if ((await deliver(part, tally, false, leads[index])) === 'stop') {
+      settleUnsent(parts.slice(index + 1), leads.slice(index + 1), tally)
+      return 'stop'
+    }
+  }
+  return 'continue'
+}
+
+/**
  * Send `rows` as one batch, or take `known`, the answer already received for
  * exactly these rows. When PostHog rejects a batch of more than one row, send
  * each half the same way, so the rows it accepts are delivered and only a row
  * it refuses alone counts as rejected. The first `retry` stops the whole
  * drain: PostHog is down or slow, and every further send would wait out the
- * timeout inside the lease. So does a claimed batch refused together with
- * both of its halves: PostHog is refusing everything, which is a fault of the
- * endpoint and not of a row, so no row is counted and every row waits for
- * the lease.
+ * timeout inside the lease. A claimed batch refused together with both of its
+ * halves goes to `deliverRefusedHalves`, which tells a refused row in each
+ * half from an endpoint refusing everything.
  * @param rows - The rows to send, oldest first.
  * @param tally - Accumulates each row's outcome.
  * @param isTopLevel - Whether `rows` is the whole claimed batch.
@@ -135,11 +185,13 @@ async function deliver(
   const middle = Math.ceil(rows.length / 2)
   const halves = [rows.slice(0, middle), rows.slice(middle)]
   const answers = isTopLevel ? await probeHalves(halves) : []
-  if (answers[1]?.kind === 'rejected') {
+  if (answers[1]?.kind === 'retry') {
+    // The first half is still unsettled, and bisecting it would only meet the failing endpoint.
     tally.retried += rows.length
-    tally.systemicRejection = true
+    tally.lastRetryStatus = answers[1].status
     return 'stop'
   }
+  if (answers[1]?.kind === 'rejected') return deliverRefusedHalves(halves, answers, tally)
   for (const [index, half] of halves.entries()) {
     if ((await deliver(half, tally, false, answers[index])) === 'stop') {
       settleUnsent(halves.slice(index + 1), answers.slice(index + 1), tally)
@@ -159,7 +211,8 @@ async function deliver(
  * deleted; rows PostHog refused alone get one more rejection, and a row at
  * `ANALYTICS_POISON_REJECTIONS` is deleted with an `error` log naming only
  * its event and id. A claimed batch PostHog refuses together with both of its
- * halves counts against no row; it logs one `error` with the status only.
+ * halves and with the first row of each half sent alone counts against no
+ * row; it logs one `error` with the status only.
  * Every other row keeps its lease and is claimed again
  * once the lease and its backoff have passed. `attempts` never deletes a row.
  * @param now - The clock the lease and backoff are measured against. Defaults to now.
