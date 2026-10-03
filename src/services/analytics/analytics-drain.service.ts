@@ -102,8 +102,10 @@ function settleUnsent(
  * of the endpoint and not of a row: no row is counted and every row waits for
  * the lease. If it accepts either, the endpoint takes rows: each lone row is
  * settled by its answer and the rest of each half is delivered as usual. A
- * `retry` stops the drain, and every row not yet acknowledged waits for the
- * lease.
+ * `retry` to a lone row stops the drain before any row is counted: a lone row
+ * already acknowledged is delivered, and every other row waits for the lease.
+ * A `retry` while a remainder is delivered stops the drain too, and every row
+ * not yet settled waits for the lease.
  * @param halves - The two halves of the claimed batch.
  * @param answers - Each half's answer, both `rejected`.
  * @param tally - Accumulates each row's outcome.
@@ -130,6 +132,11 @@ async function deliverRefusedHalves(
     ...halves.map((half) => half.slice(0, 1)),
     ...halves.map((half) => half.slice(1)),
   ].filter((part) => part.length > 0)
+  if (leads.at(-1)?.kind === 'retry') {
+    // A lone row refused before the retry is not counted: no answer this drain shows the endpoint takes rows.
+    settleUnsent(parts, leads, tally)
+    return 'stop'
+  }
   for (const [index, part] of parts.entries()) {
     if ((await deliver(part, tally, false, leads[index])) === 'stop') {
       settleUnsent(parts.slice(index + 1), leads.slice(index + 1), tally)

@@ -434,6 +434,64 @@ describe('drainAnalyticsOutbox', () => {
     expect(rows.every((row) => row.claimed_until !== null)).toBe(true)
   })
 
+  it('delivers the first lone row and counts the second when only the first is accepted', async () => {
+    const ids = await seed('good_a', 'poison', 'poison', 'good_d')
+    posthog().onBatch((events) => (hasPoison(events) ? 400 : undefined))
+    const error = vi.spyOn(logger, 'error')
+
+    await expect(drainAnalyticsOutbox()).resolves.toEqual({
+      sent: 2,
+      retried: 0,
+      rejected: 2,
+      dropped: 0,
+    })
+
+    expect(batchEvents()).toEqual([
+      ['good_a', 'poison', 'poison', 'good_d'],
+      ['good_a', 'poison'],
+      ['poison', 'good_d'],
+      ['good_a'],
+      ['poison'],
+      ['poison'],
+      ['good_d'],
+    ])
+    expect(error).not.toHaveBeenCalled()
+    expect(await outboxRows()).toEqual([
+      { id: ids[1], attempts: 1, rejections: 1, claimed_until: NOT_LEASED },
+      { id: ids[2], attempts: 1, rejections: 1, claimed_until: NOT_LEASED },
+    ])
+  })
+
+  it('counts no row when the first lone row is refused and the second answers retry', async () => {
+    await seed('row_a', 'row_b', 'row_c', 'row_d')
+    posthog().onBatch((events) => {
+      if (events.length > 1) return 400
+      return events[0]?.event === 'row_a' ? 400 : 503
+    })
+    const error = vi.spyOn(logger, 'error')
+    const markRejected = vi.spyOn(analyticsOutboxRepository, 'markRejected')
+
+    await expect(drainAnalyticsOutbox()).resolves.toEqual({
+      sent: 0,
+      retried: 4,
+      rejected: 0,
+      dropped: 0,
+    })
+
+    expect(batchEvents()).toEqual([
+      ['row_a', 'row_b', 'row_c', 'row_d'],
+      ['row_a', 'row_b'],
+      ['row_c', 'row_d'],
+      ['row_a'],
+      ['row_c'],
+    ])
+    expect(error).not.toHaveBeenCalled()
+    expect(markRejected).not.toHaveBeenCalled()
+    const rows = await outboxRows()
+    expect(rows.map((row) => row.rejections)).toEqual([0, 0, 0, 0])
+    expect(rows.every((row) => row.claimed_until !== null)).toBe(true)
+  })
+
   it('delivers the good rows when each half holds a refused row, without calling it an endpoint fault', async () => {
     const ids = await seed('poison', 'good_b', 'good_c', 'good_d', 'poison', 'good_f')
     posthog().onBatch((events) => (hasPoison(events) ? 400 : undefined))

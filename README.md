@@ -405,7 +405,12 @@ If PostHog refuses a claimed batch, both of its halves, and the first row of
 each half sent alone, it is treated as a fault of the endpoint, not of any
 row: no row is counted, the rows wait and are retried, and the drain logs one
 `error` with the status only. If it accepts either lone row, the batch is
-split as usual and only the rows it refuses alone are counted.
+split as usual and only the rows it refuses alone are counted; if a lone row
+answers with a retryable status instead, no row is counted and every row not
+acknowledged is retried. A claim of a single row has no halves to compare, so
+during an outage in which PostHog answers 400 to everything, an outbox
+holding one queued row counts a rejection against it on each drain and drops
+it at the third.
 An answer about the endpoint rather than the batch (401, 403, 404, 405, 407
 or 408, so a wrong `POSTHOG_PROJECT_KEY` or `POSTHOG_HOST`) is never counted
 against a row: the rows wait and are retried, and each drain logs one `error`
