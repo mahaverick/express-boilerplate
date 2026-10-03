@@ -12,6 +12,7 @@ import { afterAll, describe, expect, it } from 'vitest'
 import {
   addJob,
   closeQueue,
+  getAnalyticsQueue,
   getEmailQueue,
   getQueueConnection,
   isQueueReachable,
@@ -29,6 +30,11 @@ describe('queue.service', () => {
 
   it('getEmailQueue() returns the same memoised instance on repeated calls', () => {
     expect(getEmailQueue()).toBe(getEmailQueue())
+  })
+
+  it('getAnalyticsQueue() returns the same memoised "analytics" queue on repeated calls', () => {
+    expect(getAnalyticsQueue()).toBe(getAnalyticsQueue())
+    expect(getAnalyticsQueue().name).toBe('analytics')
   })
 
   it('addJob() enqueues onto the given queue and returns a job carrying the same name and data', async () => {

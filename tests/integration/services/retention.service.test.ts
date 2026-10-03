@@ -33,7 +33,10 @@ const DAYS: RetentionDays = {
   notificationsRead: 90,
   notificationsUnread: 365,
   auditLogs: 400,
+  analyticsOutbox: 7,
 }
+// Every analytics_outbox row this file writes carries this event, so afterEach finds them.
+const OUTBOX_EVENT = `retention_probe_${randomUUID().slice(0, 8)}`
 // Every email_logs row this file writes starts with this, so afterEach finds them.
 const RECIPIENT_PREFIX = `retention-${randomUUID()}-`
 const RECIPIENT_LIKE = `${RECIPIENT_PREFIX}%`
@@ -43,6 +46,7 @@ const createdTenantIds: string[] = []
 
 afterEach(async () => {
   await truncateAuditLogs()
+  await sql`delete from analytics_outbox where event = ${OUTBOX_EVENT}`
   await sql`delete from email_logs where recipient like ${RECIPIENT_LIKE}`
   await deleteTrackingRows(RECIPIENT_PREFIX)
   if (createdTenantIds.length > 0) {
@@ -293,6 +297,21 @@ async function insertAuditRow(tenantId: string, occurredAt: string): Promise<str
 }
 
 /**
+ * One undelivered analytics outbox row.
+ * @param occurredAt - Its occurred_at, ISO.
+ * @returns Its id.
+ */
+async function insertOutboxRow(occurredAt: string): Promise<string> {
+  const [row] = await sql<{ id: string }[]>`
+    insert into analytics_outbox (event, distinct_id, properties, occurred_at)
+    values (${OUTBOX_EVENT}, 'system', '{}'::jsonb, ${occurredAt}::timestamptz)
+    returning id
+  `
+  if (!row) throw new Error('outbox insert returned no row')
+  return row.id
+}
+
+/**
  * Two rows from the same seed.
  * @param insert - Inserts one row.
  * @returns Both ids, in insert order.
@@ -486,13 +505,14 @@ describe('runRetentionPurge', () => {
       justOlder(DAYS.notificationsRead)
     )
     await insertAuditRow(tenantId, justOlder(DAYS.auditLogs))
+    await insertOutboxRow(justOlder(DAYS.analyticsOutbox))
 
     const first = await runRetentionPurge(NOW, DAYS)
     // email_events and email_messages have nothing seeded here; the attempt row has no message.
-    expect(first.map((result) => result.deleted)).toEqual([1, 1, 0, 1, 0, 1, 1, 1])
+    expect(first.map((result) => result.deleted)).toEqual([1, 1, 0, 1, 0, 1, 1, 1, 1])
 
     const second = await runRetentionPurge(NOW, DAYS)
-    expect(second.map((result) => result.deleted)).toEqual([0, 0, 0, 0, 0, 0, 0, 0])
+    expect(second.map((result) => result.deleted)).toEqual([0, 0, 0, 0, 0, 0, 0, 0, 0])
   })
 
   it('loops in batches of RETENTION_BATCH_SIZE until a batch comes back short', async () => {
@@ -532,12 +552,14 @@ describe('runRetentionPurge', () => {
       insertNotification(userId, justOlder(DAYS.notificationsUnread))
     )
     const audit = await seedPair(() => insertAuditRow(tenantId, justOlder(DAYS.auditLogs)))
+    const outbox = await seedPair(() => insertOutboxRow(justOlder(DAYS.analyticsOutbox)))
     // The first of each pair is held; its twin is free.
     const heldTokens = [tokens[0]]
     const heldInvitations = [invitations[0]]
     const heldEmailLogs = [emailLogs[0]]
     const heldNotifications = [read[0], unread[0]]
     const heldAudit = [audit[0]]
+    const heldOutbox = [outbox[0]]
 
     const holder = postgres(getEnv().DATABASE_URL, { max: 1 })
     const locked = deferred<number>()
@@ -548,6 +570,7 @@ describe('runRetentionPurge', () => {
       await tx`select id from email_logs where id = any(${heldEmailLogs}) for update`
       await tx`select id from notifications where id = any(${heldNotifications}) for update`
       await tx`select id from audit_logs where id = any(${heldAudit}) for update`
+      await tx`select id from analytics_outbox where id = any(${heldOutbox}) for update`
       const [row] = await tx<{ pid: number }[]>`select pg_backend_pid() as pid`
       if (!row) throw new Error('pg_backend_pid() returned no row')
       locked.resolve(row.pid)
@@ -559,8 +582,8 @@ describe('runRetentionPurge', () => {
       const firstRun = runRetentionPurge(NOW, DAYS)
       expect(await waitForWaiter(holderPid, firstRun)).toBe(false)
       const first = await firstRun
-      expect(first.map((result) => result.error)).toEqual(Array.from({ length: 8 }))
-      expect(first.map((result) => result.deleted)).toEqual([1, 1, 0, 1, 0, 1, 1, 1])
+      expect(first.map((result) => result.error)).toEqual(Array.from({ length: 9 }))
+      expect(first.map((result) => result.deleted)).toEqual([1, 1, 0, 1, 0, 1, 1, 1, 1])
       expect(await surviving('user_tokens', tokens)).toEqual(heldTokens)
       expect(await surviving('tenant_invitations', invitations)).toEqual(heldInvitations)
       expect(await surviving('email_logs', emailLogs)).toEqual(heldEmailLogs)
@@ -568,6 +591,7 @@ describe('runRetentionPurge', () => {
         sorted(heldNotifications)
       )
       expect(await surviving('audit_logs', audit)).toEqual(heldAudit)
+      expect(await surviving('analytics_outbox', outbox)).toEqual(heldOutbox)
     } finally {
       release.resolve()
       await holding
@@ -575,12 +599,13 @@ describe('runRetentionPurge', () => {
     }
 
     const second = await runRetentionPurge(NOW, DAYS)
-    expect(second.map((result) => result.deleted)).toEqual([1, 1, 0, 1, 0, 1, 1, 1])
+    expect(second.map((result) => result.deleted)).toEqual([1, 1, 0, 1, 0, 1, 1, 1, 1])
     expect(await surviving('user_tokens', tokens)).toEqual([])
     expect(await surviving('tenant_invitations', invitations)).toEqual([])
     expect(await surviving('email_logs', emailLogs)).toEqual([])
     expect(await surviving('notifications', [...read, ...unread])).toEqual([])
     expect(await surviving('audit_logs', audit)).toEqual([])
+    expect(await surviving('analytics_outbox', outbox)).toEqual([])
   })
 
   it('runs every other rule when one fails, and reports and logs that one', async () => {
@@ -604,6 +629,7 @@ describe('runRetentionPurge', () => {
             'notifications.read',
             'notifications.unread',
             'audit_logs',
+            'analytics_outbox',
           ])
           const invitations = results.find((result) => result.table === 'tenant_invitations')
           expect(invitations?.deleted).toBe(0)
@@ -639,6 +665,7 @@ describe('runRetentionPurge', () => {
         { table: 'email_messages', deleted: 0 },
         { table: 'notifications.read', deleted: 0 },
         { table: 'notifications.unread', deleted: 0 },
+        { table: 'analytics_outbox', deleted: 0 },
       ])
     } finally {
       loggerInfo.mockRestore()
@@ -708,6 +735,41 @@ describe('runRetentionPurge', () => {
     expect(deletedBy(second, 'email_messages')).toBe(1)
     expect(await surviving('email_logs', [attempt])).toEqual([])
     expect(await surviving('email_messages', [old.id])).toEqual([])
+  })
+
+  it('drops analytics outbox rows past the window undelivered, keeps newer ones, and warns with the count', async () => {
+    const old = await insertOutboxRow(justOlder(DAYS.analyticsOutbox))
+    const recent = await insertOutboxRow(justNewer(DAYS.analyticsOutbox))
+    const loggerWarn = vi.spyOn(logger, 'warn')
+
+    try {
+      const results = await runRetentionPurge(NOW, DAYS)
+
+      expect(deletedBy(results, 'analytics_outbox')).toBe(1)
+      expect(await surviving('analytics_outbox', [old, recent])).toEqual([recent])
+      expect(loggerWarn).toHaveBeenCalledWith('analytics outbox rows dropped undelivered', {
+        analyticsOutboxDropped: 1,
+      })
+    } finally {
+      loggerWarn.mockRestore()
+    }
+  })
+
+  it('does not warn when the analytics outbox rule dropped nothing', async () => {
+    await insertOutboxRow(justNewer(DAYS.analyticsOutbox))
+    const loggerWarn = vi.spyOn(logger, 'warn')
+
+    try {
+      const results = await runRetentionPurge(NOW, DAYS)
+
+      expect(deletedBy(results, 'analytics_outbox')).toBe(0)
+      expect(loggerWarn).not.toHaveBeenCalledWith(
+        'analytics outbox rows dropped undelivered',
+        expect.anything()
+      )
+    } finally {
+      loggerWarn.mockRestore()
+    }
   })
 
   it('never expires a suppression', async () => {

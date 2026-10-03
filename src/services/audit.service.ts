@@ -17,6 +17,7 @@ import {
   type AuditLogListOptions,
   type AuditLogListRow,
 } from '@/repositories/audit-log.repository'
+import { enqueueAuditAnalytics } from '@/services/analytics/analytics-outbox.service'
 import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
 import { getRedis, redisKey } from '@/services/redis.service'
@@ -49,7 +50,9 @@ export type AuditEntry = {
 }[AuditAction]
 
 /**
- * Validate an entry and insert it, with request metadata from the ALS. The
+ * Validate an entry and insert it, with request metadata from the ALS, then
+ * forward it to the analytics outbox (`enqueueAuditAnalytics`), which never
+ * throws and, inside a transaction, writes in a savepoint of its own. The
  * request id, IP and user agent are cut to their column widths in
  * audit-log.model.ts.
  * @param entry - The entry to validate and insert.
@@ -68,7 +71,7 @@ async function writeEntry(entry: AuditEntry, executor: DbExecutor): Promise<Audi
     throw new Error(`Invalid audit metadata for ${entry.action}: ${issues}`)
   }
   const context = requestContextStore.getStore()
-  return auditLogRepository.insert(
+  const inserted = await auditLogRepository.insert(
     {
       actorKind: entry.actor === 'system' ? 'system' : 'user',
       actorUserId: entry.actor === 'system' ? undefined : entry.actor.userId,
@@ -84,6 +87,8 @@ async function writeEntry(entry: AuditEntry, executor: DbExecutor): Promise<Audi
     },
     executor
   )
+  await enqueueAuditAnalytics(inserted, executor)
+  return inserted
 }
 
 /**

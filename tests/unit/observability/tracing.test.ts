@@ -11,7 +11,11 @@
  * file that transitively imports it.
  */
 import { describe, expect, it } from 'vitest'
-import { shutdownOtel, tracingResourceAttributes } from '@/observability/tracing'
+import {
+  isIgnoredIncomingPath,
+  shutdownOtel,
+  tracingResourceAttributes,
+} from '@/observability/tracing'
 
 describe('tracing (OTEL_EXPORTER_OTLP_ENDPOINT unset, the test-env default)', () => {
   it('imports without throwing', () => {
@@ -41,5 +45,22 @@ describe('tracingResourceAttributes', () => {
     expect(tracingResourceAttributes({ OTEL_SERVICE_NAME: 'billing' })['service.name']).toBe(
       'billing'
     )
+  })
+})
+
+describe('isIgnoredIncomingPath', () => {
+  it.each([
+    ['/health', true],
+    ['/health/ready', true],
+    ['/health?probe=1', true],
+    ['/api/v1/collect/e/?ver=1', true],
+    ['/api/v1/collect/static/recorder.js', true],
+    ['/api/v1/collect', false],
+    ['/api/v1/collector', false],
+    ['/health/other', false],
+    ['/api/v1/profile', false],
+    [undefined, false],
+  ])('%s → %s', (url, isIgnored) => {
+    expect(isIgnoredIncomingPath(url)).toBe(isIgnored)
   })
 })

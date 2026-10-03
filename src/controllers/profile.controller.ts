@@ -27,9 +27,10 @@ class ProfileController extends BaseController {
    * `PATCH /profile`: update the authenticated user's own profile.
    *
    * The mass-assignment defence is `updateProfileSchema` alone: only the
-   * fields it names (`firstName`, `lastName`) reach the database, and
-   * `toUpdateValues` (profile.service.ts) reads only those two keys. There is
-   * deliberately no second allow-list here, which would drift from the first.
+   * fields it names (`firstName`, `lastName`, `analyticsOptOut`) reach the
+   * database, and `toUpdateValues` (profile.service.ts) reads only those
+   * keys. There is deliberately no second allow-list here, which would drift
+   * from the first.
    * A body with no recognised fields skips the write and returns the current
    * row, so `updatedAt` is not bumped by a request that changed nothing.
    */

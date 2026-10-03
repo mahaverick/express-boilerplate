@@ -8,12 +8,17 @@ import helmet from 'helmet'
 import { corsOptions } from '@/configs/cors.config'
 import { getEnv, trustProxySetting } from '@/configs/env.config'
 import { helmetOptions } from '@/configs/helmet.config'
+import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { HttpError } from '@/errors/http-error'
 import { errorHandler } from '@/middlewares/error.middleware'
+import { posthogSession } from '@/middlewares/posthog-session.middleware'
+import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
 import { requestContext } from '@/middlewares/request-context.middleware'
 import { requestId } from '@/middlewares/request-id.middleware'
+import { ANALYTICS_PROXY_PATH, createAnalyticsProxyRouter } from '@/routes/analytics-proxy.routes'
 import { createEmailWebhookRouter } from '@/routes/email-webhook.routes'
 import { createApiRouter } from '@/routes/index.routes'
+import { registerAnalyticsSubscribers } from '@/services/analytics/analytics-forwarder.service'
 import { isDatabaseReachable } from '@/services/database.service'
 import { isShuttingDown } from '@/services/lifecycle.service'
 import { registerOnboardingSubscribers } from '@/services/onboarding.service'
@@ -30,12 +35,14 @@ import { isRedisReachable } from '@/services/redis.service'
  * at boot. `/health` stays shallow so a database blip never restarts a
  * healthy process; `/health/ready` checks every dependency, since failing it
  * only removes the pod from rotation. It also registers the domain-event
- * subscribers (`registerOnboardingSubscribers`), which is idempotent.
+ * subscribers (`registerOnboardingSubscribers`, `registerAnalyticsSubscribers`),
+ * which is idempotent.
  * @returns A configured app with no listening socket.
  */
 export function createApp(): Express {
   // Here, not in index.ts, so every test that builds the app has the subscribers too.
   registerOnboardingSubscribers()
+  registerAnalyticsSubscribers()
 
   const app = express()
 
@@ -51,8 +58,15 @@ export function createApp(): Express {
 
   app.use(requestId)
   app.use(requestContext)
+  app.use(posthogSession)
   // Before the body parsers: a webhook signature covers the exact bytes, which express.json would consume.
   app.use('/api/v1/webhooks/email', createEmailWebhookRouter())
+  // Before the body parsers too: replay bodies stream to PostHog unread, and express.json would consume or refuse them.
+  app.use(
+    ANALYTICS_PROXY_PATH,
+    createRateLimiter(RATE_LIMITS.analyticsProxy),
+    createAnalyticsProxyRouter()
+  )
   app.use(express.json({ limit: '1mb' }))
   app.use(express.urlencoded({ extended: false, limit: '100kb' }))
 

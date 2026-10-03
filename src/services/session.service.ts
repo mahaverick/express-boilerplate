@@ -21,6 +21,7 @@ import {
   type DbExecutor,
   type DbTransaction,
 } from '@/services/database.service'
+import { emitDomainEvent } from '@/services/domain-events.service'
 import { logger } from '@/services/logger.service'
 import { denySession } from '@/services/session-denylist.service'
 import { MS_PER_SECOND, requireDurationMs } from '@/utilities/duration.utilities'
@@ -41,13 +42,15 @@ const userRepository = new UserRepository()
  * committed, and a rotation arriving later finds its token revoked.
  * @param userId - The session's user.
  * @param sessionId - The session (rotation-chain) id.
+ * @returns How many token rows this call revoked.
  */
-async function revokeSessionUnderUserLock(userId: string, sessionId: string): Promise<void> {
-  await withTransaction(async (tx) => {
+async function revokeSessionUnderUserLock(userId: string, sessionId: string): Promise<number> {
+  const revoked = await withTransaction(async (tx) => {
     await userRepository.lockById(userId, 'no key update', tx)
-    await userTokenRepository.revokeAllForSession(sessionId, tx)
+    return userTokenRepository.revokeAllForSession(sessionId, tx)
   })
   await denySession(sessionId)
+  return revoked
 }
 
 /**
@@ -551,13 +554,21 @@ export async function revokeSession(sessionId: string): Promise<void> {
  * whoever calls it, not a way to test whether a given token string is
  * still live — exactly the same reasoning `rotateRefreshToken` (this
  * module) and login (auth.service.ts) already apply to their own callers.
+ * A live token (not revoked, not expired) whose revoke changed rows emits
+ * `user_signed_out` after it, on the matched branch only, which already
+ * takes longer than a miss. The locked revoke decides who changed them, so
+ * concurrent or replayed sign-outs count once, and a lapsed session counts
+ * never.
  * @param raw - The raw refresh token presented by the client.
  * @returns Resolves once the token's session (if any matched) is revoked and its access tokens are denied, best-effort.
  */
 export async function revokeRefreshToken(raw: string): Promise<void> {
   const existing = await userTokenRepository.findByHash(hashToken(raw))
-  if (existing && existing.sessionId !== null) {
-    await revokeSessionUnderUserLock(existing.userId, existing.sessionId)
+  if (!existing || existing.sessionId === null) return
+  const revoked = await revokeSessionUnderUserLock(existing.userId, existing.sessionId)
+  const isLive = existing.expiresAt.getTime() > Date.now() && existing.revokedAt === null
+  if (isLive && revoked > 0) {
+    await emitDomainEvent({ type: 'user_signed_out', userId: existing.userId, at: new Date() })
   }
 }
 

@@ -4,7 +4,7 @@
  * tenant, its settings row and its owner membership in one transaction;
  * `createWithoutOwner` writes the first two, for staff.
  */
-import { and, eq, inArray, isNotNull, isNull, sql, type SQL } from 'drizzle-orm'
+import { and, asc, eq, gt, inArray, isNotNull, isNull, sql, type SQL } from 'drizzle-orm'
 import {
   SLUG_TAKEN_CODE,
   type MembershipRole,
@@ -30,6 +30,7 @@ import {
   type DbExecutor,
   type DbTransaction,
 } from '@/services/database.service'
+import type { TenantGroupSnapshot } from '@/types/analytics'
 
 /**
  * The columns `TenantRepository.create` accepts for the tenant row itself,
@@ -232,6 +233,35 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
       .from(userMembershipModel)
       .innerJoin(tenantModel, eq(userMembershipModel.tenantId, tenantModel.id))
       .where(and(eq(userMembershipModel.userId, userId), isNull(tenantModel.deletedAt)))
+  }
+
+  /**
+   * One page of every tenant row, archived and soft-deleted ones included,
+   * as the analytics group snapshot, in id order. Cross-tenant on purpose:
+   * only the analytics groups backfill calls it.
+   * @param afterId - The last id of the previous page; omitted for the first page.
+   * @param limit - The page size.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns Up to `limit` snapshots whose id is after `afterId`.
+   */
+  async listGroupSnapshotsAfter(
+    afterId: string | undefined,
+    limit: number,
+    executor: DbExecutor = db
+  ): Promise<TenantGroupSnapshot[]> {
+    const rows = await executor
+      .select({
+        id: tenantModel.id,
+        name: tenantModel.name,
+        status: tenantModel.lifecycleState,
+        createdAt: tenantModel.createdAt,
+        isPlatform: tenantModel.isPlatform,
+      })
+      .from(tenantModel)
+      .where(afterId === undefined ? undefined : gt(tenantModel.id, afterId))
+      .orderBy(asc(tenantModel.id))
+      .limit(limit)
+    return rows
   }
 
   /**

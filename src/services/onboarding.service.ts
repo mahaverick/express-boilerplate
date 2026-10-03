@@ -29,7 +29,7 @@ import {
   type DbExecutor,
   type DbTransaction,
 } from '@/services/database.service'
-import { subscribeDomainEvent } from '@/services/domain-events.service'
+import { emitDomainEvent, subscribeDomainEvent } from '@/services/domain-events.service'
 import { lockActorRole } from '@/services/tenant-membership.service'
 import type { Actor } from '@/types/actor'
 import type { DomainEventContext, DomainEventOf } from '@/types/domain-event'
@@ -96,6 +96,32 @@ export interface CompleteOnboardingStepInput {
    * out and the row is stamped now.
    */
   completedAt?: Date | undefined
+}
+
+/**
+ * Emit `onboarding_step_completed` for a completion that is not audited
+ * (automatic, a member's tick, the reconcile), after it committed. A staff
+ * completion is audited and reaches analytics from its audit entry, so it
+ * must not come through here. Never rejects.
+ * @param completion - The completion row just written.
+ * @param how - `auto` for an automatic or reconciled step, `manual` for a member's tick.
+ * @param userId - The member whose action completed it; null for the reconcile.
+ * @returns Resolves once every subscriber has run.
+ */
+export async function emitStepCompleted(
+  completion: OnboardingCompletion,
+  how: 'auto' | 'manual',
+  userId: string | null
+): Promise<void> {
+  await emitDomainEvent({
+    type: 'onboarding_step_completed',
+    tenantId: completion.tenantId,
+    userId,
+    stepKey: completion.stepKey,
+    how,
+    required: onboardingStepByKey(completion.stepKey)?.required ?? false,
+    at: completion.completedAt,
+  })
 }
 
 /**
@@ -380,7 +406,8 @@ export async function getTenantOnboarding(
 /**
  * Complete every `auto` step a trigger maps to, for a running tenant; an
  * untracked or unstarted tenant is skipped quietly. A member step completes
- * for `subjectUserId`.
+ * for `subjectUserId`. Each step this completes (not one already done)
+ * emits `onboarding_step_completed` for `subjectUserId`.
  * @param trigger - The trigger.
  * @param tenant - The tenant, as just read.
  * @param subjectUserId - The member the event is about.
@@ -392,12 +419,13 @@ async function completeTriggeredSteps(
 ): Promise<void> {
   if (!isOnboardingStarted(tenant)) return
   for (const step of stepsForTrigger(trigger)) {
-    await completeOnboardingStep({
+    const completion = await completeOnboardingStep({
       tenantId: tenant.id,
       userId: step.scope === 'member' ? subjectUserId : undefined,
       stepKey: step.key,
       source: 'auto',
     })
+    if (completion) await emitStepCompleted(completion, 'auto', subjectUserId)
   }
 }
 
@@ -501,7 +529,8 @@ async function lockMemberAccess(
 /**
  * Tick a manual step as a member: a member step completes for the actor
  * (any member), a tenant step for the tenant (admin or owner). Ticking a done
- * step again changes nothing. A dismissed tenant still records.
+ * step again changes nothing. A dismissed tenant still records. A new
+ * completion emits `onboarding_step_completed` after the commit.
  * @param actor - The signed-in member.
  * @param tenantId - The tenant.
  * @param stepKey - The step.
@@ -518,9 +547,9 @@ export async function completeStepAsMember(
   if (step.completion.kind !== 'manual') {
     throw new HttpError('This step completes on its own.', 409, NOT_MANUAL_CODE)
   }
-  await withTransaction(async (tx) => {
+  const completion = await withTransaction(async (tx) => {
     await lockMemberAccess(actor, tenantId, step.scope === 'member' ? 'viewer' : 'admin', tx)
-    await completeOnboardingStep(
+    return completeOnboardingStep(
       {
         tenantId,
         userId: step.scope === 'member' ? actor.userId : undefined,
@@ -531,6 +560,7 @@ export async function completeStepAsMember(
       tx
     )
   })
+  if (completion) await emitStepCompleted(completion, 'manual', actor.userId)
   return getTenantOnboarding(tenantId, { userId: actor.userId })
 }
 

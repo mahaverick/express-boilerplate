@@ -53,23 +53,25 @@ export function toPublicUser(user: User): PublicUser {
 
 /**
  * Every client-facing user (profile GET and PATCH, and the login user): the
- * public user plus their platform role. It's client-visible on purpose: it
- * only drives the staff UI, and the server re-checks the platform role on
- * every request.
+ * public user plus their platform role and their browser analytics opt-out.
+ * The role is client-visible on purpose: it only drives the staff UI, and
+ * the server re-checks the platform role on every request. The opt-out only
+ * tells the frontends to stop capturing; server events ignore it.
  */
 export interface ProfileResponse extends PublicUser {
   platformRole: MembershipRole | null
+  analyticsOptOut: boolean
 }
 
 /**
  * Build the profile response.
  * @param user - The full user row.
  * @param platformRole - Their role in the platform tenant, or null.
- * @returns The public projection plus `platformRole`.
+ * @returns The public projection plus `platformRole` and `analyticsOptOut`.
  */
 export function toProfileResponse(
   user: User,
   platformRole: MembershipRole | null
 ): ProfileResponse {
-  return { ...toPublicUser(user), platformRole }
+  return { ...toPublicUser(user), platformRole, analyticsOptOut: user.analyticsOptOut }
 }

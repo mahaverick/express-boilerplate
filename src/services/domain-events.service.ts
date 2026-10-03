@@ -62,7 +62,7 @@ export async function emitDomainEvent(
       logger.error('Domain event subscriber failed', {
         error: redactedForLog(error),
         eventType: event.type,
-        tenantId: event.tenantId,
+        ...('tenantId' in event ? { tenantId: event.tenantId } : { userId: event.userId }),
       })
     }
   }

@@ -33,6 +33,7 @@ const state: {
   emailQueue: Queue | undefined
   notificationQueue: Queue | undefined
   maintenanceQueue: Queue | undefined
+  analyticsQueue: Queue | undefined
   closed: boolean
   workerConnectionLost: Set<(dead: IORedis) => void>
   haveWorkersFailed: boolean
@@ -42,6 +43,7 @@ const state: {
   emailQueue: undefined,
   notificationQueue: undefined,
   maintenanceQueue: undefined,
+  analyticsQueue: undefined,
   closed: false,
   workerConnectionLost: new Set(),
   haveWorkersFailed: false,
@@ -167,10 +169,16 @@ function getProducerConnection(): IORedis {
       if (state.producer?.connection !== dead) return
       state.producer = undefined
       // Every queue holds the dead instance, so each is rebuilt on next use.
-      const orphans = [state.emailQueue, state.notificationQueue, state.maintenanceQueue]
+      const orphans = [
+        state.emailQueue,
+        state.notificationQueue,
+        state.maintenanceQueue,
+        state.analyticsQueue,
+      ]
       state.emailQueue = undefined
       state.notificationQueue = undefined
       state.maintenanceQueue = undefined
+      state.analyticsQueue = undefined
       for (const orphan of orphans) void discardQueue(orphan)
     }
   )
@@ -228,6 +236,24 @@ export function getMaintenanceQueue(): Queue {
     })
   }
   return state.maintenanceQueue
+}
+
+/**
+ * Get the shared "analytics" queue, creating it on first use. It carries
+ * the analytics drain, over the same producer connection as the others.
+ * @returns The analytics queue.
+ */
+export function getAnalyticsQueue(): Queue {
+  if (!state.analyticsQueue) {
+    state.analyticsQueue = new Queue('analytics', {
+      connection: getProducerConnection(),
+      prefix: redisKey('bull'),
+    })
+    state.analyticsQueue.on('error', (error: unknown) => {
+      logger.error('Analytics queue error', { error })
+    })
+  }
+  return state.analyticsQueue
 }
 
 /**
@@ -336,6 +362,11 @@ export async function closeQueue(): Promise<void> {
     const maintenanceQueue = state.maintenanceQueue
     state.maintenanceQueue = undefined
     await maintenanceQueue.close()
+  }
+  if (state.analyticsQueue) {
+    const analyticsQueue = state.analyticsQueue
+    state.analyticsQueue = undefined
+    await analyticsQueue.close()
   }
   const connections = [state.worker?.connection, state.producer?.connection]
   state.worker = undefined

@@ -103,6 +103,41 @@ rather than repeating them.
   which fans `verify_email` out to the email queue.
   `tests/integration/api/auth.test.ts` and `verification.test.ts` show both.
 
+## Analytics
+
+- **Never call PostHog from a request.** The only server code that sends to
+  PostHog is the drain (`analytics-drain.service.ts`) and the groups
+  backfill, both through `sendBatch` (`posthog-batch.service.ts`); the only
+  browser path is the `/api/v1/collect` proxy. A request writes an outbox
+  row and nothing else. See [ARCHITECTURE.md](ARCHITECTURE.md#analytics).
+- **Outbox writes go only through `enqueueAnalytics`, or
+  `enqueueAuditAnalytics` for an audit entry** (`analytics-outbox.service.ts`),
+  never the repository directly: they are the savepoint
+  inside a transaction and the `try`/`catch` on the pool that keep a failed
+  insert from failing the user's action.
+- **New audit actions forward automatically,** as the action with `.`
+  replaced by `_`. If that name collides with a product or `email_*` event,
+  add the action to `AUDIT_EVENT_RENAMES`; the builder's collision test
+  fails until you do.
+- **Don't hold a pool connection across `sendBatch`.** The drain's claim is
+  one autocommit statement for that reason:
+  `analytics-drain-outage.test.ts` runs a hanging PostHog against a
+  one-connection pool.
+- **Keep the proxy ahead of `express.json` and give it no `on.error`.**
+  A body parser ahead of it consumes or refuses replay bodies; an `on.error`
+  handler makes http-proxy-middleware skip its own error response, so a
+  failed upstream request never answers. Log through a plugin, as
+  `analytics-proxy.routes.ts` does.
+- **Enable analytics in a test file with a mock, never `process.env`** (it
+  outlives the file in its worker). A test that only reads outbox rows mocks
+  `isAnalyticsEnabled` (`@/configs/analytics.config`), as
+  `tests/integration/services/analytics-outbox.service.test.ts` does; a test
+  that sends to PostHog mocks `getEnv()` with a key and a `POSTHOG_HOST`
+  pointing at `startFakePosthog()` (`tests/helpers/fake-posthog.ts`), as
+  `tests/integration/services/analytics/analytics-drain.service.test.ts`
+  does. Delete `analytics_outbox` rows in the file's own hooks, since the
+  worker's database is shared by its files.
+
 ## Notifications
 
 - **Use `addNotificationJob()` for an event with in-app and email channels.**

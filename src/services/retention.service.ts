@@ -5,10 +5,13 @@
  * rule is logged and reported while the others still run. The email tracking
  * tables share `RETENTION_EMAIL_LOGS_DAYS` and are dated by the message's
  * `created_at`: events, then attempts, then the messages left with neither,
- * so no batch cascades. Suppressions never expire.
+ * so no batch cascades. Suppressions never expire. An `analytics_outbox` row
+ * still there after `ANALYTICS_OUTBOX_RETENTION_DAYS` was never delivered,
+ * so that rule logs what it drops at `warn`.
  */
 import { sql } from 'drizzle-orm'
 import { getEnv, type Env } from '@/configs/env.config'
+import { analyticsOutboxRepository } from '@/repositories/analytics-outbox.repository'
 import { AuditLogRepository } from '@/repositories/audit-log.repository'
 import { EmailEventRepository } from '@/repositories/email-event.repository'
 import { EmailLogRepository } from '@/repositories/email-log.repository'
@@ -45,6 +48,7 @@ export interface RetentionDays {
   notificationsRead: number
   notificationsUnread: number
   auditLogs: number
+  analyticsOutbox: number
 }
 
 /**
@@ -61,6 +65,10 @@ interface RetentionRule {
   table: string
   days: number
   purge: (cutoff: Date, limit: number, tx: DbTransaction) => Promise<number>
+  /**
+   * Called with the rule's total once it has run without error.
+   */
+  report?: (deleted: number) => void
 }
 
 /**
@@ -76,6 +84,7 @@ export function retentionDays(env: Env): RetentionDays {
     notificationsRead: env.RETENTION_NOTIFICATIONS_READ_DAYS,
     notificationsUnread: env.RETENTION_NOTIFICATIONS_UNREAD_DAYS,
     auditLogs: env.RETENTION_AUDIT_LOGS_DAYS,
+    analyticsOutbox: env.ANALYTICS_OUTBOX_RETENTION_DAYS,
   }
 }
 
@@ -92,6 +101,16 @@ async function purgeAuditLogs(cutoff: Date, limit: number, tx: DbTransaction): P
     sql`select set_config('app.audit_purge', 'on', true), set_config('app.audit_purge_before', ${cutoff.toISOString()}, true)`
   )
   return auditLogRepository.purgeOccurredBefore(cutoff, limit, tx)
+}
+
+/**
+ * Warn about outbox rows dropped undelivered: each is an event PostHog never
+ * received, after an outage longer than the retention window.
+ * @param deleted - How many rows the rule deleted.
+ */
+function reportDroppedAnalytics(deleted: number): void {
+  if (deleted === 0) return
+  logger.warn('analytics outbox rows dropped undelivered', { analyticsOutboxDropped: deleted })
 }
 
 /**
@@ -141,6 +160,12 @@ function retentionRules(days: RetentionDays): RetentionRule[] {
         notificationRepository.purgeUnreadCreatedBefore(cutoff, limit, tx),
     },
     { table: 'audit_logs', days: days.auditLogs, purge: purgeAuditLogs },
+    {
+      table: 'analytics_outbox',
+      days: days.analyticsOutbox,
+      purge: (cutoff, limit, tx) => analyticsOutboxRepository.deleteOlderThan(cutoff, limit, tx),
+      report: reportDroppedAnalytics,
+    },
   ]
 }
 
@@ -159,6 +184,7 @@ async function runRule(rule: RetentionRule, cutoff: Date): Promise<RetentionResu
       deleted += batch
     }
     logger.info('retention purge', { table: rule.table, deleted })
+    rule.report?.(deleted)
     return { table: rule.table, deleted }
   } catch (error) {
     logger.error('retention purge failed', { table: rule.table, deleted, error })

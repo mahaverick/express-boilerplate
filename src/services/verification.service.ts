@@ -12,6 +12,7 @@ import { addNotificationJob } from '@/jobs/notification.job'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { db, type DbExecutor } from '@/services/database.service'
+import { emitDomainEvent } from '@/services/domain-events.service'
 import { logger } from '@/services/logger.service'
 import { autoJoinSafely } from '@/services/platform.service'
 import { claimToken, issueToken } from '@/services/session.service'
@@ -154,11 +155,15 @@ export async function sendVerificationMail(
  * failure there is logged, never thrown.
  * @param userId - The user whose mailbox has been proven.
  * @param executor - The pool, or the caller's transaction to join.
- * @returns Resolves once the row is verified, or was already.
+ * @returns The verified row when this call verified it, undefined when it already was (or is gone).
  */
-export async function markEmailVerified(userId: string, executor: DbExecutor = db): Promise<void> {
+export async function markEmailVerified(
+  userId: string,
+  executor: DbExecutor = db
+): Promise<User | undefined> {
   const verified = await userRepository.markEmailVerified(userId, executor)
   if (verified) await autoJoinSafely(verified, executor)
+  return verified
 }
 
 /**
@@ -169,7 +174,9 @@ export async function markEmailVerified(userId: string, executor: DbExecutor = d
  *
  * Claim FIRST, compare SECOND: one presentation is one attempt, so a wrong
  * password spends the token. The dummy hash runs when there is no user, so
- * an unknown token costs the same bcrypt time as a real one.
+ * an unknown token costs the same bcrypt time as a real one. The call whose
+ * write verifies the account emits `email_verified`; a link for an account
+ * already verified, or a concurrent one that lost that write, emits nothing.
  * @param token - The raw verification token.
  * @param password - The account's password.
  * @returns Resolves once the account is verified (or already was).
@@ -187,9 +194,12 @@ export async function verifyEmail(token: string, password: string): Promise<void
   }
 
   // Already verified is success: a double-clicked link must not be an error.
-  await markEmailVerified(user.id)
+  const verifiedNow = await markEmailVerified(user.id)
   // Revoke the other links, or a token read out of an older mail still works.
   await userTokenRepository.revokeAllForUserAndPurpose(user.id, 'email_verification')
+  if (verifiedNow) {
+    await emitDomainEvent({ type: 'email_verified', userId: user.id, at: new Date() })
+  }
 }
 
 /**

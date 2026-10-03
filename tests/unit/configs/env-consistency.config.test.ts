@@ -307,6 +307,11 @@ describe('assertEnvConsistent', () => {
       expect(warnings[0]).toContain('TRUST_PROXY is false')
     })
 
+    it('warns when TRUST_PROXY is 0, which trusts no hop either', () => {
+      const { warnings } = runChecks({ ...deployed, ...google, TRUST_PROXY: '0' })
+      expect(warnings).toHaveLength(1)
+    })
+
     it('warns on local when COOKIE_SECURE=true is explicit', () => {
       const { warnings } = runChecks({ ...local, ...google, COOKIE_SECURE: 'true' })
       expect(warnings).toHaveLength(1)
@@ -322,6 +327,27 @@ describe('assertEnvConsistent', () => {
       { name: 'local derives Secure off', source: { ...local, ...google } },
     ])('stays quiet when $name', ({ source }) => {
       expect(runChecks(source).warnings).toEqual([])
+    })
+  })
+
+  describe('PostHog without TRUST_PROXY', () => {
+    const posthog = { POSTHOG_PROJECT_KEY: 'phc_test_key_not_real' }
+
+    it.each(['false', 'FALSE', '0'])('warns, and still boots, outside local with %s', (value) => {
+      const { error, warnings } = runChecks({ ...deployed, ...posthog, TRUST_PROXY: value })
+      expect(error).toBeUndefined()
+      expect(warnings).toHaveLength(1)
+      expect(warnings[0]).toContain('POSTHOG_PROJECT_KEY is set and TRUST_PROXY is false')
+    })
+
+    it.each([
+      { name: 'TRUST_PROXY is set', source: { ...deployed, ...posthog, TRUST_PROXY: '1' } },
+      { name: 'analytics is off', source: { ...deployed, TRUST_PROXY: 'false' } },
+      { name: 'APP_ENV is local', source: { ...local, ...posthog, TRUST_PROXY: 'false' } },
+    ])('stays quiet when $name', ({ source }) => {
+      expect(
+        runChecks(source).warnings.filter((warning) => warning.includes('POSTHOG_PROJECT_KEY'))
+      ).toEqual([])
     })
   })
 

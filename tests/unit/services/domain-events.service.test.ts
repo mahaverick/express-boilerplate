@@ -76,6 +76,24 @@ describe('emitDomainEvent', () => {
     )
   })
 
+  it('logs the user instead of a tenant for a user-level event', async () => {
+    const error = vi.spyOn(logger, 'error').mockImplementation(() => {})
+    subscribeDomainEvent('user_signed_in', () => {
+      throw new Error('sync failure')
+    })
+
+    await emitDomainEvent({
+      type: 'user_signed_in',
+      userId: 'user-9',
+      method: 'password',
+      at: new Date('2026-10-02T09:00:00.000Z'),
+    })
+
+    const meta = error.mock.calls[0]?.[1]
+    expect(meta).toMatchObject({ eventType: 'user_signed_in', userId: 'user-9' })
+    expect(meta).not.toHaveProperty('tenantId')
+  })
+
   it('runs a function subscribed twice once', async () => {
     const handler = vi.fn()
     subscribeDomainEvent('teammate_invited', handler)

@@ -10,6 +10,7 @@ import { HttpError } from '@/errors/http-error'
 import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { withTransaction } from '@/services/database.service'
+import { emitDomainEvent } from '@/services/domain-events.service'
 import { autoJoinSafely } from '@/services/platform.service'
 import {
   denySessions,
@@ -97,6 +98,14 @@ export async function claimUnverifiedAccount(userId: string, googleId: string): 
 }
 
 /**
+ * The user a Google Sign-In resolves to, and whether this sign-in created it.
+ */
+interface ResolvedGoogleUser {
+  user: User
+  isNew: boolean
+}
+
+/**
  * Resolve the user a Google Sign-In resolves to, linking or creating one
  * when needed.
  *
@@ -109,10 +118,10 @@ export async function claimUnverifiedAccount(userId: string, googleId: string): 
  *    verified one is linked untouched.
  * 4. A new account gets its 'email' and 'google' rows in one transaction.
  * @param profile - The raw Google profile.
- * @returns The existing, newly linked, or newly created user.
+ * @returns The existing, newly linked, or newly created user, and whether it is new.
  * @throws {HttpError} 400 `google_email_missing`, 401 `google_auth_failed` (linked user deleted), 403 `email_not_verified`, or a database error.
  */
-export async function findOrCreateByGoogle(profile: GoogleProfile): Promise<User> {
+async function resolveGoogleUser(profile: GoogleProfile): Promise<ResolvedGoogleUser> {
   const existingLink = await authProviderRepository.findByProviderAndId('google', profile.id)
   if (existingLink) {
     const user = await userRepository.findById(existingLink.userId)
@@ -124,7 +133,7 @@ export async function findOrCreateByGoogle(profile: GoogleProfile): Promise<User
         'google_auth_failed'
       )
     }
-    return user
+    return { user, isNew: false }
   }
 
   const { email, isVerified } = verifiedGoogleEmail(profile)
@@ -140,11 +149,11 @@ export async function findOrCreateByGoogle(profile: GoogleProfile): Promise<User
     }
 
     if (existingUser.emailVerifiedAt === null) {
-      return claimUnverifiedAccount(existingUser.id, profile.id)
+      return { user: await claimUnverifiedAccount(existingUser.id, profile.id), isNew: false }
     }
 
     await linkGoogleProvider(existingUser.id, profile.id)
-    return existingUser
+    return { user: existingUser, isNew: false }
   }
 
   // An unverified Google email must not create an account: anyone can add any address to a Google account.
@@ -152,7 +161,7 @@ export async function findOrCreateByGoogle(profile: GoogleProfile): Promise<User
     throw new HttpError('Google has not verified this email address', 403, 'email_not_verified')
   }
 
-  return withTransaction(async (tx) => {
+  const created = await withTransaction(async (tx) => {
     const createdUser = await userRepository.create(
       {
         email,
@@ -178,6 +187,19 @@ export async function findOrCreateByGoogle(profile: GoogleProfile): Promise<User
     if (!verified) throw new HttpError('Created user not found', 500)
     return verified
   })
+  return { user: created, isNew: true }
+}
+
+/**
+ * Resolve the user a Google Sign-In resolves to, linking or creating one
+ * when needed (`resolveGoogleUser`).
+ * @param profile - The raw Google profile.
+ * @returns The existing, newly linked, or newly created user.
+ * @throws {HttpError} 400 `google_email_missing`, 401 `google_auth_failed` (linked user deleted), 403 `email_not_verified`, or a database error.
+ */
+export async function findOrCreateByGoogle(profile: GoogleProfile): Promise<User> {
+  const { user } = await resolveGoogleUser(profile)
+  return user
 }
 
 /**
@@ -187,13 +209,15 @@ export async function findOrCreateByGoogle(profile: GoogleProfile): Promise<User
  *
  * The active check runs first and again under the user-row lock before the
  * session is issued, so a deactivated account never gets a `user_tokens` row
- * or a success redirect, even when the deactivation races the sign-in.
+ * or a success redirect, even when the deactivation races the sign-in. Once
+ * the session is issued, a sign-in that created the account emits
+ * `user_signed_up`, and every one emits `user_signed_in`.
  * @param profile - The raw Google profile from the callback.
  * @returns The new session's refresh token, for the controller to set as a cookie.
  * @throws {HttpError} Any `findOrCreateByGoogle` error, or 401 `google_auth_failed` for an inactive or deleted account.
  */
 export async function completeGoogleSignIn(profile: GoogleProfile): Promise<IssuedRefreshToken> {
-  const user = await findOrCreateByGoogle(profile)
+  const { user, isNew } = await resolveGoogleUser(profile)
 
   if (!user.active) {
     throw new HttpError('Account is inactive', 401, 'google_auth_failed')
@@ -203,10 +227,25 @@ export async function completeGoogleSignIn(profile: GoogleProfile): Promise<Issu
   // Covers users verified before their domain was listed; it never throws.
   await autoJoinSafely(user)
 
-  return withTransaction(async (tx) => {
+  const issued = await withTransaction(async (tx) => {
     const locked = await userRepository.lockById(user.id, 'share', tx)
     // Re-checked under the lock, as login does: a deactivation that committed since the lookup wins.
     if (!locked?.active) throw new HttpError('Account is inactive', 401, 'google_auth_failed')
     return issueRefreshToken(user.id, randomUUID(), tx)
   })
+  if (isNew) {
+    await emitDomainEvent({
+      type: 'user_signed_up',
+      userId: user.id,
+      method: 'google',
+      at: user.createdAt,
+    })
+  }
+  await emitDomainEvent({
+    type: 'user_signed_in',
+    userId: user.id,
+    method: 'google',
+    at: new Date(),
+  })
+  return issued
 }

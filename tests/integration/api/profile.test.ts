@@ -57,6 +57,7 @@ interface PublicUserBody {
   lastName: string | null
   createdAt: string
   platformRole: string | null
+  analyticsOptOut: boolean
 }
 
 /**
@@ -129,6 +130,7 @@ describe('/api/v1/profile', () => {
         lastName: NO_NAME,
         createdAt: ANY_STRING,
         platformRole: NO_NAME,
+        analyticsOptOut: false,
       })
       expect(JSON.stringify(response.body)).not.toMatch(/password/i)
     })
@@ -179,6 +181,7 @@ describe('/api/v1/profile', () => {
         lastName: 'Lovelace',
         createdAt: ANY_STRING,
         platformRole: NO_NAME,
+        analyticsOptOut: false,
       })
 
       const [row] = await sql`select first_name, last_name from users where id = ${user.id}`
@@ -226,6 +229,52 @@ describe('/api/v1/profile', () => {
         firstName: NO_NAME,
         lastName: 'Lovelace',
       })
+    })
+
+    it('turns browser analytics off and on again, leaving the names alone', async () => {
+      const { user, token } = await createAuthenticatedUser()
+      await userRepository.update(user.id, { firstName: 'Ada' })
+
+      const optedOut = await request(app)
+        .patch('/api/v1/profile')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ analyticsOptOut: true })
+
+      expect(optedOut.status).toBe(200)
+      expect(envelopeOf<PublicUserBody>(optedOut).data).toMatchObject({
+        firstName: 'Ada',
+        analyticsOptOut: true,
+      })
+      const [stored] = await sql`select analytics_opt_out from users where id = ${user.id}`
+      expect(stored).toEqual({ analytics_opt_out: true })
+
+      const fetched = await request(app)
+        .get('/api/v1/profile')
+        .set('Authorization', `Bearer ${token}`)
+      expect(envelopeOf<PublicUserBody>(fetched).data?.analyticsOptOut).toBe(true)
+
+      const optedIn = await request(app)
+        .patch('/api/v1/profile')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ analyticsOptOut: false })
+      expect(envelopeOf<PublicUserBody>(optedIn).data?.analyticsOptOut).toBe(false)
+    })
+
+    it.each([
+      ['a string', 'yes'],
+      ['null', NO_NAME],
+      ['a number', 1],
+    ])('refuses an analyticsOptOut that is %s, writing nothing', async (_label, value) => {
+      const { user, token } = await createAuthenticatedUser()
+
+      const response = await request(app)
+        .patch('/api/v1/profile')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ analyticsOptOut: value })
+
+      expect(response.status).toBe(400)
+      const [stored] = await sql`select analytics_opt_out from users where id = ${user.id}`
+      expect(stored).toEqual({ analytics_opt_out: false })
     })
 
     // Mass-assignment protection: a request mixing a legitimate field change with fields this endpoint must never let a caller touch. Asserting only the response would not be enough (a filtered response can still hide a write underneath), so this reads the row back with raw SQL, independent of the repository under test.

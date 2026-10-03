@@ -155,6 +155,13 @@
       "when": 1790908654025,
       "tag": "0021_onboarding",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1790966549217,
+      "tag": "0022_analytics",
+      "breakpoints": true
     }
   ]
 }
