@@ -207,6 +207,12 @@ that adds it. The file's own comments carry the detail.
   `minimumReleaseAgeExclude` key, one `name@version` per entry, needed only
   until that version is 3 days old; delete the entry then, and the key itself
   once no exception remains.
+- **`auditConfig.ignoreGhsas: GHSA-vfj7-8cjw-p6xm`**: `braces` <=3.0.3 can
+  exhaust the stack on deeply nested brace patterns, and no patched version
+  exists yet. It is reached only through `http-proxy-middleware` >
+  `micromatch`, which runs only for a glob `pathFilter`. The `/collect` proxy
+  sets none, and `braces` parses patterns, never request paths. Remove the
+  entry once `braces` ships a fix.
 
 ## Docs to update alongside a change
 
