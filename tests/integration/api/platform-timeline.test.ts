@@ -66,6 +66,7 @@ const { resetTenantGroupTypeIndexCache } =
   await import('@/services/analytics/timeline-group-index.service')
 const { sql } = await import('@/services/database.service')
 const { logger } = await import('@/services/logger.service')
+const audit = await import('@/services/audit.service')
 const { getRedis, redisKey } = await import('@/services/redis.service')
 const { truncateAuditLogs } = await import('../../helpers/audit-log')
 const { startFakePosthog } = await import('../../helpers/fake-posthog')
@@ -501,6 +502,67 @@ describe('the timeline audit', () => {
 
     expect(await statusOf(getTimeline(token, `/users/${subject.id}/timeline`))).toBe(502)
     expect(await timelineAudits(subject.id)).toBe(1)
+  })
+
+  it('fails closed when the audit write fails: 500, no PostHog, key released, next read audited', async () => {
+    const subject = await createTrackedUser()
+    const { user: staff, token } = await createTrackedStaff('admin')
+    vi.spyOn(logger, 'error').mockImplementation(() => {})
+    vi.spyOn(audit, 'recordTimelineView').mockRejectedValueOnce(new Error('insert failed'))
+
+    const failed = await getTimeline(token, `/users/${subject.id}/timeline`)
+
+    expect(failed.status).toBe(500)
+    expect((failed.body as { data?: unknown }).data).toBeUndefined()
+    expect(posthog().queries).toEqual([])
+    const redis = await getRedis()
+    expect(
+      await redis.exists(redisKey('timeline', 'audit', staff.id, 'user', subject.id, 'all'))
+    ).toBe(0)
+    expect(await timelineAudits(subject.id)).toBe(0)
+
+    expect(await statusOf(getTimeline(token, `/users/${subject.id}/timeline`))).toBe(200)
+    expect(await timelineAudits(subject.id)).toBe(1)
+  })
+
+  it('logs at error, with the target, when the audit write and the key release both fail', async () => {
+    const subject = await createTrackedUser()
+    const { token } = await createTrackedStaff('admin')
+    const error = vi.spyOn(logger, 'error').mockImplementation(() => {})
+    vi.spyOn(audit, 'recordTimelineView').mockRejectedValueOnce(new Error('insert failed'))
+    const redis = await getRedis()
+    vi.spyOn(redis, 'del').mockRejectedValueOnce(new Error('connection reset'))
+
+    expect(await statusOf(getTimeline(token, `/users/${subject.id}/timeline`))).toBe(500)
+
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining('reads of this target may go unaudited'),
+      {
+        error: expect.any(Error) as unknown,
+        kind: 'user',
+        targetId: subject.id,
+        unauditedSeconds: 600,
+      }
+    )
+    expect(JSON.stringify(error.mock.calls)).not.toContain('timeline:audit')
+  })
+
+  it('writes tenant.timeline_viewed for a tenant read and user.timeline_viewed for a user read', async () => {
+    const subject = await createTrackedUser()
+    const tenantId = await createTenant()
+    const { token } = await createTrackedStaff('admin')
+
+    await getTimeline(token, `/tenants/${tenantId}/timeline`)
+    await getTimeline(token, `/users/${subject.id}/timeline`)
+
+    const platform = await platformTenant()
+    const rows = await sql<{ action: string; target_id: string; tenant_id: string }[]>`
+      select action, target_id, tenant_id from audit_logs
+      where target_id in (${tenantId}, ${subject.id}) order by action`
+    expect(rows).toEqual([
+      { action: 'tenant.timeline_viewed', target_id: tenantId, tenant_id: platform.id },
+      { action: 'user.timeline_viewed', target_id: subject.id, tenant_id: platform.id },
+    ])
   })
 })
 

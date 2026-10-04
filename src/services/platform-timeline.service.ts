@@ -123,22 +123,29 @@ async function auditTimelineView(
       view: input.view,
     })
   } catch (error) {
-    if (hasClaimedKey) await releaseThrottleKey(key)
+    if (hasClaimedKey) await releaseThrottleKey(key, kind, id)
     throw error
   }
 }
 
 /**
- * Delete a throttle key, logging rather than throwing on failure.
+ * Delete a throttle key after a failed audit write. If the delete fails too,
+ * the next reads inside the throttle window find the key and are not audited,
+ * so that is logged at `error`, with the target but not the key.
  * @param key - The key.
+ * @param kind - Whose timeline.
+ * @param id - The user or tenant id.
  * @returns Resolves once deleted or logged.
  */
-async function releaseThrottleKey(key: string): Promise<void> {
+async function releaseThrottleKey(key: string, kind: TimelineKind, id: string): Promise<void> {
   try {
     const redis = await getRedis()
     await redis.del(key)
   } catch (error) {
-    logger.warn('Could not release the timeline audit throttle key', { error })
+    logger.error(
+      'Could not release the timeline audit throttle key after a failed audit write; reads of this target may go unaudited until it expires',
+      { error, kind, targetId: id, unauditedSeconds: TIMELINE_AUDIT_THROTTLE_SECONDS }
+    )
   }
 }
 
