@@ -66,6 +66,8 @@ const VALID_METADATA: Record<AuditAction, Record<string, unknown>> = {
     emailDomains: ['example.test', 'acme.example'],
     messageIds: ['message-1', 'message-2'],
   },
+  'user.timeline_viewed': { range: '7d', view: 'all' },
+  'tenant.timeline_viewed': { range: '90d', view: 'key' },
 }
 
 const ACTIONS = Object.keys(AUDIT_ACTIONS) as AuditAction[]
@@ -101,6 +103,7 @@ describe('AUDIT_ACTIONS', () => {
       'tenant.reactivated',
       'tenant.settings_updated',
       'tenant.suspended',
+      'tenant.timeline_viewed',
       'tenant.updated',
       'user.created',
       'user.deactivated',
@@ -109,6 +112,7 @@ describe('AUDIT_ACTIONS', () => {
       'user.purged',
       'user.reactivated',
       'user.signed_out',
+      'user.timeline_viewed',
       'user.updated',
       'user.verification_resent',
     ])
@@ -185,6 +189,19 @@ describe('AUDIT_ACTIONS', () => {
     // eslint-disable-next-line unicorn/no-null -- JSON null: created with the tenant, no reason asked
     expect(schema.safeParse({ ...valid, reason: null }).success).toBe(true)
   })
+
+  it.each(['user.timeline_viewed', 'tenant.timeline_viewed'] as const)(
+    '%s takes only a known range and view',
+    (action) => {
+      const schema = AUDIT_ACTIONS[action].metadata
+      for (const range of ['24h', '7d', '30d', '90d']) {
+        expect(schema.safeParse({ range, view: 'all' }).success).toBe(true)
+      }
+      expect(schema.safeParse({ range: '7d', view: 'key' }).success).toBe(true)
+      expect(schema.safeParse({ range: '1y', view: 'all' }).success).toBe(false)
+      expect(schema.safeParse({ range: '7d', view: 'everything' }).success).toBe(false)
+    }
+  )
 
   it('pins the closed value sets of user.password_setup_sent and auth.reauthenticated', () => {
     expect(

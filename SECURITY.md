@@ -345,13 +345,13 @@ addresses the source system already trusted.
 
 ### Rate limiting: one store prefix per limiter
 
-`RATE_LIMITS` (`src/constants/rate-limit.constants.ts`) holds 26 limiter
+`RATE_LIMITS` (`src/constants/rate-limit.constants.ts`) holds 27 limiter
 specs, each built into middleware by `createRateLimiter(spec)`
 (`src/middlewares/rate-limit.middleware.ts`). Sixteen guard the auth router
-(every route on it except `GET /providers` has at least one), six guard
+(every route on it except `GET /providers` has at least one), seven guard
 tenant creation, member invitation, invitation preview and accept, staff
-reads and staff writes, two guard the email webhook, one guards the PostHog
-proxy, and `authenticatedWrite` covers every other
+reads, staff timelines and staff writes, two guard the email webhook, one
+guards the PostHog proxy, and `authenticatedWrite` covers every other
 authenticated write. Paths below are under `/api/v1`; a `user` key is the
 authenticated user's id, and an `email` key is the submitted `email`,
 trimmed and lowercased.
@@ -379,11 +379,14 @@ trimmed and lowercased.
 | `POST /invitations/accept` (ahead of `requireAuth`)                                                                                                                                                                                                                                   | `invitation-accept`                              | 20 per 15 minutes  | IP                   |
 | `POST /auth/reauthenticate` (after the staff check)                                                                                                                                                                                                                                   | `reauthenticate`                                 | 5 per 15 minutes   | user                 |
 | `GET /platform/tenants`, `GET /platform/tenants/:id`, `GET /platform/users`, `GET /platform/users/:id`, `GET /platform/stats`, the `/platform/emails*`, `/platform/email-suppressions`, `/platform/onboarding/*` and `/platform/tenants/:id/onboarding` reads (after the staff check) | `platform-search`, one shared budget             | 60 per minute      | user                 |
+| `GET /platform/users/:id/timeline`, `GET /platform/tenants/:id/timeline` (after the admin check)                                                                                                                                                                                      | `platform-timeline`, one shared budget           | 20 per minute      | user                 |
 | Every `/platform` write (after the staff check)                                                                                                                                                                                                                                       | `platform-write`, one shared budget              | 30 per minute      | user                 |
 | `POST /webhooks/email/:provider`, in this order (public; the provider is checked first)                                                                                                                                                                                               | `email-webhook-rejected` (failed responses only) | 60 per minute      | IP                   |
 |                                                                                                                                                                                                                                                                                       | `email-webhook` (accepted requests only)         | 3000 per minute    | provider             |
 | `/collect/*`, every method (public; the PostHog proxy)                                                                                                                                                                                                                                | `analytics-proxy`                                | 3000 per minute    | IP                   |
 | Every other authenticated write (below)                                                                                                                                                                                                                                               | `authenticated-write`                            | 60 per minute      | user                 |
+
+`platform-timeline`'s limit is `TIMELINE_REQUESTS_PER_MINUTE` (20 unless set).
 
 Each spec is backed by its **own** `SharedRateLimitStore`
 (`src/configs/rate-limit-store.config.ts`) under the key prefix `rl:<name>:`,
@@ -926,7 +929,7 @@ None of these is built, except where the Status column says Partial:
 | ----------------------------------------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | MFA                                                   | **Not implemented** | No TOTP enrolment and no recovery codes. The one step-up is a password re-check before destructive staff actions; see "Step-up for destructive staff actions".                                                                      |
 | CSRF tokens                                           | **Not implemented** | See "No CSRF middleware" below — reasoning, not an oversight. The forced-login direction IS defended, by a content-type gate; see the section after it.                                                                             |
-| General-purpose rate limiting                         | **Partial**         | 26 limiters (see "Rate limiting" above). Every write route has one, at least the shared `authenticatedWrite`. There is no global limiter, and authenticated reads (profile, notifications, tenant reads, the audit logs) have none. |
+| General-purpose rate limiting                         | **Partial**         | 27 limiters (see "Rate limiting" above). Every write route has one, at least the shared `authenticatedWrite`. There is no global limiter, and authenticated reads (profile, notifications, tenant reads, the audit logs) have none. |
 | Rehash on login                                       | **Not implemented** | See "Password hashing".                                                                                                                                                                                                             |
 | Impersonation, break-glass access, row-level security | **Not implemented** | Staff act only through the platform role; see "Platform staff access and the audit log".                                                                                                                                            |
 | Audit of sign-in and credential events                | **Partial**         | `audit_logs` records no login, logout, password change or password reset. The one sign-in event it records is a staff step-up (`auth.reauthenticated`, success or wrong password).                                                  |

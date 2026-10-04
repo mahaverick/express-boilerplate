@@ -24,6 +24,7 @@ import {
 } from '@/constants/audit.constants'
 import { EMAIL_EVENT_TYPES } from '@/constants/email.constants'
 import { MEMBERSHIP_ROLES } from '@/constants/tenant.constants'
+import { TIMELINE_RANGES, TIMELINE_VIEWS } from '@/constants/timeline.constants'
 import type { AuditLog } from '@/database/models/audit-log.model'
 import {
   auditEventName,
@@ -577,6 +578,8 @@ const CANDIDATES: readonly unknown[] = [
   'reset',
   ...MEMBERSHIP_ROLES,
   ...EMAIL_TEMPLATE_KEYS,
+  ...TIMELINE_RANGES,
+  ...TIMELINE_VIEWS,
   true,
   false,
   0,
