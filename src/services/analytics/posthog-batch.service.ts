@@ -5,8 +5,12 @@
  * whether a batch landed. It imports no database module, so it opens no pool.
  */
 import { getEnv } from '@/configs/env.config'
-import { ANALYTICS_SEND_TIMEOUT_MS } from '@/constants/analytics.constants'
+import {
+  ANALYTICS_SEND_TIMEOUT_MS,
+  ANALYTICS_SIGNATURE_PROPERTY,
+} from '@/constants/analytics.constants'
 import type { AnalyticsOutboxRow } from '@/database/models/analytics-outbox.model'
+import { signAnalyticsEvent } from '@/services/analytics/analytics-signature.service'
 
 /**
  * One event in a PostHog `/batch/` request body. `uuid` is the outbox row id,
@@ -39,17 +43,44 @@ export type SendResult =
 export const ENDPOINT_LEVEL_STATUSES: ReadonlySet<number> = new Set([401, 403, 404, 405, 407, 408])
 
 /**
- * The `/batch/` form of an outbox row.
- * @param row - The claimed outbox row.
+ * A property's value when it is a string, else null.
+ * @param value - The stored property.
+ * @returns The string, or null.
+ */
+function stringOrNull(value: unknown): string | null {
+  // eslint-disable-next-line unicorn/no-null -- the signature covers an absent field as null
+  return typeof value === 'string' ? value : null
+}
+
+/**
+ * The `/batch/` form of an outbox row, signed: `server_sig`
+ * (`ANALYTICS_SIGNATURE_PROPERTY`) covers the uuid, event, distinct id,
+ * `source`, `access`, `target_type`, `target_id` and `$groups.tenant`
+ * (`signAnalyticsEvent`), so a consumer can tell a server event from one a
+ * browser forged through the collect proxy. It is added to the wire event
+ * only; the outbox row is not changed.
+ * @param row - The claimed outbox row, its markers already resolved.
  * @returns The event as PostHog's batch endpoint takes it.
  */
 export function toPosthogBatchEvent(
   row: Pick<AnalyticsOutboxRow, 'id' | 'event' | 'distinctId' | 'properties' | 'occurredAt'>
 ): PosthogBatchEvent {
+  const properties = row.properties
+  const groups = properties.$groups as { tenant?: unknown } | null | undefined
+  const signature = signAnalyticsEvent({
+    uuid: row.id,
+    event: row.event,
+    distinctId: row.distinctId,
+    source: stringOrNull(properties.source),
+    access: stringOrNull(properties.access),
+    targetType: stringOrNull(properties.target_type),
+    targetId: stringOrNull(properties.target_id),
+    tenant: stringOrNull(groups?.tenant),
+  })
   return {
     event: row.event,
     distinct_id: row.distinctId,
-    properties: row.properties,
+    properties: { ...properties, [ANALYTICS_SIGNATURE_PROPERTY]: signature },
     uuid: row.id,
     timestamp: row.occurredAt.toISOString(),
   }
