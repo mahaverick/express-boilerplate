@@ -402,12 +402,12 @@ tenant purge clears the group's name: see
 `analytics_outbox` row in its own transaction (in a savepoint, so a failed
 insert never fails the request) and never calls PostHog's API. The analytics
 Worker drains the outbox every `ANALYTICS_DRAIN_INTERVAL_MS` (5 s) in batches
-of `ANALYTICS_DRAIN_BATCH_SIZE` (500) and deletes a row only once PostHog
-acknowledged it. While PostHog is down or slow, rows wait and are retried
-with a backoff of up to 10 minutes; rows still undelivered after
-`ANALYTICS_OUTBOX_RETENTION_DAYS` (7) are dropped by the daily retention
-purge with a `warn` log (`analyticsOutboxDropped`). A row PostHog rejects
-alone three times is dropped with an `error` log naming its event and id.
+of `ANALYTICS_DRAIN_BATCH_SIZE` (500). A row leaves the outbox when PostHog
+acknowledges it, by retention after `ANALYTICS_OUTBOX_RETENTION_DAYS` (7), by
+poison drop after three rejections, by user purge, or by the deletion tick.
+Acknowledged rows are logged. Undelivered rows retry with a backoff of up to
+10 minutes and are dropped by retention with a `warn` log (`analyticsOutboxDropped`).
+Poison-dropped rows are logged as `error` naming the event and id.
 If PostHog refuses a claimed batch, both of its halves, and the first row of
 each half sent alone, it is treated as a fault of the endpoint, not of any
 row: no row is counted, the rows wait and are retried, and the drain logs one

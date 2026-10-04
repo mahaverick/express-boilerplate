@@ -739,10 +739,10 @@ for local) is [Email tracking in README.md](README.md#email-tracking).
 ## Analytics
 
 Server events reach PostHog through a transactional outbox, and browser
-events through a proxy. No request handler calls PostHog's API, with one exception: the
+events through a proxy. No request handler calls PostHog's private API (`/api/projects/…`), with one exception: the
 staff timeline read (`GET /platform/users/:id/timeline`,
 `GET /platform/tenants/:id/timeline`), on a cache miss and within the hourly
-query budget. Deleting a purged user from PostHog runs on the analytics
+query budget. The `/api/v1/collect` proxy forwards browser requests to PostHog's ingest. Deleting a purged user from PostHog runs on the analytics
 Worker, never in the purge's request.
 
 ```
