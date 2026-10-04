@@ -17,4 +17,4 @@ paths = [
 
 [[allowlists]]
 description = "Secret-shaped inputs the error scrubber's vectors must redact"
-paths = ['''tests/fixtures/error-scrub-vectors\.json''']
+paths = ['''^tests/fixtures/error-scrub-vectors\.json$''']

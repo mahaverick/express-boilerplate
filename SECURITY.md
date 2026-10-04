@@ -957,7 +957,8 @@ database is down.
 query`: the SQL text is never sent. The rule families are Postgres
   `Key (col)=(value)` detail, Postgres and JSON input echoes, URL logins,
   query strings, fragments, Bearer, Basic and known-scheme Authorization
-  credentials, `key=value` secrets (a readable word as the value is kept),
+  credentials, `key=value` secrets (only the bare values `undefined`, `null`, `missing`,
+  `true` and `false`, and already-scrubbed placeholders, are kept),
   JWTs, PostHog keys, email addresses (including unicode and `%40` forms),
   and long hex and base64 runs. Each value is then capped at 1024
   characters. The span that records the exception (`span.recordException`)
@@ -969,7 +970,9 @@ query`: the SQL text is never sent. The rule families are Postgres
   value is an array; short non-hex signatures; IP addresses, phone numbers,
   names and UUIDs; short opaque tokens in a path; unusual JWT shapes; and
   email edge forms (no TLD, double-encoded, a fullwidth `@`, a quoted local
-  part). Regex scrubbing is best-effort: keep secrets out of error messages.
+  part). Scrubbing the same text twice is not guaranteed to give the same
+  result for `Basic Credential=…` shapes, or for a secret-shaped token glued
+  to a preceding long hex run. Regex scrubbing is best-effort: keep secrets out of error messages.
 - **Never attached:** request bodies, headers, query strings or cookies;
   a database error's `detail`, `parameters`, `query` or `where`, or the
   bound values a failed query's message embeds; a job's data; an
@@ -991,7 +994,8 @@ query`: the SQL text is never sent. The rule families are Postgres
   id and tenant group, as their other events do. Anything else is sent as
   `server:<OTEL_SERVICE_NAME>` with `$process_person_profile: false`.
 - **`errorId` is not a secret.** Every 5xx body carries it so a user can
-  quote it; it is the event's uuid and names a log line, and grants nothing.
+  quote it; it is the event's uuid and names a log line (a timeline 502's names
+  nothing), and grants nothing.
 - **`/health` is public and names the release.** It answers the image's git
   sha (`APP_VERSION`). That is harmless for this public boilerplate; a
   private fork that treats its sha as sensitive drops the field in

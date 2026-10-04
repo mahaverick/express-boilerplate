@@ -885,8 +885,10 @@ reporter's throttle bounds a run of them.
 
 **`errorId`.** Every 5xx `errorHandler` writes carries an `errorId` in its
 body and on its log line (`Unhandled server error`, `Error after response
-headers were sent`). A reported error's id is its `$exception` uuid; an
-unreported one's names only the log line. `Uncaught exception` and
+headers were sent`), except a `TimelineUnavailableError` 502, whose id names
+nothing: `errorHandler` neither reports nor logs it, because its thrower
+logged before the id existed. A reported error's id is its `$exception`
+uuid; an unreported one's names only the log line. `Uncaught exception` and
 `Unhandled promise rejection` log lines carry the id too. The route
 template on an event comes from `recordRouteTemplate`
 (`route-template.middleware.ts`), mounted ahead of every router: Express
@@ -1041,7 +1043,8 @@ Every success with no payload uses `messageResponse(response, message, status?)`
 which always sends `data: null`, never a bare `{}` and never an omitted `data`.
 
 Every 5xx `errorHandler` writes also carries `errorId`, the id its log line
-carries and, when the error is reported, its `$exception` uuid (see
+carries (except a timeline 502, whose id names nothing) and, when the error
+is reported, its `$exception` uuid (see
 [Error tracking](#error-tracking)). It is optional in the contract: a 5xx
 from a proxy in front of the app never has one.
 

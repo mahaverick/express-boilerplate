@@ -513,8 +513,8 @@ rest of analytics. Express needs no sourcemap upload: `node
 --enable-source-maps` already rewrites stacks to the `.ts` lines.
 
 **Finding an error from its `errorId`.** Every 5xx body carries an
-`errorId`, and so does its `Unhandled server error` log line, so search the
-logs for it first. In PostHog, Error Tracking's UI does not search by event
+`errorId`, and so does its `Unhandled server error` log line (except a
+timeline 502, whose id names nothing), so search the logs for it first. In PostHog, Error Tracking's UI does not search by event
 uuid; run this in SQL insights (HogQL) instead, which also gives the issue
 to open:
 
@@ -524,7 +524,7 @@ from events
 where event = '$exception' and uuid = '<errorId>'
 ```
 
-An id that finds nothing names a log line only: the error was not reported
+An id that finds nothing names a log line only (or, for a timeline 502, nothing): the error was not reported
 (a deliberate 5xx, or error tracking off or throttled) or PostHog has not
 ingested it yet (allow about 15 s).
 
