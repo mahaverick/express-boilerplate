@@ -1,35 +1,24 @@
 /**
  * @file Exercises `runAnalyticsBackfillGroups` against the real per-worker
- * Postgres and the fake PostHog: the exit code and what it prints. What it
- * sends is covered in
+ * Postgres: the exit code and what it prints. What it queues is covered in
  * `tests/integration/services/analytics/analytics-backfill.service.test.ts`.
  */
 import { randomUUID } from 'node:crypto'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { AnalyticsOutboxRepository } from '@/repositories/analytics-outbox.repository'
 import { runAnalyticsBackfillGroups } from '@/scripts/analytics-backfill-groups'
 import { sql } from '@/services/database.service'
-import { startFakePosthog, type FakePosthog } from '../../helpers/fake-posthog'
+import { withMutatedMethod } from '../../helpers/mutate'
 
-const target = vi.hoisted(() => ({ host: 'http://127.0.0.1:1' }))
-
-vi.mock('@/configs/env.config', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/configs/env.config')>()
-  return {
-    ...actual,
-    getEnv: () => ({
-      ...actual.getEnv(),
-      POSTHOG_PROJECT_KEY: 'phc_test_key_not_real',
-      POSTHOG_HOST: target.host,
-    }),
-  }
+vi.mock('@/configs/analytics.config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/configs/analytics.config')>()
+  return { ...actual, isAnalyticsEnabled: () => true }
 })
 
-const state: { posthog?: FakePosthog; tenantId?: string } = {}
+const state: { tenantId?: string } = {}
 
 beforeAll(async () => {
-  state.posthog = await startFakePosthog()
-  target.host = state.posthog.url
-  // At least one tenant, so there is a batch for PostHog to answer.
+  // At least one tenant, so there is a batch to queue.
   const [row] = await sql<{ id: string }[]>`
     insert into tenants (name, slug) values ('Backfill script', ${`backfill-script-${randomUUID()}`})
     returning id`
@@ -37,14 +26,13 @@ beforeAll(async () => {
   state.tenantId = row.id
 })
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks()
-  state.posthog?.respondWith(200)
+  await sql`delete from analytics_outbox`
 })
 
 afterAll(async () => {
   if (state.tenantId) await sql`delete from tenants where id = ${state.tenantId}`
-  await state.posthog?.close()
 })
 
 describe('runAnalyticsBackfillGroups', () => {
@@ -55,18 +43,25 @@ describe('runAnalyticsBackfillGroups', () => {
 
     expect(code).toBe(0)
     expect(stdout).toHaveBeenCalledWith(
-      expect.stringMatching(/^Sent \d+ tenant groups in \d+ batches\.\n$/)
+      expect.stringMatching(
+        /^Queued \d+ tenant group markers in \d+ batches; the analytics Worker sends them\.\n$/
+      )
     )
   })
 
-  it('exits 1 with the reason when PostHog rejects a batch', async () => {
-    state.posthog?.respondWith(400)
+  it('exits 1 with the reason when an insert fails', async () => {
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
 
-    const code = await runAnalyticsBackfillGroups([])
+    await withMutatedMethod(
+      AnalyticsOutboxRepository.prototype,
+      'insertMany',
+      () => Promise.reject(new Error('insert refused')),
+      async () => {
+        expect(await runAnalyticsBackfillGroups([])).toBe(1)
+      }
+    )
 
-    expect(code).toBe(1)
-    expect(stderr).toHaveBeenCalledWith(expect.stringMatching(/^PostHog answered rejected 400/))
+    expect(stderr).toHaveBeenCalledWith('Queuing batch 1 failed; 0 tenants were queued before it\n')
   })
 
   it('exits 1 with the usage line for any argument', async () => {

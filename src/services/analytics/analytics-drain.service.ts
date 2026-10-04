@@ -14,6 +14,7 @@ import {
 } from '@/constants/analytics.constants'
 import type { AnalyticsOutboxRow } from '@/database/models/analytics-outbox.model'
 import { analyticsOutboxRepository } from '@/repositories/analytics-outbox.repository'
+import { resolveGroupMarkers } from '@/services/analytics/analytics-group-marker.service'
 import {
   ENDPOINT_LEVEL_STATUSES,
   sendBatch,
@@ -206,8 +207,11 @@ async function deliver(
  *
  * Claims up to `ANALYTICS_DRAIN_BATCH_SIZE` rows under a
  * `ANALYTICS_LEASE_SECONDS` lease (`claimBatch`, one autocommit statement
- * with `FOR UPDATE SKIP LOCKED`, so two drainers never claim one row), then
- * sends them with no database connection held. Acknowledged rows are
+ * with `FOR UPDATE SKIP LOCKED`, so two drainers never claim one row), fills
+ * in each `$groupidentify` marker with its tenant's current state
+ * (`resolveGroupMarkers`, one more autocommit read), then sends them with no
+ * database connection held. If that read fails, nothing is sent and every
+ * claimed row waits for the lease, as after a retryable answer. Acknowledged rows are
  * deleted; rows PostHog refused alone get one more rejection, and a row at
  * `ANALYTICS_POISON_REJECTIONS` is deleted with an `error` log naming only
  * its event and id. A claimed batch PostHog refuses together with both of its
@@ -225,10 +229,20 @@ export async function drainAnalyticsOutbox(now: Date = new Date()): Promise<Drai
     now
   )
   // RETURNING has no order: send oldest first, so a bisect halves in a stable order.
-  const rows = claimed.toSorted(
+  const sorted = claimed.toSorted(
     (left, right) =>
       left.occurredAt.getTime() - right.occurredAt.getTime() || left.id.localeCompare(right.id)
   )
+  let rows: AnalyticsOutboxRow[]
+  try {
+    rows = await resolveGroupMarkers(sorted)
+  } catch (error) {
+    logger.warn('analytics batch deferred: reading the tenants of its group markers failed', {
+      rows: sorted.length,
+      error,
+    })
+    return { sent: 0, retried: sorted.length, rejected: 0, dropped: 0 }
+  }
   const tally: Tally = {
     acked: [],
     rejected: [],

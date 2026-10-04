@@ -37,6 +37,7 @@ import {
   toSnakeCaseKeys,
 } from '@/services/analytics/analytics-event-builder.service'
 import { logger } from '@/services/logger.service'
+import type { TenantGroupSnapshot } from '@/types/analytics'
 import type { ProductDomainEvent } from '@/types/domain-event'
 import { EMAIL_TEMPLATE_KEYS } from '@/utilities/email-template.utilities'
 
@@ -243,7 +244,7 @@ describe('buildAuditEvents', () => {
     expect(row?.properties).not.toHaveProperty('has_reason')
   })
 
-  it("keeps a tenant's name off the event and puts it on the group identify row", () => {
+  it("keeps a tenant's name off the event and off its group marker", () => {
     const rows = buildAuditEvents(
       auditRow('tenant.created', { name: PII_NAME, slug: 'probe-co' }),
       TRACE,
@@ -262,21 +263,19 @@ describe('buildAuditEvents', () => {
     expect(rows[0]?.properties).not.toHaveProperty('slug')
     expect(JSON.stringify(rows[0])).not.toContain('probe-co')
     expect(JSON.stringify(rows[0])).not.toContain(PII_NAME)
+    // A marker: the drainer adds `$group_set` from the tenant row when it sends it.
     expect(rows[1]).toEqual({
       event: '$groupidentify',
       distinctId: `$tenant_${TENANT_ID}`,
       occurredAt: OCCURRED_AT,
       properties: {
         source: 'audit',
-        access: 'member',
-        app: 'api',
         trace_id: TRACE.traceId,
-        span_id: TRACE.spanId,
         $group_type: 'tenant',
         $group_key: TENANT_ID,
-        $group_set: { name: PII_NAME, status: 'active', created_at: OCCURRED_AT.toISOString() },
       },
     })
+    expect(JSON.stringify(rows[1])).not.toContain(PII_NAME)
   })
 
   it("adds a $set row for the affected user's staff status, not the actor's", () => {
@@ -376,10 +375,9 @@ describe('session attribution', () => {
 
   it('never adds $session_id to a $groupidentify, and sends no person-profile flag', () => {
     const row = buildTenantGroupIdentify(
-      { id: TENANT_ID, name: 'Acme', status: 'active', createdAt: OCCURRED_AT, isPlatform: false },
+      { id: TENANT_ID },
       { ...session, userId: ACTOR_ID },
       'audit',
-      'member',
       OCCURRED_AT
     )
     expect(row.properties).not.toHaveProperty('$session_id')
@@ -454,24 +452,31 @@ describe('session attribution', () => {
 })
 
 describe('buildTenantGroupIdentify', () => {
-  it('builds the row on its own, for a caller with no audit row', () => {
-    const row = buildTenantGroupIdentify(
-      {
-        id: TENANT_ID,
-        name: 'Acme',
-        status: 'suspended',
-        createdAt: OCCURRED_AT,
-        isPlatform: false,
-      },
-      {},
-      'audit',
-      'system',
-      OCCURRED_AT
-    )
-    expect(row.properties).toMatchObject({
-      $group_key: TENANT_ID,
-      $group_set: { name: 'Acme', status: 'suspended' },
+  it('builds a marker with only the group, its source and no trace, for a caller with no audit row', () => {
+    // A full snapshot, as the backfill passes: nothing but its id may be stored.
+    const tenant: TenantGroupSnapshot = {
+      id: TENANT_ID,
+      name: 'Acme',
+      status: 'suspended',
+      createdAt: OCCURRED_AT,
+      isPlatform: false,
+    }
+    const row = buildTenantGroupIdentify(tenant, {}, 'backfill', OCCURRED_AT)
+    expect(row).toEqual({
+      event: '$groupidentify',
+      distinctId: `$tenant_${TENANT_ID}`,
+      occurredAt: OCCURRED_AT,
+      properties: { source: 'backfill', $group_type: 'tenant', $group_key: TENANT_ID },
     })
+    expect(JSON.stringify(row)).not.toContain('Acme')
+  })
+
+  it('carries the trace id but no span, session, access or app', () => {
+    const row = buildTenantGroupIdentify({ id: TENANT_ID }, TRACE, 'audit', OCCURRED_AT)
+    expect(
+      Object.keys(row.properties).toSorted((left, right) => left.localeCompare(right))
+    ).toEqual(['$group_key', '$group_type', 'source', 'trace_id'])
+    expect(row.properties.trace_id).toBe(TRACE.traceId)
   })
 })
 

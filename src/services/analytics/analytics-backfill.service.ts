@@ -1,24 +1,25 @@
 /**
- * @file The groups backfill: every tenant's `$groupidentify` (name, status,
- * created_at), sent straight to PostHog page by page with `sendBatch`, never
- * through the outbox, so a run reports at once whether PostHog took it.
- * Idempotent: a second run sets the same properties again. Run once per
+ * @file The groups backfill: one `$groupidentify` marker per tenant row,
+ * archived and soft-deleted ones included, queued in the analytics outbox
+ * page by page. The drainer fills each marker with the tenant's state when
+ * it sends it (`resolveGroupMarkers`), so the backfill never races a rename:
+ * whichever marker reaches PostHog last carries the current state.
+ * Idempotent: a second run queues the same markers again. Run once per
  * environment after enabling analytics (`pnpm analytics:backfill-groups`);
  * after that, the audit forwarder keeps the groups current.
  */
-import { randomUUID } from 'node:crypto'
 import { isAnalyticsEnabled } from '@/configs/analytics.config'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { buildTenantGroupIdentify } from '@/services/analytics/analytics-event-builder.service'
-import { sendBatch, toPosthogBatchEvent } from '@/services/analytics/posthog-batch.service'
+import { enqueueAnalyticsOrThrow } from '@/services/analytics/analytics-outbox.service'
 
 /**
- * Tenants per `/batch/` request.
+ * Tenants per outbox insert.
  */
 export const BACKFILL_PAGE_SIZE = 100
 
 /**
- * What a completed backfill sent.
+ * What a completed backfill queued.
  */
 export interface BackfillResult {
   tenants: number
@@ -28,11 +29,11 @@ export interface BackfillResult {
 const tenantRepository = new TenantRepository()
 
 /**
- * Send every tenant's group properties to PostHog.
- * @param pageSize - Tenants per batch.
- * @returns How many tenants and batches were sent.
- * @throws {Error} When analytics is not configured, or when PostHog does not
- *   acknowledge a batch; the pages before it were sent, none after it.
+ * Queue a group marker for every tenant.
+ * @param pageSize - Tenants per insert.
+ * @returns How many tenants and inserts were queued.
+ * @throws {Error} When analytics is not configured, or when an insert fails;
+ *   the pages before it were queued, none after it.
  */
 export async function backfillTenantGroups(
   pageSize: number = BACKFILL_PAGE_SIZE
@@ -44,20 +45,15 @@ export async function backfillTenantGroups(
   while (hasMore) {
     const page = await tenantRepository.listGroupSnapshotsAfter(afterId, pageSize)
     if (page.length === 0) break
-    const sentAt = new Date()
-    const answer = await sendBatch(
-      page.map((tenant) =>
-        toPosthogBatchEvent({
-          ...buildTenantGroupIdentify(tenant, {}, 'backfill', 'system', sentAt),
-          id: randomUUID(),
-          occurredAt: sentAt,
-        })
+    const queuedAt = new Date()
+    try {
+      await enqueueAnalyticsOrThrow(
+        page.map((tenant) => buildTenantGroupIdentify(tenant, {}, 'backfill', queuedAt))
       )
-    )
-    if (answer.kind !== 'ack') {
-      const status = answer.status === undefined ? '' : ` ${String(answer.status)}`
+    } catch (error) {
       throw new Error(
-        `PostHog answered ${answer.kind}${status} to batch ${String(result.batches + 1)}; ${String(result.tenants)} tenants were sent before it`
+        `Queuing batch ${String(result.batches + 1)} failed; ${String(result.tenants)} tenants were queued before it`,
+        { cause: error }
       )
     }
     result.tenants += page.length

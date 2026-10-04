@@ -20,6 +20,9 @@ import { TenantInvitationRepository } from '@/repositories/tenant-invitation.rep
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
+import { currentAnalyticsContext } from '@/services/analytics/analytics-context.service'
+import { buildTenantGroupIdentify } from '@/services/analytics/analytics-event-builder.service'
+import { enqueueAnalytics } from '@/services/analytics/analytics-outbox.service'
 import { record } from '@/services/audit.service'
 import { withTransaction } from '@/services/database.service'
 import { platformTenantOrThrow } from '@/services/platform-user.service'
@@ -112,8 +115,10 @@ export async function purgeUser(actor: Actor, userId: string, reason: string): P
 /**
  * Permanently delete an archived customer tenant: delete its own audit
  * entries (the customer's data) and its email messages (which carry its
- * name), then the row (settings, memberships and invitations cascade), and
- * record `tenant.purged` in the platform tenant.
+ * name), then the row (settings, memberships and invitations cascade),
+ * record `tenant.purged` in the platform tenant, and queue a `$groupidentify`
+ * marker for it, which the drainer sends with the group's name cleared and
+ * its status `purged` (PostHog cannot reliably delete a group).
  * `memberCount` counts the members whose accounts are not soft-deleted.
  * @param actor - The platform owner, recently authenticated.
  * @param tenantId - The tenant.
@@ -149,6 +154,11 @@ export async function purgeTenant(actor: Actor, tenantId: string, reason: string
         targetId: tenantId,
         metadata: { reason, name: found.name, slug: found.slug, memberCount: members.length },
       },
+      tx
+    )
+    // The drainer finds no tenant row for this marker, so it clears the group's name in PostHog.
+    await enqueueAnalytics(
+      [buildTenantGroupIdentify({ id: tenantId }, currentAnalyticsContext(), 'audit', new Date())],
       tx
     )
   })

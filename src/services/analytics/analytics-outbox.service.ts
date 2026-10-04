@@ -3,7 +3,9 @@
  * action: inside a transaction every write runs in its own savepoint, so a
  * failed insert rolls back only itself and the caller's transaction stays
  * usable; on the pool it is a plain insert. Either way a failure is logged
- * at warn and swallowed. Nothing here calls PostHog; the drainer does.
+ * at warn and swallowed. The one exception is `enqueueAnalyticsOrThrow`,
+ * for the groups backfill, which runs in no user's action and reports
+ * whether it queued every row. Nothing here calls PostHog; the drainer does.
  */
 import { PgTransaction } from 'drizzle-orm/pg-core'
 import { isAnalyticsEnabled } from '@/configs/analytics.config'
@@ -122,6 +124,19 @@ export async function enqueueAnalytics(
       error
     )
   }
+}
+
+/**
+ * Write built rows to the outbox on the pool and let a failure throw. Only
+ * for work no user's action waits on (the groups backfill); every other
+ * writer goes through `enqueueAnalytics`. The caller checks
+ * `isAnalyticsEnabled()` first. A no-op for an empty list.
+ * @param rows - The built events.
+ * @returns Resolves once the rows are written.
+ * @throws {Error} The insert's error.
+ */
+export async function enqueueAnalyticsOrThrow(rows: NewAnalyticsOutboxRow[]): Promise<void> {
+  await analyticsOutboxRepository.insertMany(rows)
 }
 
 /**

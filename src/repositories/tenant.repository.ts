@@ -265,6 +265,32 @@ export class TenantRepository extends BaseRepository<(typeof tenantModel)['_']['
   }
 
   /**
+   * The analytics group snapshot of each of `ids` that still has a row,
+   * archived and soft-deleted ones included. Cross-tenant on purpose: only
+   * the analytics drainer calls it, to fill in `$groupidentify` markers at
+   * send time. A purged tenant has no row, so it is missing from the result.
+   * @param ids - Tenant ids; an empty list runs no query.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns One snapshot per tenant found, in no particular order.
+   */
+  async listGroupSnapshotsByIds(
+    ids: string[],
+    executor: DbExecutor = db
+  ): Promise<TenantGroupSnapshot[]> {
+    if (ids.length === 0) return []
+    return executor
+      .select({
+        id: tenantModel.id,
+        name: tenantModel.name,
+        status: tenantModel.lifecycleState,
+        createdAt: tenantModel.createdAt,
+        isPlatform: tenantModel.isPlatform,
+      })
+      .from(tenantModel)
+      .where(inArray(tenantModel.id, ids))
+  }
+
+  /**
    * Create a tenant, its settings row, and its creator's `'owner'`
    * membership, all in one transaction. A failure at any point (most often a
    * slug colliding with `tenants_slug_unique`) rolls back all three. A passed-in
