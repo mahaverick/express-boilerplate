@@ -8,6 +8,7 @@ import { STATUS_CODES } from 'node:http'
 import { type NextFunction, type Request, type Response } from 'express'
 import { HttpError } from '@/errors/http-error'
 import { redactedForLog } from '@/errors/postgres-errors'
+import { TimelineUnavailableError } from '@/errors/timeline-errors'
 import { logger } from '@/services/logger.service'
 import { errorResponse } from '@/utilities/response.utilities'
 
@@ -79,8 +80,8 @@ export function errorHandler(
   const httpError = error instanceof HttpError ? error : undefined
   const statusCode = httpError?.statusCode ?? clientStatusOf(error) ?? 500
 
-  // Masked from the client, so logged here; redacted, as a failed write carries its values.
-  if (statusCode >= 500) {
+  // Masked, so logged here (redacted: a failed write carries its values); a timeline 502's thrower logged it.
+  if (statusCode >= 500 && !(error instanceof TimelineUnavailableError)) {
     logger.error('Unhandled server error', { error: redactedForLog(error) })
   }
 

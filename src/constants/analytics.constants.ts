@@ -88,3 +88,10 @@ export const ANALYTICS_SEND_TIMEOUT_MS = 10_000
  * `$process_person_profile: false`, so PostHog creates no person for it.
  */
 export const SYSTEM_DISTINCT_ID = 'system'
+
+/**
+ * The event property that carries a server event's signature
+ * (analytics-signature.service.ts). The drainer adds it at send time; the
+ * timelines trust a row's server fields only when it verifies.
+ */
+export const ANALYTICS_SIGNATURE_PROPERTY = 'server_sig'
