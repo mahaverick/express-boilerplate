@@ -499,6 +499,55 @@ const EnvSchema = z.object({
       'Most analytics events one drain claims and sends in one PostHog batch. At least 1, at most 1000. Defaults to 500.'
     ),
   /**
+   * Optional: without it and POSTHOG_PROJECT_ID the staff timelines answer
+   * "not configured" and queued person deletions wait
+   * (analytics.config.ts `isTimelineEnabled`).
+   */
+  POSTHOG_PERSONAL_API_KEY: z
+    .string()
+    .startsWith('phx_', 'Use a PostHog personal API key, which starts with phx_')
+    .optional()
+    .describe(
+      'PostHog personal API key (phx_…) that the staff timelines read events with and user purges delete PostHog persons with. Give it only the scopes query:read, person:write and group:read, and create it on a service account rather than a person. Set it together with POSTHOG_PROJECT_ID; without both, the timelines answer "not configured" and queued person deletions wait.'
+    ),
+  POSTHOG_PROJECT_ID: z.coerce
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe(
+      'Numeric id of the PostHog project that POSTHOG_PERSONAL_API_KEY reads from and deletes in: the project POSTHOG_PROJECT_KEY reports to. Set it together with POSTHOG_PERSONAL_API_KEY.'
+    ),
+  /**
+   * No schema default: it derives from POSTHOG_HOST, which `.default()` cannot
+   * read, so `posthogAppHost` (analytics.config.ts) applies it.
+   */
+  POSTHOG_APP_HOST: z
+    .url({ protocol: /^https?$/ })
+    .refine(hasNoQueryOrFragment, NO_QUERY_OR_FRAGMENT)
+    .optional()
+    .describe(
+      'PostHog app origin that the timeline queries and person deletions call and that staff deep links open, with no trailing path. Unset derives it from POSTHOG_HOST: https://eu.posthog.com for an eu. host, otherwise https://us.posthog.com. Set it for a self-hosted PostHog. Tests point it at a fake.'
+    ),
+  TIMELINE_QUERY_BUDGET_PER_HOUR: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(100_000)
+    .default(1200)
+    .describe(
+      'Most PostHog queries the staff timelines make in any rolling hour, counted in Redis across every replica; a cached page spends none. PostHog allows 2400 query calls an hour for the whole organization, its own UI included. At least 1, at most 100000. Defaults to 1200.'
+    ),
+  TIMELINE_REQUESTS_PER_MINUTE: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(1000)
+    .default(20)
+    .describe(
+      'Timeline requests one staff user may make a minute, cached or not, before the API answers 429. At least 1, at most 1000. Defaults to 20.'
+    ),
+  /**
    * `redisKey()` (redis.service.ts) joins this and each part with `:`, so a
    * trailing colon would double it.
    */
