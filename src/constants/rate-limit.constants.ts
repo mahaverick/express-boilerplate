@@ -48,7 +48,7 @@ export interface RateLimiterSpec {
 }
 
 /**
- * The 26 rate limiters this API defines, by name.
+ * The 27 rate limiters this API defines, by name.
  */
 export type RateLimitName =
   | 'register'
@@ -77,6 +77,7 @@ export type RateLimitName =
   | 'emailWebhook'
   | 'emailWebhookRejected'
   | 'analyticsProxy'
+  | 'platformTimeline'
 
 const RATE_LIMITED_MESSAGE = 'Too many attempts. Please try again later.'
 
@@ -146,7 +147,7 @@ export function emailWebhookProviderRateLimitKey(request: Request): string {
 }
 
 /**
- * The 26 rate-limit specs this API enforces, each with the reason for its
+ * The 27 rate-limit specs this API enforces, each with the reason for its
  * window, limit and key. `name` is the live Redis key prefix
  * (`redisKey('rl', name)`): changing one resets that limiter's counters in
  * every deployment, and tests/unit/constants/rate-limit.constants.test.ts
@@ -485,6 +486,20 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     windowMs: 60_000,
     limit: 3000,
     keyBy: 'ip',
+    message: RATE_LIMITED_MESSAGE,
+  },
+  /**
+   * Keyed on the caller's id: only staff admins reach it, past requireAuth
+   * and requirePlatformRole. Every request counts, cached or not; the
+   * project-wide hourly query budget (timeline-budget.service.ts) bounds the
+   * PostHog queries behind it. The router overrides `limit` with
+   * `TIMELINE_REQUESTS_PER_MINUTE`; 20 is that variable's default.
+   */
+  platformTimeline: {
+    name: 'platform-timeline',
+    windowMs: 60_000,
+    limit: 20,
+    keyBy: 'user',
     message: RATE_LIMITED_MESSAGE,
   },
 }

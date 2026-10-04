@@ -2,6 +2,7 @@ import { DrizzleQueryError } from 'drizzle-orm'
 import { type Response } from 'express'
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { HttpError } from '@/errors/http-error'
+import { TimelineUnavailableError } from '@/errors/timeline-errors'
 import { errorHandler } from '@/middlewares/error.middleware'
 import { logger } from '@/services/logger.service'
 import { requestContextStore } from '@/services/request-context.service'
@@ -69,6 +70,27 @@ describe('errorHandler', () => {
     errorHandler(new HttpError('invalid', 422), {} as never, response, vi.fn())
 
     expect(body()).not.toHaveProperty('errors')
+  })
+
+  it('answers a TimelineUnavailableError 502 with its code and a masked message, without logging it again', () => {
+    const { response, body, status } = mockResponse()
+    errorHandler(new TimelineUnavailableError(), {} as never, response, vi.fn())
+
+    expect(status).toHaveBeenCalledWith(502)
+    expect(body()).toMatchObject({
+      success: false,
+      message: 'Internal server error',
+      statusCode: 502,
+      code: 'TIMELINE_UNAVAILABLE',
+    })
+    expect(loggerError).not.toHaveBeenCalled()
+  })
+
+  it('still logs a plain HttpError 502', () => {
+    const { response } = mockResponse()
+    errorHandler(new HttpError('upstream', 502), {} as never, response, vi.fn())
+
+    expect(loggerError).toHaveBeenCalledWith('Unhandled server error', expect.anything())
   })
 
   it('includes a machine-readable code when HttpError carries one', () => {

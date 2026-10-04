@@ -123,7 +123,7 @@ refuses a non-JSON body with 415. See
 | `pnpm platform:grant -- <e> <role>` | Gives a platform-tenant role; see below.                                                   |
 | `pnpm email:fire-event <id> <type>` | Signs and posts a fake provider event (local only); see [Email tracking](#email-tracking). |
 | `pnpm onboarding:reconcile`         | Re-derives tracked tenants' automatic onboarding steps; see [Onboarding](#onboarding).     |
-| `pnpm analytics:backfill-groups`    | Sends every tenant's PostHog group properties; see [Analytics](#analytics-posthog).        |
+| `pnpm analytics:backfill-groups`    | Queues every tenant's PostHog group properties; see [Analytics](#analytics-posthog).       |
 | `pnpm commit`                       | Interactive conventional-commit prompt.                                                    |
 
 `pnpm platform:grant -- <email> <role>` gives an existing user with a verified
@@ -335,8 +335,10 @@ trace, and a restored old event leaves a stuck tenant stuck.
 ## Analytics (PostHog)
 
 Analytics is off until `POSTHOG_PROJECT_KEY` is set: no outbox row is
-written, no analytics Worker starts, and `/api/v1/collect/*` answers 503
-`service_unavailable`. Server events and the browser share one PostHog
+written, no drain runs, and `/api/v1/collect/*` answers 503
+`service_unavailable`. With only `POSTHOG_PERSONAL_API_KEY` and
+`POSTHOG_PROJECT_ID` set, the analytics Worker still starts, to delete purged
+users from PostHog. Server events and the browser share one PostHog
 project per environment, keyed by user id (`distinct_id`) and the `tenant`
 group.
 
@@ -349,12 +351,14 @@ group.
    follows the ingest host's region; `POSTHOG_ASSETS_HOST` overrides it.
    Set the same key as the `POSTHOG_KEY` container env var of react and apex.
    A deployment that runs its workers in separate pods must give those pods
-   `POSTHOG_PROJECT_KEY` too: without it no analytics Worker starts there, rows
+   `POSTHOG_PROJECT_KEY` too: without it the drain does not run there (and no analytics Worker
+   starts unless the personal key and project id are set), so rows
    accumulate and are pruned after the retention window with only a `warn` log.
 3. Deploy, then run `pnpm analytics:backfill-groups` once, so tenants that
-   existed before carry their name, status and creation date. It sends
-   straight to PostHog and exits 1 if PostHog refuses a batch; a second run
-   is harmless.
+   existed before carry their name, status and creation date. It queues one
+   `$groupidentify` marker per tenant in the outbox, which the analytics
+   Worker sends with each tenant's state at send time, and exits 1 if a
+   batch could not be queued; a second run is harmless.
 4. If react runs with the container env `ANALYTICS_CONSENT_MODE=required`, enable
    "Cookieless server hash mode" in the project settings.
 5. Set `TRUST_PROXY` to the number of proxies in front of this app, counting
@@ -388,19 +392,22 @@ plain property and join no group, because the recipient is not a member.
 `distinct_id` and `$session_id` are pseudonymous identifiers. `$session_id`
 is sent only on an event of the user whose browser sent it (a sign-in,
 sign-up or sign-out counts, as the request carries no access token); `$groupidentify`, a
-`$set` for another user and `system` events never carry it. A purge does not reach PostHog: see
+`$set` for another user and `system` events never carry it. A user purge
+deletes the person, their events and their recordings from PostHog an hour
+later, once `POSTHOG_PERSONAL_API_KEY` and `POSTHOG_PROJECT_ID` are set, and a
+tenant purge clears the group's name: see
 [SECURITY.md](SECURITY.md#purge-the-only-hard-delete) for what stays there.
 
 **How it is delivered.** The request that causes an event writes one
 `analytics_outbox` row in its own transaction (in a savepoint, so a failed
-insert never fails the request) and never calls PostHog. The analytics
+insert never fails the request) and never calls PostHog's API. The analytics
 Worker drains the outbox every `ANALYTICS_DRAIN_INTERVAL_MS` (5 s) in batches
-of `ANALYTICS_DRAIN_BATCH_SIZE` (500) and deletes a row only once PostHog
-acknowledged it. While PostHog is down or slow, rows wait and are retried
-with a backoff of up to 10 minutes; rows still undelivered after
-`ANALYTICS_OUTBOX_RETENTION_DAYS` (7) are dropped by the daily retention
-purge with a `warn` log (`analyticsOutboxDropped`). A row PostHog rejects
-alone three times is dropped with an `error` log naming its event and id.
+of `ANALYTICS_DRAIN_BATCH_SIZE` (500). A row leaves the outbox when PostHog
+acknowledges it, by retention after `ANALYTICS_OUTBOX_RETENTION_DAYS` (7), by
+poison drop after three rejections, by user purge, or by the deletion tick.
+Undelivered rows retry with a backoff of up to 10 minutes and are dropped by
+retention with a `warn` log (`analyticsOutboxDropped`). Poison-dropped rows are
+logged as `error` naming the event and id.
 If PostHog refuses a claimed batch, both of its halves, and the first row of
 each half sent alone, it is treated as a fault of the endpoint, not of any
 row: no row is counted, the rows wait and are retried, and the drain logs one
@@ -433,6 +440,65 @@ silent for 30 s is answered 504. It has its own limiter
 `Cross-Origin-Resource-Policy: same-site`, so a frontend on a different
 _site_ from the API cannot load `/api/v1/collect/static/*` scripts; the same
 origin through the frontends' nginx, as shipped, is unaffected.
+
+### Staff timelines
+
+`GET /api/v1/platform/users/:id/timeline` and
+`GET /api/v1/platform/tenants/:id/timeline` (platform admin and up) show
+Apex what a user or a tenant did, browser and server events together, read
+from PostHog with a personal API key. They are off until both
+`POSTHOG_PERSONAL_API_KEY` and `POSTHOG_PROJECT_ID` are set, and answer
+`{ configured: false }` until then; boot warns when only one is set.
+Independent of `POSTHOG_PROJECT_KEY`.
+
+**Turning them on, once per environment:**
+
+1. In PostHog, create a personal API key with only the scopes `query:read`,
+   `person:write` and `group:read`, owned by a service account rather than
+   a person.
+2. Set `POSTHOG_PERSONAL_API_KEY` and `POSTHOG_PROJECT_ID` (the numeric id
+   of the project `POSTHOG_PROJECT_KEY` reports to). The app host follows
+   the ingest host's region (`https://us.posthog.com` or
+   `https://eu.posthog.com`); set `POSTHOG_APP_HOST` for a self-hosted
+   PostHog. The apex image needs nothing new. Set them on the worker pods
+   too: the PostHog deletion of purged users runs on the analytics Worker,
+   and boot warns while deletions wait for them.
+3. Give a PostHog seat to every staff member who will watch replays: Apex
+   links to PostHog's replay, person and group pages and embeds nothing.
+4. Optional: run `pnpm analytics:backfill-groups` once, so existing tenants'
+   group properties converge through markers. It needs `POSTHOG_PROJECT_KEY`
+   too and fails without it.
+
+**What a request does.** Query `range` is `24h`, `7d` (default), `30d` or
+`90d`; `view` is `all` (default, pageviews and clicks included) or `key`
+(no `$` events); `before` is the opaque `nextCursor` of the page before.
+The server sends one of two fixed HogQL queries, with every id in its
+placeholder values, and returns at most 100 rows built from a fixed property
+allowlist (a page URL is cut to its pathname); a page can hold fewer once
+forged and duplicate rows are removed, and `nextCursor` says whether another
+follows. Every request, a cursor page
+included, writes `user.timeline_viewed` or `tenant.timeline_viewed`, at most
+once per staff member, target and view every 10 minutes
+(`TIMELINE_AUDIT_THROTTLE_SECONDS`), before the 30 s Redis cache is read, so
+a cached page is audited too; with Redis down every request is audited. The
+audit fails closed: if its write fails, so does the read, with a 500. A
+cache miss spends one of `TIMELINE_QUERY_BUDGET_PER_HOUR` (1200) PostHog
+queries per rolling hour, counted across replicas; PostHog allows 2400 an
+hour for the whole organization, its own UI included. Each staff member may
+make `TIMELINE_REQUESTS_PER_MINUTE` (20) timeline requests a minute. A PostHog
+error, a timeout (15 s), a spent budget or, for a tenant timeline, a project
+without a `tenant` group type answers 502 `TIMELINE_UNAVAILABLE`; a 401, 403
+or 404 from PostHog also logs `Timeline key or project misconfigured` at
+`error`. Events reach a timeline only after PostHog has ingested them, and up
+to 30 s later still while a cached page lives.
+
+**Signed server events.** PostHog's project key is public, so anyone can
+send an event under any name. The timeline trusts a row's `source`,
+`access` and target only when its `server_sig` verifies; any other row is
+shown as a browser event, and one that names the user or tenant only
+through a forged target is dropped. Rotating `SESSION_SECRET` makes older
+events show as unverified in timelines: they still appear, without server
+badges.
 
 ## Make this yours
 

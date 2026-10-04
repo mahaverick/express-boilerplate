@@ -2,11 +2,13 @@
  * @file Query access to `analytics_outbox`. It does not extend
  * `BaseRepository`: a row is never updated by a user or soft-deleted. Writes
  * come from the analytics outbox service; claims, acks, rejections and pruning
- * come from the drainer and the retention job. Every drainer method here is
+ * come from the drainer and the retention job, and a user's rows are deleted
+ * by the user purge (`deleteForDistinctId`) and by the PostHog deletion tick
+ * (`deleteForDistinctIds`). Every drainer method here is
  * one autocommit statement, so no pool connection is held while the drainer
  * talks to PostHog.
  */
-import { inArray, isNull, lt, or, sql } from 'drizzle-orm'
+import { eq, inArray, isNull, lt, or, sql } from 'drizzle-orm'
 import {
   analyticsOutboxModel,
   type AnalyticsOutboxRow,
@@ -141,6 +143,35 @@ export class AnalyticsOutboxRepository {
       .delete(outbox)
       .where(sql`${outbox.rejections} >= ${maxRejections}`)
       .returning({ id: outbox.id, event: outbox.event })
+  }
+
+  /**
+   * Delete every row of one distinct id, sent or not, leased or not: the
+   * user purge calls it in its transaction, so no event of a purged user is
+   * sent after PostHog deletes the person (which would create them again).
+   * @param distinctId - The purged user's id.
+   * @param executor - The purge's transaction.
+   * @returns How many rows were deleted.
+   */
+  async deleteForDistinctId(distinctId: string, executor: DbExecutor): Promise<number> {
+    const result = await executor.delete(outbox).where(eq(outbox.distinctId, distinctId))
+    return result.count
+  }
+
+  /**
+   * Delete every row of several distinct ids in one statement, sent or not,
+   * leased or not. The PostHog deletion job calls it for the users it is
+   * about to delete, to remove an event a request still in flight at the
+   * purge committed after the purge's own delete: drained after PostHog's
+   * deletion, it would create the person again.
+   * @param distinctIds - The purged users' ids.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns How many rows were deleted.
+   */
+  async deleteForDistinctIds(distinctIds: string[], executor: DbExecutor = db): Promise<number> {
+    if (distinctIds.length === 0) return 0
+    const result = await executor.delete(outbox).where(inArray(outbox.distinctId, distinctIds))
+    return result.count
   }
 
   /**

@@ -37,6 +37,8 @@ const REASON = 'Erasure request, ticket 9001'
 
 afterEach(async () => {
   await truncateAuditLogs()
+  // Every user purge queues a PostHog deletion; the table is never pruned.
+  await sql`delete from analytics_deletions`
   if (messageIds.length > 0) await sql`delete from email_messages where id = any(${messageIds})`
   messageIds.length = 0
   if (suppressedAddresses.length > 0) {

@@ -184,14 +184,13 @@ describe('record forwards an audit entry to the outbox', () => {
         $groups: { tenant: tenantId },
       },
     })
-    // Read through the savepoint, so the group sees the rename the same transaction made.
+    // A marker only: the drainer reads the tenant's state, the rename included, when it sends it.
     expect(rows[1]).toMatchObject({
       distinctId: `$tenant_${tenantId}`,
-      properties: {
-        $group_key: tenantId,
-        $group_set: { name: 'Renamed Co', status: 'active' },
-      },
+      properties: { source: 'audit', $group_type: 'tenant', $group_key: tenantId },
     })
+    expect(rows[1]?.properties).not.toHaveProperty('$group_set')
+    expect(JSON.stringify(rows[1])).not.toContain('Renamed Co')
   })
 
   it('loses the outbox rows with the audit row when the transaction rolls back', async () => {

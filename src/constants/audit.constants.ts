@@ -8,6 +8,7 @@ import {
   ONBOARDING_STEP_KEY_PATTERN,
 } from '@/constants/onboarding.constants'
 import { MEMBERSHIP_ROLES } from '@/constants/tenant.constants'
+import { TIMELINE_RANGES, TIMELINE_VIEWS } from '@/constants/timeline.constants'
 import { EMAIL_TEMPLATE_KEYS } from '@/utilities/email-template.utilities'
 import { EMAIL_DOMAIN_PATTERN } from '@/utilities/email.utilities'
 
@@ -75,6 +76,14 @@ const reason = z.string().min(1).max(500)
  * An onboarding step key, in the registry's shape.
  */
 const stepKey = z.string().max(ONBOARDING_STEP_KEY_MAX_LENGTH).regex(ONBOARDING_STEP_KEY_PATTERN)
+
+/**
+ * The range and view a staff member opened a timeline with.
+ */
+const timelineView = z.strictObject({
+  range: z.enum(TIMELINE_RANGES),
+  view: z.enum(TIMELINE_VIEWS),
+})
 
 /**
  * The most reminder emails one entry lists: one per active owner, bounded so
@@ -203,6 +212,9 @@ export const AUDIT_ACTIONS = {
       messageIds: z.array(id).max(MAX_REMINDER_RECIPIENTS),
     }),
   },
+  // A staff member read a user's or a tenant's timeline; platform-timeline.service.ts throttles it.
+  'user.timeline_viewed': { target: 'user', metadata: timelineView },
+  'tenant.timeline_viewed': { target: 'tenant', metadata: timelineView },
 } as const satisfies Record<string, { target: AuditTargetType; metadata: z.ZodType }>
 
 /**

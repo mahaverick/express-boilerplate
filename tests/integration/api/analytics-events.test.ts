@@ -373,7 +373,7 @@ describe('sign up, sign in, create a tenant, invite, sign up through the invitat
         },
       ])
 
-      // The tenant's group properties, set server-side when it was created.
+      // The tenant's group properties, read from the tenant row when the drainer sent the marker.
       expect(events.filter((event) => event.event === '$groupidentify')).toMatchObject([
         {
           properties: {
@@ -384,8 +384,10 @@ describe('sign up, sign in, create a tenant, invite, sign up through the invitat
         },
       ])
 
-      // Every traced event has the server span's own id beside the client's trace id.
-      const tracedEvents = events.filter((sent) => sent.properties.trace_id !== undefined)
+      // Every traced event but a group marker (which carries the trace only) has the server span's own id beside the client's trace id.
+      const tracedEvents = events.filter(
+        (sent) => sent.properties.trace_id !== undefined && sent.event !== '$groupidentify'
+      )
       expect(tracedEvents.length).toBeGreaterThan(0)
       for (const event of tracedEvents) expect(event.properties.span_id).toMatch(HEX_16)
 

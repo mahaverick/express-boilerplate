@@ -501,6 +501,64 @@ describe('PostHog analytics variables', () => {
   })
 })
 
+describe('PostHog timeline variables', () => {
+  it('leaves the timelines unconfigured by default, with the budget and limiter defaults', () => {
+    const env = parseEnv(valid)
+    expect(env.POSTHOG_PERSONAL_API_KEY).toBeUndefined()
+    expect(env.POSTHOG_PROJECT_ID).toBeUndefined()
+    expect(env.POSTHOG_APP_HOST).toBeUndefined()
+    expect(env.TIMELINE_QUERY_BUDGET_PER_HOUR).toBe(1200)
+    expect(env.TIMELINE_REQUESTS_PER_MINUTE).toBe(20)
+  })
+
+  it('accepts a phx_ key and a numeric project id, and treats empty values as unset', () => {
+    const env = parseEnv({
+      ...valid,
+      POSTHOG_PERSONAL_API_KEY: 'phx_test_key_not_real',
+      POSTHOG_PROJECT_ID: '12345',
+    })
+    expect(env.POSTHOG_PERSONAL_API_KEY).toBe('phx_test_key_not_real')
+    expect(env.POSTHOG_PROJECT_ID).toBe(12_345)
+    const empty = parseEnv({ ...valid, POSTHOG_PERSONAL_API_KEY: '', POSTHOG_PROJECT_ID: '' })
+    expect(empty.POSTHOG_PERSONAL_API_KEY).toBeUndefined()
+    expect(empty.POSTHOG_PROJECT_ID).toBeUndefined()
+  })
+
+  it('refuses a key that is not a personal API key', () => {
+    for (const value of ['phc_test_key_not_real', 'test_key_not_real']) {
+      expect(() => parseEnv({ ...valid, POSTHOG_PERSONAL_API_KEY: value })).toThrow(
+        'POSTHOG_PERSONAL_API_KEY'
+      )
+    }
+  })
+
+  it('refuses a project id that is not a positive whole number', () => {
+    for (const value of ['0', '-1', '1.5', 'project']) {
+      expect(() => parseEnv({ ...valid, POSTHOG_PROJECT_ID: value })).toThrow('POSTHOG_PROJECT_ID')
+    }
+  })
+
+  it('accepts an http app host, and refuses one that is not an http(s) URL or carries a query', () => {
+    expect(parseEnv({ ...valid, POSTHOG_APP_HOST: 'http://127.0.0.1:9100' }).POSTHOG_APP_HOST).toBe(
+      'http://127.0.0.1:9100'
+    )
+    for (const value of ['us.posthog.com', 'mailto:ops@example.test', 'https://x.test/#a']) {
+      expect(() => parseEnv({ ...valid, POSTHOG_APP_HOST: value })).toThrow('POSTHOG_APP_HOST')
+    }
+  })
+
+  it.each([
+    ['TIMELINE_QUERY_BUDGET_PER_HOUR', '1', '100000', ['0', '100001', '1.5']],
+    ['TIMELINE_REQUESTS_PER_MINUTE', '1', '1000', ['0', '1001', '1.5']],
+  ] as const)('bounds %s to [%s, %s]', (name, low, high, rejected) => {
+    expect(parseEnv({ ...valid, [name]: low })[name]).toBe(Number(low))
+    expect(parseEnv({ ...valid, [name]: high })[name]).toBe(Number(high))
+    for (const value of rejected) {
+      expect(() => parseEnv({ ...valid, [name]: value })).toThrow(name)
+    }
+  })
+})
+
 describe('trustProxySetting', () => {
   it('maps "false" to the boolean Express understands, not the string', () => {
     // A non-empty string is truthy, and Express reads a string as an address list, so passing "false" through unconverted would mean "trust the proxy at the address named `false`", which proxy-addr rejects at boot.

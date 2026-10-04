@@ -164,6 +164,24 @@ function warnOnUntrustedProxyForAnalytics(env: Env, warn: (message: string) => v
 }
 
 /**
+ * Warn when only half of the timeline credentials is set. The timelines and
+ * PostHog person deletion need both, so with one alone they stay off and
+ * nothing else says why.
+ * @param env - The validated environment.
+ * @param warn - Receives the warning, naming the missing variable.
+ */
+function warnOnHalfTimelineConfig(env: Env, warn: (message: string) => void): void {
+  const hasKey = env.POSTHOG_PERSONAL_API_KEY !== undefined
+  if (hasKey === (env.POSTHOG_PROJECT_ID !== undefined)) return
+  const [presentName, missingName] = hasKey
+    ? ['POSTHOG_PERSONAL_API_KEY', 'POSTHOG_PROJECT_ID']
+    : ['POSTHOG_PROJECT_ID', 'POSTHOG_PERSONAL_API_KEY']
+  warn(
+    `${presentName} is set but ${missingName} is not, so the staff timelines answer "not configured" and PostHog person deletions wait. Set ${missingName} too, or unset ${presentName}.`
+  )
+}
+
+/**
  * Refuses unsafe or stale configuration at boot; throws Error with one actionable message.
  *
  * Every problem found goes into that one message, so an operator fixes them
@@ -232,6 +250,7 @@ export function assertEnvConsistent(
   }
 
   warnOnUntrustedProxyForAnalytics(env, warn)
+  warnOnHalfTimelineConfig(env, warn)
 
   if (problems.length === 0) return
   const list = problems.map((problem) => `  - ${problem}`).join('\n')

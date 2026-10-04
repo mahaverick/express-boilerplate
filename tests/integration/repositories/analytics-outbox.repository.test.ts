@@ -334,3 +334,36 @@ describe('AnalyticsOutboxRepository.deleteOlderThan', () => {
     expect(afterSecond.map((stored) => stored.id)).toEqual([ids[3]])
   })
 })
+
+describe('AnalyticsOutboxRepository.deleteForDistinctId', () => {
+  it("deletes every row of that distinct id, leased or not, and no other distinct id's", async () => {
+    const ids = await seed([
+      row({ distinctId: 'purged-user' }),
+      row({ distinctId: 'purged-user', claimedUntil: at(60 * SECOND_MS), attempts: 2 }),
+      row({ distinctId: 'other-user' }),
+      row({ distinctId: '$tenant_t-1', event: '$groupidentify' }),
+    ])
+
+    const deleted = await db.transaction((tx) => repository.deleteForDistinctId('purged-user', tx))
+
+    expect(deleted).toBe(2)
+    const rows = await snapshot()
+    expect(rows.map((stored) => stored.id)).toEqual([ids[2], ids[3]])
+  })
+})
+
+describe('AnalyticsOutboxRepository.deleteForDistinctIds', () => {
+  it("deletes every row of the given distinct ids in one statement, and no other id's", async () => {
+    const ids = await seed([
+      row({ distinctId: 'purged-a' }),
+      row({ distinctId: 'purged-b', claimedUntil: at(60 * SECOND_MS), attempts: 2 }),
+      row({ distinctId: 'other-user' }),
+    ])
+
+    expect(await repository.deleteForDistinctIds([])).toBe(0)
+    expect(await repository.deleteForDistinctIds(['purged-a', 'purged-b'])).toBe(2)
+
+    const rows = await snapshot()
+    expect(rows.map((stored) => stored.id)).toEqual([ids[2]])
+  })
+})

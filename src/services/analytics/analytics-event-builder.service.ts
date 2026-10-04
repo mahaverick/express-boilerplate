@@ -5,8 +5,10 @@
  * server event carries `source`, `access`, `app: 'api'`, the tenant group
  * when there is one, and the trace and browser session that caused it.
  * `scrubPiiProperties` drops banned keys and address-shaped values from the
- * event's own properties as a backstop; `$set`, `$set_once`, `$groups` and
- * `$group_set` are built here from fixed fields and are not inspected.
+ * event's own properties as a backstop; `$set`, `$set_once` and `$groups`
+ * are built here from fixed fields and are not inspected. A tenant
+ * `$groupidentify` is a marker with no `$group_set`: the drainer fills that
+ * in at send time (analytics-group-marker.service.ts).
  */
 import {
   AUDIT_EVENT_RENAMES,
@@ -33,15 +35,15 @@ import type { DomainEventAccess, ProductDomainEvent } from '@/types/domain-event
 
 /**
  * Where a server event came from: `backfill` is `pnpm analytics:backfill-groups`
- * (analytics-backfill.service.ts), which sends tenant groups directly.
+ * (analytics-backfill.service.ts), which queues a group marker per tenant.
  */
 export type AnalyticsSource = 'audit' | 'product' | 'email' | 'backfill'
 
 /**
  * The audit metadata keys never copied onto an event: `reason` becomes
  * `has_reason`, `name` (a tenant's name) reaches PostHog only through the
- * tenant group's `$group_set`, and `slug` is dropped because it is usually
- * derived from the tenant's name.
+ * tenant group's `$group_set`, which the drainer reads from the tenant row,
+ * and `slug` is dropped because it is usually derived from the tenant's name.
  */
 const AUDIT_METADATA_OMITTED_KEYS: ReadonlySet<string> = new Set(['reason', 'name', 'slug'])
 
@@ -222,40 +224,37 @@ function auditProperties(entry: AuditLog): Record<string, unknown> {
 }
 
 /**
- * The `$groupidentify` row that sets a tenant group's properties, as
- * posthog-node's `groupIdentify` sends it: `distinct_id` is
- * `$tenant_<id>`, with no `$process_person_profile` flag. It carries the
- * trace but never a browser session: the row is the tenant's, not the actor's.
- * @param tenant - The tenant as it now is.
+ * The `$groupidentify` marker that refreshes a tenant group's properties,
+ * shaped as posthog-node's `groupIdentify` sends it: `distinct_id` is
+ * `$tenant_<id>`, with no `$process_person_profile` flag. It stores only the
+ * group, its `source` and the trace, never a browser session (the row is the
+ * tenant's, not the actor's) and never the tenant's name: the drainer reads
+ * the tenant when it sends the row and adds `$group_set` then
+ * (`resolveGroupMarkers`), so a marker retried or sent late never carries an
+ * older state.
+ * @param tenant - The tenant; only its id is read.
  * @param context - The trace to link it to.
  * @param source - What prompted it.
- * @param access - How the actor reached the tenant.
  * @param occurredAt - When it happened.
  * @returns The row.
  */
 export function buildTenantGroupIdentify(
-  tenant: TenantGroupSnapshot,
+  tenant: Pick<TenantGroupSnapshot, 'id'>,
   context: AnalyticsContext,
   source: AnalyticsSource,
-  access: AuditAccess,
   occurredAt: Date
 ): NewAnalyticsOutboxRow {
-  const distinctId = `$${TENANT_GROUP_TYPE}_${tenant.id}`
-  const common = commonProperties({ source, access, distinctId, context })
+  const properties: Record<string, unknown> = {
+    source,
+    $group_type: TENANT_GROUP_TYPE,
+    $group_key: tenant.id,
+  }
+  if (context.traceId !== undefined) properties.trace_id = context.traceId
   return {
     event: '$groupidentify',
-    distinctId,
+    distinctId: `$${TENANT_GROUP_TYPE}_${tenant.id}`,
     occurredAt,
-    properties: {
-      ...common,
-      $group_type: TENANT_GROUP_TYPE,
-      $group_key: tenant.id,
-      $group_set: {
-        name: tenant.name,
-        status: tenant.status,
-        created_at: tenant.createdAt.toISOString(),
-      },
-    },
+    properties,
   }
 }
 
@@ -323,9 +322,7 @@ export function buildAuditEvents(
     },
   ]
   if (extras.tenant) {
-    rows.push(
-      buildTenantGroupIdentify(extras.tenant, context, 'audit', entry.access, entry.occurredAt)
-    )
+    rows.push(buildTenantGroupIdentify(extras.tenant, context, 'audit', entry.occurredAt))
   }
   if (extras.staffStatus) {
     rows.push(buildStaffStatusSet(extras.staffStatus, context, entry.access, entry.occurredAt))

@@ -162,6 +162,13 @@
       "when": 1790966549217,
       "tag": "0022_analytics",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1791087562604,
+      "tag": "0023_analytics_deletions",
+      "breakpoints": true
     }
   ]
 }

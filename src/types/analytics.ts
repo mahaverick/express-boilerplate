@@ -24,8 +24,9 @@ export interface AnalyticsContext {
 }
 
 /**
- * The tenant columns a `$groupidentify` row carries, read in the same
- * transaction as the change that prompted it.
+ * The tenant columns behind a tenant group's PostHog properties. The drainer
+ * reads them when it sends a `$groupidentify` marker (`resolveGroupMarkers`,
+ * analytics-group-marker.service.ts); the outbox row stores only the id.
  */
 export interface TenantGroupSnapshot {
   id: string
@@ -52,7 +53,7 @@ export interface StaffStatusSnapshot {
  */
 export interface AuditEventExtras {
   /**
-   * Adds a `$groupidentify` row for this tenant.
+   * Adds a `$groupidentify` marker for this tenant; only its id is stored.
    */
   tenant?: TenantGroupSnapshot
   /**

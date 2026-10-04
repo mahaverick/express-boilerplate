@@ -4,6 +4,12 @@
  */
 import { z } from 'zod'
 import { PAGE_DIRECTIONS, STATS_RANGES, TENANT_STATE_FILTERS } from '@/constants/platform.constants'
+import {
+  TIMELINE_DEFAULT_RANGE,
+  TIMELINE_DEFAULT_VIEW,
+  TIMELINE_RANGES,
+  TIMELINE_VIEWS,
+} from '@/constants/timeline.constants'
 import { HttpError } from '@/errors/http-error'
 import { emailSchema } from '@/validators/auth.validators'
 import { cursorField } from '@/validators/cursor.validators'
@@ -95,6 +101,28 @@ export const platformStatsQuerySchema = z.object({
  * The validated stats query.
  */
 export type PlatformStatsQuery = z.infer<typeof platformStatsQuerySchema>
+
+/**
+ * Room for any timeline cursor the server issues (about 110 characters).
+ */
+const MAX_TIMELINE_CURSOR_LENGTH = 512
+
+/**
+ * `GET /platform/users/:id/timeline` and `GET /platform/tenants/:id/timeline`
+ * query: the window (7 days), the view (everything) and the opaque `before`
+ * cursor of a later page. The cursor is decoded by the timeline service,
+ * which answers 400 for one it did not issue. Unknown keys are ignored.
+ */
+export const platformTimelineQuerySchema = z.object({
+  range: z.enum(TIMELINE_RANGES).default(TIMELINE_DEFAULT_RANGE),
+  view: z.enum(TIMELINE_VIEWS).default(TIMELINE_DEFAULT_VIEW),
+  before: z.string().min(1).max(MAX_TIMELINE_CURSOR_LENGTH).optional(),
+})
+
+/**
+ * The validated timeline query, with the cursor still encoded.
+ */
+export type PlatformTimelineQuery = z.infer<typeof platformTimelineQuerySchema>
 
 /**
  * The longest reason a staff member may give; the audit schema re-checks it.

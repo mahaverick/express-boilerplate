@@ -4,6 +4,7 @@
  * and key come from a mocked `getEnv()`, bound once the fake is listening.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { signAnalyticsEvent } from '@/services/analytics/analytics-signature.service'
 import {
   classifyStatus,
   sendBatch,
@@ -146,15 +147,62 @@ describe('classifyStatus', () => {
 })
 
 describe('toPosthogBatchEvent', () => {
-  it('sends the row id as uuid and occurred_at as the ISO timestamp', () => {
-    expect(
-      toPosthogBatchEvent({
-        id: EVENT.uuid,
-        event: EVENT.event,
-        distinctId: EVENT.distinct_id,
-        properties: EVENT.properties,
-        occurredAt: new Date(EVENT.timestamp),
-      })
-    ).toEqual(EVENT)
+  it('sends the row id as uuid, occurred_at as the ISO timestamp, and adds server_sig without touching the row', () => {
+    const properties = { ...EVENT.properties }
+
+    const sent = toPosthogBatchEvent({
+      id: EVENT.uuid,
+      event: EVENT.event,
+      distinctId: EVENT.distinct_id,
+      properties,
+      occurredAt: new Date(EVENT.timestamp),
+    })
+
+    const signature = signAnalyticsEvent({
+      uuid: EVENT.uuid,
+      event: EVENT.event,
+      distinctId: EVENT.distinct_id,
+      source: 'audit',
+      // eslint-disable-next-line unicorn/no-null -- the row has no access, as the signature reads it
+      access: null,
+      // eslint-disable-next-line unicorn/no-null -- nor a target type
+      targetType: null,
+      // eslint-disable-next-line unicorn/no-null -- nor a target id
+      targetId: null,
+      tenant: 'tenant-1',
+    })
+    expect(signature).toMatch(/^[0-9a-f]{32}$/)
+    expect(sent).toEqual({ ...EVENT, properties: { ...EVENT.properties, server_sig: signature } })
+    expect(properties).toEqual(EVENT.properties)
+  })
+
+  it('signs the eight fields, so changing any of them changes the signature', () => {
+    const row = {
+      id: EVENT.uuid,
+      event: 'member_removed',
+      distinctId: 'user-1',
+      properties: {
+        source: 'audit',
+        access: 'platform',
+        target_type: 'user',
+        target_id: 'user-2',
+        $groups: { tenant: 'tenant-1' },
+      },
+      occurredAt: new Date(EVENT.timestamp),
+    }
+    const base = toPosthogBatchEvent(row).properties.server_sig
+    const variants = [
+      { ...row, id: '01890000-0000-7000-8000-000000000002' },
+      { ...row, event: 'member_added' },
+      { ...row, distinctId: 'user-3' },
+      ...(['source', 'access', 'target_type', 'target_id'] as const).map((key) => ({
+        ...row,
+        properties: { ...row.properties, [key]: 'other' },
+      })),
+      { ...row, properties: { ...row.properties, $groups: { tenant: 'tenant-2' } } },
+    ]
+    for (const variant of variants) {
+      expect(toPosthogBatchEvent(variant).properties.server_sig).not.toBe(base)
+    }
   })
 })

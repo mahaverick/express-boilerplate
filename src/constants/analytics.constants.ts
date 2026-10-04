@@ -88,3 +88,43 @@ export const ANALYTICS_SEND_TIMEOUT_MS = 10_000
  * `$process_person_profile: false`, so PostHog creates no person for it.
  */
 export const SYSTEM_DISTINCT_ID = 'system'
+
+/**
+ * The event property that carries a server event's signature
+ * (analytics-signature.service.ts). The drainer adds it at send time; the
+ * timelines trust a row's server fields only when it verifies.
+ */
+export const ANALYTICS_SIGNATURE_PROPERTY = 'server_sig'
+
+/**
+ * How long after a user purge their PostHog deletion is first sent. PostHog
+ * deletes only events it ingested before the request, so the delay lets
+ * events already on their way land first.
+ */
+export const ANALYTICS_DELETION_DELAY_MS = 60 * 60 * 1000
+
+/**
+ * The most purged users one deletion tick sends to PostHog, in one
+ * `persons/bulk_delete/` request (PostHog takes up to 1000).
+ */
+export const ANALYTICS_DELETION_BATCH_SIZE = 10
+
+/**
+ * How long a deletion tick's claim holds its rows: it covers one batch
+ * request plus one request per claimed row, each at the
+ * `TIMELINE_POSTHOG_TIMEOUT_MS` (15 s) timeout (11 x 15 s = 165 s at the
+ * batch size), so a tick that crashes mid-request releases them and a live
+ * one keeps them.
+ */
+export const ANALYTICS_DELETION_LEASE_SECONDS = 180
+
+/**
+ * Milliseconds between deletion ticks.
+ */
+export const ANALYTICS_DELETION_INTERVAL_MS = 60_000
+
+/**
+ * How long after a purge a failed deletion starts logging at `error`
+ * instead of `warn`.
+ */
+export const ANALYTICS_DELETION_OVERDUE_MS = 24 * 60 * 60 * 1000

@@ -5,8 +5,10 @@
  * methods.
  */
 import { Router } from 'express'
+import { getEnv } from '@/configs/env.config'
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { auditController } from '@/controllers/audit.controller'
+import { platformTimelineController } from '@/controllers/platform-timeline.controller'
 import { platformController } from '@/controllers/platform.controller'
 import { requireAuth, requireRecentAuth } from '@/middlewares/auth.middleware'
 import { requireJsonContentType } from '@/middlewares/content-type.middleware'
@@ -39,7 +41,11 @@ export function createPlatformRouter(): Router {
   const searchLimiter = createRateLimiter(RATE_LIMITS.platformSearch)
   // One instance shared by every /platform write: users', tenants', emails' and onboarding's.
   const writeLimiter = createRateLimiter(RATE_LIMITS.platformWrite)
-  router.use('/users', createPlatformUserRouter({ searchLimiter, writeLimiter }))
+  // One instance shared by the user and tenant timelines.
+  const timelineLimiter = createRateLimiter(RATE_LIMITS.platformTimeline, {
+    limit: getEnv().TIMELINE_REQUESTS_PER_MINUTE,
+  })
+  router.use('/users', createPlatformUserRouter({ searchLimiter, writeLimiter, timelineLimiter }))
   router.use('/emails', createPlatformEmailRouter({ searchLimiter, writeLimiter }))
   router.use(
     '/email-suppressions',
@@ -107,6 +113,12 @@ export function createPlatformRouter(): Router {
     requirePlatformRole('viewer'),
     searchLimiter,
     platformController.getTenant
+  )
+  router.get(
+    '/tenants/:id/timeline',
+    requirePlatformRole('admin'),
+    timelineLimiter,
+    platformTimelineController.getTenantTimeline
   )
   router.get('/stats', requirePlatformRole('viewer'), searchLimiter, platformController.getStats)
   router.get('/audit-log', requirePlatformRole('admin'), auditController.listPlatformAuditLog)

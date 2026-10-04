@@ -345,13 +345,13 @@ addresses the source system already trusted.
 
 ### Rate limiting: one store prefix per limiter
 
-`RATE_LIMITS` (`src/constants/rate-limit.constants.ts`) holds 26 limiter
+`RATE_LIMITS` (`src/constants/rate-limit.constants.ts`) holds 27 limiter
 specs, each built into middleware by `createRateLimiter(spec)`
 (`src/middlewares/rate-limit.middleware.ts`). Sixteen guard the auth router
-(every route on it except `GET /providers` has at least one), six guard
+(every route on it except `GET /providers` has at least one), seven guard
 tenant creation, member invitation, invitation preview and accept, staff
-reads and staff writes, two guard the email webhook, one guards the PostHog
-proxy, and `authenticatedWrite` covers every other
+reads, staff timelines and staff writes, two guard the email webhook, one
+guards the PostHog proxy, and `authenticatedWrite` covers every other
 authenticated write. Paths below are under `/api/v1`; a `user` key is the
 authenticated user's id, and an `email` key is the submitted `email`,
 trimmed and lowercased.
@@ -379,11 +379,14 @@ trimmed and lowercased.
 | `POST /invitations/accept` (ahead of `requireAuth`)                                                                                                                                                                                                                                   | `invitation-accept`                              | 20 per 15 minutes  | IP                   |
 | `POST /auth/reauthenticate` (after the staff check)                                                                                                                                                                                                                                   | `reauthenticate`                                 | 5 per 15 minutes   | user                 |
 | `GET /platform/tenants`, `GET /platform/tenants/:id`, `GET /platform/users`, `GET /platform/users/:id`, `GET /platform/stats`, the `/platform/emails*`, `/platform/email-suppressions`, `/platform/onboarding/*` and `/platform/tenants/:id/onboarding` reads (after the staff check) | `platform-search`, one shared budget             | 60 per minute      | user                 |
+| `GET /platform/users/:id/timeline`, `GET /platform/tenants/:id/timeline` (after the admin check)                                                                                                                                                                                      | `platform-timeline`, one shared budget           | 20 per minute      | user                 |
 | Every `/platform` write (after the staff check)                                                                                                                                                                                                                                       | `platform-write`, one shared budget              | 30 per minute      | user                 |
 | `POST /webhooks/email/:provider`, in this order (public; the provider is checked first)                                                                                                                                                                                               | `email-webhook-rejected` (failed responses only) | 60 per minute      | IP                   |
 |                                                                                                                                                                                                                                                                                       | `email-webhook` (accepted requests only)         | 3000 per minute    | provider             |
 | `/collect/*`, every method (public; the PostHog proxy)                                                                                                                                                                                                                                | `analytics-proxy`                                | 3000 per minute    | IP                   |
 | Every other authenticated write (below)                                                                                                                                                                                                                                               | `authenticated-write`                            | 60 per minute      | user                 |
+
+`platform-timeline`'s limit is `TIMELINE_REQUESTS_PER_MINUTE` (20 unless set).
 
 Each spec is backed by its **own** `SharedRateLimitStore`
 (`src/configs/rate-limit-store.config.ts`) under the key prefix `rl:<name>:`,
@@ -838,12 +841,24 @@ redacted entry from a user entry written without an actor. A tenant purge
 removes the tenant and its own audit entries. Each purge is recorded in the
 platform tenant (`user.purged`, `tenant.purged`).
 
-**A purge does not reach PostHog.** Deleting from PostHog is a later
-sub-project; until then these stay there after a purge: a purged tenant's
-name in its group's `$group_set` properties; a purged user's events and
-person profile (`is_staff`, `platform_role`, `created_at`), keyed by their
-id; and the `user_purged` event's `email_domain`. If you need them gone, delete
-them in PostHog yourself.
+**What a purge does in PostHog.** A user purge queues the deletion of their
+PostHog person with its events and recordings (`analytics_deletions`,
+written in the purge's transaction) and deletes their undelivered outbox
+rows, so nothing of theirs is sent afterwards to recreate the person; the
+job deletes any that arrived since just before it calls PostHog. The
+`analytics-deletions` job sends it an hour later, because PostHog deletes
+only events it ingested before the request, and retries until PostHog has
+queued it; PostHog then deletes in the background. It needs
+`POSTHOG_PERSONAL_API_KEY` and `POSTHOG_PROJECT_ID`: without them the rows
+wait, and boot warns while any do. Recording removal rests on PostHog's
+documented `delete_recordings` flag. A tenant purge cannot delete the
+PostHog group, so it queues a `$groupidentify` marker that the drainer sends
+as `{ name: null, status: 'purged' }`, clearing the name. These stay in
+PostHog: the `user_purged` event's `email_domain`, which is the acting
+owner's event, not the purged user's; staff events about the purged user
+(`target_id` is their id), which belong to the staff who acted; and a
+purged tenant's group key and `created_at`, and its events, which are keyed
+by the tenant id and carry no name.
 
 ### Email tracking: what is stored, and what a resend can do
 
@@ -911,12 +926,21 @@ proxies the browsers' posthog-js traffic; without it, neither happens.
   user and email audit events carry `email_domain`, and
   `onboarding_reminder_sent` carries `email_domains`. `distinct_id` (a user id)
   and `$session_id` are pseudonymous identifiers, not anonymous ones: they
-  identify a person to anyone who can look the id up. A purge leaves them in
-  PostHog (see "Purge: the only hard delete").
+  identify a person to anyone who can look the id up. A user purge deletes
+  the person and their events from PostHog (see "Purge: the only hard delete").
 - **Accepted risk: a client chooses its own trace ids.** The API parents a
   request's span on the `traceparent` header the frontends send, and events
   carry that `trace_id`. A trace id is a correlation key only and never
   authorizes anything.
+- **Browser events are client-reported; server events are signed.** The
+  project key is public, so anyone can send PostHog any event, under any
+  `distinct_id` or `target_id`. The drainer adds `server_sig` to every server
+  event (an HMAC keyed from `SESSION_SECRET`, `analytics-signature.service.ts`),
+  and the staff timelines present a row's `source`, `access` and target only
+  when it verifies: an unverified row is shown as a browser event, and one
+  that reaches a timeline only through a forged target is dropped.
+  **Accepted risk:** PostHog's own UI still shows forged events, and a flood
+  of forged events can push real rows onto later timeline pages.
 
 ## What this boilerplate does NOT implement
 
@@ -926,7 +950,7 @@ None of these is built, except where the Status column says Partial:
 | ----------------------------------------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | MFA                                                   | **Not implemented** | No TOTP enrolment and no recovery codes. The one step-up is a password re-check before destructive staff actions; see "Step-up for destructive staff actions".                                                                      |
 | CSRF tokens                                           | **Not implemented** | See "No CSRF middleware" below — reasoning, not an oversight. The forced-login direction IS defended, by a content-type gate; see the section after it.                                                                             |
-| General-purpose rate limiting                         | **Partial**         | 26 limiters (see "Rate limiting" above). Every write route has one, at least the shared `authenticatedWrite`. There is no global limiter, and authenticated reads (profile, notifications, tenant reads, the audit logs) have none. |
+| General-purpose rate limiting                         | **Partial**         | 27 limiters (see "Rate limiting" above). Every write route has one, at least the shared `authenticatedWrite`. There is no global limiter, and authenticated reads (profile, notifications, tenant reads, the audit logs) have none. |
 | Rehash on login                                       | **Not implemented** | See "Password hashing".                                                                                                                                                                                                             |
 | Impersonation, break-glass access, row-level security | **Not implemented** | Staff act only through the platform role; see "Platform staff access and the audit log".                                                                                                                                            |
 | Audit of sign-in and credential events                | **Partial**         | `audit_logs` records no login, logout, password change or password reset. The one sign-in event it records is a staff step-up (`auth.reauthenticated`, success or wrong password).                                                  |

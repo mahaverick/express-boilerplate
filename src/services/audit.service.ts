@@ -23,6 +23,7 @@ import { logger } from '@/services/logger.service'
 import { getRedis, redisKey } from '@/services/redis.service'
 import { requestContextStore } from '@/services/request-context.service'
 import type { Actor } from '@/types/actor'
+import type { TimelineKind } from '@/types/timeline'
 import { encodeCursor } from '@/utilities/cursor.utilities'
 import type { PlatformAuditLogQuery, TenantAuditLogQuery } from '@/validators/audit.validators'
 
@@ -149,6 +150,42 @@ export async function recordPlatformAccess(
     if (hasClaimedKey) await releaseDedupeKey(key)
     throw error
   }
+}
+
+/**
+ * Record that a staff member read a user's or a tenant's timeline:
+ * `user.timeline_viewed` or `tenant.timeline_viewed`, written on the pool in
+ * the platform tenant, outside any transaction, since a timeline read
+ * changes nothing to commit with. It always writes; the caller
+ * (platform-timeline.service.ts) decides how often to call it.
+ * @param actor - The staff member.
+ * @param platformTenantId - The platform tenant, where the entry is written.
+ * @param kind - Whose timeline.
+ * @param targetId - The user or tenant id.
+ * @param metadata - The range and view they read it with.
+ * @returns The written row.
+ * @throws {Error} When the metadata does not match the schema or the insert fails.
+ */
+export async function recordTimelineView(
+  actor: Actor,
+  platformTenantId: string,
+  kind: TimelineKind,
+  targetId: string,
+  metadata: AuditMetadata<'user.timeline_viewed'>
+): Promise<AuditLog> {
+  const common = {
+    actor,
+    access: 'platform',
+    tenantId: platformTenantId,
+    targetId,
+    metadata,
+  } as const
+  return writeEntry(
+    kind === 'user'
+      ? { ...common, action: 'user.timeline_viewed' }
+      : { ...common, action: 'tenant.timeline_viewed' },
+    db
+  )
 }
 
 /**

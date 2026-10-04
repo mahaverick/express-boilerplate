@@ -6,7 +6,19 @@
  * counts and lists never include the platform tenant, whose membership is
  * reported as the platform role.
  */
-import { and, asc, count, desc, eq, gt, isNotNull, isNull, sql, type SQL } from 'drizzle-orm'
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  gt,
+  inArray,
+  isNotNull,
+  isNull,
+  sql,
+  type SQL,
+} from 'drizzle-orm'
 import type { PageDirection } from '@/constants/platform.constants'
 import type { MembershipRole, TenantLifecycleState } from '@/constants/tenant.constants'
 import { tenantInvitationModel } from '@/database/models/tenant-invitation.model'
@@ -74,6 +86,16 @@ export interface PlatformUserSearchOptions {
   verified?: boolean | undefined
   staff?: boolean | undefined
   cursor?: PlatformUserCursor | undefined
+}
+
+/**
+ * The name fields of one user, for labelling who did something.
+ */
+export interface PlatformUserLabel {
+  id: string
+  email: string
+  firstName: string | null
+  lastName: string | null
 }
 
 /**
@@ -395,5 +417,29 @@ export class PlatformUserRepository {
         )
       )
       .orderBy(tenantModel.id)
+  }
+
+  /**
+   * The names and addresses of the users with these ids, soft-deleted users
+   * included. An id with no user row (a purged user, or an id that was
+   * never a user's) is left out.
+   * @param ids - The user ids.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns One entry per user found, in no particular order.
+   */
+  async listLabels(
+    ids: readonly string[],
+    executor: DbExecutor = db
+  ): Promise<PlatformUserLabel[]> {
+    if (ids.length === 0) return []
+    return executor
+      .select({
+        id: userModel.id,
+        email: userModel.email,
+        firstName: userModel.firstName,
+        lastName: userModel.lastName,
+      })
+      .from(userModel)
+      .where(inArray(userModel.id, [...ids]))
   }
 }

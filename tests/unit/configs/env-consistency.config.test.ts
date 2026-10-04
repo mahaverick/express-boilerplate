@@ -50,6 +50,14 @@ function runChecks(
   return { error: message, warnings: warn.mock.calls.map(([warning]) => warning) }
 }
 
+/**
+ * Both timeline variables, set.
+ * @returns The key and the project id.
+ */
+function bothTimelineVariables(): Record<string, string> {
+  return { POSTHOG_PERSONAL_API_KEY: 'phx_test_key_not_real', POSTHOG_PROJECT_ID: '12345' }
+}
+
 describe('assertEnvConsistent', () => {
   describe('Google sign-in from Apex on another host', () => {
     const google = {
@@ -348,6 +356,41 @@ describe('assertEnvConsistent', () => {
       expect(
         runChecks(source).warnings.filter((warning) => warning.includes('POSTHOG_PROJECT_KEY'))
       ).toEqual([])
+    })
+  })
+
+  describe('half of the timeline credentials', () => {
+    it.each([
+      {
+        name: 'the key without the project id',
+        source: { ...local, POSTHOG_PERSONAL_API_KEY: 'phx_test_key_not_real' },
+        expected: 'POSTHOG_PERSONAL_API_KEY is set but POSTHOG_PROJECT_ID is not',
+      },
+      {
+        name: 'the project id without the key',
+        source: { ...deployed, POSTHOG_PROJECT_ID: '12345' },
+        expected: 'POSTHOG_PROJECT_ID is set but POSTHOG_PERSONAL_API_KEY is not',
+      },
+    ])('warns, and still boots, with $name', ({ source, expected }) => {
+      const { error, warnings } = runChecks(source)
+      expect(error).toBeUndefined()
+      expect(warnings).toHaveLength(1)
+      expect(warnings[0]).toContain(expected)
+    })
+
+    it.each([
+      { name: 'both are set', source: { ...deployed, ...bothTimelineVariables() } },
+      { name: 'neither is set', source: deployed },
+    ])('stays quiet when $name', ({ source }) => {
+      expect(runChecks(source).warnings).toEqual([])
+    })
+
+    it('never puts the key in the warning', () => {
+      const { warnings } = runChecks({
+        ...local,
+        POSTHOG_PERSONAL_API_KEY: 'phx_test_key_not_real',
+      })
+      expect(warnings.join('\n')).not.toContain('phx_test_key_not_real')
     })
   })
 
