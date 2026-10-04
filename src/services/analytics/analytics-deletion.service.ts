@@ -101,6 +101,14 @@ function logFailure(
  * failure and backs it off (`markFailed`), and logs once: at `error` when a
  * row was purged more than a day ago, otherwise at `warn`.
  *
+ * A batch of several ids that PostHog answers with a non-empty
+ * `deletion_errors` says some id was rejected but not which, and backing the
+ * whole batch off together would re-claim them together for ever. So the
+ * tick logs one `warn` (the count, no ids) and sends each id in its own
+ * request, sequentially, applying the rules above to each; the result counts
+ * per id. A timeout, a network error or an http error on the batch says
+ * nothing about single ids, so it does not split.
+ *
  * Before the request it deletes any outbox rows of the claimed ids, so an
  * event committed after the purge cannot be sent once PostHog has deleted
  * the person. The lease outlasts the request: `ANALYTICS_DELETION_LEASE_SECONDS`
@@ -119,11 +127,13 @@ export async function processAnalyticsDeletions(now: Date = new Date()): Promise
   const ids = rows.map((row) => row.distinctId)
   // A late event of a claimed id would recreate its person if drained after the deletion.
   await analyticsOutboxRepository.deleteForDistinctIds(ids)
-  const result = await posthogApi('POST', posthogProjectPath('persons/bulk_delete/'), {
-    distinct_ids: ids,
-    delete_events: true,
-    delete_recordings: true,
-  })
+  const result = await sendBulkDelete(ids)
+  if (rows.length > 1 && result.kind === 'ok' && failureOf(result) === 'deletion_errors') {
+    logger.warn('PostHog rejected part of a deletion batch; sending its ids one by one', {
+      rows: rows.length,
+    })
+    return deleteOneByOne(rows, now)
+  }
   const error = failureOf(result)
   if (error === undefined) {
     return { deleted: await analyticsDeletionRepository.deleteByIds(ids), failed: 0 }
@@ -131,6 +141,44 @@ export async function processAnalyticsDeletions(now: Date = new Date()): Promise
   await analyticsDeletionRepository.markFailed(ids, error, now)
   logFailure(rows, error, result, now)
   return { deleted: 0, failed: rows.length }
+}
+
+/**
+ * One `persons/bulk_delete/` request for the given ids.
+ * @param ids - The distinct ids to delete.
+ * @returns How the call ended.
+ */
+function sendBulkDelete(ids: string[]): Promise<PosthogApiResult> {
+  return posthogApi('POST', posthogProjectPath('persons/bulk_delete/'), {
+    distinct_ids: ids,
+    delete_events: true,
+    delete_recordings: true,
+  })
+}
+
+/**
+ * Send each claimed row in its own request, one after another, so one id
+ * PostHog keeps rejecting cannot hold back the others. Each answer is
+ * classified as a batch's would be: the row is deleted on success and
+ * backed off on any failure.
+ * @param rows - The claimed rows.
+ * @param now - The tick's clock.
+ * @returns How many rows were deleted and how many failed.
+ */
+async function deleteOneByOne(rows: AnalyticsDeletionRow[], now: Date): Promise<DeletionResult> {
+  const outcome: DeletionResult = { deleted: 0, failed: 0 }
+  for (const row of rows) {
+    const result = await sendBulkDelete([row.distinctId])
+    const error = failureOf(result)
+    if (error === undefined) {
+      outcome.deleted += await analyticsDeletionRepository.deleteByIds([row.distinctId])
+      continue
+    }
+    await analyticsDeletionRepository.markFailed([row.distinctId], error, now)
+    logFailure([row], error, result, now)
+    outcome.failed += 1
+  }
+  return outcome
 }
 
 /**
@@ -145,7 +193,7 @@ export async function warnIfDeletionsPending(): Promise<void> {
     const pending = await analyticsDeletionRepository.countPending()
     if (pending === 0) return
     logger.warn(
-      'Purged users are waiting to be deleted from PostHog, but POSTHOG_PERSONAL_API_KEY and POSTHOG_PROJECT_ID are not both set; the deletions wait until they are',
+      'Purged users are waiting to be deleted from PostHog, but POSTHOG_PERSONAL_API_KEY and POSTHOG_PROJECT_ID are not both set; the deletions wait until they are; ignore this on a pod that runs no workers (WORKER_ENABLED=false), and set both on the worker deployment',
       { pending }
     )
   } catch (error) {

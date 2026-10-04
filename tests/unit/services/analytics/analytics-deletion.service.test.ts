@@ -216,7 +216,7 @@ describe('warnIfDeletionsPending', () => {
     await warnIfDeletionsPending()
 
     expect(warn).toHaveBeenCalledWith(
-      'Purged users are waiting to be deleted from PostHog, but POSTHOG_PERSONAL_API_KEY and POSTHOG_PROJECT_ID are not both set; the deletions wait until they are',
+      'Purged users are waiting to be deleted from PostHog, but POSTHOG_PERSONAL_API_KEY and POSTHOG_PROJECT_ID are not both set; the deletions wait until they are; ignore this on a pod that runs no workers (WORKER_ENABLED=false), and set both on the worker deployment',
       { pending: 3 }
     )
   })

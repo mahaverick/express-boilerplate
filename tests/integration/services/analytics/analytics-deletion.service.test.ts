@@ -82,6 +82,8 @@ afterEach(() => {
   vi.restoreAllMocks()
   target.key = 'phx_test_key_not_real'
   posthog().bulkDeleteStatus = 202
+  posthog().bulkDeleteErrors = () => []
+  posthog().hang(0)
   posthog().bulkDeletes.length = 0
   posthog().authHeaders.length = 0
   posthog().requests.length = 0
@@ -195,5 +197,45 @@ describe('processAnalyticsDeletions', () => {
 
     const remaining = await sql<{ distinct_id: string }[]>`select distinct_id from analytics_outbox`
     expect(remaining.map((row) => row.distinct_id)).toEqual(['someone-else'])
+  })
+
+  it('splits a batch with a partial deletion_errors into one request per id, so one bad id holds back no other', async () => {
+    await seed(NOW, 'user-a', 'user-b', 'user-c')
+    posthog().bulkDeleteErrors = (ids) =>
+      ids.includes('user-b') ? [{ id: 'user-b', detail: 'rejected' }] : []
+    const warn = vi.spyOn(logger, 'warn')
+
+    await expect(processAnalyticsDeletions(NOW)).resolves.toEqual({ deleted: 2, failed: 1 })
+
+    expect(posthog().bulkDeletes.map((body) => body.distinct_ids)).toEqual([
+      ['user-a', 'user-b', 'user-c'],
+      ['user-a'],
+      ['user-b'],
+      ['user-c'],
+    ])
+    expect(await rows()).toEqual([
+      expect.objectContaining({ distinctId: 'user-b', attempts: 1, lastError: 'deletion_errors' }),
+    ])
+    expect(warn).toHaveBeenCalledWith(
+      'PostHog rejected part of a deletion batch; sending its ids one by one',
+      { rows: 3 }
+    )
+  })
+
+  it('does not split a batch that times out: every row is backed off together', async () => {
+    await seed(NOW, 'user-a', 'user-b')
+    posthog().hang(200)
+    const originalTimeout = AbortSignal.timeout.bind(AbortSignal)
+    const spy = vi.spyOn(AbortSignal, 'timeout').mockImplementation(() => originalTimeout(50))
+
+    await expect(processAnalyticsDeletions(NOW)).resolves.toEqual({ deleted: 0, failed: 2 })
+
+    spy.mockRestore()
+    expect(posthog().bulkDeletes).toHaveLength(1)
+    const stored = await rows()
+    expect(stored.map((row) => [row.distinctId, row.lastError, row.attempts])).toEqual([
+      ['user-a', 'timeout', 1],
+      ['user-b', 'timeout', 1],
+    ])
   })
 })

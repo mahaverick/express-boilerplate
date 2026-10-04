@@ -126,6 +126,11 @@ export interface FakePosthog {
    */
   bulkDeleteStatus: number
   /**
+   * The `deletion_errors` list a 202 bulk delete answers with, from the ids
+   * of that request (an empty list at start, whatever the ids).
+   */
+  bulkDeleteErrors: (distinctIds: string[]) => unknown[]
+  /**
    * The `Authorization` header of each private-API request, in arrival order.
    */
   authHeaders: string[]
@@ -199,15 +204,19 @@ function bulkDeleteOf(body: Buffer): FakePosthogBulkDelete {
 /**
  * PostHog's 202 answer to a bulk delete, as planning probe 3 recorded it.
  * @param deletion - The recorded request.
+ * @param deletionErrors - The `deletion_errors` list to answer with.
  * @returns The body.
  */
-function bulkDeleteAnswer(deletion: FakePosthogBulkDelete): Record<string, unknown> {
+function bulkDeleteAnswer(
+  deletion: FakePosthogBulkDelete,
+  deletionErrors: unknown[]
+): Record<string, unknown> {
   return {
     persons_found: deletion.distinct_ids.length,
     persons_queued_for_deletion: deletion.distinct_ids.length,
     events_queued_for_deletion: deletion.delete_events ? deletion.distinct_ids.length : 0,
     recordings_queued_for_deletion: deletion.delete_recordings ? deletion.distinct_ids.length : 0,
-    deletion_errors: [],
+    deletion_errors: deletionErrors,
   }
 }
 
@@ -284,6 +293,7 @@ export async function startFakePosthog(): Promise<FakePosthog> {
     groupTypesStatus: 200,
     bulkDeletes,
     bulkDeleteStatus: 202,
+    bulkDeleteErrors: () => [],
     authHeaders,
     close: async () => {
       state.isClosed = true
@@ -323,7 +333,13 @@ export async function startFakePosthog(): Promise<FakePosthog> {
         const deletion = bulkDeleteOf(body)
         bulkDeletes.push(deletion)
         const status = fake.bulkDeleteStatus
-        return { status, json: status === 202 ? bulkDeleteAnswer(deletion) : { detail: 'error' } }
+        return {
+          status,
+          json:
+            status === 202
+              ? bulkDeleteAnswer(deletion, fake.bulkDeleteErrors(deletion.distinct_ids))
+              : { detail: 'error' },
+        }
       }
       default: {
         return { status: 404, json: { detail: 'Not found.' } }
