@@ -14,3 +14,7 @@ description = "Committed test fixtures with intentionally fake secrets"
 paths = [
   '''^\.env\.test$''',
 ]
+
+[[allowlists]]
+description = "Secret-shaped inputs the error scrubber's vectors must redact"
+paths = ['''tests/fixtures/error-scrub-vectors\.json''']

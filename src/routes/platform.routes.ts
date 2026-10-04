@@ -9,6 +9,7 @@ import { getEnv } from '@/configs/env.config'
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { auditController } from '@/controllers/audit.controller'
 import { platformErrorsController } from '@/controllers/platform-errors.controller'
+import { platformSystemController } from '@/controllers/platform-system.controller'
 import { platformTimelineController } from '@/controllers/platform-timeline.controller'
 import { platformController } from '@/controllers/platform.controller'
 import { requireAuth, requireRecentAuth } from '@/middlewares/auth.middleware'
@@ -128,6 +129,12 @@ export function createPlatformRouter(): Router {
     platformErrorsController.getTenantErrors
   )
   router.get('/stats', requirePlatformRole('viewer'), searchLimiter, platformController.getStats)
+  router.get(
+    '/system/status',
+    requirePlatformRole('admin'),
+    searchLimiter,
+    platformSystemController.getStatus
+  )
   router.get('/audit-log', requirePlatformRole('admin'), auditController.listPlatformAuditLog)
   return router
 }

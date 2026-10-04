@@ -565,7 +565,7 @@ const EnvSchema = z.object({
     .regex(/^[\w.-]{1,64}$/, 'Use 1 to 64 letters, digits, ".", "_" and "-"')
     .default('dev')
     .describe(
-      'The release this process runs, normally the deployed git commit sha, sent as release on every $exception event. 1 to 64 letters, digits, ".", "_" and "-". Defaults to dev.'
+      'The release this process runs, normally the deployed git commit sha, sent as release on every $exception event and answered by GET /health and GET /api/v1/platform/system/status. The Docker image sets it from its GIT_SHA build arg, which deploy.yml passes as the commit sha; operators do not set it. 1 to 64 letters, digits, ".", "_" and "-". Defaults to dev.'
     ),
   /**
    * `redisKey()` (redis.service.ts) joins this and each part with `:`, so a

@@ -39,6 +39,12 @@ COPY --from=build --chown=10001:10001 /app/node_modules ./node_modules
 COPY --from=build --chown=10001:10001 /app/dist ./dist
 COPY --from=build --chown=10001:10001 /app/package.json ./package.json
 
+# The image's git sha, passed by deploy.yml's image job; /health and error
+# tracking report it as the release. Late in the stage, so a new sha
+# rebuilds no earlier layer. Local builds get `dev`.
+ARG GIT_SHA=dev
+ENV APP_VERSION=$GIT_SHA
+
 # The orchestrator owns liveness and readiness via /health and /health/ready;
 # a Docker HEALTHCHECK would be a second signal that can disagree under load.
 HEALTHCHECK NONE

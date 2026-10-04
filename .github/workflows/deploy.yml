@@ -50,6 +50,21 @@ jobs:
           tags: |
             type=sha,format=long
             type=raw,value=main,enable={{is_default_branch}}
+      # Frontend images upload their source maps to each PostHog project in the
+      # POSTHOG_SOURCEMAP_PROJECTS variable while they build; the API image
+      # takes the same arguments and uses only GIT_SHA. Projects set with no
+      # POSTHOG_CLI_TOKEN secret is a mistake, and fails here before a build.
+      - name: Check the source map settings
+        env:
+          PROJECTS: ${{ vars.POSTHOG_SOURCEMAP_PROJECTS }}
+          HAS_TOKEN: ${{ secrets.POSTHOG_CLI_TOKEN != '' }}
+        run: |
+          if [ -z "$(printf '%s' "$PROJECTS" | tr -d ' ,[:space:]')" ]; then
+            echo "::warning::sourcemaps not uploaded (POSTHOG_SOURCEMAP_PROJECTS unset)"
+          elif [ "$HAS_TOKEN" != true ]; then
+            echo "::error::POSTHOG_SOURCEMAP_PROJECTS is set but POSTHOG_CLI_TOKEN is empty"
+            exit 1
+          fi
       - id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
@@ -57,6 +72,15 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # GIT_SHA is the release every image reports. Build args appear in
+          # the provenance attestation; the token is a BuildKit secret, which
+          # never does and never reaches a layer.
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            POSTHOG_SOURCEMAP_PROJECTS=${{ vars.POSTHOG_SOURCEMAP_PROJECTS }}
+            POSTHOG_CLI_HOST=${{ vars.POSTHOG_CLI_HOST || 'https://us.posthog.com' }}
+          secrets: |
+            posthog_cli_token=${{ secrets.POSTHOG_CLI_TOKEN }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: mode=max

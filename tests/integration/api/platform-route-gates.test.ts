@@ -105,6 +105,7 @@ const ROUTES: readonly GateRow[] = [
     target: 'tenant',
   },
   { method: 'get', path: '/stats', minRole: 'viewer', requiresStepUp: false },
+  { method: 'get', path: '/system/status', minRole: 'admin', requiresStepUp: false },
   { method: 'get', path: '/audit-log', minRole: 'admin', requiresStepUp: false },
   { method: 'get', path: '/users', minRole: 'viewer', requiresStepUp: false },
   { method: 'get', path: '/users/:id', minRole: 'viewer', requiresStepUp: false, target: 'user' },

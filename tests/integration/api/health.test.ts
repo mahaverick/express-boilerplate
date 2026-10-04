@@ -19,6 +19,11 @@ describe('health probes', () => {
     expect(response.body).toMatchObject({ status: 'ok' })
   })
 
+  it("GET /health carries the release: APP_VERSION, 'dev' outside an image", async () => {
+    const response = await request(app).get('/health')
+    expect(response.body).toMatchObject({ status: 'ok', release: 'dev' })
+  })
+
   it('GET /health/ready reports each dependency', async () => {
     const response = await request(app).get('/health/ready')
     expect([200, 503]).toContain(response.status)
