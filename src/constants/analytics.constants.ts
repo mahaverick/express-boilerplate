@@ -102,3 +102,26 @@ export const ANALYTICS_SIGNATURE_PROPERTY = 'server_sig'
  * events already on their way land first.
  */
 export const ANALYTICS_DELETION_DELAY_MS = 60 * 60 * 1000
+
+/**
+ * The most purged users one deletion tick sends to PostHog, in one
+ * `persons/bulk_delete/` request (PostHog takes up to 1000).
+ */
+export const ANALYTICS_DELETION_BATCH_SIZE = 10
+
+/**
+ * How long a deletion tick's claim holds its rows: past the PostHog request
+ * timeout, so a tick that crashes mid-request releases them.
+ */
+export const ANALYTICS_DELETION_LEASE_SECONDS = 120
+
+/**
+ * Milliseconds between deletion ticks.
+ */
+export const ANALYTICS_DELETION_INTERVAL_MS = 60_000
+
+/**
+ * How long after a purge a failed deletion starts logging at `error`
+ * instead of `warn`.
+ */
+export const ANALYTICS_DELETION_OVERDUE_MS = 24 * 60 * 60 * 1000

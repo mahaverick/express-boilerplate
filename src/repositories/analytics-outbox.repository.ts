@@ -158,6 +158,22 @@ export class AnalyticsOutboxRepository {
   }
 
   /**
+   * Delete every row of several distinct ids in one statement, sent or not,
+   * leased or not. The PostHog deletion job calls it for the users it is
+   * about to delete, to remove an event a request still in flight at the
+   * purge committed after the purge's own delete: drained after PostHog's
+   * deletion, it would create the person again.
+   * @param distinctIds - The purged users' ids.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns How many rows were deleted.
+   */
+  async deleteForDistinctIds(distinctIds: string[], executor: DbExecutor = db): Promise<number> {
+    if (distinctIds.length === 0) return 0
+    const result = await executor.delete(outbox).where(inArray(outbox.distinctId, distinctIds))
+    return result.count
+  }
+
+  /**
    * Delete up to `batchSize` rows that occurred before `cutoff`, sent or not,
    * skipping rows a drain holds locked. `= any(array(...))` runs the locking
    * subquery once, for the reason `claimBatch` gives.

@@ -1,28 +1,41 @@
 /**
  * @file The Worker for the "analytics" queue: runs the outbox drain that
- * analytics.job.ts schedules, one job at a time whatever
- * `WORKER_CONCURRENCY` says, so one process never sends two batches at
- * once. Two replicas may; the drain's lease keeps their rows apart.
+ * analytics.job.ts schedules and the PostHog deletion of purged users that
+ * analytics-deletion.job.ts schedules, one job at a time whatever
+ * `WORKER_CONCURRENCY` says, so one process never sends two requests to
+ * PostHog at once. Two replicas may; each job's claim keeps their rows apart.
  */
 import { UnrecoverableError, Worker, type Job } from 'bullmq'
+import { isAnalyticsEnabled } from '@/configs/analytics.config'
+import { ANALYTICS_DELETIONS_JOB } from '@/jobs/analytics-deletion.job'
 import { ANALYTICS_DRAIN_JOB } from '@/jobs/analytics.job'
+import { processAnalyticsDeletions } from '@/services/analytics/analytics-deletion.service'
 import { drainAnalyticsOutbox } from '@/services/analytics/analytics-drain.service'
 import { logger } from '@/services/logger.service'
 import { getQueueConnection } from '@/services/queue.service'
 import { redisKey } from '@/services/redis.service'
 
 /**
- * Process one analytics job. Exported for unit testing.
+ * Process one analytics job, by name. A drain job does nothing while
+ * analytics is off, and a deletion job while the personal API key is not
+ * configured (`processAnalyticsDeletions` checks): the Worker runs when
+ * either is on, and a schedule registered under an earlier configuration
+ * stays in Redis. Exported for unit testing.
  * @param job - The job; only its name is read.
- * @returns Resolves once the drain has settled every row it claimed.
- * @throws {Error} Whatever the drain throws (a database error); the rows stay in the outbox.
+ * @returns Resolves once the drain or the deletion tick has settled every row it claimed.
+ * @throws {Error} Whatever the drain or the deletion tick throws (a database error); the rows stay.
  * @throws {UnrecoverableError} For a job name this worker has no handler for.
  */
 export async function processAnalyticsJob(job: Job): Promise<void> {
-  if (job.name !== ANALYTICS_DRAIN_JOB) {
-    throw new UnrecoverableError(`Unknown analytics job ${job.name}`)
+  if (job.name === ANALYTICS_DRAIN_JOB) {
+    if (isAnalyticsEnabled()) await drainAnalyticsOutbox()
+    return
   }
-  await drainAnalyticsOutbox()
+  if (job.name === ANALYTICS_DELETIONS_JOB) {
+    await processAnalyticsDeletions()
+    return
+  }
+  throw new UnrecoverableError(`Unknown analytics job ${job.name}`)
 }
 
 /**
@@ -39,7 +52,7 @@ export function startAnalyticsWorker(): Worker {
 
   // Warn, never the permanent-failure error: a failed tick loses nothing, and the next one retries.
   worker.on('failed', (job, error) => {
-    logger.warn('Analytics drain failed', { jobId: job?.id, name: job?.name, error })
+    logger.warn('Analytics job failed', { jobId: job?.id, name: job?.name, error })
   })
 
   worker.on('error', (error: unknown) => {

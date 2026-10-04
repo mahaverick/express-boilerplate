@@ -3,7 +3,7 @@
  * signal handling and workers. Excluded from coverage as signal wiring;
  * tests/unit/index.test.ts spawns it to prove boot refuses a bad environment.
  */
-import { isAnalyticsEnabled } from '@/configs/analytics.config'
+import { isAnalyticsEnabled, isTimelineEnabled } from '@/configs/analytics.config'
 import { assertEnvConsistent } from '@/configs/env-consistency.config'
 import { getEnv } from '@/configs/env.config'
 // Static, unlike `@/server`: constructing the logger is lazy and calls no getEnv().
@@ -29,6 +29,7 @@ async function boot(): Promise<void> {
   const { startServer, gracefulShutdown } = await import('@/server')
   const { createShutdownHandler, isShuttingDown } = await import('@/services/lifecycle.service')
   const { redactedForLog } = await import('@/errors/postgres-errors')
+  const { warnIfDeletionsPending } = await import('@/services/analytics/analytics-deletion.service')
 
   // Filled in once the workers start; shutdown reads it only when it runs.
   const workers: { supervised?: SupervisedWorkers } = {}
@@ -42,6 +43,8 @@ async function boot(): Promise<void> {
     // eslint-disable-next-line unicorn/no-process-exit -- a server error is fatal; the exit still goes through the shared once-guard
     handleShutdown((code) => process.exit(code), 1)
   })
+  // Never rejects: a failed count is logged at warn.
+  void warnIfDeletionsPending()
 
   for (const signal of ['SIGTERM', 'SIGINT'] as const) {
     process.on(signal, () => {
@@ -64,7 +67,7 @@ async function boot(): Promise<void> {
   // Throws if a Worker fails to start: boot() rejects, and the unhandledRejection handler exits 1.
   workers.supervised = startWorkers()
   logger.info(
-    isAnalyticsEnabled()
+    isAnalyticsEnabled() || isTimelineEnabled()
       ? 'Workers started (email, notification, maintenance, analytics)'
       : 'Workers started (email, notification, maintenance)'
   )

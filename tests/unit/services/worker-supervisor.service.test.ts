@@ -6,7 +6,8 @@
 import type { Worker } from 'bullmq'
 import type IORedis from 'ioredis'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { isAnalyticsEnabled } from '@/configs/analytics.config'
+import { isAnalyticsEnabled, isTimelineEnabled } from '@/configs/analytics.config'
+import { ensureAnalyticsDeletionSchedule } from '@/jobs/analytics-deletion.job'
 import { ensureAnalyticsDrainSchedule } from '@/jobs/analytics.job'
 import { ensureRetentionSchedule } from '@/jobs/maintenance.job'
 import { markShuttingDown, resetLifecycleForTests } from '@/services/lifecycle.service'
@@ -33,7 +34,11 @@ vi.mock('@/workers/maintenance.worker', () => ({ startMaintenanceWorker: vi.fn()
 vi.mock('@/jobs/maintenance.job', () => ({ ensureRetentionSchedule: vi.fn() }))
 vi.mock('@/workers/analytics.worker', () => ({ startAnalyticsWorker: vi.fn() }))
 vi.mock('@/jobs/analytics.job', () => ({ ensureAnalyticsDrainSchedule: vi.fn() }))
-vi.mock('@/configs/analytics.config', () => ({ isAnalyticsEnabled: vi.fn(() => false) }))
+vi.mock('@/jobs/analytics-deletion.job', () => ({ ensureAnalyticsDeletionSchedule: vi.fn() }))
+vi.mock('@/configs/analytics.config', () => ({
+  isAnalyticsEnabled: vi.fn(() => false),
+  isTimelineEnabled: vi.fn(() => false),
+}))
 
 interface FakeWorker {
   close: ReturnType<typeof vi.fn>
@@ -56,8 +61,8 @@ function fakeWorker(): { worker: FakeWorker; release: () => void } {
 
 /**
  * Wire the mocks: each generation gets its own connection and a fake Worker
- * per starter (three, four with analytics enabled), and registering either
- * schedule resolves.
+ * per starter (three, four with analytics or the timeline enabled), and
+ * registering any schedule resolves.
  * @returns The fakes in start order, the connections, and the lost-connection listener.
  */
 function wireMocks(): {
@@ -86,6 +91,7 @@ function wireMocks(): {
   vi.mocked(startAnalyticsWorker).mockImplementation(start)
   vi.mocked(ensureRetentionSchedule).mockResolvedValue(undefined)
   vi.mocked(ensureAnalyticsDrainSchedule).mockResolvedValue(undefined)
+  vi.mocked(ensureAnalyticsDeletionSchedule).mockResolvedValue(undefined)
   vi.mocked(onWorkerConnectionLost).mockImplementation((listener) => {
     listeners.push(listener)
     return unsubscribe
@@ -105,6 +111,7 @@ describe('startWorkers', () => {
     resetLifecycleForTests()
     vi.clearAllMocks()
     vi.mocked(isAnalyticsEnabled).mockReturnValue(false)
+    vi.mocked(isTimelineEnabled).mockReturnValue(false)
   })
 
   it('closes the lost Workers within the same call and starts new ones on a new connection', () => {
@@ -241,16 +248,65 @@ describe('startWorkers', () => {
     }
   })
 
-  it('starts no analytics Worker and registers no drain schedule while analytics is disabled', () => {
+  it('starts no analytics Worker and registers neither analytics schedule while both are disabled', () => {
     const mocks = wireMocks()
     startWorkers()
 
     expect(mocks.workers).toHaveLength(3)
     expect(startAnalyticsWorker).not.toHaveBeenCalled()
     expect(ensureAnalyticsDrainSchedule).not.toHaveBeenCalled()
+    expect(ensureAnalyticsDeletionSchedule).not.toHaveBeenCalled()
   })
 
-  it('starts the analytics Worker and registers its drain schedule once per generation when analytics is enabled', () => {
+  it('starts the analytics Worker with only the deletion schedule when only the timeline is enabled', () => {
+    vi.mocked(isTimelineEnabled).mockReturnValue(true)
+    const mocks = wireMocks()
+    startWorkers()
+
+    expect(mocks.workers).toHaveLength(4)
+    expect(startAnalyticsWorker).toHaveBeenCalledOnce()
+    expect(ensureAnalyticsDeletionSchedule).toHaveBeenCalledOnce()
+    expect(ensureAnalyticsDrainSchedule).not.toHaveBeenCalled()
+
+    mocks.lose(mocks.connections[0] as IORedis)
+    expect(mocks.workers).toHaveLength(8)
+    expect(ensureAnalyticsDeletionSchedule).toHaveBeenCalledTimes(2)
+  })
+
+  it('starts one analytics Worker and registers both schedules when both are enabled', () => {
+    vi.mocked(isAnalyticsEnabled).mockReturnValue(true)
+    vi.mocked(isTimelineEnabled).mockReturnValue(true)
+    const mocks = wireMocks()
+    startWorkers()
+
+    expect(mocks.workers).toHaveLength(4)
+    expect(startAnalyticsWorker).toHaveBeenCalledOnce()
+    expect(ensureAnalyticsDrainSchedule).toHaveBeenCalledOnce()
+    expect(ensureAnalyticsDeletionSchedule).toHaveBeenCalledOnce()
+  })
+
+  it('logs a failed deletion schedule registration at warn, and keeps the Workers running', async () => {
+    vi.mocked(isTimelineEnabled).mockReturnValue(true)
+    const mocks = wireMocks()
+    const failure = new Error('Redis unreachable')
+    vi.mocked(ensureAnalyticsDeletionSchedule).mockRejectedValueOnce(failure)
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+
+    try {
+      expect(() => startWorkers()).not.toThrow()
+      await new Promise((resolve) => setImmediate(resolve))
+
+      expect(warn).toHaveBeenCalledWith('Registering the PostHog deletion schedule failed', {
+        error: failure,
+      })
+      expect(mocks.workers).toHaveLength(4)
+      for (const { worker } of mocks.workers) expect(worker.close).not.toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('starts the analytics Worker and registers only its drain schedule once per generation when analytics is enabled', () => {
     vi.mocked(isAnalyticsEnabled).mockReturnValue(true)
     const mocks = wireMocks()
     startWorkers()
@@ -265,6 +321,7 @@ describe('startWorkers', () => {
     }
     expect(mocks.workers).toHaveLength(8)
     expect(ensureAnalyticsDrainSchedule).toHaveBeenCalledTimes(2)
+    expect(ensureAnalyticsDeletionSchedule).not.toHaveBeenCalled()
   })
 
   it('logs a failed drain schedule registration at warn, and keeps the Workers running', async () => {
