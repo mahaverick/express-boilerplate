@@ -24,9 +24,11 @@ const SCAN_MAX = 4 * ERROR_VALUE_MAX
  * Postgres's `Key (col)=(value)` detail. The value runs to the line's last
  * `)` that is followed by the end, whitespace or punctuation, so a value
  * containing parentheses is replaced whole; a detail with no such `)` (cut
- * short) is replaced to the end of the line.
+ * short) is replaced to the end of the line. Neither runs past the next
+ * `Key (`, so each detail in a text is handled on its own.
  */
-const KEY_DETAIL_PATTERN = /Key \(([^()]*)\)=\((?:.*\)(?=$|[\s.,;:])|.*)/gm
+const KEY_DETAIL_PATTERN =
+  /Key \(([^()]*)\)=\((?:(?:(?!Key \().)*\)(?=$|[\s.,;:])|(?:(?!Key \().)*)/gm
 
 /**
  * A value Postgres echoes back from the input: `invalid input syntax for
@@ -46,16 +48,18 @@ const PG_RANGE_PATTERN = /\b(value )"(?:[^"]|"")*"(?= is out of range for type)/
 
 /**
  * The snippet V8 echoes in a JSON parse error: `"<text>"... is not valid JSON`.
- * It matches at the start of a line or after `, `.
+ * It matches at the start of a line or after whitespace or `(`.
  */
-const JSON_SNIPPET_PATTERN = /(^|, )(?:\.\.\.)?"[\s\S]*?"(?:\.\.\.)? is not valid JSON/gm
+const JSON_SNIPPET_PATTERN = /(^|[\s(])(?:\.\.\.)?"[\s\S]*?"(?:\.\.\.)? is not valid JSON/gm
 
 /**
  * The credentials in a URL's userinfo: `scheme://user:pass@host`. The
  * scheme and `://` are kept. The userinfo runs to the last `@` before a
- * `/`, `?`, `#` or whitespace, quotes and `@` inside it included.
+ * `/`, `?`, `#` or whitespace, `@` inside it included. A quote ends the
+ * userinfo when a delimiter (`,` `:` `;` `}` `]` or whitespace) follows it, so
+ * it never spans from one JSON field into the next.
  */
-const USERINFO_PATTERN = /\b([a-z][a-z0-9+.-]*:\/\/)[^\s/?#<>]+@/gi
+const USERINFO_PATTERN = /\b([a-z][a-z0-9+.-]*:\/\/)(?:[^\s/?#<>"']|["'](?![,:;}\]\s]))+@/gi
 
 /**
  * A URL or path followed by a query string: the part before `?` is kept.
@@ -89,11 +93,14 @@ const BASIC_PATTERN =
  * included, also inside a JSON string) or a run up to a delimiter. A value
  * already replaced by this scrubber (`[redacted]`, `[token]`...) and the
  * bare words `undefined`, `null`, `missing`, `true` and `false` are left as
- * they are, so `token: undefined` stays readable.
+ * they are, so `token: undefined` stays readable. After `authorization` or
+ * `auth` the value may begin with a scheme word (`Token abc` becomes `Token
+ * [redacted]`), so the credential and not the scheme is replaced; `signature`
+ * covers the part of an AWS header after the credential.
  */
 const KV_SECRET_PATTERN =
-  // eslint-disable-next-line sonarjs/regex-complexity -- one pattern per rule keeps the rule list the spec; scrubText scans at most SCAN_MAX characters
-  /\b([\w-]*?(?:pass(?:word|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|session|sid|cookie|credentials?|authorization|auth|jwt|otp)\\?["']?\s*(?:[:=]|%3D)\s*\\?["']?)(?!(?:(?:Bearer|Basic) )?\[(?:redacted|value|credentials|query|fragment|token|jwt|posthog-key|email|secret)\])(?!(?<![\\"'])(?:undefined|null|missing|true|false)(?=[\s,;&})\]]|$))(?!(?<=["'])(?:undefined|null|missing|true|false)(?=\\?["']))(?:(?<=\\")(?:(?!\\")[^\n])+|(?<=["'])(?:[^"'\\\n]|\\.)+|[^\s"'\\,;&})\]]+)/gi
+  // eslint-disable-next-line sonarjs/regex-complexity, sonarjs/super-linear-regex -- one pattern per rule keeps the rule list the spec; scrubText scans at most SCAN_MAX characters
+  /\b([\w-]*?(?:pass(?:word|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|session|sid|cookie|credentials?|signature|authorization|auth|jwt|otp)\\?["']?\s*(?:[:=]|%3D)\s*\\?["']?(?:(?<=(?:authorization|auth)\\?["']?\s*(?:[:=]|%3D)\s*\\?["']?)[a-z][\w-]*[ \t]+)?)(?!(?:(?:Bearer|Basic) )?\[(?:redacted|value|credentials|query|fragment|token|jwt|posthog-key|email|secret)\])(?!(?<=(?:authorization|auth)\\?["']?\s*(?:[:=]|%3D)\s*\\?["']?)[a-z][\w-]* \[(?:redacted|value|credentials|query|fragment|token|jwt|posthog-key|email|secret)\])(?!(?<![\\"'])(?:undefined|null|missing|true|false)(?=[\s,;&})\]]|$))(?!(?<=["'])(?:undefined|null|missing|true|false)(?=\\?["']))(?:(?<=\\")(?:(?!\\")[^\n])+|(?<=["'])(?:[^"'\\\n]|\\.)+|[^\s"'\\,;&})\]]+)/gi
 
 /**
  * A JSON Web Token: three dot-separated base64url segments, the first
@@ -184,7 +191,7 @@ function capped(value: string, wasCut: boolean): string {
  * `Bearer [token]`; `Basic <base64>` becomes `Basic [token]`, the scheme's case kept; the value of a
  * secret-named key (`password`, `token`, `secret`, `api_key`, `access_key`,
  * `private_key`, `session`, `sid`, `cookie`, `credentials`, `authorization`, `auth`,
- * `jwt`, `otp`) becomes `[redacted]`; a JWT becomes `[jwt]`; a
+ * `jwt`, `otp`, `signature`) becomes `[redacted]`; a JWT becomes `[jwt]`; a
  * PostHog key (`phc_`, `phx_`, `phs_`) becomes `[posthog-key]`; an email
  * address, written with `@` or `%40`, becomes `[email]`; a run of 32 or more
  * hex digits, and a secret-looking run of 40 or more base64 characters

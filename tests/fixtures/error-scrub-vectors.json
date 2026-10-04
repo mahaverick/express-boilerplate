@@ -408,5 +408,85 @@
     "rule": "pg-input",
     "input": "date/time field value out of range: \"2024-13-45\"",
     "expected": "date/time field value out of range: \"[value]\""
+  },
+  {
+    "rule": "userinfo",
+    "input": "{\"cb\":\"https://h\",\"token\":\"ab@cd\"}",
+    "expected": "{\"cb\":\"https://h\",\"token\":\"[redacted]\"}"
+  },
+  {
+    "rule": "userinfo",
+    "input": "{\"url\":\"postgres://db\",\"password\":\"hunter2@x\"}",
+    "expected": "{\"url\":\"postgres://db\",\"password\":\"[redacted]\"}"
+  },
+  {
+    "rule": "userinfo",
+    "input": "{\"url\":\"https://h\",\"password\":\"p@ss word\"}",
+    "expected": "{\"url\":\"https://h\",\"password\":\"[redacted]\"}"
+  },
+  {
+    "rule": "userinfo",
+    "input": "{\"url\":\"https://app.example.com\",\"email\":\"jane@example.com\"}",
+    "expected": "{\"url\":\"https://app.example.com\",\"email\":\"[email]\"}"
+  },
+  {
+    "rule": "userinfo",
+    "input": "redis://u:p'q@h",
+    "expected": "redis://[credentials]@h"
+  },
+  {
+    "rule": "postgres",
+    "input": "Key (email)=(a@b.com) conflicts; Key (id)=(5",
+    "expected": "Key (email)=([value]) conflicts; Key (id)=([value])"
+  },
+  {
+    "rule": "postgres",
+    "input": "Key (a)=(1) exists; Key (b)=(2) exists",
+    "expected": "Key (a)=([value]) exists; Key (b)=([value]) exists"
+  },
+  {
+    "rule": "kv",
+    "input": "Authorization: Token abc123def",
+    "expected": "Authorization: Token [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "Authorization: ApiKey abc123def",
+    "expected": "Authorization: ApiKey [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "auth: Basic realcreds",
+    "expected": "auth: Basic [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "Authorization: Basic hunter2",
+    "expected": "Authorization: Basic [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "authorization: AWS4-HMAC-SHA256 Credential=AKIA/x, Signature=abcdef",
+    "expected": "authorization: AWS4-HMAC-SHA256 [redacted], Signature=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "Authorization: Token [redacted]",
+    "expected": "Authorization: Token [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "signature=abcdef",
+    "expected": "signature=[redacted]"
+  },
+  {
+    "rule": "json-snippet",
+    "input": "SyntaxError: \"hunter2\" is not valid JSON",
+    "expected": "SyntaxError: \"[value]\" is not valid JSON"
+  },
+  {
+    "rule": "json-snippet",
+    "input": "parse failed (\"hunter2\" is not valid JSON)",
+    "expected": "parse failed (\"[value]\" is not valid JSON)"
   }
 ]
