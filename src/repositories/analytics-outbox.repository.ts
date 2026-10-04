@@ -2,11 +2,12 @@
  * @file Query access to `analytics_outbox`. It does not extend
  * `BaseRepository`: a row is never updated by a user or soft-deleted. Writes
  * come from the analytics outbox service; claims, acks, rejections and pruning
- * come from the drainer and the retention job. Every drainer method here is
+ * come from the drainer and the retention job, and the user purge deletes a
+ * purged user's rows. Every drainer method here is
  * one autocommit statement, so no pool connection is held while the drainer
  * talks to PostHog.
  */
-import { inArray, isNull, lt, or, sql } from 'drizzle-orm'
+import { eq, inArray, isNull, lt, or, sql } from 'drizzle-orm'
 import {
   analyticsOutboxModel,
   type AnalyticsOutboxRow,
@@ -141,6 +142,19 @@ export class AnalyticsOutboxRepository {
       .delete(outbox)
       .where(sql`${outbox.rejections} >= ${maxRejections}`)
       .returning({ id: outbox.id, event: outbox.event })
+  }
+
+  /**
+   * Delete every row of one distinct id, sent or not, leased or not: the
+   * user purge calls it in its transaction, so no event of a purged user is
+   * sent after PostHog deletes the person (which would create them again).
+   * @param distinctId - The purged user's id.
+   * @param executor - The purge's transaction.
+   * @returns How many rows were deleted.
+   */
+  async deleteForDistinctId(distinctId: string, executor: DbExecutor): Promise<number> {
+    const result = await executor.delete(outbox).where(eq(outbox.distinctId, distinctId))
+    return result.count
   }
 
   /**

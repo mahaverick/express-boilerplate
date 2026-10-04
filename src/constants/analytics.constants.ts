@@ -95,3 +95,10 @@ export const SYSTEM_DISTINCT_ID = 'system'
  * timelines trust a row's server fields only when it verifies.
  */
 export const ANALYTICS_SIGNATURE_PROPERTY = 'server_sig'
+
+/**
+ * How long after a user purge their PostHog deletion is first sent. PostHog
+ * deletes only events it ingested before the request, so the delay lets
+ * events already on their way land first.
+ */
+export const ANALYTICS_DELETION_DELAY_MS = 60 * 60 * 1000

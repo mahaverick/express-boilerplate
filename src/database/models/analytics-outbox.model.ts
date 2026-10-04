@@ -2,8 +2,9 @@
  * @file The `analytics_outbox` table: server analytics events waiting to be
  * sent to PostHog. A row is written in the same transaction as the change it
  * describes (or right after commit, for a product event), and deleted once
- * PostHog acknowledges it. It holds ids, never PII, so it has no foreign key
- * and no purge touches it: the retention rule drops what PostHog never took.
+ * PostHog acknowledges it. It holds ids, never PII, and has no foreign key:
+ * the retention rule drops what PostHog never took, and a user purge deletes
+ * the purged user's rows (`deleteForDistinctId`).
  */
 import { sql, type InferInsertModel, type InferSelectModel } from 'drizzle-orm'
 import { index, jsonb, pgTable, smallint, timestamp, varchar } from 'drizzle-orm/pg-core'
