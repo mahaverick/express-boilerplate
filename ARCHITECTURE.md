@@ -761,10 +761,10 @@ analytics Worker, every ANALYTICS_DRAIN_INTERVAL_MS, concurrency 1
   endpoint fault, rows kept, one error; either accepted: settle those rows, bisect the rest
 
 analytics Worker, every 60 s (with POSTHOG_PERSONAL_API_KEY and POSTHOG_PROJECT_ID)
-  claimDue: up to 10 rows with not_before <= now, one autocommit UPDATE, 120 s lease
+  claimDue: up to 10 rows with not_before <= now, one autocommit UPDATE, 180 s lease
   (connection released) ── POST <app host>/api/projects/<id>/persons/bulk_delete/ (15 s timeout)
   deleteForDistinctIds: the claimed ids' outbox rows are deleted before the request
-  2xx with no deletion_errors: delete · anything else: keep, last_error, least(2^attempts, 360) min
+  2xx with an empty deletion_errors list: delete · anything else (a 2xx with no list too): keep, last_error, least(2^attempts, 360) min
   a batch of several ids answered ok with a non-empty deletion_errors: each id is sent alone, in the same tick
 
 browser posthog-js ── /api/v1/collect/* ── analytics-proxy limiter ── stream ── ingest or assets host

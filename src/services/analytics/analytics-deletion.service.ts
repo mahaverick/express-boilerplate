@@ -111,8 +111,9 @@ function logFailure(
  *
  * Before the request it deletes any outbox rows of the claimed ids, so an
  * event committed after the purge cannot be sent once PostHog has deleted
- * the person. The lease outlasts the request: `ANALYTICS_DELETION_LEASE_SECONDS`
- * is 120 s and `TIMELINE_POSTHOG_TIMEOUT_MS` bounds the call at 15 s.
+ * the person. The lease covers one batch request plus one request per claimed
+ * id: `ANALYTICS_DELETION_LEASE_SECONDS` is 180 s and
+ * `TIMELINE_POSTHOG_TIMEOUT_MS` bounds each call at 15 s.
  * @param now - The clock the claim and backoff are measured against. Defaults to now.
  * @returns How many rows were deleted and how many failed.
  */

@@ -100,12 +100,12 @@ afterEach(() => {
 })
 
 describe('processAnalyticsDeletions', () => {
-  it('claims ten rows under a two-minute lease and posts their ids to persons/bulk_delete/', async () => {
+  it('claims ten rows under a three-minute lease and posts their ids to persons/bulk_delete/', async () => {
     vi.mocked(posthogApi).mockResolvedValue(accepted([]))
 
     await processAnalyticsDeletions(NOW)
 
-    expect(spy('claimDue')).toHaveBeenCalledWith(10, 120, NOW)
+    expect(spy('claimDue')).toHaveBeenCalledWith(10, 180, NOW)
     expect(posthogApi).toHaveBeenCalledWith('POST', '/api/projects/7/persons/bulk_delete/', {
       distinct_ids: ['user-a'],
       delete_events: true,

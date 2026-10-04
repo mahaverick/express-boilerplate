@@ -110,12 +110,13 @@ export const ANALYTICS_DELETION_DELAY_MS = 60 * 60 * 1000
 export const ANALYTICS_DELETION_BATCH_SIZE = 10
 
 /**
- * How long a deletion tick's claim holds its rows: well past
- * `TIMELINE_POSTHOG_TIMEOUT_MS` (15 s) times the requests one tick can make
- * (one batch call, then at most one per claimed row), so a tick that crashes
- * mid-request releases them and a live one keeps them.
+ * How long a deletion tick's claim holds its rows: it covers one batch
+ * request plus one request per claimed row, each at the
+ * `TIMELINE_POSTHOG_TIMEOUT_MS` (15 s) timeout (11 x 15 s = 165 s at the
+ * batch size), so a tick that crashes mid-request releases them and a live
+ * one keeps them.
  */
-export const ANALYTICS_DELETION_LEASE_SECONDS = 120
+export const ANALYTICS_DELETION_LEASE_SECONDS = 180
 
 /**
  * Milliseconds between deletion ticks.

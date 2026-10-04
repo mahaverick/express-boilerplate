@@ -100,7 +100,7 @@ deletes the user's undelivered `analytics_outbox` rows in the same
 transaction. The `analytics-deletions` job deletes the claimed ids' outbox
 rows again before it calls PostHog, and claims due rows
 (`analytics_deletions_due_idx` on `not_before`), moving `not_before` forward
-by a 120-second lease, and deletes each row once PostHog has queued the
+by a 180-second lease, and deletes each row once PostHog has queued the
 deletion; a failure backs it off `least(2^attempts, 360)` minutes. Like
 `analytics_outbox` it holds an id and no PII and has no foreign key, since
 the user row is gone once the purge commits. **Rows are never pruned:** the

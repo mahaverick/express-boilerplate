@@ -335,8 +335,10 @@ trace, and a restored old event leaves a stuck tenant stuck.
 ## Analytics (PostHog)
 
 Analytics is off until `POSTHOG_PROJECT_KEY` is set: no outbox row is
-written, no analytics Worker starts, and `/api/v1/collect/*` answers 503
-`service_unavailable`. Server events and the browser share one PostHog
+written, no drain runs, and `/api/v1/collect/*` answers 503
+`service_unavailable`. With only `POSTHOG_PERSONAL_API_KEY` and
+`POSTHOG_PROJECT_ID` set, the analytics Worker still starts, to delete purged
+users from PostHog. Server events and the browser share one PostHog
 project per environment, keyed by user id (`distinct_id`) and the `tenant`
 group.
 
@@ -349,7 +351,8 @@ group.
    follows the ingest host's region; `POSTHOG_ASSETS_HOST` overrides it.
    Set the same key as the `POSTHOG_KEY` container env var of react and apex.
    A deployment that runs its workers in separate pods must give those pods
-   `POSTHOG_PROJECT_KEY` too: without it no analytics Worker starts there, rows
+   `POSTHOG_PROJECT_KEY` too: without it the drain does not run there (and no analytics Worker
+   starts unless the personal key and project id are set), so rows
    accumulate and are pruned after the retention window with only a `warn` log.
 3. Deploy, then run `pnpm analytics:backfill-groups` once, so tenants that
    existed before carry their name, status and creation date. It queues one
@@ -463,7 +466,8 @@ Independent of `POSTHOG_PROJECT_KEY`.
 3. Give a PostHog seat to every staff member who will watch replays: Apex
    links to PostHog's replay, person and group pages and embeds nothing.
 4. Optional: run `pnpm analytics:backfill-groups` once, so existing tenants'
-   group properties converge through markers.
+   group properties converge through markers. It needs `POSTHOG_PROJECT_KEY`
+   too and fails without it.
 
 **What a request does.** Query `range` is `24h`, `7d` (default), `30d` or
 `90d`; `view` is `all` (default, pageviews and clicks included) or `key`
