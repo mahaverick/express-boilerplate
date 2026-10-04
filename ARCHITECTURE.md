@@ -31,13 +31,22 @@ shutdown handler (`createShutdownHandler`, `lifecycle.service.ts`). It runs
 `gracefulShutdown` once and exits 1 if that takes longer than
 `SHUTDOWN_TIMEOUT_MS`.
 
+Every process also warns once at boot, after `startServer()`, when purged
+users wait in `analytics_deletions` while `POSTHOG_PERSONAL_API_KEY` and
+`POSTHOG_PROJECT_ID` are not both set (`warnIfDeletionsPending`,
+`analytics-deletion.service.ts`). The warning says it matters on the worker
+deployment and can be ignored on a pod that runs no Workers.
+
 With `WORKER_ENABLED`, `index.ts` then starts the Workers through
 `startWorkers()` (`worker-supervisor.service.ts`): email, notification and
-maintenance, and analytics when `POSTHOG_PROJECT_KEY` is set. Each time the
+maintenance, and analytics when `POSTHOG_PROJECT_KEY` is set or the personal
+API key and project id are (`isTimelineEnabled`). Each time the
 supervisor starts a worker generation (boot is the first) it also registers
 the daily retention schedule (`ensureRetentionSchedule`,
-`src/jobs/maintenance.job.ts`) and, with analytics on, the analytics drain
-schedule (`ensureAnalyticsDrainSchedule`, `src/jobs/analytics.job.ts`). A
+`src/jobs/maintenance.job.ts`), with analytics on the analytics drain
+schedule (`ensureAnalyticsDrainSchedule`, `src/jobs/analytics.job.ts`), and
+with the personal key on the PostHog deletion schedule
+(`ensureAnalyticsDeletionSchedule`, `src/jobs/analytics-deletion.job.ts`). A
 failed registration logs a `warn` and is retried with the next generation. A new
 generation starts only when a worker connection gives up before its first
 ready, so a registration that fails while the Workers stay healthy waits
@@ -103,7 +112,9 @@ message tracking: `GET /platform/emails`, `/platform/emails/health`,
 /platform/onboarding/funnel`, `/platform/onboarding/tenants` and `GET
 /platform/tenants/:id/onboarding`.
 Platform admins also get `GET /platform/audit-log` (filterable by `tenantId`,
-`targetId`, actor, action and access) and every create, update and soft
+`targetId`, actor, action and access), the PostHog timelines `GET
+/platform/users/:id/timeline` and `GET /platform/tenants/:id/timeline` (each
+read audited as `user.timeline_viewed` / `tenant.timeline_viewed`, at most once per staff member, target and view every 10 minutes; the audit fails closed: if its write fails, so does the read, with a 500, and the throttle key it claimed is released, logging at `error` if that release fails too), and every create, update and soft
 action: create a tenant and invite its owner, re-invite an owner, suspend,
 reactivate and archive a tenant, create and edit users, deactivate,
 reactivate, sign out and soft-delete users, send set-password or
@@ -332,7 +343,7 @@ layers above.
 | `platform.service.ts`            | `getPlatformMembership` (one indexed read, no cache), `assertStillPlatformRole` (the actor's platform role re-read under lock inside a staff write, 404 below the route's role, 401 for an account gone or inactive), `autoJoin` (viewer only, verified addresses on `PLATFORM_EMAIL_DOMAINS`), `bootstrapGrant` (the `platform:grant` script only).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `platform-tenant.service.ts`     | `searchAll` (state filter, keyset both ways), `getTenantDetail`, `createTenant` (no members, owner invited in the same transaction), `reissueOwnerInvitation`, `suspendTenant`/`reactivateTenant`/`archiveTenant` (one conditional UPDATE each, `transitionLifecycle`; archive also revokes pending invitations). The only importer of `platform-tenant.repository.ts`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `platform-user.service.ts`       | The staff user directory and user actions: search, detail, create with a set-password mail, edit, password-setup, resend-verification, deactivate, reactivate, sign-out, soft delete. State changes re-read the actor's platform role and the target under lock (`lockStaffPair`); the two mail actions check rank without a lock.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `platform-purge.service.ts`      | `purgeUser` and `purgeTenant`, the only hard deletes. With `retention.service.ts`, the only code that names the audit trigger's settings.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `platform-purge.service.ts`      | `purgeUser` and `purgeTenant`, the only hard deletes. With `retention.service.ts`, the only code that names the audit trigger's settings. `purgeUser` also queues the PostHog deletion (`analytics_deletions`) and deletes the user's outbox rows; `purgeTenant` queues the group's scrub marker.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `platform-stats.service.ts`      | `getPlatformStats`: totals and zero-filled per-UTC-day sign-up and email series for the staff Overview. The only importer of `platform-stats.repository.ts`. `emails[]` (deprecated) counts send attempts: `email_logs` has one row per attempt, so a mail retried and then sent adds both a failed and a sent row. `emailMessages[]` counts messages (`email_messages`) by current status in five disjoint groups. `totals.stuckTenants` comes from `countStuckTenants` (`platform-onboarding.service.ts`).                                                                                                                                                                                                                                                                                                                                       |
 | `platform-email.service.ts`      | Message tracking for staff: search, detail, masked preview, health, the suppression list and lift, and resend, which delegates to resend-verification, password-setup or the invitation resend with their own gates and audit and adds `email.resent`. `canResendFor` computes the list's `canResend` hint with the same predicates (`canStaffMailTarget`, `canActorGrantRole`). The only importer of `platform-email.repository.ts`.                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `platform-onboarding.service.ts` | Staff onboarding: the funnel, the per-state tenant list, one tenant's onboarding with reminder history, `countStuckTenants` for the Overview, marking a tenant step complete through `completeOnboardingStep`, and the reminder (one `onboarding_reminder` per active owner; the owners' `email_messages` rows and the `onboarding.reminder_sent` audit entry are written in one transaction holding the tenant row's lock, which makes the 24-hour limit, read from the latest such entry, race-safe; the jobs are enqueued after commit, and a queue failure leaves the entry and a `failed` row and answers `emailSent: false`), both audited in the tenant; `reconcileOnboarding` for `pnpm onboarding:reconcile`. Progress is derived in SQL by `platform-onboarding.repository.ts`, its only importer, with `deriveOnboardingState`'s rules. |
@@ -728,20 +739,33 @@ for local) is [Email tracking in README.md](README.md#email-tracking).
 ## Analytics
 
 Server events reach PostHog through a transactional outbox, and browser
-events through a proxy; no request ever calls PostHog.
+events through a proxy. No request calls PostHog, with one exception: the
+staff timeline read (`GET /platform/users/:id/timeline`,
+`GET /platform/tenants/:id/timeline`), on a cache miss and within the hourly
+query budget. Deleting a purged user from PostHog runs on the analytics
+Worker, never in the purge's request.
 
 ```
 request ── service transaction ── audit insert ── savepoint: analytics_outbox insert
         ├─ after commit: product domain event ─── analytics_outbox insert (pool)
-        └─ email webhook transaction ─────────── savepoint: analytics_outbox insert
+        ├─ email webhook transaction ─────────── savepoint: analytics_outbox insert
+        └─ purgeUser transaction ──────────────── analytics_deletions insert + the user's outbox rows deleted
 
 analytics Worker, every ANALYTICS_DRAIN_INTERVAL_MS, concurrency 1
   claimBatch: one autocommit UPDATE … FOR UPDATE SKIP LOCKED, 60 s lease
+  resolveGroupMarkers: one tenant read, each $groupidentify gets the tenant's current $group_set
   (connection released) ── POST <POSTHOG_HOST>/batch/ (10 s timeout)
   ack: delete · retry (no answer, 429, 5xx, 401/403/404/405/407/408): keep, lease and backoff
   rejected (400, 413, 415, 422, other 4xx): bisect; a row refused alone counts a rejection, dropped at 3;
   a batch and both its halves rejected: each half's first row sent alone; both refused:
   endpoint fault, rows kept, one error; either accepted: settle those rows, bisect the rest
+
+analytics Worker, every 60 s (with POSTHOG_PERSONAL_API_KEY and POSTHOG_PROJECT_ID)
+  claimDue: up to 10 rows with not_before <= now, one autocommit UPDATE, 120 s lease
+  (connection released) ── POST <app host>/api/projects/<id>/persons/bulk_delete/ (15 s timeout)
+  deleteForDistinctIds: the claimed ids' outbox rows are deleted before the request
+  2xx with no deletion_errors: delete · anything else: keep, last_error, least(2^attempts, 360) min
+  a batch of several ids answered ok with a non-empty deletion_errors: each id is sent alone, in the same tick
 
 browser posthog-js ── /api/v1/collect/* ── analytics-proxy limiter ── stream ── ingest or assets host
 ```
@@ -773,6 +797,16 @@ browser posthog-js ── /api/v1/collect/* ── analytics-proxy limiter ─�
   4xx answers (401, 403, 404, 405, 407, 408) are retryable, never a
   rejection, so a wrong key or host drops nothing; the drain logs one `error`
   per tick naming `POSTHOG_PROJECT_KEY` and `POSTHOG_HOST`.
+- **Signing.** `toPosthogBatchEvent` (`posthog-batch.service.ts`) adds
+  `server_sig` to every event the drain sends, markers and `$set` rows
+  included: HMAC-SHA256, its first 32 hex characters, over the uuid, event,
+  `distinct_id`, `source`, `access`, `target_type`, `target_id` and
+  `$groups.tenant`, keyed by an HKDF of `SESSION_SECRET`
+  (`analytics-signature.service.ts`). The outbox row is not changed. The
+  signer and the timeline mapper (`timeline-mapper.service.ts`) read those
+  fields through one function, `signedFieldsOf`, which keeps a non-empty
+  string and reads anything else (absent, empty, another type) as no value.
+  The mapper trusts a row's server fields only when its signature verifies.
 - **At least once.** A row is deleted after PostHog acknowledged
   it, so a crash between the two resends it with the same `uuid` (the row
   id), `timestamp`, `event` and `distinct_id`. PostHog deduplicates on `uuid`
@@ -787,9 +821,38 @@ browser posthog-js ── /api/v1/collect/* ── analytics-proxy limiter ─�
   504 when PostHog stays silent for 30 s. Without `POSTHOG_PROJECT_KEY` it answers
   503 `service_unavailable`.
 - **Groups.** A tenant's `name`, `status` and `created_at` reach PostHog only
-  as `$groupidentify` properties: from the audit hook when a tenant is
-  created, updated or changes state, and from `pnpm analytics:backfill-groups` for
-  tenants that existed before.
+  as `$groupidentify` properties. The outbox stores a marker
+  (`$group_type`, `$group_key`, `source` and the trace id) and never the
+  name: the audit hook queues one when a tenant is created, updated or
+  changes state, `purgeTenant` queues one, and `pnpm analytics:backfill-groups`
+  queues one per tenant. The drainer fills in `$group_set` from the tenant row
+  when it sends the batch (`resolveGroupMarkers`,
+  `analytics-group-marker.service.ts`), and a tenant with no row (purged)
+  goes out as `{ name: null, status: 'purged' }`, which clears the name.
+  Because the drain is the only sender and runs one batch at a time, the
+  marker PostHog receives last carries the latest committed state, whatever
+  order markers were written, retried or backfilled in. A `$group_set`
+  stored by an earlier release is replaced, never sent. If the tenant read
+  fails, nothing is sent and every claimed row waits for its lease, as after
+  a retryable answer.
+- **Purged users.** `purgeUser` writes an `analytics_deletions` row with
+  `not_before` an hour out (PostHog deletes only events it ingested before
+  the request) and deletes the user's undelivered outbox rows, in its own
+  transaction and whatever the analytics config. The `analytics-deletions`
+  job (`processAnalyticsDeletions`, `analytics-deletion.service.ts`) sends
+  due ids to `persons/bulk_delete/` with `delete_events` and
+  `delete_recordings`, through the personal-key client
+  (`posthog-api.service.ts`). Before the request it deletes the claimed ids'
+  outbox rows again (`deleteForDistinctIds`), so an event committed after the
+  purge cannot recreate the person. A 2xx with an empty `deletion_errors`
+  deletes the rows, including an id PostHog does not know; anything else
+  keeps them with a backoff and logs `warn`, or `error` once a row is a day
+  old. When a batch of several ids is answered 2xx with a non-empty
+  `deletion_errors`, which does not say which id, the job logs one `warn` and
+  sends each id alone in the same tick, so one refused id does not hold back
+  the others; a timeout, a network error or an HTTP error does not split.
+  Without the personal key and project id the job does nothing and the rows
+  wait.
 
 The operator steps are in [Analytics (PostHog) in README.md](README.md#analytics-posthog).
 
@@ -1071,7 +1134,8 @@ process. To split them, set it to `false` on API-only pods and `true` on a
 separate worker deployment that shares the Redis queues. `WORKER_CONCURRENCY`
 (default 5) sets the email and notification Workers' concurrency; the
 maintenance and analytics Workers always run one job at a time, and the daily
-retention purge and the analytics drain run only where Workers run.
+retention purge, the analytics drain and the PostHog deletion of purged users
+run only where Workers run.
 
 One-time repository setup before any of this is live:
 

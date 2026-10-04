@@ -841,12 +841,24 @@ redacted entry from a user entry written without an actor. A tenant purge
 removes the tenant and its own audit entries. Each purge is recorded in the
 platform tenant (`user.purged`, `tenant.purged`).
 
-**A purge does not reach PostHog.** Deleting from PostHog is a later
-sub-project; until then these stay there after a purge: a purged tenant's
-name in its group's `$group_set` properties; a purged user's events and
-person profile (`is_staff`, `platform_role`, `created_at`), keyed by their
-id; and the `user_purged` event's `email_domain`. If you need them gone, delete
-them in PostHog yourself.
+**What a purge does in PostHog.** A user purge queues the deletion of their
+PostHog person with its events and recordings (`analytics_deletions`,
+written in the purge's transaction) and deletes their undelivered outbox
+rows, so nothing of theirs is sent afterwards to recreate the person; the
+job deletes any that arrived since just before it calls PostHog. The
+`analytics-deletions` job sends it an hour later, because PostHog deletes
+only events it ingested before the request, and retries until PostHog has
+queued it; PostHog then deletes in the background. It needs
+`POSTHOG_PERSONAL_API_KEY` and `POSTHOG_PROJECT_ID`: without them the rows
+wait, and boot warns while any do. Recording removal rests on PostHog's
+documented `delete_recordings` flag. A tenant purge cannot delete the
+PostHog group, so it queues a `$groupidentify` marker that the drainer sends
+as `{ name: null, status: 'purged' }`, clearing the name. These stay in
+PostHog: the `user_purged` event's `email_domain`, which is the acting
+owner's event, not the purged user's; staff events about the purged user
+(`target_id` is their id), which belong to the staff who acted; and a
+purged tenant's group key and `created_at`, and its events, which are keyed
+by the tenant id and carry no name.
 
 ### Email tracking: what is stored, and what a resend can do
 
@@ -914,12 +926,21 @@ proxies the browsers' posthog-js traffic; without it, neither happens.
   user and email audit events carry `email_domain`, and
   `onboarding_reminder_sent` carries `email_domains`. `distinct_id` (a user id)
   and `$session_id` are pseudonymous identifiers, not anonymous ones: they
-  identify a person to anyone who can look the id up. A purge leaves them in
-  PostHog (see "Purge: the only hard delete").
+  identify a person to anyone who can look the id up. A user purge deletes
+  the person and their events from PostHog (see "Purge: the only hard delete").
 - **Accepted risk: a client chooses its own trace ids.** The API parents a
   request's span on the `traceparent` header the frontends send, and events
   carry that `trace_id`. A trace id is a correlation key only and never
   authorizes anything.
+- **Browser events are client-reported; server events are signed.** The
+  project key is public, so anyone can send PostHog any event, under any
+  `distinct_id` or `target_id`. The drainer adds `server_sig` to every server
+  event (an HMAC keyed from `SESSION_SECRET`, `analytics-signature.service.ts`),
+  and the staff timelines present a row's `source`, `access` and target only
+  when it verifies: an unverified row is shown as a browser event, and one
+  that reaches a timeline only through a forged target is dropped.
+  **Accepted risk:** PostHog's own UI still shows forged events, and a flood
+  of forged events can push real rows onto later timeline pages.
 
 ## What this boilerplate does NOT implement
 

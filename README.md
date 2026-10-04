@@ -123,7 +123,7 @@ refuses a non-JSON body with 415. See
 | `pnpm platform:grant -- <e> <role>` | Gives a platform-tenant role; see below.                                                   |
 | `pnpm email:fire-event <id> <type>` | Signs and posts a fake provider event (local only); see [Email tracking](#email-tracking). |
 | `pnpm onboarding:reconcile`         | Re-derives tracked tenants' automatic onboarding steps; see [Onboarding](#onboarding).     |
-| `pnpm analytics:backfill-groups`    | Sends every tenant's PostHog group properties; see [Analytics](#analytics-posthog).        |
+| `pnpm analytics:backfill-groups`    | Queues every tenant's PostHog group properties; see [Analytics](#analytics-posthog).       |
 | `pnpm commit`                       | Interactive conventional-commit prompt.                                                    |
 
 `pnpm platform:grant -- <email> <role>` gives an existing user with a verified
@@ -352,9 +352,10 @@ group.
    `POSTHOG_PROJECT_KEY` too: without it no analytics Worker starts there, rows
    accumulate and are pruned after the retention window with only a `warn` log.
 3. Deploy, then run `pnpm analytics:backfill-groups` once, so tenants that
-   existed before carry their name, status and creation date. It sends
-   straight to PostHog and exits 1 if PostHog refuses a batch; a second run
-   is harmless.
+   existed before carry their name, status and creation date. It queues one
+   `$groupidentify` marker per tenant in the outbox, which the analytics
+   Worker sends with each tenant's state at send time, and exits 1 if a
+   batch could not be queued; a second run is harmless.
 4. If react runs with the container env `ANALYTICS_CONSENT_MODE=required`, enable
    "Cookieless server hash mode" in the project settings.
 5. Set `TRUST_PROXY` to the number of proxies in front of this app, counting
@@ -388,7 +389,10 @@ plain property and join no group, because the recipient is not a member.
 `distinct_id` and `$session_id` are pseudonymous identifiers. `$session_id`
 is sent only on an event of the user whose browser sent it (a sign-in,
 sign-up or sign-out counts, as the request carries no access token); `$groupidentify`, a
-`$set` for another user and `system` events never carry it. A purge does not reach PostHog: see
+`$set` for another user and `system` events never carry it. A user purge
+deletes the person, their events and their recordings from PostHog an hour
+later, once `POSTHOG_PERSONAL_API_KEY` and `POSTHOG_PROJECT_ID` are set, and a
+tenant purge clears the group's name: see
 [SECURITY.md](SECURITY.md#purge-the-only-hard-delete) for what stays there.
 
 **How it is delivered.** The request that causes an event writes one
@@ -453,9 +457,13 @@ Independent of `POSTHOG_PROJECT_KEY`.
    of the project `POSTHOG_PROJECT_KEY` reports to). The app host follows
    the ingest host's region (`https://us.posthog.com` or
    `https://eu.posthog.com`); set `POSTHOG_APP_HOST` for a self-hosted
-   PostHog. The apex image needs nothing new.
+   PostHog. The apex image needs nothing new. Set them on the worker pods
+   too: the PostHog deletion of purged users runs on the analytics Worker,
+   and boot warns while deletions wait for them.
 3. Give a PostHog seat to every staff member who will watch replays: Apex
    links to PostHog's replay, person and group pages and embeds nothing.
+4. Optional: run `pnpm analytics:backfill-groups` once, so existing tenants'
+   group properties converge through markers.
 
 **What a request does.** Query `range` is `24h`, `7d` (default), `30d` or
 `90d`; `view` is `all` (default, pageviews and clicks included) or `key`
@@ -468,7 +476,8 @@ follows. Every request, a cursor page
 included, writes `user.timeline_viewed` or `tenant.timeline_viewed`, at most
 once per staff member, target and view every 10 minutes
 (`TIMELINE_AUDIT_THROTTLE_SECONDS`), before the 30 s Redis cache is read, so
-a cached page is audited too; with Redis down every request is audited. A
+a cached page is audited too; with Redis down every request is audited. The
+audit fails closed: if its write fails, so does the read, with a 500. A
 cache miss spends one of `TIMELINE_QUERY_BUDGET_PER_HOUR` (1200) PostHog
 queries per rolling hour, counted across replicas; PostHog allows 2400 an
 hour for the whole organization, its own UI included. Each staff member may

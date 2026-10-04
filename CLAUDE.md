@@ -106,14 +106,15 @@ rather than repeating them.
 ## Analytics
 
 - **Never call PostHog from a request, except the staff timeline read.**
-  Events reach PostHog only from the drain (`analytics-drain.service.ts`)
-  and the groups backfill, both through `sendBatch`
-  (`posthog-batch.service.ts`), and from the browser through the
-  `/api/v1/collect` proxy; a request writes an outbox row and nothing else.
-  The one request that calls PostHog is a timeline read
-  (`platform-timeline.service.ts`): on a cache miss, within the hourly
-  budget, through `posthogApi` (`posthog-api.service.ts`). See
-  [ARCHITECTURE.md](ARCHITECTURE.md#analytics).
+  The only server code that sends events to PostHog is the drain
+  (`analytics-drain.service.ts`), through `sendBatch`
+  (`posthog-batch.service.ts`); the groups backfill queues markers for it.
+  The PostHog deletion of purged users runs on the analytics Worker
+  (`analytics-deletion.service.ts`). The only browser path is the
+  `/api/v1/collect` proxy. A request writes an outbox row and nothing else,
+  except a timeline read (`platform-timeline.service.ts`), which queries
+  PostHog on a cache miss, within the hourly budget, through `posthogApi`
+  (`posthog-api.service.ts`). See [ARCHITECTURE.md](ARCHITECTURE.md#analytics).
 - **Send PostHog only the two HogQL templates in `timeline-query.service.ts`.**
   Every id, the range and the cursor go in `values`; the one token written
   into the query text is the `tenant` group type index, checked as an
@@ -130,7 +131,15 @@ rather than repeating them.
   `enqueueAuditAnalytics` for an audit entry** (`analytics-outbox.service.ts`),
   never the repository directly: they are the savepoint
   inside a transaction and the `try`/`catch` on the pool that keep a failed
-  insert from failing the user's action.
+  insert from failing the user's action. `enqueueAnalyticsOrThrow` is for
+  the groups backfill only, which no user's action waits on.
+- **Never store `$group_set` in the outbox.** A `$groupidentify` row is a
+  marker (`buildTenantGroupIdentify`); the drainer reads the tenant when it
+  sends it (`resolveGroupMarkers`). A stored snapshot, retried or sent late,
+  would overwrite a newer one in PostHog.
+- **A user purge must delete the user's outbox rows in its transaction**
+  (`deleteForDistinctId`): an event sent after PostHog deletes the person
+  recreates it.
 - **New audit actions forward automatically,** as the action with `.`
   replaced by `_`. If that name collides with a product or `email_*` event,
   add the action to `AUDIT_EVENT_RENAMES`; the builder's collision test

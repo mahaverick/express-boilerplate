@@ -88,6 +88,25 @@ own transaction. `RETENTION_TOKENS_DAYS=0` turns the rule off. Migration
 `0017` adds the indexes the predicate uses. `user_tokens.deleted_at` is not
 used by the purge, which deletes soft-deleted rows by the same rule.
 
+### `analytics_deletions`
+
+`analytics-deletion.model.ts` holds one row per purged user whose PostHog
+person, events and recordings are still to be deleted: `distinct_id` (the
+user's id, the primary key), `not_before`, `attempts`, `last_error` (an HTTP
+status or an error class such as `http_500` or `timeout`, never a response
+body) and `created_at`. `purgeUser` inserts the row in its own transaction
+with `not_before` an hour out, so a rolled-back purge leaves none, and
+deletes the user's undelivered `analytics_outbox` rows in the same
+transaction. The `analytics-deletions` job deletes the claimed ids' outbox
+rows again before it calls PostHog, and claims due rows
+(`analytics_deletions_due_idx` on `not_before`), moving `not_before` forward
+by a 120-second lease, and deletes each row once PostHog has queued the
+deletion; a failure backs it off `least(2^attempts, 360)` minutes. Like
+`analytics_outbox` it holds an id and no PII and has no foreign key, since
+the user row is gone once the purge commits. **Rows are never pruned:** the
+retention purge does not touch the table, and a row that PostHog keeps
+refusing stays, logging at `error` once it is a day old.
+
 `drizzle.config.ts`'s schema glob (`./src/database/models/*.model.ts`) picks
 up a new model automatically — no config change needed to add one.
 
@@ -383,6 +402,10 @@ second time under the lock, then run `pnpm db:migrate`.
   transaction commits, so every request that reads a user waits for it.
   `analytics_outbox` is new and empty, and has no foreign key, so its index
   builds instantly.
+
+- **`0023` locks nothing that exists.** It creates `analytics_deletions`,
+  new and empty with no foreign key, and its `not_before` index, so it
+  applies instantly on any database.
 
 ## Test database
 
