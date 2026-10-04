@@ -3,8 +3,9 @@
  * PostHog, and settle each row by the answer. The lease is one autocommit
  * statement, so no pool connection is held while PostHog is called. A row
  * leaves the outbox only when PostHog acknowledges it, when PostHog has
- * rejected it alone `ANALYTICS_POISON_REJECTIONS` times, or when the
- * retention purge drops it: a PostHog outage of any length, or a hanging
+ * rejected it alone `ANALYTICS_POISON_REJECTIONS` times, when the
+ * retention purge drops it, or when a user's purge or the deletion tick
+ * removes that user's rows (`deleteForDistinctId`, `deleteForDistinctIds`): a PostHog outage of any length, or a hanging
  * PostHog, only delays rows.
  */
 import { getEnv } from '@/configs/env.config'

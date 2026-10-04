@@ -33,6 +33,28 @@ export interface DeletionResult {
 }
 
 /**
+ * The `persons_found` count of a 2xx answer.
+ * @param result - How the call ended.
+ * @returns The count, or 0 when the call failed or the body has none.
+ */
+function personsFoundOf(result: PosthogApiResult): number {
+  if (result.kind !== 'ok') return 0
+  const found = (result.json as { persons_found?: unknown } | null | undefined)?.persons_found
+  return typeof found === 'number' ? found : 0
+}
+
+/**
+ * Log one `info` line for a tick that deleted rows: the count and the
+ * persons PostHog found, never an id.
+ * @param deleted - Rows deleted by the tick.
+ * @param personsFound - The summed `persons_found` of the answers that deleted them.
+ */
+function logDeleted(deleted: number, personsFound: number): void {
+  if (deleted > 0)
+    logger.info('PostHog queued purged users for deletion', { deleted, personsFound })
+}
+
+/**
  * The `deletion_errors` list of a 2xx answer.
  * @param result - How the call ended.
  * @returns The list, or undefined when the call failed or the body has none.
@@ -58,8 +80,16 @@ function failureOf(result: PosthogApiResult): string | undefined {
 }
 
 /**
- * Log a failed tick: at `error` when any of its rows was purged more than
- * `ANALYTICS_DELETION_OVERDUE_MS` ago, otherwise at `warn`.
+ * The `last_error` values that mean the key or project is wrong, so no retry
+ * will help.
+ */
+const CREDENTIAL_FAILURES: ReadonlySet<string> = new Set(['http_401', 'http_403', 'http_404'])
+
+/**
+ * Log a failed tick: at `error` at once when PostHog refused the key or the
+ * project (401, 403, 404), at `error` when any of its rows was purged more
+ * than `ANALYTICS_DELETION_OVERDUE_MS` ago, otherwise at `warn`. The key is
+ * never logged.
  * @param rows - The rows whose deletion failed.
  * @param error - The recorded `last_error`.
  * @param result - How the call ended.
@@ -78,6 +108,13 @@ function logFailure(
     rows: rows.length,
     lastError: error,
     deletionErrors: deletionErrorsOf(result)?.length,
+  }
+  if (CREDENTIAL_FAILURES.has(error)) {
+    logger.error(
+      'PostHog refused the deletion; check POSTHOG_PERSONAL_API_KEY and POSTHOG_PROJECT_ID',
+      meta
+    )
+    return
   }
   if (overdue.length > 0) {
     logger.error('PostHog has not deleted purged users for over 24 hours', {
@@ -133,11 +170,15 @@ export async function processAnalyticsDeletions(now: Date = new Date()): Promise
     logger.warn('PostHog rejected part of a deletion batch; sending its ids one by one', {
       rows: rows.length,
     })
-    return deleteOneByOne(rows, now)
+    const split = await deleteOneByOne(rows, now)
+    logDeleted(split.deleted, split.personsFound)
+    return { deleted: split.deleted, failed: split.failed }
   }
   const error = failureOf(result)
   if (error === undefined) {
-    return { deleted: await analyticsDeletionRepository.deleteByIds(ids), failed: 0 }
+    const deleted = await analyticsDeletionRepository.deleteByIds(ids)
+    logDeleted(deleted, personsFoundOf(result))
+    return { deleted, failed: 0 }
   }
   await analyticsDeletionRepository.markFailed(ids, error, now)
   logFailure(rows, error, result, now)
@@ -164,15 +205,19 @@ function sendBulkDelete(ids: string[]): Promise<PosthogApiResult> {
  * backed off on any failure.
  * @param rows - The claimed rows.
  * @param now - The tick's clock.
- * @returns How many rows were deleted and how many failed.
+ * @returns How many rows were deleted and failed, and the summed `persons_found`.
  */
-async function deleteOneByOne(rows: AnalyticsDeletionRow[], now: Date): Promise<DeletionResult> {
-  const outcome: DeletionResult = { deleted: 0, failed: 0 }
+async function deleteOneByOne(
+  rows: AnalyticsDeletionRow[],
+  now: Date
+): Promise<DeletionResult & { personsFound: number }> {
+  const outcome = { deleted: 0, failed: 0, personsFound: 0 }
   for (const row of rows) {
     const result = await sendBulkDelete([row.distinctId])
     const error = failureOf(result)
     if (error === undefined) {
       outcome.deleted += await analyticsDeletionRepository.deleteByIds([row.distinctId])
+      outcome.personsFound += personsFoundOf(result)
       continue
     }
     await analyticsDeletionRepository.markFailed([row.distinctId], error, now)

@@ -2,8 +2,8 @@
  * @file The Worker for the "analytics" queue: runs the outbox drain that
  * analytics.job.ts schedules and the PostHog deletion of purged users that
  * analytics-deletion.job.ts schedules, one job at a time whatever
- * `WORKER_CONCURRENCY` says, so one process never sends two requests to
- * PostHog at once. Two replicas may; each job's claim keeps their rows apart.
+ * `WORKER_CONCURRENCY` says, so this Worker never has two of its jobs
+ * talking to PostHog at once. Two replicas may; each job's claim keeps their rows apart.
  */
 import { UnrecoverableError, Worker, type Job } from 'bullmq'
 import { isAnalyticsEnabled } from '@/configs/analytics.config'

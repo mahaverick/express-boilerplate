@@ -739,7 +739,7 @@ for local) is [Email tracking in README.md](README.md#email-tracking).
 ## Analytics
 
 Server events reach PostHog through a transactional outbox, and browser
-events through a proxy. No request calls PostHog, with one exception: the
+events through a proxy. No request handler calls PostHog's API, with one exception: the
 staff timeline read (`GET /platform/users/:id/timeline`,
 `GET /platform/tenants/:id/timeline`), on a cache miss and within the hourly
 query budget. Deleting a purged user from PostHog runs on the analytics
@@ -829,9 +829,11 @@ browser posthog-js ── /api/v1/collect/* ── analytics-proxy limiter ─�
   when it sends the batch (`resolveGroupMarkers`,
   `analytics-group-marker.service.ts`), and a tenant with no row (purged)
   goes out as `{ name: null, status: 'purged' }`, which clears the name.
-  Because the drain is the only sender and runs one batch at a time, the
-  marker PostHog receives last carries the latest committed state, whatever
-  order markers were written, retried or backfilled in. A `$group_set`
+  Because the drain is the only sender and a process runs one batch at a
+  time, the marker PostHog receives last from one Worker carries the latest
+  committed state, whatever order markers were written, retried or backfilled
+  in. Two Worker replicas whose drains overlap can deliver an older resolved
+  marker after a newer one; the next marker for that tenant corrects it. A `$group_set`
   stored by an earlier release is replaced, never sent. If the tenant read
   fails, nothing is sent and every claimed row waits for its lease, as after
   a retryable answer.

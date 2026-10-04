@@ -12,7 +12,7 @@
  * so a cached page is audited too, and a later PostHog failure does not undo
  * it: it records that staff asked to look. Rows keep their server fields
  * only when their signature verifies (timeline-mapper.service.ts). This is
- * the one request path that calls PostHog.
+ * the one request path that calls PostHog's private API.
  */
 import { isTimelineEnabled, timelineLinks } from '@/configs/analytics.config'
 import { SYSTEM_DISTINCT_ID } from '@/constants/analytics.constants'

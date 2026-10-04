@@ -62,7 +62,7 @@ export async function takeTimelineQueryBudget(
   try {
     await redis.zRem(key, member)
   } catch (error) {
-    // The entry expires with the set, so this over-counts by one for at most an hour.
+    // The next call an hour later removes the entry (zRemRangeByScore), or the set expires, so this over-counts by one for at most an hour.
     logger.warn('Could not return a refused timeline query to the budget', { error })
   }
   return 'exhausted'

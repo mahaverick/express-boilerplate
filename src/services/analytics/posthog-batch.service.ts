@@ -1,5 +1,5 @@
 /**
- * @file The one HTTP call the server makes to PostHog: `POST <POSTHOG_HOST>/batch/`
+ * @file The one call that sends events to PostHog: `POST <POSTHOG_HOST>/batch/`
  * with `fetch`, classified as acknowledged, retryable or rejected. Not
  * posthog-node: its capture resolves on a 500, so it cannot tell the drainer
  * whether a batch landed. It imports no database module, so it opens no pool.

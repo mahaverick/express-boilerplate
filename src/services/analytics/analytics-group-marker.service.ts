@@ -3,9 +3,11 @@
  * marker as `$group_type` and `$group_key` only; the drainer calls
  * `resolveGroupMarkers` once per claimed batch, after the claim and before
  * the first send, and every marker goes out with the tenant's state as it
- * is then. The drainer sends one batch at a time, so whatever arrives at
- * PostHog last carries the latest committed state, in whatever order the
- * markers were written or retried. A tenant with no row (purged) gets its
+ * is then. A process drains one batch at a time, so on one Worker
+ * whatever arrives at PostHog last carries the latest committed state, in
+ * whatever order the markers were written or retried. Two Worker replicas
+ * whose drains overlap can deliver an older resolved marker after a newer
+ * one; the next marker for that tenant corrects it. A tenant with no row (purged) gets its
  * name cleared and its status set to `purged`.
  */
 import type { AnalyticsOutboxRow } from '@/database/models/analytics-outbox.model'

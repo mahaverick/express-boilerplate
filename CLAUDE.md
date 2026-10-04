@@ -105,7 +105,7 @@ rather than repeating them.
 
 ## Analytics
 
-- **Never call PostHog from a request, except the staff timeline read.**
+- **Never call PostHog's API from a request, except the staff timeline read.**
   The only server code that sends events to PostHog is the drain
   (`analytics-drain.service.ts`), through `sendBatch`
   (`posthog-batch.service.ts`); the groups backfill queues markers for it.

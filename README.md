@@ -400,7 +400,7 @@ tenant purge clears the group's name: see
 
 **How it is delivered.** The request that causes an event writes one
 `analytics_outbox` row in its own transaction (in a savepoint, so a failed
-insert never fails the request) and never calls PostHog. The analytics
+insert never fails the request) and never calls PostHog's API. The analytics
 Worker drains the outbox every `ANALYTICS_DRAIN_INTERVAL_MS` (5 s) in batches
 of `ANALYTICS_DRAIN_BATCH_SIZE` (500) and deletes a row only once PostHog
 acknowledged it. While PostHog is down or slow, rows wait and are retried

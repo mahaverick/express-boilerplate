@@ -6,6 +6,7 @@
  * only, never a tenant name.
  */
 import { fileURLToPath } from 'node:url'
+import { redactedForLog } from '@/errors/postgres-errors'
 import { backfillTenantGroups } from '@/services/analytics/analytics-backfill.service'
 import { closeDatabase } from '@/services/database.service'
 
@@ -25,9 +26,31 @@ export async function runAnalyticsBackfillGroups(argv: readonly string[]): Promi
     )
     return 0
   } catch (error) {
-    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)
+    const message = error instanceof Error ? error.message : String(error)
+    const cause = error instanceof Error ? causeText(error.cause) : undefined
+    const suffix = cause === undefined ? '' : ': ' + cause
+    process.stderr.write(`${message}${suffix}\n`)
     return 1
   }
+}
+
+/**
+ * The cause of a failure as text: an error's message, with a database query
+ * error reduced to its name and driver code, because its own message carries
+ * the bound parameters.
+ * @param cause - The error's `cause`.
+ * @returns The text, or undefined when there is no cause.
+ */
+function causeText(cause: unknown): string | undefined {
+  if (cause === undefined) return undefined
+  const safe = redactedForLog(cause)
+  if (safe instanceof Error) return safe.message
+  if (typeof safe === 'object' && safe !== null) {
+    const { name, driverCode } = safe as { name?: unknown; driverCode?: unknown }
+    const code = typeof driverCode === 'string' ? ` (driver code ${driverCode})` : ''
+    return `${typeof name === 'string' ? name : 'QueryError'}${code}`
+  }
+  return String(safe)
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

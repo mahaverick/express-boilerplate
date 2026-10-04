@@ -188,6 +188,70 @@ describe('processAnalyticsDeletions', () => {
     expect(warn).toHaveBeenCalledOnce()
   })
 
+  it.each([
+    ['401', 401],
+    ['404', 404],
+  ])('logs a %s from PostHog at error at once, naming the settings', async (_name, status) => {
+    vi.mocked(posthogApi).mockResolvedValue({ kind: 'http_error', status })
+    const warn = vi.spyOn(logger, 'warn')
+    const error = vi.spyOn(logger, 'error')
+
+    await processAnalyticsDeletions(NOW)
+
+    expect(error).toHaveBeenCalledOnce()
+    expect(error).toHaveBeenCalledWith(
+      'PostHog refused the deletion; check POSTHOG_PERSONAL_API_KEY and POSTHOG_PROJECT_ID',
+      { rows: 1, lastError: `http_${String(status)}`, deletionErrors: undefined }
+    )
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('logs one info line per tick that deleted rows: the count and persons_found, no id', async () => {
+    spy('claimDue').mockResolvedValue([claimed('secret-a'), claimed('secret-b')])
+    spy('deleteByIds').mockResolvedValue(2)
+    vi.mocked(posthogApi).mockResolvedValue({
+      kind: 'ok',
+      status: 202,
+      json: { persons_found: 1, deletion_errors: [] },
+    })
+    const info = vi.spyOn(logger, 'info')
+
+    await processAnalyticsDeletions(NOW)
+
+    expect(info).toHaveBeenCalledOnce()
+    expect(info).toHaveBeenCalledWith('PostHog queued purged users for deletion', {
+      deleted: 2,
+      personsFound: 1,
+    })
+    expect(JSON.stringify(info.mock.calls)).not.toContain('secret')
+  })
+
+  it('sums persons_found over a split tick, and logs nothing when nothing was deleted', async () => {
+    spy('claimDue').mockResolvedValue([claimed('a'), claimed('b')])
+    vi.mocked(posthogApi)
+      .mockResolvedValueOnce(accepted(['bad']))
+      .mockResolvedValueOnce({
+        kind: 'ok',
+        status: 202,
+        json: { persons_found: 1, deletion_errors: [] },
+      })
+      .mockResolvedValueOnce(accepted(['bad']))
+    const info = vi.spyOn(logger, 'info')
+
+    await processAnalyticsDeletions(NOW)
+
+    expect(info).toHaveBeenCalledOnce()
+    expect(info).toHaveBeenCalledWith('PostHog queued purged users for deletion', {
+      deleted: 1,
+      personsFound: 1,
+    })
+
+    info.mockClear()
+    vi.mocked(posthogApi).mockResolvedValue({ kind: 'timeout' })
+    await processAnalyticsDeletions(NOW)
+    expect(info).not.toHaveBeenCalled()
+  })
+
   it('claims nothing and calls nothing when no row is due', async () => {
     spy('claimDue').mockResolvedValue([])
 

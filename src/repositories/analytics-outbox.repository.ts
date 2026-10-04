@@ -2,8 +2,9 @@
  * @file Query access to `analytics_outbox`. It does not extend
  * `BaseRepository`: a row is never updated by a user or soft-deleted. Writes
  * come from the analytics outbox service; claims, acks, rejections and pruning
- * come from the drainer and the retention job, and the user purge deletes a
- * purged user's rows. Every drainer method here is
+ * come from the drainer and the retention job, and a user's rows are deleted
+ * by the user purge (`deleteForDistinctId`) and by the PostHog deletion tick
+ * (`deleteForDistinctIds`). Every drainer method here is
  * one autocommit statement, so no pool connection is held while the drainer
  * talks to PostHog.
  */

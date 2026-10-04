@@ -61,7 +61,9 @@ describe('runAnalyticsBackfillGroups', () => {
       }
     )
 
-    expect(stderr).toHaveBeenCalledWith('Queuing batch 1 failed; 0 tenants were queued before it\n')
+    expect(stderr).toHaveBeenCalledWith(
+      'Queuing batch 1 failed; 0 tenants were queued before it: insert refused\n'
+    )
   })
 
   it('exits 1 with the usage line for any argument', async () => {
