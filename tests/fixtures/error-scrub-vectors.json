@@ -1,0 +1,122 @@
+[
+  {
+    "rule": "postgres",
+    "input": "duplicate key value violates unique constraint \"users_email_unique\"",
+    "expected": "duplicate key value violates unique constraint \"users_email_unique\""
+  },
+  {
+    "rule": "postgres",
+    "input": "duplicate key value violates unique constraint \"users_email_unique\": Key (email)=(jane.doe@example.com) already exists.",
+    "expected": "duplicate key value violates unique constraint \"users_email_unique\": Key (email)=([value]) already exists."
+  },
+  {
+    "rule": "postgres",
+    "input": "Key (tenant_id, email)=(0199a1b2-0000-7000-8000-000000000003, jane@example.com) already exists.",
+    "expected": "Key (tenant_id, email)=([value]) already exists."
+  },
+  {
+    "rule": "postgres",
+    "input": "Key (name)=(Acme (EU) Ltd) already exists.",
+    "expected": "Key (name)=([value]) already exists."
+  },
+  {
+    "rule": "query",
+    "input": "GET https://app.example.com/reset?token=abc123&email=jane%40example.com failed",
+    "expected": "GET https://app.example.com/reset?[query] failed"
+  },
+  {
+    "rule": "query",
+    "input": "fetch /api/v1/users?email=jane@example.com&page=2 returned 500",
+    "expected": "fetch /api/v1/users?[query] returned 500"
+  },
+  {
+    "rule": "jwt",
+    "input": "session eyJhIjoxfQ.eyJiIjoyfQ.c2lnbmF0dXJl was rejected",
+    "expected": "session [jwt] was rejected"
+  },
+  {
+    "rule": "jwt",
+    "input": "unsigned eyJhIjoxfQ.eyJiIjoyfQ. accepted",
+    "expected": "unsigned [jwt] accepted"
+  },
+  {
+    "rule": "bearer",
+    "input": "Authorization: Bearer abc.def-ghi_123 refused",
+    "expected": "Authorization: Bearer [token] refused"
+  },
+  {
+    "rule": "bearer",
+    "input": "header was bearer eyJhIjoxfQ.eyJiIjoyfQ.c2lnbmF0dXJl",
+    "expected": "header was Bearer [token]"
+  },
+  {
+    "rule": "posthog-key",
+    "input": "project phc_test_key_not_real is unknown",
+    "expected": "project [posthog-key] is unknown"
+  },
+  {
+    "rule": "posthog-key",
+    "input": "personal key phx_test_key_not_real lacks a scope",
+    "expected": "personal key [posthog-key] lacks a scope"
+  },
+  {
+    "rule": "posthog-key",
+    "input": "secret phs_test_key_not_real expired",
+    "expected": "secret [posthog-key] expired"
+  },
+  {
+    "rule": "email",
+    "input": "user jane.doe+tag@mail.example.co.uk not found",
+    "expected": "user [email] not found"
+  },
+  {
+    "rule": "secret",
+    "input": "digest 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08 mismatch",
+    "expected": "digest [secret] mismatch"
+  },
+  {
+    "rule": "secret",
+    "input": "blob kX9/qL2mZp7RtY4vWb8/NcE3sHf6JdG1aUoK5iTn0rVy end",
+    "expected": "blob [secret] end"
+  },
+  {
+    "rule": "secret",
+    "input": "blob YSBmaXhlZCBydW4gb2YgYnl0ZXMsIG5vdGhpbmcgc2VjcmV0ISE= end",
+    "expected": "blob [secret] end"
+  },
+  {
+    "rule": "secret",
+    "input": "short dGhpcyBpcyBzaG9ydA stays",
+    "expected": "short dGhpcyBpcyBzaG9ydA stays"
+  },
+  {
+    "rule": "path",
+    "input": "/app/src/services/errors/error-scrubber.service.ts",
+    "expected": "/app/src/services/errors/error-scrubber.service.ts"
+  },
+  {
+    "rule": "path",
+    "input": "/home/runner/work/express-boilerplate/express-boilerplate/src/services/errors/error-event.service.ts",
+    "expected": "/home/runner/work/express-boilerplate/express-boilerplate/src/services/errors/error-event.service.ts"
+  },
+  {
+    "rule": "path",
+    "input": "/Users/Jane/Projects/Shop2/src/services/errors/error-event.service.ts",
+    "expected": "/Users/Jane/Projects/Shop2/src/services/errors/error-event.service.ts"
+  },
+  {
+    "rule": "path",
+    "input": "node:internal/process/task_queues",
+    "expected": "node:internal/process/task_queues"
+  },
+  {
+    "rule": "path",
+    "input": "PlatformUserService.deactivate",
+    "expected": "PlatformUserService.deactivate"
+  },
+  {
+    "rule": "cap",
+    "input": "lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit a",
+    "expected": "lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum d…[truncated]"
+  }
+]

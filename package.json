@@ -58,6 +58,7 @@
     "@opentelemetry/sdk-logs": "0.222.0",
     "@opentelemetry/sdk-node": "^0.222.0",
     "@opentelemetry/semantic-conventions": "^1.43.0",
+    "@posthog/core": "1.55.3",
     "bcrypt": "^6.0.0",
     "bullmq": "^6.3.8",
     "connect-redis": "^10.0.0",

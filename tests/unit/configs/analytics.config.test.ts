@@ -1,11 +1,12 @@
 /**
- * @file isAnalyticsEnabled, isTimelineEnabled, posthogAssetsHost,
+ * @file isAnalyticsEnabled, isErrorTrackingEnabled, isTimelineEnabled, posthogAssetsHost,
  * posthogAppHost and timelineLinks, which are pure functions of the
  * environment slice they are given.
  */
 import { describe, expect, it } from 'vitest'
 import {
   isAnalyticsEnabled,
+  isErrorTrackingEnabled,
   isTimelineEnabled,
   posthogAppHost,
   posthogAssetsHost,
@@ -157,5 +158,24 @@ describe('timelineLinks', () => {
     expect(() =>
       timelineLinks({ kind: 'user', id: 'user-1' }, { ...env, POSTHOG_PROJECT_ID: undefined })
     ).toThrow('POSTHOG_PROJECT_ID is not set')
+  })
+})
+
+describe('isErrorTrackingEnabled', () => {
+  it('is on only with a project key and the switch on', () => {
+    const key = 'phc_test_key_not_real'
+    expect(isErrorTrackingEnabled({ POSTHOG_PROJECT_KEY: key, ERROR_TRACKING_ENABLED: true })).toBe(
+      true
+    )
+    expect(
+      isErrorTrackingEnabled({ POSTHOG_PROJECT_KEY: key, ERROR_TRACKING_ENABLED: false })
+    ).toBe(false)
+    expect(
+      isErrorTrackingEnabled({ POSTHOG_PROJECT_KEY: undefined, ERROR_TRACKING_ENABLED: true })
+    ).toBe(false)
+  })
+
+  it('is off under the test environment', () => {
+    expect(isErrorTrackingEnabled()).toBe(false)
   })
 })
