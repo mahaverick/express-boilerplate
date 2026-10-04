@@ -10,7 +10,10 @@ import { randomUUID } from 'node:crypto'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { drainAnalyticsOutbox } from '@/services/analytics/analytics-drain.service'
 import { buildTenantGroupIdentify } from '@/services/analytics/analytics-event-builder.service'
-import { isAnalyticsSignatureValid } from '@/services/analytics/analytics-signature.service'
+import {
+  isAnalyticsSignatureValid,
+  signedFieldsOf,
+} from '@/services/analytics/analytics-signature.service'
 import type { PosthogBatchEvent } from '@/services/analytics/posthog-batch.service'
 import { sql } from '@/services/database.service'
 import { startFakePosthog, type FakePosthog } from '../../../helpers/fake-posthog'
@@ -57,35 +60,17 @@ async function seed(
 }
 
 /**
- * A property as the signature reads it.
- * @param value - The sent property.
- * @returns The string, or null.
- */
-function field(value: unknown): string | null {
-  // eslint-disable-next-line unicorn/no-null -- the signature covers an absent field as null
-  return typeof value === 'string' ? value : null
-}
-
-/**
  * Whether a sent event's `server_sig` verifies over the fields it was sent with.
  * @param sent - The event as the fake received it.
  * @returns The verifier's answer.
  */
 function isVerified(sent: PosthogBatchEvent): boolean {
-  const properties = sent.properties
-  const groups = properties.$groups as { tenant?: unknown } | undefined
   return isAnalyticsSignatureValid(
-    {
-      uuid: sent.uuid,
-      event: sent.event,
-      distinctId: sent.distinct_id,
-      source: field(properties.source),
-      access: field(properties.access),
-      targetType: field(properties.target_type),
-      targetId: field(properties.target_id),
-      tenant: field(groups?.tenant),
-    },
-    String(properties.server_sig)
+    signedFieldsOf(
+      { uuid: sent.uuid, event: sent.event, distinctId: sent.distinct_id },
+      sent.properties
+    ),
+    String(sent.properties.server_sig)
   )
 }
 

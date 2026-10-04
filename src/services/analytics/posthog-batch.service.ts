@@ -10,7 +10,10 @@ import {
   ANALYTICS_SIGNATURE_PROPERTY,
 } from '@/constants/analytics.constants'
 import type { AnalyticsOutboxRow } from '@/database/models/analytics-outbox.model'
-import { signAnalyticsEvent } from '@/services/analytics/analytics-signature.service'
+import {
+  signAnalyticsEvent,
+  signedFieldsOf,
+} from '@/services/analytics/analytics-signature.service'
 
 /**
  * One event in a PostHog `/batch/` request body. `uuid` is the outbox row id,
@@ -43,16 +46,6 @@ export type SendResult =
 export const ENDPOINT_LEVEL_STATUSES: ReadonlySet<number> = new Set([401, 403, 404, 405, 407, 408])
 
 /**
- * A property's value when it is a string, else null.
- * @param value - The stored property.
- * @returns The string, or null.
- */
-function stringOrNull(value: unknown): string | null {
-  // eslint-disable-next-line unicorn/no-null -- the signature covers an absent field as null
-  return typeof value === 'string' ? value : null
-}
-
-/**
  * The `/batch/` form of an outbox row, signed: `server_sig`
  * (`ANALYTICS_SIGNATURE_PROPERTY`) covers the uuid, event, distinct id,
  * `source`, `access`, `target_type`, `target_id` and `$groups.tenant`
@@ -66,17 +59,9 @@ export function toPosthogBatchEvent(
   row: Pick<AnalyticsOutboxRow, 'id' | 'event' | 'distinctId' | 'properties' | 'occurredAt'>
 ): PosthogBatchEvent {
   const properties = row.properties
-  const groups = properties.$groups as { tenant?: unknown } | null | undefined
-  const signature = signAnalyticsEvent({
-    uuid: row.id,
-    event: row.event,
-    distinctId: row.distinctId,
-    source: stringOrNull(properties.source),
-    access: stringOrNull(properties.access),
-    targetType: stringOrNull(properties.target_type),
-    targetId: stringOrNull(properties.target_id),
-    tenant: stringOrNull(groups?.tenant),
-  })
+  const signature = signAnalyticsEvent(
+    signedFieldsOf({ uuid: row.id, event: row.event, distinctId: row.distinctId }, properties)
+  )
   return {
     event: row.event,
     distinct_id: row.distinctId,

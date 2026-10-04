@@ -72,6 +72,51 @@ function canonical(fields: SignedEventFields): string {
 }
 
 /**
+ * A property as the signature reads it: a non-empty string is kept, and
+ * anything else (missing, empty, a number, a boolean, an object) is null.
+ * @param value - The property's value.
+ * @returns The string, or null.
+ */
+function signedText(value: unknown): string | null {
+  // eslint-disable-next-line unicorn/no-null -- the signature covers an absent field as null
+  return typeof value === 'string' && value !== '' ? value : null
+}
+
+/**
+ * The signed fields of an event, read from its properties by the one rule
+ * both the signer (the drainer) and the verifier (the timeline mapper) use,
+ * so they cannot disagree about an absent or oddly typed field. It reads
+ * `source`, `access`, `target_type`, `target_id` and `$groups.tenant`; a
+ * `$groups` that is not an object reads as no tenant.
+ * @param identity - The event's uuid, event name and distinct id.
+ * @param identity.uuid - The uuid.
+ * @param identity.event - The event name.
+ * @param identity.distinctId - The distinct id.
+ * @param properties - The event's properties, or a view shaped like them.
+ * @returns The fields to sign or verify.
+ */
+export function signedFieldsOf(
+  identity: { uuid: string; event: string; distinctId: string },
+  properties: Record<string, unknown>
+): SignedEventFields {
+  const groups = properties.$groups
+  const tenant =
+    typeof groups === 'object' && groups !== null
+      ? (groups as { tenant?: unknown }).tenant
+      : undefined
+  return {
+    uuid: identity.uuid,
+    event: identity.event,
+    distinctId: identity.distinctId,
+    source: signedText(properties.source),
+    access: signedText(properties.access),
+    targetType: signedText(properties.target_type),
+    targetId: signedText(properties.target_id),
+    tenant: signedText(tenant),
+  }
+}
+
+/**
  * Sign a server event.
  * @param fields - The event's signed fields, as they will be sent.
  * @returns The first 32 hex characters of the HMAC-SHA256.

@@ -14,7 +14,10 @@
  */
 import type { AuditAccess } from '@/constants/audit.constants'
 import { TIMELINE_ELEMENT_TEXT_MAX, TIMELINE_PROP_KEYS } from '@/constants/timeline.constants'
-import { isAnalyticsSignatureValid } from '@/services/analytics/analytics-signature.service'
+import {
+  isAnalyticsSignatureValid,
+  signedFieldsOf,
+} from '@/services/analytics/analytics-signature.service'
 import type {
   TimelineApp,
   TimelineCursor,
@@ -71,15 +74,6 @@ export interface TimelineMapTarget {
  */
 function text(value: unknown): string | undefined {
   return typeof value === 'string' && value !== '' ? value : undefined
-}
-
-/**
- * A column as the signature reads it: the string, or null when absent.
- * @param value - The column's value.
- * @returns The string or null.
- */
-function signedText(value: unknown): string | null {
-  return text(value) ?? null // eslint-disable-line unicorn/no-null -- the signer's "absent"
 }
 
 /**
@@ -164,17 +158,15 @@ function isSigned(
 ): boolean {
   const targetType = FIRST_PROP_COLUMN + TIMELINE_PROP_KEYS.indexOf('target_type')
   const targetId = FIRST_PROP_COLUMN + TIMELINE_PROP_KEYS.indexOf('target_id')
-  return isAnalyticsSignatureValid(
-    {
-      ...identity,
-      source: signedText(row[COLUMN.source]),
-      access: signedText(row[COLUMN.access]),
-      targetType: signedText(row[targetType]),
-      targetId: signedText(row[targetId]),
-      tenant: signedText(row[TENANT_COLUMN]),
-    },
-    row[SIGNATURE_COLUMN]
-  )
+  // The raw columns as the properties the signer read, so both sides use one rule.
+  const properties = {
+    source: row[COLUMN.source],
+    access: row[COLUMN.access],
+    target_type: row[targetType],
+    target_id: row[targetId],
+    $groups: { tenant: row[TENANT_COLUMN] },
+  }
+  return isAnalyticsSignatureValid(signedFieldsOf(identity, properties), row[SIGNATURE_COLUMN])
 }
 
 /**
