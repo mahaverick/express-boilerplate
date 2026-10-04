@@ -14,10 +14,16 @@ interface RouteLayer {
     methods: Record<string, boolean>
     stack: Array<{ handle: RequestHandler }>
   }
+  handle: { stack?: RouteLayer[] }
+  path?: string
+  match(path: string): boolean
 }
 
 function handlersFor(router: Router, method: string, path: string): RequestHandler[] {
-  const layers = router.stack as unknown as RouteLayer[]
+  return handlersIn(router.stack as unknown as RouteLayer[], method, path)
+}
+
+function handlersIn(layers: RouteLayer[], method: string, path: string): RequestHandler[] {
   const layer = layers.find(
     (candidate) => candidate.route?.path === path && candidate.route.methods[method] === true
   )
@@ -61,5 +67,29 @@ describe('createPlatformRouter', () => {
     expect((handlers[3] as unknown as Record<symbol, unknown>)[RATE_LIMITER_MARK]).toBe(
       'platform-write'
     )
+  })
+
+  it('gates the tenant timeline at admin, then the timeline limiter', () => {
+    const handlers = handlersFor(createPlatformRouter(), 'get', '/tenants/:id/timeline')
+
+    expect(handlers).toHaveLength(3)
+    expect(Object.hasOwn(handlers[0] ?? {}, RATE_LIMITER_MARK)).toBe(false)
+    expect((handlers[1] as unknown as Record<symbol, unknown>)[RATE_LIMITER_MARK]).toBe(
+      'platform-timeline'
+    )
+  })
+
+  it('shares one timeline limiter between the user and the tenant timelines', () => {
+    const router = createPlatformRouter()
+    const users = (router.stack as unknown as RouteLayer[]).find(
+      (layer) =>
+        Array.isArray(layer.handle.stack) && layer.match('/users') && layer.path === '/users'
+    )
+    if (!users?.handle.stack) throw new Error('no /users sub-router')
+
+    const userLimiter = handlersIn(users.handle.stack, 'get', '/:id/timeline')[1]
+    const tenantLimiter = handlersFor(router, 'get', '/tenants/:id/timeline')[1]
+
+    expect(userLimiter).toBe(tenantLimiter)
   })
 })

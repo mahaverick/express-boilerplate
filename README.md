@@ -434,6 +434,59 @@ silent for 30 s is answered 504. It has its own limiter
 _site_ from the API cannot load `/api/v1/collect/static/*` scripts; the same
 origin through the frontends' nginx, as shipped, is unaffected.
 
+### Staff timelines
+
+`GET /api/v1/platform/users/:id/timeline` and
+`GET /api/v1/platform/tenants/:id/timeline` (platform admin and up) show
+Apex what a user or a tenant did, browser and server events together, read
+from PostHog with a personal API key. They are off until both
+`POSTHOG_PERSONAL_API_KEY` and `POSTHOG_PROJECT_ID` are set, and answer
+`{ configured: false }` until then; boot warns when only one is set.
+Independent of `POSTHOG_PROJECT_KEY`.
+
+**Turning them on, once per environment:**
+
+1. In PostHog, create a personal API key with only the scopes `query:read`,
+   `person:write` and `group:read`, owned by a service account rather than
+   a person.
+2. Set `POSTHOG_PERSONAL_API_KEY` and `POSTHOG_PROJECT_ID` (the numeric id
+   of the project `POSTHOG_PROJECT_KEY` reports to). The app host follows
+   the ingest host's region (`https://us.posthog.com` or
+   `https://eu.posthog.com`); set `POSTHOG_APP_HOST` for a self-hosted
+   PostHog. The apex image needs nothing new.
+3. Give a PostHog seat to every staff member who will watch replays: Apex
+   links to PostHog's replay, person and group pages and embeds nothing.
+
+**What a request does.** Query `range` is `24h`, `7d` (default), `30d` or
+`90d`; `view` is `all` (default, pageviews and clicks included) or `key`
+(no `$` events); `before` is the opaque `nextCursor` of the page before.
+The server sends one of two fixed HogQL queries, with every id in its
+placeholder values, and returns at most 100 rows built from a fixed property
+allowlist (a page URL is cut to its pathname); a page can hold fewer once
+forged and duplicate rows are removed, and `nextCursor` says whether another
+follows. Every request, a cursor page
+included, writes `user.timeline_viewed` or `tenant.timeline_viewed`, at most
+once per staff member, target and view every 10 minutes
+(`TIMELINE_AUDIT_THROTTLE_SECONDS`), before the 30 s Redis cache is read, so
+a cached page is audited too; with Redis down every request is audited. A
+cache miss spends one of `TIMELINE_QUERY_BUDGET_PER_HOUR` (1200) PostHog
+queries per rolling hour, counted across replicas; PostHog allows 2400 an
+hour for the whole organization, its own UI included. Each staff member may
+make `TIMELINE_REQUESTS_PER_MINUTE` (20) timeline requests a minute. A PostHog
+error, a timeout (15 s), a spent budget or, for a tenant timeline, a project
+without a `tenant` group type answers 502 `TIMELINE_UNAVAILABLE`; a 401, 403
+or 404 from PostHog also logs `Timeline key or project misconfigured` at
+`error`. Events reach a timeline only after PostHog has ingested them, and up
+to 30 s later still while a cached page lives.
+
+**Signed server events.** PostHog's project key is public, so anyone can
+send an event under any name. The timeline trusts a row's `source`,
+`access` and target only when its `server_sig` verifies; any other row is
+shown as a browser event, and one that names the user or tenant only
+through a forged target is dropped. Rotating `SESSION_SECRET` makes older
+events show as unverified in timelines: they still appear, without server
+badges.
+
 ## Make this yours
 
 This is a template. Before the first real commit on a project generated from

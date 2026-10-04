@@ -105,11 +105,27 @@ rather than repeating them.
 
 ## Analytics
 
-- **Never call PostHog from a request.** The only server code that sends to
-  PostHog is the drain (`analytics-drain.service.ts`) and the groups
-  backfill, both through `sendBatch` (`posthog-batch.service.ts`); the only
-  browser path is the `/api/v1/collect` proxy. A request writes an outbox
-  row and nothing else. See [ARCHITECTURE.md](ARCHITECTURE.md#analytics).
+- **Never call PostHog from a request, except the staff timeline read.**
+  Events reach PostHog only from the drain (`analytics-drain.service.ts`)
+  and the groups backfill, both through `sendBatch`
+  (`posthog-batch.service.ts`), and from the browser through the
+  `/api/v1/collect` proxy; a request writes an outbox row and nothing else.
+  The one request that calls PostHog is a timeline read
+  (`platform-timeline.service.ts`): on a cache miss, within the hourly
+  budget, through `posthogApi` (`posthog-api.service.ts`). See
+  [ARCHITECTURE.md](ARCHITECTURE.md#analytics).
+- **Send PostHog only the two HogQL templates in `timeline-query.service.ts`.**
+  Every id, the range and the cursor go in `values`; the one token written
+  into the query text is the `tenant` group type index, checked as an
+  integer from 0 to 4. A timeline row carries only the `TIMELINE_PROP_KEYS`
+  properties (`timeline.constants.ts`, read by `timeline-mapper.service.ts`);
+  a new builder key fails `tests/unit/constants/timeline.constants.test.ts`
+  until it is allowlisted or excluded there. Keep a cursor's timestamp the
+  string PostHog returned: a `Date` drops its microseconds, and build it
+  from raw row 100, never from a row left after the mapper's drops.
+- **Trust a timeline row's server fields only when its `server_sig`
+  verifies** (`analytics-signature.service.ts`). The project key is public,
+  so any browser can send `source: 'audit'` or any `target_id`.
 - **Outbox writes go only through `enqueueAnalytics`, or
   `enqueueAuditAnalytics` for an audit entry** (`analytics-outbox.service.ts`),
   never the repository directly: they are the savepoint

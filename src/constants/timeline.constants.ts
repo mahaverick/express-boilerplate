@@ -57,6 +57,13 @@ export const TIMELINE_PAGE_SIZE = 100
 export const TIMELINE_CACHE_TTL_SECONDS = 30
 
 /**
+ * How long one staff member's view of one target in one view is audited
+ * once: at most one `user.timeline_viewed` or `tenant.timeline_viewed` per
+ * staff member, target and view in this window (`SET NX EX`).
+ */
+export const TIMELINE_AUDIT_THROTTLE_SECONDS = 600
+
+/**
  * How long one call to PostHog's private API may take. A 90-day timeline
  * query took 2.6–5.6 s on a fresh project.
  */

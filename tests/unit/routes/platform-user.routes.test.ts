@@ -35,7 +35,12 @@ function handlersFor(router: Router, method: string, path: string): RequestHandl
 
 const sharedSearchLimiter = createRateLimiter(RATE_LIMITS.platformSearch)
 const sharedWriteLimiter = createRateLimiter(RATE_LIMITS.platformWrite)
-const limiters = { searchLimiter: sharedSearchLimiter, writeLimiter: sharedWriteLimiter }
+const sharedTimelineLimiter = createRateLimiter(RATE_LIMITS.platformTimeline)
+const limiters = {
+  searchLimiter: sharedSearchLimiter,
+  writeLimiter: sharedWriteLimiter,
+  timelineLimiter: sharedTimelineLimiter,
+}
 
 describe('createPlatformUserRouter', () => {
   it.each([
@@ -116,5 +121,21 @@ describe('createPlatformUserRouter purge', () => {
     })
     expect(handlers[3]).toBe(sharedWriteLimiter)
     expect(Object.hasOwn(handlers[4] ?? {}, RATE_LIMITER_MARK)).toBe(false)
+  })
+})
+
+describe('createPlatformUserRouter timeline', () => {
+  it('get /:id/timeline: admin gate, then the shared timeline limiter, then the handler', async () => {
+    const handlers = handlersFor(createPlatformUserRouter(limiters), 'get', '/:id/timeline')
+    const lookup = vi.mocked(getPlatformMembership)
+    const user = { user: { id: 'user-1' } }
+
+    expect(handlers).toHaveLength(3)
+    lookup.mockResolvedValueOnce('manager')
+    expect(await nextArgumentOf(handlers[0], user)).toMatchObject({ statusCode: 404 })
+    lookup.mockResolvedValueOnce('admin')
+    expect(await nextArgumentOf(handlers[0], user)).toBeUndefined()
+    expect(handlers[1]).toBe(sharedTimelineLimiter)
+    expect(Object.hasOwn(handlers[2] ?? {}, RATE_LIMITER_MARK)).toBe(false)
   })
 })

@@ -212,7 +212,7 @@ export const AUDIT_ACTIONS = {
       messageIds: z.array(id).max(MAX_REMINDER_RECIPIENTS),
     }),
   },
-  // A staff member opened the first page of a user's or a tenant's timeline.
+  // A staff member read a user's or a tenant's timeline; platform-timeline.service.ts throttles it.
   'user.timeline_viewed': { target: 'user', metadata: timelineView },
   'tenant.timeline_viewed': { target: 'tenant', metadata: timelineView },
 } as const satisfies Record<string, { target: AuditTargetType; metadata: z.ZodType }>
