@@ -68,6 +68,8 @@ const VALID_METADATA: Record<AuditAction, Record<string, unknown>> = {
   },
   'user.timeline_viewed': { range: '7d', view: 'all' },
   'tenant.timeline_viewed': { range: '90d', view: 'key' },
+  'user.errors_viewed': {},
+  'tenant.errors_viewed': {},
 }
 
 const ACTIONS = Object.keys(AUDIT_ACTIONS) as AuditAction[]
@@ -98,6 +100,7 @@ describe('AUDIT_ACTIONS', () => {
       'tenant.accessed_by_platform',
       'tenant.archived',
       'tenant.created',
+      'tenant.errors_viewed',
       'tenant.owner_invited',
       'tenant.purged',
       'tenant.reactivated',
@@ -108,6 +111,7 @@ describe('AUDIT_ACTIONS', () => {
       'user.created',
       'user.deactivated',
       'user.deleted',
+      'user.errors_viewed',
       'user.password_setup_sent',
       'user.purged',
       'user.reactivated',

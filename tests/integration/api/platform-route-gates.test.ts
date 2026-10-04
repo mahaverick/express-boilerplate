@@ -97,6 +97,13 @@ const ROUTES: readonly GateRow[] = [
     requiresStepUp: false,
     target: 'tenant',
   },
+  {
+    method: 'get',
+    path: '/tenants/:id/errors',
+    minRole: 'admin',
+    requiresStepUp: false,
+    target: 'tenant',
+  },
   { method: 'get', path: '/stats', minRole: 'viewer', requiresStepUp: false },
   { method: 'get', path: '/audit-log', minRole: 'admin', requiresStepUp: false },
   { method: 'get', path: '/users', minRole: 'viewer', requiresStepUp: false },
@@ -104,6 +111,13 @@ const ROUTES: readonly GateRow[] = [
   {
     method: 'get',
     path: '/users/:id/timeline',
+    minRole: 'admin',
+    requiresStepUp: false,
+    target: 'user',
+  },
+  {
+    method: 'get',
+    path: '/users/:id/errors',
     minRole: 'admin',
     requiresStepUp: false,
     target: 'user',

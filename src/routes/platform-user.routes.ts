@@ -7,6 +7,7 @@
  * exists.
  */
 import { Router, type RequestHandler } from 'express'
+import { platformErrorsController } from '@/controllers/platform-errors.controller'
 import { platformTimelineController } from '@/controllers/platform-timeline.controller'
 import { platformUserController } from '@/controllers/platform-user.controller'
 import { requireRecentAuth } from '@/middlewares/auth.middleware'
@@ -23,7 +24,7 @@ export interface PlatformLimiters {
 }
 
 /**
- * The shared limiters plus the one both timeline routes draw on.
+ * The shared limiters plus the one the timeline and Errors routes draw on.
  */
 export interface PlatformUserLimiters extends PlatformLimiters {
   timelineLimiter: RequestHandler
@@ -53,6 +54,12 @@ export function createPlatformUserRouter(limiters: PlatformUserLimiters): Router
     requirePlatformRole('admin'),
     limiters.timelineLimiter,
     platformTimelineController.getUserTimeline
+  )
+  router.get(
+    '/:id/errors',
+    requirePlatformRole('admin'),
+    limiters.timelineLimiter,
+    platformErrorsController.getUserErrors
   )
   router.post(
     '/',

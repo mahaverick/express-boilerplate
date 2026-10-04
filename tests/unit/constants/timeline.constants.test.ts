@@ -206,4 +206,10 @@ describe('the timeline constants', () => {
     expect(TIMELINE_EXCLUDED_EVENTS).toContain('user_timeline_viewed')
     expect(TIMELINE_EXCLUDED_EVENTS).toContain('tenant_timeline_viewed')
   })
+
+  it('leaves out exceptions and both errors_viewed events: errors have their own tab', () => {
+    expect(TIMELINE_EXCLUDED_EVENTS).toEqual(
+      expect.arrayContaining(['$exception', 'user_errors_viewed', 'tenant_errors_viewed'])
+    )
+  })
 })

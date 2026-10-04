@@ -75,12 +75,17 @@ export const TIMELINE_POSTHOG_TIMEOUT_MS = 15_000
 export const TIMELINE_ELEMENT_TEXT_MAX = 80
 
 /**
- * Events no timeline lists: the two timeline-view audits (so a page never
- * shows itself), and PostHog's identity, property and flag bookkeeping.
+ * Events no timeline lists: the two timeline-view and two errors-view audits
+ * (so a page never shows itself or its sibling tab), exceptions (they have
+ * their own Errors tab), and PostHog's identity, property and flag
+ * bookkeeping.
  */
 export const TIMELINE_EXCLUDED_EVENTS = [
   'user_timeline_viewed',
   'tenant_timeline_viewed',
+  'user_errors_viewed',
+  'tenant_errors_viewed',
+  '$exception',
   '$identify',
   '$set',
   '$groupidentify',

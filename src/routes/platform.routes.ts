@@ -8,6 +8,7 @@ import { Router } from 'express'
 import { getEnv } from '@/configs/env.config'
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { auditController } from '@/controllers/audit.controller'
+import { platformErrorsController } from '@/controllers/platform-errors.controller'
 import { platformTimelineController } from '@/controllers/platform-timeline.controller'
 import { platformController } from '@/controllers/platform.controller'
 import { requireAuth, requireRecentAuth } from '@/middlewares/auth.middleware'
@@ -41,7 +42,7 @@ export function createPlatformRouter(): Router {
   const searchLimiter = createRateLimiter(RATE_LIMITS.platformSearch)
   // One instance shared by every /platform write: users', tenants', emails' and onboarding's.
   const writeLimiter = createRateLimiter(RATE_LIMITS.platformWrite)
-  // One instance shared by the user and tenant timelines.
+  // One instance shared by the user and tenant timelines and Errors views.
   const timelineLimiter = createRateLimiter(RATE_LIMITS.platformTimeline, {
     limit: getEnv().TIMELINE_REQUESTS_PER_MINUTE,
   })
@@ -119,6 +120,12 @@ export function createPlatformRouter(): Router {
     requirePlatformRole('admin'),
     timelineLimiter,
     platformTimelineController.getTenantTimeline
+  )
+  router.get(
+    '/tenants/:id/errors',
+    requirePlatformRole('admin'),
+    timelineLimiter,
+    platformErrorsController.getTenantErrors
   )
   router.get('/stats', requirePlatformRole('viewer'), searchLimiter, platformController.getStats)
   router.get('/audit-log', requirePlatformRole('admin'), auditController.listPlatformAuditLog)

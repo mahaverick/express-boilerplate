@@ -189,6 +189,40 @@ export async function recordTimelineView(
 }
 
 /**
+ * Record that a staff member read a user's or a tenant's error issues:
+ * `user.errors_viewed` or `tenant.errors_viewed`, with empty metadata,
+ * written on the pool in the platform tenant, outside any transaction. It
+ * always writes; the caller (platform-errors.service.ts) decides how often
+ * to call it.
+ * @param actor - The staff member.
+ * @param platformTenantId - The platform tenant, where the entry is written.
+ * @param kind - Whose errors.
+ * @param targetId - The user or tenant id.
+ * @returns The written row.
+ * @throws {Error} When the insert fails.
+ */
+export async function recordErrorsView(
+  actor: Actor,
+  platformTenantId: string,
+  kind: TimelineKind,
+  targetId: string
+): Promise<AuditLog> {
+  const common = {
+    actor,
+    access: 'platform',
+    tenantId: platformTenantId,
+    targetId,
+    metadata: {},
+  } as const
+  return writeEntry(
+    kind === 'user'
+      ? { ...common, action: 'user.errors_viewed' }
+      : { ...common, action: 'tenant.errors_viewed' },
+    db
+  )
+}
+
+/**
  * Delete a dedupe key, logging rather than throwing on failure.
  * @param key - The key to delete.
  * @returns Resolves once deleted or logged.
