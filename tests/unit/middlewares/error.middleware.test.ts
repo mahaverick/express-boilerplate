@@ -155,7 +155,10 @@ describe('errorHandler', () => {
     expect(status).toHaveBeenCalledWith(500)
     expect(body()).toMatchObject({ success: false, message: 'Internal server error' })
     // The ORIGINAL error object is logged, not the masked message — masking is for the client; the whole point of logging is that the real cause stays recoverable server-side.
-    expect(loggerError).toHaveBeenCalledWith('Unhandled server error', { error: original })
+    expect(loggerError).toHaveBeenCalledWith('Unhandled server error', {
+      error: original,
+      errorId: expect.any(String) as unknown,
+    })
   })
 
   it('logs 5xx errors with the request-id from ALS context', () => {

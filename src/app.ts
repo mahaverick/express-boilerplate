@@ -15,6 +15,7 @@ import { posthogSession } from '@/middlewares/posthog-session.middleware'
 import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
 import { requestContext } from '@/middlewares/request-context.middleware'
 import { requestId } from '@/middlewares/request-id.middleware'
+import { recordRouteTemplate } from '@/middlewares/route-template.middleware'
 import { ANALYTICS_PROXY_PATH, createAnalyticsProxyRouter } from '@/routes/analytics-proxy.routes'
 import { createEmailWebhookRouter } from '@/routes/email-webhook.routes'
 import { createApiRouter } from '@/routes/index.routes'
@@ -57,6 +58,8 @@ export function createApp(): Express {
   app.use(cors(corsOptions))
 
   app.use(requestId)
+  // Ahead of every router, so an error's `http_route` names the mount path the router matched under.
+  app.use(recordRouteTemplate)
   app.use(requestContext)
   app.use(posthogSession)
   // Before the body parsers: a webhook signature covers the exact bytes, which express.json would consume.

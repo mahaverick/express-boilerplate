@@ -8,7 +8,11 @@ import { getEnv } from '@/configs/env.config'
 import type { EmailMessage } from '@/database/models/email-message.model'
 import { redactedForLog } from '@/errors/postgres-errors'
 import type { EmailJobData } from '@/jobs/email.job'
-import { isTerminalFailure, recordPermanentFailure } from '@/jobs/job-failure.job'
+import {
+  isTerminalFailure,
+  recordPermanentFailure,
+  reportFinalJobFailure,
+} from '@/jobs/job-failure.job'
 import {
   createQueuedMessage,
   findMessage,
@@ -136,6 +140,7 @@ export function startEmailWorker(): Worker<EmailJobData> {
   })
 
   worker.on('failed', (job, error) => {
+    reportFinalJobFailure('email', job, error)
     if (job === undefined || !isTerminalFailure(job, error)) {
       logger.warn('Email job failed', {
         jobId: job?.id,

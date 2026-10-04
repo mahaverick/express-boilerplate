@@ -1,12 +1,13 @@
 /**
  * @file What a Worker's `'failed'` handler does once a job will not be
- * retried: replace the stored payload's links and tokens, mark an email
- * job's message `failed`, then log one error line. Until then the payload
- * keeps them, because a retry has to send them.
+ * retried: report it to error tracking, replace the stored payload's links
+ * and tokens, mark an email job's message `failed`, then log one error line.
+ * Until then the payload keeps them, because a retry has to send them.
  */
 import { UnrecoverableError, type Job } from 'bullmq'
 import { redactedForLog } from '@/errors/postgres-errors'
 import { markMessageSendFailed } from '@/services/email-message.service'
+import { reportError } from '@/services/errors/error-reporter.service'
 import { logger } from '@/services/logger.service'
 
 const REDACTED = '[redacted]'
@@ -67,6 +68,23 @@ export function isTerminalFailure(job: Job | undefined, error: Error): boolean {
   if (job === undefined) return false
   if (error instanceof UnrecoverableError || error.name === 'UnrecoverableError') return true
   return job.attemptsMade >= (job.opts.attempts ?? 1)
+}
+
+/**
+ * Report a job's final failure to error tracking: once, on the attempt after
+ * which BullMQ will not retry (`isTerminalFailure`), with the queue, the job
+ * name and the attempt count. The job's data is never attached. Never throws.
+ * @param queue - The queue's name.
+ * @param job - The failed job as the 'failed' event passes it; undefined when BullMQ could not load it.
+ * @param error - What the attempt threw.
+ */
+export function reportFinalJobFailure(queue: string, job: Job | undefined, error: Error): void {
+  if (job === undefined || !isTerminalFailure(job, error)) return
+  reportError(error, {
+    capturePoint: 'job',
+    handled: true,
+    job: { queue, name: job.name, attemptsMade: job.attemptsMade },
+  })
 }
 
 /**
