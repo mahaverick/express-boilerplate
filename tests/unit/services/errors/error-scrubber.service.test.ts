@@ -34,6 +34,8 @@ const HARMLESS = [
   'https://react.dev/errors/31',
   'Basic Plan upgrade required',
   'Basic settings',
+  'basic validation failed',
+  'BASIC settings',
   'value too long for type character varying(255)',
 ]
 

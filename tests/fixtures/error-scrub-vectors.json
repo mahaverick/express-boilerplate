@@ -250,8 +250,163 @@
     "expected": "https://app.example.com/assets/index-abc.js#[fragment]"
   },
   {
-    "rule": "query",
+    "rule": "kv",
     "input": "Invalid URL reset-password?token=AbC123xyz",
     "expected": "Invalid URL reset-password?token=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "{\"password\": \"hunter 2\"}",
+    "expected": "{\"password\": \"[redacted]\"}"
+  },
+  {
+    "rule": "kv",
+    "input": "{\"password\":\"hu\\\"nter2\"}",
+    "expected": "{\"password\":\"[redacted]\"}"
+  },
+  {
+    "rule": "kv",
+    "input": "{\\\"password\\\":\\\"hunter2\\\"}",
+    "expected": "{\\\"password\\\":\\\"[redacted]\\\"}"
+  },
+  {
+    "rule": "kv",
+    "input": "password%3Dhunter2",
+    "expected": "password%3D[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "password: [hunter2]",
+    "expected": "password: [redacted]]"
+  },
+  {
+    "rule": "kv",
+    "input": "sid=abc123",
+    "expected": "sid=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "authorization: abc123",
+    "expected": "authorization: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "Authorization: Bearer abcdefgh12",
+    "expected": "Authorization: Bearer [token]"
+  },
+  {
+    "rule": "kv",
+    "input": "auth=xyz",
+    "expected": "auth=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "jwt: abc",
+    "expected": "jwt: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "access_key=AKIA1",
+    "expected": "access_key=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "private-key: pk1",
+    "expected": "private-key: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "otp=123456",
+    "expected": "otp=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "code=12345",
+    "expected": "code=12345"
+  },
+  {
+    "rule": "kv",
+    "input": "token: undefined",
+    "expected": "token: undefined"
+  },
+  {
+    "rule": "kv",
+    "input": "session: null",
+    "expected": "session: null"
+  },
+  {
+    "rule": "kv",
+    "input": "password: false",
+    "expected": "password: false"
+  },
+  {
+    "rule": "kv",
+    "input": "{\"token\": \"undefined\"}",
+    "expected": "{\"token\": \"undefined\"}"
+  },
+  {
+    "rule": "kv",
+    "input": "token: undefinedx",
+    "expected": "token: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "{\"password\": \"null thing\"}",
+    "expected": "{\"password\": \"[redacted]\"}"
+  },
+  {
+    "rule": "userinfo",
+    "input": "https://user:p@ss@host/x",
+    "expected": "https://[credentials]@host/x"
+  },
+  {
+    "rule": "userinfo",
+    "input": "redis://default:p\"q@cache:6379",
+    "expected": "redis://[credentials]@cache:6379"
+  },
+  {
+    "rule": "json-snippet",
+    "input": "...\"abc def\"... is not valid JSON",
+    "expected": "\"[value]\" is not valid JSON"
+  },
+  {
+    "rule": "json-snippet",
+    "input": "\"line1\nline2\" is not valid JSON",
+    "expected": "\"[value]\" is not valid JSON"
+  },
+  {
+    "rule": "basic",
+    "input": "basic dXNlcjpwYXNz",
+    "expected": "basic [token]"
+  },
+  {
+    "rule": "basic",
+    "input": "BASIC dXNlcjpwYXNz",
+    "expected": "BASIC [token]"
+  },
+  {
+    "rule": "basic",
+    "input": "Authorization: Basic dXNlcjpwYXNzd29yZA",
+    "expected": "Authorization: Basic [token]"
+  },
+  {
+    "rule": "postgres",
+    "input": "Key (email)=(a@b.com",
+    "expected": "Key (email)=([value])"
+  },
+  {
+    "rule": "pg-input",
+    "input": "value \"99999999999\" is out of range for type integer",
+    "expected": "value \"[value]\" is out of range for type integer"
+  },
+  {
+    "rule": "pg-input",
+    "input": "malformed array literal: \"{a,b\"",
+    "expected": "malformed array literal: \"[value]\""
+  },
+  {
+    "rule": "pg-input",
+    "input": "date/time field value out of range: \"2024-13-45\"",
+    "expected": "date/time field value out of range: \"[value]\""
   }
 ]

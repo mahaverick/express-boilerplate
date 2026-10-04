@@ -23,29 +23,39 @@ const SCAN_MAX = 4 * ERROR_VALUE_MAX
 /**
  * Postgres's `Key (col)=(value)` detail. The value runs to the line's last
  * `)` that is followed by the end, whitespace or punctuation, so a value
- * containing parentheses is replaced whole.
+ * containing parentheses is replaced whole; a detail with no such `)` (cut
+ * short) is replaced to the end of the line.
  */
-const KEY_DETAIL_PATTERN = /Key \(([^()]*)\)=\(.*\)(?=$|[\s.,;:])/gm
+const KEY_DETAIL_PATTERN = /Key \(([^()]*)\)=\((?:.*\)(?=$|[\s.,;:])|.*)/gm
 
 /**
  * A value Postgres echoes back from the input: `invalid input syntax for
- * type X: "value"` and `invalid input value for enum X: "value"`. A doubled
+ * type X: "value"`, `invalid input value for enum X: "value"`, `malformed
+ * array literal: "value"` and `date/time field value out of range:
+ * "value"`. A doubled
  * quote inside the value does not end it.
  */
 const PG_INPUT_PATTERN =
-  /(invalid input (?:syntax for type|value for enum) [\w." ]+?: )"(?:[^"]|"")*"/g
+  /(invalid input (?:syntax for type|value for enum) [\w." ]+?: |malformed \w+ literal: |date\/time field value out of range: )"(?:[^"]|"")*"/g
+
+/**
+ * A number Postgres echoes back in `value "<n>" is out of range for type
+ * X`: the quoted value is replaced and the rest kept.
+ */
+const PG_RANGE_PATTERN = /\b(value )"(?:[^"]|"")*"(?= is out of range for type)/g
 
 /**
  * The snippet V8 echoes in a JSON parse error: `"<text>"... is not valid JSON`.
  * It matches at the start of a line or after `, `.
  */
-const JSON_SNIPPET_PATTERN = /(^|, )".*?"(?:\.\.\.)? is not valid JSON/gm
+const JSON_SNIPPET_PATTERN = /(^|, )(?:\.\.\.)?"[\s\S]*?"(?:\.\.\.)? is not valid JSON/gm
 
 /**
  * The credentials in a URL's userinfo: `scheme://user:pass@host`. The
- * scheme and `://` are kept.
+ * scheme and `://` are kept. The userinfo runs to the last `@` before a
+ * `/`, `?`, `#` or whitespace, quotes and `@` inside it included.
  */
-const USERINFO_PATTERN = /\b([a-z][a-z0-9+.-]*:\/\/)[^\s/?#@"'<>]+@/gi
+const USERINFO_PATTERN = /\b([a-z][a-z0-9+.-]*:\/\/)[^\s/?#<>]+@/gi
 
 /**
  * A URL or path followed by a query string: the part before `?` is kept.
@@ -65,22 +75,25 @@ const FRAGMENT_PATTERN = /((?:https?:\/\/|\/)[^\s#"'<>]*)#[^\s"'<>]+/g
 const BEARER_PATTERN = /\bBearer\s+[^\s"',;]+/gi
 
 /**
- * HTTP Basic credentials: `Basic` (this exact case) and a base64 value of
+ * HTTP Basic credentials: `Basic` in the case `Basic`, `basic` or `BASIC`, and a base64 value of
  * at least eight characters that holds an uppercase letter, a digit, `+` or
  * `/`, so prose such as `Basic validation failed` is left alone.
  */
 const BASIC_PATTERN =
-  // eslint-disable-next-line sonarjs/regex-complexity -- one pattern per rule keeps the rule list the spec; scrubText scans at most SCAN_MAX characters
-  /\bBasic\s+(?=[A-Za-z0-9+/]*[A-Z0-9+/])(?:[A-Za-z0-9+/]{4}){2,}(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?(?![\w+/=])/g
+  /\b([Bb]asic|BASIC)\s+(?=[A-Za-z0-9+/]*[A-Z0-9+/])(?:[A-Za-z0-9+/]{4}){2,}(?:[A-Za-z0-9+/]{2,3}={0,2})?(?![\w+/=])/g
 
 /**
  * A secret-named key and its value: `password=...`, `"token":"..."`,
- * `api_key: ...`, `Cookie: ...`. The key and its separator are kept; a
- * value already replaced (`[...]`) is left as it is.
+ * `api_key: ...`, `Cookie: ...`, `password%3D...`. The key and its separator
+ * are kept. The value is a quoted string (spaces and escaped quotes
+ * included, also inside a JSON string) or a run up to a delimiter. A value
+ * already replaced by this scrubber (`[redacted]`, `[token]`...) and the
+ * bare words `undefined`, `null`, `missing`, `true` and `false` are left as
+ * they are, so `token: undefined` stays readable.
  */
 const KV_SECRET_PATTERN =
   // eslint-disable-next-line sonarjs/regex-complexity -- one pattern per rule keeps the rule list the spec; scrubText scans at most SCAN_MAX characters
-  /\b([\w-]*?(?:pass(?:word|wd)?|pwd|secret|token|api[_-]?key|session|cookie|credentials?)["']?\s*[:=]\s*["']?)(?!\[)[^\s"',;&})\]]+/gi
+  /\b([\w-]*?(?:pass(?:word|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|session|sid|cookie|credentials?|authorization|auth|jwt|otp)\\?["']?\s*(?:[:=]|%3D)\s*\\?["']?)(?!(?:(?:Bearer|Basic) )?\[(?:redacted|value|credentials|query|fragment|token|jwt|posthog-key|email|secret)\])(?!(?<![\\"'])(?:undefined|null|missing|true|false)(?=[\s,;&})\]]|$))(?!(?<=["'])(?:undefined|null|missing|true|false)(?=\\?["']))(?:(?<=\\")(?:(?!\\")[^\n])+|(?<=["'])(?:[^"'\\\n]|\\.)+|[^\s"'\\,;&})\]]+)/gi
 
 /**
  * A JSON Web Token: three dot-separated base64url segments, the first
@@ -163,19 +176,21 @@ function capped(value: string, wasCut: boolean): string {
  * Remove personal data and secrets from one text, by these rules applied in
  * this order: Postgres `Key (col)=(value)` details keep the columns and lose
  * the value (`([value])`); a value Postgres echoes after `invalid input
- * syntax for type` or `invalid input value for enum`, and the snippet in a
- * V8 `is not valid JSON` error, become `"[value]"`; the userinfo of a URL
+ * syntax for type`, `invalid input value for enum`, `malformed ... literal:`
+ * or `date/time field value out of range:`, the number in `value "n" is out of
+ * range for type`, and the snippet in a V8 `is not valid JSON` error, become `"[value]"`; the userinfo of a URL
  * becomes `[credentials]@`; a URL's or path's query string becomes
  * `?[query]` and its fragment `#[fragment]`; `Bearer <credential>` becomes
- * `Bearer [token]`; `Basic <base64>` becomes `Basic [token]`; the value of a
- * secret-named key (`password`, `token`, `secret`, `api_key`, `session`,
- * `cookie`, `credentials`) becomes `[redacted]`; a JWT becomes `[jwt]`; a
+ * `Bearer [token]`; `Basic <base64>` becomes `Basic [token]`, the scheme's case kept; the value of a
+ * secret-named key (`password`, `token`, `secret`, `api_key`, `access_key`,
+ * `private_key`, `session`, `sid`, `cookie`, `credentials`, `authorization`, `auth`,
+ * `jwt`, `otp`) becomes `[redacted]`; a JWT becomes `[jwt]`; a
  * PostHog key (`phc_`, `phx_`, `phs_`) becomes `[posthog-key]`; an email
  * address, written with `@` or `%40`, becomes `[email]`; a run of 32 or more
  * hex digits, and a secret-looking run of 40 or more base64 characters
  * (`isSecretRun`), become `[secret]`; and the result is cut to 1024
  * characters, ending in `…[truncated]`. A key-named word is replaced even in
- * prose (`Missing token: please` keeps `Missing token: [redacted]`): the
+ * prose (`Missing token: please log in` becomes `Missing token: [redacted] log in`): the
  * rule trades some readable text for never leaking a value. Applying it
  * twice gives the same text as applying it once.
  * @param value - The text: an exception's type or value, or a frame's filename or function.
@@ -186,12 +201,13 @@ export function scrubText(value: string): string {
   const scrubbed = input
     .replaceAll(KEY_DETAIL_PATTERN, 'Key ($1)=([value])')
     .replaceAll(PG_INPUT_PATTERN, '$1"[value]"')
+    .replaceAll(PG_RANGE_PATTERN, '$1"[value]"')
     .replaceAll(JSON_SNIPPET_PATTERN, '$1"[value]" is not valid JSON')
     .replaceAll(USERINFO_PATTERN, '$1[credentials]@')
     .replaceAll(QUERY_PATTERN, '$1?[query]')
     .replaceAll(FRAGMENT_PATTERN, '$1#[fragment]')
     .replaceAll(BEARER_PATTERN, 'Bearer [token]')
-    .replaceAll(BASIC_PATTERN, 'Basic [token]')
+    .replaceAll(BASIC_PATTERN, '$1 [token]')
     .replaceAll(KV_SECRET_PATTERN, '$1[redacted]')
     .replaceAll(JWT_PATTERN, '[jwt]')
     .replaceAll(POSTHOG_KEY_PATTERN, '[posthog-key]')
