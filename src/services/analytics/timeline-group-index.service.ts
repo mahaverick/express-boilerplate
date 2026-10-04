@@ -6,11 +6,13 @@
  */
 import { TimelineUnavailableError } from '@/errors/timeline-errors'
 import { posthogApi, posthogProjectPath } from '@/services/analytics/posthog-api.service'
-import { logTimelineFailure } from '@/services/analytics/timeline-query.service'
+import {
+  logTimelineFailure,
+  MAX_GROUP_TYPE_INDEX,
+} from '@/services/analytics/timeline-query.service'
 import { logger } from '@/services/logger.service'
 
 const TENANT_GROUP_TYPE = 'tenant'
-const MAX_GROUP_TYPE_INDEX = 4
 
 /**
  * The cached index, once found.

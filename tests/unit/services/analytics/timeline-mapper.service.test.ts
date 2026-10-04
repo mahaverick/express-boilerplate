@@ -133,6 +133,50 @@ describe('mapTimelineResults', () => {
     ).toEqual({ required: true, method: 0 })
   })
 
+  it('shows no target props on a verified row whose signed target was absent, when a replay adds numeric ones', () => {
+    const signed = signedEvent({
+      ...BASE,
+      'properties.source': 'audit',
+      'properties.access': 'platform',
+    })
+    const replay = { ...signed, 'properties.target_type': 1, 'properties.target_id': 2 }
+
+    const [row] = mapTimelineResults([resultRow(replay)], USER_TARGET)
+
+    expect(row?.verified).toBe(true)
+    expect(row?.props).not.toHaveProperty('target_type')
+    expect(row?.props).not.toHaveProperty('target_id')
+  })
+
+  it('drops a boolean target_id', () => {
+    const signed = signedEvent({ ...BASE, 'properties.source': 'audit' })
+    const replay = { ...signed, 'properties.target_id': true }
+
+    const [row] = mapTimelineResults([resultRow(replay)], USER_TARGET)
+
+    expect(row?.verified).toBe(true)
+    expect(row?.props).toEqual({})
+  })
+
+  it('keeps the string target of a signed row', () => {
+    const [row] = mapTimelineResults(
+      [
+        resultRow(
+          signedEvent({
+            ...BASE,
+            'properties.source': 'audit',
+            'properties.target_type': 'invitation',
+            'properties.target_id': 'invitation-1',
+          })
+        ),
+      ],
+      USER_TARGET
+    )
+
+    expect(row?.verified).toBe(true)
+    expect(row?.props).toEqual({ target_type: 'invitation', target_id: 'invitation-1' })
+  })
+
   it('defaults source to browser, and an unknown access or app to null', () => {
     const row = mapOne({
       event: '$pageview',

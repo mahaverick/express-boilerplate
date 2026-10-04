@@ -44,7 +44,7 @@ export const TIMELINE_SELECT_COLUMNS: readonly string[] = [
 /**
  * PostHog's highest group type index: a project has at most five group types.
  */
-const MAX_GROUP_TYPE_INDEX = 4
+export const MAX_GROUP_TYPE_INDEX = 4
 
 /**
  * An event name the excluded-events list may hold: lowercase letters and

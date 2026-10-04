@@ -27,6 +27,10 @@ import type {
 const SERVER_SOURCES: ReadonlySet<string> = new Set(['audit', 'product', 'email'])
 const ACCESS_KINDS: ReadonlySet<string> = new Set(['member', 'platform', 'system'])
 const APPS: ReadonlySet<string> = new Set(['api', 'react', 'apex'])
+/**
+ * The props the signature covers: kept only as the non-empty strings it read.
+ */
+const SIGNED_TEXT_PROPS: ReadonlySet<string> = new Set(['target_type', 'target_id'])
 const CLICK_EVENTS: ReadonlySet<string> = new Set(['$autocapture', '$rageclick'])
 
 /**
@@ -119,7 +123,15 @@ function propertiesOf(row: readonly unknown[]): TimelineRowProperties {
   const properties: TimelineRowProperties = {}
   for (const [offset, key] of TIMELINE_PROP_KEYS.entries()) {
     const value = row[FIRST_PROP_COLUMN + offset]
-    if (typeof value === 'number' || typeof value === 'boolean' || text(value) !== undefined) {
+    if (SIGNED_TEXT_PROPS.has(key)) {
+      // The signature covers these as non-empty strings only, so nothing else may reach a verified row.
+      const signed = text(value)
+      if (signed !== undefined) properties[key] = signed
+    } else if (
+      typeof value === 'number' ||
+      typeof value === 'boolean' ||
+      text(value) !== undefined
+    ) {
       properties[key] = value as string | number | boolean
     }
   }

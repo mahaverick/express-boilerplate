@@ -53,6 +53,8 @@ function signingKey(): Buffer {
 /**
  * The string a signature is computed over: the eight fields in order,
  * joined by a newline, an absent one as the empty string.
+ * The join is unambiguous only because no signed value can contain a newline
+ * (each is a constant, an enum value or an id).
  * @param fields - The fields.
  * @returns The canonical string.
  */
