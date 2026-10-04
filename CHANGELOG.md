@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.6.0](https://github.com/mahaverick/express-boilerplate/compare/v1.5.0...v1.6.0) (2026-10-04)
+
+
+### Features
+
+* posthog timelines, purge deletion, group markers and signed events ([#78](https://github.com/mahaverick/express-boilerplate/issues/78)) ([4045fd4](https://github.com/mahaverick/express-boilerplate/commit/4045fd4fb5205b7e5f3446a0bb67b51f7645ce58))
+
 ## [1.5.0](https://github.com/mahaverick/express-boilerplate/compare/v1.4.0...v1.5.0) (2026-10-03)
 
 
