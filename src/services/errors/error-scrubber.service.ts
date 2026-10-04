@@ -56,9 +56,11 @@ const POSTHOG_KEY_PATTERN = /\bph[cxs]_\w+/g
 const EMAIL_PATTERN = /[\w.%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g
 
 /**
- * A run of 32 or more hex digits: a hash, a token or a key.
+ * A run of 32 or more hex digits: a hash, a token or a key. It is delimited
+ * by hex digits rather than word boundaries, so a run stuck to other word
+ * characters (`key_<hex>`, `<hex>suffix`) is still replaced.
  */
-const HEX_RUN_PATTERN = /\b[0-9A-Fa-f]{32,}\b/g
+const HEX_RUN_PATTERN = /(?<![0-9A-Fa-f])[0-9A-Fa-f]{32,}(?![0-9A-Fa-f])/g
 
 /**
  * A run of 40 or more base64 or base64url characters, with its padding.

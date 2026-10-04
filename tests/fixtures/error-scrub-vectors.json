@@ -76,6 +76,16 @@
   },
   {
     "rule": "secret",
+    "input": "user key_9f86d081884c7d659a2feaa0c55ad015 here",
+    "expected": "user key_[secret] here"
+  },
+  {
+    "rule": "secret",
+    "input": "9f86d081884c7d659a2feaa0c55ad015suffix",
+    "expected": "[secret]suffix"
+  },
+  {
+    "rule": "secret",
     "input": "blob kX9/qL2mZp7RtY4vWb8/NcE3sHf6JdG1aUoK5iTn0rVy end",
     "expected": "blob [secret] end"
   },
