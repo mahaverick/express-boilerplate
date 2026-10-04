@@ -185,9 +185,20 @@ describe('what the builder never reads', () => {
     const wrapped = new Error('outer', { cause: fakeQueryError() })
     for (const input of [fakeQueryError(), wrapped, { error: fakeQueryError() }]) {
       const text = inspect(buildErrorEvent(input, HTTP, ERROR_ID, AT), { depth: Infinity })
-      expect(text).toContain('Failed query: select $1')
+      expect(text).toContain("value: 'Failed query'")
+      expect(text).not.toContain('select $1')
       expect(withoutPlaceholders(text)).not.toContain(LEAKED_PARAM)
     }
+  })
+
+  it('drops a failed query’s SQL text, which can carry inlined literals', () => {
+    const error = Object.assign(new Error('Failed query: select ...'), {
+      query: "select * from users where name = 'Zebulon Quixote'",
+      params: [],
+    })
+    const { event } = buildErrorEvent(error, HTTP, ERROR_ID, AT)
+    expect(JSON.stringify(event)).not.toContain('Zebulon')
+    expect(exceptionListOf(error)[0]?.value).toBe('Failed query')
   })
 
   it('drops an HttpError’s errors', () => {

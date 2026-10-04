@@ -113,12 +113,13 @@ function nameOf(error: Error): string {
 
 /**
  * An error's message as an event may carry it. A failed query's message
- * embeds its bound parameters, so only its SQL text is kept.
+ * embeds its bound parameters, and its SQL text can carry inlined literals,
+ * so neither is kept: the message is `Failed query`.
  * @param error - The error.
  * @returns The message.
  */
 function messageOf(error: Error): string {
-  if (isQueryError(error)) return `Failed query: ${error.query}`
+  if (isQueryError(error)) return 'Failed query'
   return typeof error.message === 'string' ? error.message : ''
 }
 
