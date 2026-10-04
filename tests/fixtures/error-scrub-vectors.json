@@ -488,5 +488,50 @@
     "rule": "json-snippet",
     "input": "parse failed (\"hunter2\" is not valid JSON)",
     "expected": "parse failed (\"[value]\" is not valid JSON)"
+  },
+  {
+    "rule": "kv",
+    "input": "auth: hunter2 rejected",
+    "expected": "auth: [redacted] rejected"
+  },
+  {
+    "rule": "kv",
+    "input": "Invalid authorization: abc123secret for user 5",
+    "expected": "Invalid authorization: [redacted] for user 5"
+  },
+  {
+    "rule": "kv",
+    "input": "authorization:secretvalue other",
+    "expected": "authorization:[redacted] other"
+  },
+  {
+    "rule": "kv",
+    "input": "auth=sk_live_x and more",
+    "expected": "auth=[redacted] and more"
+  },
+  {
+    "rule": "kv",
+    "input": "{\"authorization\":\"sk_live_abc def\"}",
+    "expected": "{\"authorization\":\"[redacted]\"}"
+  },
+  {
+    "rule": "kv",
+    "input": "authorization: 'abc123secret is bad'",
+    "expected": "authorization: '[redacted]'"
+  },
+  {
+    "rule": "kv",
+    "input": "Authorization:  Token  abc",
+    "expected": "Authorization:  Token  [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "authorization=Token\tabc",
+    "expected": "authorization=Token\t[redacted]"
+  },
+  {
+    "rule": "postgres",
+    "input": "Key (a)=(x) (Key (b)=(y",
+    "expected": "Key (a)=([value]) (Key (b)=([value])"
   }
 ]

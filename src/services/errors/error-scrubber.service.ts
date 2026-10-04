@@ -94,13 +94,14 @@ const BASIC_PATTERN =
  * already replaced by this scrubber (`[redacted]`, `[token]`...) and the
  * bare words `undefined`, `null`, `missing`, `true` and `false` are left as
  * they are, so `token: undefined` stays readable. After `authorization` or
- * `auth` the value may begin with a scheme word (`Token abc` becomes `Token
- * [redacted]`), so the credential and not the scheme is replaced; `signature`
+ * `auth` the value may begin with a known scheme word (`Token abc` becomes `Token
+ * [redacted]`; `Bearer`, `Basic`, `Token`, `ApiKey`, `Digest`, `Negotiate`,
+ * `NTLM`, `Hawk`, `HOBA`, `DPoP`, `OAuth`, `AWS4-HMAC-SHA256`, `SCRAM-SHA-n`), so the credential and not the scheme is replaced; `signature`
  * covers the part of an AWS header after the credential.
  */
 const KV_SECRET_PATTERN =
   // eslint-disable-next-line sonarjs/regex-complexity, sonarjs/super-linear-regex -- one pattern per rule keeps the rule list the spec; scrubText scans at most SCAN_MAX characters
-  /\b([\w-]*?(?:pass(?:word|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|session|sid|cookie|credentials?|signature|authorization|auth|jwt|otp)\\?["']?\s*(?:[:=]|%3D)\s*\\?["']?(?:(?<=(?:authorization|auth)\\?["']?\s*(?:[:=]|%3D)\s*\\?["']?)[a-z][\w-]*[ \t]+)?)(?!(?:(?:Bearer|Basic) )?\[(?:redacted|value|credentials|query|fragment|token|jwt|posthog-key|email|secret)\])(?!(?<=(?:authorization|auth)\\?["']?\s*(?:[:=]|%3D)\s*\\?["']?)[a-z][\w-]* \[(?:redacted|value|credentials|query|fragment|token|jwt|posthog-key|email|secret)\])(?!(?<![\\"'])(?:undefined|null|missing|true|false)(?=[\s,;&})\]]|$))(?!(?<=["'])(?:undefined|null|missing|true|false)(?=\\?["']))(?:(?<=\\")(?:(?!\\")[^\n])+|(?<=["'])(?:[^"'\\\n]|\\.)+|[^\s"'\\,;&})\]]+)/gi
+  /\b([\w-]*?(?:pass(?:word|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|session|sid|cookie|credentials?|signature|authorization|auth|jwt|otp)\\?["']?\s*(?:[:=]|%3D)\s*\\?["']?(?:(?<=(?:authorization|auth)\\?["']?\s*(?:[:=]|%3D)\s*\\?["']?)(?:Bearer|Basic|Token|ApiKey|Digest|Negotiate|NTLM|Hawk|HOBA|DPoP|OAuth|AWS4-HMAC-SHA256|SCRAM-SHA-\d+)[ \t]+)?)(?!(?:(?:Bearer|Basic) )?\[(?:redacted|value|credentials|query|fragment|token|jwt|posthog-key|email|secret)\])(?!(?<=(?:authorization|auth)\\?["']?\s*(?:[:=]|%3D)\s*\\?["']?)(?:Bearer|Basic|Token|ApiKey|Digest|Negotiate|NTLM|Hawk|HOBA|DPoP|OAuth|AWS4-HMAC-SHA256|SCRAM-SHA-\d+)[ \t]+\[(?:redacted|value|credentials|query|fragment|token|jwt|posthog-key|email|secret)\])(?!(?<![\\"'])(?:undefined|null|missing|true|false)(?=[\s,;&})\]]|$))(?!(?<=["'])(?:undefined|null|missing|true|false)(?=\\?["']))(?:(?<=\\")(?:(?!\\")[^\n])+|(?<=["'])(?:[^"'\\\n]|\\.)+|[^\s"'\\,;&})\]]+)/gi
 
 /**
  * A JSON Web Token: three dot-separated base64url segments, the first
