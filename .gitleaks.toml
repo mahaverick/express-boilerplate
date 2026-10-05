@@ -1,20 +1,18 @@
 # .gitleaks.toml
 #
 # Extends gitleaks' default rule set (secrets, tokens, private keys) rather
-# than replacing it. The only local addition is an allowlist for the
-# committed test-environment file: .env.test carries intentionally fake
-# secrets (see setup-global.ts) so the suite and CI can boot without real
-# credentials, and those fake values are exactly the shape generic
-# high-entropy/secret detectors are built to flag.
+# than replacing it. The only local addition is one allowlist of two files:
+#   - .env.test carries intentionally fake secrets (see setup-global.ts) so
+#     the suite and CI can boot without real credentials, and those fake
+#     values are exactly the shape generic high-entropy/secret detectors are
+#     built to flag;
+#   - tests/fixtures/error-scrub-vectors.json holds secret-shaped inputs the
+#     error scrubber's vectors must redact.
+# It is the singular [allowlist] table because the gitleaks the CI action
+# runs (8.24.x) ignores the newer [[allowlists]] array form.
 [extend]
 useDefault = true
 
-[[allowlists]]
+[allowlist]
 description = "Committed test fixtures with intentionally fake secrets"
-paths = [
-  '''^\.env\.test$''',
-]
-
-[[allowlists]]
-description = "Secret-shaped inputs the error scrubber's vectors must redact"
-paths = ['''^tests/fixtures/error-scrub-vectors\.json$''']
+paths = ['''^\.env\.test$''', '''^tests/fixtures/error-scrub-vectors\.json$''']
