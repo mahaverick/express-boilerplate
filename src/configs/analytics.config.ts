@@ -178,8 +178,8 @@ export function posthogFlagUrl(
   flagId: number,
   env: Pick<Env, 'POSTHOG_HOST' | 'POSTHOG_APP_HOST' | 'POSTHOG_PROJECT_ID'> = getEnv()
 ): string | null {
+  const isFlagId = Number.isSafeInteger(flagId) && flagId >= 1
   // eslint-disable-next-line unicorn/no-null -- the contract sends JSON null when no link can be built
-  if (env.POSTHOG_PROJECT_ID === undefined || !Number.isSafeInteger(flagId) || flagId < 1)
-    return null
+  if (!isFlagId || env.POSTHOG_PROJECT_ID === undefined) return null
   return `${posthogAppHost(env)}/project/${String(env.POSTHOG_PROJECT_ID)}/feature_flags/${String(flagId)}`
 }
