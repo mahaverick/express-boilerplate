@@ -61,6 +61,8 @@ afterEach(() => {
   current.queries.length = 0
   current.bulkDeletes.length = 0
   current.authHeaders.length = 0
+  current.featureFlags = []
+  current.featureFlagCreates.length = 0
   target.host = current.url
   target.key = KEY
   target.projectId = 4321
@@ -87,6 +89,33 @@ describe('posthogProjectPath', () => {
     expect(() => posthogProjectPath('query/')).toThrow('POSTHOG_PROJECT_ID is not set')
   })
 })
+
+/**
+ * Create a multivariate flag through the fake, reading the error body.
+ * @param key - The flag key.
+ * @param percentages - Each variant's rollout.
+ * @returns How the call ended.
+ */
+function createSplitFlag(key: string, percentages: number[]): Promise<unknown> {
+  return posthogApi(
+    'POST',
+    posthogProjectPath('feature_flags/'),
+    {
+      key,
+      tags: ['code-registry'],
+      filters: {
+        groups: [],
+        multivariate: {
+          variants: percentages.map((rollout, index) => ({
+            key: `v${String(index)}`,
+            rollout_percentage: rollout,
+          })),
+        },
+      },
+    },
+    { shouldReadErrorBody: true }
+  )
+}
 
 describe('posthogApi', () => {
   it('sends a GET with the Bearer key and returns the parsed body', async () => {
@@ -200,6 +229,37 @@ describe('posthogApi', () => {
     expect(posthog().requests).toEqual([])
   })
 
+  it('appends query parameters, URL-encoded', async () => {
+    await posthogApi('GET', posthogProjectPath('feature_flags/'), undefined, {
+      query: { limit: '200', offset: '0', search: 'a b' },
+    })
+
+    expect(posthog().requests[0]?.path).toBe(
+      '/api/projects/4321/feature_flags/?limit=200&offset=0&search=a+b'
+    )
+  })
+
+  it('carries an error body only when asked to', async () => {
+    const body = { key: 'k', name: 'n', active: false, filters: { groups: [] } }
+
+    const silent = await posthogApi('POST', posthogProjectPath('feature_flags/'), body)
+    const read = await posthogApi('POST', posthogProjectPath('feature_flags/'), body, {
+      shouldReadErrorBody: true,
+    })
+
+    expect(silent).toEqual({ kind: 'http_error', status: 400 })
+    expect(read).toEqual({
+      kind: 'http_error',
+      status: 400,
+      json: {
+        type: 'validation_error',
+        code: 'invalid_input',
+        attr: 'tags',
+        detail: 'Add at least one tag. This project requires new feature flags to be tagged.',
+      },
+    })
+  })
+
   it('refuses a path without its trailing slash, before any request', async () => {
     await expect(posthogApi('POST', '/api/projects/4321/query', {})).rejects.toThrow(
       'must end with "/"'
@@ -255,6 +315,18 @@ describe('the fake PostHog private API', () => {
     expect(await posthogApi('GET', posthogProjectPath('groups_types/'))).toEqual({
       kind: 'http_error',
       status: 503,
+    })
+  })
+
+  it('refuses a flag create whose variant rollouts do not sum to 100, and a repeated key', async () => {
+    expect(await createSplitFlag('three', [33, 33, 33])).toMatchObject({
+      status: 400,
+      json: { code: 'cross_field.variant_rollout_sum_not_100' },
+    })
+    expect(await createSplitFlag('three', [34, 33, 33])).toMatchObject({ kind: 'ok', status: 201 })
+    expect(await createSplitFlag('three', [34, 33, 33])).toMatchObject({
+      status: 400,
+      json: { code: 'unique' },
     })
   })
 

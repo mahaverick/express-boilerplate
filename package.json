@@ -38,6 +38,7 @@
     "email:fire-event": "tsx --env-file-if-exists=.env src/scripts/email-fire-event.ts",
     "onboarding:reconcile": "tsx --env-file-if-exists=.env src/scripts/onboarding-reconcile.ts",
     "analytics:backfill-groups": "tsx --env-file-if-exists=.env src/scripts/analytics-backfill-groups.ts",
+    "flags:sync": "tsx --env-file-if-exists=.env src/scripts/flags-sync.ts",
     "test": "vitest run",
     "test:unit": "vitest run --config vitest.unit.config.ts",
     "test:watch": "vitest watch",
