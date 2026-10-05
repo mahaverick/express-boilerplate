@@ -220,6 +220,19 @@ describe('posthogFlagUrl', () => {
     ).toBe('https://eu.posthog.com/project/4321/feature_flags/931750')
   })
 
+  it.each([0, -1, 1.5, NaN])(
+    'is null for %s, which is no PostHog flag id (a malformed definition has 0)',
+    (flagId) => {
+      expect(
+        posthogFlagUrl(flagId, {
+          POSTHOG_HOST: 'https://us.i.posthog.com',
+          POSTHOG_APP_HOST: undefined,
+          POSTHOG_PROJECT_ID: 4321,
+        })
+      ).toBeNull()
+    }
+  )
+
   it('is null without a project id', () => {
     expect(
       posthogFlagUrl(1, {

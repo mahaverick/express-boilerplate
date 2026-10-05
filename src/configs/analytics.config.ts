@@ -169,15 +169,17 @@ export function timelineLinks(
 
 /**
  * A feature flag's page in PostHog, `{app}/project/{pid}/feature_flags/{id}`.
- * @param flagId - PostHog's numeric id of the flag, from the definitions snapshot.
+ * @param flagId - PostHog's numeric id of the flag, from the definitions
+ *   snapshot; 0 for a malformed definition that carried none.
  * @param env - The PostHog slice of the validated environment; defaults to `getEnv()`.
- * @returns The URL, or null when `POSTHOG_PROJECT_ID` is not set.
+ * @returns The URL, or null when `POSTHOG_PROJECT_ID` is not set or the id is not a positive safe integer.
  */
 export function posthogFlagUrl(
   flagId: number,
   env: Pick<Env, 'POSTHOG_HOST' | 'POSTHOG_APP_HOST' | 'POSTHOG_PROJECT_ID'> = getEnv()
 ): string | null {
   // eslint-disable-next-line unicorn/no-null -- the contract sends JSON null when no link can be built
-  if (env.POSTHOG_PROJECT_ID === undefined) return null
+  if (env.POSTHOG_PROJECT_ID === undefined || !Number.isSafeInteger(flagId) || flagId < 1)
+    return null
   return `${posthogAppHost(env)}/project/${String(env.POSTHOG_PROJECT_ID)}/feature_flags/${String(flagId)}`
 }

@@ -214,6 +214,24 @@ describe('GET /platform/flags', () => {
     ])
   })
 
+  it('links no PostHog page for a malformed flag, which has no numeric id', async () => {
+    await loadFlagDefinitions([
+      { ...flagDefinition('example_beta_page', { groupIndex: 0 }), id: undefined },
+      { ...flagDefinition('mm_probe_flag'), id: undefined },
+    ])
+    const { token } = await createTrackedStaff('viewer')
+
+    const list = dataOf<FlagsList>(await staffGet(token, '/flags'))
+
+    expect(list.items[0]).toMatchObject({
+      key: 'example_beta_page',
+      state: 'unsupported',
+      unsupportedReason: 'malformed',
+      posthogUrl: NONE,
+    })
+    expect(list.unregistered).toEqual([{ key: 'mm_probe_flag', active: true, posthogUrl: NONE }])
+  })
+
   it('carries the traits reference and the snapshot block', async () => {
     const { token } = await createTrackedStaff('viewer')
 

@@ -189,7 +189,8 @@ export interface FlagRow {
    */
   maxRollout: number | null
   /**
-   * The flag's page in PostHog; null when it is missing or `POSTHOG_PROJECT_ID` is not set.
+   * The flag's page in PostHog; null when it is missing, malformed with no
+   * id, or `POSTHOG_PROJECT_ID` is not set.
    */
   posthogUrl: string | null
 }
