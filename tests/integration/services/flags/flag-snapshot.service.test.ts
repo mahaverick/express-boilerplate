@@ -2,8 +2,9 @@
  * @file The replica snapshot against the real Redis, under this worker's
  * key prefix: a write reaches two independent stores through pub/sub, the
  * backstop reloads a change that was never published, a failed reload keeps
- * the copy in memory, a store with nothing stored serves null, and a stopped
- * store stops reloading.
+ * the copy in memory without logging the stored value, a reload never
+ * replaces the copy with an older snapshot, a store with nothing stored
+ * serves null, and a stopped store stops reloading.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -14,6 +15,7 @@ import {
   writeFlagSnapshot,
   type FlagSnapshotStore,
 } from '@/services/flags/flag-snapshot.service'
+import { logger } from '@/services/logger.service'
 import { getRedis } from '@/services/redis.service'
 import type { ParsedSnapshot } from '@/validators/flag-definition.validators'
 
@@ -106,6 +108,42 @@ describe('flag snapshot store', () => {
     await redis.set(flagSnapshotKey(), JSON.stringify({ flags: 'wrong' }))
     await store.reload()
     expect(store.get()?.etag).toBe('W/"kept"')
+  })
+
+  it('logs only the error type when a reload fails, never the stored value', async () => {
+    await writeFlagSnapshot(snapshot('kept'))
+    const store = await startedStore()
+    const redis = await getRedis()
+    await redis.set(flagSnapshotKey(), '{"stored-value-fragment"')
+    const warn = vi.spyOn(logger, 'warn')
+    await store.reload()
+    expect(warn).toHaveBeenCalledWith('Flag snapshot reload failed; keeping the copy in memory', {
+      reason: 'SyntaxError',
+    })
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('stored-value-fragment')
+    warn.mockRestore()
+  })
+
+  it('never replaces its copy with an older snapshot, as a late concurrent read would', async () => {
+    const newer = { ...snapshot('newer'), checkedAt: '2026-10-05T12:00:30.000Z' }
+    await writeFlagSnapshot(newer)
+    const store = await startedStore()
+    const redis = await getRedis()
+    await redis.set(flagSnapshotKey(), JSON.stringify(snapshot('older-checked')))
+    await store.reload()
+    expect(store.get()?.etag).toBe('W/"newer"')
+    const olderFetch = {
+      ...snapshot('older-fetched'),
+      fetchedAt: '2026-10-05T11:59:00.000Z',
+      checkedAt: '2026-10-05T12:01:00.000Z',
+    }
+    await redis.set(flagSnapshotKey(), JSON.stringify(olderFetch))
+    await store.reload()
+    expect(store.get()?.etag).toBe('W/"newer"')
+    const same = { ...newer, etag: 'W/"same-times"' }
+    await redis.set(flagSnapshotKey(), JSON.stringify(same))
+    await store.reload()
+    expect(store.get()?.etag).toBe('W/"same-times"')
   })
 
   it('leaves no backstop timer when stopped while starting', async () => {

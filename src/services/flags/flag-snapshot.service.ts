@@ -6,8 +6,8 @@
  * every `FLAG_SNAPSHOT_BACKSTOP_MS` in case a message was missed. The
  * subscription connects in the background, and reloads once it is
  * established so a message sent before it is not lost. A failed
- * reload keeps the copy, and a replica that never loaded one serves every
- * fallback. The message carries no data: replicas read the stored snapshot.
+ * reload keeps the copy, so does a read older than it (reloads overlap), and
+ * a replica that never loaded one serves every fallback. The message carries no data: replicas read the stored snapshot.
  */
 import type { RedisClientType } from 'redis'
 import { logger } from '@/services/logger.service'
@@ -103,6 +103,22 @@ export async function touchFlagSnapshot(snapshot: ParsedSnapshot, checkedAt: Dat
 }
 
 /**
+ * Whether a snapshot just read is older than the copy in memory: fetched or
+ * checked earlier. Reloads run concurrently (the message, the backstop, a
+ * reconnect), so a read that started first can finish last.
+ * @param incoming - The snapshot just read.
+ * @param current - The copy in memory, or null.
+ * @returns True when `incoming` must not replace `current`.
+ */
+function isOlder(incoming: ParsedSnapshot, current: ParsedSnapshot | null): boolean {
+  if (current === null) return false
+  return (
+    Date.parse(incoming.fetchedAt) < Date.parse(current.fetchedAt) ||
+    Date.parse(incoming.checkedAt) < Date.parse(current.checkedAt)
+  )
+}
+
+/**
  * One replica's in-memory snapshot.
  */
 export interface FlagSnapshotStore {
@@ -122,7 +138,8 @@ export interface FlagSnapshotStore {
    */
   get: () => ParsedSnapshot | null
   /**
-   * Read the stored snapshot into memory now; a failure or nothing stored keeps the copy.
+   * Read the stored snapshot into memory now; a failure, nothing stored, or
+   * a snapshot fetched or checked earlier than the copy keeps the copy.
    */
   reload: () => Promise<void>
 }
@@ -159,11 +176,16 @@ export function createFlagSnapshotStore(options: { backstopMs?: number } = {}): 
     if (state.isClosed) return
     try {
       const stored = await readFlagSnapshot()
-      if (stored !== null && !state.isClosed) state.snapshot = stored
+      if (stored !== null && !state.isClosed && !isOlder(stored, state.snapshot)) {
+        state.snapshot = stored
+      }
       state.isReloadFailing = false
     } catch (error) {
       if (!state.isReloadFailing) {
-        logger.warn('Flag snapshot reload failed; keeping the copy in memory', { error })
+        // The type only: a JSON SyntaxError's message quotes the stored value.
+        logger.warn('Flag snapshot reload failed; keeping the copy in memory', {
+          reason: error instanceof Error ? error.name : 'unknown',
+        })
       }
       state.isReloadFailing = true
     }
