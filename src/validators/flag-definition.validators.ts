@@ -243,13 +243,18 @@ function aggregationConstruct(
 }
 
 /**
- * A property the evaluator cannot match exactly as PostHog does.
+ * A property the evaluator cannot match exactly as PostHog does. A person
+ * property belongs to a person-aggregated flag and a group property, with
+ * its own `group_type_index` naming the tenant type, to a tenant-aggregated
+ * one; any other pairing is mixed targeting and is `group_type`.
  * @param property - The property.
+ * @param isTenantAggregated - Whether the flag aggregates on a group type.
  * @param tenantGroupIndex - The tenant group type index, or null.
  * @returns The construct, or undefined.
  */
 function propertyConstruct(
   property: FlagPropertyJson,
+  isTenantAggregated: boolean,
   tenantGroupIndex: number | null
 ): UnsupportedConstruct | undefined {
   if (property.type === 'cohort') return 'cohort'
@@ -259,10 +264,12 @@ function propertyConstruct(
   if (!OPERATORS.has(operator) || property.negation === true) return 'unknown_operator'
   if (operator === 'is_not_set') return 'is_not_set'
   if (property.type === 'person') {
+    if (isTenantAggregated) return 'group_type'
     return FLAG_PERSON_PROPERTY_KEYS.has(property.key) ? undefined : 'property_key'
   }
-  const groupIndex = property.group_type_index ?? tenantGroupIndex
-  if (tenantGroupIndex === null || groupIndex !== tenantGroupIndex) return 'group_type'
+  if (!isTenantAggregated) return 'group_type'
+  const groupIndex = property.group_type_index ?? undefined
+  if (groupIndex === undefined || groupIndex !== tenantGroupIndex) return 'group_type'
   return FLAG_GROUP_PROPERTY_KEYS.has(property.key) ? undefined : 'property_key'
 }
 
@@ -323,12 +330,14 @@ export function detectUnsupported(
   entry: FlagEntry | undefined,
   tenantGroupIndex: number | null
 ): UnsupportedConstruct | null {
+  const isTenantAggregated =
+    (definition.filters.aggregation_group_type_index ?? undefined) !== undefined
   const properties = definition.filters.groups.flatMap((condition) => condition.properties ?? [])
   const construct =
     flagLevelConstruct(definition) ??
     aggregationConstruct(definition, tenantGroupIndex) ??
     properties
-      .map((property) => propertyConstruct(property, tenantGroupIndex))
+      .map((property) => propertyConstruct(property, isTenantAggregated, tenantGroupIndex))
       .find((found) => found !== undefined) ??
     variantConstruct(definition) ??
     (entry === undefined ? undefined : registryConstruct(definition, entry))

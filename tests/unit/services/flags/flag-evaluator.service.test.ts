@@ -294,7 +294,8 @@ describe('evaluateFlag rules', () => {
           evaluateFlag(entry, snapshotWith(definition), { ...CONTEXT, distinctId: userId }, ON)
       )
     )
-    expect(results[0]).toEqual(results[1])
+    const expected = { value: false, reason: 'out_of_rollout' }
+    expect(results).toEqual([expected, expected])
   })
 })
 

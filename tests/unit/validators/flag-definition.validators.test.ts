@@ -391,6 +391,45 @@ describe('detectUnsupported', () => {
     ).toBe('group_type')
   })
 
+  it('refuses mixed targeting: a person property on a tenant flag, a group property on a person flag', () => {
+    expect(
+      detectUnsupported(
+        tenantDefinition({
+          properties: [{ key: 'tenant_role', type: 'person', operator: 'exact', value: ['x'] }],
+        }),
+        TENANT_ENTRY,
+        0
+      )
+    ).toBe('group_type')
+    expect(
+      detectUnsupported(
+        withProperties([
+          {
+            key: 'tenant_created_days',
+            type: 'group',
+            group_type_index: 0,
+            operator: 'gt',
+            value: '1',
+          },
+        ]),
+        USER_ENTRY,
+        0
+      )
+    ).toBe('group_type')
+  })
+
+  it('refuses a group property with no group_type_index', () => {
+    expect(
+      detectUnsupported(
+        tenantDefinition({
+          properties: [{ key: 'tenant_created_days', type: 'group', operator: 'gt', value: '1' }],
+        }),
+        TENANT_ENTRY,
+        0
+      )
+    ).toBe('group_type')
+  })
+
   it('refuses a group property of another group type', () => {
     const flag = definition(
       {},
@@ -514,7 +553,7 @@ describe('detectUnsupported', () => {
     expect(detectUnsupported(flag, MULTIVARIATE_ENTRY, 0)).toBe('malformed')
   })
 
-  it('accepts a NONE condition variant, as early-access flags carry', () => {
+  it('accepts a null condition variant, as early-access flags carry', () => {
     const flag = definition(
       {},
       {
