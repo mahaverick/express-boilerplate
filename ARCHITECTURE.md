@@ -898,9 +898,11 @@ restores `request.baseUrl` before an error reaches `errorHandler`, so the
 mount path is recorded when the router assigns `request.route`, and a mount
 parameter's value is put back as its name.
 
-**Order on the way out.** A process fault is reported (synchronously, no
-I/O), logged with its id, then the queue is flushed for at most
-`ERROR_FATAL_FLUSH_MS` (2 s) before the shutdown handler runs.
+**Order on the way out.** A process fault first marks shutdown, so
+`/health/ready` answers 503 from then on, is reported (synchronously, no
+I/O) and logged with its id, then the queue is flushed for at most
+`ERROR_FATAL_FLUSH_MS` (2 s) before the shutdown handler runs; a SIGTERM or
+SIGINT during that flush still exits 1.
 `gracefulShutdown` flushes for at most `ERROR_SHUTDOWN_FLUSH_MS` (3 s)
 after the Workers close, so a job's final failure is included, and before
 Redis closes and OTel shuts down. `index.ts` raises `Error.stackTraceLimit`
