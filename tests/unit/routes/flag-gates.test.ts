@@ -76,7 +76,13 @@ function gatesIn(stack: StackLayer[], prefix: string, isResolved = false): Found
     }
     if (!Array.isArray(layer.handle.stack)) {
       if ((layer.handle as unknown) === resolver) hasResolvedHere = true
-      return []
+      // A gate mounted with `use()` covers every route below its router, so its path is the mount alone.
+      const mark = (layer.handle as unknown as Partial<Record<symbol, FlagGateMark>>)[
+        FLAG_GATE_MARK
+      ]
+      return mark === undefined
+        ? []
+        : [{ path: prefix, mark, isAfterResolveTenant: hasResolvedHere }]
     }
     const mount = KNOWN_MOUNTS.find(
       (candidate) => layer.match(candidate) && layer.path === candidate
@@ -154,6 +160,23 @@ describe('requireFlag placement', () => {
         path: '/tenants/:slug/beta',
         mark: { key: 'example_beta_page', shouldBeOn: true },
         isAfterResolveTenant: false,
+      },
+    ])
+  })
+
+  it('reports a tenant-scoped gate mounted with use(), which covers routes outside /tenants/:slug', () => {
+    const router = Router()
+    const inner = Router()
+    inner.use(resolveTenant(), requireFlag('example_beta_page'))
+    inner.get('/:slug/beta', noop)
+    router.use('/tenants', inner)
+    const gates = gatesIn(stackOf(router), '')
+
+    expect(misplaced(gates)).toEqual([
+      {
+        path: '/tenants',
+        mark: { key: 'example_beta_page', shouldBeOn: true },
+        isAfterResolveTenant: true,
       },
     ])
   })

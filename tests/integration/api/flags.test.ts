@@ -399,15 +399,24 @@ describe('POST …/flags/exposures', () => {
 })
 
 /**
- * The unknown-route 404 body's message, for comparison.
- * @param token - A bearer token.
- * @returns The message.
+ * A 404 body without its per-request `requestId`, the only field two requests may differ in.
+ * @param response - The response.
+ * @returns The rest of the body.
  */
-async function unknownRouteMessage(token: string): Promise<string | undefined> {
+function withoutRequestId(response: Response): unknown {
+  return { ...(response.body as Record<string, unknown>), requestId: undefined }
+}
+
+/**
+ * The unknown-route 404 body, for comparison.
+ * @param token - A bearer token.
+ * @returns The body without its `requestId`.
+ */
+async function unknownRouteBody(token: string): Promise<unknown> {
   const response = await request(app)
     .get('/api/v1/definitely-not-a-route')
     .set('Authorization', `Bearer ${token}`)
-  return (response.body as { message?: string }).message
+  return withoutRequestId(response)
 }
 
 describe('GET /api/v1/tenants/:slug/beta', () => {
@@ -443,7 +452,7 @@ describe('GET /api/v1/tenants/:slug/beta', () => {
       .set('Authorization', `Bearer ${token}`)
 
     expect(response.status).toBe(404)
-    expect((response.body as { message?: string }).message).toBe(await unknownRouteMessage(token))
+    expect(withoutRequestId(response)).toEqual(await unknownRouteBody(token))
   })
 
   it('answers a non-member 404 before the flag is read', async () => {

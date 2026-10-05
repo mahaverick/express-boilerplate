@@ -60,10 +60,11 @@ export const RATE_LIMITER_MARK = Symbol('rateLimiter')
  * to let two limiters share a store (`ERR_ERL_STORE_REUSE`). Each store is
  * keyed `<REDIS_KEY_PREFIX>:rl:<name>:`, so two specs must never share a
  * name (rate-limit.constants.test.ts pins this), or one endpoint's traffic
- * spends another's budget. The one deliberate exception: `authenticatedWrite`
- * is built once per router (tenant, notification, profile), so on Redis they
- * spend one per-user budget, and on the in-memory fallback each router's
- * instance counts on its own.
+ * spends another's budget. Two deliberate exceptions, each built once per
+ * router so that on Redis its instances spend one budget and on the in-memory
+ * fallback each instance counts on its own: `authenticatedWrite` (tenant,
+ * notification and profile routers: one per-user budget) and `flagExposure`
+ * (flags, tenant and platform routers: one per-session budget).
  * @param spec - The limiter's configuration — see `RateLimiterSpec`.
  * @param overrides - `windowMs`/`limit` to override, e.g. a small window for a test. Every other field is fixed by `spec`.
  * @returns Express middleware enforcing the limit, tagged with `RATE_LIMITER_MARK` set to `spec.name`.

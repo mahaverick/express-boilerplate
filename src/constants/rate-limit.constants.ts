@@ -522,6 +522,9 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
    * to 10 keys a request, so an honest tab sends a handful a session. The
    * server re-evaluates every key and dedupes, so this bounds the work a
    * script can cause, not what it can record.
+   * Built once in each of the flags, tenant and platform routers: on Redis the
+   * three share one budget per session; on the in-memory fallback each counts
+   * on its own.
    */
   flagExposure: {
     name: 'flag-exposure',
