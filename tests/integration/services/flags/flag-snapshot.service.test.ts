@@ -6,7 +6,7 @@
  * replaces the copy with an older snapshot, a store with nothing stored
  * serves null, and a stopped store stops reloading.
  */
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   createFlagSnapshotStore,
   flagSnapshotKey,
@@ -50,6 +50,12 @@ async function startedStore(backstopMs = 60_000): Promise<FlagSnapshotStore> {
   await store.start()
   return store
 }
+
+beforeEach(async () => {
+  // Another file in this worker may have left a snapshot under the shared prefix.
+  const redis = await getRedis()
+  await redis.del(flagSnapshotKey())
+})
 
 afterEach(async () => {
   await Promise.all(stores.map((store) => store.stop()))

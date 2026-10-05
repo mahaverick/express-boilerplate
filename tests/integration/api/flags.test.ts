@@ -33,6 +33,7 @@ const { betaPageDefinition, ctaExperimentDefinition, loadFlagDefinitions } =
   await import('../../helpers/flag-definitions')
 const { createTrackedStaff, createTrackedUser, deleteTrackedUsers, tokenFor } =
   await import('../../helpers/platform-users')
+const { clearFlagKeys } = await import('../../helpers/flag-redis')
 const { request } = await import('../../helpers/request')
 
 interface Envelope<T> {
@@ -116,6 +117,7 @@ afterEach(async () => {
 
 afterAll(async () => {
   await stopFlagSnapshot()
+  await clearFlagKeys()
   await truncateAuditLogs()
   await sql`delete from tenants where id = any(${tenantIds})`
   await deleteTrackedUsers()

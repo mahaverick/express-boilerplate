@@ -44,6 +44,7 @@ const { betaPageDefinition, ctaExperimentDefinition, flagDefinition, loadFlagDef
 const { platformTenant } = await import('../../helpers/platform-staff')
 const { createTrackedStaff, createTrackedUser, deleteTrackedUsers } =
   await import('../../helpers/platform-users')
+const { clearFlagKeys } = await import('../../helpers/flag-redis')
 const { request } = await import('../../helpers/request')
 
 type FlagsList = import('@/types/flags').FlagsListResponse
@@ -116,6 +117,7 @@ afterEach(() => {
 
 afterAll(async () => {
   await stopFlagSnapshot()
+  await clearFlagKeys()
   await truncateAuditLogs()
   await sql`delete from tenants where id = any(${tenantIds})`
   await deleteTrackedUsers()
