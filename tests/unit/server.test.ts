@@ -33,6 +33,9 @@ vi.mock('@/services/queue.service', () => ({ closeQueue: () => recorder('closeQu
 vi.mock('@/services/notification-emitter.service', () => ({
   closeNotificationSubscriber: () => recorder('closeNotificationSubscriber')(),
 }))
+vi.mock('@/services/flags/flag-snapshot.service', () => ({
+  stopFlagSnapshot: () => recorder('stopFlagSnapshot')(),
+}))
 vi.mock('@/services/errors/error-reporter.service', () => ({
   flushErrorReports: (deadlineMs: number) => recorder(`flushErrorReports(${String(deadlineMs)})`)(),
 }))
@@ -51,5 +54,14 @@ describe('gracefulShutdown', () => {
     expect(calls.indexOf(flush)).toBeLessThan(calls.indexOf('closeRedis'))
     expect(calls.indexOf(flush)).toBeLessThan(calls.indexOf('closeDatabase'))
     expect(calls.at(-1)).toBe('shutdownOtel')
+  })
+
+  it('stops the flag snapshot subscriber with the other dependencies, after the Workers', async () => {
+    calls.length = 0
+    await gracefulShutdown(http.createServer(), { close: recorder('workers.close') })
+
+    expect(calls).toContain('stopFlagSnapshot')
+    expect(calls.indexOf('workers.close')).toBeLessThan(calls.indexOf('stopFlagSnapshot'))
+    expect(calls.indexOf('stopFlagSnapshot')).toBeLessThan(calls.indexOf('shutdownOtel'))
   })
 })

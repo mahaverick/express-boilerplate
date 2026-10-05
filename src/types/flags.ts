@@ -92,3 +92,63 @@ export interface FlagEvaluation<V = boolean | string> {
  * evaluate.
  */
 export type FlagState = 'active' | 'inactive' | 'missing' | 'unsupported'
+
+/**
+ * Why a definitions fetch failed: PostHog refused the key (401 or 403),
+ * answered another non-2xx status, timed out, could not be reached, sent a
+ * body over the size cap, or sent a body that is not the definitions shape.
+ */
+export type FlagFetchErrorCode =
+  'unauthorized' | 'http_error' | 'timeout' | 'network' | 'body_too_large' | 'invalid_body'
+
+/**
+ * The feature-flag section of the staff system status.
+ */
+export interface FlagsStatus {
+  /**
+   * Whether flags are configured (`isFlagsEnabled()`).
+   */
+  enabled: boolean
+  /**
+   * When this replica's snapshot was fetched, as ISO 8601; null without one.
+   */
+  snapshotAt: string | null
+  /**
+   * When PostHog last confirmed this replica's snapshot, as ISO 8601; null without one.
+   */
+  checkedAt: string | null
+  /**
+   * True when flags are enabled and the snapshot is missing or was last
+   * confirmed more than `FLAG_SNAPSHOT_STALE_MS` ago.
+   */
+  stale: boolean
+  /**
+   * When any replica's fetch last succeeded (a 200 or a 304), as ISO 8601;
+   * null when none did in the last day.
+   */
+  lastFetchOk: string | null
+  /**
+   * The code of the last failed fetch; null when none failed since the last success, or in the last day.
+   */
+  lastFetchError: FlagFetchErrorCode | null
+  /**
+   * The snapshot's `property_matching_version`; the numeric matching rule
+   * was validated against 1 only.
+   */
+  propertyMatchingVersion: number | null
+  /**
+   * Registered flags by state in this replica's snapshot (all but
+   * `registered` are 0 without one), PostHog flags the registry does not
+   * declare, and evaluations that met an undeclared variant in the last
+   * `FLAG_UNKNOWN_VARIANT_WINDOW_MINUTES` minutes across replicas.
+   */
+  counts: {
+    registered: number
+    active: number
+    inactive: number
+    missing: number
+    unsupported: number
+    unregistered: number
+    unknownVariant15m: number
+  }
+}

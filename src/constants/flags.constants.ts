@@ -330,3 +330,24 @@ export const FLAG_REASON_POSTHOG_CODES: Readonly<Record<FlagReason, string | nul
   // eslint-disable-next-line unicorn/no-null -- express's own fallback
   'fallback:inconclusive': null,
 }
+
+/**
+ * How long one definitions fetch, body included, may take.
+ */
+export const FLAG_DEFINITIONS_TIMEOUT_MS = 5000
+
+/**
+ * The largest definitions body read; a larger one fails the fetch (56 flags
+ * measured 28.6 kB).
+ */
+export const FLAG_DEFINITIONS_MAX_BYTES = 2 * 1024 * 1024
+
+/**
+ * How old a snapshot's `checkedAt` may be before the status calls it stale.
+ */
+export const FLAG_SNAPSHOT_STALE_MS = 600_000
+
+/**
+ * The window the status counts undeclared variants over, in minutes.
+ */
+export const FLAG_UNKNOWN_VARIANT_WINDOW_MINUTES = 15

@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest'
 import {
   isAnalyticsEnabled,
   isErrorTrackingEnabled,
+  isFlagsEnabled,
   isTimelineEnabled,
   posthogAppHost,
   posthogAssetsHost,
@@ -177,5 +178,32 @@ describe('isErrorTrackingEnabled', () => {
 
   it('is off under the test environment', () => {
     expect(isErrorTrackingEnabled()).toBe(false)
+  })
+})
+
+describe('isFlagsEnabled', () => {
+  it('is on only when both the project key and the feature flags key are set', () => {
+    expect(
+      isFlagsEnabled({
+        POSTHOG_PROJECT_KEY: 'phc_test_key_not_real',
+        POSTHOG_FEATURE_FLAGS_KEY: 'phs_test_key_not_real',
+      })
+    ).toBe(true)
+    expect(
+      isFlagsEnabled({
+        POSTHOG_PROJECT_KEY: 'phc_test_key_not_real',
+        POSTHOG_FEATURE_FLAGS_KEY: undefined,
+      })
+    ).toBe(false)
+    expect(
+      isFlagsEnabled({
+        POSTHOG_PROJECT_KEY: undefined,
+        POSTHOG_FEATURE_FLAGS_KEY: 'phs_test_key_not_real',
+      })
+    ).toBe(false)
+  })
+
+  it('is off under the test environment, which sets neither', () => {
+    expect(isFlagsEnabled()).toBe(false)
   })
 })

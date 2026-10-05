@@ -3,7 +3,7 @@
  * signal handling and workers. Excluded from coverage as signal wiring;
  * tests/unit/index.test.ts spawns it to prove boot refuses a bad environment.
  */
-import { isAnalyticsEnabled, isTimelineEnabled } from '@/configs/analytics.config'
+import { isAnalyticsEnabled, isFlagsEnabled, isTimelineEnabled } from '@/configs/analytics.config'
 import { assertEnvConsistent } from '@/configs/env-consistency.config'
 import { getEnv } from '@/configs/env.config'
 import { ERROR_FRAME_LIMIT } from '@/constants/error-tracking.constants'
@@ -28,7 +28,9 @@ import type { SupervisedWorkers } from '@/services/worker-supervisor.service'
  * uncaught exception first marks shutdown (readiness answers 503), is
  * reported to error tracking and logged with the same `errorId`, and the
  * report queue is flushed for at most `ERROR_FATAL_FLUSH_MS` before shutdown
- * begins; a SIGTERM or SIGINT during that flush still exits 1.
+ * begins; a SIGTERM or SIGINT during that flush still exits 1. With flags
+ * enabled, the flag snapshot loads before the server listens, so the first
+ * request already sees it; its start never rejects.
  * @returns Resolves once exit handlers are wired and any workers have started.
  */
 async function boot(): Promise<void> {
@@ -51,6 +53,11 @@ async function boot(): Promise<void> {
     const errorId = reportError(fault, { capturePoint: 'process', handled: false })
     logger.error(message, { error: redactedForLog(fault), errorId })
     await flushErrorReports(ERROR_FATAL_FLUSH_MS)
+  }
+
+  if (isFlagsEnabled()) {
+    const { startFlagSnapshot } = await import('@/services/flags/flag-snapshot.service')
+    await startFlagSnapshot()
   }
 
   // Filled in once the workers start; shutdown reads it only when it runs.
@@ -90,7 +97,7 @@ async function boot(): Promise<void> {
   // Throws if a Worker fails to start: boot() rejects, and the unhandledRejection handler exits 1.
   workers.supervised = startWorkers()
   logger.info(
-    isAnalyticsEnabled() || isTimelineEnabled()
+    isAnalyticsEnabled() || isTimelineEnabled() || isFlagsEnabled()
       ? 'Workers started (email, notification, maintenance, analytics)'
       : 'Workers started (email, notification, maintenance)'
   )

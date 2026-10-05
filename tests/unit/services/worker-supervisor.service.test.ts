@@ -6,9 +6,10 @@
 import type { Worker } from 'bullmq'
 import type IORedis from 'ioredis'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { isAnalyticsEnabled, isTimelineEnabled } from '@/configs/analytics.config'
+import { isAnalyticsEnabled, isFlagsEnabled, isTimelineEnabled } from '@/configs/analytics.config'
 import { ensureAnalyticsDeletionSchedule } from '@/jobs/analytics-deletion.job'
 import { ensureAnalyticsDrainSchedule } from '@/jobs/analytics.job'
+import { ensureFlagDefinitionsSchedule } from '@/jobs/flag-definitions.job'
 import { ensureRetentionSchedule } from '@/jobs/maintenance.job'
 import { markShuttingDown, resetLifecycleForTests } from '@/services/lifecycle.service'
 import { logger } from '@/services/logger.service'
@@ -35,9 +36,11 @@ vi.mock('@/jobs/maintenance.job', () => ({ ensureRetentionSchedule: vi.fn() }))
 vi.mock('@/workers/analytics.worker', () => ({ startAnalyticsWorker: vi.fn() }))
 vi.mock('@/jobs/analytics.job', () => ({ ensureAnalyticsDrainSchedule: vi.fn() }))
 vi.mock('@/jobs/analytics-deletion.job', () => ({ ensureAnalyticsDeletionSchedule: vi.fn() }))
+vi.mock('@/jobs/flag-definitions.job', () => ({ ensureFlagDefinitionsSchedule: vi.fn() }))
 vi.mock('@/configs/analytics.config', () => ({
   isAnalyticsEnabled: vi.fn(() => false),
   isTimelineEnabled: vi.fn(() => false),
+  isFlagsEnabled: vi.fn(() => false),
 }))
 
 interface FakeWorker {
@@ -92,6 +95,7 @@ function wireMocks(): {
   vi.mocked(ensureRetentionSchedule).mockResolvedValue(undefined)
   vi.mocked(ensureAnalyticsDrainSchedule).mockResolvedValue(undefined)
   vi.mocked(ensureAnalyticsDeletionSchedule).mockResolvedValue(undefined)
+  vi.mocked(ensureFlagDefinitionsSchedule).mockResolvedValue(undefined)
   vi.mocked(onWorkerConnectionLost).mockImplementation((listener) => {
     listeners.push(listener)
     return unsubscribe
@@ -112,6 +116,42 @@ describe('startWorkers', () => {
     vi.clearAllMocks()
     vi.mocked(isAnalyticsEnabled).mockReturnValue(false)
     vi.mocked(isTimelineEnabled).mockReturnValue(false)
+    vi.mocked(isFlagsEnabled).mockReturnValue(false)
+  })
+
+  it('starts the analytics Worker and registers the flag definitions schedule once per generation when flags are enabled', () => {
+    vi.mocked(isFlagsEnabled).mockReturnValue(true)
+    const mocks = wireMocks()
+    startWorkers()
+
+    expect(mocks.workers).toHaveLength(4)
+    expect(startAnalyticsWorker).toHaveBeenCalledOnce()
+    expect(ensureFlagDefinitionsSchedule).toHaveBeenCalledOnce()
+    expect(ensureAnalyticsDrainSchedule).not.toHaveBeenCalled()
+
+    mocks.lose(mocks.connections[0] as IORedis)
+    expect(mocks.workers).toHaveLength(8)
+    expect(ensureFlagDefinitionsSchedule).toHaveBeenCalledTimes(2)
+  })
+
+  it('logs a failed flag definitions schedule registration at warn, and keeps the Workers running', async () => {
+    vi.mocked(isFlagsEnabled).mockReturnValue(true)
+    const mocks = wireMocks()
+    const failure = new Error('Redis unreachable')
+    vi.mocked(ensureFlagDefinitionsSchedule).mockRejectedValueOnce(failure)
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+
+    try {
+      expect(() => startWorkers()).not.toThrow()
+      await new Promise((resolve) => setImmediate(resolve))
+
+      expect(warn).toHaveBeenCalledWith('Registering the flag definitions schedule failed', {
+        error: failure,
+      })
+      expect(mocks.workers).toHaveLength(4)
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it('closes the lost Workers within the same call and starts new ones on a new connection', () => {

@@ -438,3 +438,24 @@ describe('assertEnvConsistent', () => {
     expect(error).toContain('Only SMTP_USERNAME is set')
   })
 })
+
+describe('the feature flags key', () => {
+  it('refuses boot when POSTHOG_FEATURE_FLAGS_KEY is set without POSTHOG_PROJECT_KEY', () => {
+    const { error } = runChecks({ ...local, POSTHOG_FEATURE_FLAGS_KEY: 'phs_test_key_not_real' })
+    expect(error).toContain('POSTHOG_FEATURE_FLAGS_KEY is set but POSTHOG_PROJECT_KEY is not')
+    expect(error).not.toContain('phs_test_key_not_real')
+  })
+
+  it('passes with both keys, and with the project key alone (flags off)', () => {
+    expect(
+      runChecks({
+        ...local,
+        POSTHOG_PROJECT_KEY: 'phc_test_key_not_real',
+        POSTHOG_FEATURE_FLAGS_KEY: 'phs_test_key_not_real',
+      }).error
+    ).toBeUndefined()
+    expect(
+      runChecks({ ...local, POSTHOG_PROJECT_KEY: 'phc_test_key_not_real' }).error
+    ).toBeUndefined()
+  })
+})

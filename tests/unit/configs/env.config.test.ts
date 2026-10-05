@@ -805,3 +805,33 @@ describe('APP_VERSION', () => {
     }
   })
 })
+
+describe('POSTHOG_FEATURE_FLAGS_KEY', () => {
+  it('is unset by default, and an empty value counts as unset', () => {
+    expect(parseEnv(valid).POSTHOG_FEATURE_FLAGS_KEY).toBeUndefined()
+    expect(
+      parseEnv({ ...valid, POSTHOG_FEATURE_FLAGS_KEY: '' }).POSTHOG_FEATURE_FLAGS_KEY
+    ).toBeUndefined()
+  })
+
+  it('accepts a phs_ key', () => {
+    expect(
+      parseEnv({ ...valid, POSTHOG_FEATURE_FLAGS_KEY: 'phs_test_key_not_real' })
+        .POSTHOG_FEATURE_FLAGS_KEY
+    ).toBe('phs_test_key_not_real')
+  })
+
+  it('refuses a key that is not a feature flags secure key', () => {
+    for (const value of ['phc_test_key_not_real', 'phx_test_key_not_real', 'test_key_not_real']) {
+      expect(() => parseEnv({ ...valid, POSTHOG_FEATURE_FLAGS_KEY: value })).toThrow(
+        'POSTHOG_FEATURE_FLAGS_KEY'
+      )
+    }
+  })
+
+  it('documents the personal key scopes flags:sync needs', () => {
+    expect(EnvSchemaShape.POSTHOG_PERSONAL_API_KEY.description).toContain(
+      'feature_flag:read and feature_flag:write'
+    )
+  })
+})
