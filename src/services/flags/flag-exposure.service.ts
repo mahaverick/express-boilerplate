@@ -87,14 +87,15 @@ async function isFirstExposure(key: string, seconds: number): Promise<boolean> {
  * Release a dedupe key whose exposure was not recorded. Best effort: a
  * Redis failure leaves the key to expire.
  * @param key - The dedupe key.
- * @returns Resolves once released or the failure is swallowed.
+ * @returns True once released, false when Redis failed.
  */
-async function releaseDedupeKey(key: string): Promise<void> {
+async function didReleaseDedupeKey(key: string): Promise<boolean> {
   try {
     const redis = await getRedis()
     await redis.del(key)
+    return true
   } catch {
-    // The warn below already reports the lost exposure.
+    return false
   }
 }
 
@@ -104,7 +105,8 @@ async function releaseDedupeKey(key: string): Promise<void> {
  * string for a multivariate flag. Nothing is recorded for an evaluation
  * that is neither `condition_match` nor `holdout`, or while analytics is
  * off. Never throws: when the outbox insert fails, the dedupe key is
- * released (best effort) and a warn names the flag and the error type.
+ * released (best effort) and a warn names the flag, the error type and
+ * whether the key was released.
  * @param context - The evaluation context (the user, the tenant, the session).
  * @param key - The experiment's key.
  * @param evaluation - The server's own evaluation of it, never a client's value.
@@ -136,10 +138,11 @@ export async function recordExposure(
   try {
     await enqueueAnalyticsOrThrow([row])
   } catch (error) {
-    await releaseDedupeKey(dedupeKey)
-    logger.warn(
-      'Recording an exposure failed; released its dedupe key so the next report records',
-      { flag: key, reason: error instanceof Error ? error.name : 'unknown' }
-    )
+    const isReleased = await didReleaseDedupeKey(dedupeKey)
+    logger.warn('Recording an exposure failed; its dedupe key is released when Redis allows', {
+      flag: key,
+      reason: error instanceof Error ? error.name : 'unknown',
+      released: isReleased,
+    })
   }
 }

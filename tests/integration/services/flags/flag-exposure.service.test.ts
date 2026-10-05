@@ -194,8 +194,8 @@ describe('recordExposure', () => {
     const redis = await getRedis()
     expect(await redis.exists(exposureDedupeKey(context, KEY, 'bold'))).toBe(0)
     expect(warn).toHaveBeenCalledWith(
-      'Recording an exposure failed; released its dedupe key so the next report records',
-      { flag: KEY, reason: 'Error' }
+      'Recording an exposure failed; its dedupe key is released when Redis allows',
+      { flag: KEY, reason: 'Error', released: true }
     )
     expect(JSON.stringify(warn.mock.calls)).not.toContain(context.distinctId)
 
@@ -209,7 +209,12 @@ describe('recordExposure', () => {
     )
     const redis = await getRedis()
     vi.spyOn(redis, 'del').mockRejectedValueOnce(new Error('Redis down'))
+    const warn = vi.spyOn(logger, 'warn')
     await expect(recordExposure(contextWith(), KEY, BOLD, 'react')).resolves.toBeUndefined()
+    expect(warn).toHaveBeenCalledWith(
+      'Recording an exposure failed; its dedupe key is released when Redis allows',
+      { flag: KEY, reason: 'Error', released: false }
+    )
   })
 
   it('records nothing, and sets no dedupe key, while analytics is off', async () => {
