@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.8.0](https://github.com/mahaverick/express-boilerplate/compare/v1.7.0...v1.8.0) (2026-10-05)
+
+
+### Features
+
+* server-evaluated feature flags and experiments (sp5d) ([#82](https://github.com/mahaverick/express-boilerplate/issues/82)) ([b6237e0](https://github.com/mahaverick/express-boilerplate/commit/b6237e0d1a7987182e59df43c8a40d3bdd6507cb))
+
 ## [1.7.0](https://github.com/mahaverick/express-boilerplate/compare/v1.6.0...v1.7.0) (2026-10-05)
 
 
