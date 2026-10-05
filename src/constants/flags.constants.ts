@@ -6,7 +6,7 @@
  * Also the closed set of traits a flag may target, and the snapshot
  * pipeline's limits.
  */
-import type { FlagApp, FlagScope } from '@/types/flags'
+import type { FlagApp, FlagReason, FlagScope } from '@/types/flags'
 
 /**
  * A flag key: snake_case, starting with a letter.
@@ -304,3 +304,29 @@ export const FLAG_GROUP_PROPERTY_KEYS: ReadonlySet<string> = new Set([
   ...FLAG_TRAITS.filter((trait) => trait.where === 'group').map((trait) => trait.name),
   '$group_key',
 ])
+
+/**
+ * The reason code PostHog's remote `/flags` reports for each of our
+ * reasons, for the staff inspector and the golden tests; null where PostHog
+ * has none (an inactive flag is absent from its answer, and the other
+ * fallbacks are express's own).
+ */
+export const FLAG_REASON_POSTHOG_CODES: Readonly<Record<FlagReason, string | null>> = {
+  condition_match: 'condition_match',
+  out_of_rollout: 'out_of_rollout_bound',
+  no_condition_match: 'no_condition_match',
+  holdout: 'holdout_condition_value',
+  'fallback:no_tenant': 'no_group_type',
+  // eslint-disable-next-line unicorn/no-null -- PostHog omits an inactive flag
+  'fallback:inactive': null,
+  // eslint-disable-next-line unicorn/no-null -- express's own fallback
+  'fallback:unconfigured': null,
+  // eslint-disable-next-line unicorn/no-null -- express's own fallback
+  'fallback:snapshot_missing': null,
+  // eslint-disable-next-line unicorn/no-null -- express's own fallback
+  'fallback:flag_missing': null,
+  // eslint-disable-next-line unicorn/no-null -- express's own fallback
+  'fallback:unsupported': null,
+  // eslint-disable-next-line unicorn/no-null -- express's own fallback
+  'fallback:inconclusive': null,
+}
