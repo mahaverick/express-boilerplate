@@ -55,8 +55,8 @@ export function startAnalyticsWorker(): Worker {
 
   // Warn, never the permanent-failure error: a failed tick loses nothing, and the next one retries.
   worker.on('failed', (job, error) => {
-    reportFinalJobFailure('analytics', job, error)
-    logger.warn('Analytics job failed', { jobId: job?.id, name: job?.name, error })
+    const errorId = reportFinalJobFailure('analytics', job, error)
+    logger.warn('Analytics job failed', { jobId: job?.id, name: job?.name, error, errorId })
   })
 
   worker.on('error', (error: unknown) => {

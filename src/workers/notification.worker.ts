@@ -153,7 +153,7 @@ export function startNotificationWorker(): Worker<NotificationJobData> {
   })
 
   worker.on('failed', (job, error) => {
-    reportFinalJobFailure('notification', job, error)
+    const errorId = reportFinalJobFailure('notification', job, error)
     if (job === undefined || !isTerminalFailure(job, error)) {
       // createOnce can fail with a DrizzleQueryError whose params hold title, body and userId.
       logger.warn('Notification job failed', {
@@ -164,7 +164,7 @@ export function startNotificationWorker(): Worker<NotificationJobData> {
       })
       return
     }
-    void recordPermanentFailure('notification', job, error)
+    void recordPermanentFailure('notification', job, error, errorId)
   })
 
   worker.on('error', (error: unknown) => {

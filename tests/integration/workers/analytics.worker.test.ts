@@ -131,6 +131,11 @@ describe('analytics.worker', () => {
             10_000
           )
           expect(loggerError).not.toHaveBeenCalledWith('job failed permanently', expect.anything())
+          // A job with one attempt fails for good, so the warn line names its report.
+          expect(loggerWarn).toHaveBeenCalledWith(
+            'Analytics job failed',
+            expect.objectContaining({ jobId, errorId: expect.any(String) as unknown })
+          )
         }
       )
     } finally {

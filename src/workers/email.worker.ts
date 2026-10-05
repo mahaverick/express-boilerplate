@@ -140,7 +140,7 @@ export function startEmailWorker(): Worker<EmailJobData> {
   })
 
   worker.on('failed', (job, error) => {
-    reportFinalJobFailure('email', job, error)
+    const errorId = reportFinalJobFailure('email', job, error)
     if (job === undefined || !isTerminalFailure(job, error)) {
       logger.warn('Email job failed', {
         jobId: job?.id,
@@ -150,7 +150,7 @@ export function startEmailWorker(): Worker<EmailJobData> {
       })
       return
     }
-    void recordPermanentFailure('email', job, error)
+    void recordPermanentFailure('email', job, error, errorId)
   })
 
   worker.on('error', (error: unknown) => {

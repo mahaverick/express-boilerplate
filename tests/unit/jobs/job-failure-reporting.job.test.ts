@@ -56,6 +56,12 @@ describe('reportFinalJobFailure', () => {
     expect(JSON.stringify(vi.mocked(reportError).mock.calls)).not.toContain('secret-recipient')
   })
 
+  it('returns the report’s errorId, and undefined when nothing was reported', () => {
+    expect(reportFinalJobFailure('email', fakeJob(3, 3), new Error('smtp down'))).toBe('error-id')
+    expect(reportFinalJobFailure('email', fakeJob(1, 3), new Error('smtp down'))).toBeUndefined()
+    expect(reportFinalJobFailure('email', undefined, new Error('lost'))).toBeUndefined()
+  })
+
   it('reports a job with no attempts option on its first failure', () => {
     reportFinalJobFailure('analytics', fakeJob(1), new Error('drain failed'))
 

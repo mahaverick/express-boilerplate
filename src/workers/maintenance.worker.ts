@@ -50,7 +50,7 @@ export function startMaintenanceWorker(): Worker {
   })
 
   worker.on('failed', (job, error) => {
-    reportFinalJobFailure('maintenance', job, error)
+    const errorId = reportFinalJobFailure('maintenance', job, error)
     if (job === undefined || !isTerminalFailure(job, error)) {
       logger.warn('Maintenance job failed', {
         jobId: job?.id,
@@ -60,7 +60,7 @@ export function startMaintenanceWorker(): Worker {
       })
       return
     }
-    void recordPermanentFailure('maintenance', job, error)
+    void recordPermanentFailure('maintenance', job, error, errorId)
   })
 
   worker.on('error', (error: unknown) => {
