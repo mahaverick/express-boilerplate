@@ -5,9 +5,10 @@
  * a copy in memory, loads it at boot, reloads it on a message, and reloads
  * every `FLAG_SNAPSHOT_BACKSTOP_MS` in case a message was missed. The
  * subscription connects in the background, and reloads once it is
- * established so a message sent before it is not lost. A failed
- * reload keeps the copy, so does a read older than it (reloads overlap), and
- * a replica that never loaded one serves every fallback. The message carries no data: replicas read the stored snapshot.
+ * established so a message sent before it is not lost. A failed reload
+ * keeps the copy, so does a read checked earlier than it (reloads overlap),
+ * and a replica that never loaded one serves every fallback. The message
+ * carries no data: replicas read the stored snapshot.
  */
 import type { RedisClientType } from 'redis'
 import { logger } from '@/services/logger.service'
@@ -103,19 +104,20 @@ export async function touchFlagSnapshot(snapshot: ParsedSnapshot, checkedAt: Dat
 }
 
 /**
- * Whether a snapshot just read is older than the copy in memory: fetched or
- * checked earlier. Reloads run concurrently (the message, the backstop, a
- * reconnect), so a read that started first can finish last.
+ * Whether a snapshot just read is older than the copy in memory: checked
+ * earlier. Reloads run concurrently (the message, the backstop, a
+ * reconnect), so a read that started first can finish last. Only
+ * `checkedAt` is compared: every run that reaches PostHog advances it, while
+ * a 304 leaves `fetchedAt` alone, so a copy whose `fetchedAt` is later than
+ * the next 200's (worker clock skew, a Redis restored to an older copy)
+ * would otherwise refuse every later reload.
  * @param incoming - The snapshot just read.
  * @param current - The copy in memory, or null.
  * @returns True when `incoming` must not replace `current`.
  */
 function isOlder(incoming: ParsedSnapshot, current: ParsedSnapshot | null): boolean {
   if (current === null) return false
-  return (
-    Date.parse(incoming.fetchedAt) < Date.parse(current.fetchedAt) ||
-    Date.parse(incoming.checkedAt) < Date.parse(current.checkedAt)
-  )
+  return Date.parse(incoming.checkedAt) < Date.parse(current.checkedAt)
 }
 
 /**
@@ -139,7 +141,7 @@ export interface FlagSnapshotStore {
   get: () => ParsedSnapshot | null
   /**
    * Read the stored snapshot into memory now; a failure, nothing stored, or
-   * a snapshot fetched or checked earlier than the copy keeps the copy.
+   * a snapshot checked earlier than the copy keeps the copy.
    */
   reload: () => Promise<void>
 }

@@ -4,7 +4,13 @@
  * of spec §4.5 (each verified against PostHog in the planning probe).
  */
 import { describe, expect, it } from 'vitest'
-import { flagEntry, FLAGS, type FlagEntry } from '@/constants/flags.constants'
+import {
+  FLAG_GROUP_PROPERTY_KEYS,
+  FLAG_PERSON_PROPERTY_KEYS,
+  flagEntry,
+  FLAGS,
+  type FlagEntry,
+} from '@/constants/flags.constants'
 import {
   detectUnsupported,
   FLAG_PARSER_VERSION,
@@ -241,7 +247,7 @@ describe('parseDefinitionsResponse', () => {
 })
 
 describe('flagRegistryFingerprint', () => {
-  it('is a short sha256 hex of the running registry and parser version, stable across calls', () => {
+  it('is a short sha256 hex of the running registry, traits and parser version, stable across calls', () => {
     expect(flagRegistryFingerprint()).toMatch(/^[0-9a-f]{16}$/)
     expect(flagRegistryFingerprint()).toBe(flagRegistryFingerprint(FLAGS, FLAG_PARSER_VERSION))
   })
@@ -254,6 +260,32 @@ describe('flagRegistryFingerprint', () => {
     ['an added entry', [USER_ENTRY, TENANT_ENTRY]],
   ])('changes with %s', (_change, entries) => {
     expect(flagRegistryFingerprint(entries, 1)).not.toBe(flagRegistryFingerprint([USER_ENTRY], 1))
+  })
+
+  it('changes with the traits a condition may name', () => {
+    const base = flagRegistryFingerprint([USER_ENTRY], 1)
+    expect(
+      flagRegistryFingerprint([USER_ENTRY], 1, {
+        person: new Set([...FLAG_PERSON_PROPERTY_KEYS, 'new_trait']),
+        group: FLAG_GROUP_PROPERTY_KEYS,
+      })
+    ).not.toBe(base)
+    expect(
+      flagRegistryFingerprint([USER_ENTRY], 1, {
+        person: FLAG_PERSON_PROPERTY_KEYS,
+        group: new Set([...FLAG_GROUP_PROPERTY_KEYS, 'new_trait']),
+      })
+    ).not.toBe(base)
+  })
+
+  it('does not depend on the order the traits are declared in', () => {
+    const reversed = [...FLAG_PERSON_PROPERTY_KEYS].toReversed()
+    expect(
+      flagRegistryFingerprint([USER_ENTRY], 1, {
+        person: new Set(reversed),
+        group: FLAG_GROUP_PROPERTY_KEYS,
+      })
+    ).toBe(flagRegistryFingerprint([USER_ENTRY], 1))
   })
 
   it('changes with the parser version', () => {

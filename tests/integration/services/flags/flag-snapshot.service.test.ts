@@ -130,7 +130,7 @@ describe('flag snapshot store', () => {
     warn.mockRestore()
   })
 
-  it('never replaces its copy with an older snapshot, as a late concurrent read would', async () => {
+  it('never replaces its copy with an earlier-checked snapshot, as a late concurrent read would', async () => {
     const newer = { ...snapshot('newer'), checkedAt: '2026-10-05T12:00:30.000Z' }
     await writeFlagSnapshot(newer)
     const store = await startedStore()
@@ -145,11 +145,30 @@ describe('flag snapshot store', () => {
     }
     await redis.set(flagSnapshotKey(), JSON.stringify(olderFetch))
     await store.reload()
-    expect(store.get()?.etag).toBe('W/"newer"')
-    const same = { ...newer, etag: 'W/"same-times"' }
+    expect(store.get()?.etag).toBe('W/"older-fetched"')
+    const same = { ...olderFetch, etag: 'W/"same-times"' }
     await redis.set(flagSnapshotKey(), JSON.stringify(same))
     await store.reload()
     expect(store.get()?.etag).toBe('W/"same-times"')
+  })
+
+  it('applies a later-checked snapshot even when its copy was fetched later (clock skew, a restored Redis)', async () => {
+    const skewed = {
+      ...snapshot('skewed'),
+      fetchedAt: '2026-10-05T12:10:00.000Z',
+      checkedAt: '2026-10-05T12:10:00.000Z',
+    }
+    await writeFlagSnapshot(skewed)
+    const store = await startedStore()
+    const killed = {
+      ...snapshot('killed'),
+      fetchedAt: '2026-10-05T12:05:00.000Z',
+      checkedAt: '2026-10-05T12:10:30.000Z',
+    }
+    const redis = await getRedis()
+    await redis.set(flagSnapshotKey(), JSON.stringify(killed))
+    await store.reload()
+    expect(store.get()?.etag).toBe('W/"killed"')
   })
 
   it('leaves no backstop timer when stopped while starting', async () => {

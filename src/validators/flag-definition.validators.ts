@@ -18,28 +18,59 @@ import {
 } from '@/constants/flags.constants'
 
 /**
- * The version of the parse and detection rules. Bump it whenever
- * `detectUnsupported` or the schema changes what a definition parses to, so
- * every stored snapshot's fingerprint stops matching and the next
- * definitions run re-parses it (`flagRegistryFingerprint`).
+ * The version of the parse and detection rules, one input of
+ * `flagRegistryFingerprint`. The fingerprint already covers the registry
+ * (each entry's key, kind, variants and scope) and the trait keys a
+ * condition may name (`FLAG_PERSON_PROPERTY_KEYS`,
+ * `FLAG_GROUP_PROPERTY_KEYS`), so changing those needs no bump. Bump it
+ * whenever `detectUnsupported` or the schema changes what a definition
+ * parses to, so every stored snapshot's fingerprint stops matching and the
+ * next definitions run re-parses it.
  */
 export const FLAG_PARSER_VERSION = 1
 
 const FINGERPRINT_LENGTH = 16
 
 /**
+ * The property keys a condition may name, which `property_key` verdicts depend on.
+ */
+interface PropertyKeySets {
+  person: ReadonlySet<string>
+  group: ReadonlySet<string>
+}
+
+const TRAIT_PROPERTY_KEYS: PropertyKeySets = {
+  person: FLAG_PERSON_PROPERTY_KEYS,
+  group: FLAG_GROUP_PROPERTY_KEYS,
+}
+
+/**
+ * A set's members in a fixed order, so the fingerprint ignores declaration order.
+ * @param keys - The keys.
+ * @returns Them, sorted.
+ */
+function sortedKeys(keys: ReadonlySet<string>): string[] {
+  return [...keys].toSorted((a, b) => a.localeCompare(b, 'en'))
+}
+
+/**
  * A stable hash of what a snapshot's `unsupported` verdicts depend on
  * besides PostHog's body: every registry entry's key, kind, variants and
- * scope, in registry order, and the parser version. A stored snapshot whose
+ * scope, in registry order, the person and group property keys a condition
+ * may name, sorted, and the parser version. A stored snapshot whose
  * fingerprint differs from the running one was parsed by other rules, so
  * the definitions job fetches it again without `If-None-Match`.
  * @param entries - The registry; defaults to `FLAGS`.
  * @param parserVersion - The parser version; defaults to `FLAG_PARSER_VERSION`.
+ * @param propertyKeys - The allowed property keys; defaults to the traits'.
+ * @param propertyKeys.person - The person property keys.
+ * @param propertyKeys.group - The group property keys.
  * @returns The first 16 hex characters of the sha256.
  */
 export function flagRegistryFingerprint(
   entries: readonly FlagEntry[] = FLAGS,
-  parserVersion: number = FLAG_PARSER_VERSION
+  parserVersion: number = FLAG_PARSER_VERSION,
+  propertyKeys: PropertyKeySets = TRAIT_PROPERTY_KEYS
 ): string {
   const registry = entries.map((entry) => ({
     key: entry.key,
@@ -49,7 +80,14 @@ export function flagRegistryFingerprint(
     scope: entry.scope,
   }))
   return createHash('sha256')
-    .update(JSON.stringify({ parserVersion, registry }))
+    .update(
+      JSON.stringify({
+        parserVersion,
+        registry,
+        personKeys: sortedKeys(propertyKeys.person),
+        groupKeys: sortedKeys(propertyKeys.group),
+      })
+    )
     .digest('hex')
     .slice(0, FINGERPRINT_LENGTH)
 }

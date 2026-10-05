@@ -998,11 +998,14 @@ every API and worker process: in-memory snapshot (reload on message, 60 s backst
   and the 60 s backstop reloads (and retries the subscription) meanwhile. A
   stored snapshot that can't be read at boot is treated as none, and the
   process answers fallbacks until a good one arrives; a later failed reload,
-  or a read older than the copy in memory, keeps that copy. The snapshot stores a
-  fingerprint of the registry's keys, kinds, variants and scopes plus
-  `FLAG_PARSER_VERSION` (bump it when the parse or detection rules
+  or a read checked earlier than the copy in memory, keeps that copy. The snapshot stores a
+  fingerprint of the registry's keys, kinds, variants and scopes, the trait
+  keys a condition may name, and `FLAG_PARSER_VERSION` (bump it when the parse or detection rules
   change); when it differs from the running code's, the job omits
-  `If-None-Match` so the next run re-parses with the current rules.
+  `If-None-Match` so the next run re-parses with the current rules. During
+  a rolling deploy with workers on both versions the stored fingerprint
+  alternates, so each tick fetches a full 200 and registry-dependent
+  verdicts can flip until the old workers drain.
 - **Kill-switch latency**: a PostHog edit reaches every process on the
   next definitions run (every 30 s) and its `reload` message, or the 60 s
   backstop if the message is missed. The run shares the `analytics` worker
