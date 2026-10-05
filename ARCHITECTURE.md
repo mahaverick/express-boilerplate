@@ -83,7 +83,7 @@ everything before it.
 
 `createApiRouter()` (`src/routes/index.routes.ts`) mounts one router per
 feature under `/api/v1`: `auth`, `profile`, `notifications`, `tenants`,
-`invitations` and `platform`. A new feature router is one more `router.use(...)`
+`invitations`, `platform` and `flags`. A new feature router is one more `router.use(...)`
 line there, never a change to `app.ts`. The one exception is
 `POST /api/v1/webhooks/email/:provider` (`src/routes/email-webhook.routes.ts`),
 which `app.ts` mounts after `requestContext` and before the global
@@ -110,11 +110,12 @@ message tracking: `GET /platform/emails`, `/platform/emails/health`,
 `/platform/emails/:id` and its `/preview`, `GET
 /platform/email-suppressions`, and onboarding: `GET
 /platform/onboarding/funnel`, `/platform/onboarding/tenants` and `GET
-/platform/tenants/:id/onboarding`.
+/platform/tenants/:id/onboarding`, and the flag inspector's list, `GET
+/platform/flags`.
 Platform admins also get `GET /platform/audit-log` (filterable by `tenantId`,
 `targetId`, actor, action and access), the PostHog timelines `GET
 /platform/users/:id/timeline` and `GET /platform/tenants/:id/timeline` (each
-read audited as `user.timeline_viewed` / `tenant.timeline_viewed`, at most once per staff member, target and view every 10 minutes; the audit fails closed: if its write fails, so does the read, with a 500, and the throttle key it claimed is released, logging at `error` if that release fails too), the Errors views `GET /platform/users/:id/errors` and `GET /platform/tenants/:id/errors` (audited the same way as `user.errors_viewed` / `tenant.errors_viewed`, see [Error tracking](#error-tracking)), `GET /platform/system/status` (not audited), and every create, update and soft
+read audited as `user.timeline_viewed` / `tenant.timeline_viewed`, at most once per staff member, target and view every 10 minutes; the audit fails closed: if its write fails, so does the read, with a 500, and the throttle key it claimed is released, logging at `error` if that release fails too), the Errors views `GET /platform/users/:id/errors` and `GET /platform/tenants/:id/errors` (audited the same way as `user.errors_viewed` / `tenant.errors_viewed`, see [Error tracking](#error-tracking)), `GET /platform/system/status` (not audited), the flag evaluate view `GET /platform/flags/evaluate` (audited as `user.flags_evaluated`, throttled the same way, see [Feature flags](#feature-flags)), and every create, update and soft
 action: create a tenant and invite its owner, re-invite an owner, suspend,
 reactivate and archive a tenant, create and edit users, deactivate,
 reactivate, sign out and soft-delete users, send set-password or
@@ -237,7 +238,7 @@ verification", covers backfilling them.
 | middlewares  | `src/middlewares/`  | Cross-cutting request handling (auth, tenant resolution, rate limits, errors).                  | services (`resolveTenant` reads the platform role through `platform.service` and writes its staff-access entry through `audit.service`; `requirePlatformRole` reads `platform.service`; `logStaffWrites` logs through `logger.service`), repositories (read-only lookups in `resolveTenant`/`requireAuth`), policies, presenters (e.g. `auth.middleware.ts` builds `request.user` via `toAuthenticatedUser`, `src/presenters/user.presenter.ts`), errors, configs, utilities, constants |
 | configs      | `src/configs/`      | Env and library configuration.                                                                  | services, utilities, constants                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | presenters   | `src/presenters/`   | Pure mappers from a database row to its wire shape.                                             | types from `database/models` and `types/`, and constants (e.g. `AuthProvider`)                                                                                                                                                                                                                                                                                                                                                                                                          |
-| controllers  | `src/controllers/`  | Parse and validate input, call service methods, shape the response.                             | services, presenters, validators, errors, configs, utilities/response.utilities, constants, types, and `database/models` types via `import type` only                                                                                                                                                                                                                                                                                                                                   |
+| controllers  | `src/controllers/`  | Parse and validate input, call service methods, shape the response.                             | services, presenters, validators, errors, configs, utilities/response.utilities, constants, types, `middlewares/flag-context.middleware` (the request's memoised flag context and evaluations), and `database/models` types via `import type` only                                                                                                                                                                                                                                      |
 | services     | `src/services/`     | Business rules, transactions, authorization, side effects.                                      | repositories, policies, other services, workers, jobs, templates, errors, utilities, configs, constants, types, `database/models`, `database.service`, validator types (`import type`, for a validated-input shape a service signature needs)                                                                                                                                                                                                                                           |
 | policies     | `src/policies/`     | Pure, boolean-returning authorization functions. Never throw.                                   | constants and types only                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | repositories | `src/repositories/` | Queries only.                                                                                   | models, `database.service`, errors, constants                                                                                                                                                                                                                                                                                                                                                                                                                                           |
@@ -400,6 +401,21 @@ Each recipe below lists every place that must change together.
   enforces it) and needs a `resendAction` that re-issues the token, or
   `null` if it must never be resent. Mirror the key and its label in apex's
   `EMAIL_TEMPLATES`.
+
+- **Adding a flag.** Add an entry to `FLAGS`
+  (`src/constants/flags.constants.ts`): a snake_case key, a description
+  (it becomes the PostHog flag's name), `kind` and, for a multivariate flag,
+  `variants` with `control` first, the fallback (`false`, or `variants[0]`),
+  `scope` (`tenant` when the tenant should all see the same value),
+  `client` and `apps`, and `experiment`. Read it on the server with
+  `isEnabled` or `variantOf` (`flags.service.ts`; `flagContextFor(request)`
+  in request code), or gate a route with `requireFlag(key)` after
+  `resolveTenant()` for a tenant-scoped flag. For a client flag, mirror the
+  entry in the app's `src/observability/flags/flag-keys.ts` (react, apex).
+  Then run `pnpm flags:sync` in every environment (see
+  [README.md](README.md#feature-flags)); until it runs, the flag is
+  `missing` there and everything uses the fallback. For an experiment, follow
+  [Experiments](#feature-flags) to create it in PostHog.
 
 ## Directory rules
 
@@ -929,13 +945,149 @@ or a spent budget is the timelines' 502 `TIMELINE_UNAVAILABLE`. The
 timelines leave out `$exception` and both `*_errors_viewed` events.
 
 **System status.** `GET /platform/system/status` (platform admin and up,
-not audited) answers `{ release, errorTracking }`: the image's `APP_VERSION`
-and the reporter's sent and dropped counts over the last 15 minutes, summed
-from Redis across every API and worker process. It is an open object; later
-sections are added as keys.
+not audited) answers `{ release, errorTracking, flags }`: the image's
+`APP_VERSION`, the reporter's sent and dropped counts over the last 15
+minutes, summed from Redis across every API and worker process, and the
+flags' status (see [Feature flags](#feature-flags)). It is an open object;
+later sections are added as keys.
 
 What an event may carry, and what it never does, is in
 [SECURITY.md](SECURITY.md#error-tracking-what-reaches-posthog).
+
+## Feature flags
+
+Flags are declared in code, evaluated on the server from a snapshot of
+PostHog's flag definitions, enforced on API routes and served to react and
+apex. Rollouts, kills and experiments are edited in PostHog; the registry
+says which flags exist and what they fall back to.
+
+```
+PostHog project (one per environment)
+  │ GET <POSTHOG_HOST>/flags/definitions?token=<POSTHOG_PROJECT_KEY>
+  │ Authorization: Bearer <POSTHOG_FEATURE_FLAGS_KEY>, If-None-Match: <stored weak ETag>
+  ▼
+flag-definitions job (analytics queue, one scheduler, every 30 s)
+  │ 304: touch checkedAt · 200: parse (zod), mark unsupported constructs
+  │ SET flags:v1:snapshot (no TTL) · PUBLISH flags "reload" · failure: keep the snapshot
+  ▼
+every API and worker process: in-memory snapshot (reload on message, 60 s backstop)
+  │
+  ├─ requireFlag(key)                    route gate: unknown-route 404 unless on
+  ├─ flagsFor / isEnabled / variantOf    service reads (variantOf records server exposure)
+  ├─ GET …/flags                         the app's client flags, Cache-Control: no-store
+  ├─ POST …/flags/exposures              re-evaluate, dedupe, $feature_flag_called → outbox
+  └─ /platform/flags, /platform/flags/evaluate, system status flags
+```
+
+- **Registry** (`src/constants/flags.constants.ts`): key, description,
+  kind (`boolean` or `multivariate` with `variants`), fallback, scope
+  (`user` or `tenant`), `client` and `apps` (which app's browser receives
+  it), `experiment`. `assertFlagRegistry` refuses a malformed registry when
+  the module loads; an experiment must be multivariate with `control`
+  first, because PostHog counts exposures only from string responses.
+  `FlagKey` makes an unregistered key a type error.
+- **Traits** are only `FLAG_TRAITS`: `platform_role`, `tenant_role`,
+  `app_env`, `account_created_days` (person) and `tenant_created_days`
+  (tenant group), built from the database at evaluation time and never
+  stored in PostHog. There is no `app` trait, so a route gate and the UI
+  always agree. The distinct id is the user id and the tenant group key is
+  the tenant id.
+- **Snapshot**: each API and worker process starts its store at boot when
+  flags are configured. Only the first reload is awaited; the Redis
+  subscriber connects in the background, so a slow Redis never holds boot,
+  and the 60 s backstop reloads (and retries the subscription) meanwhile. A
+  stored snapshot that can't be read is treated as none, and the process
+  answers fallbacks until a good one arrives.
+- **Evaluation** (`flag-evaluator.service.ts`) is pure and never throws to a
+  caller: with no snapshot, a missing, inactive or unsupported flag, or a
+  tenant-scoped flag with no tenant, it returns the registry fallback with a
+  `fallback:*` reason. A definition that uses a construct the evaluator
+  can't reproduce (cohorts, flag dependencies, `is_not_set`, a property
+  outside the traits, experience continuity, early access, another group
+  type, or mixed targeting (a property whose type disagrees with the
+  flag's aggregation, or a group property with no `group_type_index`; both
+  are `group_type`), scope or kind drift against the registry,
+  device-id bucketing, evaluation contexts, an unknown `filters` key, an
+  unknown property type or operator, a negated property, or a definition
+  that fails the schema) is marked unsupported and never evaluated.
+- **Route gates** (`requireFlag`, `flag.middleware.ts`) mount after
+  `requireAuth`, after `resolveTenant()` for a tenant-scoped flag, and
+  before validators. A closed gate answers the unknown-route 404.
+  `tests/unit/routes/flag-gates.test.ts` walks the router and fails a
+  tenant-scoped gate outside `/tenants/:slug/…`. A gate read records no
+  exposure.
+- **Client reads**: `GET /api/v1/tenants/:slug/flags` (member; react, with
+  the tenant), `GET /api/v1/flags` (signed in; react, no tenant) and
+  `GET /api/v1/platform/me/flags` (platform viewer; apex, no tenant). Each
+  answers `{ flags, evaluatedAt }` in the envelope's `data`, only the
+  registry's `client` flags for that app, never a trait or a reason. The
+  route fixes the app; no request parameter chooses it. With flags
+  unconfigured they answer the fallbacks.
+- **Exposure**: `POST` to the same paths plus `/exposures`, body
+  `{ keys }` (1 to 10 distinct keys, nothing else), behind
+  `requireJsonContentType` and the `flag-exposure` limiter (60 a minute per
+  session; built in each of the three routers, so on Redis they share one
+  budget per session, and on the in-memory fallback each router counts its
+  own). Every key must be one of that app's client experiment flags, or the
+  answer is 400 with one message that names no key. The server
+  evaluates each key itself and records `$feature_flag_called` with
+  `$feature_flag`, `$feature_flag_response` (the variant, or
+  `holdout-<id>` for a holdout user, who sees the fallback) and
+  `exposure_origin`, signed with `source: 'flag'`, once per session, tenant,
+  key and response (`SET NX` in Redis; a Redis failure records anyway). Only
+  a matched condition or a holdout is recorded: a user out of the rollout or
+  matching no condition (PostHog answers them `false`) and every fallback
+  record nothing. The answer is always 204.
+  `POST /platform/me/flags/exposures` takes no step-up and leaves no
+  `Staff write` log line: it is telemetry, not a staff action.
+- **Inspector**: `GET /platform/flags` (platform viewer, `platform-search`
+  limiter) lists every registered flag with its live state (`active`,
+  `inactive`, `missing` or `unsupported` with the reason), its condition
+  count, highest rollout and PostHog link, the flags PostHog has that the
+  registry lacks, the traits reference, and the snapshot's age and whether
+  flags are configured. `GET /platform/flags/evaluate?userId&tenantId&app`
+  (platform admin, `platform-timeline` limiter) answers one user's traits
+  and every registered flag's value, reason, condition index and holdout
+  variant. It is the one place traits leave the server, so each read is
+  audited as `user.flags_evaluated`, at most once per staff member and user
+  every 10 minutes (`auditThrottledView`), before anything is evaluated.
+  An unknown user is 404; a tenant the user isn't a member of, or a tenant
+  with `app=apex`, is 400. Neither route calls PostHog.
+- **System status** gains `flags`: whether flags are configured, the
+  snapshot's fetch and check times, `stale` (checked more than 10 minutes
+  ago), the last good and failed fetch, `propertyMatchingVersion` and the
+  registered, active, inactive, missing, unsupported, unregistered and
+  unknown-variant counts.
+
+**`pnpm flags:sync [-- --dry-run]`** (`src/scripts/flags-sync.ts`) creates
+every registered flag the project lacks: inactive, one condition at 0 %,
+named by its description, tagged `code-registry` (a project can require a
+tag), aggregated on the `tenant` group for a tenant-scoped flag, and with
+the variants split evenly as integers summing to 100 (the remainder to the
+first, so 34/33/33). It reads the flag list page by page, taking only the
+`offset` from each `next` link, and the group types; with a tenant-scoped
+flag to create and no `tenant` group type it exits 1 before creating
+anything. A create answered 400 `unique` counts as already present. It never
+edits or deletes a flag: kind, variant or scope differences print as
+`drift <key>: <field>`. Exit codes: 0 when clean or after creating, 2 on
+drift (a dry run too), 1 on a credential, configuration or API failure.
+`--dry-run` prints the plan and writes nothing. It uses
+`POSTHOG_PERSONAL_API_KEY` with `feature_flag:read` and
+`feature_flag:write`, and `POSTHOG_PROJECT_ID`; run it once per environment
+(see [README.md](README.md#feature-flags)).
+
+**Experiments.** An experiment that PostHog creates together with a new flag
+turns on the flag's experience continuity, which the evaluator refuses. So:
+
+1. Run `pnpm flags:sync`, which creates the multivariate flag.
+2. Create the experiment in PostHog reusing that flag. Through the API, pass
+   `feature_flag_key` and omit `parameters.feature_flag_variants`; with
+   variants included PostHog answers 400 because the flag exists.
+3. Launch it. Launching activates the flag and keeps its 0 % rollout;
+   raise the rollout in PostHog. Experience continuity stays off.
+
+A holdout attached to the experiment is evaluated too: its users get the
+fallback (`control`) and are recorded as `holdout-<id>`.
 
 ## Health checks
 
