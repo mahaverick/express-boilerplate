@@ -638,7 +638,9 @@ environment except `local`.
 
 The 10000 is the 5-second HTTP drain that runs before the in-flight send is
 awaited, plus 5 seconds of headroom for closing the database, Redis and queues and
-flushing traces. The timeouts bound each connection attempt, the greeting
+flushing traces. The error-report flush (`ERROR_SHUTDOWN_FLUSH_MS`, 3 s) also
+runs after the workers close, so with SMTP and PostHog both hanging it comes
+out of those 5 seconds, leaving 2 for the closes. The timeouts bound each connection attempt, the greeting
 and socket inactivity, and the first try of each DNS query. They are not a
 per-send deadline: the resolver doubles the DNS timeout on each retry, the
 OS-lookup fallback has no timeout, and a host that resolves to several

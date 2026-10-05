@@ -99,6 +99,20 @@ describe('errorHandler and error tracking', () => {
     })
   })
 
+  // Express 5 turns `next(null)` into "no error", so only a direct call reaches the handler with null.
+  it('answers a thrown null with a 500 and an errorId, and reports it once', () => {
+    const { response, body } = mockResponse()
+    const { request } = mockRequest()
+
+    // eslint-disable-next-line unicorn/no-null -- the thrown value under test
+    errorHandler(null, request, response, vi.fn())
+
+    expect(reporter.reportError).toHaveBeenCalledOnce()
+    expect(vi.mocked(reporter.reportError).mock.calls[0]?.[0]).toBeNull()
+    expect((response as unknown as { status: Mock }).status).toHaveBeenCalledWith(500)
+    expect(body()).toMatchObject({ statusCode: 500, errorId: 'reported-error-id' })
+  })
+
   it('reports an HttpError 503 that wraps a cause', () => {
     const { response } = mockResponse()
     const { request } = mockRequest()

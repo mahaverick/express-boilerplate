@@ -314,7 +314,9 @@ export function reportError(error: unknown, context: ErrorContext): string {
 
 /**
  * Send every queued report, ignoring any back-off, until the queue is empty,
- * PostHog asks to retry or refuses, or `deadlineMs` passes. For process
+ * PostHog asks to retry (a send that fails outright counts as that), or
+ * `deadlineMs` passes. A batch PostHog refuses is dropped and the flush goes
+ * on. For process
  * faults and graceful shutdown. The deadline timer is not unref'd, so the
  * process stays up until the flush ends or the deadline passes. Never rejects.
  * @param deadlineMs - The most milliseconds to spend.

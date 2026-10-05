@@ -112,7 +112,7 @@ async function errorsView(actor: Actor, kind: TimelineKind, id: string): Promise
  * soft-deleted user still has them.
  * @param actor - The staff member asking (a platform admin; the route checked).
  * @param userId - The user's id.
- * @returns The issues, or `configured: false` without a personal key.
+ * @returns The issues, or `configured: false` without the personal key or the project id.
  * @throws {HttpError} 404 when no user has the id.
  * @throws {TimelineUnavailableError} When PostHog cannot answer (502).
  */
@@ -127,7 +127,7 @@ export async function getUserErrors(actor: Actor, userId: string): Promise<Error
  * group. An archived tenant still has them; the platform tenant has none.
  * @param actor - The staff member asking (a platform admin; the route checked).
  * @param tenantId - The tenant's id.
- * @returns The issues, or `configured: false` without a personal key.
+ * @returns The issues, or `configured: false` without the personal key or the project id.
  * @throws {HttpError} 404 when no customer tenant has the id.
  * @throws {TimelineUnavailableError} When PostHog cannot answer (502).
  */
