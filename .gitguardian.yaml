@@ -1,8 +1,0 @@
-# GitGuardian (GitHub app) configuration. The shared error-scrubber vectors
-# hold deliberately secret-shaped fake inputs (a bearer token, high-entropy
-# runs, a Stripe-shaped key) that the scrubber must redact; nothing in that
-# file is a real credential. Mirrors the gitleaks allowlist in .gitleaks.toml.
-version: 2
-secret:
-  ignored_paths:
-    - tests/fixtures/error-scrub-vectors.json
