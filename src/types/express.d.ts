@@ -5,8 +5,10 @@
  * declaration of a different type would be arbitrated silently under
  * `skipLibCheck`, leaving `request.user` typed as passport's empty `User`.
  */
+import type { FlagKey } from '@/constants/flags.constants'
 import type { AuthenticatedUser } from '@/presenters/user.presenter'
 import type { RequestPrincipal } from '@/types/actor'
+import type { FlagContext, FlagEvaluation } from '@/types/flags'
 
 declare global {
   namespace Express {
@@ -61,6 +63,19 @@ declare global {
        * `requireRecentAuth` (auth.middleware.ts) reads it.
        */
       authTime?: number
+
+      /**
+       * This request's flag evaluation context, memoised by `flagContextFor`
+       * (flag-context.middleware.ts). Absent until it is first read.
+       */
+      flagContext?: Promise<FlagContext>
+
+      /**
+       * This request's flag evaluations by key, memoised by
+       * `evaluateForRequest` (flag-context.middleware.ts). Absent until the
+       * first evaluation.
+       */
+      flagEvaluations?: Map<FlagKey, Promise<FlagEvaluation>>
     }
   }
 }

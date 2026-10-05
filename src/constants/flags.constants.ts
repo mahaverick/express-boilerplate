@@ -351,3 +351,14 @@ export const FLAG_SNAPSHOT_STALE_MS = 600_000
  * The window the status counts undeclared variants over, in minutes.
  */
 export const FLAG_UNKNOWN_VARIANT_WINDOW_MINUTES = 15
+
+/**
+ * The event an experiment exposure is recorded as; PostHog copies one with
+ * a string response into `$experiment_exposure`.
+ */
+export const FLAG_EXPOSURE_EVENT = '$feature_flag_called'
+
+/**
+ * How long an exposure recorded with no session (a worker's read) is deduplicated, in seconds.
+ */
+export const FLAG_EXPOSURE_WORKER_TTL_SECONDS = 86_400

@@ -17,6 +17,7 @@ import {
   SYSTEM_DISTINCT_ID,
 } from '@/constants/analytics.constants'
 import type { AuditAccess, AuditAction } from '@/constants/audit.constants'
+import { FLAG_EXPOSURE_EVENT } from '@/constants/flags.constants'
 import { onboardingStepByKey } from '@/constants/onboarding.constants'
 import type { NewAnalyticsOutboxRow } from '@/database/models/analytics-outbox.model'
 import type { AuditLog } from '@/database/models/audit-log.model'
@@ -32,12 +33,14 @@ import type {
   TenantGroupSnapshot,
 } from '@/types/analytics'
 import type { DomainEventAccess, ProductDomainEvent } from '@/types/domain-event'
+import type { ExposureOrigin } from '@/types/flags'
 
 /**
  * Where a server event came from: `backfill` is `pnpm analytics:backfill-groups`
- * (analytics-backfill.service.ts), which queues a group marker per tenant.
+ * (analytics-backfill.service.ts), which queues a group marker per tenant;
+ * `flag` is an experiment exposure (flag-exposure.service.ts).
  */
-export type AnalyticsSource = 'audit' | 'product' | 'email' | 'backfill'
+export type AnalyticsSource = 'audit' | 'product' | 'email' | 'backfill' | 'flag'
 
 /**
  * The audit metadata keys never copied onto an event: `reason` becomes
@@ -447,6 +450,56 @@ export function buildEmailEvent(
         access: 'system',
         distinctId,
         tenantId: isInvitation ? undefined : (input.tenantId ?? undefined),
+        context,
+      }),
+    },
+  }
+}
+
+/**
+ * What one experiment exposure event is built from.
+ */
+export interface FlagExposureInput {
+  flagKey: string
+  /**
+   * The recorded response: the variant served, or PostHog's `holdout-<id>`
+   * for a held-out user (who is served the fallback).
+   */
+  response: string
+  origin: ExposureOrigin
+  distinctId: string
+  tenantId: string | null
+  at: Date
+}
+
+/**
+ * The outbox row of one experiment exposure, `$feature_flag_called`: the
+ * flag key and the recorded response (the two properties PostHog derives
+ * `$experiment_exposure` from), the origin, and the common properties with
+ * source `flag`, so the drainer signs it with `server_sig`. `access` is
+ * `platform` for an exposure Apex reported and `member` otherwise. Every
+ * property comes from a fixed field, so the PII guard is not applied.
+ * @param input - The flag, the response, the origin, the user and the tenant.
+ * @param context - The trace and session it happened in.
+ * @returns The row.
+ */
+export function buildFlagExposureEvent(
+  input: FlagExposureInput,
+  context: AnalyticsContext
+): NewAnalyticsOutboxRow {
+  return {
+    event: FLAG_EXPOSURE_EVENT,
+    distinctId: input.distinctId,
+    occurredAt: input.at,
+    properties: {
+      $feature_flag: input.flagKey,
+      $feature_flag_response: input.response,
+      exposure_origin: input.origin,
+      ...commonProperties({
+        source: 'flag',
+        access: input.origin === 'apex' ? 'platform' : 'member',
+        distinctId: input.distinctId,
+        tenantId: input.tenantId ?? undefined,
         context,
       }),
     },
