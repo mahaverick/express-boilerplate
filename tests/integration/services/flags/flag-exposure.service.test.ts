@@ -3,11 +3,13 @@
  * `$feature_flag_called` row per session, tenant, flag and recorded
  * response; a held-out user recorded as `holdout-<id>`, never `control`;
  * nothing for an evaluation outside the experiment; the dedupe key and its
- * TTL; and an exposure recorded anyway when Redis fails. Analytics is off
+ * TTL; an exposure recorded anyway when Redis fails; and a failed outbox
+ * insert releasing the dedupe key so the next report records. Analytics is off
  * under `.env.test`, so `isAnalyticsEnabled` is mocked here.
  */
 import { createHash, randomUUID } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { analyticsOutboxRepository } from '@/repositories/analytics-outbox.repository'
 import {
   isAnalyticsSignatureValid,
   signedFieldsOf,
@@ -179,6 +181,35 @@ describe('recordExposure', () => {
     expect(warn.mock.calls.map(([message]) => message)).toContain(
       'Exposure dedupe unavailable; recording the exposure anyway'
     )
+  })
+
+  it('releases the dedupe key when the outbox insert fails, so the next report records', async () => {
+    vi.spyOn(analyticsOutboxRepository, 'insertMany').mockRejectedValueOnce(
+      new Error('connection reset')
+    )
+    const warn = vi.spyOn(logger, 'warn')
+    const context = contextWith()
+    await expect(recordExposure(context, KEY, BOLD, 'react')).resolves.toBeUndefined()
+    expect(await outboxRowsOf('$feature_flag_called')).toHaveLength(0)
+    const redis = await getRedis()
+    expect(await redis.exists(exposureDedupeKey(context, KEY, 'bold'))).toBe(0)
+    expect(warn).toHaveBeenCalledWith(
+      'Recording an exposure failed; released its dedupe key so the next report records',
+      { flag: KEY, reason: 'Error' }
+    )
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(context.distinctId)
+
+    await recordExposure(context, KEY, BOLD, 'react')
+    expect(await outboxRowsOf('$feature_flag_called')).toHaveLength(1)
+  })
+
+  it('never throws when the outbox insert and the key release both fail', async () => {
+    vi.spyOn(analyticsOutboxRepository, 'insertMany').mockRejectedValueOnce(
+      new Error('connection reset')
+    )
+    const redis = await getRedis()
+    vi.spyOn(redis, 'del').mockRejectedValueOnce(new Error('Redis down'))
+    await expect(recordExposure(contextWith(), KEY, BOLD, 'react')).resolves.toBeUndefined()
   })
 
   it('records nothing, and sets no dedupe key, while analytics is off', async () => {

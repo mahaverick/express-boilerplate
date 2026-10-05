@@ -128,9 +128,10 @@ export async function enqueueAnalytics(
 
 /**
  * Write built rows to the outbox on the pool and let a failure throw. Only
- * for work no user's action waits on (the groups backfill); every other
- * writer goes through `enqueueAnalytics`. The caller checks
- * `isAnalyticsEnabled()` first. A no-op for an empty list.
+ * for a caller that handles the failure itself: the groups backfill, and
+ * experiment exposure, which releases its dedupe key and never throws to
+ * the request. Every other writer goes through `enqueueAnalytics`. The
+ * caller checks `isAnalyticsEnabled()` first. A no-op for an empty list.
  * @param rows - The built events.
  * @returns Resolves once the rows are written.
  * @throws {Error} The insert's error.

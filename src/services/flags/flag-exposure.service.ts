@@ -6,7 +6,9 @@
  * as PostHog's `holdout-<id>`, never the control arm. Only a matched
  * condition or a holdout is part of the experiment; every other evaluation
  * records nothing. The dedupe fails open: when Redis fails the exposure is
- * recorded, since a duplicate is harmless and a lost exposure is not.
+ * recorded, since a duplicate is harmless and a lost exposure is not. For
+ * the same reason a failed outbox insert releases the dedupe key it
+ * claimed, so the next report records.
  */
 import { createHash } from 'node:crypto'
 import { isAnalyticsEnabled } from '@/configs/analytics.config'
@@ -17,8 +19,7 @@ import {
 } from '@/constants/flags.constants'
 import { currentAnalyticsContext } from '@/services/analytics/analytics-context.service'
 import { buildFlagExposureEvent } from '@/services/analytics/analytics-event-builder.service'
-import { enqueueAnalytics } from '@/services/analytics/analytics-outbox.service'
-import { db } from '@/services/database.service'
+import { enqueueAnalyticsOrThrow } from '@/services/analytics/analytics-outbox.service'
 import { logger } from '@/services/logger.service'
 import { getRedis, redisKey } from '@/services/redis.service'
 import type { ExposureOrigin, FlagContext, FlagEvaluation, FlagReason } from '@/types/flags'
@@ -83,11 +84,27 @@ async function isFirstExposure(key: string, seconds: number): Promise<boolean> {
 }
 
 /**
+ * Release a dedupe key whose exposure was not recorded. Best effort: a
+ * Redis failure leaves the key to expire.
+ * @param key - The dedupe key.
+ * @returns Resolves once released or the failure is swallowed.
+ */
+async function releaseDedupeKey(key: string): Promise<void> {
+  try {
+    const redis = await getRedis()
+    await redis.del(key)
+  } catch {
+    // The warn below already reports the lost exposure.
+  }
+}
+
+/**
  * Record one experiment exposure to the outbox, deduplicated. The recorded
  * response is `evaluation.holdoutVariant ?? evaluation.value`, always a
  * string for a multivariate flag. Nothing is recorded for an evaluation
  * that is neither `condition_match` nor `holdout`, or while analytics is
- * off. Never throws: the outbox write is `enqueueAnalytics` on the pool.
+ * off. Never throws: when the outbox insert fails, the dedupe key is
+ * released (best effort) and a warn names the flag and the error type.
  * @param context - The evaluation context (the user, the tenant, the session).
  * @param key - The experiment's key.
  * @param evaluation - The server's own evaluation of it, never a client's value.
@@ -102,10 +119,8 @@ export async function recordExposure(
 ): Promise<void> {
   if (!RECORDED_REASONS.has(evaluation.reason) || !isAnalyticsEnabled()) return
   const response = evaluation.holdoutVariant ?? String(evaluation.value)
-  const isFirst = await isFirstExposure(
-    exposureDedupeKey(context, key, response),
-    dedupeSeconds(context)
-  )
+  const dedupeKey = exposureDedupeKey(context, key, response)
+  const isFirst = await isFirstExposure(dedupeKey, dedupeSeconds(context))
   if (!isFirst) return
   const row = buildFlagExposureEvent(
     {
@@ -118,5 +133,13 @@ export async function recordExposure(
     },
     currentAnalyticsContext()
   )
-  await enqueueAnalytics([row], db)
+  try {
+    await enqueueAnalyticsOrThrow([row])
+  } catch (error) {
+    await releaseDedupeKey(dedupeKey)
+    logger.warn(
+      'Recording an exposure failed; released its dedupe key so the next report records',
+      { flag: key, reason: error instanceof Error ? error.name : 'unknown' }
+    )
+  }
 }
