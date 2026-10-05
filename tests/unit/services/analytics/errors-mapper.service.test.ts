@@ -117,10 +117,29 @@ describe('mapErrorIssues', () => {
     expect(mapErrorIssues([row], LINK_BASE)[0]?.count).toBe(12)
   })
 
-  it('url-encodes the issue id in the link', () => {
-    const [issue] = mapErrorIssues([issueRow(seeded({ issueId: 'a/b?c' }))], LINK_BASE)
+  it('links the issue by its id under the project’s Error Tracking URL', () => {
+    const [issue] = mapErrorIssues([issueRow(seeded())], LINK_BASE)
 
-    expect(issue?.link).toBe(`${LINK_BASE}/a%2Fb%3Fc`)
+    expect(issue?.link).toBe(`${LINK_BASE}/01a107cd-a5be-70c3-962f-84a46f9d9e46`)
+  })
+
+  // A forged event can set its own issue id property; only a UUID can become a link path.
+  it.each([
+    '..',
+    '../settings',
+    'a/b?c',
+    '01a107cd-a5be-70c3-962f',
+    '01a107cd-a5be-70c3-962f-84a46f9d9e46/..',
+    ' 01a107cd-a5be-70c3-962f-84a46f9d9e46',
+  ])('drops a row whose issue id %j is not UUID-shaped', (issueId) => {
+    const rows = [issueRow(seeded({ issueId }))]
+    expect(mapErrorIssues(rows, LINK_BASE)).toEqual([])
+  })
+
+  it('keeps an upper-case UUID issue id', () => {
+    const issueId = '01A107CD-A5BE-70C3-962F-84A46F9D9E46'
+    const rows = [issueRow(seeded({ issueId }))]
+    expect(mapErrorIssues(rows, LINK_BASE)[0]?.issueId).toBe(issueId)
   })
 
   it('drops rows missing an issue id, a count, a timestamp, a uuid or a distinct id, and non-rows', () => {

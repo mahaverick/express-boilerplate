@@ -1,8 +1,8 @@
 /**
  * @file PostHog Errors-query rows to error issues, read by position
  * (`ERRORS_SELECT_COLUMNS`). No value is trusted: a column of the wrong type
- * reads as absent, and a row without an issue id, a count, both timestamps,
- * a uuid or a distinct id is dropped. Anyone with the public project key can
+ * reads as absent, and a row without a UUID-shaped issue id, a count, both
+ * timestamps, a uuid or a distinct id is dropped. Anyone with the public project key can
  * send a `$exception`, so the most recent event's `server_sig` is verified
  * here, by the one rule the signer uses (`signedFieldsOf`), never in HogQL;
  * and its type and message are scrubbed again, since a forged event can
@@ -16,6 +16,12 @@ import { scrubText } from '@/services/errors/error-scrubber.service'
 import type { ErrorIssue } from '@/types/error-issue'
 
 const APPS: ReadonlySet<string> = new Set(['api', 'react', 'apex'])
+
+/**
+ * A UUID in canonical form, either case: PostHog's issue ids. Any other
+ * value, a forged one such as `..`, never becomes a link path.
+ */
+const UUID_PATTERN = /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i
 
 /**
  * The columns' positions in a result row.
@@ -106,10 +112,11 @@ function isSigned(
  * One result row as an error issue.
  * @param row - The result row.
  * @param issueLinkBase - The project's Error Tracking URL, without a trailing slash.
- * @returns The issue, or undefined when a required column is missing.
+ * @returns The issue, or undefined when a required column is missing or the issue id is not a UUID.
  */
 function mapRow(row: readonly unknown[], issueLinkBase: string): ErrorIssue | undefined {
-  const issueId = text(row[COLUMN.issueId])
+  const rawIssueId = text(row[COLUMN.issueId])
+  const issueId = rawIssueId !== undefined && UUID_PATTERN.test(rawIssueId) ? rawIssueId : undefined
   const count = countOf(row[COLUMN.count])
   const firstSeen = text(row[COLUMN.firstSeen])
   const lastSeen = text(row[COLUMN.lastSeen])

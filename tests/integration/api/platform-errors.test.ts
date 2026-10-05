@@ -226,7 +226,7 @@ describe("a user's errors", () => {
     const page = pageOf(await getErrors(token, `/users/${subject.id}/errors`))
 
     const [query] = posthog().queries
-    expect(query?.values).toEqual({ id: subject.id, days: 30 })
+    expect(query?.values).toEqual({ id: subject.id, days: 30, aheadMinutes: 5 })
     expect(query?.query).not.toContain(subject.id)
     expect(query?.query).toContain('distinct_id = {id}')
     const sent = posthog().requests.find((received) => received.path.endsWith('/query/'))
@@ -290,7 +290,7 @@ describe("a tenant's errors", () => {
 
     const [query] = posthog().queries
     expect(query?.query).toContain('$group_2 = {id}')
-    expect(query?.values).toEqual({ id: tenantId, days: 30 })
+    expect(query?.values).toEqual({ id: tenantId, days: 30, aheadMinutes: 5 })
   })
 
   it('answers 502 when the project has no tenant group type', async () => {

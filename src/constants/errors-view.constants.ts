@@ -1,6 +1,6 @@
 /**
- * @file Fixed values of the staff Errors views: how far back they look, how
- * many issues they list, and the event property PostHog writes each
+ * @file Fixed values of the staff Errors views: how far back and ahead they
+ * look, how many issues they list, and the event property PostHog writes each
  * `$exception`'s issue id to at ingestion.
  */
 
@@ -8,6 +8,13 @@
  * The window an Errors view covers, newest event back.
  */
 export const ERRORS_VIEW_DAYS = 30
+
+/**
+ * How far past now an event's timestamp may be and still count. An event
+ * stamped further ahead (a skewed or forged client clock) is left out, so
+ * it cannot sit as an issue's latest event for the whole window.
+ */
+export const ERRORS_VIEW_AHEAD_MINUTES = 5
 
 /**
  * The most issues one Errors view lists, newest last-seen first.

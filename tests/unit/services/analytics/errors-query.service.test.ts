@@ -24,6 +24,7 @@ function expected(match: string): string {
     "where event = '$exception'",
     `  and ${match}`,
     '  and timestamp > now() - toIntervalDay({days})',
+    '  and timestamp <= now() + toIntervalMinute({aheadMinutes})',
     "  and properties.$exception_issue_id != ''",
     'group by properties.$exception_issue_id',
     'order by last_seen desc limit 50',
@@ -34,14 +35,14 @@ describe('buildErrorsQuery', () => {
   it("matches a user's own events by distinct id, the id in values", () => {
     expect(buildErrorsQuery('user', { id: USER_ID })).toEqual({
       query: expected('distinct_id = {id}'),
-      values: { id: USER_ID, days: 30 },
+      values: { id: USER_ID, days: 30, aheadMinutes: 5 },
     })
   })
 
   it("matches a tenant's group column at its index", () => {
     expect(buildErrorsQuery('tenant', { id: TENANT_ID, groupTypeIndex: 3 })).toEqual({
       query: expected('$group_3 = {id}'),
-      values: { id: TENANT_ID, days: 30 },
+      values: { id: TENANT_ID, days: 30, aheadMinutes: 5 },
     })
   })
 

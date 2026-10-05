@@ -11,6 +11,7 @@
 import { ANALYTICS_SIGNATURE_PROPERTY } from '@/constants/analytics.constants'
 import {
   ERROR_ISSUE_ID_PROPERTY,
+  ERRORS_VIEW_AHEAD_MINUTES,
   ERRORS_VIEW_DAYS,
   ERRORS_VIEW_LIMIT,
 } from '@/constants/errors-view.constants'
@@ -97,7 +98,8 @@ function matchOf(kind: TimelineKind, groupTypeIndex: number | undefined): string
 
 /**
  * The fixed HogQL of one Errors view and its placeholder values: the
- * `$exception` events of the last `ERRORS_VIEW_DAYS` days that PostHog has
+ * `$exception` events of the last `ERRORS_VIEW_DAYS` days, and no more than
+ * `ERRORS_VIEW_AHEAD_MINUTES` minutes ahead of now, that PostHog has
  * grouped into an issue, one row per issue, most recently seen first, at
  * most `ERRORS_VIEW_LIMIT`.
  * @param kind - A user's or a tenant's errors.
@@ -117,9 +119,13 @@ export function buildErrorsQuery(
     "where event = '$exception'",
     `  and ${match}`,
     '  and timestamp > now() - toIntervalDay({days})',
+    '  and timestamp <= now() + toIntervalMinute({aheadMinutes})',
     `  and ${issueId} != ''`,
     `group by ${issueId}`,
     `order by last_seen desc limit ${String(ERRORS_VIEW_LIMIT)}`,
   ]
-  return { query: lines.join('\n'), values: { id: parameters.id, days: ERRORS_VIEW_DAYS } }
+  return {
+    query: lines.join('\n'),
+    values: { id: parameters.id, days: ERRORS_VIEW_DAYS, aheadMinutes: ERRORS_VIEW_AHEAD_MINUTES },
+  }
 }

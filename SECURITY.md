@@ -988,8 +988,12 @@ query`: the SQL text is never sent. The rule families are Postgres
   staff Errors views verify the most recent event of each issue and show
   an issue claiming `app: 'api'` without a valid signature as unverified;
   they scrub its type and message again before returning them, because a
-  forged browser event can carry anything. **Accepted risk:** PostHog's own
-  Error Tracking UI shows forged exceptions alongside real ones.
+  forged browser event can carry anything. They drop a row whose issue id
+  is not a UUID, and ignore events stamped more than 5 minutes ahead of now.
+  **Accepted risk:** PostHog's own Error Tracking UI shows forged exceptions
+  alongside real ones, and a forged event newer than an issue's real ones can
+  still mask that issue's latest type and message in the staff view, which
+  then shows the row `verified: false`.
 - **Identity.** An error during an authenticated request carries the user's
   id and tenant group, as their other events do. Anything else is sent as
   `server:<OTEL_SERVICE_NAME>` with `$process_person_profile: false`.
@@ -1190,8 +1194,9 @@ notifications. A job fails for the last time when its attempts are used up
 or it threw BullMQ's `UnrecoverableError`. The worker then rewrites the job's
 stored data, replacing every key ending in `Url` or `Token`, at any depth,
 with `[redacted]`. It then logs one `error` line, `job failed permanently`,
-with the queue, job id and name, user id, attempt count and reason, and the
-email template when the job names one. An earlier attempt logs a `warn` and
+with the queue, job id and name, user id, attempt count and reason, the
+email template when the job names one, and the `errorId` of the failure's
+error-tracking report. An earlier attempt logs a `warn` and
 keeps the link, because the retry has to send it. So a token sits in Redis
 only while a retry is pending, unless the rewrite itself fails, which logs
 its own `error` line.
