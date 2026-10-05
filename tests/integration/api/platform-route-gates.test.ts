@@ -10,7 +10,7 @@
 import { randomUUID } from 'node:crypto'
 import { Router } from 'express'
 import type { Response } from 'supertest'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createApp } from '@/app'
 import { REAUTH_REQUIRED_CODE } from '@/constants/auth.constants'
 import type { MembershipRole } from '@/constants/tenant.constants'
@@ -19,6 +19,7 @@ import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { createPlatformRouter } from '@/routes/platform.routes'
 import { sql } from '@/services/database.service'
+import { logger } from '@/services/logger.service'
 import { signAccessToken } from '@/services/session.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import {
@@ -28,6 +29,9 @@ import {
 } from '../../helpers/email-messages'
 import { makeStaff } from '../../helpers/platform-staff'
 import { request } from '../../helpers/request'
+
+// Apex has no experiment flag yet, so a real report could only answer 400, which logStaffWrites skips anyway; an empty key list lets the exemption be seen on a 204.
+vi.mock('@/validators/flags.validators', () => ({ parseExposureKeys: () => [] }))
 
 type Method = 'get' | 'post' | 'patch' | 'delete'
 
@@ -43,6 +47,11 @@ interface GateRow {
    * Which fixture `:id` resolves to.
    */
   target?: 'user' | 'tenant' | 'email' | 'suppression'
+  /**
+   * A write that is telemetry, not a staff action: no step-up, and
+   * `logStaffWrites` leaves no `Staff write` line for it.
+   */
+  isStaffWriteLogExempt?: boolean
 }
 
 const ROUTES: readonly GateRow[] = [
@@ -224,6 +233,17 @@ const ROUTES: readonly GateRow[] = [
     requiresStepUp: false,
     target: 'tenant',
   },
+  { method: 'get', path: '/me/flags', minRole: 'viewer', requiresStepUp: false },
+  // Exposure is telemetry: a REAUTH_REQUIRED here would silently lose it, and it is not audited.
+  {
+    method: 'post',
+    path: '/me/flags/exposures',
+    minRole: 'viewer',
+    requiresStepUp: false,
+    isStaffWriteLogExempt: true,
+  },
+  { method: 'get', path: '/flags', minRole: 'viewer', requiresStepUp: false },
+  { method: 'get', path: '/flags/evaluate', minRole: 'admin', requiresStepUp: false },
 ]
 
 /**
@@ -540,6 +560,20 @@ describe('/api/v1/platform route gates', () => {
       const response = await call(row, await tokenFor(row.minRole, stale))
 
       expect((response.body as { code?: string }).code).not.toBe(REAUTH_REQUIRED_CODE)
+    }
+  )
+
+  it.each(ROUTES.filter((row) => row.isStaffWriteLogExempt === true))(
+    '$method $path: an admitted, stale-signed-in call leaves no Staff write line',
+    async (row) => {
+      const info = vi.spyOn(logger, 'info')
+      const stale = new Date(Date.now() - ELEVEN_MINUTES_MS)
+
+      const response = await call(row, await tokenFor(row.minRole, stale))
+
+      expect(response.status).toBe(204)
+      expect(info.mock.calls.filter(([message]) => message === 'Staff write')).toEqual([])
+      info.mockRestore()
     }
   )
 })

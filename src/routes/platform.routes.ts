@@ -2,13 +2,16 @@
  * @file Staff routes, mounted at `/api/v1/platform`. The role gate runs before
  * the limiter, so a refused caller sees no `RateLimit-*` headers, and every
  * OPTIONS gets the unknown-route 404, so no `Allow` header lists a route's
- * methods.
+ * methods. `POST /me/flags/exposures` is telemetry, not a staff action: it
+ * takes no step-up and `logStaffWrites` leaves it out.
  */
 import { Router } from 'express'
 import { getEnv } from '@/configs/env.config'
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { auditController } from '@/controllers/audit.controller'
+import { flagsController } from '@/controllers/flags.controller'
 import { platformErrorsController } from '@/controllers/platform-errors.controller'
+import { platformFlagsController } from '@/controllers/platform-flags.controller'
 import { platformSystemController } from '@/controllers/platform-system.controller'
 import { platformTimelineController } from '@/controllers/platform-timeline.controller'
 import { platformController } from '@/controllers/platform.controller'
@@ -136,5 +139,25 @@ export function createPlatformRouter(): Router {
     platformSystemController.getStatus
   )
   router.get('/audit-log', requirePlatformRole('admin'), auditController.listPlatformAuditLog)
+  router.get('/me/flags', requirePlatformRole('viewer'), flagsController.getPlatformFlags)
+  router.post(
+    '/me/flags/exposures',
+    requirePlatformRole('viewer'),
+    requireJsonContentType,
+    createRateLimiter(RATE_LIMITS.flagExposure),
+    flagsController.recordPlatformExposures
+  )
+  router.get(
+    '/flags',
+    requirePlatformRole('viewer'),
+    searchLimiter,
+    platformFlagsController.listFlags
+  )
+  router.get(
+    '/flags/evaluate',
+    requirePlatformRole('admin'),
+    timelineLimiter,
+    platformFlagsController.evaluate
+  )
   return router
 }

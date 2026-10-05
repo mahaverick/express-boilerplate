@@ -5,15 +5,19 @@
  * carries `requireJsonContentType` (the CSRF gate; see
  * content-type.middleware.ts), per-route because the GETs have no body. Each
  * limiter runs before `resolveTenant()`, so an over-budget caller gets its 429
- * before that middleware's database reads.
+ * before that middleware's database reads. `GET /:slug/beta` is the reference
+ * flag-gated route: `requireFlag` runs after `resolveTenant()`, because
+ * `example_beta_page` is tenant-scoped.
  */
 import { Router } from 'express'
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { auditController } from '@/controllers/audit.controller'
+import { flagsController } from '@/controllers/flags.controller'
 import { onboardingController } from '@/controllers/onboarding.controller'
 import { tenantController } from '@/controllers/tenant.controller'
 import { requireAuth } from '@/middlewares/auth.middleware'
 import { requireJsonContentType } from '@/middlewares/content-type.middleware'
+import { requireFlag } from '@/middlewares/flag.middleware'
 import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
 import {
   isOfferingAdminOrOwner,
@@ -155,6 +159,21 @@ export function createTenantRouter(): Router {
     resolveTenant(),
     requireRole('owner', 'admin'),
     auditController.listTenantAuditLog
+  )
+
+  router.get('/:slug/flags', resolveTenant(), flagsController.getTenantFlags)
+  router.post(
+    '/:slug/flags/exposures',
+    requireJsonContentType,
+    createRateLimiter(RATE_LIMITS.flagExposure),
+    resolveTenant(),
+    flagsController.recordTenantExposures
+  )
+  router.get(
+    '/:slug/beta',
+    resolveTenant(),
+    requireFlag('example_beta_page'),
+    flagsController.getExampleBeta
   )
 
   return router

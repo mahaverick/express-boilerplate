@@ -70,6 +70,8 @@ const VALID_METADATA: Record<AuditAction, Record<string, unknown>> = {
   'tenant.timeline_viewed': { range: '90d', view: 'key' },
   'user.errors_viewed': {},
   'tenant.errors_viewed': {},
+  // eslint-disable-next-line unicorn/no-null -- the metadata records JSON null for "no tenant"
+  'user.flags_evaluated': { tenantId: null, clientApp: 'react' },
 }
 
 const ACTIONS = Object.keys(AUDIT_ACTIONS) as AuditAction[]
@@ -112,6 +114,7 @@ describe('AUDIT_ACTIONS', () => {
       'user.deactivated',
       'user.deleted',
       'user.errors_viewed',
+      'user.flags_evaluated',
       'user.password_setup_sent',
       'user.purged',
       'user.reactivated',

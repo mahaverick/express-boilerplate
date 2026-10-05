@@ -9,6 +9,7 @@ import { SERVER_DRAIN_TIMEOUT_MS } from '@/constants/global.constants'
 import { shutdownOtel } from '@/observability/tracing'
 import { closeDatabase } from '@/services/database.service'
 import { flushErrorReports } from '@/services/errors/error-reporter.service'
+import { stopFlagSnapshot } from '@/services/flags/flag-snapshot.service'
 import { closeAllStreams, markShuttingDown } from '@/services/lifecycle.service'
 import { logger } from '@/services/logger.service'
 import { closeNotificationSubscriber } from '@/services/notification-emitter.service'
@@ -78,6 +79,7 @@ export async function gracefulShutdown(server: Server, workers?: SupervisedWorke
     closeRedis(),
     closeQueue(),
     closeNotificationSubscriber(),
+    stopFlagSnapshot(),
   ])
   await shutdownOtel()
 }

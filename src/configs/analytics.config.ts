@@ -5,7 +5,9 @@
  * analytics is inert: no outbox row is written, the drainer never starts and
  * the collect proxy answers 503. Without `POSTHOG_PERSONAL_API_KEY` and
  * `POSTHOG_PROJECT_ID` the timelines answer "not configured". Error tracking
- * also needs `ERROR_TRACKING_ENABLED`.
+ * also needs `ERROR_TRACKING_ENABLED`. Feature flags need
+ * `POSTHOG_FEATURE_FLAGS_KEY` with the project key; without both every flag
+ * answers its registry fallback.
  */
 import { getEnv, type Env } from '@/configs/env.config'
 
@@ -49,6 +51,18 @@ export function isTimelineEnabled(
   env: Pick<Env, 'POSTHOG_PERSONAL_API_KEY' | 'POSTHOG_PROJECT_ID'> = getEnv()
 ): boolean {
   return env.POSTHOG_PERSONAL_API_KEY !== undefined && env.POSTHOG_PROJECT_ID !== undefined
+}
+
+/**
+ * Whether this environment fetches feature flag definitions and evaluates
+ * flags from them. Off, every flag answers its registry fallback.
+ * @param env - The PostHog slice of the validated environment; defaults to `getEnv()`.
+ * @returns True when both the project key and the feature flags secure key are configured.
+ */
+export function isFlagsEnabled(
+  env: Pick<Env, 'POSTHOG_PROJECT_KEY' | 'POSTHOG_FEATURE_FLAGS_KEY'> = getEnv()
+): boolean {
+  return env.POSTHOG_PROJECT_KEY !== undefined && env.POSTHOG_FEATURE_FLAGS_KEY !== undefined
 }
 
 /**
@@ -151,4 +165,21 @@ export function timelineLinks(
           null,
     replay: `${project}/replay/${REPLAY_SESSION_PLACEHOLDER}`,
   }
+}
+
+/**
+ * A feature flag's page in PostHog, `{app}/project/{pid}/feature_flags/{id}`.
+ * @param flagId - PostHog's numeric id of the flag, from the definitions
+ *   snapshot; 0 for a malformed definition that carried none.
+ * @param env - The PostHog slice of the validated environment; defaults to `getEnv()`.
+ * @returns The URL, or null when `POSTHOG_PROJECT_ID` is not set or the id is not a positive safe integer.
+ */
+export function posthogFlagUrl(
+  flagId: number,
+  env: Pick<Env, 'POSTHOG_HOST' | 'POSTHOG_APP_HOST' | 'POSTHOG_PROJECT_ID'> = getEnv()
+): string | null {
+  const isFlagId = Number.isSafeInteger(flagId) && flagId >= 1
+  // eslint-disable-next-line unicorn/no-null -- the contract sends JSON null when no link can be built
+  if (!isFlagId || env.POSTHOG_PROJECT_ID === undefined) return null
+  return `${posthogAppHost(env)}/project/${String(env.POSTHOG_PROJECT_ID)}/feature_flags/${String(flagId)}`
 }

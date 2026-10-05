@@ -367,7 +367,7 @@ const EnvSchema = z.object({
     .stringbool()
     .default(true)
     .describe(
-      'Whether the BullMQ workers (email, notification and maintenance, plus analytics when POSTHOG_PROJECT_KEY is set or POSTHOG_PERSONAL_API_KEY and POSTHOG_PROJECT_ID both are) start in-process alongside the HTTP server. Set to false for API-only pods behind a load balancer; a separate worker deployment sets this to true. The daily retention purge, the analytics drain and the PostHog deletion of purged users run only where this is true.'
+      'Whether the BullMQ workers (email, notification and maintenance, plus analytics when POSTHOG_PROJECT_KEY is set or POSTHOG_PERSONAL_API_KEY and POSTHOG_PROJECT_ID both are) start in-process alongside the HTTP server. Set to false for API-only pods behind a load balancer; a separate worker deployment sets this to true. The daily retention purge, the analytics drain, the feature flag definitions fetch and the PostHog deletion of purged users run only where this is true.'
     ),
   WORKER_CONCURRENCY: z.coerce
     .number()
@@ -508,7 +508,7 @@ const EnvSchema = z.object({
     .startsWith('phx_', 'Use a PostHog personal API key, which starts with phx_')
     .optional()
     .describe(
-      'PostHog personal API key (phx_…) that the staff timelines read events with and user purges delete PostHog persons with. Give it only the scopes query:read, person:write and group:read, and create it on a service account rather than a person. Set it together with POSTHOG_PROJECT_ID; without both, the timelines answer "not configured" and queued person deletions wait.'
+      'PostHog personal API key (phx_…) that the staff timelines read events with, user purges delete PostHog persons with and pnpm flags:sync creates feature flags with. Give it only the scopes query:read, person:write, group:read, feature_flag:read and feature_flag:write, and create it on a service account rather than a person. Set it together with POSTHOG_PROJECT_ID; without both, the timelines answer "not configured" and queued person deletions wait.'
     ),
   POSTHOG_PROJECT_ID: z.coerce
     .number()
@@ -528,6 +528,17 @@ const EnvSchema = z.object({
     .optional()
     .describe(
       'PostHog app origin that the timeline queries and person deletions call and that staff deep links open, with no trailing path. Unset derives it from POSTHOG_HOST: https://eu.posthog.com for an eu. host, otherwise https://us.posthog.com. Set it for a self-hosted PostHog. Tests point it at a fake.'
+    ),
+  /**
+   * Optional and secret: without it every flag answers its registry fallback
+   * (analytics.config.ts `isFlagsEnabled`). It is never sent to a browser.
+   */
+  POSTHOG_FEATURE_FLAGS_KEY: z
+    .string()
+    .startsWith('phs_', 'Use a PostHog feature flags secure API key, which starts with phs_')
+    .optional()
+    .describe(
+      'PostHog feature flags secure API key (phs_…, in Project settings under Feature flags) that the workers fetch feature flag definitions with every 30 seconds. It is a secret and never reaches a browser. Set it together with POSTHOG_PROJECT_KEY; without it every flag answers the fallback its code registry entry declares.'
     ),
   TIMELINE_QUERY_BUDGET_PER_HOUR: z.coerce
     .number()

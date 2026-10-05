@@ -1,15 +1,17 @@
 /**
  * @file isAnalyticsEnabled, isErrorTrackingEnabled, isTimelineEnabled, posthogAssetsHost,
- * posthogAppHost and timelineLinks, which are pure functions of the
- * environment slice they are given.
+ * posthogAppHost, timelineLinks, isFlagsEnabled and posthogFlagUrl, which are pure
+ * functions of the environment slice they are given.
  */
 import { describe, expect, it } from 'vitest'
 import {
   isAnalyticsEnabled,
   isErrorTrackingEnabled,
+  isFlagsEnabled,
   isTimelineEnabled,
   posthogAppHost,
   posthogAssetsHost,
+  posthogFlagUrl,
   timelineLinks,
 } from '@/configs/analytics.config'
 
@@ -177,5 +179,67 @@ describe('isErrorTrackingEnabled', () => {
 
   it('is off under the test environment', () => {
     expect(isErrorTrackingEnabled()).toBe(false)
+  })
+})
+
+describe('isFlagsEnabled', () => {
+  it('is on only when both the project key and the feature flags key are set', () => {
+    expect(
+      isFlagsEnabled({
+        POSTHOG_PROJECT_KEY: 'phc_test_key_not_real',
+        POSTHOG_FEATURE_FLAGS_KEY: 'phs_test_key_not_real',
+      })
+    ).toBe(true)
+    expect(
+      isFlagsEnabled({
+        POSTHOG_PROJECT_KEY: 'phc_test_key_not_real',
+        POSTHOG_FEATURE_FLAGS_KEY: undefined,
+      })
+    ).toBe(false)
+    expect(
+      isFlagsEnabled({
+        POSTHOG_PROJECT_KEY: undefined,
+        POSTHOG_FEATURE_FLAGS_KEY: 'phs_test_key_not_real',
+      })
+    ).toBe(false)
+  })
+
+  it('is off under the test environment, which sets neither', () => {
+    expect(isFlagsEnabled()).toBe(false)
+  })
+})
+
+describe('posthogFlagUrl', () => {
+  it("links a flag to its page under the project, on the region's app host", () => {
+    expect(
+      posthogFlagUrl(931_750, {
+        POSTHOG_HOST: 'https://eu.i.posthog.com',
+        POSTHOG_APP_HOST: undefined,
+        POSTHOG_PROJECT_ID: 4321,
+      })
+    ).toBe('https://eu.posthog.com/project/4321/feature_flags/931750')
+  })
+
+  it.each([0, -1, 1.5, NaN])(
+    'is null for %s, which is no PostHog flag id (a malformed definition has 0)',
+    (flagId) => {
+      expect(
+        posthogFlagUrl(flagId, {
+          POSTHOG_HOST: 'https://us.i.posthog.com',
+          POSTHOG_APP_HOST: undefined,
+          POSTHOG_PROJECT_ID: 4321,
+        })
+      ).toBeNull()
+    }
+  )
+
+  it('is null without a project id', () => {
+    expect(
+      posthogFlagUrl(1, {
+        POSTHOG_HOST: 'https://us.i.posthog.com',
+        POSTHOG_APP_HOST: undefined,
+        POSTHOG_PROJECT_ID: undefined,
+      })
+    ).toBeNull()
   })
 })

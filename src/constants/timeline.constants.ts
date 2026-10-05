@@ -76,20 +76,23 @@ export const TIMELINE_ELEMENT_TEXT_MAX = 80
 
 /**
  * Events no timeline lists: the two timeline-view and two errors-view audits
- * (so a page never shows itself or its sibling tab), exceptions (they have
- * their own Errors tab), and PostHog's identity, property and flag
- * bookkeeping.
+ * (so a page never shows itself or its sibling tab), the flag-evaluate audit,
+ * exceptions (they have their own Errors tab), and PostHog's identity,
+ * property and flag bookkeeping. `$experiment_exposure` is the copy PostHog's
+ * ingestion makes of every `$feature_flag_called` with a string response.
  */
 export const TIMELINE_EXCLUDED_EVENTS = [
   'user_timeline_viewed',
   'tenant_timeline_viewed',
   'user_errors_viewed',
   'tenant_errors_viewed',
+  'user_flags_evaluated',
   '$exception',
   '$identify',
   '$set',
   '$groupidentify',
   '$feature_flag_called',
+  '$experiment_exposure',
   '$create_alias',
 ] as const
 

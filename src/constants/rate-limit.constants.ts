@@ -48,7 +48,7 @@ export interface RateLimiterSpec {
 }
 
 /**
- * The 27 rate limiters this API defines, by name.
+ * The 28 rate limiters this API defines, by name.
  */
 export type RateLimitName =
   | 'register'
@@ -78,6 +78,7 @@ export type RateLimitName =
   | 'emailWebhookRejected'
   | 'analyticsProxy'
   | 'platformTimeline'
+  | 'flagExposure'
 
 const RATE_LIMITED_MESSAGE = 'Too many attempts. Please try again later.'
 
@@ -147,7 +148,20 @@ export function emailWebhookProviderRateLimitKey(request: Request): string {
 }
 
 /**
- * The 27 rate-limit specs this API enforces, each with the reason for its
+ * The key `flagExposure`'s limiter counts reports by: the caller's session
+ * (the access token's `sid`), which every tab of one sign-in shares; a token
+ * with no `sid` falls back to the user's id.
+ * Both are prefixed, so a session id can never land in a user's bucket.
+ * @param request - The incoming request, after `requireAuth`.
+ * @returns `session:<sid>`, `user:<id>`, or `user:anonymous`.
+ */
+export function flagExposureRateLimitKey(request: Request): string {
+  if (request.sessionId !== undefined) return `session:${request.sessionId}`
+  return `user:${request.user?.id ?? 'anonymous'}`
+}
+
+/**
+ * The 28 rate-limit specs this API enforces, each with the reason for its
  * window, limit and key. `name` is the live Redis key prefix
  * (`redisKey('rl', name)`): changing one resets that limiter's counters in
  * every deployment, and tests/unit/constants/rate-limit.constants.test.ts
@@ -500,6 +514,23 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     windowMs: 60_000,
     limit: 20,
     keyBy: 'user',
+    message: RATE_LIMITED_MESSAGE,
+  },
+  /**
+   * 60 a minute per session for the three `…/flags/exposures` routes. A
+   * browser reports each experiment value once per tab session, batched up
+   * to 10 keys a request, so an honest tab sends a handful a session. The
+   * server re-evaluates every key and dedupes, so this bounds the work a
+   * script can cause, not what it can record.
+   * Built once in each of the flags, tenant and platform routers: on Redis the
+   * three share one budget per session; on the in-memory fallback each counts
+   * on its own.
+   */
+  flagExposure: {
+    name: 'flag-exposure',
+    windowMs: 60_000,
+    limit: 60,
+    keyBy: flagExposureRateLimitKey,
     message: RATE_LIMITED_MESSAGE,
   },
 }

@@ -69,6 +69,13 @@ export function refusePlatformOptions(
 const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
 
 /**
+ * The one staff POST that is telemetry, not a staff action: apex's flag
+ * exposure report. It changes nothing a staff member answers for, so it
+ * leaves no `Staff write` line.
+ */
+const TELEMETRY_WRITE_PATH = '/api/v1/platform/me/flags/exposures'
+
+/**
  * A staff route's target in its path: `/platform/<collection>/<id>`, for
  * each collection in `TARGET_TYPE_OF_COLLECTION`.
  */
@@ -95,6 +102,7 @@ const TARGET_TYPE_OF_COLLECTION: Readonly<Record<string, string>> = {
  * that finished below 400 is logged, so a caller the gate refused can't
  * write a line naming a target of their choice. A response whose client
  * went away before it finished emits no `finish` and is not logged either.
+ * `POST /api/v1/platform/me/flags/exposures` is never logged: it is telemetry.
  * The audit log is the record; this line is for operators' dashboards and
  * alerts.
  * @param request - The incoming request, after `requireAuth`.
@@ -102,10 +110,11 @@ const TARGET_TYPE_OF_COLLECTION: Readonly<Record<string, string>> = {
  * @param next - Continues the chain.
  */
 export function logStaffWrites(request: Request, response: Response, next: NextFunction): void {
-  if (WRITE_METHODS.has(request.method)) {
+  const path = request.originalUrl.split('?', 1)[0] ?? ''
+  const isTelemetry = request.method === 'POST' && path === TELEMETRY_WRITE_PATH
+  if (!isTelemetry && WRITE_METHODS.has(request.method)) {
     response.on('finish', () => {
       if (response.statusCode >= 400 || response.locals[ADMITTED_LOCAL] !== true) return
-      const path = request.originalUrl.split('?', 1)[0] ?? ''
       const target = STAFF_TARGET_PATH.exec(path)?.groups
       logger.info('Staff write', {
         method: request.method,

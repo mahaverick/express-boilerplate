@@ -64,6 +64,7 @@ const DELIBERATELY_EXCLUDED: Readonly<Record<string, string>> = {
   tenant_id: 'an invitation email names its tenant; the tenant timeline selects by group',
   range: 'only on timeline_viewed events, which no timeline lists',
   view: 'only on timeline_viewed events, which no timeline lists',
+  client_app: 'only on user_flags_evaluated, which no timeline lists',
 }
 
 /**
@@ -210,6 +211,12 @@ describe('the timeline constants', () => {
   it('leaves out exceptions and both errors_viewed events: errors have their own tab', () => {
     expect(TIMELINE_EXCLUDED_EVENTS).toEqual(
       expect.arrayContaining(['$exception', 'user_errors_viewed', 'tenant_errors_viewed'])
+    )
+  })
+
+  it("leaves out the flag-evaluate audit and PostHog's exposure copy", () => {
+    expect(TIMELINE_EXCLUDED_EVENTS).toEqual(
+      expect.arrayContaining(['user_flags_evaluated', '$experiment_exposure'])
     )
   })
 })

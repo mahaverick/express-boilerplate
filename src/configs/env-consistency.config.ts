@@ -184,6 +184,21 @@ function warnOnHalfTimelineConfig(env: Env, warn: (message: string) => void): vo
 }
 
 /**
+ * The feature flags key without the project key. The definitions fetch
+ * sends `?token=<project key>`, so the flags key alone can never work.
+ * @param env - The validated environment.
+ * @returns One message when only the flags key is set, else none.
+ */
+function flagsKeyProblems(env: Env): string[] {
+  if (env.POSTHOG_FEATURE_FLAGS_KEY === undefined || env.POSTHOG_PROJECT_KEY !== undefined) {
+    return []
+  }
+  return [
+    'POSTHOG_FEATURE_FLAGS_KEY is set but POSTHOG_PROJECT_KEY is not, so feature flag definitions cannot be fetched. Set POSTHOG_PROJECT_KEY too, or unset POSTHOG_FEATURE_FLAGS_KEY.',
+  ]
+}
+
+/**
  * Refuses unsafe or stale configuration at boot; throws Error with one actionable message.
  *
  * Every problem found goes into that one message, so an operator fixes them
@@ -251,6 +266,7 @@ export function assertEnvConsistent(
     )
   }
 
+  problems.push(...flagsKeyProblems(env))
   warnOnUntrustedProxyForAnalytics(env, warn)
   warnOnHalfTimelineConfig(env, warn)
 

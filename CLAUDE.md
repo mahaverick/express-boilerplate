@@ -183,6 +183,26 @@ uuid))` on every column,** as `errors-query.service.ts` does: per-column
   does. Delete `analytics_outbox` rows in the file's own hooks, since the
   worker's database is shared by its files.
 
+## Feature flags
+
+- **Gate a route with `requireFlag(key)` after `requireAuth`, after
+  `resolveTenant()` for a tenant-scoped flag, and before validators.** A
+  tenant-scoped gate anywhere but `/tenants/:slug/…` answers 404 for everyone
+  and fails `tests/unit/routes/flag-gates.test.ts`. A closed gate answers the
+  unknown-route 404; never a 403 or a flag-specific message.
+- **Never take a flag value from a client.** The exposure routes re-evaluate
+  every key on the server; their body is `{ keys }` and nothing else.
+- **Targeting traits are only `FLAG_TRAITS`.** Never add a trait that is
+  PII, and never an `app` trait: the gate and the UI would disagree. Traits
+  leave the server only through `GET /platform/flags/evaluate`, which is
+  admin-only and audited.
+- **Read a flag in request code through `flagContextFor(request)`**
+  (`flag-context.middleware.ts`), which memoises the context and each
+  evaluation per request; a worker builds its context with
+  `flagContextForUser`.
+- **`pnpm flags:sync` never edits or deletes a PostHog flag,** and never
+  prints a PostHog answer body: a flag's `created_by` names a person.
+
 ## Notifications
 
 - **Use `addNotificationJob()` for an event with in-app and email channels.**

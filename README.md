@@ -102,29 +102,30 @@ refuses a non-JSON body with 415. See
 
 ## Available scripts
 
-| Script                              | What it does                                                                               |
-| ----------------------------------- | ------------------------------------------------------------------------------------------ |
-| `pnpm dev`                          | `tsx watch`, loading `.env` and then `src/observability/tracing.ts` first.                 |
-| `pnpm build`                        | `tsc` and `tsc-alias` into `dist/`, with the migrations copied alongside.                  |
-| `pnpm start`                        | Runs the build, loading `.env` and `dist/observability/tracing.js` first.                  |
-| `pnpm lint`                         | `eslint .`, then `tsc` over `src/` and `tests/` (`tsconfig.typecheck.json`).               |
-| `pnpm lint:fix`                     | `eslint . --fix`.                                                                          |
-| `pnpm lint:docs`                    | History phrasing and broken links in docs; code citing a missing doc.                      |
-| `pnpm format` / `pnpm format:check` | Prettier over the whole repo.                                                              |
-| `pnpm test`                         | `vitest run`. Needs the compose stack.                                                     |
-| `pnpm test:watch`                   | `vitest watch`.                                                                            |
-| `pnpm test:unit`                    | Every test but `tests/integration/**`; runs with Docker down.                              |
-| `pnpm test:coverage`                | `vitest run --coverage`, gated at 80% on all four measures.                                |
-| `pnpm env:example`                  | Regenerates `.env.example` from the Zod schema.                                            |
-| `pnpm env:table`                    | Prints ARCHITECTURE.md's environment table from the Zod schema.                            |
-| `pnpm db:migration:generate`        | `drizzle-kit generate`; see [DATABASE.md](DATABASE.md).                                    |
-| `pnpm db:migrate`                   | Applies pending migrations against `DATABASE_URL`.                                         |
-| `pnpm db:migrate:prod`              | The same, as `node dist/database/migrate.js`; run that in the prod image.                  |
-| `pnpm platform:grant -- <e> <role>` | Gives a platform-tenant role; see below.                                                   |
-| `pnpm email:fire-event <id> <type>` | Signs and posts a fake provider event (local only); see [Email tracking](#email-tracking). |
-| `pnpm onboarding:reconcile`         | Re-derives tracked tenants' automatic onboarding steps; see [Onboarding](#onboarding).     |
-| `pnpm analytics:backfill-groups`    | Queues every tenant's PostHog group properties; see [Analytics](#analytics-posthog).       |
-| `pnpm commit`                       | Interactive conventional-commit prompt.                                                    |
+| Script                              | What it does                                                                                |
+| ----------------------------------- | ------------------------------------------------------------------------------------------- |
+| `pnpm dev`                          | `tsx watch`, loading `.env` and then `src/observability/tracing.ts` first.                  |
+| `pnpm build`                        | `tsc` and `tsc-alias` into `dist/`, with the migrations copied alongside.                   |
+| `pnpm start`                        | Runs the build, loading `.env` and `dist/observability/tracing.js` first.                   |
+| `pnpm lint`                         | `eslint .`, then `tsc` over `src/` and `tests/` (`tsconfig.typecheck.json`).                |
+| `pnpm lint:fix`                     | `eslint . --fix`.                                                                           |
+| `pnpm lint:docs`                    | History phrasing and broken links in docs; code citing a missing doc.                       |
+| `pnpm format` / `pnpm format:check` | Prettier over the whole repo.                                                               |
+| `pnpm test`                         | `vitest run`. Needs the compose stack.                                                      |
+| `pnpm test:watch`                   | `vitest watch`.                                                                             |
+| `pnpm test:unit`                    | Every test but `tests/integration/**`; runs with Docker down.                               |
+| `pnpm test:coverage`                | `vitest run --coverage`, gated at 80% on all four measures.                                 |
+| `pnpm env:example`                  | Regenerates `.env.example` from the Zod schema.                                             |
+| `pnpm env:table`                    | Prints ARCHITECTURE.md's environment table from the Zod schema.                             |
+| `pnpm db:migration:generate`        | `drizzle-kit generate`; see [DATABASE.md](DATABASE.md).                                     |
+| `pnpm db:migrate`                   | Applies pending migrations against `DATABASE_URL`.                                          |
+| `pnpm db:migrate:prod`              | The same, as `node dist/database/migrate.js`; run that in the prod image.                   |
+| `pnpm platform:grant -- <e> <role>` | Gives a platform-tenant role; see below.                                                    |
+| `pnpm email:fire-event <id> <type>` | Signs and posts a fake provider event (local only); see [Email tracking](#email-tracking).  |
+| `pnpm onboarding:reconcile`         | Re-derives tracked tenants' automatic onboarding steps; see [Onboarding](#onboarding).      |
+| `pnpm analytics:backfill-groups`    | Queues every tenant's PostHog group properties; see [Analytics](#analytics-posthog).        |
+| `pnpm flags:sync [-- --dry-run]`    | Creates registered feature flags missing from PostHog; see [Feature flags](#feature-flags). |
+| `pnpm commit`                       | Interactive conventional-commit prompt.                                                     |
 
 `pnpm platform:grant -- <email> <role>` gives an existing user with a verified
 address a role (`owner` to `viewer`) in the platform tenant, audited as
@@ -454,8 +455,9 @@ Independent of `POSTHOG_PROJECT_KEY`.
 **Turning them on, once per environment:**
 
 1. In PostHog, create a personal API key with only the scopes `query:read`,
-   `person:write` and `group:read`, owned by a service account rather than
-   a person.
+   `person:write` and `group:read`, plus `feature_flag:read` and
+   `feature_flag:write` for `pnpm flags:sync`, owned by a service account
+   rather than a person.
 2. Set `POSTHOG_PERSONAL_API_KEY` and `POSTHOG_PROJECT_ID` (the numeric id
    of the project `POSTHOG_PROJECT_KEY` reports to). The app host follows
    the ingest host's region (`https://us.posthog.com` or
@@ -541,6 +543,47 @@ every process.
 **`/health` names the release.** It answers `{ status, uptime, release }`
 and is public, so the deployed git sha is too. A private fork that does not
 want that drops `release` in `src/app.ts`.
+
+### Feature flags
+
+Flags are declared in `src/constants/flags.constants.ts`, evaluated on the
+server and served to react and apex; how they work is in
+[ARCHITECTURE.md](ARCHITECTURE.md#feature-flags). They are off until both
+`POSTHOG_PROJECT_KEY` and `POSTHOG_FEATURE_FLAGS_KEY` are set: until then
+every flag answers its registry fallback, gated routes answer 404, nothing
+is fetched from PostHog, and the Apex status card shows flags as not set up.
+That is a valid steady state. Boot refuses `POSTHOG_FEATURE_FLAGS_KEY`
+without `POSTHOG_PROJECT_KEY`, since the fetch needs both.
+
+**Turning them on, once per environment** (each environment has its own
+PostHog project, and every registered flag must exist in each):
+
+1. In the project's settings (Feature flags), generate the Feature Flags
+   Secure API Key (it starts with `phs_`) and set it as
+   `POSTHOG_FEATURE_FLAGS_KEY`, on the API and worker pods alike. It only
+   reads flag definitions; it is a secret and never reaches a browser.
+2. Give the personal API key (`POSTHOG_PERSONAL_API_KEY`) the scopes
+   `feature_flag:read` and `feature_flag:write`, and make sure the project
+   has the `tenant` group type.
+3. Deploy, then run `pnpm flags:sync` with that environment's variables
+   (start with `pnpm flags:sync -- --dry-run`). It creates every registered
+   flag that is missing, inactive at a 0 % rollout and tagged
+   `code-registry`, prints `drift <key>: <field>` for a flag whose kind,
+   variants or scope differ, and exits 0 when clean or after creating, 2 on
+   drift, 1 on a failure. It never edits or deletes a flag; fix drift in
+   PostHog or in the registry.
+4. Roll flags out in PostHog. Every API and worker process picks up a change
+   within about a minute; browsers on their next refetch (a page load, a
+   tenant switch, focus after 5 minutes, or every 10 minutes).
+5. Check the Apex status card's Feature flags section and the `/flags` page:
+   a `missing` flag needs `pnpm flags:sync`, an `unsupported` one uses a
+   construct the server can't evaluate (the page names it), and every flag
+   PostHog has that the registry lacks is listed for information.
+
+Run `pnpm flags:sync` again in every environment whenever a release adds a
+flag. To run an experiment on a flag, follow the order in
+[ARCHITECTURE.md](ARCHITECTURE.md#feature-flags): sync first, then create the
+experiment in PostHog reusing the flag.
 
 ## Make this yours
 

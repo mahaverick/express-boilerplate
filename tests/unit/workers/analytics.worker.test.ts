@@ -6,6 +6,7 @@
 import { UnrecoverableError, type Job } from 'bullmq'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { isAnalyticsEnabled } from '@/configs/analytics.config'
+import { runFlagDefinitionsJob } from '@/jobs/flag-definitions.job'
 import { processAnalyticsDeletions } from '@/services/analytics/analytics-deletion.service'
 import { drainAnalyticsOutbox } from '@/services/analytics/analytics-drain.service'
 import { processAnalyticsJob } from '@/workers/analytics.worker'
@@ -15,6 +16,10 @@ vi.mock('@/services/analytics/analytics-deletion.service', () => ({
   processAnalyticsDeletions: vi.fn(),
 }))
 vi.mock('@/configs/analytics.config', () => ({ isAnalyticsEnabled: vi.fn(() => true) }))
+vi.mock('@/jobs/flag-definitions.job', () => ({
+  FLAG_DEFINITIONS_JOB: 'flag-definitions',
+  runFlagDefinitionsJob: vi.fn(),
+}))
 
 /**
  * A stand-in for an analytics Job; the processor reads only its name.
@@ -71,6 +76,15 @@ describe('processAnalyticsJob', () => {
     await expect(processAnalyticsJob(jobNamed('analytics-deletions'))).rejects.toThrow(
       'claim failed'
     )
+  })
+
+  it('fetches the flag definitions once for a flag-definitions job', async () => {
+    vi.mocked(runFlagDefinitionsJob).mockResolvedValue()
+    await expect(processAnalyticsJob(jobNamed('flag-definitions'))).resolves.toBeUndefined()
+    expect(runFlagDefinitionsJob).toHaveBeenCalledOnce()
+    expect(runFlagDefinitionsJob).toHaveBeenCalledWith()
+    expect(drainAnalyticsOutbox).not.toHaveBeenCalled()
+    expect(processAnalyticsDeletions).not.toHaveBeenCalled()
   })
 
   it('refuses an unknown job name without a retry', async () => {
