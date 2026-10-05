@@ -7,13 +7,52 @@
  * unsupported (`detectUnsupported`), so it answers its registry fallback
  * instead of a half-evaluated value.
  */
+import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import {
   findFlagEntry,
   FLAG_GROUP_PROPERTY_KEYS,
   FLAG_PERSON_PROPERTY_KEYS,
+  FLAGS,
   type FlagEntry,
 } from '@/constants/flags.constants'
+
+/**
+ * The version of the parse and detection rules. Bump it whenever
+ * `detectUnsupported` or the schema changes what a definition parses to, so
+ * every stored snapshot's fingerprint stops matching and the next
+ * definitions run re-parses it (`flagRegistryFingerprint`).
+ */
+export const FLAG_PARSER_VERSION = 1
+
+const FINGERPRINT_LENGTH = 16
+
+/**
+ * A stable hash of what a snapshot's `unsupported` verdicts depend on
+ * besides PostHog's body: every registry entry's key, kind, variants and
+ * scope, in registry order, and the parser version. A stored snapshot whose
+ * fingerprint differs from the running one was parsed by other rules, so
+ * the definitions job fetches it again without `If-None-Match`.
+ * @param entries - The registry; defaults to `FLAGS`.
+ * @param parserVersion - The parser version; defaults to `FLAG_PARSER_VERSION`.
+ * @returns The first 16 hex characters of the sha256.
+ */
+export function flagRegistryFingerprint(
+  entries: readonly FlagEntry[] = FLAGS,
+  parserVersion: number = FLAG_PARSER_VERSION
+): string {
+  const registry = entries.map((entry) => ({
+    key: entry.key,
+    kind: entry.kind,
+    // eslint-disable-next-line unicorn/no-null -- a boolean entry has no variants
+    variants: entry.kind === 'multivariate' ? entry.variants : null,
+    scope: entry.scope,
+  }))
+  return createHash('sha256')
+    .update(JSON.stringify({ parserVersion, registry }))
+    .digest('hex')
+    .slice(0, FINGERPRINT_LENGTH)
+}
 
 /**
  * The property operators `@posthog/core`'s `matchFeatureFlagProperty`
@@ -193,6 +232,12 @@ export interface ParsedSnapshot {
    * The group type index of `tenant` in `group_type_mapping`, or null when the project has none.
    */
   tenantGroupIndex: number | null
+  /**
+   * The `flagRegistryFingerprint` of the code that parsed it. Absent only in
+   * a snapshot stored before fingerprints existed, which counts as a
+   * mismatch.
+   */
+  fingerprint?: string
   /**
    * Every flag that is not deleted, by key, registered or not.
    */
@@ -439,6 +484,7 @@ export function parseDefinitionsResponse(
     // eslint-disable-next-line unicorn/no-null -- the snapshot's contract is null for an absent version
     propertyMatchingVersion: response.property_matching_version ?? null,
     tenantGroupIndex,
+    fingerprint: flagRegistryFingerprint(),
     flags: Object.fromEntries(entries),
   }
 }

@@ -16,7 +16,10 @@ import {
 } from '@/services/flags/flag-snapshot.service'
 import { logger } from '@/services/logger.service'
 import { getAnalyticsQueue } from '@/services/queue.service'
-import { parseDefinitionsResponse } from '@/validators/flag-definition.validators'
+import {
+  flagRegistryFingerprint,
+  parseDefinitionsResponse,
+} from '@/validators/flag-definition.validators'
 
 /**
  * The job's name, and the id of the scheduler that creates it.
@@ -43,12 +46,14 @@ export async function ensureFlagDefinitionsSchedule(): Promise<void> {
 }
 
 /**
- * Fetch the definitions once, sending the stored snapshot's ETag. A 200 is
- * parsed and stored, and every replica is told to reload; a 304 rewrites
+ * Fetch the definitions once, sending the stored snapshot's ETag when its
+ * fingerprint matches the running code's (`flagRegistryFingerprint`). A 200
+ * is parsed and stored, and every replica is told to reload; a 304 rewrites
  * only the stored `checkedAt`, unpublished; a failure keeps the stored
- * snapshot and records its code. A stored snapshot that cannot be read
- * counts as none: the fetch is unconditional and a 200 replaces it. Nothing
- * is fetched while flags are off.
+ * snapshot and records its code. A stored snapshot parsed under another
+ * registry or parser version (its fingerprint differs, or it has none), or
+ * one that cannot be read, gets an unconditional fetch, so a 200 re-parses
+ * it with the current rules. Nothing is fetched while flags are off.
  * @param now - When this run happens; defaults to now.
  * @returns Resolves once the outcome is stored and recorded.
  * @throws {Error} When writing the snapshot in Redis fails; the next tick retries.
@@ -56,8 +61,9 @@ export async function ensureFlagDefinitionsSchedule(): Promise<void> {
 export async function runFlagDefinitionsJob(now: Date = new Date()): Promise<void> {
   if (!isFlagsEnabled()) return
   const stored = await readStoredSnapshot()
+  const isCurrent = stored?.fingerprint === flagRegistryFingerprint()
   // eslint-disable-next-line unicorn/no-null -- the client's contract is null for an unconditional fetch
-  const result = await fetchFlagDefinitions(stored?.etag ?? null)
+  const result = await fetchFlagDefinitions(isCurrent ? stored.etag : null)
   if (result.kind === 'error') {
     logger.warn('Fetching flag definitions failed; keeping the stored snapshot', {
       code: result.code,

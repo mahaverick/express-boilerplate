@@ -997,7 +997,11 @@ every API and worker process: in-memory snapshot (reload on message, 60 s backst
   subscriber connects in the background, so a slow Redis never holds boot,
   and the 60 s backstop reloads (and retries the subscription) meanwhile. A
   stored snapshot that can't be read is treated as none, and the process
-  answers fallbacks until a good one arrives.
+  answers fallbacks until a good one arrives. The snapshot stores a
+  fingerprint of the registry's keys, kinds, variants and scopes plus
+  `FLAG_PARSER_VERSION` (bump it when the parse or detection rules
+  change); when it differs from the running code's, the job omits
+  `If-None-Match` so the next run re-parses with the current rules.
 - **Evaluation** (`flag-evaluator.service.ts`) is pure and never throws to a
   caller: with no snapshot, a missing, inactive or unsupported flag, or a
   tenant-scoped flag with no tenant, it returns the registry fallback with a

@@ -39,7 +39,10 @@ export function flagSnapshotChannel(): string {
 }
 
 /**
- * Whether a stored value has the snapshot's shape.
+ * Whether a stored value has the snapshot's shape. A missing `fingerprint`
+ * passes (a snapshot stored before fingerprints existed: replicas keep
+ * evaluating it, and the definitions job treats it as a mismatch); one that
+ * is not a string does not.
  * @param value - The parsed JSON.
  * @returns True when it has the snapshot's fields.
  */
@@ -49,6 +52,7 @@ function isSnapshot(value: unknown): value is ParsedSnapshot {
   return (
     typeof candidate.fetchedAt === 'string' &&
     typeof candidate.checkedAt === 'string' &&
+    (candidate.fingerprint === undefined || typeof candidate.fingerprint === 'string') &&
     typeof candidate.flags === 'object' &&
     candidate.flags !== null &&
     !Array.isArray(candidate.flags)

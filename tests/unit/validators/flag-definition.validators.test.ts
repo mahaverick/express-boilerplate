@@ -4,10 +4,12 @@
  * of spec §4.5 (each verified against PostHog in the planning probe).
  */
 import { describe, expect, it } from 'vitest'
-import { flagEntry, type FlagEntry } from '@/constants/flags.constants'
+import { flagEntry, FLAGS, type FlagEntry } from '@/constants/flags.constants'
 import {
   detectUnsupported,
+  FLAG_PARSER_VERSION,
   flagDefinitionSchema,
+  flagRegistryFingerprint,
   parseDefinitionsResponse,
   type FlagDefinitionJson,
 } from '@/validators/flag-definition.validators'
@@ -144,6 +146,7 @@ describe('parseDefinitionsResponse', () => {
       checkedAt: '2026-10-05T12:00:00.000Z',
       propertyMatchingVersion: 1,
       tenantGroupIndex: 0,
+      fingerprint: flagRegistryFingerprint(),
       flags: {},
     })
   })
@@ -234,6 +237,40 @@ describe('parseDefinitionsResponse', () => {
     ],
   ])('throws on %s', (_label, body) => {
     expect(() => parseDefinitionsResponse(body, NONE, NOW)).toThrow()
+  })
+})
+
+describe('flagRegistryFingerprint', () => {
+  it('is a short sha256 hex of the running registry and parser version, stable across calls', () => {
+    expect(flagRegistryFingerprint()).toMatch(/^[0-9a-f]{16}$/)
+    expect(flagRegistryFingerprint()).toBe(flagRegistryFingerprint(FLAGS, FLAG_PARSER_VERSION))
+  })
+
+  it.each<[string, FlagEntry[]]>([
+    ['a key', [{ ...USER_ENTRY, key: 'other_flag' }]],
+    ['a kind', [MULTIVARIATE_ENTRY]],
+    ['a scope', [TENANT_ENTRY]],
+    ['the variants', [{ ...MULTIVARIATE_ENTRY, variants: ['control', 'bold', 'loud'] }]],
+    ['an added entry', [USER_ENTRY, TENANT_ENTRY]],
+  ])('changes with %s', (_change, entries) => {
+    expect(flagRegistryFingerprint(entries, 1)).not.toBe(flagRegistryFingerprint([USER_ENTRY], 1))
+  })
+
+  it('changes with the parser version', () => {
+    expect(flagRegistryFingerprint([USER_ENTRY], 2)).not.toBe(
+      flagRegistryFingerprint([USER_ENTRY], 1)
+    )
+  })
+
+  it('ignores what the evaluator never reads: the description, client, apps and experiment', () => {
+    const changed: FlagEntry = {
+      ...USER_ENTRY,
+      description: 'Changed',
+      client: true,
+      apps: ['react'],
+      experiment: true,
+    }
+    expect(flagRegistryFingerprint([changed], 1)).toBe(flagRegistryFingerprint([USER_ENTRY], 1))
   })
 })
 

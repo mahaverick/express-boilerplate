@@ -2,8 +2,10 @@
  * @file The flag definitions schedule against the real Redis, and one job
  * run against the fake PostHog: a 200 writes and publishes the parsed
  * snapshot, a 304 (sent the stored ETag verbatim) touches only `checkedAt`,
- * a failure keeps the snapshot and records the code, and nothing is fetched
- * while flags are off. No Worker runs in this file.
+ * a failure keeps the snapshot and records the code, a stored snapshot from
+ * another registry or parser (its fingerprint differs, or it has none) is
+ * fetched unconditionally and replaced, and nothing is fetched while flags
+ * are off. No Worker runs in this file.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { isFlagsEnabled } from '@/configs/analytics.config'
@@ -17,6 +19,7 @@ import { flagSnapshotKey, readFlagSnapshot } from '@/services/flags/flag-snapsho
 import { logger } from '@/services/logger.service'
 import { closeQueue, getAnalyticsQueue } from '@/services/queue.service'
 import { createRedisClient, getRedis, redisKey } from '@/services/redis.service'
+import { flagRegistryFingerprint } from '@/validators/flag-definition.validators'
 import {
   EMPTY_FLAG_DEFINITIONS,
   startFakePosthog,
@@ -63,6 +66,22 @@ const BETA_FLAG = {
   filters: {
     aggregation_group_type_index: 0,
     groups: [{ aggregation_group_type_index: 0, properties: [], rollout_percentage: 100 }],
+  },
+}
+
+/**
+ * `example_beta_page` (a boolean entry) with a multivariate definition: kind_drift today.
+ */
+const DRIFTED_BETA_FLAG = {
+  ...BETA_FLAG,
+  filters: {
+    ...BETA_FLAG.filters,
+    multivariate: {
+      variants: [
+        { key: 'control', rollout_percentage: 50 },
+        { key: 'bold', rollout_percentage: 50 },
+      ],
+    },
   },
 }
 
@@ -125,6 +144,7 @@ describe('runFlagDefinitionsJob', () => {
         checkedAt: T0.toISOString(),
         propertyMatchingVersion: 1,
         tenantGroupIndex: 0,
+        fingerprint: flagRegistryFingerprint(),
       })
       expect(stored?.flags.example_beta_page).toMatchObject({ active: true, unsupported: NONE })
       await vi.waitFor(() => {
@@ -143,8 +163,41 @@ describe('runFlagDefinitionsJob', () => {
     await runFlagDefinitionsJob(T1)
     expect(posthog().requests.at(-1)?.headers['if-none-match']).toBe(etag)
     const stored = await readFlagSnapshot()
-    expect(stored).toMatchObject({ fetchedAt: T0.toISOString(), checkedAt: T1.toISOString() })
+    expect(stored).toMatchObject({
+      fetchedAt: T0.toISOString(),
+      checkedAt: T1.toISOString(),
+      fingerprint: flagRegistryFingerprint(),
+    })
     await expect(getFlagsStatus(T1)).resolves.toMatchObject({ lastFetchOk: T1.toISOString() })
+  })
+
+  it.each<[string, (stored: Record<string, unknown>) => Record<string, unknown>]>([
+    ['a different fingerprint', (stored) => ({ ...stored, fingerprint: 'stale0fingerprint' })],
+    ['no fingerprint', ({ fingerprint: _dropped, ...stored }) => stored],
+  ])('fetches unconditionally and replaces a stored snapshot with %s', async (_case, rewrite) => {
+    posthog().setFlagDefinitions({ ...EMPTY_FLAG_DEFINITIONS, flags: [DRIFTED_BETA_FLAG] })
+    await runFlagDefinitionsJob(T0)
+    const redis = await getRedis()
+    const raw = await redis.get(flagSnapshotKey())
+    const first = JSON.parse(String(raw)) as Record<string, unknown>
+    // Stand for a snapshot an earlier registry or parser stored: no verdict yet.
+    const flags = first.flags as Record<string, Record<string, unknown>>
+    const earlier = {
+      ...first,
+      flags: { example_beta_page: { ...flags.example_beta_page, unsupported: NONE } },
+    }
+    await redis.set(flagSnapshotKey(), JSON.stringify(rewrite(earlier)))
+
+    await runFlagDefinitionsJob(T1)
+
+    expect(posthog().requests.at(-1)?.headers['if-none-match']).toBeUndefined()
+    const stored = await readFlagSnapshot()
+    expect(stored).toMatchObject({
+      fetchedAt: T1.toISOString(),
+      checkedAt: T1.toISOString(),
+      fingerprint: flagRegistryFingerprint(),
+    })
+    expect(stored?.flags.example_beta_page?.unsupported).toBe('kind_drift')
   })
 
   it('keeps the snapshot and records the code when the fetch fails', async () => {
