@@ -2,7 +2,8 @@
  * @file The feature-flag registry: every flag the code reads, declared once
  * with its kind, fallback, scope and the apps that receive it, and checked
  * when this module loads. `flags:sync` creates each one in PostHog; while a
- * flag is missing there, or PostHog is unreachable, it answers its fallback.
+ * flag is missing there, or no snapshot has been fetched yet, it answers its
+ * fallback.
  * Also the closed set of traits a flag may target, and the snapshot
  * pipeline's limits.
  */

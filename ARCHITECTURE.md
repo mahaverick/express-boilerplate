@@ -996,12 +996,21 @@ every API and worker process: in-memory snapshot (reload on message, 60 s backst
   flags are configured. Only the first reload is awaited; the Redis
   subscriber connects in the background, so a slow Redis never holds boot,
   and the 60 s backstop reloads (and retries the subscription) meanwhile. A
-  stored snapshot that can't be read is treated as none, and the process
-  answers fallbacks until a good one arrives. The snapshot stores a
+  stored snapshot that can't be read at boot is treated as none, and the
+  process answers fallbacks until a good one arrives; a later failed reload,
+  or a read older than the copy in memory, keeps that copy. The snapshot stores a
   fingerprint of the registry's keys, kinds, variants and scopes plus
   `FLAG_PARSER_VERSION` (bump it when the parse or detection rules
   change); when it differs from the running code's, the job omits
   `If-None-Match` so the next run re-parses with the current rules.
+- **Kill-switch latency**: a PostHog edit reaches every process on the
+  next definitions run (every 30 s) and its `reload` message, or the 60 s
+  backstop if the message is missed. The run shares the `analytics` worker
+  (concurrency 1) with the outbox drain and the deletion tick, so with
+  PostHog slow or hanging and one worker replica it can wait behind a
+  drain (each batch request up to 10 s) and a deletion tick (a bulk
+  request plus, after a partial refusal, one per id: at most 11 requests
+  of up to 15 s), so a kill can take a few minutes to land.
 - **Evaluation** (`flag-evaluator.service.ts`) is pure and never throws to a
   caller: with no snapshot, a missing, inactive or unsupported flag, or a
   tenant-scoped flag with no tenant, it returns the registry fallback with a
@@ -1058,8 +1067,8 @@ every API and worker process: in-memory snapshot (reload on message, 60 s backst
   An unknown user is 404; a tenant the user isn't a member of, or a tenant
   with `app=apex`, is 400. Neither route calls PostHog.
 - **System status** gains `flags`: whether flags are configured, the
-  snapshot's fetch and check times, `stale` (checked more than 10 minutes
-  ago), the last good and failed fetch, `propertyMatchingVersion` and the
+  snapshot's fetch and check times, `stale` (no snapshot, or checked more
+  than 10 minutes ago), the last good and failed fetch, `propertyMatchingVersion` and the
   registered, active, inactive, missing, unsupported, unregistered and
   unknown-variant counts.
 
