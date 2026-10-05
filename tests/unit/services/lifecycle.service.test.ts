@@ -3,6 +3,7 @@ import { getEnv } from '@/configs/env.config'
 import {
   closeAllStreams,
   countStreams,
+  createProcessFaultHandler,
   createShutdownHandler,
   isShuttingDown,
   markShuttingDown,
@@ -124,6 +125,54 @@ describe('lifecycle.service', () => {
       expect(exit).not.toHaveBeenCalled()
       await vi.advanceTimersByTimeAsync(1)
       expect(exit).toHaveBeenCalledWith(1)
+    })
+  })
+
+  describe('createProcessFaultHandler', () => {
+    it('marks shutdown before recording, so readiness drops during the flush', async () => {
+      const seen: boolean[] = []
+      const shutdown = vi.fn()
+      const { onFault } = createProcessFaultHandler(() => {
+        seen.push(isShuttingDown())
+        return Promise.resolve()
+      }, shutdown)
+
+      await onFault('Uncaught exception', new Error('boom'))
+
+      expect(seen).toEqual([true])
+      expect(shutdown).toHaveBeenCalledWith(1)
+    })
+
+    it('shuts down with 1 even when recording rejects', async () => {
+      const shutdown = vi.fn()
+      const { onFault } = createProcessFaultHandler(
+        () => Promise.reject(new Error('flush failed')),
+        shutdown
+      )
+
+      await expect(onFault('Uncaught exception', new Error('boom'))).rejects.toThrow('flush failed')
+      expect(shutdown).toHaveBeenCalledExactlyOnceWith(1)
+    })
+
+    it('makes a signal during the fatal flush exit 1, and one before any fault exit 0', async () => {
+      const release: { flush?: () => void } = {}
+      const shutdown = vi.fn()
+      const { onFault, onSignal } = createProcessFaultHandler(
+        () =>
+          new Promise<void>((resolve) => {
+            release.flush = resolve
+          }),
+        shutdown
+      )
+
+      onSignal()
+      expect(shutdown).toHaveBeenLastCalledWith(0)
+      const fault = onFault('Unhandled promise rejection', new Error('boom'))
+      onSignal()
+      expect(shutdown).toHaveBeenLastCalledWith(1)
+      release.flush?.()
+      await fault
+      expect(shutdown).toHaveBeenLastCalledWith(1)
     })
   })
 })

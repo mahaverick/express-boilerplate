@@ -20,18 +20,21 @@ import type { SupervisedWorkers } from '@/services/worker-supervisor.service'
  * report it, and a static worker import would load BullMQ into processes
  * that never start workers. The forced-exit backstop and the once-only guard
  * live in `createShutdownHandler` (lifecycle.service.ts). `process.exit` is
- * passed in from inside the `process.on` callback, which
- * `unicorn/no-process-exit` requires. Fatal errors (unhandled rejection,
+ * passed in as a callback from the two places that begin shutdown (the
+ * server 'error' listener and the fault and signal handlers' `shutdown`),
+ * each with a `unicorn/no-process-exit` exception. Fatal errors (unhandled rejection,
  * uncaught exception, a server 'error' at bind or after listening) go
  * through the same handler with exit code 1. An unhandled rejection or an
- * uncaught exception is first reported to error tracking and logged with
- * the same `errorId`, and the report queue is flushed for at most
- * `ERROR_FATAL_FLUSH_MS` before shutdown begins.
+ * uncaught exception first marks shutdown (readiness answers 503), is
+ * reported to error tracking and logged with the same `errorId`, and the
+ * report queue is flushed for at most `ERROR_FATAL_FLUSH_MS` before shutdown
+ * begins; a SIGTERM or SIGINT during that flush still exits 1.
  * @returns Resolves once exit handlers are wired and any workers have started.
  */
 async function boot(): Promise<void> {
   const { startServer, gracefulShutdown } = await import('@/server')
-  const { createShutdownHandler, isShuttingDown } = await import('@/services/lifecycle.service')
+  const { createProcessFaultHandler, createShutdownHandler, isShuttingDown } =
+    await import('@/services/lifecycle.service')
   const { redactedForLog } = await import('@/errors/postgres-errors')
   const { warnIfDeletionsPending } = await import('@/services/analytics/analytics-deletion.service')
   const { ERROR_FATAL_FLUSH_MS } = await import('@/constants/error-tracking.constants')
@@ -65,22 +68,19 @@ async function boot(): Promise<void> {
   // Never rejects: a failed count is logged at warn.
   void warnIfDeletionsPending()
 
+  const { onFault, onSignal } = createProcessFaultHandler(recordProcessFault, (exitCode) => {
+    // eslint-disable-next-line unicorn/no-process-exit -- every exit goes through the shared once-guard
+    handleShutdown((code) => process.exit(code), exitCode)
+  })
   for (const signal of ['SIGTERM', 'SIGINT'] as const) {
-    process.on(signal, () => {
-      handleShutdown((code) => process.exit(code))
-    })
+    process.on(signal, onSignal)
   }
+  // recordProcessFault never rejects, so neither does onFault here.
   process.on('unhandledRejection', (reason) => {
-    void (async () => {
-      await recordProcessFault('Unhandled promise rejection', reason)
-      handleShutdown((code) => process.exit(code), 1)
-    })()
+    void onFault('Unhandled promise rejection', reason)
   })
   process.on('uncaughtException', (error) => {
-    void (async () => {
-      await recordProcessFault('Uncaught exception', error)
-      handleShutdown((code) => process.exit(code), 1)
-    })()
+    void onFault('Uncaught exception', error)
   })
 
   if (!getEnv().WORKER_ENABLED) return

@@ -104,3 +104,37 @@ export function createShutdownHandler(
     })()
   }
 }
+
+/**
+ * Build the process-fault handlers. A fault (an unhandled rejection or an
+ * uncaught exception) marks shutdown first, so readiness answers 503 while
+ * the fault is recorded and flushed, then shuts down with exit code 1 even
+ * if recording rejects. A signal shuts down with 0, or with 1 once a fault
+ * has begun, so a SIGTERM that arrives during the fatal flush still exits 1.
+ * @param record - Reports, logs and flushes one fault.
+ * @param shutdown - Begins shutdown with an exit code (the once-only handler).
+ * @returns `onFault`, which resolves or rejects as `record` did once shutdown has begun, and `onSignal`.
+ */
+export function createProcessFaultHandler(
+  record: (message: string, fault: unknown) => Promise<void>,
+  shutdown: (exitCode: number) => void
+): {
+  onFault: (message: string, fault: unknown) => Promise<void>
+  onSignal: () => void
+} {
+  const fault = { hasFaulted: false }
+  return {
+    onFault: async (message, error) => {
+      markShuttingDown()
+      fault.hasFaulted = true
+      try {
+        await record(message, error)
+      } finally {
+        shutdown(1)
+      }
+    },
+    onSignal: () => {
+      shutdown(fault.hasFaulted ? 1 : 0)
+    },
+  }
+}
