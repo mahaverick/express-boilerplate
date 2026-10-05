@@ -108,6 +108,16 @@ describe('flag snapshot store', () => {
     expect(store.get()?.etag).toBe('W/"kept"')
   })
 
+  it('leaves no backstop timer when stopped while starting', async () => {
+    const interval = vi.spyOn(globalThis, 'setInterval')
+    const store = createFlagSnapshotStore({ backstopMs: 50 })
+    const starting = store.start()
+    await store.stop()
+    await starting
+    expect(interval).not.toHaveBeenCalled()
+    interval.mockRestore()
+  })
+
   it('stops reloading once stopped', async () => {
     const store = await startedStore(50)
     await store.stop()

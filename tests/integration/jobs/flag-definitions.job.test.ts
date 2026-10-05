@@ -14,6 +14,7 @@ import {
 } from '@/jobs/flag-definitions.job'
 import { getFlagsStatus } from '@/services/flags/flag-counters.service'
 import { flagSnapshotKey, readFlagSnapshot } from '@/services/flags/flag-snapshot.service'
+import { logger } from '@/services/logger.service'
 import { closeQueue, getAnalyticsQueue } from '@/services/queue.service'
 import { createRedisClient, getRedis, redisKey } from '@/services/redis.service'
 import {
@@ -21,6 +22,7 @@ import {
   startFakePosthog,
   type FakePosthog,
 } from '../../helpers/fake-posthog'
+import { clearFlagKeys } from '../../helpers/flag-redis'
 
 const target = vi.hoisted((): { host: string } => ({ host: 'http://127.0.0.1:1' }))
 
@@ -71,20 +73,6 @@ const BETA_FLAG = {
 function posthog(): FakePosthog {
   if (!fake.posthog) throw new Error('the fake PostHog is not running')
   return fake.posthog
-}
-
-/**
- * Delete the snapshot and every flags counter of this worker's prefix.
- * @returns Resolves once deleted.
- */
-async function clearFlagKeys(): Promise<void> {
-  const redis = await getRedis()
-  const keys: string[] = [flagSnapshotKey()]
-  const batches = redis.scanIterator({ MATCH: redisKey('flags', '*') })
-  for await (const batch of batches) {
-    keys.push(...batch)
-  }
-  await redis.del(keys)
 }
 
 beforeAll(async () => {
@@ -176,6 +164,19 @@ describe('runFlagDefinitionsJob', () => {
     await runFlagDefinitionsJob(T0)
     await expect(readFlagSnapshot()).resolves.toBeNull()
     await expect(getFlagsStatus(T0)).resolves.toMatchObject({ lastFetchError: 'invalid_body' })
+  })
+
+  it('treats an unreadable stored snapshot as none: fetches unconditionally and replaces it', async () => {
+    posthog().setFlagDefinitions({ ...EMPTY_FLAG_DEFINITIONS, flags: [BETA_FLAG] })
+    const etag = posthog().flagDefinitionsEtag
+    const redis = await getRedis()
+    await redis.set(flagSnapshotKey(), 'garbage-value-not-json')
+    const warn = vi.spyOn(logger, 'warn')
+    await runFlagDefinitionsJob(T0)
+    expect(posthog().requests.at(-1)?.headers['if-none-match']).toBeUndefined()
+    await expect(readFlagSnapshot()).resolves.toMatchObject({ etag, checkedAt: T0.toISOString() })
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('garbage-value-not-json')
+    warn.mockRestore()
   })
 
   it('fetches nothing while flags are off', async () => {

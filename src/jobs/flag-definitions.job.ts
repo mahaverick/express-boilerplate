@@ -46,14 +46,16 @@ export async function ensureFlagDefinitionsSchedule(): Promise<void> {
  * Fetch the definitions once, sending the stored snapshot's ETag. A 200 is
  * parsed and stored, and every replica is told to reload; a 304 rewrites
  * only the stored `checkedAt`, unpublished; a failure keeps the stored
- * snapshot and records its code. Nothing is fetched while flags are off.
+ * snapshot and records its code. A stored snapshot that cannot be read
+ * counts as none: the fetch is unconditional and a 200 replaces it. Nothing
+ * is fetched while flags are off.
  * @param now - When this run happens; defaults to now.
  * @returns Resolves once the outcome is stored and recorded.
- * @throws {Error} When reading or writing the snapshot in Redis fails; the next tick retries.
+ * @throws {Error} When writing the snapshot in Redis fails; the next tick retries.
  */
 export async function runFlagDefinitionsJob(now: Date = new Date()): Promise<void> {
   if (!isFlagsEnabled()) return
-  const stored = await readFlagSnapshot()
+  const stored = await readStoredSnapshot()
   // eslint-disable-next-line unicorn/no-null -- the client's contract is null for an unconditional fetch
   const result = await fetchFlagDefinitions(stored?.etag ?? null)
   if (result.kind === 'error') {
@@ -81,6 +83,24 @@ export async function runFlagDefinitionsJob(now: Date = new Date()): Promise<voi
     flags: flags.length,
     unsupported: flags.filter((flag) => flag.unsupported !== null).length,
   })
+}
+
+/**
+ * Read the stored snapshot, treating one that cannot be read (Redis failed,
+ * or the value is not a snapshot) as none. The log names the error type only,
+ * never the stored value.
+ * @returns The stored snapshot, or null.
+ */
+async function readStoredSnapshot(): Promise<Awaited<ReturnType<typeof readFlagSnapshot>>> {
+  try {
+    return await readFlagSnapshot()
+  } catch (error) {
+    logger.warn('The stored flag snapshot could not be read; fetching without an ETag', {
+      reason: error instanceof Error ? error.name : 'unknown',
+    })
+    // eslint-disable-next-line unicorn/no-null -- the snapshot's contract is null for none
+    return null
+  }
 }
 
 /**

@@ -13,8 +13,9 @@ import {
 } from '@/services/flags/flag-counters.service'
 import { getFlagSnapshot } from '@/services/flags/flag-snapshot.service'
 import { logger } from '@/services/logger.service'
-import { getRedis, redisKey } from '@/services/redis.service'
+import { getRedis } from '@/services/redis.service'
 import { flagDefinitionSchema, type ParsedSnapshot } from '@/validators/flag-definition.validators'
+import { clearFlagKeys } from '../../../helpers/flag-redis'
 
 vi.mock('@/configs/analytics.config', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/configs/analytics.config')>()
@@ -69,29 +70,15 @@ function snapshotOf(flags: ParsedSnapshot['flags'][string][], checkedAt: string)
   }
 }
 
-/**
- * Delete every flags counter key this worker's prefix holds.
- * @returns Resolves once deleted.
- */
-async function clearFlagCounters(): Promise<void> {
-  const redis = await getRedis()
-  const keys: string[] = []
-  const batches = redis.scanIterator({ MATCH: redisKey('flags', '*') })
-  for await (const batch of batches) {
-    keys.push(...batch)
-  }
-  if (keys.length > 0) await redis.del(keys)
-}
-
 beforeEach(async () => {
   vi.mocked(isFlagsEnabled).mockReturnValue(true)
   vi.mocked(getFlagSnapshot).mockReturnValue(NONE)
-  await clearFlagCounters()
+  await clearFlagKeys()
 })
 
 afterEach(async () => {
   vi.restoreAllMocks()
-  await clearFlagCounters()
+  await clearFlagKeys()
 })
 
 describe('recordFlagFetch', () => {

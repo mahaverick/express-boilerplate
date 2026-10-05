@@ -29,8 +29,9 @@ import type { SupervisedWorkers } from '@/services/worker-supervisor.service'
  * reported to error tracking and logged with the same `errorId`, and the
  * report queue is flushed for at most `ERROR_FATAL_FLUSH_MS` before shutdown
  * begins; a SIGTERM or SIGINT during that flush still exits 1. With flags
- * enabled, the flag snapshot loads before the server listens, so the first
- * request already sees it; its start never rejects.
+ * enabled, the flag snapshot's first load completes before the server
+ * listens, so the first request already sees it; its start never rejects
+ * and does not wait for the pub/sub subscription.
  * @returns Resolves once exit handlers are wired and any workers have started.
  */
 async function boot(): Promise<void> {

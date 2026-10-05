@@ -3,7 +3,9 @@
  * definitions job writes one snapshot to Redis (`flags:v1:snapshot`, no
  * expiry) and publishes `reload` on `redisKey('flags')`; each replica keeps
  * a copy in memory, loads it at boot, reloads it on a message, and reloads
- * every `FLAG_SNAPSHOT_BACKSTOP_MS` in case a message was missed. A failed
+ * every `FLAG_SNAPSHOT_BACKSTOP_MS` in case a message was missed. The
+ * subscription connects in the background, and reloads once it is
+ * established so a message sent before it is not lost. A failed
  * reload keeps the copy, and a replica that never loaded one serves every
  * fallback. The message carries no data: replicas read the stored snapshot.
  */
@@ -101,9 +103,10 @@ export async function touchFlagSnapshot(snapshot: ParsedSnapshot, checkedAt: Dat
  */
 export interface FlagSnapshotStore {
   /**
-   * Load the stored snapshot, subscribe to `reload` and start the backstop.
-   * Never rejects: with Redis down it keeps serving what it has (nothing at
-   * boot) and the backstop retries.
+   * Load the stored snapshot and start the backstop, and begin subscribing
+   * to `reload` in the background without waiting for it. Never rejects:
+   * with Redis down it keeps serving what it has (nothing at boot), and the
+   * backstop retries the load and the subscription.
    */
   start: () => Promise<void>
   /**
@@ -178,6 +181,8 @@ export function createFlagSnapshotStore(options: { backstopMs?: number } = {}): 
       await client.subscribe(flagSnapshotChannel(), () => {
         void reload()
       })
+      // A message published before the subscription was established was missed.
+      void reload()
     } catch (error) {
       if (state.subscriber === client) state.subscriber = undefined
       if (client.isOpen) client.destroy()
@@ -205,7 +210,8 @@ export function createFlagSnapshotStore(options: { backstopMs?: number } = {}): 
       if (state.isStarted || state.isClosed) return
       state.isStarted = true
       await reload()
-      await ensureSubscriber()
+      if (state.isClosed) return
+      void ensureSubscriber()
       state.timer = setInterval(() => {
         void reload()
         if (!state.subscriber) void ensureSubscriber()
@@ -231,7 +237,7 @@ const defaultStore = createFlagSnapshotStore()
 /**
  * Start this process's snapshot store, at boot, when flags are enabled.
  * Never rejects.
- * @returns Resolves once the first load and the subscription have been tried.
+ * @returns Resolves once the first load has been tried; the subscription connects in the background.
  */
 export async function startFlagSnapshot(): Promise<void> {
   await defaultStore.start()
