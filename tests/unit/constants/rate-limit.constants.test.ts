@@ -2,10 +2,10 @@
  * @file Pins three things a refactor could silently break: (1) every
  * limiter's Redis key prefix (the `name` field — a live counter's key
  * depends on it, so changing one resets production counters on deploy)
- * stays exactly the 27 literal strings, in order; (2) every entry's
+ * stays exactly the 28 literal strings, in order; (2) every entry's
  * `windowMs`, `limit` and `keyBy` kind match today's literal values, so a
  * budget or key-axis drift is caught even though it changes no Redis key;
- * (3) the four key-derivation functions produce byte-identical output
+ * (3) the five key-derivation functions produce byte-identical output
  * for a fixed input, so a caller mid-window (Redis already holding
  * counts keyed by the previous output) is not silently split onto a new
  * bucket.
@@ -15,6 +15,7 @@ import { describe, expect, it } from 'vitest'
 import {
   authenticatedUserRateLimitKey,
   emailWebhookProviderRateLimitKey,
+  flagExposureRateLimitKey,
   RATE_LIMITS,
   submittedEmailRateLimitKey,
   type RateLimitName,
@@ -48,6 +49,7 @@ const EXPECTED_NAMES_IN_ORDER = [
   'email-webhook-rejected',
   'analytics-proxy',
   'platform-timeline',
+  'flag-exposure',
 ]
 
 /**
@@ -169,6 +171,7 @@ const EXPECTED_RATE_LIMITS: {
     limit: 20,
     keyBy: 'user',
   },
+  { key: 'flagExposure', name: 'flag-exposure', windowMs: 60_000, limit: 60, keyBy: 'function' },
 ]
 
 describe('RATE_LIMITS key stability', () => {
@@ -225,5 +228,15 @@ describe('RATE_LIMITS key stability', () => {
     expect(emailWebhookProviderRateLimitKey(sameProviderOtherIp)).toBe('resend')
     expect(emailWebhookProviderRateLimitKey(fake)).toBe('fake')
     expect(RATE_LIMITS.emailWebhook.keyBy).toBe(emailWebhookProviderRateLimitKey)
+  })
+
+  it('derives the flag-exposure key: the session id, else the user id, each prefixed', () => {
+    const withSession = { sessionId: 'sid-1', user: { id: 'user-123' } } as unknown as Request
+    const withoutSession = { user: { id: 'user-123' } } as unknown as Request
+    const anonymous = {} as unknown as Request
+    expect(flagExposureRateLimitKey(withSession)).toBe('session:sid-1')
+    expect(flagExposureRateLimitKey(withoutSession)).toBe('user:user-123')
+    expect(flagExposureRateLimitKey(anonymous)).toBe('user:anonymous')
+    expect(RATE_LIMITS.flagExposure.keyBy).toBe(flagExposureRateLimitKey)
   })
 })

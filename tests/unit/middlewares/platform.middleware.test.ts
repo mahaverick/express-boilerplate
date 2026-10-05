@@ -154,6 +154,16 @@ describe('logStaffWrites', () => {
   it('logs nothing for an admitted write that failed', () => {
     expect(logged('POST', 409, true)).toEqual([])
   })
+
+  it('never logs the flag exposure report, which is telemetry', () => {
+    expect(logged('POST', 204, true, '/api/v1/platform/me/flags/exposures')).toEqual([])
+    expect(logged('POST', 204, true, '/api/v1/platform/me/flags/exposures?x=1')).toEqual([])
+  })
+
+  it('exempts only POST on that exact path', () => {
+    expect(logged('PUT', 204, true, '/api/v1/platform/me/flags/exposures')).toHaveLength(1)
+    expect(logged('POST', 204, true, '/api/v1/platform/me/flags/exposures/extra')).toHaveLength(1)
+  })
 })
 
 describe('refusePlatformOptions', () => {
