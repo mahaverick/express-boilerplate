@@ -585,6 +585,8 @@ const CANDIDATES: readonly unknown[] = [
   ...EMAIL_TEMPLATE_KEYS,
   ...TIMELINE_RANGES,
   ...TIMELINE_VIEWS,
+  'react',
+  'apex',
   true,
   false,
   0,

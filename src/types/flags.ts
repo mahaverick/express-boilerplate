@@ -152,3 +152,97 @@ export interface FlagsStatus {
     unknownVariant15m: number
   }
 }
+
+/**
+ * One registered flag on `GET /platform/flags`: the registry entry, its live
+ * state and a summary of its PostHog conditions.
+ */
+export interface FlagRow {
+  key: string
+  description: string
+  kind: 'boolean' | 'multivariate'
+  /**
+   * The variants of a multivariate flag; null for a boolean one.
+   */
+  variants: readonly string[] | null
+  scope: FlagScope
+  client: boolean
+  apps: readonly FlagApp[]
+  experiment: boolean
+  fallback: boolean | string
+  /**
+   * The flag's state in this replica's snapshot (`flagStateOf`), the same
+   * classification the system status counts.
+   */
+  state: FlagState
+  /**
+   * Why the parser refused the definition; present only when `state` is `unsupported`.
+   */
+  unsupportedReason?: string
+  /**
+   * How many release conditions the definition has; 0 when missing.
+   */
+  conditions: number
+  /**
+   * The highest rollout percentage of any condition (a null rollout counts as
+   * 100); null when the flag is missing or has no condition.
+   */
+  maxRollout: number | null
+  /**
+   * The flag's page in PostHog; null when it is missing or `POSTHOG_PROJECT_ID` is not set.
+   */
+  posthogUrl: string | null
+}
+
+/**
+ * A flag PostHog has but the registry doesn't. Shown for information only;
+ * nothing evaluates it.
+ */
+export interface UnregisteredRow {
+  key: string
+  active: boolean
+  posthogUrl: string | null
+}
+
+/**
+ * One targeting trait, for the inspector's Traits reference panel.
+ */
+export interface TraitRow {
+  name: string
+  where: 'person' | 'group'
+  description: string
+  examples: readonly string[]
+}
+
+/**
+ * `GET /platform/flags`.
+ */
+export interface FlagsListResponse {
+  items: FlagRow[]
+  unregistered: UnregisteredRow[]
+  traits: TraitRow[]
+  snapshot: {
+    /**
+     * Whether flags are configured here; false renders the "not set up" state.
+     */
+    enabled: boolean
+    fetchedAt: string | null
+    stale: boolean
+  }
+}
+
+/**
+ * `GET /platform/flags/evaluate`: one user's (and optionally one tenant's)
+ * traits and every registered flag's evaluation, with its reason.
+ */
+export interface FlagsEvaluateResponse {
+  traits: Record<string, string | number>
+  flags: {
+    key: string
+    value: boolean | string
+    reason: FlagReason
+    conditionIndex?: number
+    holdoutVariant?: string
+  }[]
+  snapshot: { fetchedAt: string | null; stale: boolean }
+}

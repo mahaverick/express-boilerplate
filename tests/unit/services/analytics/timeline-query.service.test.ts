@@ -27,7 +27,7 @@ const SELECT =
   'select uuid, event, timestamp, distinct_id, properties.$session_id, properties.trace_id, properties.source, properties.access, properties.app, properties.$current_url, properties.$el_text, properties.target_type, properties.target_id, properties.step_key, properties.how, properties.required, properties.method, properties.via_invitation, properties.template_key, properties.bounce_kind, properties.has_reason, properties.cta, properties.table, properties.action, properties.$groups.tenant, properties.server_sig'
 
 const EXCLUDED =
-  "  and event not in ('user_timeline_viewed', 'tenant_timeline_viewed', 'user_errors_viewed', 'tenant_errors_viewed', '$exception', '$identify', '$set', '$groupidentify', '$feature_flag_called', '$create_alias')"
+  "  and event not in ('user_timeline_viewed', 'tenant_timeline_viewed', 'user_errors_viewed', 'tenant_errors_viewed', 'user_flags_evaluated', '$exception', '$identify', '$set', '$groupidentify', '$feature_flag_called', '$experiment_exposure', '$create_alias')"
 
 const ORDER = ['order by timestamp desc, uuid desc limit 101']
 

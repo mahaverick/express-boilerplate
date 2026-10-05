@@ -1,7 +1,7 @@
 /**
  * @file isAnalyticsEnabled, isErrorTrackingEnabled, isTimelineEnabled, posthogAssetsHost,
- * posthogAppHost and timelineLinks, which are pure functions of the
- * environment slice they are given.
+ * posthogAppHost, timelineLinks, isFlagsEnabled and posthogFlagUrl, which are pure
+ * functions of the environment slice they are given.
  */
 import { describe, expect, it } from 'vitest'
 import {
@@ -11,6 +11,7 @@ import {
   isTimelineEnabled,
   posthogAppHost,
   posthogAssetsHost,
+  posthogFlagUrl,
   timelineLinks,
 } from '@/configs/analytics.config'
 
@@ -205,5 +206,27 @@ describe('isFlagsEnabled', () => {
 
   it('is off under the test environment, which sets neither', () => {
     expect(isFlagsEnabled()).toBe(false)
+  })
+})
+
+describe('posthogFlagUrl', () => {
+  it("links a flag to its page under the project, on the region's app host", () => {
+    expect(
+      posthogFlagUrl(931_750, {
+        POSTHOG_HOST: 'https://eu.i.posthog.com',
+        POSTHOG_APP_HOST: undefined,
+        POSTHOG_PROJECT_ID: 4321,
+      })
+    ).toBe('https://eu.posthog.com/project/4321/feature_flags/931750')
+  })
+
+  it('is null without a project id', () => {
+    expect(
+      posthogFlagUrl(1, {
+        POSTHOG_HOST: 'https://us.i.posthog.com',
+        POSTHOG_APP_HOST: undefined,
+        POSTHOG_PROJECT_ID: undefined,
+      })
+    ).toBeNull()
   })
 })

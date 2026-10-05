@@ -218,6 +218,11 @@ export const AUDIT_ACTIONS = {
   // A staff member read a user's or a tenant's error issues; platform-errors.service.ts throttles it.
   'user.errors_viewed': { target: 'user', metadata: z.strictObject({}) },
   'tenant.errors_viewed': { target: 'tenant', metadata: z.strictObject({}) },
+  // A staff member evaluated a user's flags in Apex; platform-flags.service.ts throttles it. Not `app`: the forwarded event's own `app` property would overwrite it.
+  'user.flags_evaluated': {
+    target: 'user',
+    metadata: z.strictObject({ tenantId: id.nullable(), clientApp: z.enum(['react', 'apex']) }),
+  },
 } as const satisfies Record<string, { target: AuditTargetType; metadata: z.ZodType }>
 
 /**

@@ -223,6 +223,37 @@ export async function recordErrorsView(
 }
 
 /**
+ * Record that a staff member evaluated a user's flags in Apex:
+ * `user.flags_evaluated`, with the tenant and client app evaluated for, written on
+ * the pool in the platform tenant, outside any transaction. It always
+ * writes; the caller (platform-flags.service.ts) decides how often to call it.
+ * @param actor - The staff member.
+ * @param platformTenantId - The platform tenant, where the entry is written.
+ * @param userId - The user whose flags were evaluated.
+ * @param metadata - The tenant (or null) and app evaluated for.
+ * @returns The written row.
+ * @throws {Error} When the metadata does not match the schema or the insert fails.
+ */
+export async function recordFlagsEvaluateView(
+  actor: Actor,
+  platformTenantId: string,
+  userId: string,
+  metadata: AuditMetadata<'user.flags_evaluated'>
+): Promise<AuditLog> {
+  return writeEntry(
+    {
+      actor,
+      access: 'platform',
+      tenantId: platformTenantId,
+      targetId: userId,
+      metadata,
+      action: 'user.flags_evaluated',
+    },
+    db
+  )
+}
+
+/**
  * Delete a dedupe key, logging rather than throwing on failure.
  * @param key - The key to delete.
  * @returns Resolves once deleted or logged.

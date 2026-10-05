@@ -242,6 +242,8 @@ const ROUTES: readonly GateRow[] = [
     requiresStepUp: false,
     isStaffWriteLogExempt: true,
   },
+  { method: 'get', path: '/flags', minRole: 'viewer', requiresStepUp: false },
+  { method: 'get', path: '/flags/evaluate', minRole: 'admin', requiresStepUp: false },
 ]
 
 /**

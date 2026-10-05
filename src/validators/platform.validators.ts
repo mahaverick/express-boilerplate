@@ -125,6 +125,21 @@ export const platformTimelineQuerySchema = z.object({
 export type PlatformTimelineQuery = z.infer<typeof platformTimelineQuerySchema>
 
 /**
+ * `GET /platform/flags/evaluate` query: the user, an optional tenant the
+ * user belongs to, and the app whose client slice the result is read for.
+ */
+export const platformFlagsEvaluateQuerySchema = z.object({
+  userId: z.uuid(),
+  tenantId: z.uuid().optional(),
+  app: z.enum(['react', 'apex']),
+})
+
+/**
+ * A validated `GET /platform/flags/evaluate` query.
+ */
+export type PlatformFlagsEvaluateQuery = z.infer<typeof platformFlagsEvaluateQuerySchema>
+
+/**
  * The longest reason a staff member may give; the audit schema re-checks it.
  */
 export const MAX_REASON_LENGTH = 500

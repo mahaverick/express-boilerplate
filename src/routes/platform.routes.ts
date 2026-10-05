@@ -11,6 +11,7 @@ import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { auditController } from '@/controllers/audit.controller'
 import { flagsController } from '@/controllers/flags.controller'
 import { platformErrorsController } from '@/controllers/platform-errors.controller'
+import { platformFlagsController } from '@/controllers/platform-flags.controller'
 import { platformSystemController } from '@/controllers/platform-system.controller'
 import { platformTimelineController } from '@/controllers/platform-timeline.controller'
 import { platformController } from '@/controllers/platform.controller'
@@ -145,6 +146,18 @@ export function createPlatformRouter(): Router {
     requireJsonContentType,
     createRateLimiter(RATE_LIMITS.flagExposure),
     flagsController.recordPlatformExposures
+  )
+  router.get(
+    '/flags',
+    requirePlatformRole('viewer'),
+    searchLimiter,
+    platformFlagsController.listFlags
+  )
+  router.get(
+    '/flags/evaluate',
+    requirePlatformRole('admin'),
+    timelineLimiter,
+    platformFlagsController.evaluate
   )
   return router
 }
