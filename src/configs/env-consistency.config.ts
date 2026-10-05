@@ -23,7 +23,9 @@ export const REMOVED_ENV_NAMES: Readonly<Record<string, string>> = Object.freeze
 
 /**
  * Time left after a hung send gives up, for the database, Redis, queue and
- * OTel closes that run after the workers close.
+ * OTel closes that run after the workers close. The error-report flush
+ * (`ERROR_SHUTDOWN_FLUSH_MS`, 3 s) runs there too, so with SMTP and PostHog
+ * both hanging it takes 3 s of this.
  */
 const SHUTDOWN_HEADROOM_MS = 5000
 

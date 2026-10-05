@@ -134,6 +134,23 @@ describe('logPermanentFailure', () => {
     })
   })
 
+  it('carries the errorId of the failure’s report, when there is one', () => {
+    const loggerError = vi.spyOn(logger, 'error')
+    const job = fakeJob({ attemptsMade: 1, attempts: 1, data: { userId: 'u1' } })
+
+    logPermanentFailure(
+      'maintenance',
+      job,
+      new Error('boom'),
+      '01890000-0000-7000-8000-000000000000'
+    )
+
+    expect(loggerError).toHaveBeenCalledWith(
+      'job failed permanently',
+      expect.objectContaining({ errorId: '01890000-0000-7000-8000-000000000000' })
+    )
+  })
+
   it("takes a notification job's template from its paired email, and omits it when there is none", () => {
     const loggerError = vi.spyOn(logger, 'error')
     const withEmail = fakeJob({

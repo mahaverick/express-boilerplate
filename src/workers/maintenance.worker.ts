@@ -4,7 +4,11 @@
  * `WORKER_CONCURRENCY` says, since two purges would contend for the same rows.
  */
 import { UnrecoverableError, Worker, type Job } from 'bullmq'
-import { isTerminalFailure, recordPermanentFailure } from '@/jobs/job-failure.job'
+import {
+  isTerminalFailure,
+  recordPermanentFailure,
+  reportFinalJobFailure,
+} from '@/jobs/job-failure.job'
 import { RETENTION_PURGE_JOB } from '@/jobs/maintenance.job'
 import { logger } from '@/services/logger.service'
 import { getQueueConnection } from '@/services/queue.service'
@@ -46,6 +50,7 @@ export function startMaintenanceWorker(): Worker {
   })
 
   worker.on('failed', (job, error) => {
+    const errorId = reportFinalJobFailure('maintenance', job, error)
     if (job === undefined || !isTerminalFailure(job, error)) {
       logger.warn('Maintenance job failed', {
         jobId: job?.id,
@@ -55,7 +60,7 @@ export function startMaintenanceWorker(): Worker {
       })
       return
     }
-    void recordPermanentFailure('maintenance', job, error)
+    void recordPermanentFailure('maintenance', job, error, errorId)
   })
 
   worker.on('error', (error: unknown) => {

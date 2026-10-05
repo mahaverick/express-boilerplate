@@ -114,7 +114,7 @@ message tracking: `GET /platform/emails`, `/platform/emails/health`,
 Platform admins also get `GET /platform/audit-log` (filterable by `tenantId`,
 `targetId`, actor, action and access), the PostHog timelines `GET
 /platform/users/:id/timeline` and `GET /platform/tenants/:id/timeline` (each
-read audited as `user.timeline_viewed` / `tenant.timeline_viewed`, at most once per staff member, target and view every 10 minutes; the audit fails closed: if its write fails, so does the read, with a 500, and the throttle key it claimed is released, logging at `error` if that release fails too), and every create, update and soft
+read audited as `user.timeline_viewed` / `tenant.timeline_viewed`, at most once per staff member, target and view every 10 minutes; the audit fails closed: if its write fails, so does the read, with a 500, and the throttle key it claimed is released, logging at `error` if that release fails too), the Errors views `GET /platform/users/:id/errors` and `GET /platform/tenants/:id/errors` (audited the same way as `user.errors_viewed` / `tenant.errors_viewed`, see [Error tracking](#error-tracking)), `GET /platform/system/status` (not audited), and every create, update and soft
 action: create a tenant and invite its owner, re-invite an owner, suspend,
 reactivate and archive a tenant, create and edit users, deactivate,
 reactivate, sign out and soft-delete users, send set-password or
@@ -597,7 +597,9 @@ what it prints.
 | `POSTHOG_APP_HOST`                    | no       | —                          | PostHog app origin that the timeline queries and person deletions call and that staff deep links open, with no trailing path. Unset derives it from POSTHOG_HOST: https://eu.posthog.com for an eu. host, otherwise https://us.posthog.com. Set it for a self-hosted PostHog. Tests point it at a fake.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `TIMELINE_QUERY_BUDGET_PER_HOUR`      | no       | `1200`                     | Most PostHog queries the staff timelines make in any rolling hour, counted in Redis across every replica; a cached page spends none. PostHog allows 2400 query calls an hour for the whole organization, its own UI included. At least 1, at most 100000. Defaults to 1200.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `TIMELINE_REQUESTS_PER_MINUTE`        | no       | `20`                       | Timeline requests one staff user may make a minute, cached or not, before the API answers 429. At least 1, at most 1000. Defaults to 20.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `REDIS_KEY_PREFIX`                    | no       | `express-boilerplate`      | Namespace for every Redis key and channel this app uses: BullMQ queues (`<prefix>:bull`), rate-limit counters (`<prefix>:rl`), the session denylist (`<prefix>:denylist`), OAuth sessions (`<prefix>:sess`), the platform-access audit dedupe (`<prefix>:audit`) and the notification channel (`<prefix>:notifications`). Lowercase letters, digits, ":", "_" and "-", with no trailing colon. Give each app or environment sharing one Redis its own value; changing it abandons every existing key.                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `ERROR_TRACKING_ENABLED`              | no       | `true`                     | Whether unexpected server errors are sent to PostHog Error Tracking as $exception events. Takes effect only when POSTHOG_PROJECT_KEY is set. Defaults to true; false stops sending them, and an error still gets its errorId.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `APP_VERSION`                         | no       | `dev`                      | The release this process runs, normally the deployed git commit sha, sent as release on every $exception event and answered by GET /health and GET /api/v1/platform/system/status. The Docker image sets it from its GIT_SHA build arg, which deploy.yml passes as the commit sha; operators do not set it. 1 to 64 letters, digits, ".", "_" and "-". Defaults to dev.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `REDIS_KEY_PREFIX`                    | no       | `express-boilerplate`      | Namespace for every Redis key and channel this app uses: BullMQ queues (`<prefix>:bull`), rate-limit counters (`<prefix>:rl`), the session denylist (`<prefix>:denylist`), OAuth sessions (`<prefix>:sess`), the platform-access audit dedupe (`<prefix>:audit`), the error-tracking counters (`<prefix>:errors`) and the notification channel (`<prefix>:notifications`). Lowercase letters, digits, ":", "_" and "-", with no trailing colon. Give each app or environment sharing one Redis its own value; changing it abandons every existing key.                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `SSE_HEARTBEAT_INTERVAL_MS`           | no       | `30000`                    | Milliseconds between `:ping` heartbeat comments on an open notification SSE stream (notification-stream.controller.ts). Defaults to 30000 (30s).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `SSE_MAX_STREAMS_PER_USER`            | no       | `5`                        | Most notification SSE streams one user may hold open at once, per process. A request over the cap gets 429 too_many_streams. Defaults to 5 (several tabs and devices).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `SMTP_HOST`                           | no       | `127.0.0.1`                | SMTP server host. Defaults to 127.0.0.1, where the compose Mailpit service listens; an IP literal skips a DNS lookup on every send.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
@@ -636,7 +638,9 @@ environment except `local`.
 
 The 10000 is the 5-second HTTP drain that runs before the in-flight send is
 awaited, plus 5 seconds of headroom for closing the database, Redis and queues and
-flushing traces. The timeouts bound each connection attempt, the greeting
+flushing traces. The error-report flush (`ERROR_SHUTDOWN_FLUSH_MS`, 3 s) also
+runs after the workers close, so with SMTP and PostHog both hanging it comes
+out of those 5 seconds, leaving 2 for the closes. The timeouts bound each connection attempt, the greeting
 and socket inactivity, and the first try of each DNS query. They are not a
 per-send deadline: the resolver doubles the DNS timeout on each retry, the
 OS-lookup fallback has no timeout, and a host that resolves to several
@@ -742,7 +746,7 @@ Server events reach PostHog through a transactional outbox, and browser
 events through a proxy. No request handler calls PostHog's private API (`/api/projects/…`), with one exception: the
 staff timeline read (`GET /platform/users/:id/timeline`,
 `GET /platform/tenants/:id/timeline`), on a cache miss and within the hourly
-query budget. The `/api/v1/collect` proxy forwards browser requests to PostHog's ingest. Deleting a purged user from PostHog runs on the analytics
+query budget. The `/api/v1/collect` proxy forwards browser requests, including the frontends' `$exception` batches, to PostHog's ingest. Deleting a purged user from PostHog runs on the analytics
 Worker, never in the purge's request.
 
 ```
@@ -858,6 +862,80 @@ browser posthog-js ── /api/v1/collect/* ── analytics-proxy limiter ─�
 
 The operator steps are in [Analytics (PostHog) in README.md](README.md#analytics-posthog).
 
+## Error tracking
+
+Server errors go to PostHog Error Tracking as `$exception` events. There is
+one capture point per kind of failure, and no logger transport:
+
+| Where                                                                                   | When                                                                                                  | `capture_point` |
+| --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | --------------- |
+| `errorHandler` (`error.middleware.ts`)                                                  | a 5xx the capture rule admits; a failure after the headers were sent, recorded as 500                 | `http`          |
+| `process.on('uncaughtException' / 'unhandledRejection')` (`index.ts`)                   | always                                                                                                | `process`       |
+| each Worker's `failed` listener, through `reportFinalJobFailure` (`job-failure.job.ts`) | the attempt BullMQ will not retry (`isTerminalFailure`: attempts used up, or an `UnrecoverableError`) | `job`           |
+
+**The capture rule** (`shouldCaptureHttpError`): an error that is not an
+`HttpError` and resolves to 500 is always reported. An `HttpError` with a
+status of 500 or more is a deliberate answer, reported only when it wraps a
+`cause` (`new HttpError(message, 503, code, errors, { cause })`); without
+one it is an expected state, such as the notification stream's 503 while
+shutting down. A `TimelineUnavailableError` is never reported: PostHog
+being unreachable is its meaning. A 4xx, and a client that went away (a
+connection-reset or `aborted` error on a socket the client already closed),
+never are. The analytics Worker's ticks have one attempt each, so every
+failed drain or deletion tick is a final failure and is reported; the
+reporter's throttle bounds a run of them.
+
+**`errorId`.** Every 5xx `errorHandler` writes carries an `errorId` in its
+body and on its log line (`Unhandled server error`, `Error after response
+headers were sent`), except a `TimelineUnavailableError` 502, whose id names
+nothing: `errorHandler` neither reports nor logs it, because its thrower
+logged before the id existed. A reported error's id is its `$exception`
+uuid; an unreported one's names only the log line. `Uncaught exception` and
+`Unhandled promise rejection` log lines carry the id too. The route
+template on an event comes from `recordRouteTemplate`
+(`route-template.middleware.ts`), mounted ahead of every router: Express
+restores `request.baseUrl` before an error reaches `errorHandler`, so the
+mount path is recorded when the router assigns `request.route`, and a mount
+parameter's value is put back as its name.
+
+**Order on the way out.** A process fault first marks shutdown, so
+`/health/ready` answers 503 from then on, is reported (synchronously, no
+I/O) and logged with its id, then the queue is flushed for at most
+`ERROR_FATAL_FLUSH_MS` (2 s) before the shutdown handler runs; a SIGTERM or
+SIGINT during that flush still exits 1.
+`gracefulShutdown` flushes for at most `ERROR_SHUTDOWN_FLUSH_MS` (3 s)
+after the Workers close, so a job's final failure is included, and before
+Redis closes and OTel shuts down. `index.ts` raises `Error.stackTraceLimit`
+to `ERROR_FRAME_LIMIT` (50) before anything else, since V8 keeps 10 frames
+by default.
+
+**Staff views.** `GET /platform/users/:id/errors` and
+`GET /platform/tenants/:id/errors` (platform admin and up, the timelines'
+limiter and hourly query budget) list the error issues a user or a tenant
+hit in the last 30 days, one row per PostHog issue
+(`properties.$exception_issue_id`), from the fixed HogQL in
+`errors-query.service.ts`. A user's issues are the `$exception` events sent
+under their distinct id; a tenant's, its group's. Every column describing
+an issue's most recent event is read with `argMax(column, (timestamp,
+uuid))`, so all of them come from one event and its `server_sig` can be
+verified (`errors-mapper.service.ts`). Each read is audited as
+`user.errors_viewed` / `tenant.errors_viewed` (empty metadata), at most once
+per staff member and target every 10 minutes, by the same throttled audit
+as the timelines (`auditThrottledView`, `platform-view-audit.service.ts`).
+They answer `{ configured: false }` until the timelines are configured, and
+`{ configured: true, items, nextCursor: null }` otherwise; a PostHog failure
+or a spent budget is the timelines' 502 `TIMELINE_UNAVAILABLE`. The
+timelines leave out `$exception` and both `*_errors_viewed` events.
+
+**System status.** `GET /platform/system/status` (platform admin and up,
+not audited) answers `{ release, errorTracking }`: the image's `APP_VERSION`
+and the reporter's sent and dropped counts over the last 15 minutes, summed
+from Redis across every API and worker process. It is an open object; later
+sections are added as keys.
+
+What an event may carry, and what it never does, is in
+[SECURITY.md](SECURITY.md#error-tracking-what-reaches-posthog).
+
 ## Health checks
 
 Two endpoints, deliberately different depths:
@@ -865,7 +943,9 @@ Two endpoints, deliberately different depths:
 - **`GET /health`** is shallow: it never touches the database or Redis. If
   it depended on either, a transient blip in a dependency would make an
   orchestrator restart an otherwise-healthy process, turning a slow query
-  into an outage.
+  into an outage. It answers `{ status: 'ok', uptime, release }`, where
+  `release` is `APP_VERSION`, the image's git sha (`dev` outside an image).
+  The route is public, so the deployed sha is too.
 - **`GET /health/ready`** is deep: it checks `isDatabaseReachable()`,
   `isRedisReachable()` and `isQueueReachable()` in parallel and answers 503
   with `"status":"not-ready"` if any is down. It also answers 503 with
@@ -966,7 +1046,13 @@ Every success with no payload uses `messageResponse(response, message, status?)`
 ([`src/utilities/response.utilities.ts`](src/utilities/response.utilities.ts)),
 which always sends `data: null`, never a bare `{}` and never an omitted `data`.
 
-The envelope (`{ success, message, statusCode, code?, errors? }`) is not RFC
+Every 5xx `errorHandler` writes also carries `errorId`, the id its log line
+carries (except a timeline 502, whose id names nothing) and, when the error
+is reported, its `$exception` uuid (see
+[Error tracking](#error-tracking)). It is optional in the contract: a 5xx
+from a proxy in front of the app never has one.
+
+The envelope (`{ success, message, statusCode, code?, errors?, errorId? }`) is not RFC
 9457 `problem+json`, the more modern standard. Switching would change what
 every client parses on every response.
 
@@ -1095,7 +1181,10 @@ no shell, `curl` or `wget`, so it carries no Docker `healthcheck`.
   load. Its `CMD` is
   `node --enable-source-maps --import ./dist/observability/tracing.js dist/index.js`:
   tracing loads before the app, and a logged stack trace names the original
-  `.ts` line.
+  `.ts` line. Its `ARG GIT_SHA=dev` becomes `ENV APP_VERSION`, the release
+  `/health` and error tracking report; `deploy.yml` passes the commit sha,
+  and CI's `docker` job builds with a known value and checks `/health`
+  answers it.
 
 To run the image against the compose stack:
 
@@ -1126,6 +1215,14 @@ sha-tagged image; the `:main` tag and the `deploy` job run only from `main`.
 A `vX.Y.Z` release tag builds nothing: its `promote` job adds `:X.Y.Z`, `:X.Y`
 and `:X` to the digest `main` already built (see
 [CONTRIBUTING.md](CONTRIBUTING.md#releases)).
+
+The image job passes `GIT_SHA` (the commit sha) as a build arg. It also
+passes `POSTHOG_SOURCEMAP_PROJECTS` and `POSTHOG_CLI_HOST` (repository
+variables) and the `POSTHOG_CLI_TOKEN` secret, after a step that fails the
+job when the variable is set and the secret is empty, and warns when the
+variable is unset. Only the frontends use them, to upload sourcemaps; the
+file is the same in all three repos, so express receives them and its
+Dockerfile ignores them.
 
 The image needs the environment described under
 [Configuration](#configuration), including `APP_ENV`. Its `CMD` starts only the

@@ -775,3 +775,33 @@ describe('RESEND_WEBHOOK_SECRET', () => {
     }
   })
 })
+
+describe('ERROR_TRACKING_ENABLED', () => {
+  it('defaults to true and parses false as false', () => {
+    expect(parseEnv(valid).ERROR_TRACKING_ENABLED).toBe(true)
+    expect(parseEnv({ ...valid, ERROR_TRACKING_ENABLED: 'false' }).ERROR_TRACKING_ENABLED).toBe(
+      false
+    )
+  })
+
+  it('is false under the test environment', () => {
+    expect(getEnv().ERROR_TRACKING_ENABLED).toBe(false)
+  })
+})
+
+describe('APP_VERSION', () => {
+  it('defaults to dev', () => {
+    expect(parseEnv(valid).APP_VERSION).toBe('dev')
+  })
+
+  it('accepts a git sha', () => {
+    const sha = '4045fd4c0ffee4045fd4c0ffee4045fd4c0ffee0'
+    expect(parseEnv({ ...valid, APP_VERSION: sha }).APP_VERSION).toBe(sha)
+  })
+
+  it('refuses a value with spaces, slashes or over 64 characters', () => {
+    for (const value of ['has space', 'a/b', 'x'.repeat(65)]) {
+      expect(() => parseEnv({ ...valid, APP_VERSION: value })).toThrow(/APP_VERSION/)
+    }
+  })
+})

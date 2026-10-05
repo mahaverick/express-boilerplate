@@ -1,12 +1,13 @@
 /**
  * @file What a Worker's `'failed'` handler does once a job will not be
- * retried: replace the stored payload's links and tokens, mark an email
- * job's message `failed`, then log one error line. Until then the payload
- * keeps them, because a retry has to send them.
+ * retried: report it to error tracking, replace the stored payload's links
+ * and tokens, mark an email job's message `failed`, then log one error line.
+ * Until then the payload keeps them, because a retry has to send them.
  */
 import { UnrecoverableError, type Job } from 'bullmq'
 import { redactedForLog } from '@/errors/postgres-errors'
 import { markMessageSendFailed } from '@/services/email-message.service'
+import { reportError } from '@/services/errors/error-reporter.service'
 import { logger } from '@/services/logger.service'
 
 const REDACTED = '[redacted]'
@@ -70,6 +71,28 @@ export function isTerminalFailure(job: Job | undefined, error: Error): boolean {
 }
 
 /**
+ * Report a job's final failure to error tracking: once, on the attempt after
+ * which BullMQ will not retry (`isTerminalFailure`), with the queue, the job
+ * name and the attempt count. The job's data is never attached. Never throws.
+ * @param queue - The queue's name.
+ * @param job - The failed job as the 'failed' event passes it; undefined when BullMQ could not load it.
+ * @param error - What the attempt threw.
+ * @returns The report's `errorId`, for the failure's log line; undefined when nothing was reported.
+ */
+export function reportFinalJobFailure(
+  queue: string,
+  job: Job | undefined,
+  error: Error
+): string | undefined {
+  if (job === undefined || !isTerminalFailure(job, error)) return undefined
+  return reportError(error, {
+    capturePoint: 'job',
+    handled: true,
+    job: { queue, name: job.name, attemptsMade: job.attemptsMade },
+  })
+}
+
+/**
  * A copy of a job's data in which every key ending in `Url` or `Token`, at any depth, is `'[redacted]'`.
  * @param data - The job's data.
  * @returns The scrubbed copy; the argument is not changed.
@@ -84,8 +107,9 @@ export function scrubJobData<T>(data: T): T {
  * @param queue - The queue's name.
  * @param job - The job that will not be retried.
  * @param error - What its last attempt threw.
+ * @param errorId - The failure's error-tracking report id (`reportFinalJobFailure`), when there is one.
  */
-export function logPermanentFailure(queue: string, job: Job, error: Error): void {
+export function logPermanentFailure(queue: string, job: Job, error: Error, errorId?: string): void {
   const data: unknown = job.data
   const meta: Record<string, unknown> = {
     queue,
@@ -97,6 +121,7 @@ export function logPermanentFailure(queue: string, job: Job, error: Error): void
   }
   const template = templateOf(data)
   if (template !== undefined) meta.template = template
+  if (errorId !== undefined) meta.errorId = errorId
   logger.error('job failed permanently', meta)
 }
 
@@ -131,9 +156,15 @@ async function markEmailMessageFailed(queue: string, job: Job): Promise<void> {
  * @param queue - The queue's name; `'email'` marks the job's message.
  * @param job - The job that will not be retried.
  * @param error - What its last attempt threw.
+ * @param errorId - The failure's error-tracking report id, put on the log line.
  * @returns Resolves once the scrubbed data is stored and the message marked (or each failure logged) and the failure is logged.
  */
-export async function recordPermanentFailure(queue: string, job: Job, error: Error): Promise<void> {
+export async function recordPermanentFailure(
+  queue: string,
+  job: Job,
+  error: Error,
+  errorId?: string
+): Promise<void> {
   try {
     const data: unknown = job.data
     await job.updateData(scrubJobData(data))
@@ -145,5 +176,5 @@ export async function recordPermanentFailure(queue: string, job: Job, error: Err
     })
   }
   if (queue === 'email') await markEmailMessageFailed(queue, job)
-  logPermanentFailure(queue, job, error)
+  logPermanentFailure(queue, job, error, errorId)
 }

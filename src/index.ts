@@ -6,6 +6,7 @@
 import { isAnalyticsEnabled, isTimelineEnabled } from '@/configs/analytics.config'
 import { assertEnvConsistent } from '@/configs/env-consistency.config'
 import { getEnv } from '@/configs/env.config'
+import { ERROR_FRAME_LIMIT } from '@/constants/error-tracking.constants'
 // Static, unlike `@/server`: constructing the logger is lazy and calls no getEnv().
 import { logger } from '@/services/logger.service'
 import type { SupervisedWorkers } from '@/services/worker-supervisor.service'
@@ -19,17 +20,38 @@ import type { SupervisedWorkers } from '@/services/worker-supervisor.service'
  * report it, and a static worker import would load BullMQ into processes
  * that never start workers. The forced-exit backstop and the once-only guard
  * live in `createShutdownHandler` (lifecycle.service.ts). `process.exit` is
- * passed in from inside the `process.on` callback, which
- * `unicorn/no-process-exit` requires. Fatal errors (unhandled rejection,
+ * passed in as a callback from the two places that begin shutdown (the
+ * server 'error' listener and the fault and signal handlers' `shutdown`),
+ * each with a `unicorn/no-process-exit` exception. Fatal errors (unhandled rejection,
  * uncaught exception, a server 'error' at bind or after listening) go
- * through the same handler with exit code 1.
+ * through the same handler with exit code 1. An unhandled rejection or an
+ * uncaught exception first marks shutdown (readiness answers 503), is
+ * reported to error tracking and logged with the same `errorId`, and the
+ * report queue is flushed for at most `ERROR_FATAL_FLUSH_MS` before shutdown
+ * begins; a SIGTERM or SIGINT during that flush still exits 1.
  * @returns Resolves once exit handlers are wired and any workers have started.
  */
 async function boot(): Promise<void> {
   const { startServer, gracefulShutdown } = await import('@/server')
-  const { createShutdownHandler, isShuttingDown } = await import('@/services/lifecycle.service')
+  const { createProcessFaultHandler, createShutdownHandler, isShuttingDown } =
+    await import('@/services/lifecycle.service')
   const { redactedForLog } = await import('@/errors/postgres-errors')
   const { warnIfDeletionsPending } = await import('@/services/analytics/analytics-deletion.service')
+  const { ERROR_FATAL_FLUSH_MS } = await import('@/constants/error-tracking.constants')
+  const { flushErrorReports, reportError } =
+    await import('@/services/errors/error-reporter.service')
+
+  /**
+   * Report a process fault, log it with its id, and flush the report queue.
+   * @param message - The log line.
+   * @param fault - The rejection reason or the thrown value.
+   * @returns Resolves once the flush has finished or hit its deadline; never rejects.
+   */
+  async function recordProcessFault(message: string, fault: unknown): Promise<void> {
+    const errorId = reportError(fault, { capturePoint: 'process', handled: false })
+    logger.error(message, { error: redactedForLog(fault), errorId })
+    await flushErrorReports(ERROR_FATAL_FLUSH_MS)
+  }
 
   // Filled in once the workers start; shutdown reads it only when it runs.
   const workers: { supervised?: SupervisedWorkers } = {}
@@ -46,18 +68,19 @@ async function boot(): Promise<void> {
   // Never rejects: a failed count is logged at warn.
   void warnIfDeletionsPending()
 
+  const { onFault, onSignal } = createProcessFaultHandler(recordProcessFault, (exitCode) => {
+    // eslint-disable-next-line unicorn/no-process-exit -- every exit goes through the shared once-guard
+    handleShutdown((code) => process.exit(code), exitCode)
+  })
   for (const signal of ['SIGTERM', 'SIGINT'] as const) {
-    process.on(signal, () => {
-      handleShutdown((code) => process.exit(code))
-    })
+    process.on(signal, onSignal)
   }
+  // recordProcessFault never rejects, so neither does onFault here.
   process.on('unhandledRejection', (reason) => {
-    logger.error('Unhandled promise rejection', { error: redactedForLog(reason) })
-    handleShutdown((code) => process.exit(code), 1)
+    void onFault('Unhandled promise rejection', reason)
   })
   process.on('uncaughtException', (error) => {
-    logger.error('Uncaught exception', { error: redactedForLog(error) })
-    handleShutdown((code) => process.exit(code), 1)
+    void onFault('Uncaught exception', error)
   })
 
   if (!getEnv().WORKER_ENABLED) return
@@ -75,8 +98,12 @@ async function boot(): Promise<void> {
 
 /**
  * Validate the environment and its cross-field rules, then hand off to `boot()`.
+ * First it raises V8's stack depth (10 frames by default) to the frames
+ * error tracking keeps, so a reported stack is not cut at 10.
  */
 function main(): void {
+  // eslint-disable-next-line unicorn/no-nonstandard-builtin-properties -- V8's stack depth; Node runs only on V8
+  Error.stackTraceLimit = ERROR_FRAME_LIMIT
   try {
     assertEnvConsistent(getEnv(), process.env, (message) => {
       logger.warn(message)

@@ -118,6 +118,30 @@ describe('routing', () => {
 })
 
 describe('bodies stream through unread, ahead of the body parsers', () => {
+  // The browsers' error reports: fetch sends text/plain, a pagehide sendBeacon a Blob typed application/json.
+  it.each(['text/plain;charset=UTF-8', 'application/json'])(
+    'delivers a /batch/ body sent as %s byte for byte, with its content type',
+    async (contentType) => {
+      const { app, posthog } = running()
+      // A string: superagent would JSON-encode a Buffer sent as application/json.
+      const body =
+        '{"api_key":"phc_test_key_not_real","batch":[{"event":"$exception","properties":{ "a" : 1 }}]}'
+
+      const response = await request(app)
+        .post('/api/v1/collect/batch/')
+        .set('content-type', contentType)
+        .send(body)
+
+      expect(response.status).toBe(200)
+      expect(posthog.requests).toHaveLength(1)
+      const [received] = posthog.requests
+      expect(received?.path).toBe('/batch/')
+      expect(received?.headers['content-type']).toBe(contentType)
+      expect(received?.body.toString('utf8')).toBe(body)
+      expect(posthog.batches).toEqual([[{ event: '$exception', properties: { a: 1 } }]])
+    }
+  )
+
   it('delivers a 5 MB binary body byte for byte', async () => {
     const { app, posthog } = running()
     const body = randomBytes(5 * 1024 * 1024)

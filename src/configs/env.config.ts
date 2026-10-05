@@ -548,6 +548,26 @@ const EnvSchema = z.object({
       'Timeline requests one staff user may make a minute, cached or not, before the API answers 429. At least 1, at most 1000. Defaults to 20.'
     ),
   /**
+   * `z.stringbool()`, as for WORKER_ENABLED. It takes effect only with
+   * POSTHOG_PROJECT_KEY (analytics.config.ts `isErrorTrackingEnabled`).
+   */
+  ERROR_TRACKING_ENABLED: z
+    .stringbool()
+    .default(true)
+    .describe(
+      'Whether unexpected server errors are sent to PostHog Error Tracking as $exception events. Takes effect only when POSTHOG_PROJECT_KEY is set. Defaults to true; false stops sending them, and an error still gets its errorId.'
+    ),
+  /**
+   * Restricted to a short token so a stray value never reaches an event.
+   */
+  APP_VERSION: z
+    .string()
+    .regex(/^[\w.-]{1,64}$/, 'Use 1 to 64 letters, digits, ".", "_" and "-"')
+    .default('dev')
+    .describe(
+      'The release this process runs, normally the deployed git commit sha, sent as release on every $exception event and answered by GET /health and GET /api/v1/platform/system/status. The Docker image sets it from its GIT_SHA build arg, which deploy.yml passes as the commit sha; operators do not set it. 1 to 64 letters, digits, ".", "_" and "-". Defaults to dev.'
+    ),
+  /**
    * `redisKey()` (redis.service.ts) joins this and each part with `:`, so a
    * trailing colon would double it.
    */
@@ -557,7 +577,7 @@ const EnvSchema = z.object({
     .refine((value) => !value.endsWith(':'), 'No trailing colon: keys are joined with ":"')
     .default('express-boilerplate')
     .describe(
-      'Namespace for every Redis key and channel this app uses: BullMQ queues (`<prefix>:bull`), rate-limit counters (`<prefix>:rl`), the session denylist (`<prefix>:denylist`), OAuth sessions (`<prefix>:sess`), the platform-access audit dedupe (`<prefix>:audit`) and the notification channel (`<prefix>:notifications`). Lowercase letters, digits, ":", "_" and "-", with no trailing colon. Give each app or environment sharing one Redis its own value; changing it abandons every existing key.'
+      'Namespace for every Redis key and channel this app uses: BullMQ queues (`<prefix>:bull`), rate-limit counters (`<prefix>:rl`), the session denylist (`<prefix>:denylist`), OAuth sessions (`<prefix>:sess`), the platform-access audit dedupe (`<prefix>:audit`), the error-tracking counters (`<prefix>:errors`) and the notification channel (`<prefix>:notifications`). Lowercase letters, digits, ":", "_" and "-", with no trailing colon. Give each app or environment sharing one Redis its own value; changing it abandons every existing key.'
     ),
 
   /**

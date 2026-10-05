@@ -4,7 +4,8 @@
  * functions of the validated environment. Without `POSTHOG_PROJECT_KEY`
  * analytics is inert: no outbox row is written, the drainer never starts and
  * the collect proxy answers 503. Without `POSTHOG_PERSONAL_API_KEY` and
- * `POSTHOG_PROJECT_ID` the timelines answer "not configured".
+ * `POSTHOG_PROJECT_ID` the timelines answer "not configured". Error tracking
+ * also needs `ERROR_TRACKING_ENABLED`.
  */
 import { getEnv, type Env } from '@/configs/env.config'
 
@@ -25,6 +26,17 @@ export const REPLAY_SESSION_PLACEHOLDER = '{sessionId}'
  */
 export function isAnalyticsEnabled(env: Pick<Env, 'POSTHOG_PROJECT_KEY'> = getEnv()): boolean {
   return env.POSTHOG_PROJECT_KEY !== undefined
+}
+
+/**
+ * Whether this process sends unexpected server errors to PostHog Error Tracking.
+ * @param env - The PostHog and error-tracking slice of the validated environment; defaults to `getEnv()`.
+ * @returns True when a project key is configured and `ERROR_TRACKING_ENABLED` is true.
+ */
+export function isErrorTrackingEnabled(
+  env: Pick<Env, 'POSTHOG_PROJECT_KEY' | 'ERROR_TRACKING_ENABLED'> = getEnv()
+): boolean {
+  return isAnalyticsEnabled(env) && env.ERROR_TRACKING_ENABLED
 }
 
 /**

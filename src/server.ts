@@ -4,9 +4,11 @@
 import { type Server } from 'node:http'
 import { createApp } from '@/app'
 import { getEnv } from '@/configs/env.config'
+import { ERROR_SHUTDOWN_FLUSH_MS } from '@/constants/error-tracking.constants'
 import { SERVER_DRAIN_TIMEOUT_MS } from '@/constants/global.constants'
 import { shutdownOtel } from '@/observability/tracing'
 import { closeDatabase } from '@/services/database.service'
+import { flushErrorReports } from '@/services/errors/error-reporter.service'
 import { closeAllStreams, markShuttingDown } from '@/services/lifecycle.service'
 import { logger } from '@/services/logger.service'
 import { closeNotificationSubscriber } from '@/services/notification-emitter.service'
@@ -54,8 +56,11 @@ export function startServer(port: number = getEnv().APP_PORT): Server {
  * `Worker#close()` lets the in-flight job finish and that job needs the
  * database and Redis. `workers` is read at shutdown, so Workers replaced
  * after a Redis outage are the ones closed; it is absent on a
- * `WORKER_ENABLED=false` pod. `shutdownOtel()` runs last so it flushes the
- * spans the earlier steps produce. The forced-exit backstop is
+ * `WORKER_ENABLED=false` pod. The error-report queue is flushed after the
+ * Workers (a final job failure reports as it closes) and before Redis closes
+ * (the flush counts its outcome there), for at most `ERROR_SHUTDOWN_FLUSH_MS`.
+ * `shutdownOtel()` runs last so it flushes the spans the earlier steps
+ * produce. The forced-exit backstop is
  * `createShutdownHandler` (lifecycle.service.ts), so this never calls
  * `process.exit`.
  * @param server - The server returned by `startServer`.
@@ -67,6 +72,7 @@ export async function gracefulShutdown(server: Server, workers?: SupervisedWorke
   closeAllStreams()
   await closeServer(server)
   await Promise.allSettled(workers ? [workers.close()] : [])
+  await flushErrorReports(ERROR_SHUTDOWN_FLUSH_MS)
   await Promise.allSettled([
     closeDatabase(),
     closeRedis(),

@@ -144,6 +144,7 @@ jobs:
           REDIS_KEY_PREFIX: test
           SMTP_HOST: 127.0.0.1
           MAIL_FROM_TRANSACTIONAL: auth@mail.example.test
+          ERROR_TRACKING_ENABLED: false
       # The env block above must mirror committed .env.test. When they drift, a
       # test passes locally and fails in CI (or worse, the reverse) for reasons
       # that look nothing like the cause. This compares both directions, keys
@@ -229,8 +230,8 @@ jobs:
         with:
           persist-credentials: false
       - name: Build the production image (no push)
-        run: docker build -t express-boilerplate:ci .
-      - name: Run the image and check it starts with --enable-source-maps
+        run: docker build --build-arg GIT_SHA=ci-release-check -t express-boilerplate:ci .
+      - name: Run the image and check it starts with --enable-source-maps and reports its release
         run: |
           name=express-ci-sourcemaps
           # Fixed name, not a captured container id: lets cleanup run by name
@@ -264,6 +265,13 @@ jobs:
           echo "$top_output"
           if ! echo "$top_output" | grep -- '--enable-source-maps'; then
             echo "::error::--enable-source-maps is missing from the running process's args"
+            docker logs "$name"
+            exit 1
+          fi
+          # GIT_SHA becomes APP_VERSION, which /health reports as the release.
+          release=$(curl -sf http://localhost:4040/health | jq -r .release)
+          if [ "$release" != "ci-release-check" ]; then
+            echo "::error::/health reports release '$release', expected the GIT_SHA build arg"
             docker logs "$name"
             exit 1
           fi

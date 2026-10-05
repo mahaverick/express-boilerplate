@@ -9,7 +9,11 @@ import { Worker, type Job } from 'bullmq'
 import { getEnv } from '@/configs/env.config'
 import { redactedForLog } from '@/errors/postgres-errors'
 import { addEmailJob } from '@/jobs/email.job'
-import { isTerminalFailure, recordPermanentFailure } from '@/jobs/job-failure.job'
+import {
+  isTerminalFailure,
+  recordPermanentFailure,
+  reportFinalJobFailure,
+} from '@/jobs/job-failure.job'
 import type { NotificationJobData } from '@/jobs/notification.job'
 import { NotificationPreferenceRepository } from '@/repositories/notification-preference.repository'
 import { NotificationRepository } from '@/repositories/notification.repository'
@@ -149,6 +153,7 @@ export function startNotificationWorker(): Worker<NotificationJobData> {
   })
 
   worker.on('failed', (job, error) => {
+    const errorId = reportFinalJobFailure('notification', job, error)
     if (job === undefined || !isTerminalFailure(job, error)) {
       // createOnce can fail with a DrizzleQueryError whose params hold title, body and userId.
       logger.warn('Notification job failed', {
@@ -159,7 +164,7 @@ export function startNotificationWorker(): Worker<NotificationJobData> {
       })
       return
     }
-    void recordPermanentFailure('notification', job, error)
+    void recordPermanentFailure('notification', job, error, errorId)
   })
 
   worker.on('error', (error: unknown) => {

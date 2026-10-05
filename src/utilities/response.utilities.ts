@@ -51,13 +51,17 @@ export function messageResponse(response: Response, message: string, status = 20
  * @param status - HTTP status.
  * @param code - Optional stable, machine-readable token a client can branch on, independent of `message` or `errors`.
  * @param errors - Optional field-level detail, e.g. from a validator.
+ * @param extra - Optional `errorId`: the id `errorHandler` gives every 5xx it
+ *   writes, which names its log line and, when reported, its PostHog event.
+ * @param extra.errorId - The id.
  */
 export function errorResponse(
   response: Response,
   message: string,
   status: number,
   code?: string,
-  errors?: unknown
+  errors?: unknown,
+  extra: { errorId?: string } = {}
 ): void {
   response.status(status).json({
     success: false,
@@ -65,6 +69,7 @@ export function errorResponse(
     statusCode: status,
     ...(code !== undefined && { code }),
     ...(errors !== undefined && { errors }),
+    ...(extra.errorId !== undefined && { errorId: extra.errorId }),
     requestId: response.getHeader(REQUEST_ID_HEADER),
   })
 }

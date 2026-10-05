@@ -215,6 +215,9 @@ export const AUDIT_ACTIONS = {
   // A staff member read a user's or a tenant's timeline; platform-timeline.service.ts throttles it.
   'user.timeline_viewed': { target: 'user', metadata: timelineView },
   'tenant.timeline_viewed': { target: 'tenant', metadata: timelineView },
+  // A staff member read a user's or a tenant's error issues; platform-errors.service.ts throttles it.
+  'user.errors_viewed': { target: 'user', metadata: z.strictObject({}) },
+  'tenant.errors_viewed': { target: 'tenant', metadata: z.strictObject({}) },
 } as const satisfies Record<string, { target: AuditTargetType; metadata: z.ZodType }>
 
 /**

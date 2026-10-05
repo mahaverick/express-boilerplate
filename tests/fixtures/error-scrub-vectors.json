@@ -1,0 +1,537 @@
+[
+  {
+    "rule": "postgres",
+    "input": "duplicate key value violates unique constraint \"users_email_unique\"",
+    "expected": "duplicate key value violates unique constraint \"users_email_unique\""
+  },
+  {
+    "rule": "postgres",
+    "input": "duplicate key value violates unique constraint \"users_email_unique\": Key (email)=(jane.doe@example.com) already exists.",
+    "expected": "duplicate key value violates unique constraint \"users_email_unique\": Key (email)=([value]) already exists."
+  },
+  {
+    "rule": "postgres",
+    "input": "Key (tenant_id, email)=(0199a1b2-0000-7000-8000-000000000003, jane@example.com) already exists.",
+    "expected": "Key (tenant_id, email)=([value]) already exists."
+  },
+  {
+    "rule": "postgres",
+    "input": "Key (name)=(Acme (EU) Ltd) already exists.",
+    "expected": "Key (name)=([value]) already exists."
+  },
+  {
+    "rule": "query",
+    "input": "GET https://app.example.com/reset?token=abc123&email=jane%40example.com failed",
+    "expected": "GET https://app.example.com/reset?[query] failed"
+  },
+  {
+    "rule": "query",
+    "input": "fetch /api/v1/users?email=jane@example.com&page=2 returned 500",
+    "expected": "fetch /api/v1/users?[query] returned 500"
+  },
+  {
+    "rule": "jwt",
+    "input": "session eyJhIjoxfQ.eyJiIjoyfQ.c2lnbmF0dXJl was rejected",
+    "expected": "session [jwt] was rejected"
+  },
+  {
+    "rule": "jwt",
+    "input": "unsigned eyJhIjoxfQ.eyJiIjoyfQ. accepted",
+    "expected": "unsigned [jwt] accepted"
+  },
+  {
+    "rule": "bearer",
+    "input": "Authorization: Bearer abc.def-ghi_123 refused",
+    "expected": "Authorization: Bearer [token] refused"
+  },
+  {
+    "rule": "bearer",
+    "input": "header was bearer eyJhIjoxfQ.eyJiIjoyfQ.c2lnbmF0dXJl",
+    "expected": "header was Bearer [token]"
+  },
+  {
+    "rule": "posthog-key",
+    "input": "project phc_test_key_not_real is unknown",
+    "expected": "project [posthog-key] is unknown"
+  },
+  {
+    "rule": "posthog-key",
+    "input": "personal key phx_test_key_not_real lacks a scope",
+    "expected": "personal key [posthog-key] lacks a scope"
+  },
+  {
+    "rule": "posthog-key",
+    "input": "secret phs_test_key_not_real expired",
+    "expected": "secret [posthog-key] expired"
+  },
+  {
+    "rule": "email",
+    "input": "user jane.doe+tag@mail.example.co.uk not found",
+    "expected": "user [email] not found"
+  },
+  {
+    "rule": "secret",
+    "input": "digest 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08 mismatch",
+    "expected": "digest [secret] mismatch"
+  },
+  {
+    "rule": "secret",
+    "input": "user key_9f86d081884c7d659a2feaa0c55ad015 here",
+    "expected": "user key_[secret] here"
+  },
+  {
+    "rule": "secret",
+    "input": "9f86d081884c7d659a2feaa0c55ad015suffix",
+    "expected": "[secret]suffix"
+  },
+  {
+    "rule": "secret",
+    "input": "blob kX9/qL2mZp7RtY4vWb8/NcE3sHf6JdG1aUoK5iTn0rVy end",
+    "expected": "blob [secret] end"
+  },
+  {
+    "rule": "secret",
+    "input": "blob YSBmaXhlZCBydW4gb2YgYnl0ZXMsIG5vdGhpbmcgc2VjcmV0ISE= end",
+    "expected": "blob [secret] end"
+  },
+  {
+    "rule": "secret",
+    "input": "short dGhpcyBpcyBzaG9ydA stays",
+    "expected": "short dGhpcyBpcyBzaG9ydA stays"
+  },
+  {
+    "rule": "path",
+    "input": "/app/src/services/errors/error-scrubber.service.ts",
+    "expected": "/app/src/services/errors/error-scrubber.service.ts"
+  },
+  {
+    "rule": "path",
+    "input": "/home/runner/work/express-boilerplate/express-boilerplate/src/services/errors/error-event.service.ts",
+    "expected": "/home/runner/work/express-boilerplate/express-boilerplate/src/services/errors/error-event.service.ts"
+  },
+  {
+    "rule": "path",
+    "input": "/Users/Jane/Projects/Shop2/src/services/errors/error-event.service.ts",
+    "expected": "/Users/Jane/Projects/Shop2/src/services/errors/error-event.service.ts"
+  },
+  {
+    "rule": "path",
+    "input": "node:internal/process/task_queues",
+    "expected": "node:internal/process/task_queues"
+  },
+  {
+    "rule": "path",
+    "input": "PlatformUserService.deactivate",
+    "expected": "PlatformUserService.deactivate"
+  },
+  {
+    "rule": "cap",
+    "input": "lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit a",
+    "expected": "lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum d…[truncated]"
+  },
+  {
+    "rule": "fragment",
+    "input": "at https://app.example.com/auth/callback#access_token=ya29_AbC123shortTok&token_type=bearer:12:5",
+    "expected": "at https://app.example.com/auth/callback#[fragment]"
+  },
+  {
+    "rule": "fragment",
+    "input": "https://app.example.com/#/reset?token=AbC123xyz",
+    "expected": "https://app.example.com/#[fragment]"
+  },
+  {
+    "rule": "fragment",
+    "input": "https://app.example.com/auth/callback#code=4f8Kq2Zx9&state=xyz",
+    "expected": "https://app.example.com/auth/callback#[fragment]"
+  },
+  {
+    "rule": "userinfo",
+    "input": "getaddrinfo ENOTFOUND db for postgres://app_user:hunter2@db:5432/app",
+    "expected": "getaddrinfo ENOTFOUND db for postgres://[credentials]@db:5432/app"
+  },
+  {
+    "rule": "userinfo",
+    "input": "connect failed postgres://app_user:hunter2@db.internal.example.com:5432/app",
+    "expected": "connect failed postgres://[credentials]@db.internal.example.com:5432/app"
+  },
+  {
+    "rule": "userinfo",
+    "input": "Redis connection to redis://:s3cretPass@cache:6379 failed",
+    "expected": "Redis connection to redis://[credentials]@cache:6379 failed"
+  },
+  {
+    "rule": "userinfo",
+    "input": "GET https://user:pw@host.example.com/x failed",
+    "expected": "GET https://[credentials]@host.example.com/x failed"
+  },
+  {
+    "rule": "userinfo",
+    "input": "GET https://admin:pw123@localhost:8080/x failed",
+    "expected": "GET https://[credentials]@localhost:8080/x failed"
+  },
+  {
+    "rule": "kv",
+    "input": "login failed password=hunter2 for user",
+    "expected": "login failed password=[redacted] for user"
+  },
+  {
+    "rule": "kv",
+    "input": "bad payload {\"token\":\"abc123short\",\"id\":1}",
+    "expected": "bad payload {\"token\":\"[redacted]\",\"id\":1}"
+  },
+  {
+    "rule": "kv",
+    "input": "api_key: xyz789 rejected",
+    "expected": "api_key: [redacted] rejected"
+  },
+  {
+    "rule": "kv",
+    "input": "client_secret=Zq8shortSecret",
+    "expected": "client_secret=[redacted]"
+  },
+  {
+    "rule": "json-snippet",
+    "input": "Unexpected token 'p', \"password=hunter2\" is not valid JSON",
+    "expected": "Unexpected token 'p', \"[value]\" is not valid JSON"
+  },
+  {
+    "rule": "json-snippet",
+    "input": "Unexpected token 'o', \"{\"email\":\"jane@ex\"... is not valid JSON",
+    "expected": "Unexpected token 'o', \"[value]\" is not valid JSON"
+  },
+  {
+    "rule": "pg-input",
+    "input": "invalid input syntax for type uuid: \"AbC123xyz-from-user\"",
+    "expected": "invalid input syntax for type uuid: \"[value]\""
+  },
+  {
+    "rule": "kv",
+    "input": "Cookie: session=s%3AAbC123xyzShort.sig; theme=dark",
+    "expected": "Cookie: [redacted]; theme=dark"
+  },
+  {
+    "rule": "kv",
+    "input": "Set-Cookie: refresh_token=r_8sk2Lq; HttpOnly",
+    "expected": "Set-Cookie: [redacted]; HttpOnly"
+  },
+  {
+    "rule": "basic",
+    "input": "Authorization: Basic dXNlcjpwYXNz",
+    "expected": "Authorization: Basic [token]"
+  },
+  {
+    "rule": "kv",
+    "input": "x-api-key: sk_live_51Hshort",
+    "expected": "x-api-key: [redacted]"
+  },
+  {
+    "rule": "email",
+    "input": "user jürgen.müller@example.de missing",
+    "expected": "user [email] missing"
+  },
+  {
+    "rule": "email",
+    "input": "user jane@exämple.de missing",
+    "expected": "user [email] missing"
+  },
+  {
+    "rule": "email",
+    "input": "GET /api/v1/users/jane%40example.com 404",
+    "expected": "GET /api/v1/users/[email] 404"
+  },
+  {
+    "rule": "email",
+    "input": "lookup jane%40example.com failed",
+    "expected": "lookup [email] failed"
+  },
+  {
+    "rule": "fragment",
+    "input": "https://app.example.com/assets/index-abc.js#token=AbC123",
+    "expected": "https://app.example.com/assets/index-abc.js#[fragment]"
+  },
+  {
+    "rule": "kv",
+    "input": "Invalid URL reset-password?token=AbC123xyz",
+    "expected": "Invalid URL reset-password?token=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "{\"password\": \"hunter 2\"}",
+    "expected": "{\"password\": \"[redacted]\"}"
+  },
+  {
+    "rule": "kv",
+    "input": "{\"password\":\"hu\\\"nter2\"}",
+    "expected": "{\"password\":\"[redacted]\"}"
+  },
+  {
+    "rule": "kv",
+    "input": "{\\\"password\\\":\\\"hunter2\\\"}",
+    "expected": "{\\\"password\\\":\\\"[redacted]\\\"}"
+  },
+  {
+    "rule": "kv",
+    "input": "password%3Dhunter2",
+    "expected": "password%3D[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "password: [hunter2]",
+    "expected": "password: [redacted]]"
+  },
+  {
+    "rule": "kv",
+    "input": "sid=abc123",
+    "expected": "sid=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "authorization: abc123",
+    "expected": "authorization: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "Authorization: Bearer abcdefgh12",
+    "expected": "Authorization: Bearer [token]"
+  },
+  {
+    "rule": "kv",
+    "input": "auth=xyz",
+    "expected": "auth=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "jwt: abc",
+    "expected": "jwt: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "access_key=AKIA1",
+    "expected": "access_key=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "private-key: pk1",
+    "expected": "private-key: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "otp=123456",
+    "expected": "otp=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "code=12345",
+    "expected": "code=12345"
+  },
+  {
+    "rule": "kv",
+    "input": "token: undefined",
+    "expected": "token: undefined"
+  },
+  {
+    "rule": "kv",
+    "input": "session: null",
+    "expected": "session: null"
+  },
+  {
+    "rule": "kv",
+    "input": "password: false",
+    "expected": "password: false"
+  },
+  {
+    "rule": "kv",
+    "input": "{\"token\": \"undefined\"}",
+    "expected": "{\"token\": \"undefined\"}"
+  },
+  {
+    "rule": "kv",
+    "input": "token: undefinedx",
+    "expected": "token: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "{\"password\": \"null thing\"}",
+    "expected": "{\"password\": \"[redacted]\"}"
+  },
+  {
+    "rule": "userinfo",
+    "input": "https://user:p@ss@host/x",
+    "expected": "https://[credentials]@host/x"
+  },
+  {
+    "rule": "userinfo",
+    "input": "redis://default:p\"q@cache:6379",
+    "expected": "redis://[credentials]@cache:6379"
+  },
+  {
+    "rule": "json-snippet",
+    "input": "...\"abc def\"... is not valid JSON",
+    "expected": "\"[value]\" is not valid JSON"
+  },
+  {
+    "rule": "json-snippet",
+    "input": "\"line1\nline2\" is not valid JSON",
+    "expected": "\"[value]\" is not valid JSON"
+  },
+  {
+    "rule": "basic",
+    "input": "basic dXNlcjpwYXNz",
+    "expected": "basic [token]"
+  },
+  {
+    "rule": "basic",
+    "input": "BASIC dXNlcjpwYXNz",
+    "expected": "BASIC [token]"
+  },
+  {
+    "rule": "basic",
+    "input": "Authorization: Basic dXNlcjpwYXNzd29yZA",
+    "expected": "Authorization: Basic [token]"
+  },
+  {
+    "rule": "postgres",
+    "input": "Key (email)=(a@b.com",
+    "expected": "Key (email)=([value])"
+  },
+  {
+    "rule": "pg-input",
+    "input": "value \"99999999999\" is out of range for type integer",
+    "expected": "value \"[value]\" is out of range for type integer"
+  },
+  {
+    "rule": "pg-input",
+    "input": "malformed array literal: \"{a,b\"",
+    "expected": "malformed array literal: \"[value]\""
+  },
+  {
+    "rule": "pg-input",
+    "input": "date/time field value out of range: \"2024-13-45\"",
+    "expected": "date/time field value out of range: \"[value]\""
+  },
+  {
+    "rule": "userinfo",
+    "input": "{\"cb\":\"https://h\",\"token\":\"ab@cd\"}",
+    "expected": "{\"cb\":\"https://h\",\"token\":\"[redacted]\"}"
+  },
+  {
+    "rule": "userinfo",
+    "input": "{\"url\":\"postgres://db\",\"password\":\"hunter2@x\"}",
+    "expected": "{\"url\":\"postgres://db\",\"password\":\"[redacted]\"}"
+  },
+  {
+    "rule": "userinfo",
+    "input": "{\"url\":\"https://h\",\"password\":\"p@ss word\"}",
+    "expected": "{\"url\":\"https://h\",\"password\":\"[redacted]\"}"
+  },
+  {
+    "rule": "userinfo",
+    "input": "{\"url\":\"https://app.example.com\",\"email\":\"jane@example.com\"}",
+    "expected": "{\"url\":\"https://app.example.com\",\"email\":\"[email]\"}"
+  },
+  {
+    "rule": "userinfo",
+    "input": "redis://u:p'q@h",
+    "expected": "redis://[credentials]@h"
+  },
+  {
+    "rule": "postgres",
+    "input": "Key (email)=(a@b.com) conflicts; Key (id)=(5",
+    "expected": "Key (email)=([value]) conflicts; Key (id)=([value])"
+  },
+  {
+    "rule": "postgres",
+    "input": "Key (a)=(1) exists; Key (b)=(2) exists",
+    "expected": "Key (a)=([value]) exists; Key (b)=([value]) exists"
+  },
+  {
+    "rule": "kv",
+    "input": "Authorization: Token abc123def",
+    "expected": "Authorization: Token [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "Authorization: ApiKey abc123def",
+    "expected": "Authorization: ApiKey [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "auth: Basic realcreds",
+    "expected": "auth: Basic [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "Authorization: Basic hunter2",
+    "expected": "Authorization: Basic [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "authorization: AWS4-HMAC-SHA256 Credential=AKIA/x, Signature=abcdef",
+    "expected": "authorization: AWS4-HMAC-SHA256 [redacted], Signature=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "Authorization: Token [redacted]",
+    "expected": "Authorization: Token [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "signature=abcdef",
+    "expected": "signature=[redacted]"
+  },
+  {
+    "rule": "json-snippet",
+    "input": "SyntaxError: \"hunter2\" is not valid JSON",
+    "expected": "SyntaxError: \"[value]\" is not valid JSON"
+  },
+  {
+    "rule": "json-snippet",
+    "input": "parse failed (\"hunter2\" is not valid JSON)",
+    "expected": "parse failed (\"[value]\" is not valid JSON)"
+  },
+  {
+    "rule": "kv",
+    "input": "auth: hunter2 rejected",
+    "expected": "auth: [redacted] rejected"
+  },
+  {
+    "rule": "kv",
+    "input": "Invalid authorization: abc123secret for user 5",
+    "expected": "Invalid authorization: [redacted] for user 5"
+  },
+  {
+    "rule": "kv",
+    "input": "authorization:secretvalue other",
+    "expected": "authorization:[redacted] other"
+  },
+  {
+    "rule": "kv",
+    "input": "auth=sk_live_x and more",
+    "expected": "auth=[redacted] and more"
+  },
+  {
+    "rule": "kv",
+    "input": "{\"authorization\":\"sk_live_abc def\"}",
+    "expected": "{\"authorization\":\"[redacted]\"}"
+  },
+  {
+    "rule": "kv",
+    "input": "authorization: 'abc123secret is bad'",
+    "expected": "authorization: '[redacted]'"
+  },
+  {
+    "rule": "kv",
+    "input": "Authorization:  Token  abc",
+    "expected": "Authorization:  Token  [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "authorization=Token\tabc",
+    "expected": "authorization=Token\t[redacted]"
+  },
+  {
+    "rule": "postgres",
+    "input": "Key (a)=(x) (Key (b)=(y",
+    "expected": "Key (a)=([value]) (Key (b)=([value])"
+  }
+]

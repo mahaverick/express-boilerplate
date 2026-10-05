@@ -9,6 +9,7 @@ import { UnrecoverableError, Worker, type Job } from 'bullmq'
 import { isAnalyticsEnabled } from '@/configs/analytics.config'
 import { ANALYTICS_DELETIONS_JOB } from '@/jobs/analytics-deletion.job'
 import { ANALYTICS_DRAIN_JOB } from '@/jobs/analytics.job'
+import { reportFinalJobFailure } from '@/jobs/job-failure.job'
 import { processAnalyticsDeletions } from '@/services/analytics/analytics-deletion.service'
 import { drainAnalyticsOutbox } from '@/services/analytics/analytics-drain.service'
 import { logger } from '@/services/logger.service'
@@ -39,7 +40,9 @@ export async function processAnalyticsJob(job: Job): Promise<void> {
 }
 
 /**
- * Start the analytics worker.
+ * Start the analytics worker. A drain or deletion tick has one attempt, so
+ * every failed tick is a final failure and is reported to error tracking;
+ * the reporter's throttle bounds a run of failing ticks.
  * @returns The running Worker instance (for graceful shutdown).
  */
 export function startAnalyticsWorker(): Worker {
@@ -52,7 +55,8 @@ export function startAnalyticsWorker(): Worker {
 
   // Warn, never the permanent-failure error: a failed tick loses nothing, and the next one retries.
   worker.on('failed', (job, error) => {
-    logger.warn('Analytics job failed', { jobId: job?.id, name: job?.name, error })
+    const errorId = reportFinalJobFailure('analytics', job, error)
+    logger.warn('Analytics job failed', { jobId: job?.id, name: job?.name, error, errorId })
   })
 
   worker.on('error', (error: unknown) => {

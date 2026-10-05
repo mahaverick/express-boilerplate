@@ -902,7 +902,8 @@ and an audit entry.
 With `POSTHOG_PROJECT_KEY` set, the API sends PostHog server events and
 proxies the browsers' posthog-js traffic; without it, neither happens.
 
-- **The proxy carries no credential.** `/api/v1/collect/*` is on the API's
+- **The proxy carries no credential.** `/api/v1/collect/*` (which also
+  carries the browsers' `$exception` batches) is on the API's
   origin, so the browser sends it the `__Host-refreshToken` cookie
   (`Path=/`) like any other request. The proxy removes the `Cookie` and
   `Authorization` headers before the request leaves, so PostHog never
@@ -941,6 +942,68 @@ proxies the browsers' posthog-js traffic; without it, neither happens.
   that reaches a timeline only through a forged target is dropped.
   **Accepted risk:** PostHog's own UI still shows forged events, and a flood
   of forged events can push real rows onto later timeline pages.
+
+### Error tracking: what reaches PostHog
+
+With `POSTHOG_PROJECT_KEY` set and `ERROR_TRACKING_ENABLED` true, an
+unexpected 5xx, an uncaught exception or unhandled rejection, and a BullMQ
+job's final failure each send one `$exception` straight to PostHog's
+`/batch/`, not through the outbox, because an error often arrives while the
+database is down.
+
+- **Scrubbed before it leaves the process.** Every exception's type and
+  message, and every frame's file and function name, pass through
+  `error-scrubber.service.ts`. A query error's value is exactly `Failed
+query`: the SQL text is never sent. The rule families are Postgres
+  `Key (col)=(value)` detail, Postgres and JSON input echoes, URL logins,
+  query strings, fragments, Bearer, Basic and known-scheme Authorization
+  credentials, `key=value` secrets (only the bare values `undefined`, `null`, `missing`,
+  `true` and `false`, and already-scrubbed placeholders, are kept),
+  JWTs, PostHog keys, email addresses (including unicode and `%40` forms),
+  and long hex and base64 runs. Each value is then capped at 1024
+  characters. The span that records the exception (`span.recordException`)
+  gets the same scrubbed name, message and stack, so Tempo never holds the
+  raw message either. The frontends port the same rules, tested against one
+  shared vector file.
+- **What the scrubber does not catch:** an Authorization credential under an
+  unknown scheme; multi-parameter OAuth and Digest headers; a secret whose
+  value is an array; short non-hex signatures; IP addresses, phone numbers,
+  names and UUIDs; short opaque tokens in a path; unusual JWT shapes; and
+  email edge forms (no TLD, double-encoded, a fullwidth `@`, a quoted local
+  part). Scrubbing the same text twice is not guaranteed to give the same
+  result for `Basic Credential=…` shapes, or for a secret-shaped token glued
+  to a preceding long hex run. Regex scrubbing is best-effort: keep secrets out of error messages.
+- **Never attached:** request bodies, headers, query strings or cookies;
+  a database error's `detail`, `parameters`, `query` or `where`, or the
+  bound values a failed query's message embeds; a job's data; an
+  `HttpError`'s `errors`. The event names the route by its template
+  (`/api/v1/platform/users/:id`), never the URL
+  (`error-tracking.test.ts` sends a postgres.js unique violation and checks
+  the address is absent).
+- **What is not reported:** any 4xx, a client that went away, a deliberate
+  `HttpError` 5xx with no `cause`, a `TimelineUnavailableError`, a job
+  attempt BullMQ will retry, and the `/collect` proxy's own failures.
+- **`$exception` events are signed too.** The reporter adds `server_sig`
+  over the same fields as every server event, with `source: 'error'`. The
+  staff Errors views verify the most recent event of each issue and show
+  an issue claiming `app: 'api'` without a valid signature as unverified;
+  they scrub its type and message again before returning them, because a
+  forged browser event can carry anything. They drop a row whose issue id
+  is not a UUID, and ignore events stamped more than 5 minutes ahead of now.
+  **Accepted risk:** PostHog's own Error Tracking UI shows forged exceptions
+  alongside real ones, and a forged event newer than an issue's real ones can
+  still mask that issue's latest type and message in the staff view, which
+  then shows the row `verified: false`.
+- **Identity.** An error during an authenticated request carries the user's
+  id and tenant group, as their other events do. Anything else is sent as
+  `server:<OTEL_SERVICE_NAME>` with `$process_person_profile: false`.
+- **`errorId` is not a secret.** Every 5xx body carries it so a user can
+  quote it; it is the event's uuid and names a log line (a timeline 502's names
+  nothing), and grants nothing.
+- **`/health` is public and names the release.** It answers the image's git
+  sha (`APP_VERSION`). That is harmless for this public boilerplate; a
+  private fork that treats its sha as sensitive drops the field in
+  `src/app.ts`.
 
 ## What this boilerplate does NOT implement
 
@@ -1131,8 +1194,9 @@ notifications. A job fails for the last time when its attempts are used up
 or it threw BullMQ's `UnrecoverableError`. The worker then rewrites the job's
 stored data, replacing every key ending in `Url` or `Token`, at any depth,
 with `[redacted]`. It then logs one `error` line, `job failed permanently`,
-with the queue, job id and name, user id, attempt count and reason, and the
-email template when the job names one. An earlier attempt logs a `warn` and
+with the queue, job id and name, user id, attempt count and reason, the
+email template when the job names one, and the `errorId` of the failure's
+error-tracking report. An earlier attempt logs a `warn` and
 keeps the link, because the retry has to send it. So a token sits in Redis
 only while a retry is pending, unless the rewrite itself fails, which logs
 its own `error` line.

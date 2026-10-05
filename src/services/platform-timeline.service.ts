@@ -16,11 +16,7 @@
  */
 import { isTimelineEnabled, timelineLinks } from '@/configs/analytics.config'
 import { SYSTEM_DISTINCT_ID } from '@/constants/analytics.constants'
-import {
-  TIMELINE_AUDIT_THROTTLE_SECONDS,
-  TIMELINE_CACHE_TTL_SECONDS,
-  TIMELINE_PAGE_SIZE,
-} from '@/constants/timeline.constants'
+import { TIMELINE_CACHE_TTL_SECONDS, TIMELINE_PAGE_SIZE } from '@/constants/timeline.constants'
 import { HttpError } from '@/errors/http-error'
 import { TimelineUnavailableError } from '@/errors/timeline-errors'
 import {
@@ -41,6 +37,7 @@ import { buildTimelineQuery, logTimelineFailure } from '@/services/analytics/tim
 import { recordTimelineView } from '@/services/audit.service'
 import { logger } from '@/services/logger.service'
 import { platformTenantOrThrow } from '@/services/platform-user.service'
+import { auditThrottledView } from '@/services/platform-view-audit.service'
 import { getRedis, redisKey } from '@/services/redis.service'
 import type { Actor } from '@/types/actor'
 import type {
@@ -86,10 +83,7 @@ function cursorOf(before: string | undefined): TimelineCursor | undefined {
 
 /**
  * Audit a timeline read, at most once per staff member, target and view
- * every `TIMELINE_AUDIT_THROTTLE_SECONDS`: the entry is written only when
- * `SET NX EX` claims the throttle key. A Redis failure writes the entry
- * anyway, logged at `warn`; a failed write releases the key it claimed, so
- * the next read is audited.
+ * every `TIMELINE_AUDIT_THROTTLE_SECONDS` (platform-view-audit.service.ts).
  * @param actor - The staff member.
  * @param kind - Whose timeline.
  * @param id - The user or tenant id.
@@ -103,50 +97,19 @@ async function auditTimelineView(
   id: string,
   input: TimelineQueryInput
 ): Promise<void> {
-  const key = redisKey('timeline', 'audit', actor.userId, kind, id, input.view)
-  let hasClaimedKey = false
-  try {
-    const redis = await getRedis()
-    const reply = await redis.set(key, '1', {
-      condition: 'NX',
-      expiration: { type: 'EX', value: TIMELINE_AUDIT_THROTTLE_SECONDS },
-    })
-    if (reply === null) return
-    hasClaimedKey = true
-  } catch (error) {
-    logger.warn('Timeline audit throttle unavailable; writing the audit entry anyway', { error })
-  }
-  try {
-    const platform = await platformTenantOrThrow()
-    await recordTimelineView(actor, platform.id, kind, id, {
-      range: input.range,
-      view: input.view,
-    })
-  } catch (error) {
-    if (hasClaimedKey) await releaseThrottleKey(key, kind, id)
-    throw error
-  }
-}
-
-/**
- * Delete a throttle key after a failed audit write. If the delete fails too,
- * the next reads inside the throttle window find the key and are not audited,
- * so that is logged at `error`, with the target but not the key.
- * @param key - The key.
- * @param kind - Whose timeline.
- * @param id - The user or tenant id.
- * @returns Resolves once deleted or logged.
- */
-async function releaseThrottleKey(key: string, kind: TimelineKind, id: string): Promise<void> {
-  try {
-    const redis = await getRedis()
-    await redis.del(key)
-  } catch (error) {
-    logger.error(
-      'Could not release the timeline audit throttle key after a failed audit write; reads of this target may go unaudited until it expires',
-      { error, kind, targetId: id, unauditedSeconds: TIMELINE_AUDIT_THROTTLE_SECONDS }
-    )
-  }
+  await auditThrottledView({
+    key: redisKey('timeline', 'audit', actor.userId, kind, id, input.view),
+    label: 'Timeline',
+    kind,
+    targetId: id,
+    write: async () => {
+      const platform = await platformTenantOrThrow()
+      await recordTimelineView(actor, platform.id, kind, id, {
+        range: input.range,
+        view: input.view,
+      })
+    },
+  })
 }
 
 /**

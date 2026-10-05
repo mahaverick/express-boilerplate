@@ -105,17 +105,19 @@ rather than repeating them.
 
 ## Analytics
 
-- **Never call PostHog's private API (`/api/projects/…`) from a request, except the staff timeline read; the `/api/v1/collect` proxy is the only request path to PostHog's ingest.**
+- **Never call PostHog's private API (`/api/projects/…`) from a request, except the staff timeline and Errors reads; the `/api/v1/collect` proxy is the only request path to PostHog's ingest.**
   The only server code that sends events to PostHog is the drain
-  (`analytics-drain.service.ts`), through `sendBatch`
-  (`posthog-batch.service.ts`); the groups backfill queues markers for it.
+  (`analytics-drain.service.ts`) and the error reporter
+  (`src/services/errors/`), both through `sendBatch`
+  (`posthog-batch.service.ts`); the groups backfill queues markers for the drain.
   The PostHog deletion of purged users runs on the analytics Worker
   (`analytics-deletion.service.ts`). The only browser path is the
   `/api/v1/collect` proxy. A request writes an outbox row and nothing else,
   except a timeline read (`platform-timeline.service.ts`), which queries
   PostHog on a cache miss, within the hourly budget, through `posthogApi`
   (`posthog-api.service.ts`). See [ARCHITECTURE.md](ARCHITECTURE.md#analytics).
-- **Send PostHog only the two HogQL templates in `timeline-query.service.ts`.**
+- **Send PostHog only the two HogQL templates in `timeline-query.service.ts`
+  and the two in `errors-query.service.ts`.**
   Every id, the range and the cursor go in `values`; the one token written
   into the query text is the `tenant` group type index, checked as an
   integer from 0 to 4. A timeline row carries only the `TIMELINE_PROP_KEYS`
@@ -127,6 +129,24 @@ rather than repeating them.
 - **Trust a timeline row's server fields only when its `server_sig`
   verifies** (`analytics-signature.service.ts`). The project key is public,
   so any browser can send `source: 'audit'` or any `target_id`.
+- **Report a server error only from its one capture point:** `errorHandler`,
+  the process-fault handlers in `index.ts`, or a Worker's `failed` listener
+  through `reportFinalJobFailure`. Never add a logger transport, and never
+  call `reportError` for an error the code already handles and logs. A
+  deliberate 5xx `HttpError` is reported only when it carries `{ cause }`;
+  pass one when it wraps a real fault. Mount a new Worker's `failed`
+  listener with `reportFinalJobFailure` first. See
+  [ARCHITECTURE.md](ARCHITECTURE.md#error-tracking).
+- **Keep `recordRouteTemplate` ahead of every router** (`app.ts`): Express
+  restores `request.baseUrl` before `errorHandler` runs, so without it an
+  event's `http_route` loses its mount path.
+- **Read a staff view's most recent event with `argMax(column, (timestamp,
+uuid))` on every column,** as `errors-query.service.ts` does: per-column
+  `argMax(column, timestamp)` can take the uuid and the `server_sig` from two
+  events with one timestamp, and the signature never verifies.
+- **Add a staff read view's audit through `auditThrottledView`**
+  (`platform-view-audit.service.ts`), and its PostHog event name to
+  `TIMELINE_EXCLUDED_EVENTS`, so no timeline lists its own audit.
 - **Outbox writes go only through `enqueueAnalytics`, or
   `enqueueAuditAnalytics` for an audit entry** (`analytics-outbox.service.ts`),
   never the repository directly: they are the savepoint

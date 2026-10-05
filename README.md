@@ -427,7 +427,7 @@ eventually and without a guarantee, so a consumer that needs exactness dedupes
 by `uuid`.
 
 **The proxy.** posthog-js in react and apex sends to `/api/v1/collect`, the
-API's own origin, so ad blockers and the CSP's `connect-src 'self'` leave it
+API's own origin (events and the browsers' `$exception` batches alike), so ad blockers and the CSP's `connect-src 'self'` leave it
 alone. Requests stream through unread, the browser's cookies and bearer
 token are stripped, and PostHog sees the client's real `User-Agent` and the
 address, host, protocol and port of the request (`X-Forwarded-*` are
@@ -499,6 +499,48 @@ shown as a browser event, and one that names the user or tenant only
 through a forged target is dropped. Rotating `SESSION_SECRET` makes older
 events show as unverified in timelines: they still appear, without server
 badges.
+
+### Error tracking
+
+With `POSTHOG_PROJECT_KEY` set, an unexpected 5xx, an uncaught exception or
+unhandled rejection, and a BullMQ job's final failure each reach PostHog
+Error Tracking as one `$exception`, scrubbed, with the release
+(`APP_VERSION`, the image's git sha), the route template, the trace id when
+tracing is on, and the user and tenant when the request had them. 4xx
+answers, client aborts and job attempts that will be retried are never
+sent. `ERROR_TRACKING_ENABLED=false` turns sending off without touching the
+rest of analytics. Express needs no sourcemap upload: `node
+--enable-source-maps` already rewrites stacks to the `.ts` lines.
+
+**Finding an error from its `errorId`.** Every 5xx body carries an
+`errorId`, and so does its `Unhandled server error` log line (except a
+timeline 502, whose id names nothing), so search the logs for it first. In PostHog, Error Tracking's UI does not search by event
+uuid; run this in SQL insights (HogQL) instead, which also gives the issue
+to open:
+
+```sql
+select uuid, timestamp, properties.$exception_issue_id, properties.http_route, properties.trace_id
+from events
+where event = '$exception' and uuid = '<errorId>'
+```
+
+An id that finds nothing names a log line only (or, for a timeline 502, nothing): the error was not reported
+(a deliberate 5xx, or error tracking off or throttled) or PostHog has not
+ingested it yet (allow about 15 s).
+
+**Staff views.** `GET /api/v1/platform/users/:id/errors` and
+`GET /api/v1/platform/tenants/:id/errors` (platform admin and up) list a
+user's or a tenant's PostHog error issues from the last 30 days, with a link
+to each issue in PostHog. They need what the staff timelines need, answer
+`{ configured: false }` without it, share their limiter and hourly query
+budget, and are audited as `user.errors_viewed` / `tenant.errors_viewed`.
+`GET /api/v1/platform/system/status` (platform admin and up) answers the
+release and the reporter's sent and dropped counts over 15 minutes across
+every process.
+
+**`/health` names the release.** It answers `{ status, uptime, release }`
+and is public, so the deployed git sha is too. A private fork that does not
+want that drops `release` in `src/app.ts`.
 
 ## Make this yours
 
