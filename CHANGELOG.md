@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.0](https://github.com/mahaverick/express-boilerplate/compare/v1.6.0...v1.7.0) (2026-10-05)
+
+
+### Features
+
+* error tracking for server errors, staff errors views and system status ([#80](https://github.com/mahaverick/express-boilerplate/issues/80)) ([191baa9](https://github.com/mahaverick/express-boilerplate/commit/191baa90def0aebb23537c49642068cd0be4aa16))
+
 ## [1.6.0](https://github.com/mahaverick/express-boilerplate/compare/v1.5.0...v1.6.0) (2026-10-04)
 
 
