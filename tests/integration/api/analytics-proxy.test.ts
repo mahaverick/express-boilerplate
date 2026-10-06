@@ -4,7 +4,8 @@
  * the routing (sub-paths, query strings, the assets prefixes), the mount
  * order (bodies express.json or express.urlencoded would refuse or consume
  * arrive byte for byte), what the upstream sees of the client (its
- * User-Agent and resolved address, never its cookies or bearer token), the
+ * User-Agent and resolved address, never its cookies or bearer token), a
+ * browser event left without the server events' `$geoip_disable`, the
  * proxy's own limiter, and an unreachable upstream. Analytics is enabled for
  * this file through a mocked `getEnv()`.
  */
@@ -141,6 +142,24 @@ describe('bodies stream through unread, ahead of the body parsers', () => {
       expect(posthog.batches).toEqual([[{ event: '$exception', properties: { a: 1 } }]])
     }
   )
+
+  it('leaves GeoIP on for browser events: adds no $geoip_disable, which only server events carry', async () => {
+    const { app, posthog } = running()
+    const body = JSON.stringify({
+      api_key: 'phc_test_key_not_real',
+      batch: [{ event: '$pageview', distinct_id: 'browser-1', properties: { $current_url: '/' } }],
+    })
+
+    const response = await request(app)
+      .post('/api/v1/collect/batch/')
+      .set('content-type', 'application/json')
+      .send(body)
+
+    expect(response.status).toBe(200)
+    expect(posthog.batches).toHaveLength(1)
+    expect(posthog.batches[0]?.[0]?.properties).toEqual({ $current_url: '/' })
+    expect(posthog.requests[0]?.body.toString('utf8')).not.toContain('$geoip_disable')
+  })
 
   it('delivers a 5 MB binary body byte for byte', async () => {
     const { app, posthog } = running()

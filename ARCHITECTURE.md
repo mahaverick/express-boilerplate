@@ -828,6 +828,14 @@ browser posthog-js ── /api/v1/collect/* ── analytics-proxy limiter ─�
   fields through one function, `signedFieldsOf`, which keeps a non-empty
   string and reads anything else (absent, empty, another type) as no value.
   The mapper trusts a row's server fields only when its signature verifies.
+- **GeoIP off for server events.** `toPosthogBatchEvent` also sets
+  `$geoip_disable: true` on every event it builds, the drain's rows and the
+  error reporter's `$exception` events alike, overriding any stored value.
+  They reach PostHog from this server's address, so PostHog's GeoIP would
+  otherwise place the person in the data centre. It is added at send time,
+  so rows queued before it existed get it too, and it is not a signed
+  field. Browser events through `/api/v1/collect` are forwarded unchanged
+  and keep GeoIP, from the forwarded client address.
 - **At least once.** A row is deleted after PostHog acknowledged
   it, so a crash between the two resends it with the same `uuid` (the row
   id), `timestamp`, `event` and `distinct_id`. PostHog deduplicates on `uuid`
@@ -967,7 +975,7 @@ PostHog project (one per environment)
   │ Authorization: Bearer <POSTHOG_FEATURE_FLAGS_KEY>, If-None-Match: <stored weak ETag>
   ▼
 flag-definitions job (analytics queue, one scheduler, every 30 s)
-  │ 304: touch checkedAt · 200: parse (zod), mark unsupported constructs
+  │ 304: touch checkedAt if unchanged since read · 200: parse (zod), mark unsupported constructs
   │ SET flags:v1:snapshot (no TTL) · PUBLISH flags "reload" · failure: keep the snapshot
   ▼
 every API and worker process: in-memory snapshot (reload on message, 60 s backstop)
@@ -1005,7 +1013,15 @@ every API and worker process: in-memory snapshot (reload on message, 60 s backst
   `If-None-Match` so the next run re-parses with the current rules. During
   a rolling deploy with workers on both versions the stored fingerprint
   alternates, so each tick fetches a full 200 and registry-dependent
-  verdicts can flip until the old workers drain.
+  verdicts can flip until the old workers drain. A 304 rewrites only the
+  stored `checkedAt`, unpublished, through one Lua compare-and-set
+  (`touchFlagSnapshot`): only while the stored value is still the exact
+  string the run read. Two replicas' runs can overlap (a run outlasting its
+  interval, a stalled job's retry); without the check, a 304 landing after
+  another run's 200 would put the older content back, or an earlier
+  `checkedAt`. A replica holding a copy checked later refuses it, but one
+  without a newer copy (a fresh boot) would load it until the next run
+  replaced it. A skipped touch logs at `info`.
 - **Kill-switch latency**: a PostHog edit reaches every process on the
   next definitions run (every 30 s) and its `reload` message, or the 60 s
   backstop if the message is missed. The run shares the `analytics` worker
@@ -1065,8 +1081,9 @@ every API and worker process: in-memory snapshot (reload on message, 60 s backst
   (platform admin, `platform-timeline` limiter) answers one user's traits
   and every registered flag's value, reason, condition index and holdout
   variant. It is the one place traits leave the server, so each read is
-  audited as `user.flags_evaluated`, at most once per staff member and user
-  every 10 minutes (`auditThrottledView`), before anything is evaluated.
+  audited as `user.flags_evaluated`, at most once per staff member, user,
+  tenant (or none) and app every 10 minutes (`auditThrottledView`), before
+  anything is evaluated.
   An unknown user is 404; a tenant the user isn't a member of, or a tenant
   with `app=apex`, is 400. Neither route calls PostHog.
 - **System status** gains `flags`: whether flags are configured, the

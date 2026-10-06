@@ -1,6 +1,8 @@
 /**
  * @file sendBatch against the fake PostHog on 127.0.0.1 (no database, no
- * Redis): the request it makes, and how each answer is classified. The host
+ * Redis): the request it makes, and how each answer is classified; and
+ * toPosthogBatchEvent's wire form (the signature, and `$geoip_disable`
+ * forced on without changing the signature). The host
  * and key come from a mocked `getEnv()`, bound once the fake is listening.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
@@ -147,7 +149,7 @@ describe('classifyStatus', () => {
 })
 
 describe('toPosthogBatchEvent', () => {
-  it('sends the row id as uuid, occurred_at as the ISO timestamp, and adds server_sig without touching the row', () => {
+  it('sends the row id as uuid, occurred_at as the ISO timestamp, and adds server_sig and $geoip_disable without touching the row', () => {
     const properties = { ...EVENT.properties }
 
     const sent = toPosthogBatchEvent({
@@ -172,8 +174,29 @@ describe('toPosthogBatchEvent', () => {
       tenant: 'tenant-1',
     })
     expect(signature).toMatch(/^[0-9a-f]{32}$/)
-    expect(sent).toEqual({ ...EVENT, properties: { ...EVENT.properties, server_sig: signature } })
+    expect(sent).toEqual({
+      ...EVENT,
+      properties: { ...EVENT.properties, $geoip_disable: true, server_sig: signature },
+    })
     expect(properties).toEqual(EVENT.properties)
+  })
+
+  it('disables GeoIP even when a stored row says otherwise, and leaves the signature unchanged', () => {
+    const row = {
+      id: EVENT.uuid,
+      event: EVENT.event,
+      distinctId: EVENT.distinct_id,
+      properties: EVENT.properties,
+      occurredAt: new Date(EVENT.timestamp),
+    }
+
+    const sent = toPosthogBatchEvent({
+      ...row,
+      properties: { ...EVENT.properties, $geoip_disable: false },
+    })
+
+    expect(sent.properties.$geoip_disable).toBe(true)
+    expect(sent.properties.server_sig).toBe(toPosthogBatchEvent(row).properties.server_sig)
   })
 
   it('signs the eight fields, so changing any of them changes the signature', () => {

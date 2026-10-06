@@ -5,8 +5,9 @@
  * with the snapshot; evaluate builds one user's (and optionally one
  * tenant's) traits from the database and runs every registered flag through
  * the live evaluator. Evaluate is the one place traits leave the server, so
- * it is audited as `user.flags_evaluated`, at most once per staff member and
- * user every `TIMELINE_AUDIT_THROTTLE_SECONDS`, before anything is read.
+ * it is audited as `user.flags_evaluated`, at most once per staff member,
+ * user, tenant and app every `TIMELINE_AUDIT_THROTTLE_SECONDS`, before
+ * anything is evaluated.
  */
 import { posthogFlagUrl } from '@/configs/analytics.config'
 import { FLAG_TRAITS, FLAGS, type FlagEntry } from '@/constants/flags.constants'
@@ -109,8 +110,19 @@ export async function listFlags(): Promise<FlagsListResponse> {
 }
 
 /**
- * Audit an evaluate view, at most once per staff member and user every
- * `TIMELINE_AUDIT_THROTTLE_SECONDS` (platform-view-audit.service.ts).
+ * The throttle key's tenant part for an evaluation with no tenant. The query
+ * takes a tenant id only as a UUID, so no tenant's part can equal it.
+ */
+const NO_TENANT = 'none'
+
+/**
+ * Audit an evaluate view, at most once per staff member, user, tenant (or
+ * none) and app every `TIMELINE_AUDIT_THROTTLE_SECONDS`
+ * (platform-view-audit.service.ts): the entry records the tenant and the
+ * app, so each combination of them is audited on its own. The ids are
+ * lowercased so the key never depends on the case a UUID arrived in; an id
+ * in another case than the stored one finds no row today and is refused
+ * before the audit anyway.
  * @param actor - The staff member.
  * @param query - The validated query; the entry records its tenant and app.
  * @returns Resolves once written, or once the throttle said it already was.
@@ -118,7 +130,17 @@ export async function listFlags(): Promise<FlagsListResponse> {
  */
 async function auditEvaluateView(actor: Actor, query: PlatformFlagsEvaluateQuery): Promise<void> {
   await auditThrottledView({
-    key: redisKey('flags', 'audit', actor.userId, 'user', query.userId),
+    key: redisKey(
+      'flags',
+      'audit',
+      actor.userId.toLowerCase(),
+      'user',
+      query.userId.toLowerCase(),
+      'tenant',
+      query.tenantId?.toLowerCase() ?? NO_TENANT,
+      'app',
+      query.app
+    ),
     label: 'Flags evaluate view',
     kind: 'user',
     targetId: query.userId,

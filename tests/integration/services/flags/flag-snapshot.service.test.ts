@@ -4,13 +4,17 @@
  * backstop reloads a change that was never published, a failed reload keeps
  * the copy in memory without logging the stored value, a reload never
  * replaces the copy with an older snapshot, a store with nothing stored
- * serves null, and a stopped store stops reloading.
+ * serves null, and a stopped store stops reloading. A 304 touch rewrites
+ * `checkedAt` only while the stored value is still the exact string its run
+ * read: a snapshot another replica stored meanwhile survives it unchanged,
+ * and a deleted one is not recreated.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   createFlagSnapshotStore,
   flagSnapshotKey,
   readFlagSnapshot,
+  readStoredFlagSnapshot,
   touchFlagSnapshot,
   writeFlagSnapshot,
   type FlagSnapshotStore,
@@ -98,7 +102,9 @@ describe('flag snapshot store', () => {
   it('picks up an unpublished change on the backstop', async () => {
     await writeFlagSnapshot(snapshot('first'))
     const store = await startedStore(50)
-    await touchFlagSnapshot(snapshot('first'), new Date('2026-10-05T12:05:00.000Z'))
+    const stored = await readStoredFlagSnapshot()
+    if (!stored) throw new Error('the snapshot was not stored')
+    await touchFlagSnapshot(stored, new Date('2026-10-05T12:05:00.000Z'))
     await vi.waitFor(() => {
       expect(store.get()?.checkedAt).toBe('2026-10-05T12:05:00.000Z')
     })
@@ -187,5 +193,81 @@ describe('flag snapshot store', () => {
     await writeFlagSnapshot(snapshot('after-stop'))
     await store.reload()
     expect(store.get()).toBe(NONE)
+  })
+})
+
+describe('touchFlagSnapshot', () => {
+  const TOUCHED_AT = new Date('2026-10-05T12:05:00.000Z')
+
+  it('advances checkedAt, and nothing else, while the stored value is the one read', async () => {
+    await writeFlagSnapshot({ ...snapshot('same'), fingerprint: 'fingerprint0' })
+    const stored = await readStoredFlagSnapshot()
+    if (!stored) throw new Error('the snapshot was not stored')
+
+    await expect(touchFlagSnapshot(stored, TOUCHED_AT)).resolves.toBe('touched')
+
+    await expect(readFlagSnapshot()).resolves.toEqual({
+      ...snapshot('same'),
+      fingerprint: 'fingerprint0',
+      checkedAt: TOUCHED_AT.toISOString(),
+    })
+  })
+
+  it('leaves a snapshot another replica stored since the read unchanged, content and checkedAt', async () => {
+    await writeFlagSnapshot(snapshot('read-by-this-run'))
+    const stale = await readStoredFlagSnapshot()
+    if (!stale) throw new Error('the snapshot was not stored')
+    const newer = {
+      ...snapshot('stored-by-another-replica'),
+      checkedAt: '2026-10-05T12:01:00.000Z',
+    }
+    await writeFlagSnapshot(newer)
+    const redis = await getRedis()
+    const before = await redis.get(flagSnapshotKey())
+
+    await expect(touchFlagSnapshot(stale, TOUCHED_AT)).resolves.toBe('skipped')
+
+    expect(await redis.get(flagSnapshotKey())).toBe(before)
+    await expect(readFlagSnapshot()).resolves.toEqual(newer)
+  })
+
+  it('leaves a copy another run touched since the read alone: any change to the stored string skips', async () => {
+    await writeFlagSnapshot(snapshot('touched-twice'))
+    const read = await readStoredFlagSnapshot()
+    if (!read) throw new Error('the snapshot was not stored')
+    await expect(touchFlagSnapshot(read, new Date('2026-10-05T12:04:00.000Z'))).resolves.toBe(
+      'touched'
+    )
+
+    await expect(touchFlagSnapshot(read, TOUCHED_AT)).resolves.toBe('skipped')
+
+    await expect(readFlagSnapshot()).resolves.toMatchObject({
+      checkedAt: '2026-10-05T12:04:00.000Z',
+    })
+  })
+
+  it('writes nothing when the snapshot was deleted since the read', async () => {
+    await writeFlagSnapshot(snapshot('deleted'))
+    const stored = await readStoredFlagSnapshot()
+    if (!stored) throw new Error('the snapshot was not stored')
+    const redis = await getRedis()
+    await redis.del(flagSnapshotKey())
+
+    await expect(touchFlagSnapshot(stored, TOUCHED_AT)).resolves.toBe('skipped')
+
+    expect(await redis.exists(flagSnapshotKey())).toBe(0)
+  })
+
+  it('reads the stored string verbatim alongside the parsed snapshot', async () => {
+    const redis = await getRedis()
+    const raw = JSON.stringify({ ...snapshot('verbatim'), extra: 1 })
+    await redis.set(flagSnapshotKey(), raw)
+
+    const stored = await readStoredFlagSnapshot()
+
+    expect(stored?.raw).toBe(raw)
+    expect(stored?.snapshot.etag).toBe('W/"verbatim"')
+    await redis.del(flagSnapshotKey())
+    await expect(readStoredFlagSnapshot()).resolves.toBeNull()
   })
 })

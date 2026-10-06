@@ -50,8 +50,13 @@ export const ENDPOINT_LEVEL_STATUSES: ReadonlySet<number> = new Set([401, 403, 4
  * (`ANALYTICS_SIGNATURE_PROPERTY`) covers the uuid, event, distinct id,
  * `source`, `access`, `target_type`, `target_id` and `$groups.tenant`
  * (`signAnalyticsEvent`), so a consumer can tell a server event from one a
- * browser forged through the collect proxy. It is added to the wire event
- * only; the outbox row is not changed.
+ * browser forged through the collect proxy. It also sets `$geoip_disable`,
+ * overriding any stored value: the request comes from this server's
+ * address, so PostHog's GeoIP would otherwise place the person in the data
+ * centre. Both are added to the wire event only, at send time, so rows
+ * queued before either existed get them too; the outbox row is not changed.
+ * Every server event goes through here: the drain's rows and the error
+ * reporter's `$exception` events.
  * @param row - The claimed outbox row, its markers already resolved.
  * @returns The event as PostHog's batch endpoint takes it.
  */
@@ -65,7 +70,7 @@ export function toPosthogBatchEvent(
   return {
     event: row.event,
     distinct_id: row.distinctId,
-    properties: { ...properties, [ANALYTICS_SIGNATURE_PROPERTY]: signature },
+    properties: { ...properties, $geoip_disable: true, [ANALYTICS_SIGNATURE_PROPERTY]: signature },
     uuid: row.id,
     timestamp: row.occurredAt.toISOString(),
   }

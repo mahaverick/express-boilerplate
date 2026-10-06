@@ -10,9 +10,10 @@ import { analyticsDrainJobDefaults } from '@/jobs/analytics.job'
 import { recordFlagFetch } from '@/services/flags/flag-counters.service'
 import { fetchFlagDefinitions } from '@/services/flags/flag-definitions-client.service'
 import {
-  readFlagSnapshot,
+  readStoredFlagSnapshot,
   touchFlagSnapshot,
   writeFlagSnapshot,
+  type StoredFlagSnapshot,
 } from '@/services/flags/flag-snapshot.service'
 import { logger } from '@/services/logger.service'
 import { getAnalyticsQueue } from '@/services/queue.service'
@@ -49,7 +50,9 @@ export async function ensureFlagDefinitionsSchedule(): Promise<void> {
  * Fetch the definitions once, sending the stored snapshot's ETag when its
  * fingerprint matches the running code's (`flagRegistryFingerprint`). A 200
  * is parsed and stored, and every replica is told to reload; a 304 rewrites
- * only the stored `checkedAt`, unpublished; a failure keeps the stored
+ * only the stored `checkedAt`, unpublished, and only while the stored value
+ * is still the one this run read (`touchFlagSnapshot`), so a snapshot
+ * another replica stored meanwhile is kept as it is; a failure keeps the stored
  * snapshot and records its code. A stored snapshot parsed under another
  * registry or parser version (its fingerprint differs, or it has none), or
  * one that cannot be read, gets an unconditional fetch, so a 200 re-parses
@@ -61,9 +64,9 @@ export async function ensureFlagDefinitionsSchedule(): Promise<void> {
 export async function runFlagDefinitionsJob(now: Date = new Date()): Promise<void> {
   if (!isFlagsEnabled()) return
   const stored = await readStoredSnapshot()
-  const isCurrent = stored?.fingerprint === flagRegistryFingerprint()
+  const isCurrent = stored?.snapshot.fingerprint === flagRegistryFingerprint()
   // eslint-disable-next-line unicorn/no-null -- the client's contract is null for an unconditional fetch
-  const result = await fetchFlagDefinitions(isCurrent ? stored.etag : null)
+  const result = await fetchFlagDefinitions(isCurrent ? stored.snapshot.etag : null)
   if (result.kind === 'error') {
     logger.warn('Fetching flag definitions failed; keeping the stored snapshot', {
       code: result.code,
@@ -73,7 +76,9 @@ export async function runFlagDefinitionsJob(now: Date = new Date()): Promise<voi
     return
   }
   if (result.kind === 'not_modified') {
-    if (stored) await touchFlagSnapshot(stored, now)
+    if (stored && (await touchFlagSnapshot(stored, now)) === 'skipped') {
+      logger.info('The stored flag snapshot changed during this run; leaving it as it is')
+    }
     await recordFlagFetch('not_modified', now)
     return
   }
@@ -92,14 +97,14 @@ export async function runFlagDefinitionsJob(now: Date = new Date()): Promise<voi
 }
 
 /**
- * Read the stored snapshot, treating one that cannot be read (Redis failed,
- * or the value is not a snapshot) as none. The log names the error type only,
- * never the stored value.
- * @returns The stored snapshot, or null.
+ * Read the stored snapshot and its exact string, treating one that cannot be
+ * read (Redis failed, or the value is not a snapshot) as none. The log names
+ * the error type only, never the stored value.
+ * @returns The stored snapshot and its string, or null.
  */
-async function readStoredSnapshot(): Promise<Awaited<ReturnType<typeof readFlagSnapshot>>> {
+async function readStoredSnapshot(): Promise<StoredFlagSnapshot | null> {
   try {
-    return await readFlagSnapshot()
+    return await readStoredFlagSnapshot()
   } catch (error) {
     logger.warn('The stored flag snapshot could not be read; fetching without an ETag', {
       reason: error instanceof Error ? error.name : 'unknown',

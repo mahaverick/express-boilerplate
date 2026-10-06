@@ -3,7 +3,7 @@
  * (request id, request context, route template, PostHog session, auth,
  * tenant resolution) and the real `errorHandler`, on a probe router of
  * failing routes: the 5xx body's `errorId` names the log line and the one
- * `$exception` sent; the actor's identity and tenant group, or the server's
+ * `$exception` sent, signed and with GeoIP disabled; the actor's identity and tenant group, or the server's
  * anonymous identity; what is never sent (a 404, a validation 400, a client
  * abort, a timeline 502, a 503 with no cause); a postgres.js unique
  * violation arriving without its row values; and the `/collect` proxy's own
@@ -203,6 +203,7 @@ describe('an unexpected 5xx', () => {
       http_route: '/api/probe/items/:itemId/boom',
       http_status: 500,
       $process_person_profile: false,
+      $geoip_disable: true,
     })
     expect(
       isAnalyticsSignatureValid(
