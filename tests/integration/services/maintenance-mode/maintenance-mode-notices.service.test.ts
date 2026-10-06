@@ -5,6 +5,7 @@
  * every job finished or gone), and the notice wait's timeout and done paths.
  */
 import { randomUUID } from 'node:crypto'
+import type { Job } from 'bullmq'
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import {
   hasPendingNotices,
@@ -15,10 +16,12 @@ import {
 } from '@/services/maintenance-mode/maintenance-mode-notices.service'
 import { addJob, closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
 import { getRedis } from '@/services/redis.service'
+import { emailJobIdFor } from '@/workers/notification.worker'
 
 const added: { queue: 'notification' | 'email'; id: string }[] = []
 
 afterEach(async () => {
+  vi.restoreAllMocks()
   for (const { queue, id } of added) {
     const job = await (queue === 'email' ? getEmailQueue() : getNotificationQueue()).getJob(id)
     await job?.remove()
@@ -49,6 +52,20 @@ async function waitingJob(queue: 'notification' | 'email'): Promise<string> {
   )
   added.push({ queue, id })
   return id
+}
+
+/**
+ * A waiting notification job and the waiting email job its worker would have enqueued.
+ * @returns The notification job.
+ */
+async function notificationWithWaitingEmail(): Promise<Job> {
+  const id = await waitingJob('notification')
+  const job = await getNotificationQueue().getJob(id)
+  if (!job) throw new Error('setup: the notification job was just added')
+  const emailId = emailJobIdFor(job)
+  await addJob(getEmailQueue(), 'probe', {}, { jobId: emailId })
+  added.push({ queue: 'email', id: emailId })
+  return job
 }
 
 describe('hasPendingNotices', () => {
@@ -88,6 +105,20 @@ describe('waitForNoticeJobs', () => {
     await job?.remove()
 
     expect(await waitForNoticeJobs({ notification: job ? [job] : [] }, 300)).toBe('done')
+  })
+
+  it('skips the email of a notification that failed, so its waiting email does not hold the wait', async () => {
+    const job = await notificationWithWaitingEmail()
+    vi.spyOn(getNotificationQueue(), 'getJobState').mockResolvedValue('failed')
+
+    expect(await waitForNoticeJobs({ notification: [job] }, 300)).toBe('done')
+  })
+
+  it('times out while the email of a completed notification is still waiting', async () => {
+    const job = await notificationWithWaitingEmail()
+    vi.spyOn(getNotificationQueue(), 'getJobState').mockResolvedValue('completed')
+
+    expect(await waitForNoticeJobs({ notification: [job] }, 300)).toBe('timeout')
   })
 
   it('is done at once with no jobs', async () => {
