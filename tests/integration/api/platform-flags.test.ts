@@ -6,8 +6,8 @@
  * PostHog. Evaluate answers one user's traits and every flag's value and
  * reason, a holdout's recorded variant included, after its gates: 404 for an
  * unknown user, 400 for a tenant the user isn't in or a tenant with
- * `app=apex`, and is audited once per staff member and user per throttle
- * window. Flags are switched on with a mock; the project id and app host
+ * `app=apex`, and is audited once per staff member, user, tenant and app
+ * per throttle window. Flags are switched on with a mock; the project id and app host
  * come from a mocked `getEnv()`.
  */
 import { randomUUID } from 'node:crypto'
@@ -338,7 +338,7 @@ describe('GET /platform/flags/evaluate', () => {
     })
   })
 
-  it('audits the view once per staff member and user per throttle window', async () => {
+  it('audits the view once per staff member, user, tenant and app per throttle window', async () => {
     const { userId, tenantId } = await memberWithTenant()
     const { user: admin, token } = await createTrackedStaff('admin')
     const path = `/flags/evaluate?userId=${userId}&tenantId=${tenantId}&app=react`
@@ -351,6 +351,60 @@ describe('GET /platform/flags/evaluate', () => {
     expect(await evaluateAudits(admin.id)).toEqual([
       { tenantId: platform.id, targetId: userId, metadata: { tenantId, clientApp: 'react' } },
     ])
+  })
+
+  it('audits the same user again in another tenant, and with no tenant, inside the window', async () => {
+    const { userId, tenantId } = await memberWithTenant()
+    const second = await tenantRepository.create({
+      name: 'Inspect Two',
+      slug: `inspect-${randomUUID().slice(0, 8)}`,
+      ownerId: userId,
+    })
+    tenantIds.push(second.id)
+    const { user: admin, token } = await createTrackedStaff('admin')
+
+    const statuses = []
+    for (const query of [
+      `tenantId=${tenantId}&app=react`,
+      `tenantId=${second.id}&app=react`,
+      'app=react',
+      `tenantId=${second.id}&app=react`,
+    ]) {
+      const response = await staffGet(token, `/flags/evaluate?userId=${userId}&${query}`)
+      statuses.push(response.status)
+    }
+
+    expect(statuses).toEqual([200, 200, 200, 200])
+    const audited = await evaluateAudits(admin.id)
+    expect(audited.map((entry) => entry.metadata)).toEqual(
+      expect.arrayContaining([
+        { tenantId, clientApp: 'react' },
+        { tenantId: second.id, clientApp: 'react' },
+        { tenantId: NONE, clientApp: 'react' },
+      ])
+    )
+    expect(audited).toHaveLength(3)
+  })
+
+  it('audits the same user again for the other app inside the window', async () => {
+    const { userId } = await memberWithTenant()
+    const { user: admin, token } = await createTrackedStaff('admin')
+
+    const statuses = []
+    for (const app of ['react', 'apex', 'apex']) {
+      const response = await staffGet(token, `/flags/evaluate?userId=${userId}&app=${app}`)
+      statuses.push(response.status)
+    }
+
+    expect(statuses).toEqual([200, 200, 200])
+    const audited = await evaluateAudits(admin.id)
+    expect(audited.map((entry) => entry.metadata)).toEqual(
+      expect.arrayContaining([
+        { tenantId: NONE, clientApp: 'react' },
+        { tenantId: NONE, clientApp: 'apex' },
+      ])
+    )
+    expect(audited).toHaveLength(2)
   })
 
   it('answers 404 for an unknown user, and audits nothing', async () => {

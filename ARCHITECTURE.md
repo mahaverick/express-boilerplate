@@ -1072,8 +1072,9 @@ every API and worker process: in-memory snapshot (reload on message, 60 s backst
   (platform admin, `platform-timeline` limiter) answers one user's traits
   and every registered flag's value, reason, condition index and holdout
   variant. It is the one place traits leave the server, so each read is
-  audited as `user.flags_evaluated`, at most once per staff member and user
-  every 10 minutes (`auditThrottledView`), before anything is evaluated.
+  audited as `user.flags_evaluated`, at most once per staff member, user,
+  tenant (or none) and app every 10 minutes (`auditThrottledView`), before
+  anything is evaluated.
   An unknown user is 404; a tenant the user isn't a member of, or a tenant
   with `app=apex`, is 400. Neither route calls PostHog.
 - **System status** gains `flags`: whether flags are configured, the
