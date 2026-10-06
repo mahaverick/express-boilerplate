@@ -11,7 +11,8 @@
  * any other `/api/projects/` path, one without its trailing slash included,
  * answers 404. It serves `GET /flags/definitions` from `flagDefinitions`,
  * answering 304 with an empty body when `If-None-Match` names the current
- * ETag. `respondWith` and `onBatch` govern none of those. `hang(ms)` holds
+ * ETag, after awaiting `beforeFlagDefinitions` when one is set (a test
+ * changes Redis mid-run with it). `respondWith` and `onBatch` govern none of those. `hang(ms)` holds
  * every later request, private API included, for that long before
  * answering, and `close()` ends held requests too, so a test never waits on
  * one.
@@ -193,6 +194,12 @@ export interface FakePosthog {
    * oversized bodies); undefined at start.
    */
   flagDefinitionsRawBody: string | undefined
+  /**
+   * Awaited before `GET /flags/definitions` is answered; undefined at start.
+   * A test stands in for another replica with it, between the job's read of
+   * the stored snapshot and its answer.
+   */
+  beforeFlagDefinitions: (() => Promise<void>) | undefined
   /**
    * Replace the definitions and give them a fresh ETag, as PostHog does on every flag change.
    */
@@ -454,6 +461,7 @@ export async function startFakePosthog(): Promise<FakePosthog> {
     flagDefinitionsEtag: 'W/"fake-0"',
     flagDefinitionsStatus: 200,
     flagDefinitionsRawBody: undefined,
+    beforeFlagDefinitions: undefined,
     setFlagDefinitions: (body) => {
       state.definitionsVersion += 1
       fake.flagDefinitions = body
@@ -645,7 +653,10 @@ export async function startFakePosthog(): Promise<FakePosthog> {
     const method = request.method ?? 'GET'
     requests.push({ method, path, headers: request.headers, body })
     const bare = path.split('?', 1)[0] ?? path
-    if (bare === '/flags/definitions') return definitionsAnswer(request)
+    if (bare === '/flags/definitions') {
+      await fake.beforeFlagDefinitions?.()
+      return definitionsAnswer(request)
+    }
     const endpoint = privateEndpointOf(bare)
     if (endpoint !== undefined) {
       authHeaders.push(request.headers.authorization ?? '')

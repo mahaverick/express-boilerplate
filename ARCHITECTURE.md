@@ -967,7 +967,7 @@ PostHog project (one per environment)
   │ Authorization: Bearer <POSTHOG_FEATURE_FLAGS_KEY>, If-None-Match: <stored weak ETag>
   ▼
 flag-definitions job (analytics queue, one scheduler, every 30 s)
-  │ 304: touch checkedAt · 200: parse (zod), mark unsupported constructs
+  │ 304: touch checkedAt if unchanged since read · 200: parse (zod), mark unsupported constructs
   │ SET flags:v1:snapshot (no TTL) · PUBLISH flags "reload" · failure: keep the snapshot
   ▼
 every API and worker process: in-memory snapshot (reload on message, 60 s backstop)
@@ -1005,7 +1005,14 @@ every API and worker process: in-memory snapshot (reload on message, 60 s backst
   `If-None-Match` so the next run re-parses with the current rules. During
   a rolling deploy with workers on both versions the stored fingerprint
   alternates, so each tick fetches a full 200 and registry-dependent
-  verdicts can flip until the old workers drain.
+  verdicts can flip until the old workers drain. A 304 rewrites only the
+  stored `checkedAt`, unpublished, through one Lua compare-and-set
+  (`touchFlagSnapshot`): only while the stored value is still the exact
+  string the run read. Two replicas' runs can overlap (a run outlasting its
+  interval, a stalled job's retry); without the check, a 304 landing after
+  another run's 200 would put the older content back under a newer
+  `checkedAt`, which every replica's reload accepts. A skipped touch logs
+  at `info`.
 - **Kill-switch latency**: a PostHog edit reaches every process on the
   next definitions run (every 30 s) and its `reload` message, or the 60 s
   backstop if the message is missed. The run shares the `analytics` worker

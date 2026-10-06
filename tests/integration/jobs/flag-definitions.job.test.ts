@@ -2,7 +2,8 @@
  * @file The flag definitions schedule against the real Redis, and one job
  * run against the fake PostHog: a 200 writes and publishes the parsed
  * snapshot, a 304 (sent the stored ETag verbatim) touches only `checkedAt`,
- * a failure keeps the snapshot and records the code, a stored snapshot from
+ * and only while the stored snapshot is still the one the run read (a
+ * snapshot another replica stored mid-run survives), a failure keeps the snapshot and records the code, a stored snapshot from
  * another registry or parser (its fingerprint differs, or it has none) is
  * fetched unconditionally and replaced, and nothing is fetched while flags
  * are off. No Worker runs in this file.
@@ -15,7 +16,11 @@ import {
   runFlagDefinitionsJob,
 } from '@/jobs/flag-definitions.job'
 import { getFlagsStatus } from '@/services/flags/flag-counters.service'
-import { flagSnapshotKey, readFlagSnapshot } from '@/services/flags/flag-snapshot.service'
+import {
+  flagSnapshotKey,
+  readFlagSnapshot,
+  writeFlagSnapshot,
+} from '@/services/flags/flag-snapshot.service'
 import { logger } from '@/services/logger.service'
 import { closeQueue, getAnalyticsQueue } from '@/services/queue.service'
 import { createRedisClient, getRedis, redisKey } from '@/services/redis.service'
@@ -105,6 +110,7 @@ afterEach(async () => {
   current.setFlagDefinitions(EMPTY_FLAG_DEFINITIONS)
   current.flagDefinitionsStatus = 200
   current.flagDefinitionsRawBody = undefined
+  current.beforeFlagDefinitions = undefined
   current.requests.length = 0
   await clearFlagKeys()
 })
@@ -168,6 +174,35 @@ describe('runFlagDefinitionsJob', () => {
       checkedAt: T1.toISOString(),
       fingerprint: flagRegistryFingerprint(),
     })
+    await expect(getFlagsStatus(T1)).resolves.toMatchObject({ lastFetchOk: T1.toISOString() })
+  })
+
+  it('on a 304, leaves alone a snapshot another replica stored after this run read its own', async () => {
+    posthog().setFlagDefinitions({ ...EMPTY_FLAG_DEFINITIONS, flags: [BETA_FLAG] })
+    await runFlagDefinitionsJob(T0)
+    const read = await readFlagSnapshot()
+    if (!read) throw new Error('the first run stored nothing')
+    const newer = {
+      ...read,
+      etag: 'W/"another-replica"',
+      fetchedAt: '2026-10-05T12:00:20.000Z',
+      checkedAt: '2026-10-05T12:00:20.000Z',
+      flags: {},
+    }
+    const redis = await getRedis()
+    const replica: { stored?: string | null } = {}
+    // The fake answers 304 (the ETag this run sent is current), but only after another replica's 200 landed.
+    posthog().beforeFlagDefinitions = async () => {
+      await writeFlagSnapshot(newer)
+      replica.stored = await redis.get(flagSnapshotKey())
+    }
+
+    await runFlagDefinitionsJob(T1)
+
+    expect(posthog().requests.at(-1)?.headers['if-none-match']).toBe(read.etag)
+    expect(replica.stored).toEqual(expect.any(String))
+    expect(await redis.get(flagSnapshotKey())).toBe(replica.stored)
+    await expect(readFlagSnapshot()).resolves.toEqual(newer)
     await expect(getFlagsStatus(T1)).resolves.toMatchObject({ lastFetchOk: T1.toISOString() })
   })
 

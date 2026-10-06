@@ -61,18 +61,44 @@ function isSnapshot(value: unknown): value is ParsedSnapshot {
 }
 
 /**
+ * The stored snapshot with the exact string it was parsed from, which a 304
+ * touch compares against.
+ */
+export interface StoredFlagSnapshot {
+  /**
+   * The stored value, verbatim.
+   */
+  raw: string
+  /**
+   * The value parsed.
+   */
+  snapshot: ParsedSnapshot
+}
+
+/**
+ * Read the stored snapshot and the exact string it was parsed from.
+ * @returns The snapshot and its string, or null when none is stored.
+ * @throws {Error} When Redis fails or the stored value is not a snapshot.
+ */
+export async function readStoredFlagSnapshot(): Promise<StoredFlagSnapshot | null> {
+  const redis = await getRedis()
+  const raw = await redis.get(flagSnapshotKey())
+  // eslint-disable-next-line unicorn/no-null -- the contract is null for nothing stored
+  if (raw === null) return null
+  const parsed = JSON.parse(raw) as unknown
+  if (!isSnapshot(parsed)) throw new Error('The stored flag snapshot is not a snapshot')
+  return { raw, snapshot: parsed }
+}
+
+/**
  * Read the stored snapshot.
  * @returns The snapshot, or null when none is stored.
  * @throws {Error} When Redis fails or the stored value is not a snapshot.
  */
 export async function readFlagSnapshot(): Promise<ParsedSnapshot | null> {
-  const redis = await getRedis()
-  const stored = await redis.get(flagSnapshotKey())
+  const stored = await readStoredFlagSnapshot()
   // eslint-disable-next-line unicorn/no-null -- the contract is null for nothing stored
-  if (stored === null) return null
-  const parsed = JSON.parse(stored) as unknown
-  if (!isSnapshot(parsed)) throw new Error('The stored flag snapshot is not a snapshot')
-  return parsed
+  return stored === null ? null : stored.snapshot
 }
 
 /**
@@ -88,19 +114,42 @@ export async function writeFlagSnapshot(snapshot: ParsedSnapshot): Promise<void>
 }
 
 /**
+ * Rewrites the key (ARGV[2]) only while it still holds exactly ARGV[1]; a
+ * missing key is GET's `false`, which equals no string. Returns 1 when it wrote.
+ */
+const TOUCH_SCRIPT = `if redis.call('GET', KEYS[1]) == ARGV[1] then
+  redis.call('SET', KEYS[1], ARGV[2])
+  return 1
+end
+return 0`
+
+/**
  * Store a snapshot PostHog confirmed unchanged (a 304) with its new
  * `checkedAt`, without publishing: replicas pick it up on their backstop.
- * @param snapshot - The stored snapshot.
+ * One Lua script compares and sets, so the write happens only while the
+ * stored value is still the exact string this run read. A snapshot another
+ * replica stored since (a run outlasting its interval, a stalled job's
+ * retry), or one whose `checkedAt` another run's touch advanced, is left
+ * alone: overwriting it would put back older content under a newer
+ * `checkedAt`, which every replica's reload would accept. A deleted
+ * snapshot is not recreated.
+ * @param stored - The snapshot and the exact string this run read.
  * @param checkedAt - When PostHog confirmed it.
- * @returns Resolves once stored.
+ * @returns `touched` when it was rewritten; `skipped` when the stored value
+ *   changed or is gone.
  * @throws {Error} When Redis fails.
  */
-export async function touchFlagSnapshot(snapshot: ParsedSnapshot, checkedAt: Date): Promise<void> {
+export async function touchFlagSnapshot(
+  stored: StoredFlagSnapshot,
+  checkedAt: Date
+): Promise<'touched' | 'skipped'> {
   const redis = await getRedis()
-  await redis.set(
-    flagSnapshotKey(),
-    JSON.stringify({ ...snapshot, checkedAt: checkedAt.toISOString() })
-  )
+  const touched = JSON.stringify({ ...stored.snapshot, checkedAt: checkedAt.toISOString() })
+  const reply = await redis.eval(TOUCH_SCRIPT, {
+    keys: [flagSnapshotKey()],
+    arguments: [stored.raw, touched],
+  })
+  return reply === 1 ? 'touched' : 'skipped'
 }
 
 /**
