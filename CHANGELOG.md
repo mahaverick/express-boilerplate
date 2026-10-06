@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.8.1](https://github.com/mahaverick/express-boilerplate/compare/v1.8.0...v1.8.1) (2026-10-06)
+
+
+### Bug Fixes
+
+* sp5d follow-ups — snapshot touch race, evaluate audit throttle key, server-event geoip ([#84](https://github.com/mahaverick/express-boilerplate/issues/84)) ([b406dc3](https://github.com/mahaverick/express-boilerplate/commit/b406dc3e9f1c17e8ae93b4f432a79d4d963745f7))
+
 ## [1.8.0](https://github.com/mahaverick/express-boilerplate/compare/v1.7.0...v1.8.0) (2026-10-05)
 
 
