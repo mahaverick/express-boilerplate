@@ -83,7 +83,7 @@ export async function dedupeSchedulerJobs(queue: Queue): Promise<number> {
     if (runs.length <= 1) continue
     const keep = runToKeep(runs, `repeat:${scheduler.key}:${String(scheduler.next)}`)
     for (const job of runs) {
-      if (job !== keep && (await isRemoved(queue, job))) removed += 1
+      if (job !== keep && (await tryRemove(queue, job))) removed += 1
     }
   }
   return removed
@@ -120,7 +120,8 @@ function dueAt(job: Job): number {
  * @param job - The run.
  * @returns True when this call removed it.
  */
-async function isRemoved(queue: Queue, job: Job): Promise<boolean> {
+// eslint-disable-next-line unicorn/consistent-boolean-name -- `try…` names an attempt; the boolean says whether this call removed the job
+async function tryRemove(queue: Queue, job: Job): Promise<boolean> {
   try {
     await job.remove()
     return true
