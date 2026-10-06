@@ -215,6 +215,7 @@ interface CommittedChange {
   kind: ChangeKind
   from: MaintenanceMode
   to: MaintenanceMode
+  message: string | null
   reason: string | null
   changedAt: Date
   version: number
@@ -233,6 +234,31 @@ function isSupersededChange(committed: CommittedChange): boolean {
   const current = getMaintenanceMode()
   if (current.version <= committed.version) return false
   return current.mode !== 'full' || current.changedAt !== committed.changedAt.toISOString()
+}
+
+/**
+ * The staff view of a change that committed, built from what the change
+ * wrote, for when the view cannot be read back. The actor's name is
+ * `MAINTENANCE_ACTOR_PLACEHOLDER`: looking it up is a read that may be what failed.
+ * @param actor - The staff member who made the change.
+ * @param committed - The committed change.
+ * @returns The view; its queues are read from Redis, which never rejects.
+ */
+async function viewOfCommitted(
+  actor: Actor,
+  committed: CommittedChange
+): Promise<PlatformMaintenanceModeView> {
+  return {
+    mode: committed.to,
+    message: committed.message,
+    reason: committed.reason,
+    // eslint-disable-next-line unicorn/no-null -- the view's contract uses null for "none"
+    since: committed.to === 'off' ? null : committed.changedAt.toISOString(),
+    changedBy: { id: actor.userId, name: MAINTENANCE_ACTOR_PLACEHOLDER },
+    version: committed.version,
+    queues: await getQueuePauseStates(),
+    environment: getEnv().APP_ENV,
+  }
 }
 
 /**
@@ -291,6 +317,25 @@ async function queueNotices(actor: Actor, change: CommittedChange): Promise<Job[
 }
 
 /**
+ * `queueNotices`, except that a failure of its recipient or actor lookup is
+ * logged and answers no jobs: the change is already committed, so it must
+ * not fail the request.
+ * @param actor - The staff member who made the change.
+ * @param change - The committed change.
+ * @returns The notification jobs queued, or none.
+ */
+async function queueNoticesOrNone(actor: Actor, change: CommittedChange): Promise<Job[]> {
+  try {
+    return await queueNotices(actor, change)
+  } catch (error) {
+    logger.error('Maintenance-mode notices could not be queued after the change committed', {
+      error,
+    })
+    return []
+  }
+}
+
+/**
  * Change the maintenance mode, as the platform owner. In order: one
  * transaction re-checks the owner role under lock, locks the row, checks
  * `expectedVersion` (409), answers a no-op (same mode and message) with the
@@ -300,7 +345,10 @@ async function queueNotices(actor: Actor, change: CommittedChange): Promise<Job[
  * reload and rereads this replica's copy, queues notices for a switch-on,
  * an escalation or a switch-off, and entering `full` waits for them under
  * one shared deadline before pausing every queue (a timeout or Redis error
- * is logged and the pause goes ahead); leaving `full` resumes them.
+ * is logged and the pause goes ahead); leaving `full` resumes them. Once the
+ * row has committed no failure turns the change into an error: a failed
+ * notice lookup is logged and no notices go out, and a failed final read
+ * answers the view built from what was written.
  * @param actor - The platform owner.
  * @param body - The validated body.
  * @returns The view after the change.
@@ -363,6 +411,7 @@ export async function changeMaintenanceMode(
       kind,
       from: current.mode,
       to: body.mode,
+      message,
       reason,
       changedAt: updated.changedAt,
       version: updated.version,
@@ -373,7 +422,7 @@ export async function changeMaintenanceMode(
   await publishMaintenanceModeChange()
   await reloadMaintenanceMode()
   const isNoticed = NOTICED_KINDS.has(committed.kind)
-  const jobs = isNoticed ? await queueNotices(actor, committed) : []
+  const jobs = isNoticed ? await queueNoticesOrNone(actor, committed) : []
   if (isNoticed) {
     await rememberNoticeJobs({
       notification: jobs.flatMap((job) => (job.id === undefined ? [] : [job.id])),
@@ -394,5 +443,15 @@ export async function changeMaintenanceMode(
   } else if (committed.from === 'full' && committed.to !== 'full') {
     await setAllQueuesPaused(false)
   }
-  return getPlatformMaintenanceMode()
+  try {
+    return await getPlatformMaintenanceMode()
+  } catch (error) {
+    logger.warn(
+      'The committed maintenance mode could not be read back; answering what was written',
+      {
+        error,
+      }
+    )
+    return viewOfCommitted(actor, committed)
+  }
 }
