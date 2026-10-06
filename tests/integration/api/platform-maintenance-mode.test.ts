@@ -491,6 +491,19 @@ describe('a failure after the change committed', () => {
     return { response, version, actorId: user.id }
   }
 
+  /**
+   * Assert each logger call is `(message, { error })` with the owner's message and reason in neither the text nor any other meta key.
+   * @param calls - The spy's recorded calls.
+   */
+  function expectLoggedAsErrorObjectOnly(calls: unknown[][]): void {
+    for (const [text, meta] of calls) {
+      expect(String(text)).not.toContain(MESSAGE)
+      expect(String(text)).not.toContain(REASON)
+      expect(Object.keys(meta as object)).toEqual(['error'])
+      expect((meta as { error: unknown }).error).toBeInstanceOf(Error)
+    }
+  }
+
   it('answers the committed state, logging without the message or reason, when the notice lookup fails', async () => {
     const error = vi.spyOn(logger, 'error').mockImplementation(() => {})
     const { response, version } = await switchOn('read_only', () => {
@@ -508,8 +521,7 @@ describe('a failure after the change committed', () => {
     })
     expect(getMaintenanceMode()).toMatchObject({ mode: 'read_only', version: version + 1 })
     expect(error).toHaveBeenCalledTimes(1)
-    expect(JSON.stringify(error.mock.calls)).not.toContain(MESSAGE)
-    expect(JSON.stringify(error.mock.calls)).not.toContain(REASON)
+    expectLoggedAsErrorObjectOnly(error.mock.calls)
   })
 
   it('still pauses the queues entering full when the notice lookup fails', async () => {
@@ -545,8 +557,9 @@ describe('a failure after the change committed', () => {
     })
     expect(viewOf(response).since).toEqual(expect.any(String))
     expect(viewOf(response).queues).toHaveLength(4)
-    const logged = JSON.stringify([...warn.mock.calls, ...error.mock.calls])
-    expect(logged).not.toContain(MESSAGE)
-    expect(logged).not.toContain(REASON)
+    const fallbackWarns = warn.mock.calls.filter(([text]) => text.includes('read back'))
+    expect(fallbackWarns).toHaveLength(1)
+    expectLoggedAsErrorObjectOnly(fallbackWarns)
+    expect(error).not.toHaveBeenCalled()
   })
 })

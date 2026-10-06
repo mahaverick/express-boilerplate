@@ -1193,6 +1193,9 @@ customer write answers 503 `READ_ONLY_MODE`; reads and jobs keep running).
   and the environment name; `GET /platform/system/status` has a `maintenance`
   section; `GET /api/v1/status/maintenance` is public (120 a minute per IP,
   cacheable for 5 s).
+  Once the row has committed, a failed notice lookup or read-back is logged and
+  the request still answers 200 with the committed state (the actor's name then
+  reads 'A staff member').
 
 | Code                        | Status                 | When                                                                          |
 | --------------------------- | ---------------------- | ----------------------------------------------------------------------------- |
