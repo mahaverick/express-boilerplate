@@ -606,11 +606,23 @@ Runbook:
    writing during maintenance.
 5. **Switch off from Apex.** Leaving `full` resumes every queue; notices
    that were still queued go out then.
+6. **Restart every replica after restoring the database during maintenance.**
+   A replica ignores a row whose version is not above the one it holds, so a
+   restore to an earlier version leaves each replica on the old mode until it
+   restarts.
+7. **Keep the clocks in sync (NTP) on the database and every replica.** The
+   10 s pause grace and the notice wait are measured from the database's
+   commit time on each replica's own clock, so skew shifts when the queues
+   pause.
+8. **Failed notice jobs keep personal data.** A notice job that fails keeps
+   the actor's name and the reason in Redis for up to 3 days (the in-app
+   notification) or 7 days (the email) before it is removed.
 
-Switching on or escalating asks for the owner's password if it was entered
-more than 10 minutes ago, a reason, the customer message and the
-environment name (`APP_ENV`) typed out. Every other platform owner and admin
-is notified in-app and by email.
+Every change, switching off and a message edit included, asks for the owner's
+password if it was entered more than 10 minutes ago. Switching on or
+escalating also asks for a reason, the customer message and the environment
+name (`APP_ENV`) typed out. A switch-on, an escalation or a switch-off
+notifies every other platform owner and admin in-app and by email.
 
 ## Make this yours
 

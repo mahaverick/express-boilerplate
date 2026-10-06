@@ -1167,18 +1167,25 @@ customer write answers 503 `READ_ONLY_MODE`; reads and jobs keep running).
   by a bare 502/503 (nginx answers an HTML 502 when the API is down).
 - **Queues.** `full` pauses every queue in `getAllQueues()` with BullMQ's
   queue-wide `pause()`: running jobs finish, waiting ones stay. Every
-  replica reconciles on every reload (`reconcileQueuePause`), pausing only
-  once the change into `full` is `MAINTENANCE_MODE_PAUSE_GRACE_MS` (10 s)
-  old and resuming at once otherwise; duplicate scheduler runs queued while
-  paused are removed before a resume (`dedupeSchedulerJobs`).
+  replica reconciles on every reload (`reconcileQueuePause`): it pauses only
+  once the mode has been `full` for `MAINTENANCE_MODE_PAUSE_GRACE_MS` (10 s),
+  leaves the queues as they are while `full` is younger or the replica has
+  not yet read the row, and resumes at once in any other mode. It acts only
+  while its snapshot is still the store's, rereading the version before each
+  pause or resume. Duplicate scheduler runs queued while paused are removed
+  before a resume (`dedupeSchedulerJobs`); a failed cleanup is logged and the
+  resume still happens.
 - **Changing it.** `PUT /api/v1/platform/maintenance-mode` (owner, step-up,
   `maintenance-mode-change` limiter). Switching on or escalating needs a
-  reason, a message and `confirm` equal to `APP_ENV`; anything else needs
-  neither. After the commit it publishes, queues a notice (in-app and
-  email, type and template `maintenance_mode_changed`) to every other
-  platform owner and admin for a switch-on, an escalation or a switch-off,
-  and entering `full` waits up to `MAINTENANCE_MODE_NOTICE_WAIT_MS` for them
-  before pausing the queues. The type is staff-only
+  reason and `confirm` equal to `APP_ENV`; every change to a mode that stays
+  on, a message edit or a de-escalation included, still needs a message, and
+  switching off needs nothing more. `since` is when the mode last changed: a
+  message edit leaves it. After the commit it publishes, queues a notice
+  (in-app and email, type and template `maintenance_mode_changed`) to every
+  other platform owner and admin for a switch-on, an escalation or a
+  switch-off, and entering `full` waits for them until
+  `MAINTENANCE_MODE_NOTICE_WAIT_MS` after the commit, then pauses the queues
+  unless a later change has superseded this one. The type is staff-only
   (`STAFF_ONLY_NOTIFICATION_TYPES`): a user with no platform membership does
   not see it in `GET /notifications/preferences`. `GET` shows the state, the queues and the
   environment name; `GET /platform/system/status` has a `maintenance`
