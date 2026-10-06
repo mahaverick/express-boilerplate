@@ -828,6 +828,14 @@ browser posthog-js ── /api/v1/collect/* ── analytics-proxy limiter ─�
   fields through one function, `signedFieldsOf`, which keeps a non-empty
   string and reads anything else (absent, empty, another type) as no value.
   The mapper trusts a row's server fields only when its signature verifies.
+- **GeoIP off for server events.** `toPosthogBatchEvent` also sets
+  `$geoip_disable: true` on every event it builds, the drain's rows and the
+  error reporter's `$exception` events alike, overriding any stored value.
+  They reach PostHog from this server's address, so PostHog's GeoIP would
+  otherwise place the person in the data centre. It is added at send time,
+  so rows queued before it existed get it too, and it is not a signed
+  field. Browser events through `/api/v1/collect` are forwarded unchanged
+  and keep GeoIP, from the forwarded client address.
 - **At least once.** A row is deleted after PostHog acknowledged
   it, so a crash between the two resends it with the same `uuid` (the row
   id), `timestamp`, `event` and `distinct_id`. PostHog deduplicates on `uuid`

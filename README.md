@@ -368,7 +368,8 @@ group.
    a proxy that is the proxy's address, so GeoIP is wrong for everyone and, in
    cookieless mode, PostHog's hash merges different people. Boot warns when
    `POSTHOG_PROJECT_KEY` is set, `TRUST_PROXY` is false and `APP_ENV` is not
-   `local`.
+   `local`. Events the server sends itself carry `$geoip_disable: true`, so
+   PostHog never locates anyone by the server's address.
 
 **What the server sends.** Every audit action, as its name with `_` for
 `.` (`invitation.created` becomes `invitation_created`, and the

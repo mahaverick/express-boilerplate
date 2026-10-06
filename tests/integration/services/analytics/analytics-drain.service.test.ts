@@ -1,6 +1,7 @@
 /**
  * @file drainAnalyticsOutbox against the real per-worker Postgres and the
- * fake PostHog: acknowledged rows are deleted, a retryable answer keeps every
+ * fake PostHog: every sent event carries `$geoip_disable`, acknowledged rows
+ * are deleted, a retryable answer keeps every
  * row through an outage of any length, a lease that expires is resent, two
  * drainers never claim one row, and a rejected batch is bisected down to the
  * row PostHog refuses, which is dropped at its third rejection, unless it
@@ -174,6 +175,11 @@ describe('drainAnalyticsOutbox', () => {
       distinct_id: 'user-1',
       properties: { source: 'audit' },
     })
+    // Rows stored without it get it at send time: PostHog must not place the person at the server's address.
+    expect(posthog().batches[0]?.map((event) => event.properties.$geoip_disable)).toEqual([
+      true,
+      true,
+    ])
     expect(await outboxRows()).toEqual([])
   })
 
