@@ -9,9 +9,11 @@
  * its notices, is `platform-maintenance-mode-notices.test.ts`'s.
  */
 import type { Response } from 'supertest'
-import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp } from '@/app'
+import * as repository from '@/repositories/maintenance-mode.repository'
 import { sql } from '@/services/database.service'
+import { logger } from '@/services/logger.service'
 import {
   queuePauseTarget,
   setAllQueuesPaused,
@@ -86,6 +88,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  vi.restoreAllMocks()
   await clearMaintenanceNotices()
   await setAllQueuesPaused(false)
   await resetMaintenanceMode()
@@ -422,6 +425,20 @@ describe('PUT /platform/maintenance-mode', () => {
     expect(notices.map((job) => job.data.userId)).toEqual([admin.id])
   })
 
+  it('records messageChanged true when switching off a mode that had a message', async () => {
+    const { token } = await createTrackedStaff('owner')
+    await storeMaintenanceMode('read_only', { message: 'Back soon.' })
+    const version = await currentVersion(token)
+
+    const response = await change(token, { mode: 'off', expectedVersion: version })
+
+    expect(response.status).toBe(200)
+    const entries = await auditEntries()
+    expect(entries.map((entry) => entry.metadata)).toEqual([
+      { from: 'read_only', to: 'off', reason: NONE, messageChanged: true },
+    ])
+  })
+
   it('lets exactly one of two owners saving at once win; the other gets 409 and nothing doubles', async () => {
     const first = await createTrackedStaff('owner')
     const second = await createTrackedStaff('owner')
@@ -443,5 +460,106 @@ describe('PUT /platform/maintenance-mode', () => {
     const notices = await pendingMaintenanceNotices()
     expect(notices.filter((job) => ours.has(job.data.userId))).toHaveLength(1)
     expect(await currentVersion(first.token)).toBe(version + 1)
+  })
+})
+
+describe('a failure after the change committed', () => {
+  const REASON = 'Data fix, ticket 77'
+  const MESSAGE = 'Read only while we migrate.'
+
+  /**
+   * Switch the mode on as a new owner, with an admin to notify.
+   * @param mode - The mode to switch to.
+   * @param arm - Installs the failure, after the version is read and before the change is sent.
+   * @returns The response, the version the change was sent against, and the owner's id.
+   */
+  async function switchOn(
+    mode: 'read_only' | 'full',
+    arm: () => void
+  ): Promise<{ response: Response; version: number; actorId: string }> {
+    const { token, user } = await createTrackedStaff('owner')
+    await createTrackedStaff('admin')
+    const version = await currentVersion(token)
+    arm()
+    const response = await change(token, {
+      mode,
+      message: MESSAGE,
+      reason: REASON,
+      expectedVersion: version,
+      confirm: ENVIRONMENT,
+    })
+    return { response, version, actorId: user.id }
+  }
+
+  /**
+   * Assert each logger call is `(message, { error })` with the owner's message and reason in neither the text nor any other meta key.
+   * @param calls - The spy's recorded calls.
+   */
+  function expectLoggedAsErrorObjectOnly(calls: unknown[][]): void {
+    for (const [text, meta] of calls) {
+      expect(String(text)).not.toContain(MESSAGE)
+      expect(String(text)).not.toContain(REASON)
+      expect(Object.keys(meta as object)).toEqual(['error'])
+      expect((meta as { error: unknown }).error).toBeInstanceOf(Error)
+    }
+  }
+
+  it('answers the committed state, logging without the message or reason, when the notice lookup fails', async () => {
+    const error = vi.spyOn(logger, 'error').mockImplementation(() => {})
+    const { response, version } = await switchOn('read_only', () => {
+      vi.spyOn(repository, 'listMaintenanceModeNoticeRecipients').mockRejectedValue(
+        new Error(`lookup failed near ${MESSAGE} ${REASON}`)
+      )
+    })
+
+    expect(response.status).toBe(200)
+    expect(viewOf(response)).toMatchObject({
+      mode: 'read_only',
+      message: MESSAGE,
+      reason: REASON,
+      version: version + 1,
+    })
+    expect(getMaintenanceMode()).toMatchObject({ mode: 'read_only', version: version + 1 })
+    expect(error).toHaveBeenCalledTimes(1)
+    expectLoggedAsErrorObjectOnly(error.mock.calls)
+  })
+
+  it('still pauses the queues entering full when the notice lookup fails', async () => {
+    vi.spyOn(logger, 'error').mockImplementation(() => {})
+    const { response } = await switchOn('full', () => {
+      vi.spyOn(repository, 'listMaintenanceModeNoticeRecipients').mockRejectedValue(
+        new Error('lookup failed')
+      )
+    })
+
+    expect(response.status).toBe(200)
+    const flags = await Promise.all(getAllQueues().map((queue) => queue.isPaused()))
+    expect(flags).toEqual([true, true, true, true])
+  })
+
+  it('answers the committed state built from the committed row when the final read fails', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    const error = vi.spyOn(logger, 'error').mockImplementation(() => {})
+    const { response, version, actorId } = await switchOn('read_only', () => {
+      vi.spyOn(repository, 'readMaintenanceModeState').mockRejectedValue(
+        new Error(`read failed near ${MESSAGE} ${REASON}`)
+      )
+    })
+
+    expect(response.status).toBe(200)
+    expect(viewOf(response)).toMatchObject({
+      mode: 'read_only',
+      message: MESSAGE,
+      reason: REASON,
+      version: version + 1,
+      changedBy: { id: actorId },
+      environment: ENVIRONMENT,
+    })
+    expect(viewOf(response).since).toEqual(expect.any(String))
+    expect(viewOf(response).queues).toHaveLength(4)
+    const fallbackWarns = warn.mock.calls.filter(([text]) => text.includes('read back'))
+    expect(fallbackWarns).toHaveLength(1)
+    expectLoggedAsErrorObjectOnly(fallbackWarns)
+    expect(error).not.toHaveBeenCalled()
   })
 })

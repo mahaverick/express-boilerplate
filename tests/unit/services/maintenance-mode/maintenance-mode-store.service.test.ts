@@ -227,4 +227,28 @@ describe('maintenance-mode store rules', () => {
     expect(read).not.toHaveBeenCalled()
     expect(store.get().known).toBe(false)
   })
+
+  it('says nothing and notifies no one when a read in flight fails after stop()', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    const error = vi.spyOn(logger, 'error').mockImplementation(() => {})
+    const reading: { fail: (reason: Error) => void } = { fail: () => {} }
+    const store = createMaintenanceModeStore({
+      read: () =>
+        new Promise<MaintenanceModeStateRow>((_resolve, reject) => {
+          reading.fail = reject
+        }),
+    })
+    const listener = vi.fn()
+    store.onReload(listener)
+
+    const pending = store.reload()
+    await store.stop()
+    reading.fail(new Error('connection terminated'))
+    await pending
+
+    expect(warn).not.toHaveBeenCalled()
+    expect(error).not.toHaveBeenCalled()
+    expect(listener).not.toHaveBeenCalled()
+    expect(store.lastReloadError()).toBeNull()
+  })
 })

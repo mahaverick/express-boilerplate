@@ -4,7 +4,7 @@
  * in-memory store reloads. Migration 0024 inserts the row (mode `off`,
  * version 0); no code inserts or deletes one. History lives in the audit log.
  */
-import { sql, type InferInsertModel, type InferSelectModel } from 'drizzle-orm'
+import { sql, type InferSelectModel } from 'drizzle-orm'
 import { check, integer, pgTable, smallint, text, timestamp, varchar } from 'drizzle-orm/pg-core'
 import {
   MAINTENANCE_MODE_TEXT_MAX_LENGTH,
@@ -72,8 +72,3 @@ export const maintenanceModeState = pgTable(
  * The maintenance_mode_state row as read from the database.
  */
 export type MaintenanceModeStateRow = InferSelectModel<typeof maintenanceModeState>
-
-/**
- * The maintenance_mode_state row as written to the database.
- */
-export type NewMaintenanceModeStateRow = InferInsertModel<typeof maintenanceModeState>

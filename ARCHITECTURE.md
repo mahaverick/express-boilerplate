@@ -1182,17 +1182,20 @@ customer write answers 503 `READ_ONLY_MODE`; reads and jobs keep running).
   switching off needs nothing more. `since` is when the mode last changed, and
   `changedBy` is who set it: a save that keeps the mode (a message edit) leaves
   both, and leaves the stored reason too unless the body sends a new one. A
-  change of mode stores the reason sent (none if absent) and the actor. After the commit it publishes, queues a notice
-  (in-app and email, type and template `maintenance_mode_changed`) to every
-  other platform owner and admin for a switch-on, an escalation or a
-  switch-off, and entering `full` waits for them until
-  `MAINTENANCE_MODE_NOTICE_WAIT_MS` after the commit, then pauses the queues
-  unless a later change has superseded this one. The type is staff-only
-  (`STAFF_ONLY_NOTIFICATION_TYPES`): a user with no platform membership does
-  not see it in `GET /notifications/preferences`. `GET` shows the state, the queues and the
-  environment name; `GET /platform/system/status` has a `maintenance`
+  change of mode stores the reason sent (none if absent) and the actor. After
+  the commit it publishes, queues a notice (in-app and email, type and template
+  `maintenance_mode_changed`) to every other platform owner and admin for a
+  switch-on, an escalation or a switch-off, and entering `full` waits for them
+  until `MAINTENANCE_MODE_NOTICE_WAIT_MS` after the commit, then pauses the
+  queues unless a later change has superseded this one. The type is staff-only
+  (`STAFF_ONLY_NOTIFICATION_TYPES`): a user with no platform membership does not
+  see it in `GET /notifications/preferences`. `GET` shows the state, the queues
+  and the environment name; `GET /platform/system/status` has a `maintenance`
   section; `GET /api/v1/status/maintenance` is public (120 a minute per IP,
   cacheable for 5 s).
+  Once the row has committed, a failed notice lookup or read-back is logged and
+  the request still answers 200 with the committed state (the actor's name then
+  reads 'A staff member').
 
 | Code                        | Status                 | When                                                                          |
 | --------------------------- | ---------------------- | ----------------------------------------------------------------------------- |

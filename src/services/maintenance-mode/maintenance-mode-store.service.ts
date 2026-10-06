@@ -176,6 +176,8 @@ export function createMaintenanceModeStore(
       // eslint-disable-next-line unicorn/no-null -- the contract is null for "no failure"
       state.lastReloadError = null
     } catch (error) {
+      // A read that fails after stop() is shutdown noise: say nothing, notify no one.
+      if (state.isClosed) return
       // Once per failing streak: the backstop retries every interval.
       if (state.lastReloadError === null) {
         if (state.snapshot.known) {
