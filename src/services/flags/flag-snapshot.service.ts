@@ -129,10 +129,11 @@ return 0`
  * One Lua script compares and sets, so the write happens only while the
  * stored value is still the exact string this run read. A snapshot another
  * replica stored since (a run outlasting its interval, a stalled job's
- * retry), or one whose `checkedAt` another run's touch advanced, is left
- * alone: overwriting it would put back older content under a newer
- * `checkedAt`, which every replica's reload would accept. A deleted
- * snapshot is not recreated.
+ * retry), or one whose `checkedAt` another run's touch moved, is left
+ * alone: overwriting it would put back older content, or an earlier
+ * `checkedAt`. A replica holding a copy checked later refuses that
+ * (`isOlder`), but one without a newer copy (a fresh boot) would load it
+ * until the next run replaced it. A deleted snapshot is not recreated.
  * @param stored - The snapshot and the exact string this run read.
  * @param checkedAt - When PostHog confirmed it.
  * @returns `touched` when it was rewritten; `skipped` when the stored value

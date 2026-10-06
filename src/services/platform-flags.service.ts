@@ -7,7 +7,7 @@
  * the live evaluator. Evaluate is the one place traits leave the server, so
  * it is audited as `user.flags_evaluated`, at most once per staff member,
  * user, tenant and app every `TIMELINE_AUDIT_THROTTLE_SECONDS`, before
- * anything is read.
+ * anything is evaluated.
  */
 import { posthogFlagUrl } from '@/configs/analytics.config'
 import { FLAG_TRAITS, FLAGS, type FlagEntry } from '@/constants/flags.constants'
@@ -119,7 +119,10 @@ const NO_TENANT = 'none'
  * Audit an evaluate view, at most once per staff member, user, tenant (or
  * none) and app every `TIMELINE_AUDIT_THROTTLE_SECONDS`
  * (platform-view-audit.service.ts): the entry records the tenant and the
- * app, so each combination of them is audited on its own.
+ * app, so each combination of them is audited on its own. The ids are
+ * lowercased so the key never depends on the case a UUID arrived in; an id
+ * in another case than the stored one finds no row today and is refused
+ * before the audit anyway.
  * @param actor - The staff member.
  * @param query - The validated query; the entry records its tenant and app.
  * @returns Resolves once written, or once the throttle said it already was.
@@ -130,11 +133,11 @@ async function auditEvaluateView(actor: Actor, query: PlatformFlagsEvaluateQuery
     key: redisKey(
       'flags',
       'audit',
-      actor.userId,
+      actor.userId.toLowerCase(),
       'user',
-      query.userId,
+      query.userId.toLowerCase(),
       'tenant',
-      query.tenantId ?? NO_TENANT,
+      query.tenantId?.toLowerCase() ?? NO_TENANT,
       'app',
       query.app
     ),

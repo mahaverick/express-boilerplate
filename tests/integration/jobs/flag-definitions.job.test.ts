@@ -3,10 +3,11 @@
  * run against the fake PostHog: a 200 writes and publishes the parsed
  * snapshot, a 304 (sent the stored ETag verbatim) touches only `checkedAt`,
  * and only while the stored snapshot is still the one the run read (a
- * snapshot another replica stored mid-run survives), a failure keeps the snapshot and records the code, a stored snapshot from
- * another registry or parser (its fingerprint differs, or it has none) is
- * fetched unconditionally and replaced, and nothing is fetched while flags
- * are off. No Worker runs in this file.
+ * snapshot another replica stored mid-run survives), a failure keeps the
+ * snapshot and records the code, a stored snapshot from another registry
+ * or parser (its fingerprint differs, or it has none) is fetched
+ * unconditionally and replaced, and nothing is fetched while flags are
+ * off. No Worker runs in this file.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { isFlagsEnabled } from '@/configs/analytics.config'

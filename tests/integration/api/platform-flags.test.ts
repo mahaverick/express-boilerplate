@@ -386,6 +386,24 @@ describe('GET /platform/flags/evaluate', () => {
     expect(audited).toHaveLength(3)
   })
 
+  it('writes one entry when a repeat sends the tenant id in upper case', async () => {
+    // Ids are stored lower case and compared exactly, so the membership check refuses the variant before the audit.
+    const { userId, tenantId } = await memberWithTenant()
+    const { user: admin, token } = await createTrackedStaff('admin')
+
+    const first = await staffGet(
+      token,
+      `/flags/evaluate?userId=${userId}&tenantId=${tenantId}&app=react`
+    )
+    const repeat = await staffGet(
+      token,
+      `/flags/evaluate?userId=${userId}&tenantId=${tenantId.toUpperCase()}&app=react`
+    )
+
+    expect([first.status, repeat.status]).toEqual([200, 400])
+    expect(await evaluateAudits(admin.id)).toHaveLength(1)
+  })
+
   it('audits the same user again for the other app inside the window', async () => {
     const { userId } = await memberWithTenant()
     const { user: admin, token } = await createTrackedStaff('admin')

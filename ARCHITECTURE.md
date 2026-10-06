@@ -1018,9 +1018,10 @@ every API and worker process: in-memory snapshot (reload on message, 60 s backst
   (`touchFlagSnapshot`): only while the stored value is still the exact
   string the run read. Two replicas' runs can overlap (a run outlasting its
   interval, a stalled job's retry); without the check, a 304 landing after
-  another run's 200 would put the older content back under a newer
-  `checkedAt`, which every replica's reload accepts. A skipped touch logs
-  at `info`.
+  another run's 200 would put the older content back, or an earlier
+  `checkedAt`. A replica holding a copy checked later refuses it, but one
+  without a newer copy (a fresh boot) would load it until the next run
+  replaced it. A skipped touch logs at `info`.
 - **Kill-switch latency**: a PostHog edit reaches every process on the
   next definitions run (every 30 s) and its `reload` message, or the 60 s
   backstop if the message is missed. The run shares the `analytics` worker

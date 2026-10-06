@@ -12,10 +12,10 @@
  * answers 404. It serves `GET /flags/definitions` from `flagDefinitions`,
  * answering 304 with an empty body when `If-None-Match` names the current
  * ETag, after awaiting `beforeFlagDefinitions` when one is set (a test
- * changes Redis mid-run with it). `respondWith` and `onBatch` govern none of those. `hang(ms)` holds
- * every later request, private API included, for that long before
- * answering, and `close()` ends held requests too, so a test never waits on
- * one.
+ * changes Redis mid-run with it). `respondWith` and `onBatch` govern none
+ * of those. `hang(ms)` holds every later request, private API included,
+ * for that long before answering, and `close()` ends held requests too, so
+ * a test never waits on one.
  */
 import http, { type IncomingHttpHeaders, type ServerResponse } from 'node:http'
 import type { AddressInfo, Socket } from 'node:net'
