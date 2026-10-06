@@ -10,6 +10,7 @@ import {
   STEP_UP_MAX_AGE_MS,
 } from '@/constants/auth.constants'
 import { HttpError } from '@/errors/http-error'
+import { maintenanceRefusalFor } from '@/middlewares/maintenance-mode.middleware'
 import { toAuthenticatedUser, type AuthenticatedUser } from '@/presenters/user.presenter'
 import { UserRepository } from '@/repositories/user.repository'
 import { requestContextStore } from '@/services/request-context.service'
@@ -101,15 +102,20 @@ async function loadAuthenticatedUser(userId: string): Promise<AuthenticatedUser>
  * react client's interceptor treats as a verdict on the token and signs the
  * user out rather than refreshing.
  *
+ * On a route Apex calls, a maintenance refusal the gate left on the response
+ * is answered here unless the user holds a platform role
+ * (`maintenanceRefusalFor`), so staff keep working in Apex during
+ * maintenance; an unauthenticated call is still answered 401 first.
+ *
  * Catches and calls `next(error)` itself, so a test that calls it directly
  * sees a call to `next`, not an unhandled rejection.
  * @param request - The incoming request.
- * @param _response - The response. Unused: a rejection is reported by the terminal error handler, not here.
+ * @param response - The response, read for the gate's staff-pass mark; a rejection is written by the terminal error handler, not here.
  * @param next - Passes control on once `request.user` is populated, or forwards the rejection.
  */
 export async function requireAuth(
   request: Request,
-  _response: Response,
+  response: Response,
   next: NextFunction
 ): Promise<void> {
   try {
@@ -130,6 +136,11 @@ export async function requireAuth(
     request.user = await loadAuthenticatedUser(payload.sub)
     const context = requestContextStore.getStore()
     if (context) context.userId = request.user.id
+    const refusal = await maintenanceRefusalFor(request.user.id, response)
+    if (refusal) {
+      next(refusal)
+      return
+    }
     next()
   } catch (error) {
     next(error)

@@ -24,6 +24,7 @@ import { record } from '@/services/audit.service'
 import { withTransaction, type DbTransaction } from '@/services/database.service'
 import { emitDomainEvent } from '@/services/domain-events.service'
 import { logger } from '@/services/logger.service'
+import { assertSignInAllowed } from '@/services/maintenance-mode/maintenance-mode.service'
 import { autoJoinSafely, getPlatformMembership } from '@/services/platform.service'
 import {
   claimToken,
@@ -230,10 +231,13 @@ async function platformRoleForLogin(userId: string): Promise<MembershipRole | nu
  * password change or reset still in flight is waited for, and one that
  * committed after the compare answers the same 401, so no session outlives it.
  * A deactivation or soft delete that committed after the first read answers
- * the same 401 there too.
+ * the same 401 there too. In `full` maintenance a user with no platform role
+ * is refused (`assertSignInAllowed`) once the credentials have passed and
+ * before anything is written; an auto-join domain user who has not joined
+ * yet counts as non-staff.
  * @param input - The validated login body.
  * @returns The user, their platform role, an access token and a new refresh token.
- * @throws {HttpError} 401 'Invalid email or password'.
+ * @throws {HttpError} 401 'Invalid email or password', or 503 `MAINTENANCE_MODE` (a `MaintenanceModeError`).
  */
 export async function login(input: LoginInput): Promise<LoginResult> {
   const user = await userRepository.findByEmail(input.email)
@@ -243,6 +247,9 @@ export async function login(input: LoginInput): Promise<LoginResult> {
   if (!user || !isPasswordCorrect || !user.active || !user.passwordHash || !user.emailVerifiedAt) {
     throw new HttpError('Invalid email or password', 401)
   }
+
+  // After the credential guard and before any write, so a refused sign-in leaves no trace.
+  await assertSignInAllowed(user.id)
 
   // After the guard, so a failed attempt leaves no trace; before tokens, so a failed UPDATE sets no cookie.
   await userRepository.update(user.id, { lastLoggedInAt: new Date() })

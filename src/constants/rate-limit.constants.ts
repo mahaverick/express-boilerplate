@@ -48,7 +48,7 @@ export interface RateLimiterSpec {
 }
 
 /**
- * The 28 rate limiters this API defines, by name.
+ * The 29 rate limiters this API defines, by name.
  */
 export type RateLimitName =
   | 'register'
@@ -79,6 +79,7 @@ export type RateLimitName =
   | 'analyticsProxy'
   | 'platformTimeline'
   | 'flagExposure'
+  | 'maintenanceStatus'
 
 const RATE_LIMITED_MESSAGE = 'Too many attempts. Please try again later.'
 
@@ -161,7 +162,7 @@ export function flagExposureRateLimitKey(request: Request): string {
 }
 
 /**
- * The 28 rate-limit specs this API enforces, each with the reason for its
+ * The 29 rate-limit specs this API enforces, each with the reason for its
  * window, limit and key. `name` is the live Redis key prefix
  * (`redisKey('rl', name)`): changing one resets that limiter's counters in
  * every deployment, and tests/unit/constants/rate-limit.constants.test.ts
@@ -531,6 +532,18 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     windowMs: 60_000,
     limit: 60,
     keyBy: flagExposureRateLimitKey,
+    message: RATE_LIMITED_MESSAGE,
+  },
+  /**
+   * 120 a minute per IP for the public `GET /status/maintenance`: react
+   * fetches it once at start and every 30-40 s while `full`, so a busy office
+   * NAT address stays far under it, and a script polling it is bounded.
+   */
+  maintenanceStatus: {
+    name: 'maintenance-status',
+    windowMs: 60_000,
+    limit: 120,
+    keyBy: 'ip',
     message: RATE_LIMITED_MESSAGE,
   },
 }

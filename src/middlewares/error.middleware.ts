@@ -1,6 +1,7 @@
 /**
  * @file The terminal error handler. It writes the envelope
- * `{ success, message, statusCode, code?, errors?, errorId? }` (see
+ * `{ success, message, statusCode, code?, errors?, errorId? }`, plus `mode`
+ * and `since` on a maintenance-mode 503 (see
  * ARCHITECTURE.md for why not RFC 9457). `errors` is field-level validation
  * detail; `code` is one stable token a client branches on, kept separate so
  * the two never collide. Every 5xx carries an `errorId`, which its log line
@@ -13,6 +14,7 @@ import { SpanStatusCode, trace } from '@opentelemetry/api'
 import { uuidv7 } from '@posthog/core/vendor/uuidv7'
 import { type NextFunction, type Request, type Response } from 'express'
 import { HttpError } from '@/errors/http-error'
+import { MaintenanceModeError } from '@/errors/maintenance-mode-errors'
 import { redactedForLog } from '@/errors/postgres-errors'
 import { TimelineUnavailableError } from '@/errors/timeline-errors'
 import { REQUEST_ID_HEADER } from '@/middlewares/request-id.middleware'
@@ -167,6 +169,16 @@ export function errorHandler(
       errorId,
     })
     request.socket.destroy()
+    return
+  }
+
+  // A maintenance refusal is not a fault: its message is the owner's, shown as is, and it is never logged.
+  if (error instanceof MaintenanceModeError) {
+    response.setHeader('Retry-After', String(error.retryAfterSeconds))
+    errorResponse(response, error.message, error.statusCode, error.code, undefined, {
+      mode: error.mode,
+      since: error.since,
+    })
     return
   }
 

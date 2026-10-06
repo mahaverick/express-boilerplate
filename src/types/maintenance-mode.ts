@@ -28,3 +28,12 @@ export interface MaintenanceModeSnapshot {
    */
   known: boolean
 }
+
+/**
+ * What `GET /api/v1/status/maintenance` answers, to anyone.
+ */
+export interface PublicMaintenanceStatus {
+  mode: MaintenanceMode
+  message: string | null
+  since: string | null
+}
