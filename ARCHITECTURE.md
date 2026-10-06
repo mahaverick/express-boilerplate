@@ -1179,8 +1179,10 @@ customer write answers 503 `READ_ONLY_MODE`; reads and jobs keep running).
   `maintenance-mode-change` limiter). Switching on or escalating needs a
   reason and `confirm` equal to `APP_ENV`; every change to a mode that stays
   on, a message edit or a de-escalation included, still needs a message, and
-  switching off needs nothing more. `since` is when the mode last changed: a
-  message edit leaves it. After the commit it publishes, queues a notice
+  switching off needs nothing more. `since` is when the mode last changed, and
+  `changedBy` is who set it: a save that keeps the mode (a message edit) leaves
+  both, and leaves the stored reason too unless the body sends a new one. A
+  change of mode stores the reason sent (none if absent) and the actor. After the commit it publishes, queues a notice
   (in-app and email, type and template `maintenance_mode_changed`) to every
   other platform owner and admin for a switch-on, an escalation or a
   switch-off, and entering `full` waits for them until

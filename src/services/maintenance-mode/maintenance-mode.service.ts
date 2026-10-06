@@ -295,7 +295,8 @@ async function queueNotices(actor: Actor, change: CommittedChange): Promise<Job[
  * transaction re-checks the owner role under lock, locks the row, checks
  * `expectedVersion` (409), answers a no-op (same mode and message) with the
  * current state and writes nothing, checks the change's rules, updates the
- * row (`version + 1`) and writes the audit entry. Then it publishes the
+ * row (`version + 1`; a save that keeps the mode keeps `changed_at`, `changed_by`
+ * and, unless the body sends one, the reason) and writes the audit entry. Then it publishes the
  * reload and rereads this replica's copy, queues notices for a switch-on,
  * an escalation or a switch-off, and entering `full` waits for them under
  * one shared deadline before pausing every queue (a timeout or Redis error

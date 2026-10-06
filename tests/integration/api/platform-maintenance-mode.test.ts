@@ -329,6 +329,51 @@ describe('PUT /platform/maintenance-mode', () => {
     expect(await pendingMaintenanceNotices()).toEqual([])
   })
 
+  it('keeps who set the mode and its reason across a message edit, and replaces them on a mode change', async () => {
+    const owner = await createTrackedStaff('owner')
+    const other = await createTrackedStaff('owner')
+    const first = await change(owner.token, {
+      mode: 'full',
+      message: 'One.',
+      reason: 'Reason R',
+      expectedVersion: await currentVersion(owner.token),
+      confirm: ENVIRONMENT,
+    })
+    expect(first.status).toBe(200)
+    const began = viewOf(first).since
+
+    const unreasoned = await change(other.token, {
+      mode: 'full',
+      message: 'Two.',
+      expectedVersion: viewOf(first).version,
+    })
+    expect(unreasoned.status).toBe(200)
+    expect(viewOf(unreasoned)).toMatchObject({ reason: 'Reason R', since: began })
+    expect(viewOf(unreasoned).changedBy?.id).toBe(owner.user.id)
+
+    const reasoned = await change(other.token, {
+      mode: 'full',
+      message: 'Three.',
+      reason: 'Reason R2',
+      expectedVersion: viewOf(unreasoned).version,
+    })
+    expect(reasoned.status).toBe(200)
+    expect(viewOf(reasoned)).toMatchObject({ reason: 'Reason R2', since: began })
+    expect(viewOf(reasoned).changedBy?.id).toBe(owner.user.id)
+    const entries = await auditEntries()
+    const edits = entries.filter((entry) => entry.metadata.from === 'full')
+    expect(edits.map((entry) => entry.metadata.reason)).toEqual([NONE, 'Reason R2'])
+
+    const changed = await change(other.token, {
+      mode: 'read_only',
+      message: 'Four.',
+      expectedVersion: viewOf(reasoned).version,
+    })
+    expect(changed.status).toBe(200)
+    expect(viewOf(changed).reason).toBe(NONE)
+    expect(viewOf(changed).changedBy?.id).toBe(other.user.id)
+  })
+
   it('de-escalates from full with no confirm, resumes the queues, and notifies nobody', async () => {
     const { token } = await createTrackedStaff('owner')
     await createTrackedStaff('admin')

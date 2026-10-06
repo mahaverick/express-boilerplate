@@ -22,6 +22,7 @@ const ROW_ID = 1
 
 /**
  * What one change writes; `version` and `changed_at` are set by the update itself (`changed_at` only when the mode changes).
+ * When the mode stays the same the stored `changed_by` is kept, and so is the stored `reason` unless `reason` is given.
  */
 export interface MaintenanceModeChange {
   mode: MaintenanceMode
@@ -129,7 +130,9 @@ export async function findMaintenanceModeStaff(
  * Write a change only if the stored version is still `expectedVersion`,
  * incrementing it. `changed_at` is the time the mode last changed: it takes
  * the transaction's time only when the mode differs from the stored one, so
- * a message edit or any other save that keeps the mode leaves it alone.
+ * a message edit or any other save that keeps the mode leaves it alone. Such
+ * a save also keeps `changed_by` (who set the mode) and keeps the stored
+ * `reason` unless the change carries one; a mode change always writes both.
  * @param change - The new mode, message, reason and actor.
  * @param expectedVersion - The version the caller read.
  * @param executor - The change's transaction.
@@ -145,8 +148,8 @@ export async function updateMaintenanceModeStateIfVersion(
     .set({
       mode: change.mode,
       message: change.message,
-      reason: change.reason,
-      changedBy: change.changedBy,
+      reason: sql`case when ${maintenanceModeState.mode} = ${change.mode} then coalesce(${change.reason}::text, ${maintenanceModeState.reason}) else ${change.reason}::text end`,
+      changedBy: sql`case when ${maintenanceModeState.mode} = ${change.mode} then ${maintenanceModeState.changedBy} else ${change.changedBy}::varchar end`,
       changedAt: sql`case when ${maintenanceModeState.mode} = ${change.mode} then ${maintenanceModeState.changedAt} else now() end`,
       version: sql`${maintenanceModeState.version} + 1`,
     })

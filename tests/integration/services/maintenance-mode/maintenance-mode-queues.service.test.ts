@@ -188,14 +188,16 @@ describe('resuming when the duplicate cleanup fails', () => {
     expect(String(warn.mock.calls[0]?.[0])).toMatch(/duplicate/i)
   })
 
-  it('says a queue could not be resumed, and may still be paused, when its resume fails', async () => {
+  it('says the pause state could not be checked or resumed, and a later reload retries, when its resume fails', async () => {
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
     await setAllQueuesPaused(true)
     vi.spyOn(getEmailQueue(), 'resume').mockRejectedValue(new Error('Connection is closed.'))
 
     await setAllQueuesPaused(false)
 
-    expect(String(warn.mock.calls[0]?.[0])).toMatch(/could not be resumed.*may still be paused/i)
+    expect(String(warn.mock.calls[0]?.[0])).toMatch(
+      /pause state could not be checked or resumed.*later reload retries the resume/i
+    )
   })
 })
 
