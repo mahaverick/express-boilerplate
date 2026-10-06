@@ -35,11 +35,11 @@ export const maintenanceModeState = pgTable(
      */
     message: text('message'),
     /**
-     * The internal reason the owner gave, if any.
+     * The internal reason given when the current mode was set, if any; a save that keeps the mode keeps it unless a new reason is sent.
      */
     reason: text('reason'),
     /**
-     * The staff member who made the change; null for the seeded row, and
+     * The staff member who set the current mode (a save that keeps the mode leaves it); null for the seeded row, and
      * once that user is purged.
      */
     changedBy: varchar('changed_by', { length: 36 }).references(() => userModel.id, {

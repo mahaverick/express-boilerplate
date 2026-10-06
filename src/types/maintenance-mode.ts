@@ -83,7 +83,7 @@ export interface PlatformMaintenanceModeView {
    */
   message: string | null
   /**
-   * The reason given with the last change, if any.
+   * The reason given when the current mode was set, if any. A save that keeps the mode keeps it unless that save sends a new reason.
    */
   reason: string | null
   /**
@@ -91,7 +91,7 @@ export interface PlatformMaintenanceModeView {
    */
   since: string | null
   /**
-   * Who made the last change; null for the seeded row or a purged user.
+   * Who set the current mode (a save that keeps the mode leaves it); null for the seeded row or a purged user.
    */
   changedBy: { id: string; name: string } | null
   /**
