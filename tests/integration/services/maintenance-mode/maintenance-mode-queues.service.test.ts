@@ -16,7 +16,10 @@ import {
   reconcileQueuePause,
   setAllQueuesPaused,
 } from '@/services/maintenance-mode/maintenance-mode-queues.service'
-import { reloadMaintenanceMode } from '@/services/maintenance-mode/maintenance-mode-store.service'
+import {
+  getMaintenanceMode,
+  reloadMaintenanceMode,
+} from '@/services/maintenance-mode/maintenance-mode-store.service'
 import { getMaintenanceModeStatus } from '@/services/maintenance-mode/maintenance-mode.service'
 import {
   closeQueue,
@@ -34,7 +37,7 @@ const NOW = new Date('2026-10-06T10:00:30.000Z')
 const NONE = null
 
 /**
- * A known snapshot that changed `ageMs` before `NOW`.
+ * A known snapshot, at the version this process's store holds, that changed `ageMs` before `NOW`.
  * @param mode - Its mode.
  * @param ageMs - How long before `NOW` it changed.
  * @returns The snapshot.
@@ -46,7 +49,7 @@ function snapshot(mode: 'off' | 'read_only' | 'full', ageMs: number): Maintenanc
     message: mode === 'off' ? undefined : 'Back soon.',
     since: mode === 'off' ? undefined : changedAt,
     changedAt,
-    version: 1,
+    version: getMaintenanceMode().version,
     known: true,
   } as unknown as MaintenanceModeSnapshot
 }
@@ -121,6 +124,78 @@ describe('reconcileQueuePause', () => {
     failing.mockRestore()
     expect(await pauseFlags()).toEqual({ ...ALL_PAUSED, email: false })
     expect(warn).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('a reconcile for a superseded snapshot', () => {
+  it('does not pause when the store has moved on', async () => {
+    const stale = snapshot('full', 60_000)
+    await storeMaintenanceMode('off')
+    await reloadMaintenanceMode()
+
+    await reconcileQueuePause(stale, NOW)
+
+    expect(await pauseFlags()).toEqual(NONE_PAUSED)
+  })
+
+  it('does not resume when the store has moved on', async () => {
+    await setAllQueuesPaused(true)
+    const stale = snapshot('read_only', 0)
+    await storeMaintenanceMode('full', { changedAt: new Date(0) })
+    await reloadMaintenanceMode()
+
+    await reconcileQueuePause(stale, NOW)
+
+    expect(await pauseFlags()).toEqual(ALL_PAUSED)
+  })
+
+  it('rechecks the version just before each pause, so a change landing mid-reconcile wins', async () => {
+    const stale = snapshot('full', 60_000)
+    let moved: Promise<void> | undefined
+    const moveStore = (): Promise<void> => {
+      moved ??= (async () => {
+        await storeMaintenanceMode('off')
+        await reloadMaintenanceMode()
+      })()
+      return moved
+    }
+    for (const queue of getAllQueues()) {
+      vi.spyOn(queue, 'isPaused').mockImplementation(async () => {
+        await moveStore()
+        return false
+      })
+    }
+
+    await reconcileQueuePause(stale, NOW)
+
+    vi.restoreAllMocks()
+    expect(await pauseFlags()).toEqual(NONE_PAUSED)
+  })
+})
+
+describe('resuming when the duplicate cleanup fails', () => {
+  it('still resumes the queue, warning once per streak that duplicate runs may follow', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    vi.spyOn(getEmailQueue(), 'getJobSchedulers').mockRejectedValue(new Error('boom'))
+    await setAllQueuesPaused(true)
+
+    await setAllQueuesPaused(false)
+    await setAllQueuesPaused(true)
+    await setAllQueuesPaused(false)
+
+    expect(await pauseFlags()).toEqual(NONE_PAUSED)
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(String(warn.mock.calls[0]?.[0])).toMatch(/duplicate/i)
+  })
+
+  it('says a queue is still paused when its resume fails', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    await setAllQueuesPaused(true)
+    vi.spyOn(getEmailQueue(), 'resume').mockRejectedValue(new Error('Connection is closed.'))
+
+    await setAllQueuesPaused(false)
+
+    expect(String(warn.mock.calls[0]?.[0])).toMatch(/still paused/i)
   })
 })
 

@@ -121,7 +121,10 @@ function entriesOf(app: Express): WalkedEntry[] {
 }
 
 /**
- * The rule an entry falls under: the prefix rule for a `*` mount, else the first matching rule.
+ * The rule an entry falls under: the prefix rule for a `*` mount, else the
+ * rule whose path is exactly the entry's route template (a rule never
+ * covers a different template that merely matches its pattern, so a literal
+ * route beside a parameterised one needs a row of its own).
  * @param entry - The entry.
  * @returns The rule, or undefined.
  */
@@ -131,7 +134,12 @@ function ruleFor(entry: WalkedEntry): MaintenanceRouteRule | undefined {
       (rule) => rule.match === 'prefix' && rule.path === entry.path
     )
   }
-  return classifyMaintenanceRoute(entry.method, entry.path)
+  return MAINTENANCE_ROUTE_RULES.find(
+    (rule) =>
+      rule.match === 'exact' &&
+      rule.path === entry.path &&
+      (rule.method === '*' || rule.method === entry.method)
+  )
 }
 
 /**
@@ -318,6 +326,18 @@ describe('maintenance-mode route classification', () => {
     app.use('/api/v1', api)
 
     expect(unclassified(entriesOf(app))).toEqual(['POST /api/v1/tenants/:slug/archive-everything'])
+  })
+
+  it('fails on a literal route that only matches a parameterised rule’s pattern', () => {
+    const app = express()
+    const api = Router()
+    const tenants = Router()
+    tenants.patch('/:slug/members/:userId', noop)
+    tenants.patch('/:slug/members/bulk', noop)
+    api.use('/tenants', tenants)
+    app.use('/api/v1', api)
+
+    expect(unclassified(entriesOf(app))).toEqual(['PATCH /api/v1/tenants/:slug/members/bulk'])
   })
 
   it('fails on a rule whose route is gone', () => {

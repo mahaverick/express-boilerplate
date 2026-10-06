@@ -5,6 +5,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
+import { MAINTENANCE_ACTOR_PLACEHOLDER } from '@/constants/maintenance-mode.constants'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { PlatformEmailRecord } from '@/repositories/platform-email.repository'
 import { renderForMessage } from '@/services/mailer.service'
@@ -12,7 +13,6 @@ import {
   buildPreviewMessage,
   canResendFor,
   INVITER_NAME_PLACEHOLDER,
-  MAINTENANCE_ACTOR_PLACEHOLDER,
   MAINTENANCE_REASON_PLACEHOLDER,
   rateOf,
   TOKEN_MASK,

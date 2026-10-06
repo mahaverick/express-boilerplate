@@ -13,6 +13,7 @@ import type { Job } from 'bullmq'
 import { getEnv } from '@/configs/env.config'
 import {
   CONFIRMATION_MISMATCH_CODE,
+  MAINTENANCE_ACTOR_PLACEHOLDER,
   MAINTENANCE_MODE_CODE,
   MAINTENANCE_MODE_CONFLICT_CODE,
   type MaintenanceMode,
@@ -34,6 +35,7 @@ import { withTransaction } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
 import {
   hasPendingNotices,
+  noticeWaitBudgetMs,
   rememberNoticeJobs,
   waitForNoticeJobs,
 } from '@/services/maintenance-mode/maintenance-mode-notices.service'
@@ -144,13 +146,14 @@ function changeKindOf(from: MaintenanceMode, to: MaintenanceMode): ChangeKind {
 }
 
 /**
- * A staff member's display name: their names, or their address when they have none.
+ * A staff member's display name: their names, or `MAINTENANCE_ACTOR_PLACEHOLDER` when they have none:
+ * never their address, which would reach other staff's notices and the notice jobs' Redis data.
  * @param staff - The staff member.
  * @returns The name.
  */
 function nameOf(staff: MaintenanceModeStaff): string {
   const name = [staff.firstName, staff.lastName].filter(Boolean).join(' ')
-  return name === '' ? staff.email : name
+  return name === '' ? MAINTENANCE_ACTOR_PLACEHOLDER : name
 }
 
 /**
@@ -214,6 +217,7 @@ interface CommittedChange {
   to: MaintenanceMode
   reason: string | null
   changedAt: Date
+  version: number
 }
 
 /**
@@ -229,7 +233,7 @@ async function queueNotices(actor: Actor, change: CommittedChange): Promise<Job[
     listMaintenanceModeNoticeRecipients(actor.userId),
     findMaintenanceModeStaff(actor.userId),
   ])
-  const actorName = actorRow ? nameOf(actorRow) : 'A staff member'
+  const actorName = actorRow ? nameOf(actorRow) : MAINTENANCE_ACTOR_PLACEHOLDER
   const appName = getEnv().APP_NAME
   const mode = MODE_WORDS[change.to]
   const changedAt = change.changedAt.toISOString()
@@ -339,7 +343,14 @@ export async function changeMaintenanceMode(
       },
       tx
     )
-    return { kind, from: current.mode, to: body.mode, reason, changedAt: updated.changedAt }
+    return {
+      kind,
+      from: current.mode,
+      to: body.mode,
+      reason,
+      changedAt: updated.changedAt,
+      version: updated.version,
+    }
   })
   if (committed === undefined) return getPlatformMaintenanceMode()
 
@@ -354,13 +365,17 @@ export async function changeMaintenanceMode(
     })
   }
   if (committed.to === 'full' && committed.from !== 'full') {
-    const outcome = await waitForNoticeJobs({ notification: jobs })
+    const outcome = await waitForNoticeJobs(
+      { notification: jobs },
+      noticeWaitBudgetMs(committed.changedAt)
+    )
     if (outcome !== 'done') {
       logger.warn('Maintenance-mode notices were not all sent before the queues paused', {
         outcome,
       })
     }
-    await setAllQueuesPaused(true)
+    // A later change may have left `full` during the wait; it owns the queues now.
+    if (getMaintenanceMode().version === committed.version) await setAllQueuesPaused(true)
   } else if (committed.from === 'full' && committed.to !== 'full') {
     await setAllQueuesPaused(false)
   }

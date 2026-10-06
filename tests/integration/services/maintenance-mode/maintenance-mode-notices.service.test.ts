@@ -5,10 +5,11 @@
  * every job finished or gone), and the notice wait's timeout and done paths.
  */
 import { randomUUID } from 'node:crypto'
-import { afterAll, afterEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import {
   hasPendingNotices,
   noticeIdsKey,
+  noticeWaitBudgetMs,
   rememberNoticeJobs,
   waitForNoticeJobs,
 } from '@/services/maintenance-mode/maintenance-mode-notices.service'
@@ -91,5 +92,29 @@ describe('waitForNoticeJobs', () => {
 
   it('is done at once with no jobs', async () => {
     expect(await waitForNoticeJobs({ notification: [] }, 300)).toBe('done')
+  })
+})
+
+describe('noticeWaitBudgetMs', () => {
+  const COMMITTED = new Date('2026-10-06T10:00:00.000Z')
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('is what is left of the notice wait counted from the commit, on the clock', () => {
+    vi.useFakeTimers({ now: new Date(COMMITTED.getTime() + 3000) })
+
+    expect(noticeWaitBudgetMs(COMMITTED)).toBe(7000)
+  })
+
+  it('is the whole wait at the commit and zero once it has passed', () => {
+    expect(noticeWaitBudgetMs(COMMITTED, COMMITTED.getTime())).toBe(10_000)
+    expect(noticeWaitBudgetMs(COMMITTED, COMMITTED.getTime() + 10_000)).toBe(0)
+    expect(noticeWaitBudgetMs(COMMITTED, COMMITTED.getTime() + 25_000)).toBe(0)
+  })
+
+  it('never exceeds the wait when this replica’s clock runs behind the database’s', () => {
+    expect(noticeWaitBudgetMs(COMMITTED, COMMITTED.getTime() - 4000)).toBe(10_000)
   })
 })

@@ -21,7 +21,7 @@ import { db, type DbExecutor, type DbTransaction } from '@/services/database.ser
 const ROW_ID = 1
 
 /**
- * What one change writes; `version` and `changed_at` are set by the update itself.
+ * What one change writes; `version` and `changed_at` are set by the update itself (`changed_at` only when the mode changes).
  */
 export interface MaintenanceModeChange {
   mode: MaintenanceMode
@@ -127,7 +127,9 @@ export async function findMaintenanceModeStaff(
 
 /**
  * Write a change only if the stored version is still `expectedVersion`,
- * incrementing it and stamping `changed_at` with the transaction's time.
+ * incrementing it. `changed_at` is the time the mode last changed: it takes
+ * the transaction's time only when the mode differs from the stored one, so
+ * a message edit or any other save that keeps the mode leaves it alone.
  * @param change - The new mode, message, reason and actor.
  * @param expectedVersion - The version the caller read.
  * @param executor - The change's transaction.
@@ -145,7 +147,7 @@ export async function updateMaintenanceModeStateIfVersion(
       message: change.message,
       reason: change.reason,
       changedBy: change.changedBy,
-      changedAt: sql`now()`,
+      changedAt: sql`case when ${maintenanceModeState.mode} = ${change.mode} then ${maintenanceModeState.changedAt} else now() end`,
       version: sql`${maintenanceModeState.version} + 1`,
     })
     .where(

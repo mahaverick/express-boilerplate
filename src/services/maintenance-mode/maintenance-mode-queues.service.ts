@@ -12,10 +12,15 @@
  * and the next reload retries them. A reload's pause waits for the grace
  * (`MAINTENANCE_MODE_PAUSE_GRACE_MS`) so the changing request's notices go out first; a resume is immediate,
  * after removing duplicate scheduler runs queued during the pause.
+ *
+ * A reconcile acts only while its snapshot is still the store's: before each
+ * pause or resume it rereads the store's version, so a change that landed
+ * since leaves the queues to that change's own reconcile.
  */
 import type { Job, Queue } from 'bullmq'
 import { MAINTENANCE_MODE_PAUSE_GRACE_MS } from '@/constants/maintenance-mode.constants'
 import { logger } from '@/services/logger.service'
+import { getMaintenanceMode } from '@/services/maintenance-mode/maintenance-mode-store.service'
 import { getAllQueues } from '@/services/queue.service'
 import type { MaintenanceModeSnapshot, QueuePauseState } from '@/types/maintenance-mode'
 
@@ -33,6 +38,11 @@ const PENDING_JOB_TYPES = ['wait', 'delayed', 'prioritized'] as const
  * The queues whose last reconcile failed, so a failure is logged once per streak.
  */
 const failingQueues = new Set<string>()
+
+/**
+ * The queues whose last duplicate cleanup failed, so that is logged once per streak too.
+ */
+const failingDedupes = new Set<string>()
 
 /**
  * What a reload does to the queues for one snapshot: `pause` only for
@@ -54,9 +64,9 @@ export function queuePauseTarget(snapshot: MaintenanceModeSnapshot, now: Date): 
 
 /**
  * Remove the duplicate pending runs a job scheduler gathered while its
- * queue was paused, before the queue resumes (probe P1: a scheduler
- * re-upserted during a pause, as each replica boot does, adds one pending
- * run per elapsed interval). Per scheduler, the pending job with id
+ * queue was paused, before the queue resumes (a scheduler re-upserted
+ * during a pause, as each replica boot does, adds one pending run per
+ * elapsed interval). Per scheduler, the pending job with id
  * `repeat:<key>:<next>` is kept, or else the one due latest; every other is
  * removed. A scheduler's only pending job is never removed: its chain lives
  * there. A job another replica removed first is skipped.
@@ -128,26 +138,58 @@ async function isRemoved(queue: Queue, job: Job): Promise<boolean> {
 }
 
 /**
+ * Remove a paused queue's duplicate scheduler runs before it resumes. A
+ * failure is logged once per streak and never stops the resume: a few
+ * duplicate runs are better than a queue left paused. Never rejects.
+ * @param queue - A paused queue.
+ */
+async function dedupeBeforeResume(queue: Queue): Promise<void> {
+  try {
+    await dedupeSchedulerJobs(queue)
+    failingDedupes.delete(queue.name)
+  } catch (error) {
+    if (!failingDedupes.has(queue.name)) {
+      logger.warn(
+        'Duplicate scheduler runs could not be removed before the queue resumed; duplicate runs may follow',
+        {
+          queue: queue.name,
+          error,
+        }
+      )
+    }
+    failingDedupes.add(queue.name)
+  }
+}
+
+/**
  * Bring one queue to the target. Never rejects.
  * @param queue - The queue.
  * @param target - Pause or resume.
+ * @param version - The store version the target was decided for; the queue is left alone once the store holds another. Omit to act whatever the store holds.
  */
-async function applyTarget(queue: Queue, target: 'pause' | 'resume'): Promise<void> {
+async function applyTarget(
+  queue: Queue,
+  target: 'pause' | 'resume',
+  version?: number
+): Promise<void> {
+  const isSuperseded = (): boolean =>
+    version !== undefined && getMaintenanceMode().version !== version
   try {
     const isPaused = await queue.isPaused()
-    if (target === 'pause' && !isPaused) await queue.pause()
-    if (target === 'resume' && isPaused) {
-      await dedupeSchedulerJobs(queue)
-      await queue.resume()
+    if (target === 'pause' && !isPaused && !isSuperseded()) await queue.pause()
+    if (target === 'resume' && isPaused && !isSuperseded()) {
+      await dedupeBeforeResume(queue)
+      if (!isSuperseded()) await queue.resume()
     }
     failingQueues.delete(queue.name)
   } catch (error) {
     if (!failingQueues.has(queue.name)) {
-      logger.warn('Maintenance mode could not set a queue’s pause state; the next reload retries', {
-        queue: queue.name,
-        target,
-        error,
-      })
+      logger.warn(
+        target === 'resume'
+          ? 'A queue is still paused after maintenance mode ended; the next reload retries the resume'
+          : 'A queue could not be paused for maintenance mode; the next reload retries',
+        { queue: queue.name, error }
+      )
     }
     failingQueues.add(queue.name)
   }
@@ -156,9 +198,10 @@ async function applyTarget(queue: Queue, target: 'pause' | 'resume'): Promise<vo
 /**
  * Bring every queue to one target. Never rejects.
  * @param target - Pause or resume.
+ * @param version - The store version the target was decided for, if it is to be rechecked.
  * @returns Resolves once every queue has been tried.
  */
-async function applyToAllQueues(target: 'pause' | 'resume'): Promise<void> {
+async function applyToAllQueues(target: 'pause' | 'resume', version?: number): Promise<void> {
   let queues: Queue[]
   try {
     queues = getAllQueues()
@@ -167,7 +210,7 @@ async function applyToAllQueues(target: 'pause' | 'resume'): Promise<void> {
     logger.warn('Maintenance mode could not reach the queues', { error })
     return
   }
-  await Promise.all(queues.map((queue) => applyTarget(queue, target)))
+  await Promise.all(queues.map((queue) => applyTarget(queue, target, version)))
 }
 
 /**
@@ -194,7 +237,7 @@ export async function reconcileQueuePause(
 ): Promise<void> {
   const target = queuePauseTarget(snapshot, now)
   if (target === 'leave') return
-  await applyToAllQueues(target)
+  await applyToAllQueues(target, snapshot.version)
 }
 
 /**

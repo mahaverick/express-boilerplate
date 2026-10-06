@@ -38,6 +38,12 @@ export const MAINTENANCE_MODE_RETRY_AFTER_SECONDS = 30
 export const MAINTENANCE_MODE_NOTICE_WAIT_MS = 10_000
 
 /**
+ * What a maintenance-mode notice, and its preview, call the staff member who
+ * made the change when they have no name: never their address.
+ */
+export const MAINTENANCE_ACTOR_PLACEHOLDER = 'A staff member'
+
+/**
  * How old a change into `full` must be before a reload pauses the queues:
  * the changing request pauses them itself once its notices
  * are out, and a reload inside this window must neither pause them before

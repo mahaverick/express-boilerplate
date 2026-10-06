@@ -2,8 +2,8 @@
  * @file The notice jobs of the last maintenance-mode change. Before a
  * change into `full` pauses the queues, the changing request waits for its
  * notices (`waitForNoticeJobs`) by polling each job's state, never with a
- * `QueueEvents` connection (probe P4: a job removed on completion before the
- * wait starts would read as a failure). It records their ids in Redis
+ * `QueueEvents` connection (a job removed on completion before the wait
+ * starts would read as a failure). It records their ids in Redis
  * (`redisKey('maintenance-mode', 'notices')`, kept a week); the status
  * section reads them to report whether any notice has not gone out yet,
  * which happens when the queues paused first: they go out on resume.
@@ -50,7 +50,8 @@ export function noticeIdsKey(): string {
 
 /**
  * Record the last change's notice jobs, replacing the previous change's.
- * A failure is logged: the status then reports no pending notices.
+ * A failure is logged and the previous change's record (kept up to a week)
+ * stays: the status then reports that change's notices, not this one's.
  * @param ids - The job ids.
  * @returns Resolves once stored or logged; never rejects.
  */
@@ -116,6 +117,19 @@ async function pollUntilFinished(
     if (Date.now() >= deadline) return 'timeout'
     await delay(NOTICE_POLL_INTERVAL_MS)
   }
+}
+
+/**
+ * What is left of the notice wait for a change committed at `changedAt`: the
+ * wait counts from the commit, so it always ends by the time another replica's
+ * backstop may pause the queues (`MAINTENANCE_MODE_PAUSE_GRACE_MS` after it).
+ * @param changedAt - The commit time the database stamped.
+ * @param now - The current instant in epoch ms; injectable for tests.
+ * @returns The remaining wait in ms, never negative and never above the whole wait.
+ */
+export function noticeWaitBudgetMs(changedAt: Date, now: number = Date.now()): number {
+  const left = changedAt.getTime() + MAINTENANCE_MODE_NOTICE_WAIT_MS - now
+  return Math.min(MAINTENANCE_MODE_NOTICE_WAIT_MS, Math.max(0, left))
 }
 
 /**

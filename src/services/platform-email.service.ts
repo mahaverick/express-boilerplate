@@ -13,6 +13,7 @@ import {
   type EmailMessageGroup,
   type EmailMessageStatus,
 } from '@/constants/email.constants'
+import { MAINTENANCE_ACTOR_PLACEHOLDER } from '@/constants/maintenance-mode.constants'
 import type { StatsRange } from '@/constants/platform.constants'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import { HttpError } from '@/errors/http-error'
@@ -83,12 +84,6 @@ export const TOKEN_MASK = '••••••'
  * What a preview shows for the inviter, whose name is never stored.
  */
 export const INVITER_NAME_PLACEHOLDER = 'A teammate'
-
-/**
- * What a maintenance-mode notice's preview shows for the staff member who
- * made the change, whose name is never stored.
- */
-export const MAINTENANCE_ACTOR_PLACEHOLDER = 'A staff member'
 
 /**
  * What a maintenance-mode notice's preview shows for the reason, which stays

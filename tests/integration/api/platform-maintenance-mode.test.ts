@@ -12,7 +12,10 @@ import type { Response } from 'supertest'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
 import { sql } from '@/services/database.service'
-import { setAllQueuesPaused } from '@/services/maintenance-mode/maintenance-mode-queues.service'
+import {
+  queuePauseTarget,
+  setAllQueuesPaused,
+} from '@/services/maintenance-mode/maintenance-mode-queues.service'
 import {
   getMaintenanceMode,
   reloadMaintenanceMode,
@@ -236,6 +239,55 @@ describe('PUT /platform/maintenance-mode', () => {
 
     expect(response.status).toBe(409)
     expect((response.body as { code?: string }).code).toBe('MAINTENANCE_MODE_CONFLICT')
+  })
+
+  it('keeps since across a message edit: the response, the staff view, the public status, the 503 body and the pause grace', async () => {
+    const { token } = await createTrackedStaff('owner')
+    const began = new Date(Date.now() - 3_600_000)
+    await storeMaintenanceMode('full', { message: 'Old.', changedAt: began })
+    await reloadMaintenanceMode()
+    const version = await currentVersion(token)
+
+    const response = await change(token, {
+      mode: 'full',
+      message: 'New.',
+      expectedVersion: version,
+    })
+
+    expect(response.status).toBe(200)
+    expect(viewOf(response)).toMatchObject({ message: 'New.', since: began.toISOString() })
+    expect(viewOf(await request(app).get(PATH).set('Authorization', `Bearer ${token}`)).since).toBe(
+      began.toISOString()
+    )
+    const status = await request(app).get('/api/v1/status/maintenance')
+    expect((status.body as { data: { since: string } }).data.since).toBe(began.toISOString())
+    const refused = await request(app).get('/api/v1/tenants')
+    expect(refused.status).toBe(503)
+    expect(refused.body).toMatchObject({ message: 'New.', since: began.toISOString() })
+    expect(getMaintenanceMode().changedAt).toBe(began.toISOString())
+    expect(queuePauseTarget(getMaintenanceMode(), new Date())).toBe('pause')
+  })
+
+  it('names a staff member with no name as "A staff member" in the notices, never by address', async () => {
+    const { user: actor, token } = await createTrackedStaff('owner')
+    await createTrackedStaff('admin')
+    const version = await currentVersion(token)
+
+    const response = await change(token, {
+      mode: 'read_only',
+      message: 'Read only.',
+      reason: 'Data fix',
+      expectedVersion: version,
+      confirm: ENVIRONMENT,
+    })
+
+    expect(response.status).toBe(200)
+    expect(viewOf(response).changedBy).toEqual({ id: actor.id, name: 'A staff member' })
+    const notices = await pendingMaintenanceNotices()
+    expect(notices).toHaveLength(1)
+    const [notice] = notices
+    expect(notice?.data.body).toContain('A staff member set maintenance mode')
+    expect(JSON.stringify(notice?.data)).not.toContain(actor.email)
   })
 
   it('answers a no-op with the current state, writing, auditing and notifying nothing', async () => {

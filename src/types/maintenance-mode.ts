@@ -18,7 +18,7 @@ export interface MaintenanceModeSnapshot {
    */
   since: string | null
   /**
-   * When the row last changed (ISO 8601), whatever the mode; null until the
+   * When the mode last changed (a message edit leaves it; ISO 8601), whatever the mode; null until the
    * first successful read. Kept apart from `since`, which is null while `off`.
    */
   changedAt: string | null

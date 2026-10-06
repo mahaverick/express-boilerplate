@@ -8,12 +8,13 @@
  * status endpoint (shape, cache header, rate limit), and the staff pass on
  * the customer routes Apex calls.
  */
-import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp } from '@/app'
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { sql } from '@/services/database.service'
+import { logger } from '@/services/logger.service'
 import { reloadMaintenanceMode } from '@/services/maintenance-mode/maintenance-mode-store.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { resetMaintenanceMode, storeMaintenanceMode } from '../../helpers/maintenance-mode'
@@ -68,6 +69,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  vi.restoreAllMocks()
   await resetMaintenanceMode()
   await reloadMaintenanceMode()
   await truncateAuditLogs()
@@ -151,11 +153,18 @@ describe('refusals', () => {
   })
 
   it('never logs nor masks a refusal', async () => {
-    await enter('full')
+    const error = vi.spyOn(logger, 'error').mockImplementation(() => {})
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    await enter('full', 'Owner words, never logged.')
+
     const response = await request(app).get('/api/v1/tenants')
 
     expect(response.status).toBe(503)
     expect(response.body).not.toHaveProperty('errorId')
+    const logged = JSON.stringify([...error.mock.calls, ...warn.mock.calls])
+    expect(logged).not.toContain('Owner words, never logged.')
+    expect(error).not.toHaveBeenCalled()
+    expect(warn).not.toHaveBeenCalled()
   })
 
   it('carries the CORS grant and exposed headers on a cross-origin refusal; a preflight is answered by cors', async () => {
