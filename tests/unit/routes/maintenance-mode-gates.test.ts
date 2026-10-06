@@ -42,10 +42,6 @@ interface WalkedEntry {
 }
 
 /**
- * Every mount path a router is mounted at, under the app or under `/api/v1`.
- * A router mounted anywhere else makes the walk throw, so no route can hide.
- */
-/**
  * The walked app and the `requireAuth` its routers use, both loaded in `beforeAll`.
  */
 const live: { entries: WalkedEntry[]; requireAuth: unknown } = {
@@ -53,6 +49,10 @@ const live: { entries: WalkedEntry[]; requireAuth: unknown } = {
   requireAuth: undefined,
 }
 
+/**
+ * Every mount path a router is mounted at, under the app or under `/api/v1`.
+ * A router mounted anywhere else makes the walk throw, so no route can hide.
+ */
 const KNOWN_MOUNTS = [
   '/api/v1',
   '/api/v1/webhooks/email',
@@ -76,29 +76,48 @@ const noop: RequestHandler = (_request, response) => {
 }
 
 /**
+ * Whether `requireAuth` has already run for a request to a full path: one
+ * mounted `requireAuth` layer's answer.
+ */
+type AuthCover = (fullPath: string) => boolean
+
+/**
  * The routes a router stack registers, with full paths, recursing into
- * mounted routers; a mount at a let-through prefix is one `*` entry.
+ * mounted routers; a mount at a let-through prefix is one `*` entry. A
+ * route is behind auth when a `requireAuth` layer registered before it
+ * covers its path (a `use(requireAuth)` covers only the paths under its own
+ * mount), or when `requireAuth` sits in its own handler list before its
+ * last handler.
  * @param stack - A router's layers.
  * @param prefix - The mount path the layers sit under.
- * @param isAuthed - Whether `requireAuth` already ran on every request that reaches this router.
+ * @param inherited - The `requireAuth` layers of the routers above that run on every request reaching this one.
  * @returns The entries.
  * @throws {Error} When a router is mounted at a path not in `KNOWN_MOUNTS`.
  */
-function entriesIn(stack: StackLayer[], prefix: string, isAuthed = false): WalkedEntry[] {
-  let isAuthedHere = isAuthed
+function entriesIn(
+  stack: StackLayer[],
+  prefix: string,
+  inherited: readonly AuthCover[] = []
+): WalkedEntry[] {
+  const covers = [...inherited]
+  const isCovered = (fullPath: string): boolean => covers.some((cover) => cover(fullPath))
   return stack.flatMap((layer) => {
     if (layer.route) {
       const { path: routePath, methods, stack: handlers } = layer.route
+      const fullPath = `${prefix}${routePath === '/' ? '' : routePath}`
+      const authIndex = handlers.findIndex(({ handle }) => handle === live.requireAuth)
       const isBehindAuth =
-        isAuthedHere || handlers.some(({ handle }) => handle === live.requireAuth)
+        isCovered(fullPath) || (authIndex !== -1 && authIndex < handlers.length - 1)
       return Object.keys(methods).map((method) => ({
         method: method.toUpperCase(),
-        path: `${prefix}${routePath === '/' ? '' : routePath}`,
+        path: fullPath,
         isBehindAuth,
       }))
     }
     if (!Array.isArray(layer.handle.stack)) {
-      if ((layer.handle as unknown) === live.requireAuth) isAuthedHere = true
+      if ((layer.handle as unknown) === live.requireAuth) {
+        covers.push((fullPath) => layer.match(fullPath.slice(prefix.length) || '/'))
+      }
       return []
     }
     const mount = KNOWN_MOUNTS.find(
@@ -106,8 +125,8 @@ function entriesIn(stack: StackLayer[], prefix: string, isAuthed = false): Walke
     )
     if (mount === undefined) throw new Error('a router is mounted at an unknown path')
     const full = `${prefix}${mount}`
-    if (PREFIX_PATHS.has(full)) return [{ method: '*', path: full, isBehindAuth: isAuthedHere }]
-    return entriesIn(layer.handle.stack, full, isAuthedHere)
+    if (PREFIX_PATHS.has(full)) return [{ method: '*', path: full, isBehindAuth: isCovered(full) }]
+    return entriesIn(layer.handle.stack, full, [...covers])
   })
 }
 
@@ -333,6 +352,62 @@ describe('maintenance-mode route classification', () => {
     expect(entry).toMatchObject({ method: 'PATCH', path: '/api/v1/tenants/:slug' })
     expect(entry?.isBehindAuth).toBe(false)
     expect(entry && ruleFor(entry)?.staffPass).toBe(true)
+  })
+
+  it('marks only the layers under a requireAuth mount as behind auth', () => {
+    const app = express()
+    const api = Router()
+    const profile = Router()
+    profile.get('/', noop)
+    const tenants = Router()
+    tenants.patch('/:slug', noop)
+    api.use('/profile', live.requireAuth as RequestHandler)
+    api.use('/tenants', tenants)
+    api.use('/profile', profile)
+    app.use('/api/v1', api)
+
+    const walked = Object.fromEntries(
+      entriesOf(app).map((entry) => [`${entry.method} ${entry.path}`, entry.isBehindAuth])
+    )
+
+    expect(walked).toEqual({
+      'PATCH /api/v1/tenants/:slug': false,
+      'GET /api/v1/profile': true,
+    })
+  })
+
+  it('marks every layer behind a pathless router-wide requireAuth', () => {
+    const app = express()
+    const api = Router()
+    const tenants = Router()
+    tenants.patch('/:slug', noop)
+    api.use(live.requireAuth as RequestHandler)
+    api.use('/tenants', tenants)
+    app.use('/api/v1', api)
+
+    expect(entriesOf(app).map((entry) => entry.isBehindAuth)).toEqual([true])
+  })
+
+  it('needs requireAuth before a route’s handler, not after it or as the handler', () => {
+    const app = express()
+    const api = Router()
+    const tenants = Router()
+    const requireAuth = live.requireAuth as RequestHandler
+    tenants.patch('/before', requireAuth, noop)
+    tenants.patch('/after', noop, requireAuth)
+    tenants.patch('/alone', requireAuth)
+    api.use('/tenants', tenants)
+    app.use('/api/v1', api)
+
+    const walked = Object.fromEntries(
+      entriesOf(app).map((entry) => [entry.path, entry.isBehindAuth])
+    )
+
+    expect(walked).toEqual({
+      '/api/v1/tenants/before': true,
+      '/api/v1/tenants/after': false,
+      '/api/v1/tenants/alone': false,
+    })
   })
 
   it('fails on a route added without a classification', () => {
