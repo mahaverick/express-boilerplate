@@ -333,6 +333,7 @@ describe('audit value sets', () => {
       'user',
       'email_message',
       'email_suppression',
+      'platform',
     ])
   })
 

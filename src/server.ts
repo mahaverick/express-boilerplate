@@ -12,6 +12,7 @@ import { flushErrorReports } from '@/services/errors/error-reporter.service'
 import { stopFlagSnapshot } from '@/services/flags/flag-snapshot.service'
 import { closeAllStreams, markShuttingDown } from '@/services/lifecycle.service'
 import { logger } from '@/services/logger.service'
+import { stopMaintenanceModeStore } from '@/services/maintenance-mode/maintenance-mode-store.service'
 import { closeNotificationSubscriber } from '@/services/notification-emitter.service'
 import { closeQueue } from '@/services/queue.service'
 import { closeRedis } from '@/services/redis.service'
@@ -80,6 +81,7 @@ export async function gracefulShutdown(server: Server, workers?: SupervisedWorke
     closeQueue(),
     closeNotificationSubscriber(),
     stopFlagSnapshot(),
+    stopMaintenanceModeStore(),
   ])
   await shutdownOtel()
 }

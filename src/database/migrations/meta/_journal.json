@@ -169,6 +169,13 @@
       "when": 1791087562604,
       "tag": "0023_analytics_deletions",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1791281586391,
+      "tag": "0024_maintenance_mode",
+      "breakpoints": true
     }
   ]
 }
