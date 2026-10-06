@@ -351,8 +351,8 @@ specs, each built into middleware by `createRateLimiter(spec)`
 (every route on it except `GET /providers` has at least one), seven guard
 tenant creation, member invitation, invitation preview and accept, staff
 reads, staff timelines and staff writes, two guard the email webhook, one
-guards the PostHog proxy, one guards the feature-flag exposure reports, and
-`authenticatedWrite` covers every other authenticated write. Paths below are under `/api/v1`; a `user` key is the
+guards the PostHog proxy, one guards the feature-flag exposure reports, one
+guards the public maintenance status, and `authenticatedWrite` covers every other authenticated write. Paths below are under `/api/v1`; a `user` key is the
 authenticated user's id, and an `email` key is the submitted `email`,
 trimmed and lowercased.
 
