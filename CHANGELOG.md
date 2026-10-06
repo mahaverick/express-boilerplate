@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.9.0](https://github.com/mahaverick/express-boilerplate/compare/v1.8.1...v1.9.0) (2026-10-06)
+
+
+### Features
+
+* maintenance mode (sp5e-1) — gate, queue pause, owner routes ([#86](https://github.com/mahaverick/express-boilerplate/issues/86)) ([a372f06](https://github.com/mahaverick/express-boilerplate/commit/a372f06d649e6c0c2414c1442078dd1e2667558f))
+
 ## [1.8.1](https://github.com/mahaverick/express-boilerplate/compare/v1.8.0...v1.8.1) (2026-10-06)
 
 
