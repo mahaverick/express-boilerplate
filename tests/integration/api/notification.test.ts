@@ -14,16 +14,24 @@ import { randomUUID } from 'node:crypto'
 import type { Response } from 'supertest'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
-import { NOTIFICATION_TYPES } from '@/constants/notification.constants'
+import {
+  NOTIFICATION_TYPES,
+  STAFF_ONLY_NOTIFICATION_TYPES,
+} from '@/constants/notification.constants'
 import type { Notification } from '@/database/models/notification.model'
 import type { User } from '@/database/models/user.model'
 import { NotificationRepository } from '@/repositories/notification.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { signAccessToken } from '@/services/session.service'
+import { createTrackedStaff, deleteTrackedUsers } from '../../helpers/platform-users'
 import { request } from '../../helpers/request'
 
 const app = createApp()
+// What a user with no platform role is shown: every type but the staff-only ones.
+const CUSTOMER_TYPES = NOTIFICATION_TYPES.filter(
+  (type) => !(STAFF_ONLY_NOTIFICATION_TYPES as readonly string[]).includes(type)
+)
 const userRepository = new UserRepository()
 const notificationRepository = new NotificationRepository()
 
@@ -113,6 +121,7 @@ describe('/api/v1/notifications', () => {
   const createdUserIds: string[] = []
 
   afterEach(async () => {
+    await deleteTrackedUsers()
     if (createdUserIds.length === 0) return
     await sql`delete from users where id = any(${createdUserIds})`
     createdUserIds.length = 0
@@ -432,13 +441,50 @@ describe('/api/v1/notifications', () => {
 
       expect(response.status).toBe(200)
       expect(envelopeOf<PreferencesBody>(response).data).toEqual({
-        preferences: NOTIFICATION_TYPES.map((type) => ({
+        preferences: CUSTOMER_TYPES.map((type) => ({
           notificationType: type,
           emailEnabled: true,
           inAppEnabled: true,
         })),
       })
     })
+
+    it('omits the staff-only types for a user with no platform role', async () => {
+      const { token } = await createAuthenticatedUser()
+
+      const response = await request(app)
+        .get('/api/v1/notifications/preferences')
+        .set('Authorization', `Bearer ${token}`)
+
+      const types = envelopeOf<PreferencesBody>(response).data?.preferences.map(
+        (entry) => entry.notificationType
+      )
+      expect(types).not.toContain('maintenance_mode_changed')
+    })
+
+    it.each(['viewer', 'owner'] as const)(
+      'lists the staff-only types, with defaults, for a platform %s',
+      async (role) => {
+        const { token } = await createTrackedStaff(role)
+
+        const response = await request(app)
+          .get('/api/v1/notifications/preferences')
+          .set('Authorization', `Bearer ${token}`)
+
+        expect(envelopeOf<PreferencesBody>(response).data?.preferences).toEqual(
+          NOTIFICATION_TYPES.map((type) => ({
+            notificationType: type,
+            emailEnabled: true,
+            inAppEnabled: true,
+          }))
+        )
+        expect(envelopeOf<PreferencesBody>(response).data?.preferences).toContainEqual({
+          notificationType: 'maintenance_mode_changed',
+          emailEnabled: true,
+          inAppEnabled: true,
+        })
+      }
+    )
 
     it('rejects a request with no token', async () => {
       const response = await request(app).get('/api/v1/notifications/preferences')
@@ -478,6 +524,28 @@ describe('/api/v1/notifications', () => {
       expect(response.status).toBe(400)
       const errors = envelopeOf<PreferencesBody>(response).errors
       expect(errors?.preferences?.[0]).toMatch(/does not support a configurable preference/i)
+    })
+
+    it('rejects an update naming a staff-only type from a user with no platform role', async () => {
+      const { user, token } = await createAuthenticatedUser()
+
+      const response = await request(app)
+        .put('/api/v1/notifications/preferences')
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          preferences: [
+            {
+              notificationType: 'maintenance_mode_changed',
+              emailEnabled: false,
+              inAppEnabled: true,
+            },
+          ],
+        })
+
+      expect(response.status).toBe(400)
+      expect(response.body).toMatchObject({ message: 'Validation failed' })
+      const rows = await sql`select * from notification_preferences where user_id = ${user.id}`
+      expect(rows).toHaveLength(0)
     })
 
     it('does not write a preference row when the update is rejected', async () => {

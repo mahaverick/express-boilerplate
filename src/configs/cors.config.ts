@@ -8,7 +8,9 @@ import { isAllowedOrigin } from '@/utilities/origin.utilities'
  * spec forbids the pair, and a browser discards the response rather than
  * warning about it. No `methods` list: `cors`'s default covers every verb
  * this API registers and cannot drift as routes are added. `X-Request-Id` is
- * exposed so a cross-origin client can report the id this API logs.
+ * exposed so a cross-origin client can report the id this API logs;
+ * `Maintenance-Mode` and `Retry-After` so it can read the maintenance mode
+ * every response carries and when to retry a maintenance 503.
  * `traceparent` and `X-POSTHOG-SESSION-ID` are set by the frontends' own
  * axios interceptor, so a cross-origin frontend can link a server event to
  * its trace and its browser session.
@@ -28,7 +30,7 @@ export const corsOptions: CorsOptions = {
     'traceparent',
     'X-POSTHOG-SESSION-ID',
   ],
-  exposedHeaders: ['X-Request-Id'],
+  exposedHeaders: ['X-Request-Id', 'Maintenance-Mode', 'Retry-After'],
   // Chrome caps preflight caching at 600s; Authorization makes every call preflight.
   maxAge: 600,
   optionsSuccessStatus: 204,

@@ -11,6 +11,7 @@ import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { withTransaction } from '@/services/database.service'
 import { emitDomainEvent } from '@/services/domain-events.service'
+import { assertSignInAllowed } from '@/services/maintenance-mode/maintenance-mode.service'
 import { autoJoinSafely } from '@/services/platform.service'
 import {
   denySessions,
@@ -214,7 +215,11 @@ export async function findOrCreateByGoogle(profile: GoogleProfile): Promise<User
  * `user_signed_up`, and every one emits `user_signed_in`.
  * @param profile - The raw Google profile from the callback.
  * @returns The new session's refresh token, for the controller to set as a cookie.
- * @throws {HttpError} Any `findOrCreateByGoogle` error, or 401 `google_auth_failed` for an inactive or deleted account.
+ * In `full` maintenance a user with no platform role is refused after the
+ * active check (`assertSignInAllowed`); the controller redirects with
+ * `error=MAINTENANCE_MODE`. A new account is still created first, as the
+ * lookup does before any refusal.
+ * @throws {HttpError} Any `findOrCreateByGoogle` error, 401 `google_auth_failed` for an inactive or deleted account, or 503 `MAINTENANCE_MODE`.
  */
 export async function completeGoogleSignIn(profile: GoogleProfile): Promise<IssuedRefreshToken> {
   const { user, isNew } = await resolveGoogleUser(profile)
@@ -222,6 +227,8 @@ export async function completeGoogleSignIn(profile: GoogleProfile): Promise<Issu
   if (!user.active) {
     throw new HttpError('Account is inactive', 401, 'google_auth_failed')
   }
+  // Before any sign-in write: in `full` only staff get a session.
+  await assertSignInAllowed(user.id)
 
   await userRepository.update(user.id, { lastLoggedInAt: new Date() })
   // Covers users verified before their domain was listed; it never throws.

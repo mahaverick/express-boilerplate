@@ -12,14 +12,24 @@
  * because the mailed link is the only way to accept). The first two fire when
  * the link is sent, so their names are not past tense; `'password_changed'`
  * fires from `changePassword` (auth.service.ts) after the new hash is stored
- * and the other sessions are revoked.
+ * and the other sessions are revoked. `'maintenance_mode_changed'` goes to
+ * every other platform owner and admin when maintenance mode is switched on,
+ * escalated or switched off.
  */
 export const NOTIFICATION_TYPES = [
   'verify_email',
   'password_reset_requested',
   'password_changed',
   'tenant_invitation',
+  'maintenance_mode_changed',
 ] as const
+
+/**
+ * The notification types only platform staff see: a user with no platform
+ * membership gets none of them in their preferences list, and an update
+ * naming one is refused as for any type that cannot be configured.
+ */
+export const STAFF_ONLY_NOTIFICATION_TYPES = ['maintenance_mode_changed'] as const
 
 /**
  * One of the fixed set of notification types a `notifications` or

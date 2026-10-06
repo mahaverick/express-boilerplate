@@ -586,6 +586,44 @@ flag. To run an experiment on a flag, follow the order in
 [ARCHITECTURE.md](ARCHITECTURE.md#feature-flags): sync first, then create the
 experiment in PostHog reusing the flag.
 
+## Maintenance mode
+
+A platform owner switches maintenance mode from Apex's Maintenance page;
+how it works is in [ARCHITECTURE.md](ARCHITECTURE.md#maintenance-mode).
+
+Runbook:
+
+1. **Confirm staff access before `full`.** In `full` only staff can sign in,
+   and nobody can reset a password, so make sure whoever will switch it off
+   can sign in to Apex with a password or Google.
+2. **Use `read_only` for data fixes where reads are safe.** Customers keep
+   reading; their writes answer 503 `READ_ONLY_MODE`, and jobs keep running.
+3. **Before database work, check "0 running" on every queue** on the
+   Maintenance page. `full` pauses every queue, but jobs already running
+   finish first.
+4. **Staff keep working.** Staff actions in Apex, including the tenant,
+   member, invitation and Staff pages, and staff sign-ins keep working and
+   writing during maintenance.
+5. **Switch off from Apex.** Leaving `full` resumes every queue; notices
+   that were still queued go out then.
+6. **Restart every replica after restoring the database during maintenance.**
+   A replica ignores a row whose version is not above the one it holds, so a
+   restore to an earlier version leaves each replica on the old mode until it
+   restarts.
+7. **Keep the clocks in sync (NTP) on the database and every replica.** The
+   10 s pause grace and the notice wait are measured from the database's
+   commit time on each replica's own clock, so skew shifts when the queues
+   pause.
+8. **Failed notice jobs keep personal data.** A notice job that fails keeps
+   the actor's name and the reason in Redis for up to 3 days (the in-app
+   notification) or 7 days (the email) before it is removed.
+
+Every change, switching off and a message edit included, asks for the owner's
+password if it was entered more than 10 minutes ago. Switching on or
+escalating also asks for a reason, the customer message and the environment
+name (`APP_ENV`) typed out. A switch-on, an escalation or a switch-off
+notifies every other platform owner and admin in-app and by email.
+
 ## Make this yours
 
 This is a template. Before the first real commit on a project generated from

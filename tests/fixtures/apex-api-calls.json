@@ -1,0 +1,33 @@
+{
+  "source": "apex-boilerplate origin/main c8d3d01: every API call outside /platform/*, as METHOD path under /api/v1, with apex parameter names. Update it when apex adds a call; see MAINTENANCE_STAFF_ROUTES.",
+  "calls": [
+    "DELETE /api/v1/tenants/:slug/invitations/:invitationId",
+    "DELETE /api/v1/tenants/:slug/members/:userId",
+    "GET /api/v1/auth/google",
+    "GET /api/v1/auth/google/callback",
+    "GET /api/v1/auth/providers",
+    "GET /api/v1/profile",
+    "GET /api/v1/tenants/:slug",
+    "GET /api/v1/tenants/:slug/audit-log",
+    "GET /api/v1/tenants/:slug/invitations",
+    "GET /api/v1/tenants/:slug/members",
+    "PATCH /api/v1/profile",
+    "PATCH /api/v1/tenants/:slug",
+    "PATCH /api/v1/tenants/:slug/members/:userId",
+    "POST /api/v1/auth/change-password",
+    "POST /api/v1/auth/forgot-password",
+    "POST /api/v1/auth/login",
+    "POST /api/v1/auth/logout",
+    "POST /api/v1/auth/reauthenticate",
+    "POST /api/v1/auth/refresh",
+    "POST /api/v1/auth/register",
+    "POST /api/v1/auth/resend-verification",
+    "POST /api/v1/auth/reset-password",
+    "POST /api/v1/auth/verify-email",
+    "POST /api/v1/collect",
+    "POST /api/v1/invitations/accept",
+    "POST /api/v1/invitations/preview",
+    "POST /api/v1/tenants/:slug/invitations",
+    "POST /api/v1/tenants/:slug/invitations/:invitationId/resend"
+  ]
+}

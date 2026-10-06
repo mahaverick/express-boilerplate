@@ -54,8 +54,9 @@ export type PreferenceMatrix = NotificationPreferenceMatrixEntry[]
  * `verify_email` and `password_reset_requested`, because disabling them locks
  * the user out (in-app reaches only a signed-in user); `password_changed`, so
  * an attacker who took over the account cannot silence the one mail telling the
- * owner; and `tenant_invitation`, which sends no email on this path and is
- * listed to match the write side. Keep in sync by hand with
+ * owner; `tenant_invitation`, which sends no email on this path and is
+ * listed to match the write side; and `maintenance_mode_changed`, so no
+ * owner or admin can miss that customers are locked out. Keep in sync by hand with
  * `NON_DISABLEABLE_NOTIFICATION_TYPES` (notification.validators.ts), or a
  * client could `PUT` a preference this repository then ignores.
  */
@@ -64,6 +65,7 @@ const NON_DISABLEABLE_EMAIL_TYPES: ReadonlySet<string> = new Set<string>([
   'password_reset_requested',
   'password_changed',
   'tenant_invitation',
+  'maintenance_mode_changed',
 ])
 
 /**

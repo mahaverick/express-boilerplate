@@ -257,6 +257,17 @@ export function getAnalyticsQueue(): Queue {
 }
 
 /**
+ * Every queue this module creates, creating any not yet created: what
+ * maintenance mode pauses and resumes. A queue added to this module must be
+ * added here; `tests/integration/services/queue-registry.test.ts` compares
+ * this list with every `new Queue(` in this file.
+ * @returns The email, notification, maintenance and analytics queues.
+ */
+export function getAllQueues(): Queue[] {
+  return [getEmailQueue(), getNotificationQueue(), getMaintenanceQueue(), getAnalyticsQueue()]
+}
+
+/**
  * Enqueue a job. A generic wrapper over `Queue#add`, typed so the job's data
  * is the caller's `T`: with BullMQ's default type parameters `queue.add()`
  * returns `Job<any>`, and typing the parameter `Queue<T>` trips

@@ -5,6 +5,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
+import { MAINTENANCE_ACTOR_PLACEHOLDER } from '@/constants/maintenance-mode.constants'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { PlatformEmailRecord } from '@/repositories/platform-email.repository'
 import { renderForMessage } from '@/services/mailer.service'
@@ -12,6 +13,7 @@ import {
   buildPreviewMessage,
   canResendFor,
   INVITER_NAME_PLACEHOLDER,
+  MAINTENANCE_REASON_PLACEHOLDER,
   rateOf,
   TOKEN_MASK,
   type ResendContext,
@@ -34,6 +36,21 @@ describe('rateOf', () => {
 })
 
 describe('buildPreviewMessage', () => {
+  it('shows a maintenance-mode notice with its stored variables and placeholders for the actor and reason', () => {
+    const { message, isPartial } = buildPreviewMessage(
+      'maintenance_mode_changed',
+      { firstName: 'Ada', appName: 'Acme', mode: 'full', changedAt: '2026-10-06T10:42:00.000Z' },
+      ORIGIN
+    )
+    const rendered = renderForMessage(message)
+
+    expect(isPartial).toBe(false)
+    expect(rendered.text).toContain(
+      `${MAINTENANCE_ACTOR_PLACEHOLDER} set Acme maintenance mode to full at 2026-10-06T10:42:00.000Z.`
+    )
+    expect(rendered.text).toContain(`Reason: ${MAINTENANCE_REASON_PLACEHOLDER}`)
+  })
+
   it.each<[EmailTemplateKey, string]>([
     ['email_verification', '/verify-email?token='],
     ['password_reset', '/reset-password?token='],

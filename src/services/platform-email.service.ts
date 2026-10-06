@@ -13,6 +13,7 @@ import {
   type EmailMessageGroup,
   type EmailMessageStatus,
 } from '@/constants/email.constants'
+import { MAINTENANCE_ACTOR_PLACEHOLDER } from '@/constants/maintenance-mode.constants'
 import type { StatsRange } from '@/constants/platform.constants'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import { HttpError } from '@/errors/http-error'
@@ -83,6 +84,12 @@ export const TOKEN_MASK = '••••••'
  * What a preview shows for the inviter, whose name is never stored.
  */
 export const INVITER_NAME_PLACEHOLDER = 'A teammate'
+
+/**
+ * What a maintenance-mode notice's preview shows for the reason, which stays
+ * in the audit log only.
+ */
+export const MAINTENANCE_REASON_PLACEHOLDER = '(See the audit log.)'
 
 /**
  * Error code: the message's template is not in this build's registry.
@@ -480,6 +487,21 @@ export function buildPreviewMessage(
             nextStep: fill('nextStep'),
             // Carries no token, so it is stored and shown as it was sent.
             overviewLink: fill('overviewLink'),
+          },
+        }
+      }
+      case 'maintenance_mode_changed': {
+        return {
+          to,
+          templateKey,
+          variables: {
+            firstName: fill('firstName'),
+            appName: fill('appName'),
+            mode: fill('mode'),
+            // Never stored: another person's name, and internal text the audit log keeps.
+            actorName: MAINTENANCE_ACTOR_PLACEHOLDER,
+            reason: MAINTENANCE_REASON_PLACEHOLDER,
+            changedAt: fill('changedAt'),
           },
         }
       }

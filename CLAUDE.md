@@ -183,6 +183,23 @@ uuid))` on every column,** as `errors-query.service.ts` does: per-column
   does. Delete `analytics_outbox` rows in the file's own hooks, since the
   worker's database is shared by its files.
 
+## Maintenance mode
+
+- **Every new route needs a maintenance classification.** Add its row to
+  `MAINTENANCE_ROUTE_RULES` (`maintenance-mode.constants.ts`): let through,
+  a read, a write, or a read-only-allowed write.
+  `tests/unit/routes/maintenance-mode-gates.test.ts` fails on a route with no
+  rule and on a rule with no route. A customer route Apex starts calling also
+  joins `MAINTENANCE_STAFF_ROUTES` and `tests/fixtures/apex-api-calls.json`,
+  and must sit behind `requireAuth`, which runs its staff check.
+- **Never read Postgres or Redis for the mode in a request.** The gate reads
+  the replica's store (`getMaintenanceMode()`); a test that changes the mode
+  writes the row with a higher version (`tests/helpers/maintenance-mode.ts`)
+  and calls `reloadMaintenanceMode()`, and resets it the same way.
+- **A test that pauses the queues resumes them** (`setAllQueuesPaused(false)`)
+  before the file ends: the pause is a flag in Redis under the worker's
+  prefix, and the next file's jobs would never run.
+
 ## Feature flags
 
 - **Gate a route with `requireFlag(key)` after `requireAuth`, after

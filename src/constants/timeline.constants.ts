@@ -77,6 +77,7 @@ export const TIMELINE_ELEMENT_TEXT_MAX = 80
 /**
  * Events no timeline lists: the two timeline-view and two errors-view audits
  * (so a page never shows itself or its sibling tab), the flag-evaluate audit,
+ * the maintenance-mode audit (a platform-wide change, shown in Apex's Activity log),
  * exceptions (they have their own Errors tab), and PostHog's identity,
  * property and flag bookkeeping. `$experiment_exposure` is the copy PostHog's
  * ingestion makes of every `$feature_flag_called` with a string response.
@@ -87,6 +88,7 @@ export const TIMELINE_EXCLUDED_EVENTS = [
   'user_errors_viewed',
   'tenant_errors_viewed',
   'user_flags_evaluated',
+  'platform_maintenance_mode_changed',
   '$exception',
   '$identify',
   '$set',

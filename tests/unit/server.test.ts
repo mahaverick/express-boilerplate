@@ -36,6 +36,9 @@ vi.mock('@/services/notification-emitter.service', () => ({
 vi.mock('@/services/flags/flag-snapshot.service', () => ({
   stopFlagSnapshot: () => recorder('stopFlagSnapshot')(),
 }))
+vi.mock('@/services/maintenance-mode/maintenance-mode-store.service', () => ({
+  stopMaintenanceModeStore: () => recorder('stopMaintenanceModeStore')(),
+}))
 vi.mock('@/services/errors/error-reporter.service', () => ({
   flushErrorReports: (deadlineMs: number) => recorder(`flushErrorReports(${String(deadlineMs)})`)(),
 }))
@@ -63,5 +66,14 @@ describe('gracefulShutdown', () => {
     expect(calls).toContain('stopFlagSnapshot')
     expect(calls.indexOf('workers.close')).toBeLessThan(calls.indexOf('stopFlagSnapshot'))
     expect(calls.indexOf('stopFlagSnapshot')).toBeLessThan(calls.indexOf('shutdownOtel'))
+  })
+
+  it('stops the maintenance-mode store with the other dependencies, after the Workers', async () => {
+    calls.length = 0
+    await gracefulShutdown(http.createServer(), { close: recorder('workers.close') })
+
+    expect(calls).toContain('stopMaintenanceModeStore')
+    expect(calls.indexOf('workers.close')).toBeLessThan(calls.indexOf('stopMaintenanceModeStore'))
+    expect(calls.indexOf('stopMaintenanceModeStore')).toBeLessThan(calls.indexOf('shutdownOtel'))
   })
 })

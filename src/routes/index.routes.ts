@@ -12,6 +12,7 @@ import { createInvitationRouter } from '@/routes/invitation.routes'
 import { createNotificationRouter } from '@/routes/notification.routes'
 import { createPlatformRouter } from '@/routes/platform.routes'
 import { createProfileRouter } from '@/routes/profile.routes'
+import { createStatusRouter } from '@/routes/status.routes'
 import { createTenantRouter } from '@/routes/tenant.routes'
 
 /**
@@ -28,5 +29,6 @@ export function createApiRouter(): Router {
   router.use('/invitations', createInvitationRouter())
   router.use('/platform', createPlatformRouter())
   router.use('/flags', createFlagsRouter())
+  router.use('/status', createStatusRouter())
   return router
 }

@@ -11,6 +11,7 @@ import { helmetOptions } from '@/configs/helmet.config'
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { HttpError } from '@/errors/http-error'
 import { errorHandler } from '@/middlewares/error.middleware'
+import { maintenanceModeGate } from '@/middlewares/maintenance-mode.middleware'
 import { posthogSession } from '@/middlewares/posthog-session.middleware'
 import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
 import { requestContext } from '@/middlewares/request-context.middleware'
@@ -61,6 +62,8 @@ export function createApp(): Express {
   // Ahead of every router, so an error's `http_route` names the mount path the router matched under.
   app.use(recordRouteTemplate)
   app.use(requestContext)
+  // After cors, so a refusal carries the grant; before every router, the proxy and the body parsers.
+  app.use(maintenanceModeGate)
   app.use(posthogSession)
   // Before the body parsers: a webhook signature covers the exact bytes, which express.json would consume.
   app.use('/api/v1/webhooks/email', createEmailWebhookRouter())

@@ -38,6 +38,7 @@ const KNOWN_MOUNTS = [
   '/invitations',
   '/platform',
   '/flags',
+  '/status',
   '/users',
   '/emails',
   '/email-suppressions',

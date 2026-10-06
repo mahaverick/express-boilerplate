@@ -17,6 +17,7 @@ import {
 import { BaseController } from '@/controllers/base.controller'
 import { authenticatedUserId, oauthAppOf } from '@/controllers/helpers.controller'
 import { HttpError } from '@/errors/http-error'
+import { MaintenanceModeError } from '@/errors/maintenance-mode-errors'
 import { redactedForLog } from '@/errors/postgres-errors'
 import { toPublicAuthProviders } from '@/presenters/auth-provider.presenter'
 import { toProfileResponse } from '@/presenters/user.presenter'
@@ -524,6 +525,8 @@ class AuthController extends BaseController {
    * `HttpError.code` is forwarded verbatim; anything else is
    * `processing_failed`; Google reporting an error or no profile is
    * `google_auth_failed`. Not wrapped in `handle()` for the same reason.
+   * A maintenance-mode refusal is expected and carries the owner's customer
+   * message, so it is not logged.
    * @param request - The incoming callback request, carrying Google's `code`/`state` query parameters.
    * @param response - The response.
    * @param next - Forwards a synchronous failure from `passport.authenticate` itself; every failure from the async body redirects instead.
@@ -548,7 +551,9 @@ class AuthController extends BaseController {
 
             response.redirect(`${frontend}/auth/callback`)
           } catch (innerError) {
-            logger.error('Google OAuth callback failed', { error: redactedForLog(innerError) })
+            if (!(innerError instanceof MaintenanceModeError)) {
+              logger.error('Google OAuth callback failed', { error: redactedForLog(innerError) })
+            }
             const code =
               innerError instanceof HttpError && innerError.code
                 ? innerError.code

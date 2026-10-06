@@ -51,9 +51,11 @@ export function messageResponse(response: Response, message: string, status = 20
  * @param status - HTTP status.
  * @param code - Optional stable, machine-readable token a client can branch on, independent of `message` or `errors`.
  * @param errors - Optional field-level detail, e.g. from a validator.
- * @param extra - Optional `errorId`: the id `errorHandler` gives every 5xx it
+ * @param extra - Optional extra fields.
+ * @param extra.errorId - The id `errorHandler` gives every 5xx fault it
  *   writes, which names its log line and, when reported, its PostHog event.
- * @param extra.errorId - The id.
+ * @param extra.mode - On a maintenance-mode 503, the mode it was refused under.
+ * @param extra.since - On a maintenance-mode 503, when that mode began (or null).
  */
 export function errorResponse(
   response: Response,
@@ -61,7 +63,7 @@ export function errorResponse(
   status: number,
   code?: string,
   errors?: unknown,
-  extra: { errorId?: string } = {}
+  extra: { errorId?: string; mode?: string; since?: string | null } = {}
 ): void {
   response.status(status).json({
     success: false,
@@ -70,6 +72,7 @@ export function errorResponse(
     ...(code !== undefined && { code }),
     ...(errors !== undefined && { errors }),
     ...(extra.errorId !== undefined && { errorId: extra.errorId }),
+    ...(extra.mode !== undefined && { mode: extra.mode, since: extra.since }),
     requestId: response.getHeader(REQUEST_ID_HEADER),
   })
 }

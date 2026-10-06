@@ -22,6 +22,11 @@ import {
   type EmailVerificationVariables,
 } from '@/templates/email/email-verification.template'
 import {
+  MAINTENANCE_MODE_CHANGED_TEMPLATE_KEY,
+  renderMaintenanceModeChangedTemplate,
+  type MaintenanceModeChangedVariables,
+} from '@/templates/email/maintenance-mode-changed.template'
+import {
   ONBOARDING_REMINDER_TEMPLATE_KEY,
   renderOnboardingReminderTemplate,
   type OnboardingReminderVariables,
@@ -98,6 +103,11 @@ export type MailMessage =
       templateKey: typeof ONBOARDING_REMINDER_TEMPLATE_KEY
       variables: OnboardingReminderVariables
     }
+  | {
+      to: string
+      templateKey: typeof MAINTENANCE_MODE_CHANGED_TEMPLATE_KEY
+      variables: MaintenanceModeChangedVariables
+    }
 
 /**
  * The tracked message one send attempt belongs to: its `email_messages` id,
@@ -145,6 +155,9 @@ export function renderForMessage(message: MailMessage): RenderedEmail {
     }
     case ONBOARDING_REMINDER_TEMPLATE_KEY: {
       return renderOnboardingReminderTemplate(message.variables)
+    }
+    case MAINTENANCE_MODE_CHANGED_TEMPLATE_KEY: {
+      return renderMaintenanceModeChangedTemplate(message.variables)
     }
     default: {
       throw new Error(

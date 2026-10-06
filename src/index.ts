@@ -31,7 +31,9 @@ import type { SupervisedWorkers } from '@/services/worker-supervisor.service'
  * begins; a SIGTERM or SIGINT during that flush still exits 1. With flags
  * enabled, the flag snapshot's first load completes before the server
  * listens, so the first request already sees it; its start never rejects
- * and does not wait for the pub/sub subscription.
+ * and does not wait for the pub/sub subscription. The maintenance-mode
+ * store's first read completes before the server listens too, the same way,
+ * so no request is served under a mode this replica has not tried to read.
  * @returns Resolves once exit handlers are wired and any workers have started.
  */
 async function boot(): Promise<void> {
@@ -60,6 +62,17 @@ async function boot(): Promise<void> {
     const { startFlagSnapshot } = await import('@/services/flags/flag-snapshot.service')
     await startFlagSnapshot()
   }
+
+  const { onMaintenanceModeReload, startMaintenanceModeStore } =
+    await import('@/services/maintenance-mode/maintenance-mode-store.service')
+  const { reconcileQueuePause } =
+    await import('@/services/maintenance-mode/maintenance-mode-queues.service')
+  // Every reload, API-only replicas included: they hold producer connections. Never rejects.
+  onMaintenanceModeReload((snapshot) => {
+    void reconcileQueuePause(snapshot)
+  })
+  // Never rejects: a failed first read starts the replica open and the backstop retries.
+  await startMaintenanceModeStore()
 
   // Filled in once the workers start; shutdown reads it only when it runs.
   const workers: { supervised?: SupervisedWorkers } = {}
