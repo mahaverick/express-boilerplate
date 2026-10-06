@@ -3,6 +3,7 @@
  * constraints, and the metadata schema of every audited action.
  */
 import { z } from 'zod'
+import { MAINTENANCE_MODES } from '@/constants/maintenance-mode.constants'
 import {
   ONBOARDING_STEP_KEY_MAX_LENGTH,
   ONBOARDING_STEP_KEY_PATTERN,
@@ -224,6 +225,16 @@ export const AUDIT_ACTIONS = {
   'user.flags_evaluated': {
     target: 'user',
     metadata: z.strictObject({ tenantId: id.nullable(), clientApp: z.enum(['react', 'apex']) }),
+  },
+  // The platform owner changed maintenance mode; the reason is null when none was given.
+  'platform.maintenance_mode_changed': {
+    target: 'platform',
+    metadata: z.strictObject({
+      from: z.enum(MAINTENANCE_MODES),
+      to: z.enum(MAINTENANCE_MODES),
+      reason: reason.nullable(),
+      messageChanged: z.boolean(),
+    }),
   },
 } as const satisfies Record<string, { target: AuditTargetType; metadata: z.ZodType }>
 

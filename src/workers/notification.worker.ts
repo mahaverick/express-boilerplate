@@ -44,7 +44,7 @@ function metadataWithoutVariables(metadata: Record<string, unknown>): Record<str
  * @returns `job.id`.
  * @throws {Error} When the job has no id, which BullMQ never does for a processed job.
  */
-function idOf(job: Job<NotificationJobData>): string {
+function idOf(job: Pick<Job<NotificationJobData>, 'id'>): string {
   if (job.id === undefined) throw new Error('Notification job has no id')
   return job.id
 }
@@ -62,10 +62,11 @@ function dedupeKeyFor(job: Job<NotificationJobData>): string {
 /**
  * The BullMQ jobId for this job's email. BullMQ rejects a custom id
  * containing ':' (other than its own 3-part form), so this uses '-'.
+ * Exported so maintenance mode can wait on the email a notice job enqueues.
  * @param job - The notification job.
  * @returns The email job id.
  */
-function emailJobIdFor(job: Job<NotificationJobData>): string {
+export function emailJobIdFor(job: Pick<Job<NotificationJobData>, 'id' | 'timestamp'>): string {
   return `notification-email-${idOf(job)}-${job.timestamp}`
 }
 

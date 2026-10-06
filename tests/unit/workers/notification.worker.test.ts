@@ -15,7 +15,7 @@ import { NotificationRepository } from '@/repositories/notification.repository'
 import { logger } from '@/services/logger.service'
 import type { MailMessage } from '@/services/mailer.service'
 import * as notificationEmitter from '@/services/notification-emitter.service'
-import { processNotificationJob } from '@/workers/notification.worker'
+import { emailJobIdFor, processNotificationJob } from '@/workers/notification.worker'
 
 vi.mock('@/jobs/email.job', () => ({
   addEmailJob: vi.fn(),
@@ -327,5 +327,13 @@ describe('processNotificationJob', () => {
     } finally {
       loggerErrorSpy.mockRestore()
     }
+  })
+})
+
+describe('emailJobIdFor', () => {
+  it('is notification-email-<job id>-<job timestamp>, the id maintenance mode waits on', () => {
+    expect(emailJobIdFor({ id: '42', timestamp: 1_791_266_648_853 })).toBe(
+      'notification-email-42-1791266648853'
+    )
   })
 })

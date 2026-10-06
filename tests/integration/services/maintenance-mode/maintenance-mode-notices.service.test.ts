@@ -1,8 +1,8 @@
 /**
- * @file Whether the last change's notices are still pending, against the
- * real notification and email queues under this worker's prefix: nothing
- * recorded, a notification job still waiting, an email job still waiting,
- * and every job finished or gone.
+ * @file The last change's notices against the real notification and email
+ * queues under this worker's prefix, with no Worker running: whether any is
+ * still pending (nothing recorded, a waiting notification or email job,
+ * every job finished or gone), and the notice wait's timeout and done paths.
  */
 import { randomUUID } from 'node:crypto'
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
@@ -10,6 +10,7 @@ import {
   hasPendingNotices,
   noticeIdsKey,
   rememberNoticeJobs,
+  waitForNoticeJobs,
 } from '@/services/maintenance-mode/maintenance-mode-notices.service'
 import { addJob, closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
 import { getRedis } from '@/services/redis.service'
@@ -69,5 +70,26 @@ describe('hasPendingNotices', () => {
     })
 
     expect(await hasPendingNotices()).toBe(false)
+  })
+})
+
+describe('waitForNoticeJobs', () => {
+  it('times out on a notification job no Worker runs', async () => {
+    const id = await waitingJob('notification')
+    const job = await getNotificationQueue().getJob(id)
+
+    expect(await waitForNoticeJobs({ notification: job ? [job] : [] }, 300)).toBe('timeout')
+  })
+
+  it('is done once the notification job and its email are gone', async () => {
+    const id = await waitingJob('notification')
+    const job = await getNotificationQueue().getJob(id)
+    await job?.remove()
+
+    expect(await waitForNoticeJobs({ notification: job ? [job] : [] }, 300)).toBe('done')
+  })
+
+  it('is done at once with no jobs', async () => {
+    expect(await waitForNoticeJobs({ notification: [] }, 300)).toBe('done')
   })
 })

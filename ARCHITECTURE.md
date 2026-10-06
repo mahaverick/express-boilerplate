@@ -1122,6 +1122,74 @@ turns on the flag's experience continuity, which the evaluator refuses. So:
 A holdout attached to the experiment is evaluated too: its users get the
 fallback (`control`) and are recorded as `holdout-<id>`.
 
+## Maintenance mode
+
+A platform owner puts the product into maintenance from Apex, without a
+deploy: `full` (every customer route answers 503 `MAINTENANCE_MODE`,
+customers cannot sign in, every BullMQ queue pauses) or `read_only` (every
+customer write answers 503 `READ_ONLY_MODE`; reads and jobs keep running).
+
+- **State.** One row, `maintenance_mode_state` (migration 0024 seeds it
+  `off`, version 0), is the source of truth. A change is a compare-and-set
+  on `version` (`updateMaintenanceModeStateIfVersion`), written with its
+  `platform.maintenance_mode_changed` audit entry in one transaction.
+- **Propagation.** Each replica keeps the mode in memory
+  (`src/services/maintenance-mode/maintenance-mode-store.service.ts`). A
+  change publishes `reload` on `redisKey('maintenance-mode')`; every replica
+  rereads the row on the message, on a subscriber reconnect, and every
+  `MAINTENANCE_MODE_RELOAD_INTERVAL_MS` (10 s) whatever happens. A row not
+  newer (by version) than the copy is ignored. The first read happens before
+  the server listens; if it fails the replica serves `off` with
+  `known: false` and retries; a later failure keeps the last known mode. No
+  request reads Postgres or Redis for the mode.
+- **The gate.** `maintenanceModeGate` (`src/middlewares/maintenance-mode.middleware.ts`)
+  runs right after `requestContext`, after `cors`, before every router, the
+  webhooks, the PostHog proxy and the body parsers. It stamps
+  `Maintenance-Mode: off | read_only | full` on every response it sees and
+  decides by method and path from `MAINTENANCE_ROUTE_RULES`
+  (`src/constants/maintenance-mode.constants.ts`). `/health`, `/health/ready`,
+  the email webhooks, `/collect`, `GET /status/maintenance`, `/platform/*`,
+  `GET /profile`, sign-in and the session routes are always let through; in
+  `read_only` reads and the flag exposure reports pass. On the customer routes
+  Apex calls (`MAINTENANCE_STAFF_ROUTES`) the gate only marks the refusal, and
+  `requireAuth` lets platform staff through and refuses everyone else, so
+  staff work in Apex (and write) during maintenance. In `full`, password
+  login and the Google callback refuse a user with no platform role
+  (`assertSignInAllowed`) before any session is created.
+  `tests/unit/routes/maintenance-mode-gates.test.ts` walks every route: a
+  route with no rule, a rule with no route, or a staff-pass route outside
+  `requireAuth` fails it.
+- **Refusal.** 503 with `Retry-After: 30` and
+  `{ success: false, statusCode: 503, code, message, mode, since, requestId }`,
+  where `message` is the owner's customer message. `errorHandler` writes it
+  unmasked and does not log it. CORS exposes `Maintenance-Mode` and
+  `Retry-After`. Clients detect maintenance by the 503 and its `code`, never
+  by a bare 502/503 (nginx answers an HTML 502 when the API is down).
+- **Queues.** `full` pauses every queue in `getAllQueues()` with BullMQ's
+  queue-wide `pause()`: running jobs finish, waiting ones stay. Every
+  replica reconciles on every reload (`reconcileQueuePause`), pausing only
+  once the change into `full` is `MAINTENANCE_MODE_PAUSE_GRACE_MS` (10 s)
+  old and resuming at once otherwise; duplicate scheduler runs queued while
+  paused are removed before a resume (`dedupeSchedulerJobs`).
+- **Changing it.** `PUT /api/v1/platform/maintenance-mode` (owner, step-up,
+  `maintenance-mode-change` limiter). Switching on or escalating needs a
+  reason, a message and `confirm` equal to `APP_ENV`; anything else needs
+  neither. After the commit it publishes, queues a notice (in-app and
+  email, type and template `maintenance_mode_changed`) to every other
+  platform owner and admin for a switch-on, an escalation or a switch-off,
+  and entering `full` waits up to `MAINTENANCE_MODE_NOTICE_WAIT_MS` for them
+  before pausing the queues. `GET` shows the state, the queues and the
+  environment name; `GET /platform/system/status` has a `maintenance`
+  section; `GET /api/v1/status/maintenance` is public (120 a minute per IP,
+  cacheable for 5 s).
+
+| Code                        | Status                 | When                                                                          |
+| --------------------------- | ---------------------- | ----------------------------------------------------------------------------- |
+| `MAINTENANCE_MODE`          | 503, `Retry-After: 30` | `full`, a route not let through, or a sign-in by a user with no platform role |
+| `READ_ONLY_MODE`            | 503, `Retry-After: 30` | `read_only`, a write not on the allowlist                                     |
+| `MAINTENANCE_MODE_CONFLICT` | 409                    | a change whose `expectedVersion` is not the stored version                    |
+| `CONFIRMATION_MISMATCH`     | 400                    | switching on or escalating without `confirm` equal to `APP_ENV`               |
+
 ## Health checks
 
 Two endpoints, deliberately different depths:

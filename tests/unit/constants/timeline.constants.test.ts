@@ -65,6 +65,7 @@ const DELIBERATELY_EXCLUDED: Readonly<Record<string, string>> = {
   range: 'only on timeline_viewed events, which no timeline lists',
   view: 'only on timeline_viewed events, which no timeline lists',
   client_app: 'only on user_flags_evaluated, which no timeline lists',
+  message_changed: 'only on platform_maintenance_mode_changed, which no timeline lists',
 }
 
 /**

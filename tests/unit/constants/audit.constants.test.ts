@@ -72,6 +72,12 @@ const VALID_METADATA: Record<AuditAction, Record<string, unknown>> = {
   'tenant.errors_viewed': {},
   // eslint-disable-next-line unicorn/no-null -- the metadata records JSON null for "no tenant"
   'user.flags_evaluated': { tenantId: null, clientApp: 'react' },
+  'platform.maintenance_mode_changed': {
+    from: 'off',
+    to: 'full',
+    reason: 'Database upgrade',
+    messageChanged: true,
+  },
 }
 
 const ACTIONS = Object.keys(AUDIT_ACTIONS) as AuditAction[]
@@ -97,6 +103,7 @@ describe('AUDIT_ACTIONS', () => {
       'onboarding.reminder_sent',
       'onboarding.step_completed',
       'onboarding.undismissed',
+      'platform.maintenance_mode_changed',
       'platform.member.auto_joined',
       'platform.member.granted',
       'tenant.accessed_by_platform',

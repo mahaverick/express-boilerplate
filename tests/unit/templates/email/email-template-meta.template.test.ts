@@ -44,6 +44,14 @@ const SAMPLE_VARIABLES: {
     nextStep: 'Invite a teammate',
     overviewLink: 'https://x.test/tenants/acme',
   },
+  maintenance_mode_changed: {
+    firstName: 'Ada',
+    appName: 'App',
+    mode: 'full',
+    actorName: 'Grace',
+    reason: 'Database upgrade',
+    changedAt: '2026-10-06T10:42:00.000Z',
+  },
 }
 
 describe('EMAIL_TEMPLATE_META', () => {
@@ -90,6 +98,12 @@ describe('EMAIL_TEMPLATE_META', () => {
       onboarding_reminder: {
         senderClass: 'general',
         previewVariables: ['tenantName', 'appName', 'nextStep', 'overviewLink'],
+        // eslint-disable-next-line unicorn/no-null -- the registry's "never resent" value
+        resendAction: null,
+      },
+      maintenance_mode_changed: {
+        senderClass: 'general',
+        previewVariables: ['firstName', 'appName', 'mode', 'changedAt'],
         // eslint-disable-next-line unicorn/no-null -- the registry's "never resent" value
         resendAction: null,
       },

@@ -72,3 +72,35 @@ export interface MaintenanceModeStatus {
    */
   lastReloadError: string | null
 }
+
+/**
+ * What `GET` and `PUT /api/v1/platform/maintenance-mode` answer to staff.
+ */
+export interface PlatformMaintenanceModeView {
+  mode: MaintenanceMode
+  /**
+   * The customer message; null while `off`.
+   */
+  message: string | null
+  /**
+   * The reason given with the last change, if any.
+   */
+  reason: string | null
+  /**
+   * When the current mode began; null while `off`.
+   */
+  since: string | null
+  /**
+   * Who made the last change; null for the seeded row or a purged user.
+   */
+  changedBy: { id: string; name: string } | null
+  /**
+   * The value a change sends back as `expectedVersion`.
+   */
+  version: number
+  queues: QueuePauseState[]
+  /**
+   * The server's `APP_ENV`: what `confirm` must equal to switch on or escalate.
+   */
+  environment: string
+}

@@ -85,6 +85,18 @@ export const TOKEN_MASK = '••••••'
 export const INVITER_NAME_PLACEHOLDER = 'A teammate'
 
 /**
+ * What a maintenance-mode notice's preview shows for the staff member who
+ * made the change, whose name is never stored.
+ */
+export const MAINTENANCE_ACTOR_PLACEHOLDER = 'A staff member'
+
+/**
+ * What a maintenance-mode notice's preview shows for the reason, which stays
+ * in the audit log only.
+ */
+export const MAINTENANCE_REASON_PLACEHOLDER = '(See the audit log.)'
+
+/**
  * Error code: the message's template is not in this build's registry.
  */
 export const TEMPLATE_UNAVAILABLE_CODE = 'template_unavailable'
@@ -480,6 +492,21 @@ export function buildPreviewMessage(
             nextStep: fill('nextStep'),
             // Carries no token, so it is stored and shown as it was sent.
             overviewLink: fill('overviewLink'),
+          },
+        }
+      }
+      case 'maintenance_mode_changed': {
+        return {
+          to,
+          templateKey,
+          variables: {
+            firstName: fill('firstName'),
+            appName: fill('appName'),
+            mode: fill('mode'),
+            // Never stored: another person's name, and internal text the audit log keeps.
+            actorName: MAINTENANCE_ACTOR_PLACEHOLDER,
+            reason: MAINTENANCE_REASON_PLACEHOLDER,
+            changedAt: fill('changedAt'),
           },
         }
       }

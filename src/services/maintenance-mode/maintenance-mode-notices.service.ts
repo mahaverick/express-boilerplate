@@ -1,14 +1,25 @@
 /**
- * @file The notice jobs of the last maintenance-mode change. The changing
- * request records their ids in Redis (`redisKey('maintenance-mode',
- * 'notices')`, kept a week); the status section reads them to report
- * whether any notice has not gone out yet, which happens when the queues
- * paused before they ran: they go out on resume.
+ * @file The notice jobs of the last maintenance-mode change. Before a
+ * change into `full` pauses the queues, the changing request waits for its
+ * notices (`waitForNoticeJobs`) by polling each job's state, never with a
+ * `QueueEvents` connection (probe P4: a job removed on completion before the
+ * wait starts would read as a failure). It records their ids in Redis
+ * (`redisKey('maintenance-mode', 'notices')`, kept a week); the status
+ * section reads them to report whether any notice has not gone out yet,
+ * which happens when the queues paused first: they go out on resume.
  */
-import type { Queue } from 'bullmq'
+import { setTimeout as delay } from 'node:timers/promises'
+import type { Job, Queue } from 'bullmq'
+import { MAINTENANCE_MODE_NOTICE_WAIT_MS } from '@/constants/maintenance-mode.constants'
 import { logger } from '@/services/logger.service'
 import { getEmailQueue, getNotificationQueue } from '@/services/queue.service'
 import { getRedis, redisKey } from '@/services/redis.service'
+import { emailJobIdFor } from '@/workers/notification.worker'
+
+/**
+ * How often the notice wait asks each job's state.
+ */
+const NOTICE_POLL_INTERVAL_MS = 200
 
 /**
  * How long the ids of one change's notices are kept.
@@ -84,5 +95,61 @@ export async function hasPendingNotices(): Promise<boolean> {
   } catch (error) {
     logger.warn('Maintenance-mode notice state could not be read', { error })
     return false
+  }
+}
+
+/**
+ * Poll some jobs' states until every one has finished or the deadline passes.
+ * @param queue - Their queue.
+ * @param ids - Their ids.
+ * @param deadline - The epoch ms to stop at.
+ * @returns Each job's final state, in order, or `'timeout'`.
+ */
+async function pollUntilFinished(
+  queue: Queue,
+  ids: string[],
+  deadline: number
+): Promise<string[] | 'timeout'> {
+  for (;;) {
+    const states = await Promise.all(ids.map((id) => queue.getJobState(id)))
+    if (states.every((state) => FINISHED_STATES.has(state))) return states
+    if (Date.now() >= deadline) return 'timeout'
+    await delay(NOTICE_POLL_INTERVAL_MS)
+  }
+}
+
+/**
+ * Wait, under one shared deadline, for a change's notification jobs to
+ * finish, then for the email job each one that did not fail enqueued
+ * (`emailJobIdFor`). `completed`, `failed` and `unknown` (finished and
+ * removed, or, for an email, never enqueued because the channel is off)
+ * count as finished: the notification worker enqueues the email before its
+ * own job completes.
+ * @param jobs - The change's jobs.
+ * @param jobs.notification - Its notification jobs.
+ * @param deadlineMs - The shared deadline; defaults to `MAINTENANCE_MODE_NOTICE_WAIT_MS`.
+ * @returns `'done'`, `'timeout'`, or `'error'` when Redis failed; never rejects.
+ */
+export async function waitForNoticeJobs(
+  jobs: { notification: Job[] },
+  deadlineMs: number = MAINTENANCE_MODE_NOTICE_WAIT_MS
+): Promise<'done' | 'timeout' | 'error'> {
+  const deadline = Date.now() + deadlineMs
+  const notifications = jobs.notification.filter((job) => job.id !== undefined)
+  try {
+    const states = await pollUntilFinished(
+      getNotificationQueue(),
+      notifications.map((job) => job.id ?? ''),
+      deadline
+    )
+    if (states === 'timeout') return 'timeout'
+    const emailIds = notifications
+      .filter((_job, index) => states[index] !== 'failed')
+      .map((job) => emailJobIdFor(job))
+    const emailStates = await pollUntilFinished(getEmailQueue(), emailIds, deadline)
+    return emailStates === 'timeout' ? 'timeout' : 'done'
+  } catch (error) {
+    logger.warn('Maintenance-mode notices could not be waited for', { error })
+    return 'error'
   }
 }

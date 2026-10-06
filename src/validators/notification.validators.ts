@@ -51,14 +51,16 @@ export type NotificationIdParameters = z.infer<typeof notificationIdSchema>
  * apply, plus a listing-only third: `verify_email` and
  * `password_reset_requested` would lock the user out if disabled;
  * `password_changed` must not be silenceable by someone who has taken the
- * account over; and `tenant_invitation` has no email on the notification path
- * and is listed to keep the two sets the same.
+ * account over; `tenant_invitation` has no email on the notification path
+ * and is listed to keep the two sets the same; and `maintenance_mode_changed`
+ * must reach every owner and admin.
  */
 const NON_DISABLEABLE_NOTIFICATION_TYPES: ReadonlySet<string> = new Set([
   'verify_email',
   'password_reset_requested',
   'password_changed',
   'tenant_invitation',
+  'maintenance_mode_changed',
 ])
 
 /**

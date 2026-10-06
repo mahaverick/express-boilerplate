@@ -33,7 +33,7 @@ import { request } from '../../helpers/request'
 // Apex has no experiment flag yet, so a real report could only answer 400, which logStaffWrites skips anyway; an empty key list lets the exemption be seen on a 204.
 vi.mock('@/validators/flags.validators', () => ({ parseExposureKeys: () => [] }))
 
-type Method = 'get' | 'post' | 'patch' | 'delete'
+type Method = 'get' | 'post' | 'put' | 'patch' | 'delete'
 
 interface GateRow {
   method: Method
@@ -244,6 +244,8 @@ const ROUTES: readonly GateRow[] = [
   },
   { method: 'get', path: '/flags', minRole: 'viewer', requiresStepUp: false },
   { method: 'get', path: '/flags/evaluate', minRole: 'admin', requiresStepUp: false },
+  { method: 'get', path: '/maintenance-mode', minRole: 'viewer', requiresStepUp: false },
+  { method: 'put', path: '/maintenance-mode', minRole: 'owner', requiresStepUp: true },
 ]
 
 /**

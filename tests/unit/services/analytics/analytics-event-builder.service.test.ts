@@ -23,6 +23,7 @@ import {
   type AuditAction,
 } from '@/constants/audit.constants'
 import { EMAIL_EVENT_TYPES } from '@/constants/email.constants'
+import { MAINTENANCE_MODES } from '@/constants/maintenance-mode.constants'
 import { MEMBERSHIP_ROLES } from '@/constants/tenant.constants'
 import { TIMELINE_RANGES, TIMELINE_VIEWS } from '@/constants/timeline.constants'
 import type { AuditLog } from '@/database/models/audit-log.model'
@@ -582,6 +583,7 @@ const CANDIDATES: readonly unknown[] = [
   'setup',
   'reset',
   ...MEMBERSHIP_ROLES,
+  ...MAINTENANCE_MODES,
   ...EMAIL_TEMPLATE_KEYS,
   ...TIMELINE_RANGES,
   ...TIMELINE_VIEWS,

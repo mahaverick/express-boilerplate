@@ -586,6 +586,32 @@ flag. To run an experiment on a flag, follow the order in
 [ARCHITECTURE.md](ARCHITECTURE.md#feature-flags): sync first, then create the
 experiment in PostHog reusing the flag.
 
+## Maintenance mode
+
+A platform owner switches maintenance mode from Apex's Maintenance page;
+how it works is in [ARCHITECTURE.md](ARCHITECTURE.md#maintenance-mode).
+
+Runbook:
+
+1. **Confirm staff access before `full`.** In `full` only staff can sign in,
+   and nobody can reset a password, so make sure whoever will switch it off
+   can sign in to Apex with a password or Google.
+2. **Use `read_only` for data fixes where reads are safe.** Customers keep
+   reading; their writes answer 503 `READ_ONLY_MODE`, and jobs keep running.
+3. **Before database work, check "0 running" on every queue** on the
+   Maintenance page. `full` pauses every queue, but jobs already running
+   finish first.
+4. **Staff keep working.** Staff actions in Apex, including the tenant,
+   member, invitation and Staff pages, and staff sign-ins keep working and
+   writing during maintenance.
+5. **Switch off from Apex.** Leaving `full` resumes every queue; notices
+   that were still queued go out then.
+
+Switching on or escalating asks for the owner's password if it was entered
+more than 10 minutes ago, a reason, the customer message and the
+environment name (`APP_ENV`) typed out. Every other platform owner and admin
+is notified in-app and by email.
+
 ## Make this yours
 
 This is a template. Before the first real commit on a project generated from

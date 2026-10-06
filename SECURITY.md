@@ -345,14 +345,15 @@ addresses the source system already trusted.
 
 ### Rate limiting: one store prefix per limiter
 
-`RATE_LIMITS` (`src/constants/rate-limit.constants.ts`) holds 29 limiter
+`RATE_LIMITS` (`src/constants/rate-limit.constants.ts`) holds 30 limiter
 specs, each built into middleware by `createRateLimiter(spec)`
 (`src/middlewares/rate-limit.middleware.ts`). Sixteen guard the auth router
 (every route on it except `GET /providers` has at least one), seven guard
 tenant creation, member invitation, invitation preview and accept, staff
 reads, staff timelines and staff writes, two guard the email webhook, one
 guards the PostHog proxy, one guards the feature-flag exposure reports, one
-guards the public maintenance status, and `authenticatedWrite` covers every other authenticated write. Paths below are under `/api/v1`; a `user` key is the
+guards the public maintenance status, one guards the maintenance-mode change, and
+`authenticatedWrite` covers every other authenticated write. Paths below are under `/api/v1`; a `user` key is the
 authenticated user's id, and an `email` key is the submitted `email`,
 trimmed and lowercased.
 
@@ -385,6 +386,7 @@ trimmed and lowercased.
 |                                                                                                                                                                                                                                                                                                              | `email-webhook` (accepted requests only)         | 3000 per minute    | provider                   |
 | `POST /flags/exposures`, `POST /tenants/:slug/flags/exposures`, `POST /platform/me/flags/exposures`                                                                                                                                                                                                          | `flag-exposure`, one budget on Redis             | 60 per minute      | session (`sid`), else user |
 | `GET /status/maintenance` (public)                                                                                                                                                                                                                                                                           | `maintenance-status`                             | 120 per minute     | IP                         |
+| `PUT /platform/maintenance-mode` (after the owner and step-up checks)                                                                                                                                                                                                                                        | `maintenance-mode-change`                        | 10 per minute      | user                       |
 | `/collect/*`, every method (public; the PostHog proxy)                                                                                                                                                                                                                                                       | `analytics-proxy`                                | 3000 per minute    | IP                         |
 | Every other authenticated write (below)                                                                                                                                                                                                                                                                      | `authenticated-write`                            | 60 per minute      | user                       |
 
@@ -1015,7 +1017,7 @@ None of these is built, except where the Status column says Partial:
 | ----------------------------------------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | MFA                                                   | **Not implemented** | No TOTP enrolment and no recovery codes. The one step-up is a password re-check before destructive staff actions; see "Step-up for destructive staff actions".                                                                      |
 | CSRF tokens                                           | **Not implemented** | See "No CSRF middleware" below — reasoning, not an oversight. The forced-login direction IS defended, by a content-type gate; see the section after it.                                                                             |
-| General-purpose rate limiting                         | **Partial**         | 29 limiters (see "Rate limiting" above). Every write route has one, at least the shared `authenticatedWrite`. There is no global limiter, and authenticated reads (profile, notifications, tenant reads, the audit logs) have none. |
+| General-purpose rate limiting                         | **Partial**         | 30 limiters (see "Rate limiting" above). Every write route has one, at least the shared `authenticatedWrite`. There is no global limiter, and authenticated reads (profile, notifications, tenant reads, the audit logs) have none. |
 | Rehash on login                                       | **Not implemented** | See "Password hashing".                                                                                                                                                                                                             |
 | Impersonation, break-glass access, row-level security | **Not implemented** | Staff act only through the platform role; see "Platform staff access and the audit log".                                                                                                                                            |
 | Audit of sign-in and credential events                | **Partial**         | `audit_logs` records no login, logout, password change or password reset. The one sign-in event it records is a staff step-up (`auth.reauthenticated`, success or wrong password).                                                  |
