@@ -9,6 +9,7 @@ import {
   DEFAULT_NOTIFICATION_PAGE_SIZE,
   MAX_NOTIFICATION_PAGE_SIZE,
   NOTIFICATION_TYPES,
+  STAFF_ONLY_NOTIFICATION_TYPES,
 } from '@/constants/notification.constants'
 
 /**
@@ -73,33 +74,48 @@ export const CONFIGURABLE_NOTIFICATION_TYPES = NOTIFICATION_TYPES.filter(
 )
 
 /**
- * One preference entry. `z.enum(NOTIFICATION_TYPES)` keeps the parsed type the
- * `NotificationType` union, and the `.refine()` turns "not configurable" into
- * a per-field message (`preferences.<index>.notificationType`) instead of
- * zod's generic invalid-enum text.
+ * The notification types that exist for a caller: every type for platform
+ * staff, all but the staff-only ones for everyone else.
+ * @param isStaff - Whether the caller holds a platform membership.
+ * @returns The types.
  */
-const preferenceEntrySchema = z.object({
-  notificationType: z
-    .enum(NOTIFICATION_TYPES)
-    .refine((type) => CONFIGURABLE_NOTIFICATION_TYPES.includes(type), {
-      message: 'This notification type does not support a configurable preference.',
-    }),
-  emailEnabled: z.boolean(),
-  inAppEnabled: z.boolean(),
-})
+function notificationTypesFor(isStaff: boolean): readonly string[] {
+  const staffOnly: readonly string[] = STAFF_ONLY_NOTIFICATION_TYPES
+  return isStaff
+    ? NOTIFICATION_TYPES
+    : NOTIFICATION_TYPES.filter((type) => !staffOnly.includes(type))
+}
 
 /**
- * `PUT /api/v1/notifications/preferences` request body: one or more
- * per-type channel toggles to upsert.
+ * `PUT /api/v1/notifications/preferences` request body for one caller: one or
+ * more per-type channel toggles to upsert. `z.enum(NOTIFICATION_TYPES)` keeps
+ * the parsed type the `NotificationType` union, and the `.refine()` turns
+ * "not configurable" into a per-field message
+ * (`preferences.<index>.notificationType`) instead of zod's generic
+ * invalid-enum text. A staff-only type is not configurable for a caller who
+ * cannot see it, whatever `CONFIGURABLE_NOTIFICATION_TYPES` holds.
+ * @param isStaff - Whether the caller holds a platform membership.
+ * @returns The schema.
  */
-export const updatePreferencesSchema = z.object({
-  preferences: z
-    .array(preferenceEntrySchema)
-    .min(1, 'preferences must contain at least one entry.'),
-})
+export function updatePreferencesSchemaFor(isStaff: boolean) {
+  const visibleTypes = notificationTypesFor(isStaff)
+  const isConfigurable = (type: string): boolean =>
+    visibleTypes.includes(type) &&
+    (CONFIGURABLE_NOTIFICATION_TYPES as readonly string[]).includes(type)
+  const entry = z.object({
+    notificationType: z.enum(NOTIFICATION_TYPES).refine(isConfigurable, {
+      message: 'This notification type does not support a configurable preference.',
+    }),
+    emailEnabled: z.boolean(),
+    inAppEnabled: z.boolean(),
+  })
+  return z.object({
+    preferences: z.array(entry).min(1, 'preferences must contain at least one entry.'),
+  })
+}
 
 /**
  * The validated shape of a `PUT /api/v1/notifications/preferences` request
  * body.
  */
-export type UpdatePreferencesInput = z.infer<typeof updatePreferencesSchema>
+export type UpdatePreferencesInput = z.infer<ReturnType<typeof updatePreferencesSchemaFor>>

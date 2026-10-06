@@ -7,6 +7,7 @@ import { BaseController } from '@/controllers/base.controller'
 import { authenticatedUserId } from '@/controllers/helpers.controller'
 import type { Notification } from '@/database/models/notification.model'
 import {
+  canSeeStaffOnlyNotificationTypes,
   deleteNotification,
   getPreferences,
   listNotifications,
@@ -18,7 +19,7 @@ import { messageResponse, successResponse } from '@/utilities/response.utilities
 import {
   listNotificationsSchema,
   notificationIdSchema,
-  updatePreferencesSchema,
+  updatePreferencesSchemaFor,
 } from '@/validators/notification.validators'
 import { parseBody } from '@/validators/parse.validators'
 
@@ -118,14 +119,15 @@ class NotificationController extends BaseController {
    * `PUT /notifications/preferences`: upsert one or more of the
    * authenticated user's notification preferences.
    *
-   * `updatePreferencesSchema` (notification.validators.ts) is the only gate
+   * `updatePreferencesSchemaFor` (notification.validators.ts) is the only gate
    * on which `notificationType` values reach `upsert`: a type outside
    * `CONFIGURABLE_NOTIFICATION_TYPES` (currently every type) fails with a
    * per-field 400.
    */
   updatePreferences = this.handle(async (request, response) => {
     const userId = authenticatedUserId(request)
-    const { preferences } = parseBody(updatePreferencesSchema, request.body)
+    const isStaff = await canSeeStaffOnlyNotificationTypes(userId)
+    const { preferences } = parseBody(updatePreferencesSchemaFor(isStaff), request.body)
     const updated = await updatePreferences(userId, preferences)
     successResponse(response, { preferences: updated }, 'Notification preferences updated.')
   })

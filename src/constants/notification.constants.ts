@@ -25,6 +25,13 @@ export const NOTIFICATION_TYPES = [
 ] as const
 
 /**
+ * The notification types only platform staff see: a user with no platform
+ * membership gets none of them in their preferences list, and an update
+ * naming one is refused as for any type that cannot be configured.
+ */
+export const STAFF_ONLY_NOTIFICATION_TYPES = ['maintenance_mode_changed'] as const
+
+/**
  * One of the fixed set of notification types a `notifications` or
  * `notification_preferences` row may carry.
  */

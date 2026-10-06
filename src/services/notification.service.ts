@@ -4,7 +4,10 @@
  * repository's userId-scoped methods, so a caller cannot act on or learn of
  * another user's notification.
  */
-import { MAX_NOTIFICATION_PAGE_SIZE } from '@/constants/notification.constants'
+import {
+  MAX_NOTIFICATION_PAGE_SIZE,
+  STAFF_ONLY_NOTIFICATION_TYPES,
+} from '@/constants/notification.constants'
 import type { Notification, NotificationPreference } from '@/database/models/notification.model'
 import { HttpError } from '@/errors/http-error'
 import {
@@ -15,6 +18,7 @@ import {
   decodeNotificationCursor,
   NotificationRepository,
 } from '@/repositories/notification.repository'
+import { getPlatformMembership } from '@/services/platform.service'
 import type { UpdatePreferencesInput } from '@/validators/notification.validators'
 
 const notificationRepository = new NotificationRepository()
@@ -82,12 +86,29 @@ export async function deleteNotification(userId: string, notificationId: string)
 }
 
 /**
- * The user's full preference matrix, defaults resolved for unset types.
+ * Whether the user may see the staff-only notification types: they hold a
+ * platform membership.
  * @param userId - The user.
- * @returns One entry per notification type.
+ * @returns True for platform staff.
+ */
+export async function canSeeStaffOnlyNotificationTypes(userId: string): Promise<boolean> {
+  return (await getPlatformMembership(userId)) !== null
+}
+
+/**
+ * The user's full preference matrix, defaults resolved for unset types. A
+ * user with no platform membership gets no staff-only type.
+ * @param userId - The user.
+ * @returns One entry per notification type the user may see.
  */
 export async function getPreferences(userId: string): Promise<PreferenceMatrix> {
-  return notificationPreferenceRepository.getFullMatrix(userId)
+  const [matrix, isStaff] = await Promise.all([
+    notificationPreferenceRepository.getFullMatrix(userId),
+    canSeeStaffOnlyNotificationTypes(userId),
+  ])
+  if (isStaff) return matrix
+  const staffOnly: readonly string[] = STAFF_ONLY_NOTIFICATION_TYPES
+  return matrix.filter((entry) => !staffOnly.includes(entry.notificationType))
 }
 
 /**

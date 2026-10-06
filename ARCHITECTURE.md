@@ -1178,7 +1178,9 @@ customer write answers 503 `READ_ONLY_MODE`; reads and jobs keep running).
   email, type and template `maintenance_mode_changed`) to every other
   platform owner and admin for a switch-on, an escalation or a switch-off,
   and entering `full` waits up to `MAINTENANCE_MODE_NOTICE_WAIT_MS` for them
-  before pausing the queues. `GET` shows the state, the queues and the
+  before pausing the queues. The type is staff-only
+  (`STAFF_ONLY_NOTIFICATION_TYPES`): a user with no platform membership does
+  not see it in `GET /notifications/preferences`. `GET` shows the state, the queues and the
   environment name; `GET /platform/system/status` has a `maintenance`
   section; `GET /api/v1/status/maintenance` is public (120 a minute per IP,
   cacheable for 5 s).
