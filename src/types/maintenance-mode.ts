@@ -37,3 +37,38 @@ export interface PublicMaintenanceStatus {
   message: string | null
   since: string | null
 }
+
+/**
+ * One queue's pause state for Apex; `paused` and `active` are null when
+ * Redis could not be asked.
+ */
+export interface QueuePauseState {
+  name: string
+  paused: boolean | null
+  active: number | null
+}
+
+/**
+ * The maintenance section of the staff system status.
+ */
+export interface MaintenanceModeStatus {
+  mode: MaintenanceMode
+  since: string | null
+  /**
+   * False while this replica has never read the row: Apex shows "unknown".
+   */
+  known: boolean
+  /**
+   * True only when every queue answered and is paused.
+   */
+  queuesPaused: boolean
+  queues: QueuePauseState[]
+  /**
+   * True while a notice job of the last change has not finished.
+   */
+  noticesPending: boolean
+  /**
+   * The label of this replica's last failed reload, or null.
+   */
+  lastReloadError: string | null
+}

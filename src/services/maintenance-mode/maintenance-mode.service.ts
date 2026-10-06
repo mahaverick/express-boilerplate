@@ -1,13 +1,18 @@
 /**
  * @file Maintenance mode as the rest of the app asks about it: whether a
- * user may sign in now, and the public status. Both read this replica's
- * in-memory mode, never Postgres.
+ * user may sign in now, the public status and the staff status section.
+ * They read this replica's in-memory mode, never Postgres.
  */
 import { MAINTENANCE_MODE_CODE } from '@/constants/maintenance-mode.constants'
 import { MaintenanceModeError } from '@/errors/maintenance-mode-errors'
-import { getMaintenanceMode } from '@/services/maintenance-mode/maintenance-mode-store.service'
+import { hasPendingNotices } from '@/services/maintenance-mode/maintenance-mode-notices.service'
+import { getQueuePauseStates } from '@/services/maintenance-mode/maintenance-mode-queues.service'
+import {
+  getMaintenanceMode,
+  getMaintenanceModeReloadError,
+} from '@/services/maintenance-mode/maintenance-mode-store.service'
 import { getPlatformMembership } from '@/services/platform.service'
-import type { PublicMaintenanceStatus } from '@/types/maintenance-mode'
+import type { MaintenanceModeStatus, PublicMaintenanceStatus } from '@/types/maintenance-mode'
 
 /**
  * Refuse a sign-in in `full` unless the user is staff (holds any platform
@@ -32,4 +37,24 @@ export async function assertSignInAllowed(userId: string): Promise<void> {
 export function getPublicMaintenanceStatus(): PublicMaintenanceStatus {
   const { mode, message, since } = getMaintenanceMode()
   return { mode, message, since }
+}
+
+/**
+ * The maintenance section of the staff system status, as this replica sees
+ * it: the mode, whether it is known, each queue's pause state, whether the
+ * last change's notices are still pending, and the last reload failure.
+ * @returns The section; never rejects (a Redis failure shows as null queue fields and no pending notices).
+ */
+export async function getMaintenanceModeStatus(): Promise<MaintenanceModeStatus> {
+  const snapshot = getMaintenanceMode()
+  const [queues, noticesPending] = await Promise.all([getQueuePauseStates(), hasPendingNotices()])
+  return {
+    mode: snapshot.mode,
+    since: snapshot.since,
+    known: snapshot.known,
+    queuesPaused: queues.length > 0 && queues.every((queue) => queue.paused === true),
+    queues,
+    noticesPending,
+    lastReloadError: getMaintenanceModeReloadError(),
+  }
 }

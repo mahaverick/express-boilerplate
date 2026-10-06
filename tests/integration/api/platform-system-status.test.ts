@@ -1,6 +1,7 @@
 /**
  * @file GET /api/v1/platform/system/status through the real app: an admin
- * gets the release, error tracking's status and the flags' status, a viewer
+ * gets the release, error tracking's status, the flags' status and the
+ * maintenance section, a viewer
  * the plain 404, and no read is audited. The counters themselves are the
  * error-counters and flag-counters services'; here they are spied.
  */
@@ -9,7 +10,9 @@ import { createApp } from '@/app'
 import { sql } from '@/services/database.service'
 import * as counters from '@/services/errors/error-counters.service'
 import * as flagCounters from '@/services/flags/flag-counters.service'
+import * as maintenanceMode from '@/services/maintenance-mode/maintenance-mode.service'
 import type { FlagsStatus } from '@/types/flags'
+import type { MaintenanceModeStatus } from '@/types/maintenance-mode'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { createTrackedStaff, deleteTrackedUsers } from '../../helpers/platform-users'
 import { request } from '../../helpers/request'
@@ -57,6 +60,23 @@ function sampleFlagsStatus(): FlagsStatus {
   }
 }
 
+/**
+ * A maintenance section as the maintenance-mode service could answer it.
+ * @returns The section.
+ */
+function sampleMaintenanceStatus(): MaintenanceModeStatus {
+  return {
+    mode: 'full',
+    since: '2026-10-06T10:42:00.000Z',
+    known: true,
+    queuesPaused: true,
+    queues: [{ name: 'email', paused: true, active: 0 }],
+    noticesPending: false,
+    // eslint-disable-next-line unicorn/no-null -- the last reload succeeded
+    lastReloadError: null,
+  }
+}
+
 afterEach(async () => {
   vi.restoreAllMocks()
   await truncateAuditLogs()
@@ -67,6 +87,9 @@ describe('GET /platform/system/status', () => {
   it('answers an admin with the release, error tracking and flags, and audits nothing', async () => {
     vi.spyOn(counters, 'getErrorTrackingStatus').mockResolvedValue(sampleStatus())
     vi.spyOn(flagCounters, 'getFlagsStatus').mockResolvedValue(sampleFlagsStatus())
+    vi.spyOn(maintenanceMode, 'getMaintenanceModeStatus').mockResolvedValue(
+      sampleMaintenanceStatus()
+    )
     const { user, token } = await createTrackedStaff('admin')
 
     const response = await request(app)
@@ -78,6 +101,7 @@ describe('GET /platform/system/status', () => {
       release: 'dev',
       errorTracking: sampleStatus(),
       flags: sampleFlagsStatus(),
+      maintenance: sampleMaintenanceStatus(),
     })
     const [row] = await sql<{ count: number }[]>`
       select count(*)::int as count from audit_logs where actor_user_id = ${user.id}`

@@ -38,6 +38,15 @@ export const MAINTENANCE_MODE_RETRY_AFTER_SECONDS = 30
 export const MAINTENANCE_MODE_NOTICE_WAIT_MS = 10_000
 
 /**
+ * How old a change into `full` must be before a reload pauses the queues:
+ * the changing request pauses them itself once its notices
+ * are out, and a reload inside this window must neither pause them before
+ * that nor resume them after. Equal to `MAINTENANCE_MODE_NOTICE_WAIT_MS`,
+ * the notice wait's own deadline.
+ */
+export const MAINTENANCE_MODE_PAUSE_GRACE_MS = 10_000
+
+/**
  * The longest customer message or internal reason, in characters.
  */
 export const MAINTENANCE_MODE_TEXT_MAX_LENGTH = 500

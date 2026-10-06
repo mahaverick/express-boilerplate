@@ -63,8 +63,14 @@ async function boot(): Promise<void> {
     await startFlagSnapshot()
   }
 
-  const { startMaintenanceModeStore } =
+  const { onMaintenanceModeReload, startMaintenanceModeStore } =
     await import('@/services/maintenance-mode/maintenance-mode-store.service')
+  const { reconcileQueuePause } =
+    await import('@/services/maintenance-mode/maintenance-mode-queues.service')
+  // Every reload, API-only replicas included: they hold producer connections. Never rejects.
+  onMaintenanceModeReload((snapshot) => {
+    void reconcileQueuePause(snapshot)
+  })
   // Never rejects: a failed first read starts the replica open and the backstop retries.
   await startMaintenanceModeStore()
 
