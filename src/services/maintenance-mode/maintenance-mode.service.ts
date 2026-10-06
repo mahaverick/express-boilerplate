@@ -221,6 +221,21 @@ interface CommittedChange {
 }
 
 /**
+ * Whether a later change has replaced a committed one in this replica's
+ * store: a strictly newer version that is no longer the same `full` (another
+ * mode, or a `full` that began at another time). A same-mode message edit
+ * keeps `changedAt`, and a store that has not caught up (a failed reload)
+ * holds an older version, so neither supersedes the change.
+ * @param committed - The committed change.
+ * @returns True when the change's queue pause should be skipped.
+ */
+function isSupersededChange(committed: CommittedChange): boolean {
+  const current = getMaintenanceMode()
+  if (current.version <= committed.version) return false
+  return current.mode !== 'full' || current.changedAt !== committed.changedAt.toISOString()
+}
+
+/**
  * Queue one in-app notice and email to every other platform owner and admin,
  * and record the jobs for the status section. A failed enqueue is logged and
  * skipped: the change is already committed.
@@ -374,8 +389,7 @@ export async function changeMaintenanceMode(
         outcome,
       })
     }
-    // A later change may have left `full` during the wait; it owns the queues now.
-    if (getMaintenanceMode().version === committed.version) await setAllQueuesPaused(true)
+    if (!isSupersededChange(committed)) await setAllQueuesPaused(true)
   } else if (committed.from === 'full' && committed.to !== 'full') {
     await setAllQueuesPaused(false)
   }

@@ -291,15 +291,19 @@ const COMPILED_RULES = MAINTENANCE_ROUTE_RULES.map((rule) => ({ rule, pattern: p
  * classified as GET, as Express routes it.
  * @param method - The request method.
  * @param path - The request path, without the query string.
+ * @param rules - The rules to look in, in order; defaults to `MAINTENANCE_ROUTE_RULES` (a test passes its own).
  * @returns The first matching rule.
  */
 export function classifyMaintenanceRoute(
   method: string,
-  path: string
+  path: string,
+  rules?: readonly MaintenanceRouteRule[]
 ): MaintenanceRouteRule | undefined {
   const upper = method.toUpperCase()
   const effective = upper === 'HEAD' ? 'GET' : upper
-  return COMPILED_RULES.find(
+  const compiled =
+    rules === undefined ? COMPILED_RULES : rules.map((rule) => ({ rule, pattern: patternOf(rule) }))
+  return compiled.find(
     ({ rule, pattern }) => (rule.method === '*' || rule.method === effective) && pattern.test(path)
   )?.rule
 }

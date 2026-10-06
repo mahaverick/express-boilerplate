@@ -186,7 +186,7 @@ async function applyTarget(
     if (!failingQueues.has(queue.name)) {
       logger.warn(
         target === 'resume'
-          ? 'A queue is still paused after maintenance mode ended; the next reload retries the resume'
+          ? 'A queue could not be resumed after full maintenance mode; it may still be paused until a later reload resumes it'
           : 'A queue could not be paused for maintenance mode; the next reload retries',
         { queue: queue.name, error }
       )

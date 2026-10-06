@@ -8,6 +8,7 @@ import { createApp } from '@/app'
 import { MAINTENANCE_MODE_PAUSE_GRACE_MS } from '@/constants/maintenance-mode.constants'
 import * as notices from '@/services/maintenance-mode/maintenance-mode-notices.service'
 import { setAllQueuesPaused } from '@/services/maintenance-mode/maintenance-mode-queues.service'
+import * as store from '@/services/maintenance-mode/maintenance-mode-store.service'
 import {
   getMaintenanceMode,
   reloadMaintenanceMode,
@@ -79,6 +80,63 @@ describe('a change that waits for its notices', () => {
     expect(response.status).toBe(200)
     const flags = await Promise.all(getAllQueues().map((queue) => queue.isPaused()))
     expect(flags).toEqual([false, false, false, false])
+  })
+
+  it('still pauses the queues when another owner only edited the message during the wait', async () => {
+    const first = await createTrackedStaff('owner')
+    const second = await createTrackedStaff('owner')
+    const before = await request(app).get(PATH).set('Authorization', `Bearer ${first.token}`)
+    const version = (before.body as { data: PlatformMaintenanceModeView }).data.version
+    let releaseWait!: (outcome: 'done') => void
+    // eslint-disable-next-line unicorn/prefer-promise-with-resolvers -- tsconfig.json pins `lib: ["ES2023"]`; `Promise.withResolvers` is ES2024 and untyped under it.
+    const held = new Promise<'done'>((resolve) => {
+      releaseWait = resolve
+    })
+    const wait = vi.spyOn(notices, 'waitForNoticeJobs').mockImplementation(() => held)
+
+    // A supertest request is lazy: awaiting it inside an async function is what sends it now.
+    const pending = (async () =>
+      request(app).put(PATH).set('Authorization', `Bearer ${first.token}`).send({
+        mode: 'full',
+        message: 'Down.',
+        reason: 'Upgrade',
+        expectedVersion: version,
+        confirm: 'local',
+      }))()
+    await waitUntil(() => wait.mock.calls.length === 1, { message: 'the first change is waiting' })
+    const edit = await request(app)
+      .put(PATH)
+      .set('Authorization', `Bearer ${second.token}`)
+      .send({ mode: 'full', message: 'Down until noon.', expectedVersion: version + 1 })
+    expect(edit.status).toBe(200)
+    expect(getMaintenanceMode()).toMatchObject({ mode: 'full', version: version + 2 })
+    releaseWait('done')
+    const response = await pending
+
+    expect(response.status).toBe(200)
+    const flags = await Promise.all(getAllQueues().map((queue) => queue.isPaused()))
+    expect(flags).toEqual([true, true, true, true])
+  })
+
+  it('still pauses the queues when this replica’s reload failed and its store is behind', async () => {
+    const { token } = await createTrackedStaff('owner')
+    const before = await request(app).get(PATH).set('Authorization', `Bearer ${token}`)
+    const version = (before.body as { data: PlatformMaintenanceModeView }).data.version
+    vi.spyOn(notices, 'waitForNoticeJobs').mockResolvedValue('done')
+    vi.spyOn(store, 'reloadMaintenanceMode').mockResolvedValue()
+
+    const response = await request(app).put(PATH).set('Authorization', `Bearer ${token}`).send({
+      mode: 'full',
+      message: 'Down.',
+      reason: 'Upgrade',
+      expectedVersion: version,
+      confirm: 'local',
+    })
+
+    expect(response.status).toBe(200)
+    expect(getMaintenanceMode().version).toBeLessThan(version + 1)
+    const flags = await Promise.all(getAllQueues().map((queue) => queue.isPaused()))
+    expect(flags).toEqual([true, true, true, true])
   })
 
   it('is given what is left of the notice wait after the commit, never more than all of it', async () => {

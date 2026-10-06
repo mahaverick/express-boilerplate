@@ -126,20 +126,39 @@ function entriesOf(app: Express): WalkedEntry[] {
  * covers a different template that merely matches its pattern, so a literal
  * route beside a parameterised one needs a row of its own).
  * @param entry - The entry.
+ * @param rules - The rule list to look in.
  * @returns The rule, or undefined.
  */
-function ruleFor(entry: WalkedEntry): MaintenanceRouteRule | undefined {
+function ruleFor(
+  entry: WalkedEntry,
+  rules: readonly MaintenanceRouteRule[] = MAINTENANCE_ROUTE_RULES
+): MaintenanceRouteRule | undefined {
   if (entry.method === '*') {
-    return MAINTENANCE_ROUTE_RULES.find(
-      (rule) => rule.match === 'prefix' && rule.path === entry.path
-    )
+    return rules.find((rule) => rule.match === 'prefix' && rule.path === entry.path)
   }
-  return MAINTENANCE_ROUTE_RULES.find(
+  return rules.find(
     (rule) =>
       rule.match === 'exact' &&
       rule.path === entry.path &&
       (rule.method === '*' || rule.method === entry.method)
   )
+}
+
+/**
+ * The walked routes the gate would classify by another rule than their own:
+ * it takes the first rule whose pattern matches, so an earlier parameterised
+ * rule shadows a later literal one.
+ * @param entries - The walked entries.
+ * @param rules - The rule list the gate would use.
+ * @returns `METHOD path` for each.
+ */
+function shadowed(entries: WalkedEntry[], rules: readonly MaintenanceRouteRule[]): string[] {
+  return entries
+    .filter((entry) => entry.method !== '*')
+    .filter(
+      (entry) => classifyMaintenanceRoute(entry.method, entry.path, rules) !== ruleFor(entry, rules)
+    )
+    .map((entry) => `${entry.method} ${entry.path}`)
 }
 
 /**
@@ -338,6 +357,32 @@ describe('maintenance-mode route classification', () => {
     app.use('/api/v1', api)
 
     expect(unclassified(entriesOf(app))).toEqual(['PATCH /api/v1/tenants/:slug/members/bulk'])
+  })
+
+  it('classifies every walked route by its own rule, not an earlier rule that matches its pattern', () => {
+    expect(shadowed(live.entries, MAINTENANCE_ROUTE_RULES)).toEqual([])
+  })
+
+  it('fails on a literal rule placed after a parameterised rule that also matches it', () => {
+    const app = express()
+    const api = Router()
+    const tenants = Router()
+    tenants.patch('/:slug/members/:userId', noop)
+    tenants.patch('/:slug/members/bulk', noop)
+    api.use('/tenants', tenants)
+    app.use('/api/v1', api)
+    const literal: MaintenanceRouteRule = {
+      method: 'PATCH',
+      path: '/api/v1/tenants/:slug/members/bulk',
+      match: 'exact',
+      readOnly: 'block',
+      full: 'block',
+      staffPass: false,
+    }
+    const rules = [...MAINTENANCE_ROUTE_RULES, literal]
+
+    expect(unclassified(entriesOf(app))).toEqual(['PATCH /api/v1/tenants/:slug/members/bulk'])
+    expect(shadowed(entriesOf(app), rules)).toEqual(['PATCH /api/v1/tenants/:slug/members/bulk'])
   })
 
   it('fails on a rule whose route is gone', () => {
