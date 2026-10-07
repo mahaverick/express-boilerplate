@@ -1,17 +1,19 @@
 /**
  * @file `isAllowedOrigin`, the one definition of an origin this API will talk
- * to, used by the CORS configuration.
+ * to, used by the CORS configuration and the Origin check on the refresh
+ * cookie's routes (origin.middleware.ts).
  */
 import { getEnv } from '@/configs/env.config'
 
 /**
  * Whether a request's origin may be granted CORS access: no `Origin` at all
- * (same-origin or a non-browser client), `WEB_URL`'s origin, or one listed in
- * `CORS_ALLOWED_ORIGINS`.
+ * (a non-browser client, or a same-origin GET), `WEB_URL`'s origin,
+ * `APEX_URL`'s origin, or one listed in `CORS_ALLOWED_ORIGINS`.
  *
  * Exact string equality against a fixed set, never a suffix or regex match,
- * which a lookalike domain can satisfy. A refused origin only has the grant
- * header withheld; the request is not rejected server-side.
+ * which a lookalike domain can satisfy. For CORS a refused origin only has
+ * the grant header withheld; `requireAllowedOriginWhenPresent` refuses it
+ * outright on `/auth/refresh` and `/auth/logout`.
  * @param origin - The request's `Origin` header, or undefined when it has none.
  * @returns True when the request may proceed.
  */
@@ -20,7 +22,9 @@ export function isAllowedOrigin(origin: string | undefined): boolean {
 
   const env = getEnv()
 
-  if (canonicalOrigin(env.WEB_URL) === origin) return true
+  if (canonicalOrigin(env.WEB_URL) === origin || canonicalOrigin(env.APEX_URL) === origin) {
+    return true
+  }
 
   return parseOriginList(env.CORS_ALLOWED_ORIGINS).has(origin)
 }

@@ -399,6 +399,78 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
   })
 
   /**
+   * SameSite=Strict does not stop a sibling subdomain (same site, other
+   * origin) from making the browser POST here with the cookie attached.
+   */
+  describe('the Origin check on refresh and logout', () => {
+    const SIBLING = 'https://blog.example.test'
+
+    it('refuses a refresh from a disallowed Origin 403, and the session still refreshes', async () => {
+      const { response: loginResponse } = await registerAndLogin(createdIds)
+      const cookie = refreshCookiePair(loginResponse) as string
+
+      const refused = await request(app)
+        .post('/api/v1/auth/refresh')
+        .set('Origin', SIBLING)
+        .set('Sec-Fetch-Site', 'same-site')
+        .set('Cookie', cookie)
+      expect(refused.status).toBe(403)
+      expect(envelopeOf(refused).code).toBe('ORIGIN_NOT_ALLOWED')
+      expect(refreshCookiePair(refused)).toBeUndefined()
+
+      const refreshed = await request(app).post('/api/v1/auth/refresh').set('Cookie', cookie)
+      expect(refreshed.status).toBe(200)
+    })
+
+    it('refuses a logout from a disallowed Origin 403, and the session survives', async () => {
+      const { response: loginResponse } = await registerAndLogin(createdIds)
+      const cookie = refreshCookiePair(loginResponse) as string
+
+      const refused = await request(app)
+        .post('/api/v1/auth/logout')
+        .set('Origin', SIBLING)
+        .set('Sec-Fetch-Site', 'same-site')
+        .set('Cookie', cookie)
+      expect(refused.status).toBe(403)
+      expect(envelopeOf(refused).code).toBe('ORIGIN_NOT_ALLOWED')
+
+      const refreshed = await request(app).post('/api/v1/auth/refresh').set('Cookie', cookie)
+      expect(refreshed.status).toBe(200)
+    })
+
+    it('answers WEB_URL, a same-origin browser request and a request with no Origin as before', async () => {
+      const { response: loginResponse } = await registerAndLogin(createdIds)
+      const first = refreshCookiePair(loginResponse) as string
+
+      const fromWebUrl = await request(app)
+        .post('/api/v1/auth/refresh')
+        .set('Origin', 'http://localhost:5173')
+        .set('Cookie', first)
+      expect(fromWebUrl.status).toBe(200)
+      const second = refreshCookiePair(fromWebUrl) as string
+
+      const sameOrigin = await request(app)
+        .post('/api/v1/auth/refresh')
+        .set('Origin', 'http://localhost:8088')
+        .set('Sec-Fetch-Site', 'same-origin')
+        .set('Cookie', second)
+      expect(sameOrigin.status).toBe(200)
+      const third = refreshCookiePair(sameOrigin) as string
+
+      const loggedOut = await request(app).post('/api/v1/auth/logout').set('Cookie', third)
+      expect(loggedOut.status).toBe(200)
+      const afterLogout = await request(app).post('/api/v1/auth/refresh').set('Cookie', third)
+      expect(afterLogout.status).toBe(401)
+    })
+
+    it('refuses before the limiter, so a refused request spends no refresh budget', async () => {
+      const refused = await request(app).post('/api/v1/auth/refresh').set('Origin', SIBLING)
+      expect(refused.status).toBe(403)
+      expect(refused.headers['ratelimit-policy']).toBeUndefined()
+    })
+  })
+
+  /**
    * The production limiters on /register and /logout are proven wired
    * here, not proven to 429: exhausting either would take 100
    * registrations (or 300 logouts) from this suite's single client
