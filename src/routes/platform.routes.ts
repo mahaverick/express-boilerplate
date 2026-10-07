@@ -139,7 +139,12 @@ export function createPlatformRouter(): Router {
     searchLimiter,
     platformSystemController.getStatus
   )
-  router.get('/audit-log', requirePlatformRole('admin'), auditController.listPlatformAuditLog)
+  router.get(
+    '/audit-log',
+    requirePlatformRole('admin'),
+    searchLimiter,
+    auditController.listPlatformAuditLog
+  )
   router.get('/me/flags', requirePlatformRole('viewer'), flagsController.getPlatformFlags)
   router.post(
     '/me/flags/exposures',
