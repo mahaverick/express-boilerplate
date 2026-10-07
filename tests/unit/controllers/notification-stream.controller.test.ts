@@ -12,10 +12,11 @@ import { countAllStreams, resetLifecycleForTests } from '@/services/lifecycle.se
  * Build a fake request and response pair for an authenticated stream call.
  * @param options - Whether the client is already gone, and when the token expires.
  * @param options.isGone - True when the request and response are already destroyed.
+ * @param options.isRequestDestroyed - True when only the request is destroyed, as Node does once a body is fully read.
  * @param options.expiresAt - The access token's expiry.
  * @returns The fakes, with the response's `writeHead` spy.
  */
-function buildCall(options: { isGone: boolean; expiresAt?: Date }): {
+function buildCall(options: { isGone: boolean; isRequestDestroyed?: boolean; expiresAt?: Date }): {
   request: Request
   response: Response
   writeHead: ReturnType<typeof vi.fn>
@@ -25,7 +26,7 @@ function buildCall(options: { isGone: boolean; expiresAt?: Date }): {
     user: { id: 'user-a' },
     sessionId: 'session-a',
     accessTokenExpiresAt: options.expiresAt,
-    destroyed: options.isGone,
+    destroyed: options.isGone || options.isRequestDestroyed === true,
     get: vi.fn(),
     on: vi.fn(),
   } as unknown as Request
@@ -61,6 +62,18 @@ describe('notificationStreamController.streamNotifications', () => {
     expect(writeHead).not.toHaveBeenCalled()
     expect(next).not.toHaveBeenCalled()
     expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('still opens the stream when only the request is destroyed (its body was fully read)', async () => {
+    const { request, response, writeHead } = buildCall({ isGone: false, isRequestDestroyed: true })
+
+    await notificationStreamController.streamNotifications(request, response, vi.fn())
+
+    expect(writeHead).toHaveBeenCalledWith(
+      200,
+      expect.objectContaining({ 'Content-Type': 'text/event-stream' })
+    )
+    expect(countAllStreams()).toBe(1)
   })
 
   it('frees the registry slot when the expiry timer closes the stream', async () => {

@@ -124,19 +124,20 @@ function writeNotificationEvent(response: Response, notification: Notification):
  * Decide, before a stream opens, whether to refuse it. A client already gone
  * (it aborted during `requireAuth`'s awaits, before any `'close'` listener
  * exists here) gets nothing, since no listener would ever unregister its
- * stream. Otherwise apply the two stream caps. Over the per-user cap
+ * stream. Only the response is checked: Node destroys a request once its
+ * body is fully read, which a live GET carrying a `Content-Length` has done
+ * by now, while a real abort destroys the response. Otherwise apply the two stream caps. Over the per-user cap
  * (`SSE_MAX_STREAMS_PER_USER`) throws 429 `too_many_streams`; at the
  * process-wide cap (`SSE_MAX_STREAMS_TOTAL`) answers 503 `stream_capacity`
  * with `Retry-After`, written here rather than thrown: `errorHandler` would
  * mask a 503's message and log it as a fault.
  * @param userId - The authenticated caller.
- * @param request - The incoming request.
  * @param response - The response, still unwritten.
  * @returns True when no stream may open: the client is gone, or the 503 was written.
  * @throws {HttpError} 429 `too_many_streams` over the per-user cap.
  */
-function didRefuseStream(userId: string, request: Request, response: Response): boolean {
-  if (request.destroyed || response.destroyed) return true
+function didRefuseStream(userId: string, response: Response): boolean {
+  if (response.destroyed) return true
   if (countStreams(userId) >= getEnv().SSE_MAX_STREAMS_PER_USER) {
     throw new HttpError('Too many open notification streams', 429, 'too_many_streams')
   }
@@ -189,7 +190,7 @@ class NotificationStreamController extends BaseController {
       }
       const userId = authenticatedUserId(request)
       // No await between this and registerStream, so the counts are exact in this process.
-      if (didRefuseStream(userId, request, response)) return
+      if (didRefuseStream(userId, response)) return
       const sessionId = requireSessionId(request)
 
       response.writeHead(200, {
@@ -261,8 +262,8 @@ class NotificationStreamController extends BaseController {
        * Run after every write: a client over `SSE_MAX_BUFFERED_BYTES` has
        * stopped reading. Destroy, never end: `end()` queues behind the
        * stalled buffer and keeps the socket open. Destroyed first, so
-       * `closeStream` skips `end()`; the destroy still fires request
-       * `'close'`, which unregisters.
+       * `closeStream` skips `end()`, and `closeStream` itself
+       * unregisters the stream.
        */
       const dropIfStalled = (): void => {
         if (response.writableLength <= SSE_MAX_BUFFERED_BYTES) return
