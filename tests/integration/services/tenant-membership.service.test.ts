@@ -21,6 +21,7 @@ import { hashToken } from '@/services/session.service'
 import { changeRole, removeMember } from '@/services/tenant-membership.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { withMutatedMethod } from '../../helpers/mutate'
+import { makeStaff, platformTenant } from '../../helpers/platform-staff'
 import { settle } from '../../helpers/timing'
 
 const tenantRepository = new TenantRepository()
@@ -260,6 +261,69 @@ describe('tenant-membership.service', () => {
 
     expect(await isPending(offer)).toBe(true)
     expect(await revokedAuditRows()).toEqual([])
+  })
+
+  it('revokes a removed staff member’s invitations sent on platform authority, each audited in its own tenant', async () => {
+    const owner = await createUser()
+    const staffOwner = await createUser()
+    const staffAdmin = await createUser()
+    const platform = await platformTenant()
+    await makeStaff(staffOwner.id, 'owner')
+    await makeStaff(staffAdmin.id, 'admin')
+    const customer = await createTenant(owner)
+    const joined = await createTenant(owner)
+    await userMembershipRepository.create({
+      userId: staffAdmin.id,
+      tenantId: joined.id,
+      role: 'admin',
+    })
+    const viaPlatform = await pendingFrom(customer, staffAdmin, 'manager')
+    const asMember = await pendingFrom(joined, staffAdmin, 'viewer')
+
+    await removeMember({ userId: staffOwner.id }, platform.id, staffAdmin.id, {
+      isPlatformTenant: true,
+    })
+
+    expect(await isPending(viaPlatform)).toBe(false)
+    expect(await isPending(asMember)).toBe(true)
+    expect(await revokedAuditRows()).toEqual([
+      { targetId: viaPlatform, actorUserId: staffOwner.id, tenantId: customer.id },
+    ])
+  })
+
+  it('revokes on a staff demotion only the platform-authority offers the new role cannot grant', async () => {
+    const owner = await createUser()
+    const staffOwner = await createUser()
+    const demoted = await createUser()
+    const platform = await platformTenant()
+    await makeStaff(staffOwner.id, 'owner')
+    await makeStaff(demoted.id, 'owner')
+    const customer = await createTenant(owner)
+    const joined = await createTenant(owner)
+    await userMembershipRepository.create({
+      userId: demoted.id,
+      tenantId: joined.id,
+      role: 'owner',
+    })
+    const ownerOffer = await pendingFrom(customer, demoted, 'owner')
+    const adminOffer = await pendingFrom(customer, demoted, 'admin')
+    const managerOffer = await pendingFrom(customer, demoted, 'manager')
+    const asMember = await pendingFrom(joined, demoted, 'owner')
+
+    await changeRole({ userId: staffOwner.id }, platform.id, demoted.id, 'admin', {
+      isPlatformTenant: true,
+    })
+
+    expect(await isPending(ownerOffer)).toBe(false)
+    expect(await isPending(adminOffer)).toBe(false)
+    expect(await isPending(managerOffer)).toBe(true)
+    expect(await isPending(asMember)).toBe(true)
+    const revoked = await revokedAuditRows()
+    expect(revoked).toEqual(
+      [ownerOffer, adminOffer]
+        .toSorted((a, b) => a.localeCompare(b))
+        .map((targetId) => ({ targetId, actorUserId: staffOwner.id, tenantId: customer.id }))
+    )
   })
 
   it('answers 404 Tenant not found to an actor who is not a member, and leaves the target alone', async () => {

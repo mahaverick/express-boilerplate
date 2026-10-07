@@ -1045,4 +1045,23 @@ describe('an invitation outlives its sender', () => {
     expect(accept.status).toBe(404)
     expect(envelopeOf(accept).code).toBe('invitation_invalid')
   })
+
+  it('customer tenant: a staff admin invites on platform access, is removed from staff, then the invitation is accepted', async () => {
+    const platform = await platformTenant()
+    const { tenant } = await tenantWith('viewer')
+    const { user: staffAdmin, token: adminToken } = await createTrackedStaff('admin')
+    const { user: staffOwner } = await createTrackedStaff('owner')
+    const email = `sender-${randomUUID()}@example.test`
+    const rawToken = await inviteAs(tenant.slug, adminToken, email, 'manager')
+
+    const removal = await request(app)
+      .delete(`/api/v1/tenants/${platform.slug}/members/${staffAdmin.id}`)
+      .set('Authorization', `Bearer ${recentAuthTokenFor(staffOwner)}`)
+      .send({})
+    expect(removal.status).toBe(200)
+
+    const accept = await acceptAs(rawToken, email)
+    expect(accept.status).toBe(404)
+    expect(envelopeOf(accept).code).toBe('invitation_invalid')
+  })
 })
