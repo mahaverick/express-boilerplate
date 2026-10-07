@@ -298,7 +298,7 @@ const EnvSchema = z.object({
     .positive()
     .default(10)
     .describe(
-      'Most invitation mails (invites and resends) one address may receive in 24 hours, across every tenant and sender; past it the sender gets 429 RATE_LIMITED. Defaults to 10.'
+      'Most tenant invitation mails (invites and resends) one address may receive in 24 hours, across every tenant and sender, of which one tenant may send at most 3; past either the sender gets 429 RATE_LIMITED. Staff owner-invitations of new tenants are not counted. Defaults to 10.'
     ),
 
   /**

@@ -233,11 +233,14 @@ function invitationNotFound(): HttpError {
 
 /**
  * Refuse an invitation mail the recipient's daily budget has no room for.
+ * Call it after the transaction's last write that can fail, so a refusal
+ * rolls those writes back and an attempt refused earlier spends nothing.
  * @param email - The invited address.
- * @throws {HttpError} 429 `RATE_LIMITED` when the address has had `INVITATION_RECIPIENT_DAILY_LIMIT` invitation mails in the window.
+ * @param tenantId - The tenant sending it, whose share of the budget is counted too.
+ * @throws {HttpError} 429 `RATE_LIMITED` when the tenant has had its share of the address's invitation mails in the window, or the address has had `INVITATION_RECIPIENT_DAILY_LIMIT`.
  */
-async function assertRecipientBudget(email: string): Promise<void> {
-  if ((await spendInvitationRecipientBudget(email)) === 'exhausted') {
+async function assertRecipientBudget(email: string, tenantId: string): Promise<void> {
+  if ((await spendInvitationRecipientBudget(email, tenantId)) === 'exhausted') {
     throw new HttpError(INVITATION_RECIPIENT_LIMITED_MESSAGE, 429, RATE_LIMITED_CODE)
   }
 }
@@ -384,7 +387,6 @@ export async function invite(
     if (invitee && membership) {
       throw new HttpError(ALREADY_MEMBER_MESSAGE, 409, ALREADY_MEMBER_CODE)
     }
-    await assertRecipientBudget(normalizedEmail)
     const tenant = await tenantForMessages(tenantId, tx)
     const inviter = await userRepository.findById(actor.userId, {}, tx)
 
@@ -399,6 +401,8 @@ export async function invite(
       },
       tx
     )
+    // After the writes that can fail, so a 404 or a 409 spends nothing; a refusal rolls the insert back.
+    await assertRecipientBudget(normalizedEmail, tenantId)
     await record(
       {
         action: 'invitation.created',
@@ -548,8 +552,8 @@ export async function listPending(tenantId: string): Promise<PendingInvitationSu
  * again. The old link stops working at once. Resending re-issues the
  * invitation's role, so the grant rule runs again, on the actor's role as
  * re-read under lock. A resend within `INVITATION_RESEND_COOLDOWN` of the
- * last send is refused, except a staff resend of a mail that failed
- * (`resentFromId`); every resend spends the recipient's daily budget.
+ * last send is refused, except a staff resend (`resentFromId`), which is
+ * audited with a reason; every resend spends the recipient's daily budget.
  * @param actor - The signed-in user resending it, named in the email.
  * @param tenantId - The tenant it must belong to.
  * @param invitationId - The invitation.
@@ -572,9 +576,8 @@ export async function resend(
     if (!canActorGrantRole(actorRole, pending.role)) {
       throw new HttpError(GRANT_REFUSED_MESSAGE, 403)
     }
-    // A staff resend of a failed mail is the first that reaches the inbox, so no cooldown applies.
+    // A staff resend (audited, with a reason) skips the cooldown.
     if (options.resentFromId === undefined) assertResendCooldownOver(pending)
-    await assertRecipientBudget(pending.email)
     const updated = await invitationRepository.replaceToken(
       pending.id,
       hashToken(rawToken),
@@ -582,6 +585,8 @@ export async function resend(
       tx
     )
     if (!updated) throw invitationNotFound()
+    // After the token swap, so a refusal rolls it back and the mailed link keeps working.
+    await assertRecipientBudget(updated.email, tenantId)
     await record(
       {
         action: 'invitation.resent',

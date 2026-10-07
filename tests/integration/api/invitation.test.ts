@@ -16,6 +16,7 @@ import { inspect } from 'node:util'
 import type { Response } from 'supertest'
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { createApp } from '@/app'
+import { getEnv } from '@/configs/env.config'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
@@ -29,6 +30,7 @@ import { logger } from '@/services/logger.service'
 import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
 import { getRedis, redisKey } from '@/services/redis.service'
 import { hashToken, signAccessToken } from '@/services/session.service'
+import { hashRateLimitIdentity } from '@/utilities/rate-limit-key.utilities'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { backdateInvitationSend } from '../../helpers/backdate'
 import { platformTenant } from '../../helpers/platform-staff'
@@ -197,6 +199,25 @@ async function trackedMailCount(recipient: string, templateKey: string): Promise
     where recipient = ${recipient} and template_key = ${templateKey}
   `
   return rows[0]?.n ?? 0
+}
+
+/**
+ * The Redis key holding an address's daily invitation-mail count across every tenant.
+ * @param email - The address.
+ * @returns The key.
+ */
+function recipientBudgetKey(email: string): string {
+  return redisKey('rl', 'invitation-recipient', hashRateLimitIdentity(email.trim().toLowerCase()))
+}
+
+/**
+ * How many invitation mails the address's daily budget has spent, across every tenant.
+ * @param email - The address.
+ * @returns The count; 0 when nothing has been spent.
+ */
+async function recipientBudgetSpent(email: string): Promise<number> {
+  const redis = await getRedis()
+  return Number((await redis.get(recipientBudgetKey(email))) ?? 0)
 }
 
 /**
@@ -626,8 +647,8 @@ describe('invitations API', () => {
         await resendVia(tenant.slug, ownerToken, pending?.id ?? '')
       }
 
-      // The invite plus at most one resend inside a cooldown window.
-      expect(await trackedMailCount(invitee, 'tenant_invitation')).toBeLessThanOrEqual(2)
+      // The invite only: every resend lands inside the cooldown.
+      expect(await trackedMailCount(invitee, 'tenant_invitation')).toBe(1)
     })
 
     it('answers a resend inside the cooldown 429 invitation_resend_cooldown, and the link keeps working', async () => {
@@ -673,6 +694,50 @@ describe('invitations API', () => {
       expect(refused.status).toBe(429)
       expect(refused.body).toMatchObject({ code: 'RATE_LIMITED' })
       expect(await invitationRepository.listPending(tenant.id)).toEqual([])
+    })
+
+    it('refuses a fourth invitation of one address from one tenant without spending its daily budget', async () => {
+      const invitee = uniqueEmail()
+      const { ownerToken, tenant } = await setup()
+      for (let index = 0; index < 3; index += 1) {
+        const invited = await inviteVia(tenant.slug, ownerToken, { email: invitee, role: 'viewer' })
+        expect(invited.status).toBe(202)
+      }
+      const spentBefore = await recipientBudgetSpent(invitee)
+
+      const refused = await inviteVia(tenant.slug, ownerToken, { email: invitee, role: 'viewer' })
+
+      expect(refused.status).toBe(429)
+      expect(refused.body).toMatchObject({ code: 'RATE_LIMITED' })
+      expect(await recipientBudgetSpent(invitee)).toBe(spentBefore)
+      const other = await setup()
+      const elsewhere = await inviteVia(other.tenant.slug, other.ownerToken, {
+        email: invitee,
+        role: 'viewer',
+      })
+      expect(elsewhere.status).toBe(202)
+    })
+
+    it('refuses a resend past the address ceiling 429 RATE_LIMITED, and the link keeps working', async () => {
+      const { ownerToken, tenant } = await setup()
+      const invitee = uniqueEmail()
+      await inviteVia(tenant.slug, ownerToken, { email: invitee, role: 'viewer' })
+      const { token: rawToken } = await waitForInvitationEmail(invitee)
+      const [pending] = await invitationRepository.listPending(tenant.id)
+      await backdateInvitationSend(pending?.id ?? '')
+      const redis = await getRedis()
+      await redis.set(
+        recipientBudgetKey(invitee),
+        String(getEnv().INVITATION_RECIPIENT_DAILY_LIMIT),
+        { PX: HOUR_MS }
+      )
+
+      const resent = await resendVia(tenant.slug, ownerToken, pending?.id ?? '')
+
+      expect(resent.status).toBe(429)
+      expect(resent.body).toMatchObject({ code: 'RATE_LIMITED' })
+      const stillValid = await previewVia(rawToken)
+      expect(stillValid.status).toBe(200)
     })
 
     it('invites twelve distinct addresses back to back', async () => {

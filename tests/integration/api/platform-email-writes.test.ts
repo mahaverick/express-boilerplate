@@ -19,7 +19,9 @@ import { TenantInvitationRepository } from '@/repositories/tenant-invitation.rep
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { sql } from '@/services/database.service'
 import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
+import { getRedis, redisKey } from '@/services/redis.service'
 import { hashToken, signAccessToken } from '@/services/session.service'
+import { hashRateLimitIdentity } from '@/utilities/rate-limit-key.utilities'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import {
   createTrackedMessage,
@@ -355,6 +357,25 @@ describe('POST /platform/emails/:id/resend: invitations', () => {
         message: 'the invitation resend creates a message linked back to the original',
       }
     )
+  })
+
+  it('resends straight after the last mail, skipping the cooldown, and still spends the address budget', async () => {
+    const { token } = await createTrackedStaff('admin')
+    const tenant = await customerTenant()
+    // The invitation is stamped as mailed now, well inside the cooldown.
+    const { message } = await invitationMessage(tenant)
+
+    const response = await resend(token, message)
+
+    expect(response.status).toBe(202)
+    const redis = await getRedis()
+    const key = redisKey(
+      'rl',
+      'invitation-recipient',
+      hashRateLimitIdentity(message.recipient.toLowerCase())
+    )
+    expect(await redis.get(key)).toBe('1')
+    expect(await redis.get(`${key}:${tenant.id}`)).toBe('1')
   })
 
   it('asks for a recent sign-in on a platform-tenant invitation, and resends once fresh', async () => {
