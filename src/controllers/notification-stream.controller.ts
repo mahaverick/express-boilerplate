@@ -121,17 +121,22 @@ function writeNotificationEvent(response: Response, notification: Notification):
 }
 
 /**
- * Apply the two stream caps before a stream opens. Over the per-user cap
+ * Decide, before a stream opens, whether to refuse it. A client already gone
+ * (it aborted during `requireAuth`'s awaits, before any `'close'` listener
+ * exists here) gets nothing, since no listener would ever unregister its
+ * stream. Otherwise apply the two stream caps. Over the per-user cap
  * (`SSE_MAX_STREAMS_PER_USER`) throws 429 `too_many_streams`; at the
  * process-wide cap (`SSE_MAX_STREAMS_TOTAL`) answers 503 `stream_capacity`
  * with `Retry-After`, written here rather than thrown: `errorHandler` would
  * mask a 503's message and log it as a fault.
  * @param userId - The authenticated caller.
+ * @param request - The incoming request.
  * @param response - The response, still unwritten.
- * @returns True when the 503 was written and no stream may open.
+ * @returns True when no stream may open: the client is gone, or the 503 was written.
  * @throws {HttpError} 429 `too_many_streams` over the per-user cap.
  */
-function didRefuseOverStreamCaps(userId: string, response: Response): boolean {
+function didRefuseStream(userId: string, request: Request, response: Response): boolean {
+  if (request.destroyed || response.destroyed) return true
   if (countStreams(userId) >= getEnv().SSE_MAX_STREAMS_PER_USER) {
     throw new HttpError('Too many open notification streams', 429, 'too_many_streams')
   }
@@ -184,7 +189,7 @@ class NotificationStreamController extends BaseController {
       }
       const userId = authenticatedUserId(request)
       // No await between this and registerStream, so the counts are exact in this process.
-      if (didRefuseOverStreamCaps(userId, response)) return
+      if (didRefuseStream(userId, request, response)) return
       const sessionId = requireSessionId(request)
 
       response.writeHead(200, {
@@ -241,9 +246,11 @@ class NotificationStreamController extends BaseController {
       /**
        * The teardown for every server-initiated close: shutdown (registry),
        * token expiry and a stalled client. Safe to call after the stall path
-       * has destroyed the response.
+       * has destroyed the response. Unregisters itself, so it needs no
+       * request `'close'` to free its registry slot.
        */
       const closeStream = (): void => {
+        unregisterStream()
         clearInterval(heartbeat)
         offNotification(userId, handleNotification)
         if (!response.writableEnded && !response.destroyed) response.end()
