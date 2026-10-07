@@ -91,6 +91,13 @@ export type RateLimitName =
 const RATE_LIMITED_MESSAGE = 'Too many attempts. Please try again later.'
 
 /**
+ * Machine-readable code identifying a rate-limited request, carried in the
+ * error envelope's `code` field, so a client can branch on it without
+ * matching on `message`.
+ */
+export const RATE_LIMITED_CODE = 'RATE_LIMITED'
+
+/**
  * The lowercase, trimmed email a request body claims, or an empty string
  * when it carries none. Read directly off the raw body — a limiter must
  * key consistently even for a request validation will go on to reject —

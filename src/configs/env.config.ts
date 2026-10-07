@@ -282,6 +282,24 @@ const EnvSchema = z.object({
     .describe(
       'How long a tenant invitation link stays valid, as an ms()-parseable duration string (e.g. "7d"). Resending an invitation issues a new link with a fresh lifetime. Defaults to 7d.'
     ),
+  INVITATION_RESEND_COOLDOWN: z
+    .string()
+    .default('10m')
+    .refine((value) => parseDurationMs(value) !== undefined, {
+      message:
+        'INVITATION_RESEND_COOLDOWN must be a duration string ms() can parse, e.g. "10m" or "600000".',
+    })
+    .describe(
+      'How long after an invitation is mailed before it can be resent, as an ms()-parseable duration string. A resend sooner answers 429 invitation_resend_cooldown. Defaults to 10m.'
+    ),
+  INVITATION_RECIPIENT_DAILY_LIMIT: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(10)
+    .describe(
+      'Most invitation mails (invites and resends) one address may receive in 24 hours, across every tenant and sender; past it the sender gets 429 RATE_LIMITED. Defaults to 10.'
+    ),
 
   /**
    * Defaults to `false`, which fails towards over-limiting: behind a proxy

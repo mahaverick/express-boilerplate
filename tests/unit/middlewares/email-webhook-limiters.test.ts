@@ -8,9 +8,9 @@
  */
 import express, { type Express } from 'express'
 import { describe, expect, it, vi } from 'vitest'
-import { RATE_LIMITS } from '@/constants/rate-limit.constants'
+import { RATE_LIMITED_CODE, RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { errorHandler } from '@/middlewares/error.middleware'
-import { createRateLimiter, RATE_LIMITED_CODE } from '@/middlewares/rate-limit.middleware'
+import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
 import { request } from '../../helpers/request'
 
 vi.mock('@/services/redis.service', async (importOriginal) => ({

@@ -27,6 +27,7 @@ import {
   revoke,
 } from '@/services/tenant-invitation.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
+import { backdateInvitationSend } from '../../helpers/backdate'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { expectNoJob, waitForInvitationEmail, waitForJob } from '../../helpers/queue-jobs'
 
@@ -357,6 +358,7 @@ describe('tenant-invitation.service', () => {
       await invite({ userId: owner.id }, tenant.id, email, 'viewer')
       const first = await waitForInvitationEmail(email)
       const [pending] = await listPending(tenant.id)
+      await backdateInvitationSend(pending?.id ?? '')
 
       await resend({ userId: owner.id }, tenant.id, pending?.id ?? '')
 

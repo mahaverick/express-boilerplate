@@ -16,13 +16,9 @@ import path from 'node:path'
 import express, { type Express, type RequestHandler } from 'express'
 import type { Test } from 'supertest'
 import { describe, expect, it, vi } from 'vitest'
-import { RATE_LIMITS } from '@/constants/rate-limit.constants'
+import { RATE_LIMITED_CODE, RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { errorHandler } from '@/middlewares/error.middleware'
-import {
-  createRateLimiter,
-  RATE_LIMITED_CODE,
-  RATE_LIMITER_MARK,
-} from '@/middlewares/rate-limit.middleware'
+import { createRateLimiter, RATE_LIMITER_MARK } from '@/middlewares/rate-limit.middleware'
 import { request } from '../../helpers/request'
 
 vi.mock('@/services/redis.service', async (importOriginal) => ({

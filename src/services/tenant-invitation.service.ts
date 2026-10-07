@@ -8,6 +8,7 @@
  */
 import { randomBytes } from 'node:crypto'
 import { getEnv } from '@/configs/env.config'
+import { RATE_LIMITED_CODE } from '@/constants/rate-limit.constants'
 import {
   INVITATION_TOKEN_BYTES,
   INVITEE_DEACTIVATED_CODE,
@@ -29,6 +30,7 @@ import { UserRepository } from '@/repositories/user.repository'
 import { record } from '@/services/audit.service'
 import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
 import { emitDomainEvent } from '@/services/domain-events.service'
+import { spendInvitationRecipientBudget } from '@/services/invitation-recipient-limit.service'
 import { logger } from '@/services/logger.service'
 import { hashToken } from '@/services/session.service'
 import { lockActorRole } from '@/services/tenant-membership.service'
@@ -99,6 +101,23 @@ export const INVITATION_EMAIL_UNVERIFIED_MESSAGE =
  * Error code: no pending invitation with that id in this tenant.
  */
 export const INVITATION_NOT_FOUND_CODE = 'invitation_not_found'
+
+/**
+ * Error code: a resend inside `INVITATION_RESEND_COOLDOWN` of the invitation's last send.
+ */
+export const INVITATION_RESEND_COOLDOWN_CODE = 'invitation_resend_cooldown'
+
+/**
+ * Message for `INVITATION_RESEND_COOLDOWN_CODE`.
+ */
+export const INVITATION_RESEND_COOLDOWN_MESSAGE =
+  'This invitation was just sent. Try again in a few minutes.'
+
+/**
+ * The 429 message when an address has had its day's share of invitation mail.
+ */
+export const INVITATION_RECIPIENT_LIMITED_MESSAGE =
+  'This address has received too many invitations today. Try again tomorrow.'
 
 const INVITATION_NOT_FOUND_MESSAGE = 'Invitation not found'
 /**
@@ -213,6 +232,31 @@ function invitationNotFound(): HttpError {
 }
 
 /**
+ * Refuse an invitation mail the recipient's daily budget has no room for.
+ * @param email - The invited address.
+ * @throws {HttpError} 429 `RATE_LIMITED` when the address has had `INVITATION_RECIPIENT_DAILY_LIMIT` invitation mails in the window.
+ */
+async function assertRecipientBudget(email: string): Promise<void> {
+  if ((await spendInvitationRecipientBudget(email)) === 'exhausted') {
+    throw new HttpError(INVITATION_RECIPIENT_LIMITED_MESSAGE, 429, RATE_LIMITED_CODE)
+  }
+}
+
+/**
+ * Refuse a resend sooner than `INVITATION_RESEND_COOLDOWN` after the
+ * invitation's last send. A row never stamped is let through.
+ * @param invitation - The pending invitation.
+ * @throws {HttpError} 429 `invitation_resend_cooldown` inside the cooldown.
+ */
+function assertResendCooldownOver(invitation: TenantInvitation): void {
+  if (invitation.lastSentAt === null) return
+  const elapsedMs = Date.now() - invitation.lastSentAt.getTime()
+  if (elapsedMs < requireDurationMs(getEnv().INVITATION_RESEND_COOLDOWN)) {
+    throw new HttpError(INVITATION_RESEND_COOLDOWN_MESSAGE, 429, INVITATION_RESEND_COOLDOWN_CODE)
+  }
+}
+
+/**
  * The one 404 for every token that cannot be previewed or accepted.
  * @returns The error to throw.
  */
@@ -315,7 +359,7 @@ async function tenantForMessages(
  * @param tenantId - The tenant.
  * @param email - The address to invite, in any case.
  * @param role - The role offered.
- * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access, or when the tenant is gone; 403 when the actor is now below admin or may not grant `role`; 409 `already_member` when the address belongs to a member; 409 `invitation_conflict` from a racing duplicate invite.
+ * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access, or when the tenant is gone; 403 when the actor is now below admin or may not grant `role`; 409 `already_member` when the address belongs to a member; 429 `RATE_LIMITED` when the address has had its day's invitation mail; 409 `invitation_conflict` from a racing duplicate invite.
  */
 export async function invite(
   actor: Actor,
@@ -340,6 +384,7 @@ export async function invite(
     if (invitee && membership) {
       throw new HttpError(ALREADY_MEMBER_MESSAGE, 409, ALREADY_MEMBER_CODE)
     }
+    await assertRecipientBudget(normalizedEmail)
     const tenant = await tenantForMessages(tenantId, tx)
     const inviter = await userRepository.findById(actor.userId, {}, tx)
 
@@ -502,12 +547,14 @@ export async function listPending(tenantId: string): Promise<PendingInvitationSu
  * Give a pending invitation a new link and a fresh lifetime, and mail it
  * again. The old link stops working at once. Resending re-issues the
  * invitation's role, so the grant rule runs again, on the actor's role as
- * re-read under lock.
+ * re-read under lock. A resend within `INVITATION_RESEND_COOLDOWN` of the
+ * last send is refused, except a staff resend of a mail that failed
+ * (`resentFromId`); every resend spends the recipient's daily budget.
  * @param actor - The signed-in user resending it, named in the email.
  * @param tenantId - The tenant it must belong to.
  * @param invitationId - The invitation.
  * @param options - `resentFromId` when a staff resend re-runs this for an earlier message.
- * @throws {HttpError} 404 when the tenant is gone, before anything is written; 404 `Tenant not found` when the actor no longer has access; 403 when the actor is now below admin; 404 `invitation_not_found` when it is not pending in this tenant; 403 when the actor may not grant its role.
+ * @throws {HttpError} 404 when the tenant is gone, before anything is written; 404 `Tenant not found` when the actor no longer has access; 403 when the actor is now below admin; 404 `invitation_not_found` when it is not pending in this tenant; 403 when the actor may not grant its role; 429 `invitation_resend_cooldown` inside the cooldown; 429 `RATE_LIMITED` when the address has had its day's invitation mail.
  */
 export async function resend(
   actor: Actor,
@@ -525,6 +572,9 @@ export async function resend(
     if (!canActorGrantRole(actorRole, pending.role)) {
       throw new HttpError(GRANT_REFUSED_MESSAGE, 403)
     }
+    // A staff resend of a failed mail is the first that reaches the inbox, so no cooldown applies.
+    if (options.resentFromId === undefined) assertResendCooldownOver(pending)
+    await assertRecipientBudget(pending.email)
     const updated = await invitationRepository.replaceToken(
       pending.id,
       hashToken(rawToken),

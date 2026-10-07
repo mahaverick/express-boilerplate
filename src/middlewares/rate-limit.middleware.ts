@@ -8,18 +8,12 @@ import { rateLimit } from 'express-rate-limit'
 import { SharedRateLimitStore } from '@/configs/rate-limit-store.config'
 import {
   authenticatedUserRateLimitKey,
+  RATE_LIMITED_CODE,
   submittedEmailRateLimitKey,
   type RateLimiterSpec,
 } from '@/constants/rate-limit.constants'
 import { HttpError } from '@/errors/http-error'
 import { redisKey } from '@/services/redis.service'
-
-/**
- * Machine-readable code identifying a rate-limited request, carried in the
- * error envelope's `code` field, so a client can branch on it without
- * matching on `message`.
- */
-export const RATE_LIMITED_CODE = 'RATE_LIMITED'
 
 /**
  * Build one limiter's store under its own `rl:<name>` keyspace.

@@ -30,6 +30,7 @@ import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queu
 import { getRedis, redisKey } from '@/services/redis.service'
 import { hashToken, signAccessToken } from '@/services/session.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
+import { backdateInvitationSend } from '../../helpers/backdate'
 import { platformTenant } from '../../helpers/platform-staff'
 import {
   createTrackedStaff,
@@ -45,6 +46,7 @@ import {
   waitForVerificationToken,
 } from '../../helpers/queue-jobs'
 import { request } from '../../helpers/request'
+import { settle } from '../../helpers/timing'
 
 const app = createApp()
 const invitationRepository = new TenantInvitationRepository()
@@ -179,6 +181,35 @@ async function acceptVia(token: string, bearer?: string): Promise<Response> {
   const pending = request(app).post('/api/v1/invitations/accept')
   if (bearer) pending.set('Authorization', `Bearer ${bearer}`)
   return pending.send({ token })
+}
+
+/**
+ * Tracked messages enqueued to `recipient` with `templateKey`, after the
+ * fire-and-forget follow-up work has had time to run.
+ * @param recipient - The address.
+ * @param templateKey - The template.
+ * @returns How many were enqueued.
+ */
+async function trackedMailCount(recipient: string, templateKey: string): Promise<number> {
+  await settle(1500, 'the mail is enqueued fire-and-forget after the reply; absence has no event')
+  const rows = await sql<{ n: number }[]>`
+    select count(*)::int as n from email_messages
+    where recipient = ${recipient} and template_key = ${templateKey}
+  `
+  return rows[0]?.n ?? 0
+}
+
+/**
+ * Resend a pending invitation as `bearer`, with no body, as the clients do.
+ * @param slug - The tenant slug.
+ * @param bearer - The caller's access token.
+ * @param invitationId - The invitation.
+ * @returns The response.
+ */
+async function resendVia(slug: string, bearer: string, invitationId: string): Promise<Response> {
+  return request(app)
+    .post(`/api/v1/tenants/${slug}/invitations/${invitationId}/resend`)
+    .set('Authorization', `Bearer ${bearer}`)
 }
 
 describe('invitations API', () => {
@@ -484,6 +515,7 @@ describe('invitations API', () => {
       await inviteVia(tenant.slug, ownerToken, { email: invitee.email, role: 'viewer' })
       const first = await waitForInvitationEmail(invitee.email)
       const [pending] = await invitationRepository.listPending(tenant.id)
+      await backdateInvitationSend(pending?.id ?? '')
 
       // No .send(): the React client resends with no body at all.
       const resent = await request(app)
@@ -508,6 +540,7 @@ describe('invitations API', () => {
         role: 'viewer',
       })
       const [pending] = await invitationRepository.listPending(tenant.id)
+      await backdateInvitationSend(pending?.id ?? '')
 
       const resent = await request(app)
         .post(`/api/v1/tenants/${tenant.slug}/invitations/${pending?.id ?? ''}/resend`)
@@ -578,6 +611,82 @@ describe('invitations API', () => {
       expect(unknown.body).toMatchObject({ code: 'invitation_not_found' })
       expect(malformed.status).toBe(400)
       expect(malformed.body).toMatchObject({ message: 'Validation failed' })
+    })
+  })
+
+  describe('mail per invitation and per recipient', () => {
+    it('SEC-abuse-02: back-to-back resends of one invitation do not each mail the invitee', async () => {
+      const { ownerToken, tenant } = await setup()
+      const invitee = uniqueEmail()
+
+      const invited = await inviteVia(tenant.slug, ownerToken, { email: invitee, role: 'viewer' })
+      expect(invited.status).toBe(202)
+      const [pending] = await invitationRepository.listPending(tenant.id)
+      for (let index = 0; index < 5; index += 1) {
+        await resendVia(tenant.slug, ownerToken, pending?.id ?? '')
+      }
+
+      // The invite plus at most one resend inside a cooldown window.
+      expect(await trackedMailCount(invitee, 'tenant_invitation')).toBeLessThanOrEqual(2)
+    })
+
+    it('answers a resend inside the cooldown 429 invitation_resend_cooldown, and the link keeps working', async () => {
+      const { ownerToken, tenant } = await setup()
+      const invitee = uniqueEmail()
+      await inviteVia(tenant.slug, ownerToken, { email: invitee, role: 'viewer' })
+      const { token: rawToken } = await waitForInvitationEmail(invitee)
+      const [pending] = await invitationRepository.listPending(tenant.id)
+
+      const resent = await resendVia(tenant.slug, ownerToken, pending?.id ?? '')
+
+      expect(resent.status).toBe(429)
+      expect(resent.body).toMatchObject({
+        code: 'invitation_resend_cooldown',
+        message: 'This invitation was just sent. Try again in a few minutes.',
+      })
+      const stillValid = await previewVia(rawToken)
+      expect(stillValid.status).toBe(200)
+    })
+
+    it('resends once the cooldown has passed', async () => {
+      const { ownerToken, tenant } = await setup()
+      await inviteVia(tenant.slug, ownerToken, { email: uniqueEmail(), role: 'viewer' })
+      const [pending] = await invitationRepository.listPending(tenant.id)
+      await backdateInvitationSend(pending?.id ?? '')
+
+      const resent = await resendVia(tenant.slug, ownerToken, pending?.id ?? '')
+
+      expect(resent.status).toBe(202)
+    })
+
+    it('refuses the eleventh invitation to one address within a day 429 RATE_LIMITED, whoever sends it', async () => {
+      const invitee = uniqueEmail()
+      for (let index = 0; index < 10; index += 1) {
+        const { ownerToken, tenant } = await setup()
+        const invited = await inviteVia(tenant.slug, ownerToken, { email: invitee, role: 'viewer' })
+        expect(invited.status).toBe(202)
+      }
+      const { ownerToken, tenant } = await setup()
+
+      const refused = await inviteVia(tenant.slug, ownerToken, { email: invitee, role: 'viewer' })
+
+      expect(refused.status).toBe(429)
+      expect(refused.body).toMatchObject({ code: 'RATE_LIMITED' })
+      expect(await invitationRepository.listPending(tenant.id)).toEqual([])
+    })
+
+    it('invites twelve distinct addresses back to back', async () => {
+      const { ownerToken, tenant } = await setup()
+
+      for (let index = 0; index < 12; index += 1) {
+        const invited = await inviteVia(tenant.slug, ownerToken, {
+          email: uniqueEmail(),
+          role: 'viewer',
+        })
+        expect(invited.status).toBe(202)
+      }
+
+      expect(await invitationRepository.listPending(tenant.id)).toHaveLength(12)
     })
   })
 

@@ -99,7 +99,8 @@ export interface ValidInvitation extends InvitationWithTenant {
 export class TenantInvitationRepository {
   /**
    * Revoke any pending invitation for this tenant and address, then insert a
-   * new one. Call it inside a transaction so the two writes commit together.
+   * new one, stamped as mailed now. Call it inside a transaction so the two
+   * writes commit together.
    * @param input - The new invitation's columns.
    * @param executor - Where to run the queries. Defaults to the pool.
    * @returns The inserted row.
@@ -120,7 +121,10 @@ export class TenantInvitationRepository {
         )
       )
     try {
-      const [row] = await executor.insert(invitation).values(input).returning()
+      const [row] = await executor
+        .insert(invitation)
+        .values({ ...input, lastSentAt: sql`now()` })
+        .returning()
       if (!row) throw new HttpError('Insert returned no row', 500)
       return row
     } catch (error) {
@@ -336,8 +340,8 @@ export class TenantInvitationRepository {
   }
 
   /**
-   * Give a pending invitation a new token and expiry. The old token stops
-   * resolving at once.
+   * Give a pending invitation a new token and expiry, stamped as mailed now.
+   * The old token stops resolving at once.
    * @param id - The invitation id.
    * @param tokenHash - SHA-256 hex of the new raw token.
    * @param expiresAt - The new expiry.
@@ -352,7 +356,7 @@ export class TenantInvitationRepository {
   ): Promise<TenantInvitation | undefined> {
     const [row] = await executor
       .update(invitation)
-      .set({ tokenHash, expiresAt, updatedAt: sql`now()` })
+      .set({ tokenHash, expiresAt, lastSentAt: sql`now()`, updatedAt: sql`now()` })
       .where(and(eq(invitation.id, id), pendingCondition()))
       .returning()
     return row

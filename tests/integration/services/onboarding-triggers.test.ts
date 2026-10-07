@@ -30,6 +30,7 @@ import { hashToken } from '@/services/session.service'
 import { accept, createOwnerInvitation, invite, resend } from '@/services/tenant-invitation.service'
 import { createTenant, updateSettings } from '@/services/tenant.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
+import { backdateInvitationSend } from '../../helpers/backdate'
 import {
   createTrackedStaff,
   createTrackedUser,
@@ -280,6 +281,7 @@ describe('inviting', () => {
       'viewer'
     )
 
+    await backdateInvitationSend(invitationId)
     await resend({ userId: owner.id }, tenant.id, invitationId)
 
     expect(await completedKeys(tenant.id)).toEqual([])
