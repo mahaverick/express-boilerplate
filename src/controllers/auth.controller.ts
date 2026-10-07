@@ -170,11 +170,16 @@ function presentedRefreshTokens(request: Request): string[] {
  * it, outlive the next logout, and never trip reuse detection. The new
  * session's token is never among them: it is only in the response.
  * @param request - The request whose cookies name the sessions.
+ * @param options - `emitSignedOut: false` for a sign-in, which is not the user signing out.
+ * @param options.emitSignedOut - Whether each live revoke emits `user_signed_out`; default true.
  * @returns Resolves once each presented token's session, if any, is revoked.
  */
-async function revokePresentedSessions(request: Request): Promise<void> {
+async function revokePresentedSessions(
+  request: Request,
+  options: { emitSignedOut?: boolean } = {}
+): Promise<void> {
   for (const rawToken of presentedRefreshTokens(request)) {
-    await revokeRefreshToken(rawToken)
+    await revokeRefreshToken(rawToken, options)
   }
 }
 
@@ -376,7 +381,7 @@ class AuthController extends BaseController {
   login = this.handle(async (request, response) => {
     const input = parseBody(loginSchema, request.body)
     const session = await authService.login(input)
-    await revokePresentedSessions(request)
+    await revokePresentedSessions(request, { emitSignedOut: false })
 
     setRefreshTokenCookie(
       request,
@@ -582,7 +587,7 @@ class AuthController extends BaseController {
 
           try {
             const refreshToken = await completeGoogleSignIn(profile)
-            await revokePresentedSessions(request)
+            await revokePresentedSessions(request, { emitSignedOut: false })
             setOAuthRefreshTokenCookie(request, response, refreshToken.raw, refreshToken.expiresAt)
 
             response.redirect(`${frontend}/auth/callback`)

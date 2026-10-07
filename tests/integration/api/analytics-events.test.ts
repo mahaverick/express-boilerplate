@@ -485,6 +485,28 @@ describe('browser session attribution', () => {
     },
     FLOW_TIMEOUT_MS
   )
+
+  it(
+    'ends the session a re-login presents without a user_signed_out',
+    async () => {
+      const { app } = running()
+      const email = `analytics-relogin-${randomUUID()}@example.test`
+      const first = await signUpVerifyAndSignIn(email)
+
+      const second = await traced(
+        request(app)
+          .post('/api/v1/auth/login')
+          .set('Cookie', first.refreshCookie.split(';', 1)[0] as string)
+          .send({ email, password: PASSWORD })
+      )
+      expect(second.status).toBe(200)
+
+      const events = await drainAll()
+      expect(namesOf(events, second.traceId)).toEqual(['user_signed_in'])
+      expect(events.filter((event) => event.event === 'user_signed_out')).toEqual([])
+    },
+    FLOW_TIMEOUT_MS
+  )
 })
 
 describe('email webhook events', () => {

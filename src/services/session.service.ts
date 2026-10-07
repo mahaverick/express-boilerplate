@@ -560,14 +560,19 @@ export async function revokeSession(sessionId: string): Promise<void> {
  * concurrent or replayed sign-outs count once, and a lapsed session counts
  * never.
  * @param raw - The raw refresh token presented by the client.
+ * @param options - `emitSignedOut: false` revokes silently, for a sign-in that replaces the session; default true.
+ * @param options.emitSignedOut - Whether a live revoke emits `user_signed_out`.
  * @returns Resolves once the token's session (if any matched) is revoked and its access tokens are denied, best-effort.
  */
-export async function revokeRefreshToken(raw: string): Promise<void> {
+export async function revokeRefreshToken(
+  raw: string,
+  options: { emitSignedOut?: boolean } = {}
+): Promise<void> {
   const existing = await userTokenRepository.findByHash(hashToken(raw))
   if (!existing || existing.sessionId === null) return
   const revoked = await revokeSessionUnderUserLock(existing.userId, existing.sessionId)
   const isLive = existing.expiresAt.getTime() > Date.now() && existing.revokedAt === null
-  if (isLive && revoked > 0) {
+  if (isLive && revoked > 0 && options.emitSignedOut !== false) {
     await emitDomainEvent({ type: 'user_signed_out', userId: existing.userId, at: new Date() })
   }
 }
