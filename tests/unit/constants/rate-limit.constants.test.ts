@@ -20,6 +20,7 @@ import {
   submittedEmailRateLimitKey,
   type RateLimitName,
 } from '@/constants/rate-limit.constants'
+import { hashRateLimitIdentity } from '@/utilities/rate-limit-key.utilities'
 
 const EXPECTED_NAMES_IN_ORDER = [
   'register',
@@ -214,19 +215,21 @@ describe('RATE_LIMITS key stability', () => {
     expect(spec.skip?.(noBody)).toBe(true)
   })
 
-  it('derives the same composite key for login: ip + ":" + normalised email', () => {
+  it('derives the composite key for login: ip + ":" + the hashed normalised email', () => {
     const request = {
       ip: '203.0.113.5',
       body: { email: 'Victim@Example.com' },
     } as unknown as Request
     const keyBy = RATE_LIMITS.login.keyBy
     if (typeof keyBy !== 'function') throw new Error('login.keyBy must be a function')
-    expect(keyBy(request)).toBe('203.0.113.5:victim@example.com')
+    expect(keyBy(request)).toBe(`203.0.113.5:${hashRateLimitIdentity('victim@example.com')}`)
+    expect(keyBy(request)).not.toContain('example.com')
   })
 
-  it('derives the same email-only key: the normalised submitted email, ip ignored', () => {
+  it('derives the email-only key from the normalised submitted email, hashed, ip ignored', () => {
     const request = { body: { email: 'Victim@Example.com' } } as unknown as Request
-    expect(submittedEmailRateLimitKey(request)).toBe('victim@example.com')
+    expect(submittedEmailRateLimitKey(request)).toBe(hashRateLimitIdentity('victim@example.com'))
+    expect(submittedEmailRateLimitKey(request)).not.toContain('example.com')
   })
 
   it('derives the same user key: request.user.id, or "anonymous" when unset', () => {

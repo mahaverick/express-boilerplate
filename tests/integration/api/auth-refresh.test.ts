@@ -17,6 +17,7 @@ import { REFRESH_REUSE_GRACE_MS } from '@/constants/auth.constants'
 import type { User } from '@/database/models/user.model'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
+import { getRedis, redisKey } from '@/services/redis.service'
 import { hashToken } from '@/services/session.service'
 import { testRefreshCookie } from '../../helpers/refresh-cookie'
 import { request } from '../../helpers/request'
@@ -513,6 +514,24 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
   })
 
   describe('login rate limiting (end to end, against the real production limiter and real Redis)', () => {
+    it('never writes the submitted address into a rate-limit key name', async () => {
+      const email = uniqueEmail()
+
+      const response = await request(app)
+        .post('/api/v1/auth/login')
+        .send({ email, password: 'not-the-password' })
+      expect(response.status).toBe(401)
+
+      const client = await getRedis()
+      const keys: string[] = []
+      const batches = client.scanIterator({ MATCH: `${redisKey('rl')}:*`, COUNT: 500 })
+      for await (const batch of batches) {
+        keys.push(...batch)
+      }
+      expect(keys.some((key) => key.startsWith(`${redisKey('rl', 'login-account')}:`))).toBe(true)
+      expect(keys.filter((key) => key.includes(email))).toEqual([])
+    })
+
     it('returns 429 after the configured number of attempts, with RateLimit-* headers', async () => {
       const email = uniqueEmail()
       const attempt = (): Test =>

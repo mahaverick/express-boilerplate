@@ -97,6 +97,20 @@ describe('scrubJobData', () => {
     })
   })
 
+  it('redacts the recipient address, top-level and on a paired email', () => {
+    const data = {
+      to: 'owner@example.com',
+      templateKey: 'registration_attempt',
+      email: { to: 'owner@example.com', templateKey: 'password_reset' },
+    }
+
+    expect(scrubJobData(data)).toEqual({
+      to: '[redacted]',
+      templateKey: 'registration_attempt',
+      email: { to: '[redacted]', templateKey: 'password_reset' },
+    })
+  })
+
   it('returns a copy and leaves its argument untouched', () => {
     const data = { variables: { resetUrl: 'https://x.test/r' } }
     const scrubbed = scrubJobData(data)

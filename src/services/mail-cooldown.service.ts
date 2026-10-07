@@ -3,9 +3,9 @@
  * one mail of a kind per address per window, however many requests ask for
  * one, with no reply that differs (a 429 would be an enumeration oracle).
  */
-import { createHash } from 'node:crypto'
 import { logger } from '@/services/logger.service'
 import { getRedis, redisKey } from '@/services/redis.service'
+import { hashRateLimitIdentity } from '@/utilities/rate-limit-key.utilities'
 
 /**
  * What a claim answers when Redis cannot be reached: `'send'` fails open (the
@@ -15,12 +15,12 @@ import { getRedis, redisKey } from '@/services/redis.service'
 export type MailCooldownFallback = 'send' | 'skip'
 
 /**
- * The key segment for one address: a digest, so no address is a Redis key name.
+ * The key segment for one address: a keyed digest, so no address is a Redis key name.
  * @param email - The address, as submitted.
  * @returns The digest of the trimmed, lowercased address.
  */
 function addressDigest(email: string): string {
-  return createHash('sha256').update(email.trim().toLowerCase()).digest('hex')
+  return hashRateLimitIdentity(email.trim().toLowerCase())
 }
 
 /**

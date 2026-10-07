@@ -6,6 +6,7 @@
  */
 import type { Request } from 'express'
 import { ipKeyGenerator } from 'express-rate-limit'
+import { hashRateLimitIdentity } from '@/utilities/rate-limit-key.utilities'
 import { loginSchema } from '@/validators/auth.validators'
 
 /**
@@ -109,12 +110,13 @@ function submittedEmail(request: Request): string {
  * submitted email, never either alone — see the `login` entry in
  * `RATE_LIMITS` below for why a distributed attacker (many IPs) or a
  * bystander (same IP, different email) must each land in a different
- * bucket from the victim.
+ * bucket from the victim. The email part is `hashRateLimitIdentity`'s
+ * digest, so the Redis key never names an address.
  * @param request - The incoming request.
- * @returns A key combining the client's IP and the submitted email.
+ * @returns A key combining the client's IP and the submitted email's digest.
  */
 function loginRateLimitKey(request: Request): string {
-  return `${ipKeyGenerator(request.ip ?? 'unknown')}:${submittedEmail(request)}`
+  return `${ipKeyGenerator(request.ip ?? 'unknown')}:${hashRateLimitIdentity(submittedEmail(request))}`
 }
 
 /**
@@ -133,11 +135,13 @@ function isMalformedLogin(request: Request): boolean {
  * The key an email-keyed limiter counts attempts by: the submitted address
  * ALONE — a composite with IP here would make the budget per-address-PER-IP,
  * which a distributed attacker defeats trivially. Maps `keyBy: 'email'`.
+ * The address is hashed (`hashRateLimitIdentity`): a key is written for any
+ * string submitted, account or not, and must not name it.
  * @param request - The incoming request.
- * @returns The submitted, normalised email, or an empty string.
+ * @returns The digest of the submitted, normalised email (of `''` when it carries none).
  */
 export function submittedEmailRateLimitKey(request: Request): string {
-  return submittedEmail(request)
+  return hashRateLimitIdentity(submittedEmail(request))
 }
 
 /**
