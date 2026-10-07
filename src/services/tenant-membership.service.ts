@@ -4,16 +4,19 @@
  * memberships, then (for staff) the actor's platform membership; authorize the
  * actor's current role against the target's (on the platform tenant, the staff
  * rule: an owner may act on another owner); check the last-owner rule (active
- * owners on the platform tenant); write; audit.
+ * owners on the platform tenant); write; revoke the pending invitations the
+ * member can no longer stand behind; audit.
  */
-import type { MembershipRole } from '@/constants/tenant.constants'
+import { MEMBERSHIP_ROLES, type MembershipRole } from '@/constants/tenant.constants'
 import type { UserMembership } from '@/database/models/user-membership.model'
 import { HttpError } from '@/errors/http-error'
 import {
+  canActorGrantRole,
   canActorModifyTarget,
   canPlatformActorModifyTarget,
   isRoleAtLeast,
 } from '@/policies/tenant.policy'
+import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { record } from '@/services/audit.service'
 import { db, type DbTransaction } from '@/services/database.service'
@@ -24,8 +27,55 @@ import {
 } from '@/services/tenant-access.service'
 import type { Actor, TenantAccess } from '@/types/actor'
 import type { RowLockMode } from '@/types/lock-mode'
+import { hostnameDomain } from '@/utilities/email.utilities'
 
+const tenantInvitationRepository = new TenantInvitationRepository()
 const userMembershipRepository = new UserMembershipRepository()
+
+/**
+ * Revoke the pending invitations `inviterId` sent in this tenant, in the
+ * caller's transaction, and record one `invitation.revoked` per invitation
+ * under the actor of the change that cost the sender their authority.
+ * @param actor - The signed-in user whose change triggers the revoke.
+ * @param access - How the actor reached the tenant.
+ * @param tenantId - The tenant.
+ * @param inviterId - The member whose invitations go.
+ * @param roles - Only offers of these roles; every offer when absent.
+ * @param tx - The change's transaction.
+ * @returns Resolves once every invitation is revoked and audited.
+ */
+async function revokeInvitationsSentIn(
+  actor: Actor,
+  access: TenantAccess,
+  tenantId: string,
+  inviterId: string,
+  roles: readonly MembershipRole[] | undefined,
+  tx: DbTransaction
+): Promise<void> {
+  const revoked = await tenantInvitationRepository.revokePendingByInviterInTenant(
+    inviterId,
+    tenantId,
+    roles === undefined ? {} : { roles },
+    tx
+  )
+  for (const invitation of revoked) {
+    await record(
+      {
+        action: 'invitation.revoked',
+        actor,
+        access,
+        tenantId,
+        targetId: invitation.id,
+        metadata: {
+          role: invitation.role,
+          // eslint-disable-next-line unicorn/no-null -- stored as JSON null in the audit metadata
+          emailDomain: hostnameDomain(invitation.email) ?? null,
+        },
+      },
+      tx
+    )
+  }
+}
 
 /**
  * Refuse an actor whose current role is below the route's `requireRole` bar.
@@ -178,7 +228,8 @@ async function assertOwnerRemainsFor(
  * Change a member's role; demoting the last live owner is refused. The
  * actor's access is re-read under lock, so a demotion that lands after
  * `resolveTenant` still counts. Atomic against a concurrent role change or
- * removal of an owner.
+ * removal of an owner. The member's pending invitations here that the new
+ * role could not grant are revoked in the same transaction.
  * @param actor - The signed-in user making the change.
  * @param tenantId - The tenant.
  * @param targetUserId - The member whose role changes.
@@ -217,6 +268,9 @@ export async function changeRole(
     }
     const updated = await userMembershipRepository.updateRole(target.id, role, tx)
     if (!updated) throw new HttpError('Member not found', 404)
+    // Offers the new role could not make itself stop admitting people.
+    const ungrantable = MEMBERSHIP_ROLES.filter((offered) => !canActorGrantRole(role, offered))
+    await revokeInvitationsSentIn(actor, access, tenantId, targetUserId, ungrantable, tx)
     await record(
       {
         action: 'member.role_changed',
@@ -235,7 +289,8 @@ export async function changeRole(
 /**
  * Remove a member; removing the last live owner is refused. The actor's
  * access is re-read under lock. Atomic against a concurrent role change or
- * removal of an owner.
+ * removal of an owner. The member's pending invitations in this tenant are
+ * revoked in the same transaction.
  * @param actor - The signed-in user removing the member.
  * @param tenantId - The tenant.
  * @param targetUserId - The member to remove.
@@ -272,6 +327,7 @@ export async function removeMember(
     }
     const wasDeleted = await userMembershipRepository.delete(target.id, tx)
     if (!wasDeleted) throw new HttpError('Member not found', 404)
+    await revokeInvitationsSentIn(actor, access, tenantId, targetUserId, undefined, tx)
     await record(
       {
         action: 'member.removed',

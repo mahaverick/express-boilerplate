@@ -8,21 +8,48 @@
  */
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
+import type { MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
+import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
+import { hashToken } from '@/services/session.service'
 import { changeRole, removeMember } from '@/services/tenant-membership.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { settle } from '../../helpers/timing'
 
 const tenantRepository = new TenantRepository()
+const invitationRepository = new TenantInvitationRepository()
 const userMembershipRepository = new UserMembershipRepository()
 const userRepository = new UserRepository()
+
+/**
+ * The `invitation.revoked` audit rows, each with its target and actor.
+ * @returns One row per entry, by target id.
+ */
+async function revokedAuditRows(): Promise<
+  { targetId: string; actorUserId: string; tenantId: string }[]
+> {
+  return sql<{ targetId: string; actorUserId: string; tenantId: string }[]>`
+    select target_id as "targetId", actor_user_id as "actorUserId", tenant_id as "tenantId"
+    from audit_logs where action = 'invitation.revoked' order by target_id`
+}
+
+/**
+ * Whether an invitation is still pending (neither accepted nor revoked).
+ * @param id - The invitation.
+ * @returns True while it is pending.
+ */
+async function isPending(id: string): Promise<boolean> {
+  const [row] = await sql<{ pending: boolean }[]>`
+    select accepted_at is null and revoked_at is null as pending from tenant_invitations where id = ${id}`
+  return row?.pending ?? false
+}
 
 /**
  * How a settled service call ended: 'fulfilled', an HttpError's status, or
@@ -36,6 +63,25 @@ function outcomeOf(result: PromiseSettledResult<unknown>): string | number {
   if (reason instanceof HttpError) return reason.statusCode
   const cause = (reason as { cause?: { code?: unknown } } | undefined)?.cause
   return typeof cause?.code === 'string' ? cause.code : String(reason)
+}
+
+/**
+ * A pending invitation sent by `inviter`, written straight to the table.
+ * @param tenant - The tenant.
+ * @param inviter - The sender.
+ * @param role - The offered role.
+ * @returns The invitation id.
+ */
+async function pendingFrom(tenant: Tenant, inviter: User, role: MembershipRole): Promise<string> {
+  const invitation = await invitationRepository.createPending({
+    tenantId: tenant.id,
+    email: `membership-invitee-${randomUUID()}@example.test`,
+    role,
+    tokenHash: hashToken(randomUUID()),
+    invitedBy: inviter.id,
+    expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+  })
+  return invitation.id
 }
 
 describe('tenant-membership.service', () => {
@@ -137,6 +183,83 @@ describe('tenant-membership.service', () => {
     const a = await userMembershipRepository.findByUserAndTenant(ownerA.id, tenant.id)
     const b = await userMembershipRepository.findByUserAndTenant(managerB.id, tenant.id)
     expect([a?.role, b?.role]).toEqual(['owner', 'owner'])
+  })
+
+  it('revokes a removed member’s pending invitations in that tenant only, with one invitation.revoked entry each', async () => {
+    const owner = await createUser()
+    const admin = await createUser()
+    const tenant = await createTenant(owner)
+    const elsewhere = await createTenant(admin)
+    await userMembershipRepository.create({ userId: admin.id, tenantId: tenant.id, role: 'admin' })
+    const first = await pendingFrom(tenant, admin, 'manager')
+    const second = await pendingFrom(tenant, admin, 'viewer')
+    const ownersOwn = await pendingFrom(tenant, owner, 'viewer')
+    const otherTenant = await pendingFrom(elsewhere, admin, 'viewer')
+
+    await removeMember({ userId: owner.id }, tenant.id, admin.id)
+
+    expect(await isPending(first)).toBe(false)
+    expect(await isPending(second)).toBe(false)
+    expect(await isPending(ownersOwn)).toBe(true)
+    expect(await isPending(otherTenant)).toBe(true)
+    expect(await revokedAuditRows()).toEqual(
+      [first, second]
+        .toSorted((a, b) => a.localeCompare(b))
+        .map((targetId) => ({ targetId, actorUserId: owner.id, tenantId: tenant.id }))
+    )
+  })
+
+  it('revokes on a demotion only the invitations the new role can no longer grant', async () => {
+    const owner = await createUser()
+    const coOwner = await createUser()
+    const tenant = await createTenant(owner)
+    await userMembershipRepository.create({
+      userId: coOwner.id,
+      tenantId: tenant.id,
+      role: 'owner',
+    })
+    const ownerOffer = await pendingFrom(tenant, coOwner, 'owner')
+    const adminOffer = await pendingFrom(tenant, coOwner, 'admin')
+    const viewerOffer = await pendingFrom(tenant, coOwner, 'viewer')
+
+    await changeRole({ userId: coOwner.id }, tenant.id, coOwner.id, 'admin')
+
+    expect(await isPending(ownerOffer)).toBe(false)
+    expect(await isPending(adminOffer)).toBe(false)
+    expect(await isPending(viewerOffer)).toBe(true)
+    const revoked = await revokedAuditRows()
+    expect(revoked.map((row) => row.targetId)).toEqual(
+      [ownerOffer, adminOffer].toSorted((a, b) => a.localeCompare(b))
+    )
+  })
+
+  it('revokes nothing on a promotion or a role the member could already grant from', async () => {
+    const owner = await createUser()
+    const admin = await createUser()
+    const tenant = await createTenant(owner)
+    await userMembershipRepository.create({ userId: admin.id, tenantId: tenant.id, role: 'admin' })
+    const offer = await pendingFrom(tenant, admin, 'manager')
+
+    await changeRole({ userId: owner.id }, tenant.id, admin.id, 'owner')
+
+    expect(await isPending(offer)).toBe(true)
+    expect(await revokedAuditRows()).toEqual([])
+  })
+
+  it('still refuses the last owner’s removal and demotion 409, revoking nothing', async () => {
+    const owner = await createUser()
+    const tenant = await createTenant(owner)
+    const offer = await pendingFrom(tenant, owner, 'viewer')
+
+    await expect(removeMember({ userId: owner.id }, tenant.id, owner.id)).rejects.toMatchObject({
+      statusCode: 409,
+    })
+    await expect(
+      changeRole({ userId: owner.id }, tenant.id, owner.id, 'viewer')
+    ).rejects.toMatchObject({ statusCode: 409 })
+
+    expect(await isPending(offer)).toBe(true)
+    expect(await revokedAuditRows()).toEqual([])
   })
 
   it('answers 404 Tenant not found to an actor who is not a member, and leaves the target alone', async () => {

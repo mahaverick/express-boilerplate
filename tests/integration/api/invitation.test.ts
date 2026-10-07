@@ -3,10 +3,10 @@
  * Postgres and Redis. No Worker runs: tests read the invitation and
  * verification emails straight off the queues (tests/helpers/queue-jobs.ts).
  *
- * Rate limits here are wiring, not thresholds. The preview (60 per 15 min)
- * and accept (20 per 15 min) limiters are keyed on IP, and every request
- * here comes from 127.0.0.1. This file makes 13 accept and 18 preview
- * requests; keep accepts under 20 or the file throttles itself. Thresholds
+ * Rate limits here are wiring, not thresholds. The preview limiter (60 per
+ * 15 min) is keyed on IP and every request here comes from 127.0.0.1; this
+ * file makes 18 preview requests, so keep them under 60. Accept (20 per 15
+ * min) is keyed on the signed-in user, not the IP. Thresholds
  * are proven with small overrides in
  * tests/unit/middlewares/rate-limit.middleware.test.ts.
  */
@@ -30,6 +30,14 @@ import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queu
 import { getRedis, redisKey } from '@/services/redis.service'
 import { hashToken, signAccessToken } from '@/services/session.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
+import { platformTenant } from '../../helpers/platform-staff'
+import {
+  createTrackedStaff,
+  createTrackedUser,
+  deleteTrackedUsers,
+  recentAuthTokenFor,
+  tokenFor,
+} from '../../helpers/platform-users'
 import {
   expectNoJob,
   waitForInvitationEmail,
@@ -924,5 +932,117 @@ describe('invitations API', () => {
         for (const spy of spies) spy.mockRestore()
       }
     })
+  })
+})
+
+/**
+ * Invite `email` as `inviter` and return the raw token from the mail.
+ * @param slug - The tenant slug.
+ * @param token - The inviter's bearer token.
+ * @param email - The invited address.
+ * @param role - The offered role.
+ * @returns The raw accept token.
+ */
+async function inviteAs(
+  slug: string,
+  token: string,
+  email: string,
+  role: MembershipRole
+): Promise<string> {
+  const response = await inviteVia(slug, token, { email, role })
+  expect(response.status).toBe(202)
+  const mail = await waitForInvitationEmail(email)
+  return mail.token
+}
+
+/**
+ * Accept `rawToken` as a fresh verified account for `email`.
+ * @param rawToken - The raw token.
+ * @param email - The invited address.
+ * @returns The response.
+ */
+async function acceptAs(rawToken: string, email: string): Promise<Response> {
+  const invitee = await createTrackedUser({ email })
+  return acceptVia(rawToken, tokenFor(invitee))
+}
+
+describe('an invitation outlives its sender', () => {
+  const tenantIds: string[] = []
+
+  afterEach(async () => {
+    await truncateAuditLogs()
+    if (tenantIds.length > 0) await sql`delete from tenants where id = any(${tenantIds})`
+    tenantIds.length = 0
+    await deleteTrackedUsers()
+  })
+
+  /**
+   * A customer tenant with an owner and a second member holding `role`.
+   * @param role - The second member's role.
+   * @returns The tenant, its owner and the member.
+   */
+  async function tenantWith(
+    role: MembershipRole
+  ): Promise<{ tenant: Tenant; owner: User; member: User }> {
+    const owner = await createTrackedUser()
+    const member = await createTrackedUser()
+    const tenant = await tenantRepository.create({
+      name: 'Sender Co',
+      slug: `sender-${owner.id.slice(0, 8)}`,
+      ownerId: owner.id,
+    })
+    tenantIds.push(tenant.id)
+    await userMembershipRepository.create({ userId: member.id, tenantId: tenant.id, role })
+    return { tenant, owner, member }
+  }
+
+  it('customer tenant: an admin is removed, then their manager invitation is accepted', async () => {
+    const { tenant, owner, member: admin } = await tenantWith('admin')
+    const email = `sender-${randomUUID()}@example.test`
+    const rawToken = await inviteAs(tenant.slug, tokenFor(admin), email, 'manager')
+
+    const removal = await request(app)
+      .delete(`/api/v1/tenants/${tenant.slug}/members/${admin.id}`)
+      .set('Authorization', `Bearer ${tokenFor(owner)}`)
+      .send({})
+    expect(removal.status).toBe(200)
+
+    const accept = await acceptAs(rawToken, email)
+    expect(accept.status).toBe(404)
+    expect(envelopeOf(accept).code).toBe('invitation_invalid')
+  })
+
+  it('customer tenant: an admin is demoted to viewer, then their manager invitation is accepted', async () => {
+    const { tenant, owner, member: admin } = await tenantWith('admin')
+    const email = `sender-${randomUUID()}@example.test`
+    const rawToken = await inviteAs(tenant.slug, tokenFor(admin), email, 'manager')
+
+    const demotion = await request(app)
+      .patch(`/api/v1/tenants/${tenant.slug}/members/${admin.id}`)
+      .set('Authorization', `Bearer ${tokenFor(owner)}`)
+      .send({ role: 'viewer' })
+    expect(demotion.status).toBe(200)
+
+    const accept = await acceptAs(rawToken, email)
+    expect(accept.status).toBe(404)
+    expect(envelopeOf(accept).code).toBe('invitation_invalid')
+  })
+
+  it('platform tenant: a staff admin is removed, then their viewer invitation still mints staff', async () => {
+    const platform = await platformTenant()
+    const { user: staffAdmin, token: adminToken } = await createTrackedStaff('admin')
+    const { user: staffOwner } = await createTrackedStaff('owner')
+    const email = `sender-${randomUUID()}@example.test`
+    const rawToken = await inviteAs(platform.slug, adminToken, email, 'viewer')
+
+    const removal = await request(app)
+      .delete(`/api/v1/tenants/${platform.slug}/members/${staffAdmin.id}`)
+      .set('Authorization', `Bearer ${recentAuthTokenFor(staffOwner)}`)
+      .send({})
+    expect(removal.status).toBe(200)
+
+    const accept = await acceptAs(rawToken, email)
+    expect(accept.status).toBe(404)
+    expect(envelopeOf(accept).code).toBe('invitation_invalid')
   })
 })

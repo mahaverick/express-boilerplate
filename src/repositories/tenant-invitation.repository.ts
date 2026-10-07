@@ -390,6 +390,40 @@ export class TenantInvitationRepository {
   }
 
   /**
+   * Revoke the pending invitations one user sent in one tenant, expired or
+   * not: once they lose their place or their rank there, nothing should
+   * still admit people on their authority. `roles` narrows the revoke to the
+   * offers of those roles (a demotion revokes only what the new role can no
+   * longer grant); an empty list revokes nothing.
+   * @param inviterId - The sender.
+   * @param tenantId - The tenant.
+   * @param options - `roles` limits the revoke to offers of those roles; all roles when absent.
+   * @param options.roles - The offered roles to revoke.
+   * @param executor - Where to run the query; the caller's transaction.
+   * @returns The revoked rows, for their audit entries.
+   */
+  async revokePendingByInviterInTenant(
+    inviterId: string,
+    tenantId: string,
+    options: { roles?: readonly MembershipRole[] },
+    executor: DbExecutor = db
+  ): Promise<TenantInvitation[]> {
+    if (options.roles?.length === 0) return []
+    return executor
+      .update(invitation)
+      .set({ revokedAt: sql`now()`, updatedAt: sql`now()` })
+      .where(
+        and(
+          eq(invitation.invitedBy, inviterId),
+          eq(invitation.tenantId, tenantId),
+          options.roles === undefined ? undefined : inArray(invitation.role, [...options.roles]),
+          pendingCondition()
+        )
+      )
+      .returning()
+  }
+
+  /**
    * Revoke every pending invitation of this tenant offering `role`, expired or not.
    * @param tenantId - The tenant.
    * @param role - The role offered.
