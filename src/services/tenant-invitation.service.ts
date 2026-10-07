@@ -562,18 +562,23 @@ export async function resend(
 }
 
 /**
- * Revoke a pending invitation. The actor's role is re-read under lock.
+ * Revoke a pending invitation. The actor's role is re-read under lock, and
+ * the grant rule applies as it does to invite and resend: an admin cannot
+ * revoke an owner or admin invitation it could not have sent.
  * @param actor - The signed-in user revoking it.
  * @param tenantId - The tenant it must belong to.
  * @param invitationId - The invitation.
- * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access; 403 when the actor is now below admin; 404 `invitation_not_found` when it is not pending in this tenant.
+ * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access; 403 when the actor is now below admin; 404 `invitation_not_found` when it is not pending in this tenant; 403 when the actor may not grant its role.
  */
 export async function revoke(actor: Actor, tenantId: string, invitationId: string): Promise<void> {
   await db.transaction(async (tx) => {
-    const { access } = await lockActorRole(actor, tenantId, 'admin', tx)
+    const { role: actorRole, access } = await lockActorRole(actor, tenantId, 'admin', tx)
     // Read first: the audit entry needs the role and address the revoke doesn't return.
     const pending = await invitationRepository.findPendingById(tenantId, invitationId, tx)
     if (!pending) throw invitationNotFound()
+    if (!canActorGrantRole(actorRole, pending.role)) {
+      throw new HttpError(GRANT_REFUSED_MESSAGE, 403)
+    }
     const wasRevoked = await invitationRepository.revoke(tenantId, invitationId, tx)
     if (!wasRevoked) throw invitationNotFound()
     await record(

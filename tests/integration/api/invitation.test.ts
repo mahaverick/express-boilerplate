@@ -605,6 +605,51 @@ describe('invitations API', () => {
       }
     )
 
+    // Revoke applies the grant rule, as invite and resend do.
+    for (const role of ['owner', 'admin'] as const satisfies readonly MembershipRole[]) {
+      it(`refuses a tenant admin revoking an ${role} invitation 403`, async () => {
+        const { owner, tenant } = await setup()
+        const { user: admin, token: adminToken } = await createUser()
+        await userMembershipRepository.create({
+          userId: admin.id,
+          tenantId: tenant.id,
+          role: 'admin',
+        })
+        const { invitationId } = await seedInvitation(tenant, owner, { email: uniqueEmail(), role })
+
+        const response = await request(app)
+          .delete(`/api/v1/tenants/${tenant.slug}/invitations/${invitationId}`)
+          .set('Authorization', `Bearer ${adminToken}`)
+          .send({})
+
+        expect(response.status).toBe(403)
+        const [row] = await sql<{ revoked: boolean }[]>`
+          select revoked_at is not null as revoked from tenant_invitations where id = ${invitationId}`
+        expect(row?.revoked).toBe(false)
+      })
+    }
+
+    it('lets a tenant admin revoke a manager invitation', async () => {
+      const { owner, tenant } = await setup()
+      const { user: admin, token: adminToken } = await createUser()
+      await userMembershipRepository.create({
+        userId: admin.id,
+        tenantId: tenant.id,
+        role: 'admin',
+      })
+      const { invitationId } = await seedInvitation(tenant, owner, {
+        email: uniqueEmail(),
+        role: 'manager',
+      })
+
+      const response = await request(app)
+        .delete(`/api/v1/tenants/${tenant.slug}/invitations/${invitationId}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({})
+
+      expect(response.status).toBe(200)
+    })
+
     it('revokes: the link stops previewing and accepting, and a second revoke 404s', async () => {
       const { owner, ownerToken, tenant } = await setup()
       const { user: invitee, token: inviteeToken } = await createUser()
