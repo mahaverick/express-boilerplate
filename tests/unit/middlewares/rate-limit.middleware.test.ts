@@ -494,18 +494,21 @@ describe('RATE_LIMITS.invitationPreview', () => {
 })
 
 describe('RATE_LIMITS.invitationAccept', () => {
-  // Keyed on IP, not the user: two different signed-in callers behind one IP share the bucket, because the limiter runs before requireAuth.
-  it('returns 429 once the limit is exceeded, whoever the caller claims to be', async () => {
+  // Keyed on the user, behind requireAuth: a second signed-in caller behind the same IP keeps their own budget.
+  it('returns 429 once one user spends the budget, and keys on the user id', async () => {
     const app = buildAppBehindAsUser(
       createRateLimiter(RATE_LIMITS.invitationAccept, { limit: 1, windowMs: 60_000 })
     )
+    const invitee = randomUUID()
 
-    const allowed = await request(app).post('/endpoint').set('x-test-user-id', randomUUID())
-    const limited = await request(app).post('/endpoint').set('x-test-user-id', randomUUID())
+    const allowed = await request(app).post('/endpoint').set('x-test-user-id', invitee)
+    const limited = await request(app).post('/endpoint').set('x-test-user-id', invitee)
+    const bystander = await request(app).post('/endpoint').set('x-test-user-id', randomUUID())
 
     expect(allowed.status).toBe(201)
     expect(limited.status).toBe(429)
     expect(limited.body).toMatchObject({ success: false, code: RATE_LIMITED_CODE })
+    expect(bystander.status).toBe(201)
   })
 })
 

@@ -133,7 +133,7 @@ const EXPECTED_RATE_LIMITS: {
     name: 'invitation-accept',
     windowMs: 900_000,
     limit: 20,
-    keyBy: 'ip',
+    keyBy: 'user',
   },
   { key: 'platformSearch', name: 'platform-search', windowMs: 60_000, limit: 60, keyBy: 'user' },
   {

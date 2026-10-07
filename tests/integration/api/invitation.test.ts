@@ -27,6 +27,7 @@ import { UserRepository } from '@/repositories/user.repository'
 import { db, sql } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
 import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
+import { getRedis, redisKey } from '@/services/redis.service'
 import { hashToken, signAccessToken } from '@/services/session.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import {
@@ -705,6 +706,40 @@ describe('invitations API', () => {
       // A used link previews as invalid; the React page shows "invalid or expired".
       const usedPreview = await previewVia(rawToken)
       expect(usedPreview.body).toMatchObject(INVALID)
+    })
+
+    it('SEC-abuse-03: unauthenticated accept traffic from an address does not spend a signed-in invitee’s accept budget', async () => {
+      const client = await getRedis()
+      const keys: string[] = []
+      const batches = client.scanIterator({
+        MATCH: `${redisKey('rl', 'invitation-accept')}:*`,
+        COUNT: 100,
+      })
+      for await (const batch of batches) {
+        keys.push(...batch)
+      }
+      if (keys.length > 0) await client.del(keys)
+      const { owner, tenant } = await setup()
+      const { user: invitee, token: inviteeToken } = await createUser()
+      const { rawToken } = await seedInvitation(tenant, owner, { email: invitee.email })
+
+      for (let index = 0; index < 20; index += 1) {
+        const junk = await acceptVia(randomBytes(32).toString('base64url'))
+        expect(junk.status).toBe(401)
+      }
+      const accepted = await acceptVia(rawToken, inviteeToken)
+
+      expect(accepted.status).toBe(200)
+    })
+
+    it('answers an unauthenticated form post 401 before the content-type gate', async () => {
+      const response = await request(app)
+        .post('/api/v1/invitations/accept')
+        .type('form')
+        .send('token=x')
+
+      expect(response.status).toBe(401)
+      expect(response.headers).not.toHaveProperty('ratelimit-limit')
     })
 
     it('answers a malformed token with invitation_invalid', async () => {

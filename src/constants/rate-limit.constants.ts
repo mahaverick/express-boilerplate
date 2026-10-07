@@ -395,14 +395,16 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     message: RATE_LIMITED_MESSAGE,
   },
   /**
-   * Keyed on IP alone: this limiter runs ahead of `requireAuth`, so no
-   * caller identity exists yet when it executes.
+   * Keyed on the caller's id, behind `requireAuth`, as changePassword: an
+   * IP key would let anonymous requests from a shared address lock a
+   * signed-in invitee out. The token is 256 bits, so this bounds a user
+   * working through many tokens, not guessing.
    */
   invitationAccept: {
     name: 'invitation-accept',
     windowMs: 15 * 60 * 1000,
     limit: 20,
-    keyBy: 'ip',
+    keyBy: 'user',
     message: RATE_LIMITED_MESSAGE,
   },
   /**

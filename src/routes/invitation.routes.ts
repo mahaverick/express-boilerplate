@@ -2,7 +2,7 @@
  * @file The invitee's side of an invitation, mounted at `/api/v1/invitations`.
  * Both routes take the token in a JSON body, never in the URL. Preview is
  * public, so a token holder sees the invitation before signing in; accept
- * needs a signed-in user. Each limiter runs before any database read.
+ * needs a signed-in user. Each limiter runs before the invitation is read.
  */
 import { Router } from 'express'
 import { RATE_LIMITS } from '@/constants/rate-limit.constants'
@@ -23,11 +23,12 @@ export function createInvitationRouter(): Router {
     createRateLimiter(RATE_LIMITS.invitationPreview),
     invitationController.previewInvitation
   )
+  // requireAuth first: anonymous traffic from a shared IP never spends a signed-in invitee's budget, and the limiter keys on request.user.id.
   router.post(
     '/accept',
+    requireAuth,
     requireJsonContentType,
     createRateLimiter(RATE_LIMITS.invitationAccept),
-    requireAuth,
     invitationController.acceptInvitation
   )
   return router
