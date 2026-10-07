@@ -31,6 +31,17 @@ describe('didClaimMailCooldown', () => {
     expect(set).toHaveBeenCalledWith(expect.any(String), '1', { NX: true, PX: 300_000 })
   })
 
+  it('rounds a fractional cooldown up to a whole PX, which Redis requires', async () => {
+    set.mockResolvedValue('OK')
+
+    await expect(
+      didClaimMailCooldown('password-reset-notice', 'owner@example.com', 1.5, {
+        whenUnavailable: 'send',
+      })
+    ).resolves.toBe(true)
+    expect(set).toHaveBeenCalledWith(expect.any(String), '1', { NX: true, PX: 2 })
+  })
+
   it('refuses the slot while one is held (the SET answers null)', async () => {
     // eslint-disable-next-line unicorn/no-null -- node-redis answers null for a SET NX that did not write
     set.mockResolvedValue(null)

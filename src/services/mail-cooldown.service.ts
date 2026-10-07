@@ -31,7 +31,7 @@ function addressDigest(email: string): string {
  * and answered by `whenUnavailable`.
  * @param scope - The mail kind, a fixed key segment such as `'password-reset-notice'`.
  * @param email - The recipient address.
- * @param cooldownMs - How long a won claim holds the slot.
+ * @param cooldownMs - How long a won claim holds the slot, rounded up to a whole millisecond.
  * @param options - What to answer when Redis cannot be reached.
  * @param options.whenUnavailable - `'send'` answers true, `'skip'` answers false.
  * @returns Whether the caller may send the mail now.
@@ -46,7 +46,8 @@ export async function didClaimMailCooldown(
     const client = await getRedis()
     const result = await client.set(redisKey(scope, addressDigest(email)), '1', {
       NX: true,
-      PX: cooldownMs,
+      // Redis rejects a non-integer PX, and the catch below would then fail open.
+      PX: Math.ceil(cooldownMs),
     })
     return result === 'OK'
   } catch (error) {

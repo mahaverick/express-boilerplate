@@ -356,9 +356,11 @@ async function sendPasswordResetMailIfRegistered(email: string, app: FrontendApp
  * Mail a reset link if the address has an account, at most once per
  * `PASSWORD_RESET_MAIL_COOLDOWN` per address (`didClaimMailCooldown`; when
  * Redis is down the mail is sent, since the owner must be able to reset).
- * The claim is taken for any address, registered or not. The controller
- * replies BEFORE calling this — the lookup itself would otherwise be a
- * timing oracle — so it must never reject.
+ * The claim is taken for any address, registered or not, and before the
+ * lookup: if the lookup or the enqueue then throws, that address gets no
+ * mail until the cooldown ends. The controller replies BEFORE calling
+ * this — the lookup itself would otherwise be a timing oracle — so it must
+ * never reject.
  * @param email - The address submitted to `/forgot-password`.
  * @param app - The frontend the reset link opens; the customer app by default.
  * @returns Resolves when the work is done or its failure is logged.
