@@ -282,9 +282,9 @@ uuid))` on every column,** as `errors-query.service.ts` does: per-column
   than `/`, which looks like a logout. The controller reads the current cookie
   only through `currentRefreshCookie(env)`. Under `COOKIE_SECURE` the legacy
   `refreshToken` cookie (`LEGACY_REFRESH_TOKEN_COOKIE_NAME`) is never
-  redeemed: a sibling subdomain can plant it. Logout revokes it, a refresh
-  that carried no current cookie revokes it and answers 401, and a login, a
-  successful refresh, a Google sign-in or a logout clears it when presented;
+  redeemed: a sibling subdomain or a plain-http attacker can plant it. Logout
+  revokes it, a refresh that carried no current cookie revokes it and answers
+  401, and a login, a successful refresh, a Google sign-in or a logout clears it when presented;
   a refresh answered 401 clears only the cookie name it read.
 - **`COOKIE_DOMAIN` goes on the refresh-cookie set, its clear, and the OAuth
   session cookie.** A clear with a different domain leaves the cookie behind.

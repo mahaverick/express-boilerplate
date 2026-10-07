@@ -456,10 +456,11 @@ describe('refresh cookie: the legacy refreshToken name', () => {
     expect([first.status, second.status]).toEqual([401, 401])
     for (const response of [first, second]) {
       expect(cookieLines(response, HOST_COOKIE)).toHaveLength(0)
-      expect(cookieLines(response, PLAIN_COOKIE).every((line) => EPOCH_EXPIRY.test(line))).toBe(
-        true
-      )
+      const clears = cookieLines(response, PLAIN_COOKIE)
+      expect(clears).toHaveLength(1)
+      expect(EPOCH_EXPIRY.test(clears[0] ?? '')).toBe(true)
     }
+    expect(await tokenState(legacy)).toEqual({ isConsumed: false, isRevoked: true })
   })
 
   // A plain cookie planted by a sibling subdomain must not sign a browser with no current cookie into the planter's session.

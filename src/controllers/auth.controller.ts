@@ -136,7 +136,9 @@ function readCookie(request: Request, name: string): string | undefined {
  * The refresh token to redeem: the current cookie's only, by the
  * newest-cookie rule (`readCookie`). Under COOKIE_SECURE the unprefixed
  * `refreshToken` is never redeemed: a sibling subdomain or an on-path
- * attacker on plain http can plant it, which is what the prefix stops.
+ * attacker on plain http can plant it. `__Host-` stops both; `__Secure-`
+ * (used with COOKIE_DOMAIN) stops only the plain-http planter, since
+ * COOKIE_DOMAIN already trusts its subdomains.
  * Without COOKIE_SECURE the current name is that unprefixed one.
  * @param request - The incoming request.
  * @returns The raw refresh token, or undefined when the current cookie was not sent.

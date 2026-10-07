@@ -70,7 +70,7 @@ export const MAX_NAME_LENGTH = 100
  * The refresh cookie's unprefixed name: the current name without
  * COOKIE_SECURE. With it, a cookie of this name is revoked and cleared
  * (logout, a refresh that carried no current cookie) but never redeemed,
- * since a sibling subdomain can plant it.
+ * since a sibling subdomain or a plain-http attacker can plant it.
  * @deprecated as the COOKIE_SECURE revoke-and-clear read, removed in the next major version; plain http keeps this name
  */
 export const LEGACY_REFRESH_TOKEN_COOKIE_NAME = 'refreshToken'

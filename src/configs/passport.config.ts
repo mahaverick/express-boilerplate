@@ -97,10 +97,12 @@ const OAUTH_SESSION_MAX_AGE_MS = 5 * 60 * 1000
 /**
  * The OAuth session cookie's name, with the strongest prefix the deployment
  * allows, as `refreshCookieSpec` (auth.constants.ts) picks for the refresh
- * cookie: an unprefixed one can be planted by a sibling subdomain, binding a
- * victim's callback to the planter's `state`. `__Host-` needs Secure, no
- * Domain and Path=/ (express-session's default path); `__Secure-` allows the
- * COOKIE_DOMAIN.
+ * cookie: an unprefixed one can be planted by a sibling subdomain or by an
+ * attacker on plain http, binding a victim's callback to the planter's
+ * `state`. `__Host-` stops both and needs Secure, no Domain and Path=/
+ * (express-session's default path). `__Secure-` allows the COOKIE_DOMAIN but
+ * stops only the plain-http planter, since COOKIE_DOMAIN already trusts its
+ * subdomains.
  * @param env - Whether cookies are Secure and the configured COOKIE_DOMAIN.
  * @param env.COOKIE_SECURE - Whether cookies are Secure, resolved through `isCookieSecure`.
  * @param env.COOKIE_DOMAIN - The configured COOKIE_DOMAIN, if any.
