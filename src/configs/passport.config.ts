@@ -95,6 +95,28 @@ const OAUTH_SESSION_COOKIE_NAME = 'oauth.sid'
 const OAUTH_SESSION_MAX_AGE_MS = 5 * 60 * 1000
 
 /**
+ * The OAuth session cookie's name, with the strongest prefix the deployment
+ * allows, as `refreshCookieSpec` (auth.constants.ts) picks for the refresh
+ * cookie: an unprefixed one can be planted by a sibling subdomain, binding a
+ * victim's callback to the planter's `state`. `__Host-` needs Secure, no
+ * Domain and Path=/ (express-session's default path); `__Secure-` allows the
+ * COOKIE_DOMAIN.
+ * @param env - Whether cookies are Secure and the configured COOKIE_DOMAIN.
+ * @param env.COOKIE_SECURE - Whether cookies are Secure, resolved through `isCookieSecure`.
+ * @param env.COOKIE_DOMAIN - The configured COOKIE_DOMAIN, if any.
+ * @returns The cookie name express-session sets and reads.
+ */
+export function oauthSessionCookieName(env: {
+  COOKIE_SECURE: boolean
+  COOKIE_DOMAIN?: string | undefined
+}): string {
+  if (!env.COOKIE_SECURE) return OAUTH_SESSION_COOKIE_NAME
+  return env.COOKIE_DOMAIN === undefined
+    ? `__Host-${OAUTH_SESSION_COOKIE_NAME}`
+    : `__Secure-${OAUTH_SESSION_COOKIE_NAME}`
+}
+
+/**
  * Build the `express-session` options once a Redis client is available.
  * @param client - A connected (or connecting-but-queuing) node-redis client.
  * @returns Options for `express-session`'s `session()` factory.
@@ -107,7 +129,10 @@ function buildOAuthSessionOptions(client: Awaited<ReturnType<typeof getRedis>>):
     secret: env.SESSION_SECRET,
     resave: false,
     saveUninitialized: false,
-    name: OAUTH_SESSION_COOKIE_NAME,
+    name: oauthSessionCookieName({
+      COOKIE_SECURE: isCookieSecure(env),
+      COOKIE_DOMAIN: env.COOKIE_DOMAIN,
+    }),
     cookie: {
       maxAge: OAUTH_SESSION_MAX_AGE_MS,
       httpOnly: true,

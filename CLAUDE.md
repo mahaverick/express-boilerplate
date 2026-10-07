@@ -270,17 +270,22 @@ uuid))` on every column,** as `errors-query.service.ts` does: per-column
   scheme and trailing slash included.
 - **Sessions are OAuth-scoped only.** `express-session` runs on `/auth/google`
   and `/auth/google/callback` (5-minute TTL); the rest of the API is stateless.
-- **`oauth.sid` needs `req.secure` when `COOKIE_SECURE` resolves true.**
+- **`oauth.sid` needs `req.secure` when `COOKIE_SECURE` resolves true,**
+  and then carries the prefix the refresh cookie does
+  (`oauthSessionCookieName`: `__Host-oauth.sid`, or `__Secure-oauth.sid`
+  with `COOKIE_DOMAIN`).
   express-session silently skips a `Secure` cookie on a non-HTTPS request, so
   behind TLS termination set `TRUST_PROXY` and forward `X-Forwarded-Proto`.
 - **The refresh cookie's name, path and domain come only from
   `refreshCookieSpec`** (`auth.constants.ts`); don't write them anywhere else.
   A browser silently drops a `__Host-` cookie with a `Domain` or a path other
   than `/`, which looks like a logout. The controller reads the current cookie
-  only through `currentRefreshCookie(env)`. Refresh and logout also read the
-  legacy `refreshToken` cookie (`LEGACY_REFRESH_TOKEN_COOKIE_NAME`); a login,
-  a successful refresh, a Google sign-in or a logout clears it when presented,
-  and a refresh answered 401 clears only the cookie name it read.
+  only through `currentRefreshCookie(env)`. Under `COOKIE_SECURE` the legacy
+  `refreshToken` cookie (`LEGACY_REFRESH_TOKEN_COOKIE_NAME`) is never
+  redeemed: a sibling subdomain can plant it. Logout revokes it, a refresh
+  that carried no current cookie revokes it and answers 401, and a login, a
+  successful refresh, a Google sign-in or a logout clears it when presented;
+  a refresh answered 401 clears only the cookie name it read.
 - **`COOKIE_DOMAIN` goes on the refresh-cookie set, its clear, and the OAuth
   session cookie.** A clear with a different domain leaves the cookie behind.
   After a domain change the browser sends two cookies of one name, oldest

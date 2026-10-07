@@ -68,9 +68,10 @@ export const MAX_NAME_LENGTH = 100
 
 /**
  * The refresh cookie's unprefixed name: the current name without
- * COOKIE_SECURE, and also read with it so a browser holding it keeps its
- * session.
- * @deprecated as the COOKIE_SECURE fallback read, removed in the next major version; plain http keeps this name
+ * COOKIE_SECURE. With it, a cookie of this name is revoked and cleared
+ * (logout, a refresh that carried no current cookie) but never redeemed,
+ * since a sibling subdomain can plant it.
+ * @deprecated as the COOKIE_SECURE revoke-and-clear read, removed in the next major version; plain http keeps this name
  */
 export const LEGACY_REFRESH_TOKEN_COOKIE_NAME = 'refreshToken'
 
@@ -126,7 +127,7 @@ export const GOOGLE_STRATEGY_NAME = 'google'
 /**
  * How long after a refresh token's rotation a replay of it gets a sibling token instead of revoking the session.
  *
- * Accepted trade-off: concurrent tabs stop logging each other out; a token stolen and replayed within the window also gets a sibling.
+ * Accepted trade-off: concurrent tabs stop logging each other out; a token stolen and replayed within the window also gets a sibling, a second chain that lives until SESSION_ABSOLUTE_TTL, its logout or a password change, and that reuse detection never catches.
  */
 export const REFRESH_REUSE_GRACE_MS = 10_000
 
