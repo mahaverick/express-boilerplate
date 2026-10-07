@@ -98,6 +98,35 @@ describe('lifecycle.service', () => {
       await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(1))
     })
 
+    it('exits 1 when a fault arrives after SIGTERM began shutdown', async () => {
+      const release: { finish?: () => void } = {}
+      const shutdown = vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            release.finish = resolve
+          })
+      )
+      const exit = vi.fn()
+      const handler = createShutdownHandler(shutdown, 60_000)
+      const faults = createProcessFaultHandler(
+        () => Promise.resolve(),
+        (code) => {
+          handler(exit, code)
+        }
+      )
+
+      faults.onSignal()
+      await faults.onFault('Uncaught exception', new Error('crash during drain'))
+      release.finish?.()
+
+      await vi.waitFor(() => {
+        expect(exit).toHaveBeenCalled()
+      })
+      expect(shutdown).toHaveBeenCalledTimes(1)
+      expect(exit).toHaveBeenCalledTimes(1)
+      expect(exit).toHaveBeenCalledWith(1)
+    })
+
     it('exits 1 when shutdown rejects', async () => {
       const exit = vi.fn()
       createShutdownHandler(() => Promise.reject(new Error('close failed')), 25_000)(exit)
