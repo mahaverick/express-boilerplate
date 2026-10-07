@@ -110,10 +110,11 @@ async function revokeInvitationsSentIn(
 /**
  * Revoke the pending invitations a staff member sent in customer tenants on
  * their platform role (tenants where they hold no membership), in the
- * caller's transaction, each audited in its own tenant. Called when their
- * platform membership is removed or lowered.
+ * caller's transaction, each audited in its own tenant with `access:
+ * 'platform'`: the actor reaches those tenants through platform authority,
+ * not membership. Called when their platform membership is removed or
+ * lowered.
  * @param actor - The signed-in user whose change triggers the revoke.
- * @param access - How the actor reached the platform tenant.
  * @param inviterId - The staff member whose invitations go.
  * @param roles - Only offers of these roles; every offer when absent.
  * @param tx - The change's transaction.
@@ -121,7 +122,6 @@ async function revokeInvitationsSentIn(
  */
 async function revokeInvitationsSentOnPlatformAccess(
   actor: Actor,
-  access: TenantAccess,
   inviterId: string,
   roles: readonly MembershipRole[] | undefined,
   tx: DbTransaction
@@ -131,7 +131,7 @@ async function revokeInvitationsSentOnPlatformAccess(
     roles === undefined ? {} : { roles },
     tx
   )
-  await auditRevokedInvitations(actor, access, revoked, tx)
+  await auditRevokedInvitations(actor, 'platform', revoked, tx)
 }
 
 /**
@@ -332,13 +332,7 @@ export async function changeRole(
     if (options.isPlatformTenant === true) {
       // Elsewhere the member now acts with the role platform access derives.
       const ungrantableElsewhere = rolesUngrantableBy(platformAccessRole(role))
-      await revokeInvitationsSentOnPlatformAccess(
-        actor,
-        access,
-        targetUserId,
-        ungrantableElsewhere,
-        tx
-      )
+      await revokeInvitationsSentOnPlatformAccess(actor, targetUserId, ungrantableElsewhere, tx)
     }
     await record(
       {
@@ -400,7 +394,7 @@ export async function removeMember(
     if (!wasDeleted) throw new HttpError('Member not found', 404)
     await revokeInvitationsSentIn(actor, access, tenantId, targetUserId, undefined, tx)
     if (options.isPlatformTenant === true) {
-      await revokeInvitationsSentOnPlatformAccess(actor, access, targetUserId, undefined, tx)
+      await revokeInvitationsSentOnPlatformAccess(actor, targetUserId, undefined, tx)
     }
     await record(
       {

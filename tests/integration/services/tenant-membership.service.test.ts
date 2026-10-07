@@ -42,6 +42,16 @@ async function revokedAuditRows(): Promise<
 }
 
 /**
+ * The access mode of each `invitation.revoked` audit row, by target id.
+ * @returns One mode per entry.
+ */
+async function revokedAuditAccess(): Promise<string[]> {
+  const rows = await sql<{ access: string }[]>`
+    select access from audit_logs where action = 'invitation.revoked' order by target_id`
+  return rows.map((row) => row.access)
+}
+
+/**
  * Whether an invitation is still pending (neither accepted nor revoked).
  * @param id - The invitation.
  * @returns True while it is pending.
@@ -289,6 +299,7 @@ describe('tenant-membership.service', () => {
     expect(await revokedAuditRows()).toEqual([
       { targetId: viaPlatform, actorUserId: staffOwner.id, tenantId: customer.id },
     ])
+    expect(await revokedAuditAccess()).toEqual(['platform'])
   })
 
   it('revokes on a staff demotion only the platform-authority offers the new role cannot grant', async () => {
@@ -324,6 +335,7 @@ describe('tenant-membership.service', () => {
         .toSorted((a, b) => a.localeCompare(b))
         .map((targetId) => ({ targetId, actorUserId: staffOwner.id, tenantId: customer.id }))
     )
+    expect(await revokedAuditAccess()).toEqual(['platform', 'platform'])
   })
 
   it('answers 404 Tenant not found to an actor who is not a member, and leaves the target alone', async () => {
