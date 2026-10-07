@@ -170,6 +170,21 @@ describe('the platform tenant member routes', () => {
     expect(fresh.status).toBe(202)
   })
 
+  it('lets a staff owner with a stale sign-in revoke a pending invitation, since it only removes a grant', async () => {
+    const owner = await createTrackedStaff('owner')
+    const created = await invite(recentAuthTokenFor(owner.user), 'platform', 'viewer')
+    expect(created.status).toBe(202)
+    const [pending] = await sql<{ id: string }[]>`
+      select i.id from tenant_invitations i join tenants t on t.id = i.tenant_id
+      where t.is_platform and i.accepted_at is null and i.revoked_at is null
+      order by i.created_at desc, i.id desc limit 1`
+
+    const revoked = await request(app)
+      .delete(`/api/v1/tenants/platform/invitations/${pending?.id ?? ''}`)
+      .set('Authorization', `Bearer ${staleAuthTokenFor(owner.user)}`)
+    expect(revoked.status).toBe(200)
+  })
+
   it('leave customer tenants as they were: no step-up, and an owner still cannot demote another owner', async () => {
     const customer = await createTrackedUser()
     const coOwner = await createTrackedUser()

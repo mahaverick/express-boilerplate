@@ -34,6 +34,7 @@ import {
  * every invitation and every resend also need a recent sign-in
  * (`requireRecentAuthOnPlatformTenant`): every platform role, viewer included,
  * reads every user, tenant and address.
+ * A revoke needs no recent sign-in: it only removes a pending grant.
  * @returns A router mounted at `/api/v1/tenants` by `index.routes.ts`, every route behind `requireAuth`.
  */
 export function createTenantRouter(): Router {

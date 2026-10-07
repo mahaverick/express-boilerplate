@@ -375,7 +375,8 @@ uuid))` on every column,** as `errors-query.service.ts` does: per-column
   owners only (`countActiveOwners`); and a role change, a removal, a resend,
   or an invitation of any role needs step-up
   (`requireRecentAuthOnPlatformTenant`): every platform role reads every user,
-  tenant and address. Keep these to the platform tenant:
+  tenant and address. A revoke needs no recent sign-in: it only removes a
+  pending grant. Keep these to the platform tenant:
   on a customer tenant an owner acts only on their own ownership.
 - **A tenant with no active owner is the one place an admin grants owner.**
   `POST /platform/tenants/:id/owner-invitation` (platform admin, step-up, a
