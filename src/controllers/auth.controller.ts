@@ -377,9 +377,10 @@ class AuthController extends BaseController {
    * `POST /auth/login`: log in with an email and password. See
    * auth.service.ts for why every failure is one identical, equally-costly 401.
    * A refresh cookie the browser still presented has its session revoked
-   * once the new one is issued.
+   * once the new one is issued. `no-store`, as every token response (RFC 6749 §5.1).
    */
   login = this.handle(async (request, response) => {
+    response.set('Cache-Control', 'no-store')
     const input = parseBody(loginSchema, request.body)
     const session = await authService.login(input)
     await revokePresentedSessions(request, { emitSignedOut: false })
@@ -428,8 +429,10 @@ class AuthController extends BaseController {
    * The limiter's 429 and a 5xx never clear. Under COOKIE_SECURE a request
    * carrying only the legacy `refreshToken` cookie answers 401 after that
    * cookie's session is revoked and the cookie cleared: it is never redeemed.
+   * `no-store`, as every token response (RFC 6749 §5.1).
    */
   refresh = this.handle(async (request, response) => {
+    response.set('Cache-Control', 'no-store')
     const rawToken = readRefreshTokenCookie(request)
     if (!rawToken) {
       await revokeUnredeemedLegacyCookie(request, response)

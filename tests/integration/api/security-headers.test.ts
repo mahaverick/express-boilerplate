@@ -11,12 +11,22 @@
 import { randomUUID } from 'node:crypto'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { closeNotificationSubscriber } from '@/services/notification-emitter.service'
+import { getRedis, redisKey } from '@/services/redis.service'
 import { signAccessToken } from '@/services/session.service'
+import { truncateAuditLogs } from '../../helpers/audit-log'
+import {
+  createTrackedStaff,
+  createTrackedUser,
+  deleteTrackedUsers,
+  TEST_PASSWORD,
+  tokenFor,
+} from '../../helpers/platform-users'
+import { testRefreshCookie } from '../../helpers/refresh-cookie'
 import { request } from '../../helpers/request'
 
 const app = createApp()
@@ -134,6 +144,8 @@ describe('security headers on a live SSE stream', () => {
             expect(response.statusCode).toBe(200)
             expect(response.headers['content-type']).toMatch(/^text\/event-stream/)
             expectSecurityHeaders(response.headers as Record<string, string | undefined>)
+            // The stream's own header wins over the no-store requireAuth set before it.
+            expect(response.headers['cache-control']).toBe('no-cache')
             resolve()
           } catch (error: unknown) {
             reject(error instanceof Error ? error : new Error(String(error)))
@@ -147,5 +159,115 @@ describe('security headers on a live SSE stream', () => {
         // Expected once destroy() above fires on an open connection.
       })
     })
+  })
+})
+
+/**
+ * Every authenticated response, and the two that carry an access token in
+ * their body, are `no-store`: a revalidating policy (`no-cache`, `private`)
+ * still keeps the body in the browser's disk cache, readable after sign-out.
+ * Routes with their own policy keep it.
+ */
+describe('Cache-Control', () => {
+  afterEach(async () => {
+    await truncateAuditLogs()
+    await deleteTrackedUsers()
+  })
+
+  it.each([
+    { description: 'GET /profile', path: '/api/v1/profile' },
+    { description: 'GET /tenants', path: '/api/v1/tenants' },
+    { description: 'GET /notifications', path: '/api/v1/notifications' },
+  ])('is no-store on an authenticated $description', async ({ path }) => {
+    const user = await createTrackedUser()
+
+    const response = await request(app)
+      .get(path)
+      .set('Authorization', `Bearer ${tokenFor(user)}`)
+
+    expect(response.status).toBe(200)
+    expect(response.headers['cache-control']).toBe('no-store')
+  })
+
+  it('is no-store on the staff user directory', async () => {
+    const { token } = await createTrackedStaff('viewer')
+
+    const response = await request(app)
+      .get('/api/v1/platform/users')
+      .set('Authorization', `Bearer ${token}`)
+
+    expect(response.status).toBe(200)
+    expect(response.headers['cache-control']).toBe('no-store')
+  })
+
+  it('is no-store on a refused authenticated request', async () => {
+    const response = await request(app)
+      .get('/api/v1/profile')
+      .set('Authorization', 'Bearer not-a-token')
+
+    expect(response.status).toBe(401)
+    expect(response.headers['cache-control']).toBe('no-store')
+  })
+
+  it('is no-store on the login and refresh responses that carry an access token', async () => {
+    const user = await createTrackedUser({ hasPassword: true })
+
+    const loggedIn = await request(app)
+      .post('/api/v1/auth/login')
+      .send({ email: user.email, password: TEST_PASSWORD })
+    expect(loggedIn.status).toBe(200)
+    expect(loggedIn.headers['cache-control']).toBe('no-store')
+
+    const cookieName = testRefreshCookie().name
+    const cookie = (loggedIn.headers['set-cookie'] as string[] | undefined)
+      ?.find((line) => line.startsWith(`${cookieName}=`))
+      ?.split(';', 1)[0]
+    expect(cookie).toBeDefined()
+    const refreshed = await request(app)
+      .post('/api/v1/auth/refresh')
+      .set('Cookie', cookie as string)
+    expect(refreshed.status).toBe(200)
+    expect(refreshed.headers['cache-control']).toBe('no-store')
+  })
+
+  it('keeps an authenticated GET conditional: a matching If-None-Match still answers 304', async () => {
+    const user = await createTrackedUser()
+    const token = tokenFor(user)
+    const first = await request(app).get('/api/v1/profile').set('Authorization', `Bearer ${token}`)
+    const etag = first.headers.etag
+    expect(etag).toBeDefined()
+
+    const second = await request(app)
+      .get('/api/v1/profile')
+      .set('Authorization', `Bearer ${token}`)
+      .set('If-None-Match', etag as string)
+
+    expect(second.status).toBe(304)
+    expect(second.headers['cache-control']).toBe('no-store')
+  })
+
+  it('leaves the public maintenance status at public, max-age=5', async () => {
+    // Other files in this worker poll the route under the same IP; start its per-IP budget afresh.
+    const client = await getRedis()
+    const keys: string[] = []
+    const batches = client.scanIterator({ MATCH: `${redisKey('rl', 'maintenance-status')}:*` })
+    for await (const batch of batches) keys.push(...batch)
+    if (keys.length > 0) await client.del(keys)
+
+    const response = await request(app).get('/api/v1/status/maintenance')
+
+    expect(response.status).toBe(200)
+    expect(response.headers['cache-control']).toBe('public, max-age=5')
+  })
+
+  it('leaves the flag read at no-store', async () => {
+    const { token } = await createTrackedStaff('viewer')
+
+    const response = await request(app)
+      .get('/api/v1/platform/me/flags')
+      .set('Authorization', `Bearer ${token}`)
+
+    expect(response.status).toBe(200)
+    expect(response.headers['cache-control']).toBe('no-store')
   })
 })
