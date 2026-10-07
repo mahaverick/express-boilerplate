@@ -228,37 +228,36 @@ export function requireMembership(): (
 const recentAuth = requireRecentAuth()
 
 /**
- * Step-up on the platform tenant only: a request that changes who holds
- * staff power (a member's role, a removal, an invitation offering admin or
- * owner, a resend) needs a recent sign-in there, as the `/platform` staff
- * actions do. Customer tenants pass straight through. Must run after
- * `resolveTenant`, which sets `request.principal`; without a principal it
- * answers 500, failing closed, since it cannot tell which tenant it guards.
- * @param isApplicable - Narrows the check to some requests on the platform tenant (e.g. by the offered role); all of them by default.
- * @returns An Express middleware.
+ * The middleware `requireRecentAuthOnPlatformTenant` returns — see its JSDoc.
+ * @param request - The incoming request, after `resolveTenant`.
+ * @param response - The response, passed to the step-up check.
+ * @param next - Continues the chain, or forwards the 401 or 500.
  */
-export function requireRecentAuthOnPlatformTenant(
-  isApplicable: (request: Request) => boolean = () => true
-): (request: Request, response: Response, next: NextFunction) => void {
-  return (request, response, next) => {
-    if (request.principal === undefined) {
-      next(new HttpError('Tenant step-up check is misconfigured', 500))
-      return
-    }
-    if (!request.principal.isPlatformTenant || !isApplicable(request)) {
-      next()
-      return
-    }
-    recentAuth(request, response, next)
+function stepUpOnPlatformTenant(request: Request, response: Response, next: NextFunction): void {
+  if (request.principal === undefined) {
+    next(new HttpError('Tenant step-up check is misconfigured', 500))
+    return
   }
+  if (!request.principal.isPlatformTenant) {
+    next()
+    return
+  }
+  recentAuth(request, response, next)
 }
 
 /**
- * Whether an invitation request offers a role with staff power on the platform tenant.
- * @param request - The invitation request; its body is validated later by the handler.
- * @returns True for an offered `admin` or `owner`.
+ * Step-up on the platform tenant only: a request that changes who holds
+ * staff power (a member's role, a removal, an invitation of any role, a
+ * resend) needs a recent sign-in there, as the `/platform` staff actions
+ * do. Customer tenants pass straight through. Must run after
+ * `resolveTenant`, which sets `request.principal`; without a principal it
+ * answers 500, failing closed, since it cannot tell which tenant it guards.
+ * @returns An Express middleware.
  */
-export function isOfferingAdminOrOwner(request: Request): boolean {
-  const role: unknown = (request.body as { role?: unknown } | undefined)?.role
-  return role === 'admin' || role === 'owner'
+export function requireRecentAuthOnPlatformTenant(): (
+  request: Request,
+  response: Response,
+  next: NextFunction
+) => void {
+  return stepUpOnPlatformTenant
 }

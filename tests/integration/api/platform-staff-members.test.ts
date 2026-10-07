@@ -124,7 +124,7 @@ describe('the platform tenant member routes', () => {
     }
   })
 
-  it('require a recent sign-in for a role change, a removal, an admin or owner invitation and a resend', async () => {
+  it('require a recent sign-in for a role change, a removal, every invitation and a resend', async () => {
     const owner = await createTrackedStaff('owner')
     const other = await createTrackedStaff('admin')
     const stale = staleAuthTokenFor(owner.user)
@@ -142,6 +142,9 @@ describe('the platform tenant member routes', () => {
       await removeMember(stale, 'platform', other.user.id),
       await invite(stale, 'platform', 'admin'),
       await invite(stale, 'platform', 'owner'),
+      // Every platform role reads every user, tenant and address, so a viewer invitation mints staff too.
+      await invite(stale, 'platform', 'viewer'),
+      await invite(stale, 'platform', 'manager'),
       // A resend re-issues whatever role was offered, so it always needs step-up on the platform tenant.
       await request(app)
         .post(`/api/v1/tenants/platform/invitations/${pendingId}/resend`)
@@ -152,11 +155,19 @@ describe('the platform tenant member routes', () => {
       expect(response.status).toBe(401)
       expect((response.body as { code?: string }).code).toBe(REAUTH_REQUIRED_CODE)
     }
-    // A viewer invitation grants no staff power, so no step-up.
-    const response3 = await invite(stale, 'platform', 'viewer')
-    expect(response3.status).toBe(202)
     const response4 = await invite(recentAuthTokenFor(owner.user), 'platform', 'admin')
     expect(response4.status).toBe(202)
+  })
+
+  it('refuses a staff admin with a stale sign-in inviting a platform viewer 401, and admits a fresh one 202', async () => {
+    const admin = await createTrackedStaff('admin')
+
+    const stale = await invite(staleAuthTokenFor(admin.user), 'platform', 'viewer')
+    expect(stale.status).toBe(401)
+    expect((stale.body as { code?: string }).code).toBe(REAUTH_REQUIRED_CODE)
+
+    const fresh = await invite(recentAuthTokenFor(admin.user), 'platform', 'viewer')
+    expect(fresh.status).toBe(202)
   })
 
   it('leave customer tenants as they were: no step-up, and an owner still cannot demote another owner', async () => {

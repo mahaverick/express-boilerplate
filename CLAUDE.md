@@ -373,8 +373,9 @@ uuid))` on every column,** as `errors-query.service.ts` does: per-column
   change. There an owner may demote or remove another owner
   (`canPlatformActorModifyTarget`); the last-owner guard counts active
   owners only (`countActiveOwners`); and a role change, a removal, a resend,
-  or an invitation offering admin or owner needs step-up
-  (`requireRecentAuthOnPlatformTenant`). Keep these to the platform tenant:
+  or an invitation of any role needs step-up
+  (`requireRecentAuthOnPlatformTenant`): every platform role reads every user,
+  tenant and address. Keep these to the platform tenant:
   on a customer tenant an owner acts only on their own ownership.
 - **A tenant with no active owner is the one place an admin grants owner.**
   `POST /platform/tenants/:id/owner-invitation` (platform admin, step-up, a

@@ -116,7 +116,8 @@ describe('links once APEX_URL is set', () => {
     })
     createdUserIds.push(user.id)
     await makeStaff(user.id, 'owner')
-    return signAccessToken(user, randomUUID())
+    // Recent: every platform-tenant invitation needs a recent sign-in.
+    return signAccessToken(user, randomUUID(), new Date())
   }
 
   /**

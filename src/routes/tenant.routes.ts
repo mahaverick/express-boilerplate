@@ -20,7 +20,6 @@ import { requireJsonContentType } from '@/middlewares/content-type.middleware'
 import { requireFlag } from '@/middlewares/flag.middleware'
 import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
 import {
-  isOfferingAdminOrOwner,
   requireMembership,
   requireRecentAuthOnPlatformTenant,
   requireRole,
@@ -32,8 +31,9 @@ import {
  * admins pass the owner/admin routes (the audit log included) and staff
  * viewers do not. The onboarding writes add `requireMembership`, so no
  * platform role acts on them. On the platform tenant, member role changes, removals,
- * admin/owner invitations and every resend also need a recent sign-in
- * (`requireRecentAuthOnPlatformTenant`).
+ * every invitation and every resend also need a recent sign-in
+ * (`requireRecentAuthOnPlatformTenant`): every platform role, viewer included,
+ * reads every user, tenant and address.
  * @returns A router mounted at `/api/v1/tenants` by `index.routes.ts`, every route behind `requireAuth`.
  */
 export function createTenantRouter(): Router {
@@ -94,7 +94,7 @@ export function createTenantRouter(): Router {
     inviteRateLimiter,
     resolveTenant(),
     requireRole('owner', 'admin'),
-    requireRecentAuthOnPlatformTenant(isOfferingAdminOrOwner),
+    requireRecentAuthOnPlatformTenant(),
     tenantController.inviteMember
   )
   router.post(
