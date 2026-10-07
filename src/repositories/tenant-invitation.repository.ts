@@ -3,7 +3,7 @@
  * the table has no `deletedAt`. Lookups by token join `tenants` and exclude a
  * soft-deleted tenant.
  */
-import { and, desc, eq, gt, inArray, isNull, notExists, sql } from 'drizzle-orm'
+import { and, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm'
 import type { MembershipRole, TenantLifecycleState } from '@/constants/tenant.constants'
 import {
   tenantInvitationModel,
@@ -425,48 +425,32 @@ export class TenantInvitationRepository {
   }
 
   /**
-   * Revoke the pending invitations one user sent, expired or not, in the
-   * customer tenants where they hold no membership: those were sent on their
-   * platform role, so they go when that role is lost or lowered. An
-   * invitation does not record how its sender reached the tenant; no
-   * membership there is the proxy. `roles` narrows the revoke as in
-   * `revokePendingByInviterInTenant`; an empty list revokes nothing.
+   * The customer tenants where one user has pending invitations (expired or
+   * not), each with the role the user holds there as a member, if any. The
+   * platform tenant is left out: it is members-only, and its offers are the
+   * in-tenant revoke's.
    * @param inviterId - The sender.
-   * @param options - `roles` limits the revoke to offers of those roles; all roles when absent.
-   * @param options.roles - The offered roles to revoke.
    * @param executor - Where to run the query; the caller's transaction.
-   * @returns The revoked rows, for their audit entries in each row's tenant.
+   * @returns One row per tenant; `memberRole` is undefined where the sender is not a member.
    */
-  async revokePendingByInviterOnPlatformAccess(
+  async findCustomerTenantsWithPendingFrom(
     inviterId: string,
-    options: { roles?: readonly MembershipRole[] },
     executor: DbExecutor = db
-  ): Promise<TenantInvitation[]> {
-    if (options.roles?.length === 0) return []
+  ): Promise<{ tenantId: string; memberRole: MembershipRole | undefined }[]> {
     const membership = userMembershipModel
-    // Correlated on the invitation's tenant: the sender is not a member there.
-    const senderMembership = executor
-      .select({ one: sql`1` })
-      .from(membership)
-      .where(and(eq(membership.userId, inviterId), eq(membership.tenantId, invitation.tenantId)))
-    // The platform tenant is members-only; its offers are the in-tenant revoke's.
-    const platformTenant = executor
-      .select({ one: sql`1` })
-      .from(tenantModel)
-      .where(and(eq(tenantModel.id, invitation.tenantId), eq(tenantModel.isPlatform, true)))
-    return executor
-      .update(invitation)
-      .set({ revokedAt: sql`now()`, updatedAt: sql`now()` })
-      .where(
-        and(
-          eq(invitation.invitedBy, inviterId),
-          options.roles === undefined ? undefined : inArray(invitation.role, [...options.roles]),
-          pendingCondition(),
-          notExists(senderMembership),
-          notExists(platformTenant)
-        )
+    const rows = await executor
+      .selectDistinct({ tenantId: invitation.tenantId, memberRole: membership.role })
+      .from(invitation)
+      .innerJoin(
+        tenantModel,
+        and(eq(tenantModel.id, invitation.tenantId), eq(tenantModel.isPlatform, false))
       )
-      .returning()
+      .leftJoin(
+        membership,
+        and(eq(membership.tenantId, invitation.tenantId), eq(membership.userId, inviterId))
+      )
+      .where(and(eq(invitation.invitedBy, inviterId), pendingCondition()))
+    return rows.map((row) => ({ tenantId: row.tenantId, memberRole: row.memberRole ?? undefined }))
   }
 
   /**

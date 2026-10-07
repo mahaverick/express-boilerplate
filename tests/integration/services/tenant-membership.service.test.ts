@@ -338,6 +338,57 @@ describe('tenant-membership.service', () => {
     expect(await revokedAuditAccess()).toEqual(['platform', 'platform'])
   })
 
+  it('revokes on a staff removal the platform-era offers a later membership cannot grant', async () => {
+    const owner = await createUser()
+    const staffOwner = await createUser()
+    const removed = await createUser()
+    const platform = await platformTenant()
+    await makeStaff(staffOwner.id, 'owner')
+    await makeStaff(removed.id, 'owner')
+    const customer = await createTenant(owner)
+    const adminOffer = await pendingFrom(customer, removed, 'admin')
+    const viewerOffer = await pendingFrom(customer, removed, 'viewer')
+    await userMembershipRepository.create({
+      userId: removed.id,
+      tenantId: customer.id,
+      role: 'admin',
+    })
+
+    await removeMember({ userId: staffOwner.id }, platform.id, removed.id, {
+      isPlatformTenant: true,
+    })
+
+    expect(await isPending(adminOffer)).toBe(false)
+    expect(await isPending(viewerOffer)).toBe(true)
+    expect(await revokedAuditRows()).toEqual([
+      { targetId: adminOffer, actorUserId: staffOwner.id, tenantId: customer.id },
+    ])
+    expect(await revokedAuditAccess()).toEqual(['platform'])
+  })
+
+  it('keeps on a staff removal an offer the member’s role in that tenant can grant', async () => {
+    const owner = await createUser()
+    const staffOwner = await createUser()
+    const removed = await createUser()
+    const platform = await platformTenant()
+    await makeStaff(staffOwner.id, 'owner')
+    await makeStaff(removed.id, 'owner')
+    const customer = await createTenant(owner)
+    const adminOffer = await pendingFrom(customer, removed, 'admin')
+    await userMembershipRepository.create({
+      userId: removed.id,
+      tenantId: customer.id,
+      role: 'owner',
+    })
+
+    await removeMember({ userId: staffOwner.id }, platform.id, removed.id, {
+      isPlatformTenant: true,
+    })
+
+    expect(await isPending(adminOffer)).toBe(true)
+    expect(await revokedAuditRows()).toEqual([])
+  })
+
   it('answers 404 Tenant not found to an actor who is not a member, and leaves the target alone', async () => {
     const owner = await createUser()
     const outsider = await createUser()

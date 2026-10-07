@@ -108,30 +108,40 @@ async function revokeInvitationsSentIn(
 }
 
 /**
- * Revoke the pending invitations a staff member sent in customer tenants on
- * their platform role (tenants where they hold no membership), in the
- * caller's transaction, each audited in its own tenant with `access:
- * 'platform'`: the actor reaches those tenants through platform authority,
- * not membership. Called when their platform membership is removed or
- * lowered.
+ * After a staff member's platform role is removed or lowered, revoke in
+ * every customer tenant the pending invitations they sent that their
+ * remaining authority there cannot grant, in the caller's transaction. Their
+ * authority in a tenant is their membership role when they are a member
+ * (membership wins, as in `lockTenantAccess`), otherwise the role their new
+ * platform role gives through platform access, or none after a removal; with
+ * none, every invitation there goes. Each revoke is audited in its own tenant
+ * with `access: 'platform'`: the actor reaches those tenants through
+ * platform authority, not membership.
  * @param actor - The signed-in user whose change triggers the revoke.
- * @param inviterId - The staff member whose invitations go.
- * @param roles - Only offers of these roles; every offer when absent.
+ * @param inviterId - The staff member whose invitations are checked.
+ * @param newPlatformRole - Their platform role after the change; undefined after a removal.
  * @param tx - The change's transaction.
  * @returns Resolves once every invitation is revoked and audited.
  */
-async function revokeInvitationsSentOnPlatformAccess(
+async function revokeInvitationsBeyondAuthorityElsewhere(
   actor: Actor,
   inviterId: string,
-  roles: readonly MembershipRole[] | undefined,
+  newPlatformRole: MembershipRole | undefined,
   tx: DbTransaction
 ): Promise<void> {
-  const revoked = await tenantInvitationRepository.revokePendingByInviterOnPlatformAccess(
-    inviterId,
-    roles === undefined ? {} : { roles },
-    tx
-  )
-  await auditRevokedInvitations(actor, 'platform', revoked, tx)
+  const tenants = await tenantInvitationRepository.findCustomerTenantsWithPendingFrom(inviterId, tx)
+  for (const { tenantId, memberRole } of tenants) {
+    const authority =
+      memberRole ??
+      (newPlatformRole === undefined ? undefined : platformAccessRole(newPlatformRole))
+    const revoked = await tenantInvitationRepository.revokePendingByInviterInTenant(
+      inviterId,
+      tenantId,
+      authority === undefined ? {} : { roles: rolesUngrantableBy(authority) },
+      tx
+    )
+    await auditRevokedInvitations(actor, 'platform', revoked, tx)
+  }
 }
 
 /**
@@ -287,7 +297,8 @@ async function assertOwnerRemainsFor(
  * `resolveTenant` still counts. Atomic against a concurrent role change or
  * removal of an owner. The member's pending invitations here that the new
  * role could not grant are revoked in the same transaction; on the platform
- * tenant, so are those they sent in customer tenants on their platform role.
+ * tenant, so are those they sent in customer tenants that their remaining
+ * authority there (a membership, else the new platform role) cannot grant.
  * @param actor - The signed-in user making the change.
  * @param tenantId - The tenant.
  * @param targetUserId - The member whose role changes.
@@ -330,9 +341,7 @@ export async function changeRole(
     const ungrantable = rolesUngrantableBy(role)
     await revokeInvitationsSentIn(actor, access, tenantId, targetUserId, ungrantable, tx)
     if (options.isPlatformTenant === true) {
-      // Elsewhere the member now acts with the role platform access derives.
-      const ungrantableElsewhere = rolesUngrantableBy(platformAccessRole(role))
-      await revokeInvitationsSentOnPlatformAccess(actor, targetUserId, ungrantableElsewhere, tx)
+      await revokeInvitationsBeyondAuthorityElsewhere(actor, targetUserId, role, tx)
     }
     await record(
       {
@@ -355,7 +364,7 @@ export async function changeRole(
  * removal of an owner. The member's pending invitations in this tenant are
  * revoked in the same transaction, including ones the remover could not
  * revoke directly; on the platform tenant, so are those they sent in
- * customer tenants on their platform role.
+ * customer tenants that a membership there cannot grant.
  * @param actor - The signed-in user removing the member.
  * @param tenantId - The tenant.
  * @param targetUserId - The member to remove.
@@ -394,7 +403,7 @@ export async function removeMember(
     if (!wasDeleted) throw new HttpError('Member not found', 404)
     await revokeInvitationsSentIn(actor, access, tenantId, targetUserId, undefined, tx)
     if (options.isPlatformTenant === true) {
-      await revokeInvitationsSentOnPlatformAccess(actor, targetUserId, undefined, tx)
+      await revokeInvitationsBeyondAuthorityElsewhere(actor, targetUserId, undefined, tx)
     }
     await record(
       {
