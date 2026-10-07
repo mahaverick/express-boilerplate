@@ -106,4 +106,13 @@ describe('requireAllowedOriginWhenPresent', () => {
     })
     expect(run(middleware, { origin: 'null' })).toMatchObject({ statusCode: 403 })
   })
+
+  it('passes an opaque null origin only when the browser marks the request same-origin', async () => {
+    const middleware = await load()
+    expect(run(middleware, { origin: 'null', 'sec-fetch-site': 'same-origin' })).toBeUndefined()
+    expect(run(middleware, { origin: 'null' })).toMatchObject({
+      statusCode: 403,
+      code: 'ORIGIN_NOT_ALLOWED',
+    })
+  })
 })

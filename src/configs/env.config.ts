@@ -296,7 +296,7 @@ const EnvSchema = z.object({
     .string()
     .optional()
     .describe(
-      'Extra browser origins allowed to call this API, comma-separated (e.g. "https://admin.example.com,https://shop.example.com"). WEB_URL is ALWAYS allowed and does not need listing here, and same-origin requests send no Origin header at all. Leave empty for a single-frontend deployment. Never a wildcard: this API sends credentials, and the CORS spec forbids "*" with credentials.'
+      'Extra browser origins allowed to call this API, comma-separated (e.g. "https://admin.example.com,https://shop.example.com"). WEB_URL and APEX_URL are always allowed and need no entry. Browsers send Origin on a same-origin POST, and POST /auth/refresh and /auth/logout refuse a present Origin that is none of WEB_URL, APEX_URL or an entry here unless Sec-Fetch-Site is same-origin, so a frontend served on any other origin must be listed. Leave empty for a single-frontend deployment. Never a wildcard: this API sends credentials, and the CORS spec forbids "*" with credentials.'
     ),
 
   /**
