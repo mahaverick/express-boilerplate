@@ -244,6 +244,21 @@ const EnvSchema = z.object({
     ),
 
   /**
+   * A notice, not a login path: it is skipped when Redis is down. No 429 on
+   * register instead, which would tell a caller the address is taken.
+   */
+  REGISTRATION_ATTEMPT_NOTICE_COOLDOWN: z
+    .string()
+    .default('1h')
+    .refine((value) => (parseDurationMs(value) ?? 0) > 0, {
+      message:
+        'REGISTRATION_ATTEMPT_NOTICE_COOLDOWN must be a positive duration string ms() can parse, e.g. "1h" or "3600000".',
+    })
+    .describe(
+      'Shortest gap between two "someone tried to register with your address" notices to one address, as an ms()-parseable duration (e.g. "1h"). Register answers the same 202 either way; an attempt inside the gap mails nothing, so nobody can mail-bomb an account owner through register. Defaults to 1h.'
+    ),
+
+  /**
    * Longer than PASSWORD_RESET_TTL: the recipient of a staff-created account
    * did not ask for the mail. The link is single-use either way.
    */

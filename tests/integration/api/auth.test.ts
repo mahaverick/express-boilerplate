@@ -36,6 +36,7 @@ import {
 import { withMutatedMethod } from '../../helpers/mutate'
 import { testRefreshCookie } from '../../helpers/refresh-cookie'
 import { request } from '../../helpers/request'
+import { settle, waitUntil } from '../../helpers/timing'
 
 const app = createApp()
 const userRepository = new UserRepository()
@@ -165,6 +166,29 @@ async function login(
 ): Promise<{ response: Response; body: ApiEnvelope<LoginBody> }> {
   const response = await request(app).post('/api/v1/auth/login').send({ email, password })
   return { response, body: envelopeOf<LoginBody>(response) }
+}
+
+/**
+ * How many registration-attempt notices were queued to `recipient`: the
+ * first is awaited, then a further one would arrive fire-and-forget,
+ * which has no event to wait for.
+ * @param recipient - The address.
+ * @returns The count of tracked `registration_attempt` messages.
+ */
+async function registrationAttemptNotices(recipient: string): Promise<number> {
+  const count = async (): Promise<number> => {
+    const [row] = await sql<{ count: number }[]>`
+      select count(*)::int as count from email_messages
+      where recipient = ${recipient} and template_key = 'registration_attempt'
+    `
+    return row?.count ?? 0
+  }
+  await waitUntil(count, { message: 'the first registration-attempt notice is queued' })
+  await settle(
+    1000,
+    'a further notice is queued fire-and-forget after the reply; absence has no event'
+  )
+  return count()
 }
 
 describe('POST /api/v1/auth/register and /login', () => {
@@ -363,6 +387,37 @@ describe('POST /api/v1/auth/register and /login', () => {
       // The notice must not carry a verification link: the person registering is not necessarily the person who owns the mailbox.
       const detail = await getMailpitMessage(messages[0]?.ID ?? '')
       expect(detail.Text).not.toContain('/verify-email?token=')
+    })
+
+    it('SEC-abuse-01: repeated registration of a taken address mails its owner at most once per window', async () => {
+      const email = uniqueEmail()
+      await registerUser({ email })
+
+      for (let index = 0; index < 5; index += 1) {
+        const { response } = await registerUser({ email })
+        expect(response.status).toBe(202)
+      }
+
+      expect(await registrationAttemptNotices(email)).toBe(1)
+      await sql`delete from email_messages where recipient = ${email}`
+      await drainMailpit(email)
+    })
+
+    it('still mails the owner of another taken address inside one address’s window', async () => {
+      const first = uniqueEmail()
+      const second = uniqueEmail()
+      await registerUser({ email: first })
+      await registerUser({ email: second })
+
+      await registerUser({ email: first })
+      await registerUser({ email: first })
+      await registerUser({ email: second })
+
+      expect(await registrationAttemptNotices(first)).toBe(1)
+      expect(await registrationAttemptNotices(second)).toBe(1)
+      await sql`delete from email_messages where recipient = any(${[first, second]})`
+      await drainMailpit(first)
+      await drainMailpit(second)
     })
 
     it('does not leak the stored user when the address is taken', async () => {

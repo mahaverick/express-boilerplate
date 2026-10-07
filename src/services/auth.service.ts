@@ -99,12 +99,19 @@ export interface AuthProvidersResult {
 
 /**
  * Tell the owner of an already-registered address that someone tried to
- * register it. The holder may have been soft-deleted since the insert failed;
+ * register it, at most once per `REGISTRATION_ATTEMPT_NOTICE_COOLDOWN` per
+ * address (`didClaimMailCooldown`; skipped when Redis is down, since it is only
+ * a notice). The holder may have been soft-deleted since the insert failed;
  * then the fallback name is used and the job's correlation id is `''`, which
  * is stored as `email_messages.user_id` NULL (and used in logs).
  * @param email - The address that was submitted.
  */
 async function sendRegistrationAttemptMail(email: string): Promise<void> {
+  const cooldownMs = requireDurationMs(getEnv().REGISTRATION_ATTEMPT_NOTICE_COOLDOWN)
+  const canSend = await didClaimMailCooldown('registration-attempt-notice', email, cooldownMs, {
+    whenUnavailable: 'skip',
+  })
+  if (!canSend) return
   const existing = await userRepository.findByEmail(email)
   await addEmailJob(
     {
