@@ -288,7 +288,7 @@ describe('maintenance-mode route classification', () => {
     )
   })
 
-  it('lets exactly the flag exposure writes through in read_only beyond that set', () => {
+  it('lets exactly the flag exposure writes and the invitation preview through in read_only beyond that set', () => {
     const writes = MAINTENANCE_ROUTE_RULES.filter(
       (rule) =>
         rule.method !== 'GET' &&
@@ -298,9 +298,11 @@ describe('maintenance-mode route classification', () => {
     ).map((rule) => `${rule.method} ${rule.path}`)
 
     expect(writes.toSorted(byText)).toEqual(
-      ['POST /api/v1/flags/exposures', 'POST /api/v1/tenants/:slug/flags/exposures'].toSorted(
-        byText
-      )
+      [
+        'POST /api/v1/flags/exposures',
+        'POST /api/v1/tenants/:slug/flags/exposures',
+        'POST /api/v1/invitations/preview',
+      ].toSorted(byText)
     )
   })
 

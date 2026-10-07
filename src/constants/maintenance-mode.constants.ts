@@ -261,7 +261,8 @@ export const MAINTENANCE_ROUTE_RULES: readonly MaintenanceRouteRule[] = [
   // Flag exposure recording: telemetry, on the read-only allowlist.
   readOnlyWrite('POST', '/api/v1/tenants/:slug/flags/exposures'),
   read('/api/v1/tenants/:slug/beta'),
-  write('POST', '/api/v1/invitations/preview'),
+  // Token lookup sent as POST to keep the token out of the URL; it writes nothing.
+  readOnlyWrite('POST', '/api/v1/invitations/preview'),
   write('POST', '/api/v1/invitations/accept'),
   read('/api/v1/flags'),
   readOnlyWrite('POST', '/api/v1/flags/exposures'),
