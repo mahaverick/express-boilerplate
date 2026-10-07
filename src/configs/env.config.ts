@@ -647,6 +647,20 @@ const EnvSchema = z.object({
     ),
 
   /**
+   * Per process, beside the per-user cap: without it enough verified
+   * accounts could hold every connection a proxy in front has.
+   */
+  SSE_MAX_STREAMS_TOTAL: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(100_000)
+    .default(2000)
+    .describe(
+      'Most notification SSE streams this process holds open at once, across all users (1-100000). A request over the cap gets 503 stream_capacity with Retry-After: 30, and the client retries with backoff. Size it under what the proxy in front can hold: each stream through nginx costs it two connections (client and upstream). Defaults to 2000.'
+    ),
+
+  /**
    * SMTP defaults point at the compose Mailpit, so a fresh clone sends mail
    * with no configuration. SMTP_USERNAME and SMTP_PASSWORD stay optional:
    * Mailpit checks neither.

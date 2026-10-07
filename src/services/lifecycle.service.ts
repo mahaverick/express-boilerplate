@@ -53,6 +53,17 @@ export function countStreams(userId: string): number {
 }
 
 /**
+ * How many streams are open in this process, across every user: the count
+ * `SSE_MAX_STREAMS_TOTAL` caps.
+ * @returns The number of registered streams.
+ */
+export function countAllStreams(): number {
+  let total = 0
+  for (const closers of state.streams.values()) total += closers.size
+  return total
+}
+
+/**
  * End every registered stream and empty the registry.
  */
 export function closeAllStreams(): void {

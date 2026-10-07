@@ -72,6 +72,7 @@ const baseEnv: Env = {
   REDIS_KEY_PREFIX: 'express-boilerplate',
   SSE_HEARTBEAT_INTERVAL_MS: 30_000,
   SSE_MAX_STREAMS_PER_USER: 5,
+  SSE_MAX_STREAMS_TOTAL: 2000,
   SMTP_HOST: 'localhost',
   SMTP_PORT: 1025,
   MAIL_FROM: 'no-reply@example.com',

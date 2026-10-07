@@ -24,8 +24,10 @@ import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import {
+  countAllStreams,
   countStreams,
   markShuttingDown,
+  registerStream,
   resetLifecycleForTests,
 } from '@/services/lifecycle.service'
 import {
@@ -1000,6 +1002,31 @@ describe('GET /api/v1/notifications/stream', () => {
       message: 'a closed stream frees its slot under the cap',
       timeout: 2000,
     })
+    const again = openStream({ header: `Bearer ${token}` })
+    const reopened = await again.waitForResponse()
+    expect(reopened.statusCode).toBe(200)
+  })
+
+  it('answers 503 stream_capacity with Retry-After, before any stream opens, at the server-wide cap', async () => {
+    const { user, token } = await createAuthenticatedUser()
+    const total = getEnv().SSE_MAX_STREAMS_TOTAL
+    // Other accounts' streams fill the process: one fake closer each, no sockets needed.
+    const unregister = Array.from({ length: total }, (_, index) =>
+      registerStream(`capacity-filler-${String(index)}`, () => {})
+    )
+    expect(countAllStreams()).toBe(total)
+
+    const refused = openStream({ header: `Bearer ${token}` })
+    const response = await refused.waitForResponse()
+    expect(response.statusCode).toBe(503)
+    expect(response.headers['retry-after']).toBe('30')
+    expect(response.headers['content-type']).not.toContain('text/event-stream')
+    const parsed = JSON.parse(await refused.collectBody()) as { code?: string; message?: string }
+    expect(parsed.code).toBe('stream_capacity')
+    expect(countStreams(user.id)).toBe(0)
+
+    // One slot freed anywhere lets the next stream open.
+    unregister[0]?.()
     const again = openStream({ header: `Bearer ${token}` })
     const reopened = await again.waitForResponse()
     expect(reopened.statusCode).toBe(200)

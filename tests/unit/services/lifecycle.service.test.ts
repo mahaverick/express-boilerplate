@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { getEnv } from '@/configs/env.config'
 import {
   closeAllStreams,
+  countAllStreams,
   countStreams,
   createProcessFaultHandler,
   createShutdownHandler,
@@ -43,6 +44,19 @@ describe('lifecycle.service', () => {
     unregisterFirst()
     expect(countStreams('user-a')).toBe(1)
     expect(countStreams('nobody')).toBe(0)
+  })
+
+  it('counts every open stream across users, and forgets unregistered ones', () => {
+    const first = registerStream('user-a', () => {})
+    registerStream('user-a', () => {})
+    registerStream('user-b', () => {})
+    expect(countAllStreams()).toBe(3)
+
+    first()
+    first()
+    expect(countAllStreams()).toBe(2)
+    closeAllStreams()
+    expect(countAllStreams()).toBe(0)
   })
 
   it('closeAllStreams calls every closer exactly once and empties the registry', () => {

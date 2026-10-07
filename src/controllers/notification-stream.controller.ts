@@ -14,11 +14,17 @@ import { BaseController } from '@/controllers/base.controller'
 import { authenticatedUserId } from '@/controllers/helpers.controller'
 import type { Notification } from '@/database/models/notification.model'
 import { HttpError } from '@/errors/http-error'
-import { countStreams, isShuttingDown, registerStream } from '@/services/lifecycle.service'
+import {
+  countAllStreams,
+  countStreams,
+  isShuttingDown,
+  registerStream,
+} from '@/services/lifecycle.service'
 import { logger } from '@/services/logger.service'
 import { offNotification, onNotification } from '@/services/notification-emitter.service'
 import { fetchMissedNotifications } from '@/services/notification.service'
 import { isSessionDenied } from '@/services/session-denylist.service'
+import { errorResponse } from '@/utilities/response.utilities'
 
 /**
  * The SSE `retry:` reconnect delay sent once at connect. An `EventSource`
@@ -26,6 +32,11 @@ import { isSessionDenied } from '@/services/session-denylist.service'
  * backoff and ignores it.
  */
 const SSE_RETRY_MS = 3000
+
+/**
+ * The `Retry-After`, in seconds, on a refusal at the server-wide stream cap.
+ */
+const STREAM_CAPACITY_RETRY_AFTER_SECONDS = 30
 
 /**
  * setTimeout's ceiling (2^31-1 ms). A longer delay fires immediately.
@@ -110,6 +121,32 @@ function writeNotificationEvent(response: Response, notification: Notification):
 }
 
 /**
+ * Apply the two stream caps before a stream opens. Over the per-user cap
+ * (`SSE_MAX_STREAMS_PER_USER`) throws 429 `too_many_streams`; at the
+ * process-wide cap (`SSE_MAX_STREAMS_TOTAL`) answers 503 `stream_capacity`
+ * with `Retry-After`, written here rather than thrown: `errorHandler` would
+ * mask a 503's message and log it as a fault.
+ * @param userId - The authenticated caller.
+ * @param response - The response, still unwritten.
+ * @returns True when the 503 was written and no stream may open.
+ * @throws {HttpError} 429 `too_many_streams` over the per-user cap.
+ */
+function didRefuseOverStreamCaps(userId: string, response: Response): boolean {
+  if (countStreams(userId) >= getEnv().SSE_MAX_STREAMS_PER_USER) {
+    throw new HttpError('Too many open notification streams', 429, 'too_many_streams')
+  }
+  if (countAllStreams() < getEnv().SSE_MAX_STREAMS_TOTAL) return false
+  response.setHeader('Retry-After', String(STREAM_CAPACITY_RETRY_AFTER_SECONDS))
+  errorResponse(
+    response,
+    'The server is at its notification stream capacity. Try again shortly.',
+    503,
+    'stream_capacity'
+  )
+  return true
+}
+
+/**
  * The SSE handler for `GET /api/v1/notifications/stream`.
  */
 class NotificationStreamController extends BaseController {
@@ -146,10 +183,8 @@ class NotificationStreamController extends BaseController {
         throw new HttpError('Server is shutting down', 503)
       }
       const userId = authenticatedUserId(request)
-      // No await between this and registerStream, so the count is exact in this process.
-      if (countStreams(userId) >= getEnv().SSE_MAX_STREAMS_PER_USER) {
-        throw new HttpError('Too many open notification streams', 429, 'too_many_streams')
-      }
+      // No await between this and registerStream, so the counts are exact in this process.
+      if (didRefuseOverStreamCaps(userId, response)) return
       const sessionId = requireSessionId(request)
 
       response.writeHead(200, {
