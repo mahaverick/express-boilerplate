@@ -5,6 +5,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { didClaimMailCooldown } from '@/services/mail-cooldown.service'
 import { getRedis } from '@/services/redis.service'
+import { hashRateLimitIdentity } from '@/utilities/rate-limit-key.utilities'
 
 vi.mock('@/services/redis.service', () => ({
   getRedis: vi.fn(),
@@ -67,7 +68,7 @@ describe('didClaimMailCooldown', () => {
     })
 
     const [first, second, third] = set.mock.calls.map((call) => call[0])
-    expect(first).toMatch(/^test:password-reset-notice:[0-9a-f]{32,}$/)
+    expect(first).toBe(`test:password-reset-notice:${hashRateLimitIdentity('owner@example.com')}`)
     expect(second).toBe(first)
     expect(third).toMatch(/^test:registration-attempt-notice:/)
     expect(set.mock.calls.map((call) => call[0]).join(' ')).not.toContain('example.com')

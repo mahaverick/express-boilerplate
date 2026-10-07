@@ -19,6 +19,7 @@ import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { getRedis, redisKey } from '@/services/redis.service'
 import { hashToken } from '@/services/session.service'
+import { hashRateLimitIdentity } from '@/utilities/rate-limit-key.utilities'
 import { testRefreshCookie } from '../../helpers/refresh-cookie'
 import { request } from '../../helpers/request'
 
@@ -528,7 +529,7 @@ describe('POST /api/v1/auth/refresh and /logout', () => {
       for await (const batch of batches) {
         keys.push(...batch)
       }
-      expect(keys.some((key) => key.startsWith(`${redisKey('rl', 'login-account')}:`))).toBe(true)
+      expect(keys).toContain(`${redisKey('rl', 'login-account')}:${hashRateLimitIdentity(email)}`)
       expect(keys.filter((key) => key.includes(email))).toEqual([])
     })
 
