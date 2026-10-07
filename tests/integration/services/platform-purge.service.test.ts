@@ -68,16 +68,21 @@ describe('S7-25: cascade-delete lock order', () => {
     )
 
     const blocker = await blockerClient.reserve()
+    let isBlockerOpen = false
+    const started: Promise<string>[] = []
     try {
       await blocker`begin`
+      isBlockerOpen = true
       await blocker`select id from audit_logs where actor_user_id = ${u.id} for update`
       const [holder] = await blocker<{ pid: number }[]>`select pg_backend_pid() as pid`
       const purge = outcomeOf(purgeUser({ userId: a.id }, u.id, 'S7-25 probe'))
+      started.push(purge)
       expect(await waitForWaiter(holder?.pid ?? 0, purge)).toBe(true)
 
       const roleChange = outcomeOf(
         changeRole({ userId: c.id }, platform.id, v.id, 'editor', { isPlatformTenant: true })
       )
+      started.push(roleChange)
       const isWaiting = await pollUntil(
         async (probe) => {
           const [row] = await probe<{ n: number }[]>`
@@ -92,12 +97,15 @@ describe('S7-25: cascade-delete lock order', () => {
       )
       expect(isWaiting).toBe(true)
       await blocker`commit`
+      isBlockerOpen = false
 
       expect(await Promise.all([purge, roleChange])).toEqual(['ok', 'ok'])
     } finally {
-      // After the commit above this is a no-op; on an early failure it releases the row.
-      await blocker`rollback`
+      // Only on an early failure: it releases the row the purge is queued behind.
+      if (isBlockerOpen) await blocker`rollback`
       blocker.release()
+      // An early failure leaves these running; let them finish before afterAll cleans up.
+      await Promise.allSettled(started)
     }
   })
 })
