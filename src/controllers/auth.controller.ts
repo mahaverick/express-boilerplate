@@ -310,7 +310,8 @@ function clearPresentedRefreshCookie(request: Request, response: Response): void
  * Revoke and clear a legacy `refreshToken` cookie that a refresh carried
  * with no current cookie: under COOKIE_SECURE it is never redeemed, so a
  * planted one signs no one in and a pre-prefix one ends here. Logout's
- * primitive, so it resolves quietly for a dead or forged token.
+ * primitive, so it resolves quietly for a dead or forged token. It is a
+ * security revoke, not the user signing out, so it emits no `user_signed_out`.
  * @param request - The refresh request.
  * @param response - The response to add the clearing Set-Cookie lines to.
  * @returns Resolves once the token's session, if any, is revoked.
@@ -319,7 +320,7 @@ async function revokeUnredeemedLegacyCookie(request: Request, response: Response
   // eslint-disable-next-line sonarjs/deprecation -- the unprefixed name is revoked and cleared, never redeemed
   const legacy = readCookie(request, LEGACY_REFRESH_TOKEN_COOKIE_NAME)
   if (legacy === undefined) return
-  await revokeRefreshToken(legacy)
+  await revokeRefreshToken(legacy, { emitSignedOut: false })
   clearLegacyRefreshCookies(request, response, getEnv())
 }
 

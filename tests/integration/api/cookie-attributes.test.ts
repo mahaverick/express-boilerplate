@@ -27,6 +27,7 @@ import {
 } from '@/services/session.service'
 import { parseDurationMs } from '@/utilities/duration.utilities'
 import { hashPassword } from '@/utilities/password.utilities'
+import { clearOutbox, outboxRowsOf } from '../../helpers/analytics-outbox'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { request } from '../../helpers/request'
 
@@ -40,6 +41,13 @@ import { request } from '../../helpers/request'
 vi.mock('@/configs/env.config', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/configs/env.config')>()
   return { ...actual, getEnv: vi.fn(actual.getEnv) }
+})
+
+const analytics = vi.hoisted(() => ({ isEnabled: false }))
+
+vi.mock('@/configs/analytics.config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/configs/analytics.config')>()
+  return { ...actual, isAnalyticsEnabled: () => analytics.isEnabled }
 })
 
 const realEnv = getEnv()
@@ -85,6 +93,7 @@ const createdIds: string[] = []
 
 afterEach(async () => {
   vi.mocked(getEnv).mockReturnValue(realEnv)
+  analytics.isEnabled = false
   passport.unuse(GOOGLE_STRATEGY_NAME)
   if (createdIds.length === 0) return
   await sql`delete from users where id = any(${createdIds})`
@@ -393,6 +402,24 @@ describe('refresh cookie: the legacy refreshToken name', () => {
       expect(await tokenState(legacy)).toEqual({ isConsumed: false, isRevoked: true })
     }
   )
+
+  it('revokes a legacy-only cookie without a user_signed_out, which is not a sign-out', async () => {
+    analytics.isEnabled = true
+    await clearOutbox()
+    const app = appWith(SECURE_HOST_ONLY)
+    const email = await createVerifiedUser()
+    const legacy = await sessionFor(email)
+
+    const refreshed = await request(app)
+      .post('/api/v1/auth/refresh')
+      .set('X-Forwarded-Proto', 'https')
+      .set('Cookie', `${PLAIN_COOKIE}=${legacy}`)
+
+    expect(refreshed.status).toBe(401)
+    expect(await tokenState(legacy)).toEqual({ isConsumed: false, isRevoked: true })
+    expect(await outboxRowsOf('user_signed_out')).toEqual([])
+    await clearOutbox()
+  })
 
   it('uses the current cookie when a client holds both, and leaves the legacy session alone', async () => {
     const app = appWith(SECURE_HOST_ONLY)
