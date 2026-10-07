@@ -5,8 +5,12 @@
  */
 import type { NextFunction, Request, Response } from 'express'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { getEnv } from '@/configs/env.config'
 import { notificationStreamController } from '@/controllers/notification-stream.controller'
 import { countAllStreams, resetLifecycleForTests } from '@/services/lifecycle.service'
+import { isSessionDenied } from '@/services/session-denylist.service'
+
+vi.mock('@/services/session-denylist.service', () => ({ isSessionDenied: vi.fn() }))
 
 /**
  * Build a fake request and response pair for an authenticated stream call.
@@ -20,8 +24,12 @@ function buildCall(options: { isGone: boolean; isRequestDestroyed?: boolean; exp
   request: Request
   response: Response
   writeHead: ReturnType<typeof vi.fn>
+  emitResponse: (event: string) => void
+  end: ReturnType<typeof vi.fn>
 } {
+  const responseHandlers = new Map<string, (() => void)[]>()
   const writeHead = vi.fn()
+  const end = vi.fn()
   const request = {
     user: { id: 'user-a' },
     sessionId: 'session-a',
@@ -35,18 +43,23 @@ function buildCall(options: { isGone: boolean; isRequestDestroyed?: boolean; exp
     destroyed: options.isGone,
     writableLength: 0,
     writeHead,
-    on: vi.fn(),
+    on: vi.fn((event: string, handler: () => void) => {
+      responseHandlers.set(event, [...(responseHandlers.get(event) ?? []), handler])
+    }),
     flushHeaders: vi.fn(),
     write: vi.fn(),
-    end: vi.fn(function (this: { writableEnded: boolean }) {
-      this.writableEnded = true
-    }),
+    end,
   } as unknown as Response
-  return { request, response, writeHead }
+  const emitResponse = (event: string): void => {
+    const handlers = responseHandlers.get(event) ?? []
+    for (const handler of handlers) handler()
+  }
+  return { request, response, writeHead, emitResponse, end }
 }
 
 describe('notificationStreamController.streamNotifications', () => {
   afterEach(() => {
+    vi.mocked(isSessionDenied).mockReset()
     vi.useRealTimers()
     resetLifecycleForTests()
   })
@@ -89,5 +102,35 @@ describe('notificationStreamController.streamNotifications', () => {
     // No request 'close' is emitted: the close path must unregister by itself.
     await vi.advanceTimersByTimeAsync(1500)
     expect(countAllStreams()).toBe(0)
+  })
+
+  it('tears down when the response closes, though the request closed long before', async () => {
+    vi.useFakeTimers()
+    const { request, response, emitResponse } = buildCall({
+      isGone: false,
+      isRequestDestroyed: true,
+      expiresAt: new Date(Date.now() + 60_000),
+    })
+
+    await notificationStreamController.streamNotifications(request, response, vi.fn())
+    expect(countAllStreams()).toBe(1)
+
+    emitResponse('close')
+    expect(countAllStreams()).toBe(0)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('frees the registry slot when the heartbeat finds the session denied', async () => {
+    vi.useFakeTimers()
+    vi.mocked(isSessionDenied).mockResolvedValue(true)
+    const { request, response, end } = buildCall({ isGone: false })
+
+    await notificationStreamController.streamNotifications(request, response, vi.fn())
+    expect(countAllStreams()).toBe(1)
+
+    await vi.advanceTimersByTimeAsync(getEnv().SSE_HEARTBEAT_INTERVAL_MS)
+    expect(countAllStreams()).toBe(0)
+    expect(end).toHaveBeenCalledTimes(1)
+    expect(vi.getTimerCount()).toBe(0)
   })
 })

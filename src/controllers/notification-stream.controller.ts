@@ -230,9 +230,7 @@ class NotificationStreamController extends BaseController {
         if (response.writableEnded || response.destroyed) return
         void (async () => {
           if (await isSessionDenied(sessionId)) {
-            clearInterval(heartbeat)
-            offNotification(userId, handleNotification)
-            response.end()
+            closeStream()
             return
           }
           // The client may have disconnected during the Redis round trip.
@@ -247,12 +245,14 @@ class NotificationStreamController extends BaseController {
       /**
        * The teardown for every server-initiated close: shutdown (registry),
        * token expiry and a stalled client. Safe to call after the stall path
-       * has destroyed the response. Unregisters itself, so it needs no
-       * request `'close'` to free its registry slot.
+       * has destroyed the response, and to call twice. Also the teardown when
+       * the response closes, so a slot never depends on a close event the
+       * request may have fired before this handler listened.
        */
       const closeStream = (): void => {
         unregisterStream()
         clearInterval(heartbeat)
+        clearTimeout(expiryTimer)
         offNotification(userId, handleNotification)
         if (!response.writableEnded && !response.destroyed) response.end()
       }
@@ -280,12 +280,10 @@ class NotificationStreamController extends BaseController {
       expiryTimer?.unref()
 
       let isClosed = false
-      request.on('close', () => {
+      // The response, not the request: a request whose body was read has already closed.
+      response.on('close', () => {
         isClosed = true
-        unregisterStream()
-        offNotification(userId, handleNotification)
-        clearInterval(heartbeat)
-        clearTimeout(expiryTimer)
+        closeStream()
       })
 
       if (lastEventId) {
