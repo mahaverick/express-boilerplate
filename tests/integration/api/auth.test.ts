@@ -550,6 +550,27 @@ describe('POST /api/v1/auth/register and /login', () => {
       expect(refreshCookie).not.toMatch(/Domain=/i)
     })
 
+    it('ends the session of the refresh cookie a re-login presents, so it no longer refreshes', async () => {
+      const { email } = await registerVerifiedUser()
+      const first = await login(email, VALID_PASSWORD)
+      const oldCookie = findRefreshTokenCookie(first.response)
+      expect(oldCookie).toBeDefined()
+      const oldPair = (oldCookie as string).split(';', 1)[0] as string
+
+      const second = await request(app)
+        .post('/api/v1/auth/login')
+        .set('Cookie', oldPair)
+        .send({ email, password: VALID_PASSWORD })
+      expect(second.status).toBe(200)
+      const newPair = (findRefreshTokenCookie(second) as string).split(';', 1)[0] as string
+      expect(newPair).not.toBe(oldPair)
+
+      const oldRefresh = await request(app).post('/api/v1/auth/refresh').set('Cookie', oldPair)
+      expect(oldRefresh.status).toBe(401)
+      const newRefresh = await request(app).post('/api/v1/auth/refresh').set('Cookie', newPair)
+      expect(newRefresh.status).toBe(200)
+    })
+
     it('gives the SAME error for an unknown email and a wrong password', async () => {
       const email = uniqueEmail()
       await registerUser({ email })

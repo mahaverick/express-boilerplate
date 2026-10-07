@@ -163,6 +163,22 @@ function presentedRefreshTokens(request: Request): string[] {
 }
 
 /**
+ * Revoke the session of every refresh token the request carries, current
+ * and legacy, one at a time (each revoke locks the user row). Logout's
+ * revoke, and also run after a sign-in: a session the browser's cookie
+ * pointed at would otherwise stay refreshable after the new cookie replaces
+ * it, outlive the next logout, and never trip reuse detection. The new
+ * session's token is never among them: it is only in the response.
+ * @param request - The request whose cookies name the sessions.
+ * @returns Resolves once each presented token's session, if any, is revoked.
+ */
+async function revokePresentedSessions(request: Request): Promise<void> {
+  for (const rawToken of presentedRefreshTokens(request)) {
+    await revokeRefreshToken(rawToken)
+  }
+}
+
+/**
  * When the request carried the legacy `refreshToken` cookie, clear it: the
  * host-only form, and the COOKIE_DOMAIN form when one is set. A form that is
  * the current cookie is skipped, so this never clears the cookie being set.
@@ -354,10 +370,13 @@ class AuthController extends BaseController {
   /**
    * `POST /auth/login`: log in with an email and password. See
    * auth.service.ts for why every failure is one identical, equally-costly 401.
+   * A refresh cookie the browser still presented has its session revoked
+   * once the new one is issued.
    */
   login = this.handle(async (request, response) => {
     const input = parseBody(loginSchema, request.body)
     const session = await authService.login(input)
+    await revokePresentedSessions(request)
 
     setRefreshTokenCookie(
       request,
@@ -436,10 +455,7 @@ class AuthController extends BaseController {
    * a caller learn which raw value was actually live.
    */
   logout = this.handle(async (request, response) => {
-    // One at a time: each revoke locks the user row.
-    for (const rawToken of presentedRefreshTokens(request)) {
-      await revokeRefreshToken(rawToken)
-    }
+    await revokePresentedSessions(request)
     clearRefreshTokenCookie(request, response)
     messageResponse(response, 'Logged out.')
   })
@@ -534,6 +550,10 @@ class AuthController extends BaseController {
    * body is an immediately-invoked async function — an async callback passed
    * directly would turn a rejection into an unhandled one.
    *
+   * A refresh cookie the request carried (a Lax one from an earlier Google
+   * sign-in; the cross-site hop withholds a Strict one) has its session
+   * revoked once the new one is issued, as `login` does.
+   *
    * Every failure redirects to `/login?error=...` on the frontend that
    * started the sign-in, never this API's JSON envelope (the browser arrived
    * by a full-page navigation).
@@ -562,6 +582,7 @@ class AuthController extends BaseController {
 
           try {
             const refreshToken = await completeGoogleSignIn(profile)
+            await revokePresentedSessions(request)
             setOAuthRefreshTokenCookie(request, response, refreshToken.raw, refreshToken.expiresAt)
 
             response.redirect(`${frontend}/auth/callback`)

@@ -361,6 +361,30 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
         expect(user.lastLoggedInAt?.getTime()).toBeGreaterThanOrEqual(beforeSignIn - 1000)
       })
 
+      it('revokes the session of a refresh cookie the callback request presents', async () => {
+        const earlier = await userRepository.create({ email: uniqueEmail() })
+        createdIds.push(earlier.id)
+        const presented = await issueRefreshToken(earlier.id, randomUUID())
+        const profile = googleProfile({ emailVerified: true })
+        passport.use(GOOGLE_STRATEGY_NAME, new FakeGoogleSuccessStrategy(profile))
+
+        const response = await request(app)
+          .get('/api/v1/auth/google/callback')
+          .set('Cookie', `${testRefreshCookie().name}=${presented.raw}`)
+
+        expect(response.status).toBe(302)
+        expect(response.headers.location).toBe('http://localhost:5173/auth/callback')
+        const email = profile.emails?.[0]?.value
+        if (!email) throw new Error('test fixture has no email')
+        const user = await userRepository.findByEmail(email)
+        if (user) createdIds.push(user.id)
+        const [row] = await sql<{ live: number }[]>`
+          select count(*)::int as live from user_tokens
+          where session_id = ${presented.sessionId} and revoked_at is null
+        `
+        expect(row?.live).toBe(0)
+      })
+
       it('redirects to the frontend login with an error and sets no cookie when the resolved user is inactive', async () => {
         const profile = googleProfile({ emailVerified: true })
         const email = profile.emails?.[0]?.value
