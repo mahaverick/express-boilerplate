@@ -723,9 +723,12 @@ to `WEB_URL`.
   (`rememberOAuthApp`), and the callback redirects to that frontend
   (`oauthAppOf`, `src/controllers/helpers.controller.ts`).
 
-`APEX_URL` is not in the CORS allow-list (`isAllowedOrigin` grants `WEB_URL`
-and `CORS_ALLOWED_ORIGINS`), so an Apex that calls this API directly from its
-own origin must be listed in `CORS_ALLOWED_ORIGINS`; one that proxies `/api`
+`APEX_URL`'s origin is always granted, beside `WEB_URL` (`isAllowedOrigin`
+grants `WEB_URL`, `APEX_URL` and `CORS_ALLOWED_ORIGINS`), so an Apex served at
+`APEX_URL` that calls this API directly needs no entry. An Apex served on any
+other origin must still be listed in `CORS_ALLOWED_ORIGINS`, or
+`POST /auth/refresh` and `/auth/logout` refuse it 403 (`ORIGIN_NOT_ALLOWED`)
+unless the browser marks the request same-origin; one that proxies `/api`
 through its own host needs no entry. Google calls back to `APP_URL` only, so
 when Google sign-in is on (`GOOGLE_CLIENT_ID`) and the Apex host differs from
 `APP_URL`'s, `COOKIE_DOMAIN` must cover both; boot refuses otherwise
