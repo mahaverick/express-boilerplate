@@ -393,25 +393,6 @@ describe('RATE_LIMITS.forgotPasswordIp', () => {
   })
 })
 
-describe('RATE_LIMITS.forgotPasswordEmail', () => {
-  it('keys on the submitted address alone: a different address is unaffected by the victim’s counter', async () => {
-    const app = buildAppBehind(
-      createRateLimiter(RATE_LIMITS.forgotPasswordEmail, { limit: 2, windowMs: 60_000 })
-    )
-
-    await request(app).post('/endpoint').send({ email: 'victim@example.com' })
-    await request(app).post('/endpoint').send({ email: 'victim@example.com' })
-    const victimBlocked = await request(app).post('/endpoint').send({ email: 'victim@example.com' })
-    expect(victimBlocked.status).toBe(429)
-
-    // A different address, same supertest agent (same client IP) — must be entirely unaffected by victim@example.com's counter, since an attacker who knows only the victim's address must not be able to spend anyone else's budget.
-    const bystander = await request(app)
-      .post('/endpoint')
-      .send({ email: 'someone-else@example.com' })
-    expect(bystander.status).toBe(201)
-  })
-})
-
 describe('RATE_LIMITS.resetPassword', () => {
   it('returns 429 once the limit is exceeded, keyed on IP alone', async () => {
     const app = buildAppBehind(

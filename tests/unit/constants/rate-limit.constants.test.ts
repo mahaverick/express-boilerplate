@@ -2,7 +2,7 @@
  * @file Pins three things a refactor could silently break: (1) every
  * limiter's Redis key prefix (the `name` field — a live counter's key
  * depends on it, so changing one resets production counters on deploy)
- * stays exactly the 30 literal strings, in order; (2) every entry's
+ * stays exactly the 29 literal strings, in order; (2) every entry's
  * `windowMs`, `limit` and `keyBy` kind match today's literal values, so a
  * budget or key-axis drift is caught even though it changes no Redis key;
  * (3) the five key-derivation functions produce byte-identical output
@@ -32,7 +32,6 @@ const EXPECTED_NAMES_IN_ORDER = [
   'resend-verification-ip',
   'resend-verification-email',
   'forgot-password-ip',
-  'forgot-password-email',
   'reset-password',
   'google-oauth',
   'google-oauth-callback',
@@ -95,13 +94,6 @@ const EXPECTED_RATE_LIMITS: {
     windowMs: 3_600_000,
     limit: 5,
     keyBy: 'ip',
-  },
-  {
-    key: 'forgotPasswordEmail',
-    name: 'forgot-password-email',
-    windowMs: 3_600_000,
-    limit: 20,
-    keyBy: 'email',
   },
   { key: 'resetPassword', name: 'reset-password', windowMs: 900_000, limit: 10, keyBy: 'ip' },
   { key: 'googleOAuth', name: 'google-oauth', windowMs: 300_000, limit: 300, keyBy: 'ip' },

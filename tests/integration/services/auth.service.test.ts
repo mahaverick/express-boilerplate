@@ -6,6 +6,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { getEnv } from '@/configs/env.config'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserTokenRepository } from '@/repositories/user-token.repository'
 import { UserRepository } from '@/repositories/user.repository'
@@ -15,6 +16,14 @@ import { logger } from '@/services/logger.service'
 import { prepareResendVerification } from '@/services/verification.service'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { fakeQueryError, LEAKED_PARAM, loggedText } from '../../helpers/query-error'
+import { settle } from '../../helpers/timing'
+
+vi.mock('@/configs/env.config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/configs/env.config')>()
+  return { ...actual, getEnv: vi.fn(actual.getEnv) }
+})
+
+const realEnv = getEnv()
 
 const VALID_PASSWORD = 'correct horse battery staple'
 
@@ -130,5 +139,80 @@ describe('post-reply work never rejects', () => {
       expect.anything()
     )
     expect(loggedText(warnSpy)).not.toContain(LEAKED_PARAM)
+  })
+})
+
+/**
+ * How many password-reset tokens the user has been issued: one per queued reset mail.
+ * @param userId - The user.
+ * @returns The count.
+ */
+async function resetTokenCount(userId: string): Promise<number> {
+  const [row] = await sql<{ count: number }[]>`
+    select count(*)::int as count from user_tokens
+    where user_id = ${userId} and purpose = 'password_reset'
+  `
+  return row?.count ?? 0
+}
+
+/**
+ * Forgot-password answers every request 202 and has no per-address limiter;
+ * one reset mail per address per `PASSWORD_RESET_MAIL_COOLDOWN` bounds the
+ * inbox instead, so nobody can spend the owner's budget.
+ */
+describe('requestPasswordReset mail cooldown', () => {
+  const userRepository = new UserRepository()
+  const createdIds: string[] = []
+
+  afterEach(async () => {
+    vi.mocked(getEnv).mockReturnValue(realEnv)
+    if (createdIds.length === 0) return
+    await sql`delete from users where id = any(${createdIds})`
+    createdIds.length = 0
+  })
+
+  /**
+   * An active account, tracked for cleanup.
+   * @returns The user's id and address.
+   */
+  async function seedActiveUser(): Promise<{ id: string; email: string }> {
+    const user = await userRepository.create({ email: uniqueEmail(), emailVerifiedAt: new Date() })
+    createdIds.push(user.id)
+    return { id: user.id, email: user.email }
+  }
+
+  it('queues one reset mail for twenty requests inside the cooldown', async () => {
+    const { id, email } = await seedActiveUser()
+
+    for (let index = 0; index < 20; index += 1) {
+      await requestPasswordReset(email)
+    }
+
+    expect(await resetTokenCount(id)).toBe(1)
+  })
+
+  it("queues the owner's request once the cooldown has passed", async () => {
+    vi.mocked(getEnv).mockReturnValue({ ...realEnv, PASSWORD_RESET_MAIL_COOLDOWN: '300ms' })
+    const { id, email } = await seedActiveUser()
+    for (let index = 0; index < 20; index += 1) {
+      await requestPasswordReset(email)
+    }
+    expect(await resetTokenCount(id)).toBe(1)
+
+    await settle(400, 'the cooldown key expires on a timer; there is no event to await')
+    await requestPasswordReset(email)
+
+    expect(await resetTokenCount(id)).toBe(2)
+  })
+
+  it('keeps one address in cooldown from holding back another', async () => {
+    const first = await seedActiveUser()
+    const second = await seedActiveUser()
+
+    await requestPasswordReset(first.email)
+    await requestPasswordReset(second.email)
+
+    expect(await resetTokenCount(first.id)).toBe(1)
+    expect(await resetTokenCount(second.id)).toBe(1)
   })
 })

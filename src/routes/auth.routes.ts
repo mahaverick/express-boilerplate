@@ -79,11 +79,10 @@ export function createAuthRouter(): Router {
     createRateLimiter(RATE_LIMITS.resendVerificationEmail),
     verificationController.resendVerification
   )
-  // Per-IP and per-address limiters bound the mail one IP or one victim address can trigger.
+  // Per-IP only: a per-address limit would let anyone deny the owner; the service's mail cooldown bounds one inbox.
   router.post(
     '/forgot-password',
     createRateLimiter(RATE_LIMITS.forgotPasswordIp),
-    createRateLimiter(RATE_LIMITS.forgotPasswordEmail),
     authController.forgotPassword
   )
   router.post(

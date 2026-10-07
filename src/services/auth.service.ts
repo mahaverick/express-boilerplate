@@ -24,6 +24,7 @@ import { record } from '@/services/audit.service'
 import { withTransaction, type DbTransaction } from '@/services/database.service'
 import { emitDomainEvent } from '@/services/domain-events.service'
 import { logger } from '@/services/logger.service'
+import { didClaimMailCooldown } from '@/services/mail-cooldown.service'
 import { assertSignInAllowed } from '@/services/maintenance-mode/maintenance-mode.service'
 import { autoJoinSafely, getPlatformMembership } from '@/services/platform.service'
 import {
@@ -352,15 +353,23 @@ async function sendPasswordResetMailIfRegistered(email: string, app: FrontendApp
 }
 
 /**
- * Mail a reset link if the address has an account. The controller replies
- * BEFORE calling this — the lookup itself would otherwise be a timing
- * oracle — so it must never reject.
+ * Mail a reset link if the address has an account, at most once per
+ * `PASSWORD_RESET_MAIL_COOLDOWN` per address (`didClaimMailCooldown`; when
+ * Redis is down the mail is sent, since the owner must be able to reset).
+ * The claim is taken for any address, registered or not. The controller
+ * replies BEFORE calling this — the lookup itself would otherwise be a
+ * timing oracle — so it must never reject.
  * @param email - The address submitted to `/forgot-password`.
  * @param app - The frontend the reset link opens; the customer app by default.
  * @returns Resolves when the work is done or its failure is logged.
  */
 export async function requestPasswordReset(email: string, app: FrontendApp = 'web'): Promise<void> {
   try {
+    const cooldownMs = requireDurationMs(getEnv().PASSWORD_RESET_MAIL_COOLDOWN)
+    const canSend = await didClaimMailCooldown('password-reset-notice', email, cooldownMs, {
+      whenUnavailable: 'send',
+    })
+    if (!canSend) return
     await sendPasswordResetMailIfRegistered(email, app)
   } catch (error) {
     logger.error('Forgot-password mail failed', { error: redactedForLog(error) })

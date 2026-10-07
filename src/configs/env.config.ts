@@ -229,6 +229,21 @@ const EnvSchema = z.object({
     ),
 
   /**
+   * Replaces a per-address limiter on forgot-password, which anyone who
+   * knows an address could spend to deny its owner their reset mail.
+   */
+  PASSWORD_RESET_MAIL_COOLDOWN: z
+    .string()
+    .default('5m')
+    .refine((value) => (parseDurationMs(value) ?? 0) > 0, {
+      message:
+        'PASSWORD_RESET_MAIL_COOLDOWN must be a positive duration string ms() can parse, e.g. "5m" or "300000".',
+    })
+    .describe(
+      'Shortest gap between two password-reset mails to one address, as an ms()-parseable duration (e.g. "5m"). Forgot-password answers the same 202 to every request; a request inside the gap mails nothing, so an owner\'s own request is at most one gap late and one address gets at most 12 reset mails an hour at the default. Defaults to 5m.'
+    ),
+
+  /**
    * Longer than PASSWORD_RESET_TTL: the recipient of a staff-created account
    * did not ask for the mail. The link is single-use either way.
    */

@@ -54,7 +54,7 @@ export interface RateLimiterSpec {
 }
 
 /**
- * The 30 rate limiters this API defines, by name.
+ * The 29 rate limiters this API defines, by name.
  */
 export type RateLimitName =
   | 'register'
@@ -67,7 +67,6 @@ export type RateLimitName =
   | 'resendVerificationIp'
   | 'resendVerificationEmail'
   | 'forgotPasswordIp'
-  | 'forgotPasswordEmail'
   | 'resetPassword'
   | 'googleOAuth'
   | 'googleOAuthCallback'
@@ -181,7 +180,7 @@ export function flagExposureRateLimitKey(request: Request): string {
 }
 
 /**
- * The 30 rate-limit specs this API enforces, each with the reason for its
+ * The 29 rate-limit specs this API enforces, each with the reason for its
  * window, limit and key. `name` is the live Redis key prefix
  * (`redisKey('rl', name)`): changing one resets that limiter's counters in
  * every deployment, and tests/unit/constants/rate-limit.constants.test.ts
@@ -307,27 +306,17 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
     message: RATE_LIMITED_MESSAGE,
   },
   /**
-   * Same tight/generous pair shape as resend-verification, run in series,
-   * for the identical reason: the tight IP side is what stops an
-   * attacker, since a tight per-address budget would itself be the attack.
+   * The only limiter on forgot-password, keyed on IP alone. There is no
+   * per-address limiter: anyone who knows an address could spend one and
+   * deny its owner their reset mail. One victim's inbox is bounded instead
+   * by a silent per-address mail cooldown (`PASSWORD_RESET_MAIL_COOLDOWN`,
+   * `requestPasswordReset`), behind a reply that never changes.
    */
   forgotPasswordIp: {
     name: 'forgot-password-ip',
     windowMs: 60 * 60 * 1000,
     limit: 5,
     keyBy: 'ip',
-    message: RATE_LIMITED_MESSAGE,
-  },
-  /**
-   * Generous half of the forgotPasswordIp pair: bounds mail-bombing one
-   * victim's inbox without letting anyone who merely knows their address
-   * deny them their own reset mail.
-   */
-  forgotPasswordEmail: {
-    name: 'forgot-password-email',
-    windowMs: 60 * 60 * 1000,
-    limit: 20,
-    keyBy: 'email',
     message: RATE_LIMITED_MESSAGE,
   },
   /**
