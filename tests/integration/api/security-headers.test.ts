@@ -30,7 +30,8 @@ function expectSecurityHeaders(headers: Record<string, string | undefined>): voi
   expect(headers['cross-origin-resource-policy']).toBe('same-site')
   expect(headers['referrer-policy']).toBe('no-referrer')
   expect(headers['x-content-type-options']).toBe('nosniff')
-  expect(headers['strict-transport-security']).toBe('max-age=31536000; includeSubDomains')
+  // HSTS belongs to the TLS-terminating edge, never this API.
+  expect(headers['strict-transport-security']).toBeUndefined()
   expect(headers['x-powered-by']).toBeUndefined()
 }
 
