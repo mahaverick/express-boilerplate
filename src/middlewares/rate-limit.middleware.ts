@@ -84,6 +84,7 @@ export function createRateLimiter(
     ...(keyGenerator && { keyGenerator }),
     skipFailedRequests: spec.counts === 'accepted',
     skipSuccessfulRequests: spec.counts === 'rejected',
+    ...(spec.skip && { skip: spec.skip }),
     handler: (_request: Request, _response: Response, next: NextFunction) => {
       next(new HttpError(spec.message, 429, RATE_LIMITED_CODE))
     },

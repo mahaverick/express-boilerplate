@@ -211,6 +211,17 @@ describe('RATE_LIMITS key stability', () => {
     }
   )
 
+  it('counts only well-formed, refused attempts against loginAccount', () => {
+    const spec = RATE_LIMITS.loginAccount
+    expect(spec.counts).toBe('rejected')
+    const wellFormed = { body: { email: 'owner@example.com', password: 'x' } } as unknown as Request
+    const noPassword = { body: { email: 'owner@example.com' } } as unknown as Request
+    const noBody = {} as unknown as Request
+    expect(spec.skip?.(wellFormed)).toBe(false)
+    expect(spec.skip?.(noPassword)).toBe(true)
+    expect(spec.skip?.(noBody)).toBe(true)
+  })
+
   it('derives the same composite key for login: ip + ":" + normalised email', () => {
     const request = {
       ip: '203.0.113.5',

@@ -6,6 +6,7 @@
  */
 import type { Request } from 'express'
 import { ipKeyGenerator } from 'express-rate-limit'
+import { loginSchema } from '@/validators/auth.validators'
 
 /**
  * One rate limiter's full configuration: window, budget, and how its
@@ -41,6 +42,11 @@ export interface RateLimiterSpec {
    * Absent, every request counts.
    */
   counts?: 'accepted' | 'rejected'
+  /**
+   * A request this returns true for is neither counted nor limited: it
+   * passes to the route, whose own validation answers it.
+   */
+  skip?: (request: Request) => boolean
   /**
    * The message carried in the 429 `HttpError`'s body.
    */
@@ -110,6 +116,18 @@ function submittedEmail(request: Request): string {
  */
 function loginRateLimitKey(request: Request): string {
   return `${ipKeyGenerator(request.ip ?? 'unknown')}:${submittedEmail(request)}`
+}
+
+/**
+ * Whether a login body would fail `loginSchema`, so the route answers it 400
+ * without checking a password. `loginAccount` skips it: a malformed request
+ * costs the sender no bcrypt work, so counting it would let anyone lock an
+ * account out for free.
+ * @param request - The incoming request.
+ * @returns True when the body is not a well-formed login.
+ */
+function isMalformedLogin(request: Request): boolean {
+  return !loginSchema.safeParse(request.body).success
 }
 
 /**
@@ -211,15 +229,20 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
   },
   /**
    * Per-account, keyed on the submitted email alone: bounds distributed
-   * guessing against one account from many IPs. Limit is deliberately
-   * high — locking a victim out still costs an attacker 100 attempts an
-   * hour.
+   * guessing against one account from many IPs. Counts only well-formed
+   * attempts that were refused: a malformed body (`isMalformedLogin`) and
+   * the owner's own successful sign-ins spend nothing. The limit is
+   * deliberately high, and the residual is by design: 100 well-formed wrong
+   * passwords an hour, each a bcrypt-checked request (and the composite
+   * `login` key holds each IP to 5 per address), still lock the account.
    */
   loginAccount: {
     name: 'login-account',
     windowMs: 60 * 60 * 1000,
     limit: 100,
     keyBy: 'email',
+    counts: 'rejected',
+    skip: isMalformedLogin,
     message: RATE_LIMITED_MESSAGE,
   },
   /**
