@@ -55,8 +55,8 @@ class NotificationController extends BaseController {
    * `GET /notifications`: the authenticated user's notifications, newest
    * first, one page at a time.
    *
-   * An invalid or stale `cursor` is never a 400: `decodeNotificationCursor`
-   * (notification.repository.ts) resolves it to no cursor, the first page.
+   * A malformed `cursor` is a 400 (`listNotificationsSchema` decodes it); a
+   * well-formed one past the last row is an empty page.
    */
   listNotifications = this.handle(async (request, response) => {
     const userId = authenticatedUserId(request)

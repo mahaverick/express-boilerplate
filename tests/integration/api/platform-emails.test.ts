@@ -11,6 +11,7 @@ import { createApp } from '@/app'
 import { getEnv } from '@/configs/env.config'
 import { sql } from '@/services/database.service'
 import { TOKEN_MASK } from '@/services/platform-email.service'
+import { encodeCursor } from '@/utilities/cursor.utilities'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import {
   addAttempt,
@@ -515,5 +516,40 @@ describe('GET /api/v1/platform/email-suppressions', () => {
 
     const token = tokenFor(outsider)
     expect(await statusOf(get(token, '/email-suppressions'))).toBe(404)
+  })
+})
+
+describe('out-of-range staff dates are a 400', () => {
+  const ID = '01a1156d-00b7-75d4-887f-2dd37e110303'
+
+  it.each([
+    ['/emails', { from: '9999-12-31', to: '9999-12-31' }],
+    ['/emails', { from: '0000-01-01' }],
+    ['/emails', { cursor: encodeCursor({ sortAt: '9999-99-99T99:99:99.999999Z', id: ID }) }],
+    [
+      '/email-suppressions',
+      { cursor: encodeCursor({ sortAt: '2026-02-30T00:00:00.000000Z', id: ID }) },
+    ],
+  ])('GET %s %j', async (path, query) => {
+    const { token } = await createTrackedStaff('viewer')
+    const response = await request(app)
+      .get(`/api/v1/platform${path}`)
+      .query(query)
+      .set('Authorization', `Bearer ${token}`)
+    expect(response.status).toBe(400)
+  })
+
+  it('still accepts the widest real range and a real cursor', async () => {
+    const { token } = await createTrackedStaff('viewer')
+    const range = await request(app)
+      .get('/api/v1/platform/emails')
+      .query({ from: '0001-01-01', to: '9998-12-31' })
+      .set('Authorization', `Bearer ${token}`)
+    expect(range.status).toBe(200)
+    const cursor = await request(app)
+      .get('/api/v1/platform/email-suppressions')
+      .query({ cursor: encodeCursor({ sortAt: '2024-02-29T23:59:59.999999Z', id: ID }) })
+      .set('Authorization', `Bearer ${token}`)
+    expect(cursor.status).toBe(200)
   })
 })

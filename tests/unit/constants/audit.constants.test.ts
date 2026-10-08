@@ -78,6 +78,7 @@ const VALID_METADATA: Record<AuditAction, Record<string, unknown>> = {
     to: 'full',
     reason: 'Database upgrade',
     messageChanged: true,
+    reasonChanged: true,
   },
 }
 

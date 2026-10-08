@@ -18,12 +18,23 @@ const MAX_TENANT_LOGO_LENGTH = 255
 const MAX_TENANT_WEBSITE_LENGTH = 255
 const MAX_TENANT_TIMEZONE_LENGTH = 64
 const MAX_TENANT_LOCALE_LENGTH = 10
+/**
+ * `metadata` serialized with `JSON.stringify`, in UTF-16 code units.
+ */
+const MAX_TENANT_METADATA_LENGTH = 16_384
+/**
+ * `metadata`'s own object is level 1.
+ */
+const MAX_TENANT_METADATA_DEPTH = 10
 
 /**
  * `RESERVED_SLUGS` as a `Set<string>`: the tuple's `.includes` accepts only
  * its literal union, not a parsed `string`.
  */
 const RESERVED_SLUGS_SET: ReadonlySet<string> = new Set(RESERVED_SLUGS)
+
+const MAX_SLUG_LENGTH = 100
+const SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/
 
 /**
  * A tenant's URL-safe identifier: lowercase alphanumeric, hyphen-separated,
@@ -37,14 +48,27 @@ export const slugSchema = z
   .string()
   .trim()
   .min(3, 'Slug must be at least 3 characters.')
-  .max(100, 'Slug must be at most 100 characters.')
+  .max(MAX_SLUG_LENGTH, `Slug must be at most ${MAX_SLUG_LENGTH} characters.`)
   .regex(
-    /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/,
+    SLUG_PATTERN,
     'Slug must be lowercase alphanumeric characters and hyphens, and cannot start or end with a hyphen.'
   )
   .refine((slug) => !RESERVED_SLUGS_SET.has(slug), {
     message: 'This slug is reserved and cannot be used.',
   })
+
+/**
+ * Whether a `:slug` path segment has the shape a stored slug can have, so a
+ * lookup can answer 404 without querying for one that cannot exist (a NUL
+ * would otherwise reach Postgres as a 22021 and answer 500). Not trimmed and
+ * not checked against `RESERVED_SLUGS`: `platform`, the staff tenant's slug,
+ * is reserved for creation but looked up like any other.
+ * @param value - The raw path segment.
+ * @returns True when the segment could name a tenant.
+ */
+export function isSlugShaped(value: string): boolean {
+  return value.length <= MAX_SLUG_LENGTH && SLUG_PATTERN.test(value)
+}
 
 /**
  * The description field, shared by the create and update schemas. A separate
@@ -61,6 +85,33 @@ const tenantDescriptionField = z
   .refine(safeText({ multiline: true }), 'Description contains characters that are not allowed')
 
 /**
+ * A tenant's `logo` or `website`: an absolute `http:` or `https:` URL, trimmed
+ * and capped at the column width, never `javascript:`, `data:` or free
+ * text, so a client that renders it as a link or image source cannot be
+ * made to run or load anything else. A backslash anywhere, or credentials
+ * (`user:pw@`) in the URL, are refused too, so one host cannot read as
+ * another; an `@` in the path or query is fine.
+ * @param label - The field's name in its messages (`Logo`, `Website`).
+ * @param maxLength - The column width.
+ * @returns The field schema; callers add `.nullable()`/`.optional()`.
+ */
+function httpUrlField(label: string, maxLength: number) {
+  return z
+    .string()
+    .trim()
+    .min(1, 'Must not be empty.')
+    .max(maxLength, `${label} must be at most ${maxLength} characters.`)
+    .refine(safeText(), `${label} contains characters that are not allowed`)
+    .refine((value) => {
+      if (value.includes('\\')) return false
+      if (!URL.canParse(value)) return true
+      const { username, password } = new URL(value)
+      return username === '' && password === ''
+    }, `${label} must be an http or https URL.`)
+    .pipe(z.url({ protocol: /^https?$/, message: `${label} must be an http or https URL.` }))
+}
+
+/**
  * `POST /api/v1/tenants` request body. The caller becomes the tenant's sole
  * `'owner'` member; the owner comes from `request.user.id`, never from this
  * body, so a caller cannot name a different owner.
@@ -74,23 +125,8 @@ export const newTenantSchema = z.object({
     .refine(safeText(), 'Name contains characters that are not allowed'),
   slug: slugSchema,
   description: z.preprocess(normalizeMultilineText, tenantDescriptionField).optional(),
-  logo: z
-    .string()
-    .trim()
-    .min(1, 'Must not be empty.')
-    .max(MAX_TENANT_LOGO_LENGTH, `Logo must be at most ${MAX_TENANT_LOGO_LENGTH} characters.`)
-    .refine(safeText(), 'Logo contains characters that are not allowed')
-    .optional(),
-  website: z
-    .string()
-    .trim()
-    .min(1, 'Must not be empty.')
-    .max(
-      MAX_TENANT_WEBSITE_LENGTH,
-      `Website must be at most ${MAX_TENANT_WEBSITE_LENGTH} characters.`
-    )
-    .refine(safeText(), 'Website contains characters that are not allowed')
-    .optional(),
+  logo: httpUrlField('Logo', MAX_TENANT_LOGO_LENGTH).optional(),
+  website: httpUrlField('Website', MAX_TENANT_WEBSITE_LENGTH).optional(),
 })
 
 /**
@@ -118,25 +154,8 @@ export const updateTenantSchema = z.object({
     .refine(safeText(), 'Name contains characters that are not allowed')
     .optional(),
   description: z.preprocess(normalizeMultilineText, tenantDescriptionField).nullable().optional(),
-  logo: z
-    .string()
-    .trim()
-    .min(1, 'Must not be empty.')
-    .max(MAX_TENANT_LOGO_LENGTH, `Logo must be at most ${MAX_TENANT_LOGO_LENGTH} characters.`)
-    .refine(safeText(), 'Logo contains characters that are not allowed')
-    .nullable()
-    .optional(),
-  website: z
-    .string()
-    .trim()
-    .min(1, 'Must not be empty.')
-    .max(
-      MAX_TENANT_WEBSITE_LENGTH,
-      `Website must be at most ${MAX_TENANT_WEBSITE_LENGTH} characters.`
-    )
-    .refine(safeText(), 'Website contains characters that are not allowed')
-    .nullable()
-    .optional(),
+  logo: httpUrlField('Logo', MAX_TENANT_LOGO_LENGTH).nullable().optional(),
+  website: httpUrlField('Website', MAX_TENANT_WEBSITE_LENGTH).nullable().optional(),
 })
 
 /**
@@ -188,11 +207,90 @@ export const updateMemberRoleSchema = z.object({
 export type UpdateMemberRoleInput = z.infer<typeof updateMemberRoleSchema>
 
 /**
- * `PATCH /api/v1/tenants/:slug/settings` request body. `timezone`/`locale`
- * are bounded to their column widths only, not checked as a real IANA zone
- * or BCP 47 tag: nothing in this codebase interprets either value, so a project
- * that depends on one should add that check. `metadata` is `null` to clear
- * it or any JSON object, never a bare array or primitive.
+ * What one walk over a parsed JSON value finds.
+ */
+interface JsonScan {
+  /**
+   * A key or string value holds U+0000, which Postgres `jsonb` refuses (22P05).
+   */
+  hasNul: boolean
+  /**
+   * The deepest object or array nesting; a bare primitive is 0.
+   */
+  depth: number
+}
+
+/**
+ * Walk a parsed JSON value once, iteratively (a deep value cannot overflow
+ * the stack), recording a NUL in any key or string and the nesting depth.
+ * @param value - A value `JSON.parse` produced.
+ * @returns What the walk found.
+ */
+export function scanJson(value: unknown): JsonScan {
+  const scan: JsonScan = { hasNul: false, depth: 0 }
+  const pending: { node: unknown; depth: number }[] = [{ node: value, depth: 0 }]
+  for (let item = pending.pop(); item !== undefined; item = pending.pop()) {
+    const { node, depth } = item
+    if (typeof node === 'string') {
+      if (node.includes('\u{0}')) scan.hasNul = true
+      continue
+    }
+    if (typeof node !== 'object' || node === null) continue
+    scan.depth = Math.max(scan.depth, depth + 1)
+    for (const [key, child] of Object.entries(node)) {
+      if (key.includes('\u{0}')) scan.hasNul = true
+      pending.push({ node: child, depth: depth + 1 })
+    }
+  }
+  return scan
+}
+
+const TIMEZONE_PATTERN = /^[A-Za-z0-9_+\-/]+$/
+const LOCALE_PATTERN = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/
+
+/**
+ * Whether `value` names a time zone this runtime knows (an IANA name such as
+ * `Europe/Paris`, an alias such as `UTC`, or `Etc/GMT+5`), in the
+ * letters-digits-`_+-/` shape. Names match case-insensitively, and the
+ * runtime also takes colon-free UTC offsets (`+0530`, `+05`, `-08`), which are
+ * accepted; the colon form `+05:30` is refused by the shape check, though the
+ * runtime would take it.
+ * @param value - The trimmed candidate.
+ * @returns True when the value is a usable time zone name.
+ */
+export function isTimeZoneName(value: string): boolean {
+  if (!TIMEZONE_PATTERN.test(value)) return false
+  try {
+    new Intl.DateTimeFormat('en', { timeZone: value })
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Whether `value` is a BCP 47 language tag of the common shape (a 2-3
+ * letter language, then `-`-separated subtags such as `en-US` or
+ * `zh-Hant-TW`) that `Intl` accepts.
+ * @param value - The trimmed candidate.
+ * @returns True when the value is a usable locale tag.
+ */
+export function isLocaleTag(value: string): boolean {
+  if (!LOCALE_PATTERN.test(value)) return false
+  try {
+    return Intl.getCanonicalLocales(value).length === 1
+  } catch {
+    return false
+  }
+}
+
+/**
+ * `PATCH /api/v1/tenants/:slug/settings` request body. `timezone` must name a
+ * time zone the runtime knows (`isTimeZoneName`) and `locale` must be a BCP 47
+ * tag (`isLocaleTag`), both within their column widths. `metadata` is `null`
+ * to clear it or a JSON object of at most 16 384 characters serialized and
+ * 10 levels deep (every member downloads it with each settings read), never a
+ * bare array or primitive.
  */
 export const updateTenantSettingsSchema = z.object({
   timezone: z
@@ -203,14 +301,42 @@ export const updateTenantSettingsSchema = z.object({
       MAX_TENANT_TIMEZONE_LENGTH,
       `Timezone must be at most ${MAX_TENANT_TIMEZONE_LENGTH} characters.`
     )
+    .refine(safeText(), 'Timezone contains characters that are not allowed')
+    .refine(isTimeZoneName, 'Timezone must be a time zone name such as Europe/Paris.')
     .optional(),
   locale: z
     .string()
     .trim()
     .min(1, 'Must not be empty.')
     .max(MAX_TENANT_LOCALE_LENGTH, `Locale must be at most ${MAX_TENANT_LOCALE_LENGTH} characters.`)
+    .refine(safeText(), 'Locale contains characters that are not allowed')
+    .refine(isLocaleTag, 'Locale must be a language tag such as en or en-US.')
     .optional(),
-  metadata: z.record(z.string(), z.unknown()).nullable().optional(),
+  metadata: z
+    .record(z.string(), z.unknown())
+    .superRefine((value, context) => {
+      const scan = scanJson(value)
+      if (scan.depth > MAX_TENANT_METADATA_DEPTH) {
+        context.addIssue({
+          code: 'custom',
+          message: `Metadata must be nested at most ${MAX_TENANT_METADATA_DEPTH} levels deep.`,
+        })
+      } else if (JSON.stringify(value).length > MAX_TENANT_METADATA_LENGTH) {
+        // Only serialized once shallow: stringify recurses and a deep value could overflow the stack.
+        context.addIssue({
+          code: 'custom',
+          message: `Metadata must be at most ${MAX_TENANT_METADATA_LENGTH} characters as JSON.`,
+        })
+      }
+      if (scan.hasNul) {
+        context.addIssue({
+          code: 'custom',
+          message: 'Metadata contains characters that are not allowed',
+        })
+      }
+    })
+    .nullable()
+    .optional(),
 })
 
 /**

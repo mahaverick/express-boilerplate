@@ -22,6 +22,7 @@ import {
   getMaintenanceMode,
   reloadMaintenanceMode,
 } from '@/services/maintenance-mode/maintenance-mode-store.service'
+import { getMaintenanceModeStatus } from '@/services/maintenance-mode/maintenance-mode.service'
 import { closeQueue, getAllQueues } from '@/services/queue.service'
 import type { PlatformMaintenanceModeView } from '@/types/maintenance-mode'
 import { truncateAuditLogs } from '../../helpers/audit-log'
@@ -68,6 +69,21 @@ async function currentVersion(token: string): Promise<number> {
  */
 function change(token: string, body: Record<string, unknown>): Promise<Response> {
   return request(app).put(PATH).set('Authorization', `Bearer ${token}`).send(body)
+}
+
+/**
+ * The pending notices addressed to the test's own users. The worker database
+ * can hold platform staff another file left behind, and they are notified
+ * too, so a test counts only the recipients it created.
+ * @param userIds - The test's users.
+ * @returns Their pending notices.
+ */
+async function noticesTo(
+  userIds: readonly string[]
+): Promise<Awaited<ReturnType<typeof pendingMaintenanceNotices>>> {
+  const ours = new Set(userIds)
+  const notices = await pendingMaintenanceNotices()
+  return notices.filter((job) => ours.has(job.data.userId))
 }
 
 /**
@@ -131,7 +147,7 @@ describe('PUT /platform/maintenance-mode', () => {
     const { user: actor, token } = await createTrackedStaff('owner', { firstName: 'Grace' })
     const { user: otherOwner } = await createTrackedStaff('owner')
     const { user: admin } = await createTrackedStaff('admin')
-    await createTrackedStaff('manager')
+    const { user: manager } = await createTrackedStaff('manager')
     const version = await currentVersion(token)
 
     const response = await change(token, {
@@ -161,10 +177,11 @@ describe('PUT /platform/maintenance-mode', () => {
           to: 'read_only',
           reason: 'Data fix, ticket 77',
           messageChanged: true,
+          reasonChanged: true,
         },
       },
     ])
-    const notices = await pendingMaintenanceNotices()
+    const notices = await noticesTo([actor.id, otherOwner.id, admin.id, manager.id])
     const recipients = notices.map((job) => job.data.userId)
     expect(recipients.toSorted(byText)).toEqual([otherOwner.id, admin.id].toSorted(byText))
   })
@@ -271,9 +288,48 @@ describe('PUT /platform/maintenance-mode', () => {
     expect(queuePauseTarget(getMaintenanceMode(), new Date())).toBe('pause')
   })
 
+  it('keeps the staff status changedAt across a message-only and a reason-only save', async () => {
+    const { user, token } = await createTrackedStaff('owner')
+    const { user: admin } = await createTrackedStaff('admin')
+    const began = new Date(Date.now() - 3_600_000)
+    await storeMaintenanceMode('read_only', { message: 'Old.', changedAt: began })
+    await reloadMaintenanceMode()
+    const version = await currentVersion(token)
+
+    const edited = await change(token, {
+      mode: 'read_only',
+      message: 'New.',
+      expectedVersion: version,
+    })
+    expect(edited.status).toBe(200)
+    await expect(getMaintenanceModeStatus()).resolves.toMatchObject({
+      changedAt: began.toISOString(),
+    })
+
+    const reasoned = await change(token, {
+      mode: 'read_only',
+      message: 'New.',
+      reason: 'Reason R2',
+      expectedVersion: viewOf(edited).version,
+    })
+    expect(reasoned.status).toBe(200)
+    expect(viewOf(reasoned)).toMatchObject({
+      reason: 'Reason R2',
+      since: began.toISOString(),
+      version: version + 2,
+    })
+    await expect(getMaintenanceModeStatus()).resolves.toMatchObject({
+      changedAt: began.toISOString(),
+    })
+    const entries = await auditEntries()
+    const reasonEdit = entries.find((entry) => entry.metadata.reason === 'Reason R2')
+    expect(reasonEdit?.metadata).toMatchObject({ messageChanged: false, reasonChanged: true })
+    expect(await noticesTo([user.id, admin.id])).toEqual([])
+  })
+
   it('names a staff member with no name as "A staff member" in the notices, never by address', async () => {
     const { user: actor, token } = await createTrackedStaff('owner')
-    await createTrackedStaff('admin')
+    const { user: admin } = await createTrackedStaff('admin')
     const version = await currentVersion(token)
 
     const response = await change(token, {
@@ -286,7 +342,7 @@ describe('PUT /platform/maintenance-mode', () => {
 
     expect(response.status).toBe(200)
     expect(viewOf(response).changedBy).toEqual({ id: actor.id, name: 'A staff member' })
-    const notices = await pendingMaintenanceNotices()
+    const notices = await noticesTo([actor.id, admin.id])
     expect(notices).toHaveLength(1)
     const [notice] = notices
     expect(notice?.data.body).toContain('A staff member set maintenance mode')
@@ -311,6 +367,208 @@ describe('PUT /platform/maintenance-mode', () => {
     expect(await pendingMaintenanceNotices()).toEqual([])
   })
 
+  it('stores a new reason sent with the same mode and message (it is not a no-op)', async () => {
+    const { token } = await createTrackedStaff('owner')
+    const { user: admin } = await createTrackedStaff('admin')
+    await storeMaintenanceMode('read_only', { message: 'Same.' })
+    await sql`update maintenance_mode_state set reason = 'Old reason.' where id = 1`
+    await reloadMaintenanceMode()
+    const version = await currentVersion(token)
+
+    const response = await change(token, {
+      mode: 'read_only',
+      message: 'Same.',
+      reason: 'New reason.',
+      expectedVersion: version,
+    })
+
+    expect(response.status).toBe(200)
+    expect(viewOf(response).reason).toBe('New reason.')
+    expect(viewOf(response).version).toBe(version + 1)
+    const entries = await auditEntries()
+    expect(entries.map((entry) => entry.metadata)).toEqual([
+      {
+        from: 'read_only',
+        to: 'read_only',
+        reason: 'New reason.',
+        messageChanged: false,
+        reasonChanged: true,
+      },
+    ])
+    expect(await noticesTo([admin.id])).toEqual([])
+  })
+
+  it('clears the stored reason when a same-mode save sends reason null', async () => {
+    const { token } = await createTrackedStaff('owner')
+    await storeMaintenanceMode('read_only', { message: 'Same.' })
+    await sql`update maintenance_mode_state set reason = 'Old reason.' where id = 1`
+    await reloadMaintenanceMode()
+    const version = await currentVersion(token)
+
+    const response = await change(token, {
+      mode: 'read_only',
+      message: 'Same.',
+      reason: NONE,
+      expectedVersion: version,
+    })
+
+    expect(response.status).toBe(200)
+    expect(viewOf(response).reason).toBeNull()
+    expect(viewOf(response).version).toBe(version + 1)
+    const entries = await auditEntries()
+    expect(entries.map((entry) => entry.metadata)).toEqual([
+      {
+        from: 'read_only',
+        to: 'read_only',
+        reason: NONE,
+        messageChanged: false,
+        reasonChanged: true,
+      },
+    ])
+  })
+
+  it('refuses a switch-on whose reason is null, as one with no reason', async () => {
+    const { token } = await createTrackedStaff('owner')
+    const version = await currentVersion(token)
+
+    const response = await change(token, {
+      mode: 'read_only',
+      message: 'Read only.',
+      reason: NONE,
+      expectedVersion: version,
+      confirm: ENVIRONMENT,
+    })
+
+    expect(response.status).toBe(400)
+    expect(response.body).toMatchObject({ errors: { reason: [expect.any(String)] } })
+  })
+
+  it('answers a no-op when reason null is sent and no reason is stored', async () => {
+    const { token } = await createTrackedStaff('owner')
+    await storeMaintenanceMode('read_only', { message: 'Same.' })
+    const version = await currentVersion(token)
+
+    const response = await change(token, {
+      mode: 'read_only',
+      message: 'Same.',
+      reason: NONE,
+      expectedVersion: version,
+    })
+
+    expect(response.status).toBe(200)
+    expect(viewOf(response).version).toBe(version)
+    expect(await auditEntries()).toEqual([])
+  })
+
+  it('clears the stored reason and edits the message in one same-mode save with reason null', async () => {
+    const { token } = await createTrackedStaff('owner')
+    await storeMaintenanceMode('read_only', { message: 'Old.' })
+    await sql`update maintenance_mode_state set reason = 'Old reason.' where id = 1`
+    await reloadMaintenanceMode()
+    const version = await currentVersion(token)
+
+    const response = await change(token, {
+      mode: 'read_only',
+      message: 'New.',
+      reason: NONE,
+      expectedVersion: version,
+    })
+
+    expect(response.status).toBe(200)
+    expect(viewOf(response)).toMatchObject({ message: 'New.', reason: NONE, version: version + 1 })
+    const entries = await auditEntries()
+    expect(entries.map((entry) => entry.metadata)).toEqual([
+      {
+        from: 'read_only',
+        to: 'read_only',
+        reason: NONE,
+        messageChanged: true,
+        reasonChanged: true,
+      },
+    ])
+  })
+
+  it('refuses an escalation whose reason is null, as one with no reason', async () => {
+    const { token } = await createTrackedStaff('owner')
+    await storeMaintenanceMode('read_only', { message: 'Same.' })
+    const version = await currentVersion(token)
+
+    const response = await change(token, {
+      mode: 'full',
+      message: 'Down.',
+      reason: NONE,
+      expectedVersion: version,
+      confirm: ENVIRONMENT,
+    })
+
+    expect(response.status).toBe(400)
+    expect(response.body).toMatchObject({ errors: { reason: [expect.any(String)] } })
+    expect(await auditEntries()).toEqual([])
+  })
+
+  it('stores the reason sent with an escalation, replacing the stored one', async () => {
+    const { token } = await createTrackedStaff('owner')
+    await storeMaintenanceMode('read_only', { message: 'Same.' })
+    await sql`update maintenance_mode_state set reason = 'Old reason.' where id = 1`
+    await reloadMaintenanceMode()
+    const version = await currentVersion(token)
+
+    const response = await change(token, {
+      mode: 'full',
+      message: 'Down.',
+      reason: 'Escalated.',
+      expectedVersion: version,
+      confirm: ENVIRONMENT,
+    })
+
+    expect(response.status).toBe(200)
+    expect(viewOf(response)).toMatchObject({ mode: 'full', reason: 'Escalated.' })
+  })
+
+  it.each([
+    ['sends no reason', {}, NONE],
+    ['sends reason null', { reason: NONE }, NONE],
+    ['sends a reason', { reason: 'Easing.' }, 'Easing.'],
+  ])(
+    'a de-escalation that %s stores %j as its reason, not the stored one',
+    async (_label, extra, stored) => {
+      const { token } = await createTrackedStaff('owner')
+      await storeMaintenanceMode('full', { message: 'Down.' })
+      await sql`update maintenance_mode_state set reason = 'Old reason.' where id = 1`
+      await reloadMaintenanceMode()
+      const version = await currentVersion(token)
+
+      const response = await change(token, {
+        mode: 'read_only',
+        message: 'Easing.',
+        expectedVersion: version,
+        ...extra,
+      })
+
+      expect(response.status).toBe(200)
+      expect(viewOf(response)).toMatchObject({ mode: 'read_only', reason: stored })
+    }
+  )
+
+  it('still answers a no-op when the same reason is sent again', async () => {
+    const { token } = await createTrackedStaff('owner')
+    await storeMaintenanceMode('read_only', { message: 'Same.' })
+    await sql`update maintenance_mode_state set reason = 'Kept.' where id = 1`
+    await reloadMaintenanceMode()
+    const version = await currentVersion(token)
+
+    const response = await change(token, {
+      mode: 'read_only',
+      message: 'Same.',
+      reason: 'Kept.',
+      expectedVersion: version,
+    })
+
+    expect(response.status).toBe(200)
+    expect(viewOf(response).version).toBe(version)
+    expect(await auditEntries()).toEqual([])
+  })
+
   it('edits the message with no reason or confirm, audited but not notified', async () => {
     const { token } = await createTrackedStaff('owner')
     await createTrackedStaff('admin')
@@ -327,7 +585,13 @@ describe('PUT /platform/maintenance-mode', () => {
     expect(viewOf(response).message).toBe('New.')
     const entries = await auditEntries()
     expect(entries.map((entry) => entry.metadata)).toEqual([
-      { from: 'read_only', to: 'read_only', reason: NONE, messageChanged: true },
+      {
+        from: 'read_only',
+        to: 'read_only',
+        reason: NONE,
+        messageChanged: true,
+        reasonChanged: false,
+      },
     ])
     expect(await pendingMaintenanceNotices()).toEqual([])
   })
@@ -407,7 +671,7 @@ describe('PUT /platform/maintenance-mode', () => {
   })
 
   it('switches off with no reason: the message is cleared and every other owner and admin is notified', async () => {
-    const { token } = await createTrackedStaff('owner')
+    const { user: owner, token } = await createTrackedStaff('owner')
     const { user: admin } = await createTrackedStaff('admin')
     await storeMaintenanceMode('read_only')
     const version = await currentVersion(token)
@@ -421,8 +685,91 @@ describe('PUT /platform/maintenance-mode', () => {
       since: NONE,
       reason: NONE,
     })
-    const notices = await pendingMaintenanceNotices()
+    const notices = await noticesTo([owner.id, admin.id])
     expect(notices.map((job) => job.data.userId)).toEqual([admin.id])
+  })
+
+  it('records reasonChanged false for a message edit that omits the reason, though one is stored', async () => {
+    const { token } = await createTrackedStaff('owner')
+    await storeMaintenanceMode('read_only', { message: 'Old.' })
+    await sql`update maintenance_mode_state set reason = 'Stored.' where id = 1`
+    await reloadMaintenanceMode()
+
+    const response = await change(token, {
+      mode: 'read_only',
+      message: 'New.',
+      expectedVersion: await currentVersion(token),
+    })
+
+    expect(response.status).toBe(200)
+    expect(viewOf(response).reason).toBe('Stored.')
+    const entries = await auditEntries()
+    expect(entries.map((entry) => entry.metadata)).toEqual([
+      {
+        from: 'read_only',
+        to: 'read_only',
+        reason: NONE,
+        messageChanged: true,
+        reasonChanged: false,
+      },
+    ])
+  })
+
+  it('records reasonChanged true for a message edit that sends reason null over a stored reason', async () => {
+    const { token } = await createTrackedStaff('owner')
+    await storeMaintenanceMode('read_only', { message: 'Old.' })
+    await sql`update maintenance_mode_state set reason = 'Stored.' where id = 1`
+    await reloadMaintenanceMode()
+
+    const response = await change(token, {
+      mode: 'read_only',
+      message: 'New.',
+      reason: NONE,
+      expectedVersion: await currentVersion(token),
+    })
+
+    expect(response.status).toBe(200)
+    expect(viewOf(response).reason).toBe(NONE)
+    const entries = await auditEntries()
+    expect(entries.map((entry) => entry.metadata)).toEqual([
+      {
+        from: 'read_only',
+        to: 'read_only',
+        reason: NONE,
+        messageChanged: true,
+        reasonChanged: true,
+      },
+    ])
+  })
+
+  it.each([
+    ['keeps the stored reason', 'Stored.', false],
+    ['sends a new reason', 'Fresh.', true],
+  ])('records reasonChanged for a mode switch that %s', async (_label, sent, expected) => {
+    const { token } = await createTrackedStaff('owner')
+    await storeMaintenanceMode('read_only', { message: 'Same.' })
+    await sql`update maintenance_mode_state set reason = 'Stored.' where id = 1`
+    await reloadMaintenanceMode()
+
+    const response = await change(token, {
+      mode: 'full',
+      message: 'Same.',
+      reason: sent,
+      expectedVersion: await currentVersion(token),
+      confirm: ENVIRONMENT,
+    })
+
+    expect(response.status).toBe(200)
+    const entries = await auditEntries()
+    expect(entries.map((entry) => entry.metadata)).toEqual([
+      {
+        from: 'read_only',
+        to: 'full',
+        reason: sent,
+        messageChanged: false,
+        reasonChanged: expected,
+      },
+    ])
   })
 
   it('records messageChanged true when switching off a mode that had a message', async () => {
@@ -435,7 +782,7 @@ describe('PUT /platform/maintenance-mode', () => {
     expect(response.status).toBe(200)
     const entries = await auditEntries()
     expect(entries.map((entry) => entry.metadata)).toEqual([
-      { from: 'read_only', to: 'off', reason: NONE, messageChanged: true },
+      { from: 'read_only', to: 'off', reason: NONE, messageChanged: true, reasonChanged: false },
     ])
   })
 
@@ -456,9 +803,8 @@ describe('PUT /platform/maintenance-mode', () => {
     const statuses = responses.map((response) => response.status)
     expect(statuses.toSorted((a, b) => a - b)).toEqual([200, 409])
     expect(await auditEntries()).toHaveLength(1)
-    const ours = new Set([first.user.id, second.user.id])
-    const notices = await pendingMaintenanceNotices()
-    expect(notices.filter((job) => ours.has(job.data.userId))).toHaveLength(1)
+    const notices = await noticesTo([first.user.id, second.user.id])
+    expect(notices).toHaveLength(1)
     expect(await currentVersion(first.token)).toBe(version + 1)
   })
 })

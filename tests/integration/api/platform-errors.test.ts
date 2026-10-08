@@ -17,7 +17,12 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 
 const PROJECT_ID = 4321
 
-const target = vi.hoisted(() => ({ host: 'http://127.0.0.1:1', isConfigured: true, budget: 1200 }))
+const target = vi.hoisted(() => ({
+  host: 'http://127.0.0.1:1',
+  isConfigured: true,
+  budget: 1200,
+  isRedisDown: false,
+}))
 
 vi.mock('@/configs/env.config', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/configs/env.config')>()
@@ -30,6 +35,15 @@ vi.mock('@/configs/env.config', async (importOriginal) => {
       POSTHOG_PROJECT_ID: target.isConfigured ? 4321 : undefined,
       TIMELINE_QUERY_BUDGET_PER_HOUR: target.budget,
     }),
+  }
+})
+
+vi.mock('@/services/redis.service', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/services/redis.service')>()
+  return {
+    ...actual,
+    getRedis: () =>
+      target.isRedisDown ? Promise.reject(new Error('Redis unreachable')) : actual.getRedis(),
   }
 })
 
@@ -46,6 +60,7 @@ const { startFakePosthog } = await import('../../helpers/fake-posthog')
 const { platformTenant } = await import('../../helpers/platform-staff')
 const { createTrackedStaff, createTrackedUser, deleteTrackedUsers } =
   await import('../../helpers/platform-users')
+const { withMutatedModule } = await import('../../helpers/mutate')
 const { request } = await import('../../helpers/request')
 
 type FakePosthog = Awaited<ReturnType<typeof startFakePosthog>>
@@ -184,6 +199,7 @@ afterEach(async () => {
   vi.restoreAllMocks()
   target.isConfigured = true
   target.budget = 1200
+  target.isRedisDown = false
   const current = posthog()
   current.respondToQuery(() => ({ status: 200 }))
   current.groupTypes = [{ group_type: 'tenant', group_type_index: 0 }]
@@ -364,6 +380,72 @@ describe('the Errors audit', () => {
       select action from audit_logs where target_id = ${tenantId} order by action`
     expect(rows).toEqual([{ action: 'tenant.errors_viewed' }, { action: 'tenant.timeline_viewed' }])
   })
+})
+
+describe('the Errors audit with Redis down', () => {
+  it('answers 200 and writes one user.errors_viewed per call: the throttle fails toward auditing', async () => {
+    const subject = await createTrackedUser()
+    const { token } = await createTrackedStaff('admin')
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    target.isRedisDown = true
+
+    const first = await getErrors(token, `/users/${subject.id}/errors`)
+    const second = await getErrors(token, `/users/${subject.id}/errors`)
+
+    expect([first.status, second.status]).toEqual([200, 200])
+    expect(await errorsAudits(subject.id)).toBe(2)
+    const throttleWarnings = warn.mock.calls.filter(([message]) =>
+      message.endsWith('audit throttle unavailable; writing the audit entry anyway')
+    )
+    expect(throttleWarnings).toHaveLength(2)
+  })
+
+  /**
+   * Deliberately red when run with MUTATION_PROOF=1: the app loads against a
+   * view audit that skips the entry when Redis is down (failing toward not
+   * auditing), and the real test's own assertion then fails. Skipped by
+   * default, so the file is green:
+   *
+   *   MUTATION_PROOF=1 pnpm exec vitest run tests/integration/api/platform-errors.test.ts   # red
+   *   pnpm exec vitest run tests/integration/api/platform-errors.test.ts                    # green
+   */
+  it.runIf(process.env.MUTATION_PROOF === '1')(
+    'reproduces the Redis-down audit assertion against a throttle that fails toward silence',
+    async () => {
+      const subject = await createTrackedUser()
+      const { token } = await createTrackedStaff('admin')
+      vi.spyOn(logger, 'warn').mockImplementation(() => {})
+      target.isRedisDown = true
+
+      await withMutatedModule<
+        typeof import('@/services/platform-view-audit.service'),
+        typeof import('@/app')
+      >(
+        '@/services/platform-view-audit.service',
+        {
+          auditThrottledView: async (audit) => {
+            try {
+              await getRedis()
+            } catch {
+              return
+            }
+            await audit.write()
+          },
+        },
+        () => import('@/app'),
+        async (subjectModule) => {
+          const mutatedApp = subjectModule.createApp()
+          for (let call = 0; call < 2; call += 1) {
+            const response = await request(mutatedApp)
+              .get(`/api/v1/platform/users/${subject.id}/errors`)
+              .set('Authorization', `Bearer ${token}`)
+            expect(response.status).toBe(200)
+          }
+          expect(await errorsAudits(subject.id)).toBe(2)
+        }
+      )
+    }
+  )
 })
 
 describe('an unconfigured environment', () => {

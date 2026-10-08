@@ -114,8 +114,9 @@ export function getPublicMaintenanceStatus(): PublicMaintenanceStatus {
 
 /**
  * The maintenance section of the staff system status, as this replica sees
- * it: the mode, whether it is known, each queue's pause state, whether the
- * last change's notices are still pending, and the last reload failure.
+ * it: the mode, when it began and when it last changed (also while off),
+ * whether it is known, each queue's pause state, whether the last change's
+ * notices are still pending, and the last reload failure.
  * @returns The section; never rejects (a Redis failure shows as null queue fields and no pending notices).
  */
 export async function getMaintenanceModeStatus(): Promise<MaintenanceModeStatus> {
@@ -124,6 +125,7 @@ export async function getMaintenanceModeStatus(): Promise<MaintenanceModeStatus>
   return {
     mode: snapshot.mode,
     since: snapshot.since,
+    changedAt: snapshot.changedAt,
     known: snapshot.known,
     queuesPaused: queues.length > 0 && queues.every((queue) => queue.paused === true),
     queues,
@@ -171,7 +173,7 @@ function assertChangeAllowed(kind: ChangeKind, body: ChangeMaintenanceModeBody):
     })
   }
   if (kind !== 'switch_on' && kind !== 'escalate') return
-  if (body.reason === undefined) {
+  if (body.reason === undefined || body.reason === null) {
     throw new HttpError('Validation failed', 400, undefined, {
       reason: ['reason is required to switch maintenance mode on or escalate it.'],
     })
@@ -338,10 +340,12 @@ async function queueNoticesOrNone(actor: Actor, change: CommittedChange): Promis
 /**
  * Change the maintenance mode, as the platform owner. In order: one
  * transaction re-checks the owner role under lock, locks the row, checks
- * `expectedVersion` (409), answers a no-op (same mode and message) with the
- * current state and writes nothing, checks the change's rules, updates the
+ * `expectedVersion` (409), answers a no-op (same mode and message, and no
+ * reason sent or the stored one sent again) with the current state and
+ * writes nothing, checks the change's rules, updates the
  * row (`version + 1`; a save that keeps the mode keeps `changed_at`, `changed_by`
- * and, unless the body sends one, the reason) and writes the audit entry. Then it publishes the
+ * and, unless the body sends one or `null`, which clears it, the reason) and
+ * writes the audit entry. Then it publishes the
  * reload and rereads this replica's copy, queues notices for a switch-on,
  * an escalation or a switch-off, and entering `full` waits for them under
  * one shared deadline before pausing every queue (a timeout or Redis error
@@ -371,12 +375,19 @@ export async function changeMaintenanceMode(
     const kind = changeKindOf(current.mode, body.mode)
     // eslint-disable-next-line unicorn/no-null -- the column is null while off
     const message = body.mode === 'off' ? null : (body.message ?? null)
-    if (kind === 'message' && (body.mode === 'off' || message === current.message)) return undefined
+    // A same-mode save changes something when the message or a sent reason differs from the stored one.
+    const isReasonChanged = body.reason !== undefined && body.reason !== current.reason
+    if (
+      kind === 'message' &&
+      (body.mode === 'off' || (!isReasonChanged && message === current.message))
+    ) {
+      return undefined
+    }
     assertChangeAllowed(kind, body)
-    // eslint-disable-next-line unicorn/no-null -- the column is null when no reason was given
+    // eslint-disable-next-line unicorn/no-null -- the column is null when no reason was given or it was cleared
     const reason = body.reason ?? null
     const updated = await updateMaintenanceModeStateIfVersion(
-      { mode: body.mode, message, reason, changedBy: actor.userId },
+      { mode: body.mode, message, reason: body.reason, changedBy: actor.userId },
       body.expectedVersion,
       tx
     )
@@ -403,6 +414,8 @@ export async function changeMaintenanceMode(
           // Compared as text: a mode that is off has no message, whatever the column holds.
           messageChanged:
             (message ?? '') !== (current.mode === 'off' ? '' : (current.message ?? '')),
+          // The reason stored after the save against the one stored before, so a clear is told from a keep.
+          reasonChanged: updated.reason !== current.reason,
         },
       },
       tx
@@ -412,7 +425,7 @@ export async function changeMaintenanceMode(
       from: current.mode,
       to: body.mode,
       message,
-      reason,
+      reason: updated.reason,
       changedAt: updated.changedAt,
       version: updated.version,
     }

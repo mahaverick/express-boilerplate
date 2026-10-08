@@ -5,7 +5,11 @@
 import { DrizzleQueryError } from 'drizzle-orm'
 import postgres from 'postgres'
 import { describe, expect, it } from 'vitest'
-import { isUniqueViolation } from '@/errors/postgres-errors'
+import {
+  isUniqueViolation,
+  isUnstorableTextError,
+  isUntranslatableCharacterError,
+} from '@/errors/postgres-errors'
 
 /**
  * Build a real `postgres.PostgresError`, typed correctly for callers.
@@ -91,5 +95,33 @@ describe('isUniqueViolation', () => {
       constraint_name: 'auth_providers_provider_provider_id_unique',
     })
     expect(isUniqueViolation(error)).toBe(true)
+  })
+})
+
+describe('isUnstorableTextError', () => {
+  it.each(['22021', '22P05'])(
+    'is true for a PostgresError with code %s, bare or Drizzle-wrapped',
+    (code) => {
+      const cause = pgError({ message: 'invalid byte sequence', code })
+      expect(isUnstorableTextError(cause)).toBe(true)
+      expect(isUnstorableTextError(new DrizzleQueryError('select $1', ['x'], cause))).toBe(true)
+    }
+  )
+
+  it('is false for another SQLSTATE or a plain Error carrying the code', () => {
+    expect(isUnstorableTextError(pgError({ message: 'too long', code: '22001' }))).toBe(false)
+    const lookalike = Object.assign(new Error('x'), { code: '22021' })
+    expect(isUnstorableTextError(lookalike)).toBe(false)
+  })
+})
+
+describe('isUntranslatableCharacterError', () => {
+  it('is true only for 22P05, bare or Drizzle-wrapped', () => {
+    const cause = pgError({ message: 'untranslatable', code: '22P05' })
+    expect(isUntranslatableCharacterError(cause)).toBe(true)
+    expect(isUntranslatableCharacterError(new DrizzleQueryError('select $1', ['x'], cause))).toBe(
+      true
+    )
+    expect(isUntranslatableCharacterError(pgError({ message: 'nul', code: '22021' }))).toBe(false)
   })
 })

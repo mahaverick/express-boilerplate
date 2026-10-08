@@ -45,6 +45,15 @@ const failingQueues = new Set<string>()
 const failingDedupes = new Set<string>()
 
 /**
+ * Forget every failing streak, so the next failure of any queue is logged
+ * again. For tests: the two sets live for the process, across test files.
+ */
+export function resetQueueFailureStreaks(): void {
+  failingQueues.clear()
+  failingDedupes.clear()
+}
+
+/**
  * What a reload does to the queues for one snapshot: `pause` only for
  * `full` whose change is at least `MAINTENANCE_MODE_PAUSE_GRACE_MS` old;
  * `leave` for a younger `full` (the changing request pauses after its

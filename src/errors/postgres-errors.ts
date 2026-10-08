@@ -27,6 +27,44 @@ export function isUniqueViolation(error: unknown, constraintName?: string): bool
 }
 
 /**
+ * SQLSTATEs Postgres raises when a bound text value holds a character it
+ * cannot store: 22021 (`character_not_in_repertoire`, a NUL in `text`) and
+ * 22P05 (`untranslatable_character`, a NUL in `jsonb`).
+ */
+const UNSTORABLE_TEXT_CODES: ReadonlySet<string> = new Set(['22021', '22P05'])
+
+/**
+ * Postgres's SQLSTATE for `untranslatable_character`: a NUL in `jsonb`, but
+ * also what a database in a non-UTF8 encoding raises for ordinary text.
+ */
+const UNTRANSLATABLE_CHARACTER_CODE = '22P05'
+
+/**
+ * Whether an error (or its Drizzle-wrapped cause) is Postgres refusing a
+ * character in caller-supplied text: the client's input, not a server
+ * fault. Request validation refuses these first; this is the backstop for
+ * a field it missed.
+ * @param error - The thrown or forwarded error.
+ * @returns True when error is (or wraps) a 22021 or 22P05 driver error.
+ */
+export function isUnstorableTextError(error: unknown): boolean {
+  const cause = error instanceof DrizzleQueryError ? error.cause : error
+  return cause instanceof postgres.PostgresError && UNSTORABLE_TEXT_CODES.has(cause.code)
+}
+
+/**
+ * Whether an error (or its Drizzle-wrapped cause) is Postgres's 22P05. Unlike
+ * a 22021, this one can be a deployment fault (a database encoding mismatch),
+ * so a handler that answers 400 for it should still leave a trace.
+ * @param error - The thrown or forwarded error.
+ * @returns True when error is (or wraps) a 22P05 driver error.
+ */
+export function isUntranslatableCharacterError(error: unknown): boolean {
+  const cause = error instanceof DrizzleQueryError ? error.cause : error
+  return cause instanceof postgres.PostgresError && cause.code === UNTRANSLATABLE_CHARACTER_CODE
+}
+
+/**
  * The shape of a failed database query as the ORM reports it: the SQL text
  * and the bound parameter values. Matched structurally, not with
  * `instanceof DrizzleQueryError`, so any error carrying a query and its

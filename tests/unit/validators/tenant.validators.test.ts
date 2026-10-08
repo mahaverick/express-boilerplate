@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { RESERVED_SLUGS } from '@/constants/tenant.constants'
-import { newTenantSchema, slugSchema, updateTenantSchema } from '@/validators/tenant.validators'
+import {
+  isLocaleTag,
+  isSlugShaped,
+  isTimeZoneName,
+  newTenantSchema,
+  scanJson,
+  slugSchema,
+  updateTenantSchema,
+} from '@/validators/tenant.validators'
 
 describe('slugSchema', () => {
   it('reserves the seeded platform tenant’s slug', () => {
@@ -92,5 +100,67 @@ describe('updateTenantSchema free-text fields', () => {
     // eslint-disable-next-line unicorn/no-null -- proving the PATCH "clear" contract survives the new refinement
     const result = updateTenantSchema.safeParse({ description: null })
     expect(result.success).toBe(true)
+  })
+})
+
+describe('isSlugShaped', () => {
+  it('accepts a stored slug, including the reserved platform tenant slug', () => {
+    expect(isSlugShaped('acme-inc')).toBe(true)
+    expect(isSlugShaped('platform')).toBe(true)
+  })
+
+  it.each(['a\u{0}b', 'Acme', '-acme', 'acme-', 'a'.repeat(101), ' acme', ''])(
+    'refuses %j',
+    (value) => {
+      expect(isSlugShaped(value)).toBe(false)
+    }
+  )
+})
+
+describe('scanJson', () => {
+  it('finds a NUL in a nested key or string value', () => {
+    expect(scanJson({ a: [{ b: 'x\u{0}' }] }).hasNul).toBe(true)
+    expect(scanJson({ a: { 'b\u{0}': 1 } }).hasNul).toBe(true)
+    // eslint-disable-next-line unicorn/no-null -- JSON null, as a request body carries it
+    expect(scanJson({ a: ['x', 1, true, null] }).hasNul).toBe(false)
+  })
+
+  it('measures nesting depth without recursing', () => {
+    expect(scanJson('x').depth).toBe(0)
+    expect(scanJson({}).depth).toBe(1)
+    expect(scanJson({ a: [{ b: 1 }] }).depth).toBe(3)
+    let deep: unknown = {}
+    for (let level = 0; level < 100_000; level += 1) deep = { a: deep }
+    expect(scanJson(deep).depth).toBe(100_001)
+  })
+})
+
+describe('isTimeZoneName', () => {
+  it.each([
+    'UTC',
+    'Europe/Paris',
+    'Etc/GMT+5',
+    'America/Argentina/Buenos_Aires',
+    'europe/paris',
+    '+0530',
+  ])('accepts %s', (zone) => {
+    expect(isTimeZoneName(zone)).toBe(true)
+  })
+
+  it.each(['Not/AZone', '+05:30', 'Etc/\u{202E}gnp', 'UTC X', '', 'a'.repeat(10_000)])(
+    'refuses %j',
+    (zone) => {
+      expect(isTimeZoneName(zone)).toBe(false)
+    }
+  )
+})
+
+describe('isLocaleTag', () => {
+  it.each(['en', 'fr', 'en-US', 'zh-Hant-TW', 'pt-BR'])('accepts %s', (tag) => {
+    expect(isLocaleTag(tag)).toBe(true)
+  })
+
+  it.each(['en_US', 'x-private', 'i-klingon', 'e', 'en-', 'en\u{7}'])('refuses %j', (tag) => {
+    expect(isLocaleTag(tag)).toBe(false)
   })
 })

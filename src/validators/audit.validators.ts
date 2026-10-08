@@ -4,7 +4,7 @@
  */
 import { z } from 'zod'
 import { AUDIT_ACCESS_KINDS, AUDIT_ACTION_NAMES } from '@/constants/audit.constants'
-import { cursorField } from '@/validators/cursor.validators'
+import { cursorField, isoInstantField } from '@/validators/cursor.validators'
 
 const DEFAULT_AUDIT_PAGE_SIZE = 50
 const MAX_AUDIT_PAGE_SIZE = 100
@@ -12,7 +12,7 @@ const MAX_AUDIT_PAGE_SIZE = 100
 /**
  * The audit cursor's decoded shape: the last entry's time and id.
  */
-export const auditCursorSchema = z.object({ occurredAt: z.iso.datetime(), id: z.uuid() }).strict()
+export const auditCursorSchema = z.object({ occurredAt: isoInstantField, id: z.uuid() }).strict()
 
 const pageFields = {
   cursor: cursorField(auditCursorSchema).optional(),

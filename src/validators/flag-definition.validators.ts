@@ -27,7 +27,7 @@ import {
  * parses to, so every stored snapshot's fingerprint stops matching and the
  * next definitions run re-parses it.
  */
-export const FLAG_PARSER_VERSION = 1
+export const FLAG_PARSER_VERSION = 2
 
 const FINGERPRINT_LENGTH = 16
 
@@ -142,29 +142,69 @@ const KNOWN_FILTER_KEYS: ReadonlySet<string> = new Set([
 ])
 
 /**
- * One condition property. `type` and `operator` are any string here, so an
- * unknown one parses and `detectUnsupported` names it.
+ * The condition keys the evaluator knows. `sort_key` and `description` are
+ * stored for display only (PostHog's UI strips `sort_key` on save, so it
+ * comes from other writers; `description` is `null` once cleared). They are
+ * listed so a flag saved in the UI stays supported; any other key may change
+ * what the condition matches, so it fails closed.
  */
-export const flagPropertySchema = z.object({
-  key: z.string(),
-  type: z.string().optional(),
-  operator: z.string().nullish(),
-  value: z.unknown(),
-  group_type_index: z.number().int().nullish(),
-  negation: z.boolean().optional(),
-})
+const KNOWN_CONDITION_KEYS: ReadonlySet<string> = new Set([
+  'properties',
+  'rollout_percentage',
+  'variant',
+  'aggregation_group_type_index',
+  'sort_key',
+  'description',
+])
+
+/**
+ * The property keys the evaluator knows. `label`, `cohort_name` and
+ * `group_key_names` are stored or injected by PostHog for display only; they
+ * are listed so a flag saved in the UI stays supported (every `$group_key`
+ * property carries `group_key_names`). Any other key may change how the
+ * property matches (a case-sensitivity switch, say), so it fails closed.
+ */
+const KNOWN_PROPERTY_KEYS: ReadonlySet<string> = new Set([
+  'key',
+  'type',
+  'operator',
+  'value',
+  'group_type_index',
+  'negation',
+  'label',
+  'cohort_name',
+  'group_key_names',
+])
+
+/**
+ * One condition property. `type` and `operator` are any string here, so an
+ * unknown one parses and `detectUnsupported` names it; an unknown key is kept
+ * for it to name too.
+ */
+export const flagPropertySchema = z
+  .object({
+    key: z.string(),
+    type: z.string().optional(),
+    operator: z.string().nullish(),
+    value: z.unknown(),
+    group_type_index: z.number().int().nullish(),
+    negation: z.boolean().optional(),
+  })
+  .catchall(z.unknown())
 
 /**
  * One condition property, as validated.
  */
 export type FlagPropertyJson = z.infer<typeof flagPropertySchema>
 
-const conditionSchema = z.object({
-  properties: z.array(flagPropertySchema).nullish(),
-  rollout_percentage: z.number().nullish(),
-  variant: z.string().nullish(),
-  aggregation_group_type_index: z.number().int().nullish(),
-})
+const conditionSchema = z
+  .object({
+    properties: z.array(flagPropertySchema).nullish(),
+    rollout_percentage: z.number().nullish(),
+    variant: z.string().nullish(),
+    aggregation_group_type_index: z.number().int().nullish(),
+  })
+  .catchall(z.unknown())
 
 const variantSchema = z.object({ key: z.string(), rollout_percentage: z.number() })
 
@@ -217,6 +257,7 @@ export type UnsupportedConstruct =
   | 'bucketing_identifier'
   | 'evaluation_contexts'
   | 'unknown_filter'
+  | 'unknown_field'
   | 'early_access'
   | 'group_type'
   | 'cohort'
@@ -301,6 +342,24 @@ function flagLevelConstruct(definition: FlagDefinitionJson): UnsupportedConstruc
     return 'early_access'
   }
   return undefined
+}
+
+/**
+ * A condition or property key the evaluator does not know. The schema keeps
+ * such keys rather than stripping them, so a flag is never evaluated as if a
+ * setting PostHog applies were absent.
+ * @param definition - The definition.
+ * @returns `unknown_field`, or undefined.
+ */
+function fieldConstruct(definition: FlagDefinitionJson): UnsupportedConstruct | undefined {
+  const hasUnknownField = definition.filters.groups.some(
+    (condition) =>
+      Object.keys(condition).some((key) => !KNOWN_CONDITION_KEYS.has(key)) ||
+      (condition.properties ?? []).some((property) =>
+        Object.keys(property).some((key) => !KNOWN_PROPERTY_KEYS.has(key))
+      )
+  )
+  return hasUnknownField ? 'unknown_field' : undefined
 }
 
 /**
@@ -399,7 +458,9 @@ function registryConstruct(
  * contexts, an unknown `filters` key, early access), then a group
  * aggregation that is not the tenant's, then each property (cohort, flag
  * dependency, unknown type or operator, `is_not_set`, a key outside the
- * traits), then a stray condition variant, then disagreement with the
+ * traits), then an unknown condition or property key (after the property
+ * checks, so a cohort or flag dependency with its own extra keys is named as
+ * such), then a stray condition variant, then disagreement with the
  * registry entry. Date and semver operators are supported, but no trait
  * holds a date or a version, so a condition using one is refused by its key.
  * @param definition - The validated definition.
@@ -422,6 +483,7 @@ export function detectUnsupported(
     properties
       .map((property) => propertyConstruct(property, isTenantAggregated, tenantGroupIndex))
       .find((found) => found !== undefined) ??
+    fieldConstruct(definition) ??
     variantConstruct(definition) ??
     (entry === undefined ? undefined : registryConstruct(definition, entry))
   // eslint-disable-next-line unicorn/no-null -- the snapshot's contract is null for an evaluable flag

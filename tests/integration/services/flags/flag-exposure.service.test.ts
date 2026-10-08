@@ -195,12 +195,30 @@ describe('recordExposure', () => {
     expect(await redis.exists(exposureDedupeKey(context, KEY, 'bold'))).toBe(0)
     expect(warn).toHaveBeenCalledWith(
       'Recording an exposure failed; its dedupe key is released when Redis allows',
-      { flag: KEY, reason: 'Error', released: true }
+      {
+        flag: KEY,
+        reason: 'Error',
+        released: true,
+        events: ['$feature_flag_called'],
+        analyticsOutboxWriteFailed: 1,
+      }
     )
     expect(JSON.stringify(warn.mock.calls)).not.toContain(context.distinctId)
 
     await recordExposure(context, KEY, BOLD, 'react')
     expect(await outboxRowsOf('$feature_flag_called')).toHaveLength(1)
+  })
+
+  it('carries analyticsOutboxWriteFailed like every other failed outbox write', async () => {
+    vi.spyOn(analyticsOutboxRepository, 'insertMany').mockRejectedValueOnce(
+      new Error('connection reset')
+    )
+    const warn = vi.spyOn(logger, 'warn')
+    await recordExposure(contextWith(), KEY, BOLD, 'react')
+    const meta = warn.mock.calls.find(([message]) =>
+      message.startsWith('Recording an exposure failed')
+    )?.[1]
+    expect(meta).toMatchObject({ analyticsOutboxWriteFailed: 1 })
   })
 
   it('never throws when the outbox insert and the key release both fail', async () => {
@@ -213,7 +231,13 @@ describe('recordExposure', () => {
     await expect(recordExposure(contextWith(), KEY, BOLD, 'react')).resolves.toBeUndefined()
     expect(warn).toHaveBeenCalledWith(
       'Recording an exposure failed; its dedupe key is released when Redis allows',
-      { flag: KEY, reason: 'Error', released: false }
+      {
+        flag: KEY,
+        reason: 'Error',
+        released: false,
+        events: ['$feature_flag_called'],
+        analyticsOutboxWriteFailed: 1,
+      }
     )
   })
 

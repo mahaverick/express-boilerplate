@@ -7,23 +7,33 @@ import { z } from 'zod'
 import { EMAIL_MESSAGE_STATUSES } from '@/constants/email.constants'
 import { EMAIL_SUPPRESSION_STATE_FILTERS, STATS_RANGES } from '@/constants/platform.constants'
 import { EMAIL_TEMPLATE_KEYS } from '@/utilities/email-template.utilities'
-import { cursorField } from '@/validators/cursor.validators'
+import { cursorField, sortAtField } from '@/validators/cursor.validators'
 import { directionField, pageLimitField, searchQueryField } from '@/validators/platform.validators'
-
-/**
- * A cursor's `sortAt`: `created_at` as UTC text with microseconds, exactly
- * as the repository selects it.
- */
-const SORT_AT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/
 
 /**
  * The email and suppression cursors' decoded shape: the last row's
  * `created_at` (microsecond text) and id.
  */
 export const emailCursorSchema = z.strictObject({
-  sortAt: z.string().regex(SORT_AT_PATTERN),
+  sortAt: sortAtField,
   id: z.uuid(),
 })
+
+/**
+ * A `YYYY-MM-DD` UTC day in years 0001-9998: Postgres has no year 0, and the
+ * service turns an inclusive `to` into an exclusive end one day later, which
+ * must still be a four-digit year.
+ * @param name - The query field's name, for its messages.
+ * @returns The field schema.
+ */
+function utcDayField(name: string) {
+  return z.iso
+    .date(`${name} must be a YYYY-MM-DD date.`)
+    .refine(
+      (day) => day >= '0001-01-01' && day <= '9998-12-31',
+      `${name} must be between 0001-01-01 and 9998-12-31.`
+    )
+}
 
 /**
  * Refuse `direction=prev` without a cursor: there is no "last page" to start from.
@@ -57,8 +67,8 @@ export const platformEmailSearchSchema = z
     template: z.enum(EMAIL_TEMPLATE_KEYS).optional(),
     tenantId: z.uuid('tenantId must be a valid UUID.').optional(),
     userId: z.uuid('userId must be a valid UUID.').optional(),
-    from: z.iso.date('from must be a YYYY-MM-DD date.').optional(),
-    to: z.iso.date('to must be a YYYY-MM-DD date.').optional(),
+    from: utcDayField('from').optional(),
+    to: utcDayField('to').optional(),
     cursor: cursorField(emailCursorSchema).optional(),
     direction: directionField,
     limit: pageLimitField,

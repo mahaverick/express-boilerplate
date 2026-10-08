@@ -68,9 +68,9 @@ describe('tenantPrincipal (via listMembers)', () => {
   })
 })
 
-// A plain `:userId` path segment can never actually parse as `string[] | undefined` under this codebase's route patterns; reaching this 400 needs a param object Express itself would never build.
+// A plain `:userId` path segment can never actually parse as `string[] | undefined` under this codebase's route patterns; this param object is one Express itself would never build, and it gets the same 404 as any id that is not a UUID.
 describe('targetUserIdParameter (via updateMemberRole)', () => {
-  it('forwards a 400 HttpError to next() when :userId is not a single string — a routing bug, not a real request shape', async () => {
+  it('forwards a 404 HttpError to next() when :userId is not a single string, as for any id that is not a UUID', async () => {
     const { next, lastCallArgument } = mockNext()
     const request = {
       user: {
@@ -89,7 +89,7 @@ describe('targetUserIdParameter (via updateMemberRole)', () => {
     expect(next).toHaveBeenCalledTimes(1)
     const error = lastCallArgument()
     expect(error).toBeInstanceOf(HttpError)
-    expect((error as HttpError).statusCode).toBe(400)
-    expect((error as HttpError).message).toBe('Malformed member id')
+    expect((error as HttpError).statusCode).toBe(404)
+    expect((error as HttpError).message).toBe('Member not found')
   })
 })

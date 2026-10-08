@@ -235,7 +235,7 @@ export const AUDIT_ACTIONS = {
     target: 'user',
     metadata: z.strictObject({ tenantId: id.nullable(), clientApp: z.enum(['react', 'apex']) }),
   },
-  // The platform owner changed maintenance mode; the reason is null when none was given.
+  // The platform owner changed maintenance mode; `reason` is the reason sent with the change (null when none was sent, which may leave a stored reason in place), and `reasonChanged` says whether the stored reason differs from before.
   'platform.maintenance_mode_changed': {
     target: 'platform',
     metadata: z.strictObject({
@@ -243,6 +243,7 @@ export const AUDIT_ACTIONS = {
       to: z.enum(MAINTENANCE_MODES),
       reason: reason.nullable(),
       messageChanged: z.boolean(),
+      reasonChanged: z.boolean(),
     }),
   },
 } as const satisfies Record<string, { target: AuditTargetType; metadata: z.ZodType }>

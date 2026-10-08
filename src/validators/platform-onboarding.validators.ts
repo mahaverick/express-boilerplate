@@ -7,14 +7,8 @@ import { z } from 'zod'
 import { ONBOARDING_RANGES, onboardingStepByKey } from '@/constants/onboarding.constants'
 import { ONBOARDING_TENANT_STATE_FILTERS } from '@/constants/platform.constants'
 import { HttpError } from '@/errors/http-error'
-import { cursorField } from '@/validators/cursor.validators'
+import { cursorField, sortAtField } from '@/validators/cursor.validators'
 import { directionField, pageLimitField } from '@/validators/platform.validators'
-
-/**
- * A cursor's `sortAt`: the row's sort timestamp as UTC text with
- * microseconds, exactly as the repository selects it.
- */
-const SORT_AT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/
 
 /**
  * The 404 an unknown or malformed step key answers.
@@ -32,7 +26,7 @@ export const STEP_NOT_FOUND_CODE = 'onboarding_step_not_found'
  * timestamp (microsecond text) and id.
  */
 export const onboardingCursorSchema = z.strictObject({
-  sortAt: z.string().regex(SORT_AT_PATTERN),
+  sortAt: sortAtField,
   id: z.uuid(),
 })
 

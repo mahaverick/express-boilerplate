@@ -481,3 +481,39 @@ describe('GET /platform/flags/evaluate', () => {
     expect(response.status).toBe(404)
   })
 })
+
+describe('GET /platform/flags/evaluate refusals', () => {
+  it('names errors.tenantId on the apex+tenant 400, and audits nothing', async () => {
+    const { userId, tenantId } = await memberWithTenant()
+    const { user: admin, token } = await createTrackedStaff('admin')
+    const response = await staffGet(
+      token,
+      `/flags/evaluate?userId=${userId}&tenantId=${tenantId}&app=apex`
+    )
+    expect(response.status).toBe(400)
+    expect(response.body).toMatchObject({ errors: { tenantId: [expect.any(String)] } })
+    expect(await evaluateAudits(admin.id)).toEqual([])
+  })
+
+  it('audits nothing for a non-member tenant 400 or a malformed query 400', async () => {
+    const { userId } = await memberWithTenant()
+    const { tenantId: otherTenantId } = await memberWithTenant()
+    const { user: admin, token } = await createTrackedStaff('admin')
+    const nonMember = await staffGet(
+      token,
+      `/flags/evaluate?userId=${userId}&tenantId=${otherTenantId}&app=react`
+    )
+    const malformed = await staffGet(token, `/flags/evaluate?userId=${userId}&app=api`)
+    expect([nonMember.status, malformed.status]).toEqual([400, 400])
+    expect(await evaluateAudits(admin.id)).toEqual([])
+  })
+
+  it('answers a soft-deleted user 404, as an unknown one, and audits nothing', async () => {
+    const { userId } = await memberWithTenant()
+    await sql`update users set deleted_at = now() where id = ${userId}`
+    const { user: admin, token } = await createTrackedStaff('admin')
+    const response = await staffGet(token, `/flags/evaluate?userId=${userId}&app=react`)
+    expect(response.status).toBe(404)
+    expect(await evaluateAudits(admin.id)).toEqual([])
+  })
+})

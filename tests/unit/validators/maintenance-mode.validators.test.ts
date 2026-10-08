@@ -6,6 +6,9 @@
 import { describe, expect, it } from 'vitest'
 import { changeMaintenanceModeBody } from '@/validators/maintenance-mode.validators'
 
+// eslint-disable-next-line unicorn/no-null -- the API's contract uses null for "clear"
+const NONE = null
+
 describe('changeMaintenanceModeBody', () => {
   it('accepts a switch-on body and trims the text, keeping newlines', () => {
     const parsed = changeMaintenanceModeBody.parse({
@@ -30,6 +33,18 @@ describe('changeMaintenanceModeBody', () => {
       mode: 'off',
       expectedVersion: 0,
     })
+  })
+
+  it('keeps a null reason as null and an absent one absent', () => {
+    const cleared = changeMaintenanceModeBody.parse({
+      mode: 'full',
+      reason: NONE,
+      expectedVersion: 0,
+    })
+    const absent = changeMaintenanceModeBody.parse({ mode: 'full', expectedVersion: 0 })
+
+    expect(cleared.reason).toBeNull()
+    expect('reason' in absent).toBe(false)
   })
 
   it.each([

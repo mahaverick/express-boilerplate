@@ -10,12 +10,12 @@
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
-  decodeNotificationCursor,
   NotificationRepository,
   type NotificationCursor,
 } from '@/repositories/notification.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
+import { listNotificationsSchema } from '@/validators/notification.validators'
 
 const notificationRepository = new NotificationRepository()
 const userRepository = new UserRepository()
@@ -62,9 +62,9 @@ async function pageThroughAll(
     }
 
     if (nextCursor === undefined) break
-    const decoded = decodeNotificationCursor(nextCursor)
+    const decoded = listNotificationsSchema.parse({ cursor: nextCursor }).cursor
     expect(decoded).toBeDefined()
-    cursor = decoded
+    cursor = decoded && { createdAt: new Date(decoded.createdAt), id: decoded.id }
   }
 
   return { seenIds, pageCount }

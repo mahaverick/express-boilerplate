@@ -12,6 +12,7 @@ import { completeGoogleSignIn } from '@/services/google-auth.service'
 import { reloadMaintenanceMode } from '@/services/maintenance-mode/maintenance-mode-store.service'
 import {
   assertSignInAllowed,
+  getMaintenanceModeStatus,
   getPublicMaintenanceStatus,
 } from '@/services/maintenance-mode/maintenance-mode.service'
 import { truncateAuditLogs } from '../../../helpers/audit-log'
@@ -146,6 +147,35 @@ describe('getPublicMaintenanceStatus', () => {
       mode: 'read_only',
       message: 'Read only.',
       since: changedAt.toISOString(),
+    })
+  })
+})
+
+describe('getMaintenanceModeStatus', () => {
+  it('carries the last change time even while off, where since is null', async () => {
+    const switchedOff = new Date('2026-10-07T09:30:00.000Z')
+    await storeMaintenanceMode('off', { changedAt: switchedOff })
+    await reloadMaintenanceMode()
+
+    const status = await getMaintenanceModeStatus()
+
+    expect(status).toMatchObject({
+      mode: 'off',
+      // eslint-disable-next-line unicorn/no-null -- the status's contract is null while off
+      since: null,
+      changedAt: '2026-10-07T09:30:00.000Z',
+    })
+  })
+
+  it('carries the same time as since while a mode is on', async () => {
+    const switchedOn = new Date('2026-10-07T09:00:00.000Z')
+    await storeMaintenanceMode('read_only', { changedAt: switchedOn })
+    await reloadMaintenanceMode()
+
+    expect(await getMaintenanceModeStatus()).toMatchObject({
+      mode: 'read_only',
+      since: '2026-10-07T09:00:00.000Z',
+      changedAt: '2026-10-07T09:00:00.000Z',
     })
   })
 })

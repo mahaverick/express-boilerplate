@@ -122,6 +122,22 @@ async function pendingFrom(tenantId: string, inviterId: string): Promise<string>
   return invitation.id
 }
 
+/**
+ * An object nested `levels` deep: `{ a: { a: … {} } }`.
+ * @param levels - How many objects deep.
+ * @returns The root.
+ */
+function nested(levels: number): Record<string, unknown> {
+  const root: Record<string, unknown> = {}
+  let cursor = root
+  for (let depth = 1; depth < levels; depth += 1) {
+    const next: Record<string, unknown> = {}
+    cursor.a = next
+    cursor = next
+  }
+  return root
+}
+
 describe('/api/v1/tenants', () => {
   const createdTenantIds: string[] = []
   const createdUserIds: string[] = []
@@ -170,6 +186,21 @@ describe('/api/v1/tenants', () => {
     })
     createdTenantIds.push(tenant.id)
     return tenant
+  }
+
+  /**
+   * PATCH the settings of a fresh tenant as its owner.
+   * @param body - The request body.
+   * @returns The response status.
+   */
+  async function patchSettings(body: unknown): Promise<number> {
+    const { user, token } = await createAuthenticatedUser()
+    const tenant = await createTenant(user.id)
+    const response = await request(app)
+      .patch(`/api/v1/tenants/${tenant.slug}/settings`)
+      .set('Authorization', `Bearer ${token}`)
+      .send(body as object)
+    return response.status
   }
 
   describe('POST /api/v1/tenants', () => {
@@ -1344,6 +1375,203 @@ describe('/api/v1/tenants', () => {
           expect(response.status).toBe(404)
         }
       )
+    })
+  })
+
+  describe('NUL in unvalidated input answers 4xx, not 500', () => {
+    it('a :slug with NUL answers 404 to any signed-in user', async () => {
+      const { token } = await createAuthenticatedUser()
+      const response = await request(app)
+        .get('/api/v1/tenants/a%00b')
+        .set('Authorization', `Bearer ${token}`)
+      expect(response.status).toBe(404)
+    })
+
+    it.each([
+      ['DELETE', '/api/v1/tenants/a%00b/membership'],
+      ['PATCH', '/api/v1/tenants/a%00b/members/0198f8a0-0000-7000-8000-000000000000'],
+    ] as const)('%s %s answers 404', async (method, path) => {
+      const { token } = await createAuthenticatedUser()
+      const response = await request(app)
+        [method.toLowerCase() as 'delete' | 'patch'](path)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ role: 'viewer' })
+      expect(response.status).toBe(404)
+    })
+
+    it('a member :userId with NUL answers 404', async () => {
+      const { user, token } = await createAuthenticatedUser()
+      const tenant = await createTenant(user.id)
+      const response = await request(app)
+        .delete(`/api/v1/tenants/${tenant.slug}/members/a%00b`)
+        .set('Authorization', `Bearer ${token}`)
+      expect(response.status).toBe(404)
+    })
+
+    it.each([
+      ['timezone', { timezone: 'UTC\u{0}x' }],
+      ['locale', { locale: 'en\u{0}' }],
+      ['metadata value', { metadata: { a: 'x\u{0}y' } }],
+      ['metadata key', { metadata: { 'a\u{0}': 1 } }],
+    ])('settings %s with NUL answers 400', async (_label, body) => {
+      const { user, token } = await createAuthenticatedUser()
+      const tenant = await createTenant(user.id)
+      const response = await request(app)
+        .patch(`/api/v1/tenants/${tenant.slug}/settings`)
+        .set('Authorization', `Bearer ${token}`)
+        .send(body)
+      expect(response.status).toBe(400)
+    })
+
+    it('a nested metadata string with NUL answers 400', async () => {
+      const { user, token } = await createAuthenticatedUser()
+      const tenant = await createTenant(user.id)
+      const response = await request(app)
+        .patch(`/api/v1/tenants/${tenant.slug}/settings`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ metadata: { a: [{ b: 'x\u{0}' }] } })
+      expect(response.status).toBe(400)
+    })
+  })
+
+  describe('PATCH /api/v1/tenants/:slug/members/:userId with a malformed id', () => {
+    it('answers 404 for a member id that is not a uuid', async () => {
+      const { user, token } = await createAuthenticatedUser()
+      const tenant = await createTenant(user.id)
+      const response = await request(app)
+        .patch(`/api/v1/tenants/${tenant.slug}/members/not-a-uuid`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ role: 'viewer' })
+      expect(response.status).toBe(404)
+      expect(envelopeOf(response).message).toBe('Member not found')
+    })
+  })
+
+  describe('timezone and locale refuse control and bidi characters', () => {
+    it.each([
+      ['timezone bidi override', { timezone: 'Etc/\u{202E}gnp' }],
+      ['timezone newline', { timezone: 'UTC\nX' }],
+      ['locale bell', { locale: 'en\u{7}' }],
+      ['timezone that names no zone', { timezone: 'Not/AZone' }],
+      ['timezone with a colon offset (shape check)', { timezone: '+05:30' }],
+      ['locale with an underscore', { locale: 'en_US' }],
+      ['locale that is not a language tag', { locale: 'x-private' }],
+    ])('%s', async (_label, body) => {
+      const { user, token } = await createAuthenticatedUser()
+      const tenant = await createTenant(user.id)
+      const response = await request(app)
+        .patch(`/api/v1/tenants/${tenant.slug}/settings`)
+        .set('Authorization', `Bearer ${token}`)
+        .send(body)
+      expect(response.status).toBe(400)
+    })
+
+    it.each([
+      { timezone: 'UTC', locale: 'en' },
+      { timezone: 'Etc/GMT+5', locale: 'zh-Hant-TW' },
+      { timezone: 'America/Argentina/Buenos_Aires', locale: 'pt-BR' },
+    ])('accepts a real zone and language tag %j', async (body) => {
+      const { user, token } = await createAuthenticatedUser()
+      const tenant = await createTenant(user.id)
+      const response = await request(app)
+        .patch(`/api/v1/tenants/${tenant.slug}/settings`)
+        .set('Authorization', `Bearer ${token}`)
+        .send(body)
+      expect(response.status).toBe(200)
+    })
+  })
+
+  describe('metadata is bounded', () => {
+    it('refuses 900 KB of metadata', async () => {
+      expect(await patchSettings({ metadata: { blob: 'x'.repeat(900_000) } })).toBe(400)
+    })
+
+    it('refuses metadata nested 1,000 deep', async () => {
+      expect(await patchSettings({ metadata: nested(1000) })).toBe(400)
+    })
+
+    it('refuses metadata nested 100,000 deep with a 400, not a 500', async () => {
+      const { user, token } = await createAuthenticatedUser()
+      const tenant = await createTenant(user.id)
+      // Raw JSON: serializing a value this deep would overflow the stack in the client too.
+      const levels = 100_000
+      const body = `{"metadata":${'{"a":'.repeat(levels - 1)}{}${'}'.repeat(levels - 1)}}`
+      const response = await request(app)
+        .patch(`/api/v1/tenants/${tenant.slug}/settings`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('Content-Type', 'application/json')
+        .send(body)
+      expect(response.status).toBe(400)
+      const { errors } = response.body as { errors: Record<string, string[]> }
+      expect(errors.metadata).toEqual(['Metadata must be nested at most 10 levels deep.'])
+    })
+
+    it('accepts metadata at the size and depth caps, and refuses one past each', async () => {
+      // 16 384 serialized characters: {"blob":"…"} is 11 characters of frame.
+      expect(await patchSettings({ metadata: { blob: 'x'.repeat(16_384 - 11) } })).toBe(200)
+      expect(await patchSettings({ metadata: { blob: 'x'.repeat(16_384 - 10) } })).toBe(400)
+      expect(await patchSettings({ metadata: nested(10) })).toBe(200)
+      expect(await patchSettings({ metadata: nested(11) })).toBe(400)
+    })
+  })
+
+  describe('logo and website must be http(s) URLs', () => {
+    it.each([
+      ['website javascript:', { website: 'javascript:alert(document.domain)' }],
+      ['logo javascript:', { logo: 'javascript:alert(1)' }],
+      ['logo data:', { logo: 'data:text/html,<script>alert(1)</script>' }],
+      ['website not a URL', { website: 'call us maybe' }],
+      ['website userinfo host swap', { website: 'https://bank.example@evil.example/' }],
+      ['website credentials', { website: 'https://user:pw@host.example/' }],
+      ['website backslash before @', { website: String.raw`https://evil.example\@good.example/` }],
+      ['logo backslash in path', { logo: String.raw`https://good.example/a\b` }],
+    ])('PATCH refuses %s', async (_label, body) => {
+      const { user, token } = await createAuthenticatedUser()
+      const tenant = await createTenant(user.id)
+      const response = await request(app)
+        .patch(`/api/v1/tenants/${tenant.slug}`)
+        .set('Authorization', `Bearer ${token}`)
+        .send(body)
+      expect(response.status).toBe(400)
+    })
+
+    it('POST refuses a javascript: website and still accepts an https one', async () => {
+      const { token } = await createAuthenticatedUser()
+      const refused = await request(app)
+        .post('/api/v1/tenants')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ name: 'Acme', slug: uniqueSlug(), website: 'javascript:alert(1)' })
+      const leaked = envelopeOf<{ id: string }>(refused).data
+      if (leaked) createdTenantIds.push(leaked.id)
+      expect(refused.status).toBe(400)
+      expect(envelopeOf(refused).errors?.website).toEqual(['Website must be an http or https URL.'])
+
+      const slug = uniqueSlug()
+      const accepted = await request(app)
+        .post('/api/v1/tenants')
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          name: 'Acme',
+          slug,
+          website: ' https://acme.example/ ',
+          logo: 'http://localhost:3000/logo.png',
+        })
+      expect(accepted.status).toBe(201)
+      const created = envelopeOf<{ id: string; website: string }>(accepted).data
+      if (created) createdTenantIds.push(created.id)
+      expect(created?.website).toBe('https://acme.example/')
+    })
+
+    it('POST still accepts an @ in the path or query', async () => {
+      const { token } = await createAuthenticatedUser()
+      const response = await request(app)
+        .post('/api/v1/tenants')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ name: 'Acme', slug: uniqueSlug(), website: 'https://example.com/u/@name?x=a@b' })
+      const created = envelopeOf<{ id: string; website: string }>(response).data
+      if (created) createdTenantIds.push(created.id)
+      expect(response.status).toBe(201)
+      expect(created?.website).toBe('https://example.com/u/@name?x=a@b')
     })
   })
 })

@@ -14,6 +14,7 @@ import {
   dedupeSchedulerJobs,
   getQueuePauseStates,
   reconcileQueuePause,
+  resetQueueFailureStreaks,
   setAllQueuesPaused,
 } from '@/services/maintenance-mode/maintenance-mode-queues.service'
 import {
@@ -74,6 +75,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.restoreAllMocks()
+  resetQueueFailureStreaks()
   await setAllQueuesPaused(false)
   await resetMaintenanceMode()
   await reloadMaintenanceMode()
@@ -124,6 +126,53 @@ describe('reconcileQueuePause', () => {
     failing.mockRestore()
     expect(await pauseFlags()).toEqual({ ...ALL_PAUSED, email: false })
     expect(warn).toHaveBeenCalledTimes(1)
+  })
+})
+
+const PAUSE_WARNING = 'A queue could not be paused for maintenance mode; the next reload retries'
+const DEDUPE_WARNING =
+  'Duplicate scheduler runs could not be removed before the queue resumed; duplicate runs may follow'
+
+/**
+ * Pause every queue, then reconcile to `read_only`, which resumes them.
+ */
+async function pauseThenResume(): Promise<void> {
+  await setAllQueuesPaused(true)
+  await reconcileQueuePause(snapshot('read_only', 0), NOW)
+}
+
+describe('the failure streaks', () => {
+  it('logs a failing duplicate cleanup once per streak, and again once the streaks are reset', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    vi.spyOn(getEmailQueue(), 'getJobSchedulers').mockRejectedValue(
+      new Error('Connection is closed.')
+    )
+    const dedupeWarnings = (): number =>
+      warn.mock.calls.filter(([message]) => message === DEDUPE_WARNING).length
+
+    await pauseThenResume()
+    await pauseThenResume()
+    expect(dedupeWarnings()).toBe(1)
+
+    resetQueueFailureStreaks()
+    await pauseThenResume()
+    expect(dedupeWarnings()).toBe(2)
+    expect(await pauseFlags()).toEqual(NONE_PAUSED)
+  })
+
+  it('logs a failing pause check once per streak, and again once the streaks are reset', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    vi.spyOn(getEmailQueue(), 'isPaused').mockRejectedValue(new Error('Connection is closed.'))
+    const pauseWarnings = (): number =>
+      warn.mock.calls.filter(([message]) => message === PAUSE_WARNING).length
+
+    await reconcileQueuePause(snapshot('full', 60_000), NOW)
+    await reconcileQueuePause(snapshot('full', 60_000), NOW)
+    expect(pauseWarnings()).toBe(1)
+
+    resetQueueFailureStreaks()
+    await reconcileQueuePause(snapshot('full', 60_000), NOW)
+    expect(pauseWarnings()).toBe(2)
   })
 })
 

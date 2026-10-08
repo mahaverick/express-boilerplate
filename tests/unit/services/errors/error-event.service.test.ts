@@ -24,6 +24,7 @@ import {
   type ErrorContext,
 } from '@/services/errors/error-event.service'
 import { requestContextStore } from '@/services/request-context.service'
+import { withMutatedModule } from '../../../helpers/mutate'
 import { fakeQueryError, LEAKED_PARAM } from '../../../helpers/query-error'
 
 const ERROR_ID = '0199a1b2-0000-7000-8000-0000000000e1'
@@ -44,17 +45,6 @@ function errorWithFrames(message: string, frames: string[]): Error {
   const error = new Error(message)
   Object.defineProperty(error, 'stack', { value: [`Error: ${message}`, ...frames].join('\n') })
   return error
-}
-
-/**
- * Text without the scrubber's `[secret]` placeholder, which spells the same
- * word as `LEAKED_PARAM` and turns up where the scrubber redacts a long
- * hashed path segment of a test runner's stack.
- * @param text - Printed event or span error.
- * @returns The text without `[secret]`.
- */
-function withoutPlaceholders(text: string): string {
-  return text.replaceAll('[secret]', '')
 }
 
 afterEach(() => {
@@ -187,7 +177,7 @@ describe('what the builder never reads', () => {
       const text = inspect(buildErrorEvent(input, HTTP, ERROR_ID, AT), { depth: Infinity })
       expect(text).toContain("value: 'Failed query'")
       expect(text).not.toContain('select $1')
-      expect(withoutPlaceholders(text)).not.toContain(LEAKED_PARAM)
+      expect(text).not.toContain(LEAKED_PARAM)
     }
   })
 
@@ -348,6 +338,51 @@ describe('buildErrorEvent', () => {
   })
 })
 
+describe('a failed query’s bound parameters, proven', () => {
+  it('the span stand-in never carries a bound parameter', () => {
+    const span = scrubbedErrorForSpan(fakeQueryError())
+    expect(inspect(span, { depth: Infinity })).not.toContain(LEAKED_PARAM)
+  })
+
+  it('the event never carries a bound parameter', () => {
+    const event = buildErrorEvent(fakeQueryError(), HTTP, ERROR_ID, AT)
+    expect(inspect(event, { depth: Infinity })).not.toContain(LEAKED_PARAM)
+  })
+
+  /**
+   * Deliberately red when run with MUTATION_PROOF=1: the event builder loads
+   * against a `postgres-errors` whose `isQueryError` never matches, so a
+   * failed query is treated as a plain error and its message, which carries
+   * the bound parameter, is sent; the real tests' own assertion then fails.
+   * Skipped by default, so the file is green:
+   *
+   *   MUTATION_PROOF=1 pnpm exec vitest run tests/unit/services/errors/error-event.service.test.ts   # red
+   *   pnpm exec vitest run tests/unit/services/errors/error-event.service.test.ts                    # green
+   */
+  it.runIf(process.env.MUTATION_PROOF === '1')(
+    'reproduces "drops a failed query’s bound parameters" against a builder that keeps them',
+    async () => {
+      await withMutatedModule<
+        typeof import('@/errors/postgres-errors'),
+        typeof import('@/services/errors/error-event.service')
+      >(
+        '@/errors/postgres-errors',
+        { isQueryError: (_error: unknown): _error is never => false },
+        () => import('@/services/errors/error-event.service'),
+        (subject) => {
+          const event = inspect(subject.buildErrorEvent(fakeQueryError(), HTTP, ERROR_ID, AT), {
+            depth: Infinity,
+          })
+          const span = inspect(subject.scrubbedErrorForSpan(fakeQueryError()), { depth: Infinity })
+          // Soft, so the span half is checked and reported even when the event half fails.
+          expect.soft(event).not.toContain(LEAKED_PARAM)
+          expect.soft(span).not.toContain(LEAKED_PARAM)
+        }
+      )
+    }
+  )
+})
+
 describe('scrubbedErrorForSpan', () => {
   it('carries only scrubbed text', () => {
     const error = errorWithFrames('no account for jane@example.com', [
@@ -362,7 +397,7 @@ describe('scrubbedErrorForSpan', () => {
 
   it('drops a failed query’s parameters', () => {
     const text = inspect(scrubbedErrorForSpan(fakeQueryError()), { depth: Infinity })
-    expect(withoutPlaceholders(text)).not.toContain(LEAKED_PARAM)
+    expect(text).not.toContain(LEAKED_PARAM)
   })
 
   it('has no stack for a value that is not an Error', () => {

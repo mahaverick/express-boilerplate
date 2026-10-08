@@ -81,6 +81,12 @@ function posthog(): FakePosthog {
 const handled: { resolve: ((status: number) => void) | undefined } = { resolve: undefined }
 
 /**
+ * Resolved by the probe app's `/abort/:kind` route once it is running, so a
+ * test can close its socket while the route is still producing its 5xx.
+ */
+const routeEntered: { resolve: (() => void) | undefined } = { resolve: undefined }
+
+/**
  * A probe app with the real middleware chain, routes that fail on purpose
  * under a mounted router, and the real `errorHandler`.
  * @returns The app.
@@ -130,6 +136,20 @@ function probeApp(): express.Express {
     if (kind === 'object') throw { message: 'x', email: 'a@b.example' }
     throw Object.create(null)
     /* eslint-enable @typescript-eslint/only-throw-error, unicorn/no-null */
+  })
+  // Fails after the client's socket has closed (with `waitForClose=1`): with an abort error (`reset`) or any other (`plain`).
+  router.get('/abort/:kind', async (request_: Request) => {
+    const closed = new Promise<void>((resolve) => {
+      request_.socket.once('close', () => {
+        resolve()
+      })
+    })
+    routeEntered.resolve?.()
+    if (request_.query.waitForClose === '1') await closed
+    if (request_.params.kind === 'reset') {
+      throw Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' })
+    }
+    throw new Error('handler failed after the client left')
   })
   router.get('/duplicate/:email', async (request_: Request) => {
     await db.insert(userModel).values({ email: String(request_.params.email) })
@@ -335,6 +355,66 @@ describe('what is never sent', () => {
       handled.resolve = undefined
       await new Promise<void>((resolve) => server.close(() => resolve()))
     }
+  })
+})
+
+/**
+ * Request `/api/probe/abort/<kind>?waitForClose=1` over a raw socket and
+ * close it once the route is running, so the route fails after the client
+ * left.
+ * @param kind - `reset` (an abort error) or `plain` (any other failure).
+ * @returns The status the error handler wrote.
+ */
+async function failAfterClientLeft(kind: 'reset' | 'plain'): Promise<number> {
+  const server = http.createServer(probeApp())
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const { port } = server.address() as AddressInfo
+  const status = new Promise<number>((resolve) => {
+    handled.resolve = resolve
+  })
+  const entered = new Promise<void>((resolve) => {
+    routeEntered.resolve = resolve
+  })
+  try {
+    const socket = net.connect(port, '127.0.0.1')
+    await new Promise<void>((resolve) => socket.once('connect', resolve))
+    socket.write(`GET /api/probe/abort/${kind}?waitForClose=1 HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n`)
+    await entered
+    socket.destroy()
+    return await status
+  } finally {
+    handled.resolve = undefined
+    routeEntered.resolve = undefined
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+  }
+}
+
+describe('a client that goes away while a 5xx is being produced', () => {
+  it('never reports the abort error a 5xx route raises once the client is gone', async () => {
+    vi.spyOn(logger, 'error').mockImplementation(() => {})
+    const report = vi.spyOn(reporter, 'reportError')
+
+    expect(await failAfterClientLeft('reset')).toBe(500)
+    expect(report).not.toHaveBeenCalled()
+    expect(await sentExceptions()).toEqual([])
+  })
+
+  it('reports the same abort error while the client is still connected', async () => {
+    vi.spyOn(logger, 'error').mockImplementation(() => {})
+
+    const response = await request(probeApp()).get('/api/probe/abort/reset')
+
+    expect(response.status).toBe(500)
+    expect(await sentExceptions()).toHaveLength(1)
+  })
+
+  it('still reports any other failure after the client is gone', async () => {
+    vi.spyOn(logger, 'error').mockImplementation(() => {})
+    const report = vi.spyOn(reporter, 'reportError')
+
+    expect(await failAfterClientLeft('plain')).toBe(500)
+    expect(report).toHaveBeenCalledTimes(1)
+    expect(await sentExceptions()).toHaveLength(1)
   })
 })
 

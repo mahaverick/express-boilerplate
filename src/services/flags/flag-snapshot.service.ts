@@ -12,7 +12,12 @@
  */
 import type { RedisClientType } from 'redis'
 import { logger } from '@/services/logger.service'
-import { createRedisClient, getRedis, redisKey } from '@/services/redis.service'
+import {
+  createRedisClient,
+  getRedis,
+  REDIS_CONNECT_TIMEOUT_MS,
+  redisKey,
+} from '@/services/redis.service'
 import type { ParsedSnapshot } from '@/validators/flag-definition.validators'
 
 /**
@@ -22,6 +27,37 @@ import type { ParsedSnapshot } from '@/validators/flag-definition.validators'
 export const FLAG_SNAPSHOT_BACKSTOP_MS = 60_000
 
 const RELOAD_MESSAGE = 'reload'
+
+/**
+ * The longest `stop()` waits for a subscriber still connecting before it
+ * returns anyway: shutdown must not hang on a Redis or proxy that accepted
+ * the connection and never answers.
+ */
+const STOP_SUBSCRIBER_WAIT_MS = 1000
+
+/**
+ * Settle with `promise`, or reject once `ms` pass first. The timer is
+ * cleared either way and never holds the process open.
+ * @param promise - The work to bound.
+ * @param ms - The deadline.
+ * @param message - The error's message on a timeout.
+ * @returns What `promise` resolves to.
+ * @throws {Error} When the deadline passes first, or with `promise`'s own rejection.
+ */
+async function withDeadline<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(message))
+    }, ms)
+    timer.unref()
+  })
+  try {
+    return await Promise.race([promise, deadline])
+  } finally {
+    clearTimeout(timer)
+  }
+}
 
 /**
  * The Redis key of the stored snapshot.
@@ -40,10 +76,20 @@ export function flagSnapshotChannel(): string {
 }
 
 /**
- * Whether a stored value has the snapshot's shape. A missing `fingerprint`
- * passes (a snapshot stored before fingerprints existed: replicas keep
- * evaluating it, and the definitions job treats it as a mismatch); one that
- * is not a string does not.
+ * Whether a value is a string `Date.parse` reads as a real time.
+ * @param value - Anything.
+ * @returns True for a parseable timestamp string.
+ */
+function isTimestamp(value: unknown): value is string {
+  return typeof value === 'string' && Number.isFinite(Date.parse(value))
+}
+
+/**
+ * Whether a stored value has the snapshot's shape, with both timestamps
+ * parseable (staleness and the older-copy check compare them). A missing
+ * `fingerprint` passes (a snapshot stored before fingerprints existed:
+ * replicas keep evaluating it, and the definitions job treats it as a
+ * mismatch); one that is not a string does not.
  * @param value - The parsed JSON.
  * @returns True when it has the snapshot's fields.
  */
@@ -51,8 +97,8 @@ function isSnapshot(value: unknown): value is ParsedSnapshot {
   if (typeof value !== 'object' || value === null) return false
   const candidate = value as Record<string, unknown>
   return (
-    typeof candidate.fetchedAt === 'string' &&
-    typeof candidate.checkedAt === 'string' &&
+    isTimestamp(candidate.fetchedAt) &&
+    isTimestamp(candidate.checkedAt) &&
     (candidate.fingerprint === undefined || typeof candidate.fingerprint === 'string') &&
     typeof candidate.flags === 'object' &&
     candidate.flags !== null &&
@@ -171,6 +217,23 @@ function isOlder(incoming: ParsedSnapshot, current: ParsedSnapshot | null): bool
 }
 
 /**
+ * Close a client; one already closed throws, which is ignored. A client whose
+ * TCP connect has not landed yet is not closed by this: node-redis has no
+ * socket to destroy until then. Once the connect lands, the handshake
+ * deadline's destroy releases it against a silent peer; against a healthy
+ * Redis it stays open until the process exits, unref'd by the caller so it
+ * never keeps the process alive.
+ * @param client - The client.
+ */
+function destroyQuietly(client: RedisClientType): void {
+  try {
+    client.destroy()
+  } catch {
+    // Already closed: nothing to release.
+  }
+}
+
+/**
  * One replica's in-memory snapshot.
  */
 export interface FlagSnapshotStore {
@@ -182,7 +245,9 @@ export interface FlagSnapshotStore {
    */
   start: () => Promise<void>
   /**
-   * Stop the backstop and close the subscriber. Safe to call twice; a stopped store stays stopped.
+   * Stop the backstop and close the subscriber, waiting at most
+   * `STOP_SUBSCRIBER_WAIT_MS` for one still connecting. Safe to call twice; a
+   * stopped store stays stopped.
    */
   stop: () => Promise<void>
   /**
@@ -253,17 +318,27 @@ export function createFlagSnapshotStore(options: { backstopMs?: number } = {}): 
       if (readiness.hasBeenReady) void reload()
       readiness.hasBeenReady = true
     })
-    try {
+    const handshake = async (): Promise<void> => {
       await client.connect()
       if (state.isClosed || !client.isReady) throw new Error('Closed while connecting')
       await client.subscribe(flagSnapshotChannel(), () => {
         void reload()
       })
+    }
+    try {
+      // connectTimeout bounds only the TCP connect; a peer that accepts and never answers would hang the handshake.
+      await withDeadline(
+        handshake(),
+        REDIS_CONNECT_TIMEOUT_MS,
+        'Flag snapshot subscriber did not finish connecting'
+      )
       // A message published before the subscription was established was missed.
       void reload()
     } catch (error) {
       if (state.subscriber === client) state.subscriber = undefined
-      if (client.isOpen) client.destroy()
+      // A connect that landed after stop() cannot be closed through node-redis; unref'd, it never holds the process.
+      client.unref()
+      destroyQuietly(client)
       if (!state.isClosed) {
         logger.warn('Flag snapshot subscriber failed to start; the backstop keeps reloading', {
           error,
@@ -302,8 +377,14 @@ export function createFlagSnapshotStore(options: { backstopMs?: number } = {}): 
       state.timer = undefined
       const client = state.subscriber
       state.subscriber = undefined
-      if (client?.isOpen) client.destroy()
-      if (state.subscribing) await state.subscribing
+      if (client) destroyQuietly(client)
+      if (state.subscribing) {
+        try {
+          await withDeadline(state.subscribing, STOP_SUBSCRIBER_WAIT_MS, 'stop')
+        } catch {
+          // The attempt settles on its own at its handshake deadline; shutdown does not wait for it.
+        }
+      }
     },
     get: () => state.snapshot,
     reload,
@@ -324,7 +405,9 @@ export async function startFlagSnapshot(): Promise<void> {
 /**
  * Stop this process's snapshot store, for graceful shutdown. Safe to call
  * twice, and when it never started.
- * @returns Resolves once the subscriber is closed.
+ * @returns Resolves once the subscriber is closed or, for one still
+ *   connecting, after at most `STOP_SUBSCRIBER_WAIT_MS`; a connect that
+ *   lands later stays open, unref'd.
  */
 export async function stopFlagSnapshot(): Promise<void> {
   await defaultStore.stop()

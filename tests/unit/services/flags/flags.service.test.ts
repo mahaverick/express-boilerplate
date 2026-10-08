@@ -20,6 +20,24 @@ import {
 import type { FlagContext } from '@/types/flags'
 import { parseDefinitionsResponse } from '@/validators/flag-definition.validators'
 
+/**
+ * Whether the registry's reference experiment is marked an experiment. The
+ * registry has no non-experiment multivariate flag, so one test flips it.
+ */
+const registry = vi.hoisted(() => ({ isCtaExperiment: true }))
+
+vi.mock('@/constants/flags.constants', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/constants/flags.constants')>()
+  return {
+    ...actual,
+    flagEntry: (key: Parameters<typeof actual.flagEntry>[0]) => {
+      const entry = actual.flagEntry(key)
+      return key === 'example_cta_experiment' && !registry.isCtaExperiment
+        ? { ...entry, experiment: false }
+        : entry
+    },
+  }
+})
 vi.mock('@/configs/analytics.config', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/configs/analytics.config')>()
   return { ...actual, isFlagsEnabled: vi.fn(() => true) }
@@ -104,6 +122,7 @@ function snapshotWith(variant: string, variants: string[] = ['control', 'bold'])
 }
 
 beforeEach(() => {
+  registry.isCtaExperiment = true
   vi.mocked(isFlagsEnabled).mockReturnValue(true)
   vi.mocked(getFlagSnapshot).mockReturnValue(snapshotWith('bold'))
 })
@@ -196,5 +215,13 @@ describe('evaluateAll', () => {
         evaluation: { value: 'bold', reason: 'condition_match', conditionIndex: 0 },
       },
     ])
+  })
+})
+
+describe('variantOf on a non-experiment multivariate flag', () => {
+  it('returns the variant and records no exposure', async () => {
+    registry.isCtaExperiment = false
+    await expect(variantOf(TENANT_CONTEXT, 'example_cta_experiment')).resolves.toBe('bold')
+    expect(recordExposure).not.toHaveBeenCalled()
   })
 })

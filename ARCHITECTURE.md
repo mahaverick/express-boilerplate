@@ -244,7 +244,7 @@ verification", covers backfilling them.
 | controllers  | `src/controllers/`  | Parse and validate input, call service methods, shape the response.                             | services, presenters, validators, errors, configs, utilities/response.utilities, constants, types, `middlewares/flag-context.middleware` (the request's memoised flag context and evaluations), and `database/models` types via `import type` only                                                                                                                                                                                                                                                                                                                                                    |
 | services     | `src/services/`     | Business rules, transactions, authorization, side effects.                                      | repositories, policies, other services, workers, jobs, templates, errors, utilities, configs, constants, types, `database/models`, `database.service`, validator types (`import type`, for a validated-input shape a service signature needs)                                                                                                                                                                                                                                                                                                                                                         |
 | policies     | `src/policies/`     | Pure, boolean-returning authorization functions. Never throw.                                   | constants and types only                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| repositories | `src/repositories/` | Queries only.                                                                                   | models, `database.service`, errors, constants                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| repositories | `src/repositories/` | Queries only.                                                                                   | models, `database.service`, errors, constants, utilities (pure helpers: `escapeLikePattern`, `encodeCursor`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | constants    | `src/constants/`    | Shared values: limits, names and keys.                                                          | other constants, types, utilities (pure helpers, e.g. `hashRateLimitIdentity`, `EMAIL_TEMPLATE_KEYS`), validators (`rate-limit.constants.ts` reads `loginSchema`)                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | errors       | `src/errors/`       | Error classes and Postgres error handling (`HttpError`, `isUniqueViolation`, `redactedForLog`). | nothing under `src/`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 
@@ -1015,7 +1015,9 @@ every API and worker process: in-memory snapshot (reload on message, 60 s backst
 - **Snapshot**: each API and worker process starts its store at boot when
   flags are configured. Only the first reload is awaited; the Redis
   subscriber connects in the background, so a slow Redis never holds boot,
-  and the 60 s backstop reloads (and retries the subscription) meanwhile. A
+  and the 60 s backstop reloads (and retries the subscription) meanwhile.
+  The subscriber's handshake is bounded by `REDIS_CONNECT_TIMEOUT_MS` (5 s),
+  and `stop()` waits at most 1 s for one still connecting. A
   stored snapshot that can't be read at boot is treated as none, and the
   process answers fallbacks until a good one arrives; a later failed reload,
   or a read checked earlier than the copy in memory, keeps that copy. The snapshot stores a
@@ -1052,8 +1054,12 @@ every API and worker process: in-memory snapshot (reload on message, 60 s backst
   flag's aggregation, or a group property with no `group_type_index`; both
   are `group_type`), scope or kind drift against the registry,
   device-id bucketing, evaluation contexts, an unknown `filters` key, an
-  unknown property type or operator, a negated property, or a definition
-  that fails the schema) is marked unsupported and never evaluated.
+  unknown property type or operator, a negated property, a condition or
+  property key it does not know (`unknown_field`), or a definition that
+  fails the schema) is marked unsupported and never evaluated. Unknown keys
+  fail closed: the only ones let through are the display-only keys PostHog
+  writes, `sort_key` and `description` on a condition and `label`,
+  `cohort_name` and `group_key_names` on a property.
 - **Route gates** (`requireFlag`, `flag.middleware.ts`) mount after
   `requireAuth`, after `resolveTenant()` for a tenant-scoped flag, and
   before validators. A closed gate answers the unknown-route 404.
@@ -1189,21 +1195,34 @@ customer write answers 503 `READ_ONLY_MODE`; reads and jobs keep running).
   resume still happens.
 - **Changing it.** `PUT /api/v1/platform/maintenance-mode` (owner, step-up,
   `maintenance-mode-change` limiter). Switching on or escalating needs a
-  reason and `confirm` equal to `APP_ENV`; every change to a mode that stays
-  on, a message edit or a de-escalation included, still needs a message, and
-  switching off needs nothing more. `since` is when the mode last changed, and
-  `changedBy` is who set it: a save that keeps the mode (a message edit) leaves
-  both, and leaves the stored reason too unless the body sends a new one. A
-  change of mode stores the reason sent (none if absent) and the actor. After
-  the commit it publishes, queues a notice (in-app and email, type and template
-  `maintenance_mode_changed`) to every other platform owner and admin for a
-  switch-on, an escalation or a switch-off, and entering `full` waits for them
+  reason (`reason: null` is refused like a missing one) and `confirm` equal to
+  `APP_ENV`; every change to a mode that stays on, a save that keeps the mode
+  or a de-escalation included, still needs a message, and switching off needs
+  nothing more. A save that keeps the mode is a no-op, answered with the
+  current state and nothing written, when it changes nothing: the same
+  message, and no reason sent or the stored one sent again. A save that keeps
+  `off` is always a no-op. Any other save, one that changes only the reason
+  included, increments `version`, writes an audit entry and publishes.
+  `since` is when the mode last changed, and `changedBy` is who set it: a
+  save that keeps the mode leaves both, and leaves the stored reason unless
+  the body sends one; a reason replaces it and `reason: null` clears it. A
+  change of mode stores the reason sent (none if absent or `null`) and the
+  actor. The audit entry (`platform.maintenance_mode_changed`) records `from`,
+  `to`, the `reason` sent (null when none was), `messageChanged` and
+  `reasonChanged`: whether the stored reason after the save differs from the
+  one before, so a clear is told from a keep (entries written before the key
+  existed lack it). After the commit it publishes, queues a notice (in-app and
+  email, type and template `maintenance_mode_changed`) to every other platform
+  owner and admin for a switch-on, an escalation or a switch-off (never for a
+  save that keeps the mode), and entering `full` waits for them
   until `MAINTENANCE_MODE_NOTICE_WAIT_MS` after the commit, then pauses the
   queues unless a later change has superseded this one. The type is staff-only
   (`STAFF_ONLY_NOTIFICATION_TYPES`): a user with no platform membership does not
   see it in `GET /notifications/preferences`. `GET` shows the state, the queues
   and the environment name; `GET /platform/system/status` has a `maintenance`
-  section; `GET /api/v1/status/maintenance` is public (120 a minute per IP,
+  section, whose `since` is null while off and whose `changedAt` is when the
+  mode last changed in every mode, `off` included (null only until the
+  replica first reads the row); `GET /api/v1/status/maintenance` is public (120 a minute per IP,
   cacheable for 5 s).
   Once the row has committed, a failed notice lookup or read-back is logged and
   the request still answers 200 with the committed state (the actor's name then

@@ -238,7 +238,7 @@ describe('runFlagsSync', () => {
     expect(createRequests()).toEqual([])
     expect(stdout).toContain('drift example_beta_page: scope\n')
     expect(stdout).toContain('drift example_cta_experiment: kind\n')
-    expect(stdout).toContain('drifted 2.')
+    expect(stdout).toContain('Created 0, present 0, drifted 2.\n')
   })
 
   it('names a variant drift', async () => {
@@ -274,10 +274,53 @@ describe('runFlagsSync', () => {
   it('exits 2 on a dry run that finds drift', async () => {
     posthog().featureFlags = [existing('example_cta_experiment', { groups: [] })]
 
-    const { code } = await run(['--dry-run'])
+    const { code, stdout } = await run(['--dry-run'])
 
     expect(code).toBe(2)
     expect(createRequests()).toEqual([])
+    expect(stdout).toContain('Dry run: 1 to create, 0 present, 1 drifted.\n')
+  })
+
+  it('does not count a drifted flag as both present and drifted (counts sum to the registry)', async () => {
+    const [beta, cta] = inSync()
+    if (!beta || !cta) throw new Error('setup: inSync returns both flags')
+    posthog().featureFlags = [
+      // eslint-disable-next-line unicorn/no-null -- person aggregation on a tenant-scoped flag: drift
+      { ...beta, filters: { aggregation_group_type_index: null, groups: [] } },
+      cta,
+    ]
+    const { code, stdout } = await run()
+    expect(code).toBe(2)
+    expect(stdout).toContain('Created 0, present 1, drifted 1.')
+  })
+
+  it('exits 1 naming the group types when they cannot be read', async () => {
+    posthog().groupTypesStatus = 500
+    const { code, stderr } = await run()
+    expect(code).toBe(1)
+    expect(stderr).toBe('Could not read PostHog group types\n')
+    expect(createRequests()).toEqual([])
+  })
+
+  it('treats a soft-deleted flag in the list as missing and creates it', async () => {
+    const [beta, cta] = inSync()
+    if (!beta || !cta) throw new Error('setup: inSync returns both flags')
+    posthog().featureFlags = [{ ...beta, deleted: true }, cta]
+    const { code } = await run()
+    expect(code).toBe(0)
+    expect(
+      posthog().featureFlagCreates.map((created) => (created as { key?: string }).key)
+    ).toEqual(['example_beta_page'])
+  })
+
+  it('exits 1 when the list never ends (MAX_PAGES)', async () => {
+    posthog().featureFlagsPageLimit = 1
+    posthog().featureFlags = Array.from({ length: 51 }, (_, index) =>
+      existing(`other_${String(index)}`, { groups: [] })
+    )
+    const { code, stderr } = await run()
+    expect(code).toBe(1)
+    expect(stderr).toBe('PostHog flag list did not end\n')
   })
 
   it('refuses before creating anything when a tenant-scoped flag needs a missing tenant group type', async () => {
@@ -305,6 +348,35 @@ describe('runFlagsSync', () => {
     expect(code).toBe(0)
     expect(stdout).toContain('present example_cta_experiment\n')
     expect(stdout).toContain('Created 1, present 1, drifted 0.')
+  })
+
+  it('creates the missing flag and reports the drifted one on the same run, exiting 2', async () => {
+    posthog().featureFlags = [existing('example_cta_experiment', { groups: [] })]
+
+    const { code, stdout } = await run()
+
+    expect(code).toBe(2)
+    expect(
+      posthog().featureFlagCreates.map((created) => (created as { key?: string }).key)
+    ).toEqual(['example_beta_page'])
+    expect(stdout).toBe(
+      'drift example_cta_experiment: kind\ncreated example_beta_page\nCreated 1, present 0, drifted 1.\n'
+    )
+  })
+
+  it('counts a create that lost a race as present beside a drifted flag', async () => {
+    posthog().featureFlags = [existing('example_cta_experiment', { groups: [] })]
+    posthog().onFeatureFlagCreate(() => ({
+      status: 400,
+      json: { type: 'validation_error', code: 'unique', attr: 'key', detail: 'exists' },
+    }))
+
+    const { code, stdout } = await run()
+
+    expect(code).toBe(2)
+    expect(stdout).toBe(
+      'drift example_cta_experiment: kind\npresent example_beta_page\nCreated 0, present 1, drifted 1.\n'
+    )
   })
 
   it('exits 1 on any other refused create, naming the status and code only', async () => {

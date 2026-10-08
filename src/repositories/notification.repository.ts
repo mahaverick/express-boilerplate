@@ -11,6 +11,7 @@ import {
 } from '@/database/models/notification.model'
 import { HttpError } from '@/errors/http-error'
 import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
+import { encodeCursor } from '@/utilities/cursor.utilities'
 
 /**
  * The two fields a keyset pagination cursor for `NotificationRepository.list`
@@ -31,49 +32,15 @@ export interface NotificationCursor {
 
 /**
  * Encode a page's last row into the opaque, URL-safe cursor string
- * `NotificationRepository.list` returns as `nextCursor`. `createdAt` is
+ * `NotificationRepository.list` returns as `nextCursor`, through the shared
+ * `encodeCursor` that `cursorField` decodes against. `createdAt` is
  * serialized with `toISOString()`, since the cursor goes to the client and
  * comes back as a query parameter.
  * @param cursor - The last row's `createdAt` and `id`.
  * @returns A base64url-encoded, opaque cursor string.
  */
 export function encodeNotificationCursor(cursor: NotificationCursor): string {
-  return Buffer.from(
-    JSON.stringify({ createdAt: cursor.createdAt.toISOString(), id: cursor.id })
-  ).toString('base64url')
-}
-
-/**
- * Decode a cursor string produced by `encodeNotificationCursor` back into
- * the `{ createdAt, id }` pair `NotificationRepository.list` accepts as
- * `options.cursor`.
- *
- * Never throws: the cursor is client-supplied, and a malformed or tampered one
- * decodes as no cursor (the first page), not a 500.
- * @param raw - The cursor string, as returned by `encodeNotificationCursor` or supplied by a client.
- * @returns The decoded `{ createdAt, id }` pair, or undefined when `raw` is not a validly-encoded cursor.
- */
-export function decodeNotificationCursor(raw: string): NotificationCursor | undefined {
-  try {
-    const decoded: unknown = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'))
-    if (
-      typeof decoded !== 'object' ||
-      decoded === null ||
-      !('createdAt' in decoded) ||
-      !('id' in decoded) ||
-      typeof decoded.createdAt !== 'string' ||
-      typeof decoded.id !== 'string'
-    ) {
-      return undefined
-    }
-
-    const createdAt = new Date(decoded.createdAt)
-    if (Number.isNaN(createdAt.getTime())) return undefined
-
-    return { createdAt, id: decoded.id }
-  } catch {
-    return undefined
-  }
+  return encodeCursor({ createdAt: cursor.createdAt.toISOString(), id: cursor.id })
 }
 
 /**

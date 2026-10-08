@@ -22,12 +22,16 @@ const ROW_ID = 1
 
 /**
  * What one change writes; `version` and `changed_at` are set by the update itself (`changed_at` only when the mode changes).
- * When the mode stays the same the stored `changed_by` is kept, and so is the stored `reason` unless `reason` is given.
+ * When the mode stays the same the stored `changed_by` is kept, and so is the stored `reason` unless `reason` is given (`null` clears it).
  */
 export interface MaintenanceModeChange {
   mode: MaintenanceMode
   message: string | null
-  reason: string | null
+  /**
+   * The reason to store; `null` stores none. `undefined` keeps the stored
+   * reason on a save that keeps the mode, and stores none on a mode change.
+   */
+  reason?: string | null | undefined
   changedBy: string
 }
 
@@ -132,7 +136,8 @@ export async function findMaintenanceModeStaff(
  * the transaction's time only when the mode differs from the stored one, so
  * a message edit or any other save that keeps the mode leaves it alone. Such
  * a save also keeps `changed_by` (who set the mode) and keeps the stored
- * `reason` unless the change carries one; a mode change always writes both.
+ * `reason` unless the change carries one (`null` clears it); a mode change
+ * always writes both.
  * @param change - The new mode, message, reason and actor.
  * @param expectedVersion - The version the caller read.
  * @param executor - The change's transaction.
@@ -148,7 +153,10 @@ export async function updateMaintenanceModeStateIfVersion(
     .set({
       mode: change.mode,
       message: change.message,
-      reason: sql`case when ${maintenanceModeState.mode} = ${change.mode} then coalesce(${change.reason}::text, ${maintenanceModeState.reason}) else ${change.reason}::text end`,
+      reason:
+        change.reason === undefined
+          ? sql`case when ${maintenanceModeState.mode} = ${change.mode} then ${maintenanceModeState.reason} else null end`
+          : sql`${change.reason}::text`,
       changedBy: sql`case when ${maintenanceModeState.mode} = ${change.mode} then ${maintenanceModeState.changedBy} else ${change.changedBy}::varchar end`,
       changedAt: sql`case when ${maintenanceModeState.mode} = ${change.mode} then ${maintenanceModeState.changedAt} else now() end`,
       version: sql`${maintenanceModeState.version} + 1`,

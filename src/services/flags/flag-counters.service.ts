@@ -151,9 +151,11 @@ function countsOf(
 export async function getFlagsStatus(at: Date = new Date()): Promise<FlagsStatus> {
   const isEnabled = isFlagsEnabled()
   const snapshot = getFlagSnapshot()
+  // A checkedAt that does not parse (NaN) is stale too: it confirms nothing.
+  const checkedAtMs = snapshot === null ? NaN : Date.parse(snapshot.checkedAt)
   const isStale =
     isEnabled &&
-    (snapshot === null || at.getTime() - Date.parse(snapshot.checkedAt) > FLAG_SNAPSHOT_STALE_MS)
+    (!Number.isFinite(checkedAtMs) || at.getTime() - checkedAtMs > FLAG_SNAPSHOT_STALE_MS)
   const status: FlagsStatus = {
     enabled: isEnabled,
     // eslint-disable-next-line unicorn/no-null -- the contract sends JSON null

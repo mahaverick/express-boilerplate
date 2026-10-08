@@ -315,9 +315,50 @@ export function classifyMaintenanceRoute(
 }
 
 /**
- * What the gate does with one request in one mode: let it through, or
- * refuse it with the mode's code. `OPTIONS` is always let through (`cors`
- * answers preflights before the gate; any other OPTIONS is Express's own).
+ * What the gate does with one request in one mode, and the route rule it
+ * decided by.
+ */
+export interface MaintenanceDecision {
+  /**
+   * `'allow'`, or the mode's refusal code.
+   */
+  verdict: 'allow' | typeof MAINTENANCE_MODE_CODE | typeof READ_ONLY_MODE_CODE
+  /**
+   * The matched rule; undefined when none matched or none was needed (mode
+   * `off`, an `OPTIONS` request).
+   */
+  rule: MaintenanceRouteRule | undefined
+}
+
+/**
+ * What the gate does with one request in one mode, classifying the route
+ * once: let it through, or refuse it with the mode's code. `OPTIONS` is
+ * always let through (`cors` answers preflights before the gate; any other
+ * OPTIONS is Express's own).
+ * @param mode - This replica's mode.
+ * @param method - The request method.
+ * @param path - The request path, without the query string.
+ * @returns The verdict and the rule it was decided by.
+ */
+export function maintenanceDecision(
+  mode: MaintenanceMode,
+  method: string,
+  path: string
+): MaintenanceDecision {
+  const upper = method.toUpperCase()
+  if (mode === 'off' || upper === 'OPTIONS') return { verdict: 'allow', rule: undefined }
+  const rule = classifyMaintenanceRoute(upper, path)
+  if (mode === 'read_only') {
+    const isRead = upper === 'GET' || upper === 'HEAD'
+    const access = rule?.readOnly ?? (isRead ? 'allow' : 'block')
+    return { verdict: access === 'allow' ? 'allow' : READ_ONLY_MODE_CODE, rule }
+  }
+  return { verdict: rule?.full === 'allow' ? 'allow' : MAINTENANCE_MODE_CODE, rule }
+}
+
+/**
+ * What the gate does with one request in one mode (`maintenanceDecision`
+ * without the rule).
  * @param mode - This replica's mode.
  * @param method - The request method.
  * @param path - The request path, without the query string.
@@ -327,14 +368,6 @@ export function maintenanceVerdict(
   mode: MaintenanceMode,
   method: string,
   path: string
-): 'allow' | typeof MAINTENANCE_MODE_CODE | typeof READ_ONLY_MODE_CODE {
-  const upper = method.toUpperCase()
-  if (mode === 'off' || upper === 'OPTIONS') return 'allow'
-  const rule = classifyMaintenanceRoute(upper, path)
-  if (mode === 'read_only') {
-    const isRead = upper === 'GET' || upper === 'HEAD'
-    const access = rule?.readOnly ?? (isRead ? 'allow' : 'block')
-    return access === 'allow' ? 'allow' : READ_ONLY_MODE_CODE
-  }
-  return rule?.full === 'allow' ? 'allow' : MAINTENANCE_MODE_CODE
+): MaintenanceDecision['verdict'] {
+  return maintenanceDecision(mode, method, path).verdict
 }
