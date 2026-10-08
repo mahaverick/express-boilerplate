@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { getEnv } from '@/configs/env.config'
+import { resetRedisDeadlineForTests } from '@/services/redis-deadline.service'
 import { MS_PER_SECOND, requireDurationMs } from '@/utilities/duration.utilities'
+import { answerWithinBound, stalledCommand } from '../../helpers/redis-stall'
 
 const redis = {
   set: vi.fn<(key: string, value: string, options: unknown) => Promise<string>>(),
@@ -21,6 +23,7 @@ vi.mock('@/services/logger.service', () => ({
 describe('session denylist', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    resetRedisDeadlineForTests()
     redis.set.mockResolvedValue('OK')
     redis.exists.mockResolvedValue(0)
   })
@@ -54,5 +57,11 @@ describe('session denylist', () => {
     redis.set.mockRejectedValue(new Error('connection refused'))
     const { denySession } = await import('@/services/session-denylist.service')
     await expect(denySession('session-abc')).resolves.toBe('failed')
+  })
+
+  it('ALLOWS within the deadline when Redis is connected but does not answer, as on any other failure', async () => {
+    redis.exists.mockImplementation(stalledCommand)
+    const { isSessionDenied } = await import('@/services/session-denylist.service')
+    expect(await answerWithinBound(isSessionDenied('session-abc'))).toBe(false)
   })
 })

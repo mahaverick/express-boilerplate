@@ -6,6 +6,7 @@
  * every invocation, so a per-test `mockReturnValue` takes effect
  * without `vi.resetModules()`.
  */
+import express from 'express'
 import passport from 'passport'
 import type { VerifyCallback } from 'passport-google-oauth20'
 import { describe, expect, it, vi } from 'vitest'
@@ -15,7 +16,10 @@ import {
   createOAuthSessionMiddleware,
   GOOGLE_STRATEGY_NAME,
 } from '@/configs/passport.config'
+import { resetRedisDeadlineForTests } from '@/services/redis-deadline.service'
 import { getRedis } from '@/services/redis.service'
+import { answerWithinBound, stalledCommand } from '../../helpers/redis-stall'
+import { request } from '../../helpers/request'
 
 vi.mock('@/configs/env.config', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/configs/env.config')>()
@@ -227,5 +231,26 @@ describe('createOAuthSessionMiddleware', () => {
 
     expect(secondNext).toHaveBeenCalledTimes(1)
     expect(vi.mocked(getRedis)).toHaveBeenCalledTimes(2)
+  })
+
+  it('answers, within the deadline, when the session store does not answer', async () => {
+    resetRedisDeadlineForTests()
+    // A connected client whose session reads and writes never settle.
+    const set = vi.fn(stalledCommand)
+    const stalled = { get: stalledCommand, set, expire: stalledCommand, del: stalledCommand }
+    vi.mocked(getRedis).mockResolvedValueOnce(stalled as never)
+    const app = express()
+    app.get('/auth/google', createOAuthSessionMiddleware(), (thisRequest, response) => {
+      // Modified, so express-session saves it before the response ends, as the OAuth state does.
+      Object.assign(thisRequest.session, { probe: 'state' })
+      response.json({ ok: true })
+    })
+
+    const response = await answerWithinBound((async () => request(app).get('/auth/google'))())
+
+    expect(response).not.toBe('hung')
+    // The session save reached the stalled store: the deadline, not a skipped save, ended the wait.
+    expect(set).toHaveBeenCalledTimes(1)
+    resetRedisDeadlineForTests()
   })
 })

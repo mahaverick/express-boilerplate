@@ -987,8 +987,9 @@ tracking, flags, the maintenance queue states and pending-notice check) is bound
 `status-read.service.ts`): a stalled Redis answers the section with what it
 reports when Redis fails, and one `warn`. The bound covers the handler
 only. A request reaches it after `requireAuth`'s session denylist read and
-the route's rate limiter, and those Redis calls have no bound yet, so a
-stalled Redis can still hang an authenticated request, this page included.
+the route's rate limiter, which have the shorter request-path deadline
+(see [Data layer](#data-layer)), so a stalled Redis costs this page at most
+that deadline before them.
 
 What an event may carry, and what it never does, is in
 [SECURITY.md](SECURITY.md#error-tracking-what-reaches-posthog).
@@ -1309,7 +1310,25 @@ hanging at boot. After `ready`, every client retries forever with backoff
 reconnects nothing waits for Redis: node-redis runs with
 `disableOfflineQueue`, a producer enqueue rejects, `isQueueReachable` reports
 false for a queue connection in any post-ready status but `ready`, and
-`closeQueue` disconnects instead of queueing a `QUIT`. A queue connection that
+`closeQueue` disconnects instead of queueing a `QUIT`.
+
+**Through a stalled Redis.** node-redis never times out a command it has
+written, so a Redis that is connected but does not answer would hold every
+request that touches it. Every Redis call on the request path (the session
+denylist read, the rate-limit store and its switch to Redis, the staff-visit
+and view-audit dedupes, the flag exposure dedupe, the timeline budget and
+cache, the invitation recipient budget, the mail cooldowns, the OAuth session
+store and `isRedisReachable()`) runs under `withRedisDeadline`
+(`redis-deadline.service.ts`): a call that has not answered in
+`REDIS_REQUEST_DEADLINE_MS` (300 ms) fails, and for the next
+`REDIS_STALL_COOLDOWN_MS` (5 s) every such call fails at once without asking
+Redis, then the next call tries again. A failure takes the caller's existing
+outage path (fail open, memory, or `next(error)`), so a stall is handled as an
+outage. One `warn` marks each cooldown and one `info` the first success after
+it. Workers, BullMQ, pub/sub and the status reads (bounded by
+`STATUS_READ_TIMEOUT_MS`) are outside it.
+
+A queue connection that
 gives up before its first `ready` is replaced on next use, and the producer's
 queues with it. Workers on it never recover by themselves: BullMQ does not
 re-initialise a connection whose init failed, and when that failure is not one

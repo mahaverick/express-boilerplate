@@ -15,6 +15,7 @@ import {
 import { getEnv, isCookieSecure } from '@/configs/env.config'
 import { GOOGLE_STRATEGY_NAME } from '@/constants/auth.constants'
 import { logger } from '@/services/logger.service'
+import { withRedisDeadline } from '@/services/redis-deadline.service'
 import { getRedis, redisKey } from '@/services/redis.service'
 
 export { GOOGLE_STRATEGY_NAME } from '@/constants/auth.constants'
@@ -119,15 +120,60 @@ export function oauthSessionCookieName(env: {
 }
 
 /**
+ * The shared Redis client's type.
+ */
+type RedisClient = Awaited<ReturnType<typeof getRedis>>
+
+/**
+ * The client connect-redis is given: the commands it sends while a request
+ * waits (`get`, `set`, `expire` for a touch, `del` for a destroy) run under
+ * `withRedisDeadline`, so a stalled Redis fails the OAuth request
+ * (express-session passes the error to `next`) instead of holding it. Every
+ * other property is the client's own, bound to it.
+ * @param client - The shared client.
+ * @returns A view of the client with those four commands bounded.
+ */
+function boundedSessionClient(client: RedisClient): RedisClient {
+  const bounded = new Map<PropertyKey, unknown>([
+    ['get', (key: string) => withRedisDeadline(() => client.get(key), 'OAuth session read')],
+    [
+      'set',
+      (key: string, value: string, options?: Parameters<RedisClient['set']>[2]) =>
+        withRedisDeadline(() => client.set(key, value, options), 'OAuth session write'),
+    ],
+    [
+      'expire',
+      (key: string, seconds: number) =>
+        withRedisDeadline(() => client.expire(key, seconds), 'OAuth session touch'),
+    ],
+    [
+      'del',
+      (keys: string | string[]) =>
+        withRedisDeadline(() => client.del(keys), 'OAuth session destroy'),
+    ],
+  ])
+  return new Proxy(client, {
+    get(target, property): unknown {
+      if (bounded.has(property)) return bounded.get(property)
+      // Bound to the real client: its methods may use private fields a Proxy receiver lacks.
+      const value: unknown = Reflect.get(target, property, target)
+      return typeof value === 'function'
+        ? (value as (...parameters: unknown[]) => unknown).bind(target)
+        : value
+    },
+  })
+}
+
+/**
  * Build the `express-session` options once a Redis client is available.
  * @param client - A connected (or connecting-but-queuing) node-redis client.
  * @returns Options for `express-session`'s `session()` factory.
  */
-function buildOAuthSessionOptions(client: Awaited<ReturnType<typeof getRedis>>): SessionOptions {
+function buildOAuthSessionOptions(client: RedisClient): SessionOptions {
   const env = getEnv()
   return {
     // connect-redis's own default prefix, `sess:`, would sit outside REDIS_KEY_PREFIX.
-    store: new RedisStore({ client, prefix: `${redisKey('sess')}:` }),
+    store: new RedisStore({ client: boundedSessionClient(client), prefix: `${redisKey('sess')}:` }),
     secret: env.SESSION_SECRET,
     resave: false,
     saveUninitialized: false,

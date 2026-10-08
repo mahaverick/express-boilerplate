@@ -24,6 +24,7 @@ import { requestContextStore } from '@/services/request-context.service'
 import { denySession } from '@/services/session-denylist.service'
 import { signAccessToken } from '@/services/session.service'
 import { withMutatedModule } from '../../helpers/mutate'
+import { answerWithinBound, stalledCommand } from '../../helpers/redis-stall'
 
 const userRepository = new UserRepository()
 
@@ -246,6 +247,38 @@ describe('requireAuth', () => {
         // Not toBeInstanceOf(HttpError): vi.resetModules() re-evaluates error.middleware.ts too, giving a different HttpError class identity — a false negative, not a real failure.
         expect(error.statusCode).toBe(401)
         expect(error.code).toBe(ACCESS_TOKEN_EXPIRED_CODE)
+      }
+    )
+  })
+
+  /**
+   * A test-local Redis whose `EXISTS` never settles, the way a connected
+   * server that has stopped answering behaves. Loaded through
+   * `withMutatedModule`, so the deadline's cooldown state is fresh too and
+   * nothing here leaks into the next test.
+   */
+  it('lets an authenticated request through, within the deadline, when the denylist read stalls', async () => {
+    const user = await createUser()
+    const token = signAccessToken(user, randomUUID())
+
+    await withMutatedModule<
+      typeof import('@/services/redis.service'),
+      typeof import('@/middlewares/auth.middleware')
+    >(
+      '@/services/redis.service',
+      { getRedis: () => Promise.resolve({ exists: stalledCommand } as never) },
+      () => import('@/middlewares/auth.middleware'),
+      async (subject) => {
+        const request = buildRequest(`Bearer ${token}`)
+        const { next, lastCallArgument } = mockNext()
+
+        const outcome = await answerWithinBound(subject.requireAuth(request, noResponse, next))
+
+        expect(outcome).not.toBe('hung')
+        // Fail open, as on any denylist failure: the request is not denied.
+        expect(next).toHaveBeenCalledTimes(1)
+        expect(lastCallArgument()).toBeUndefined()
+        expect(request.user?.id).toBe(user.id)
       }
     )
   })

@@ -4,8 +4,10 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { didClaimMailCooldown } from '@/services/mail-cooldown.service'
+import { resetRedisDeadlineForTests } from '@/services/redis-deadline.service'
 import { getRedis } from '@/services/redis.service'
 import { hashRateLimitIdentity } from '@/utilities/rate-limit-key.utilities'
+import { answerWithinBound, stalledCommand } from '../../helpers/redis-stall'
 
 vi.mock('@/services/redis.service', () => ({
   getRedis: vi.fn(),
@@ -15,6 +17,7 @@ vi.mock('@/services/redis.service', () => ({
 const set = vi.fn<(key: string, value: string, options: unknown) => Promise<string | null>>()
 
 beforeEach(() => {
+  resetRedisDeadlineForTests()
   set.mockReset()
   vi.mocked(getRedis).mockReset()
   vi.mocked(getRedis).mockResolvedValue({ set } as unknown as Awaited<ReturnType<typeof getRedis>>)
@@ -88,4 +91,21 @@ describe('didClaimMailCooldown', () => {
       })
     ).resolves.toBe(false)
   })
+
+  it.each([
+    { whenUnavailable: 'send' as const, expected: true },
+    { whenUnavailable: 'skip' as const, expected: false },
+  ])(
+    "answers the caller's choice ($whenUnavailable) within the deadline when Redis does not answer",
+    async ({ whenUnavailable, expected }) => {
+      set.mockImplementation(stalledCommand)
+      expect(
+        await answerWithinBound(
+          didClaimMailCooldown('password-reset-notice', 'owner@example.com', 300_000, {
+            whenUnavailable,
+          })
+        )
+      ).toBe(expected)
+    }
+  )
 })

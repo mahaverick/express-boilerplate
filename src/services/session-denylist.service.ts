@@ -1,5 +1,6 @@
 import { getEnv } from '@/configs/env.config'
 import { logger } from '@/services/logger.service'
+import { withRedisDeadline } from '@/services/redis-deadline.service'
 import { getRedis, redisKey } from '@/services/redis.service'
 import { MS_PER_SECOND, requireDurationMs } from '@/utilities/duration.utilities'
 
@@ -64,7 +65,11 @@ export async function denySession(sessionId: string): Promise<DenyOutcome> {
 export async function isSessionDenied(sessionId: string): Promise<boolean> {
   try {
     const redis = await getRedis()
-    return (await redis.exists(denylistKey(sessionId))) === 1
+    const exists = await withRedisDeadline(
+      () => redis.exists(denylistKey(sessionId)),
+      'session denylist read'
+    )
+    return exists === 1
   } catch (error) {
     logger.warn('Denylist unreachable; allowing the request', {
       sessionId,

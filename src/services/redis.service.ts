@@ -6,6 +6,7 @@
 import { createClient, type RedisClientType } from 'redis'
 import { getEnv } from '@/configs/env.config'
 import { logger } from '@/services/logger.service'
+import { withRedisDeadline } from '@/services/redis-deadline.service'
 
 /**
  * Module state in one object, so no function reassigns a top-level binding.
@@ -118,13 +119,14 @@ export async function getRedis(): Promise<RedisClientType> {
 /**
  * Check that Redis answers.
  * @returns True when PING succeeds; false once the client has been closed,
- *   without attempting to reconnect.
+ *   without attempting to reconnect, and false when PING misses the
+ *   request-path deadline or a stall cooldown is open (`withRedisDeadline`).
  */
 export async function isRedisReachable(): Promise<boolean> {
   if (state.closed) return false
   try {
     const client = await getRedis()
-    const reply = await client.ping()
+    const reply = await withRedisDeadline(() => client.ping(), 'readiness ping')
     return reply === 'PONG'
   } catch {
     return false

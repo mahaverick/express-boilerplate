@@ -7,6 +7,7 @@
  */
 import { TIMELINE_AUDIT_THROTTLE_SECONDS } from '@/constants/timeline.constants'
 import { logger } from '@/services/logger.service'
+import { withRedisDeadline } from '@/services/redis-deadline.service'
 import { getRedis } from '@/services/redis.service'
 import type { TimelineKind } from '@/types/timeline'
 
@@ -74,10 +75,14 @@ export async function auditThrottledView(audit: ThrottledViewAudit): Promise<voi
   let hasClaimedKey = false
   try {
     const redis = await getRedis()
-    const reply = await redis.set(audit.key, '1', {
-      condition: 'NX',
-      expiration: { type: 'EX', value: TIMELINE_AUDIT_THROTTLE_SECONDS },
-    })
+    const reply = await withRedisDeadline(
+      () =>
+        redis.set(audit.key, '1', {
+          condition: 'NX',
+          expiration: { type: 'EX', value: TIMELINE_AUDIT_THROTTLE_SECONDS },
+        }),
+      'view audit throttle'
+    )
     if (reply === null) return
     hasClaimedKey = true
   } catch (error) {

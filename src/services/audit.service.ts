@@ -20,6 +20,7 @@ import {
 import { enqueueAuditAnalytics } from '@/services/analytics/analytics-outbox.service'
 import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
+import { withRedisDeadline } from '@/services/redis-deadline.service'
 import { getRedis, redisKey } from '@/services/redis.service'
 import { requestContextStore } from '@/services/request-context.service'
 import type { Actor } from '@/types/actor'
@@ -123,10 +124,14 @@ export async function recordPlatformAccess(
   let hasClaimedKey = false
   try {
     const redis = await getRedis()
-    const reply = await redis.set(key, '1', {
-      condition: 'NX',
-      expiration: { type: 'EX', value: PLATFORM_ACCESS_DEDUPE_SECONDS },
-    })
+    const reply = await withRedisDeadline(
+      () =>
+        redis.set(key, '1', {
+          condition: 'NX',
+          expiration: { type: 'EX', value: PLATFORM_ACCESS_DEDUPE_SECONDS },
+        }),
+      'platform access dedupe'
+    )
     if (reply === null) return undefined
     hasClaimedKey = true
   } catch (error) {

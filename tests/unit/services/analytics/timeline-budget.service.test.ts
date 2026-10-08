@@ -6,9 +6,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { takeTimelineQueryBudget } from '@/services/analytics/timeline-budget.service'
 import { logger } from '@/services/logger.service'
+import { resetRedisDeadlineForTests } from '@/services/redis-deadline.service'
+import { answerWithinBound, stalledCommand } from '../../../helpers/redis-stall'
 
 const redis = vi.hoisted(() => ({
   isUnreachable: false,
+  isStalled: false,
   count: 0,
   zRem: vi.fn<(key: string, member: string) => Promise<number>>(),
 }))
@@ -25,7 +28,10 @@ vi.mock('@/services/redis.service', async (importOriginal) => ({
               zAdd: () => chain,
               zCard: () => chain,
               expire: () => chain,
-              exec: () => Promise.resolve([0, 1, redis.count, 1]),
+              exec: () =>
+                redis.isStalled
+                  ? new Promise<never>(() => {})
+                  : Promise.resolve([0, 1, redis.count, 1]),
             }
             return chain
           },
@@ -37,6 +43,8 @@ beforeEach(() => {
   vi.restoreAllMocks()
   redis.zRem.mockReset()
   redis.isUnreachable = false
+  redis.isStalled = false
+  resetRedisDeadlineForTests()
   redis.count = 0
   redis.zRem.mockResolvedValue(1)
 })
@@ -74,5 +82,18 @@ describe('takeTimelineQueryBudget', () => {
       'Could not return a refused timeline query to the budget',
       expect.objectContaining({ error: expect.any(Error) as unknown })
     )
+  })
+
+  it('allows the query within the deadline when Redis does not answer', async () => {
+    redis.isStalled = true
+    vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    expect(await answerWithinBound(takeTimelineQueryBudget())).toBe('taken')
+  })
+
+  it('still refuses, within the deadline, when removing the refused entry does not answer', async () => {
+    redis.count = 1201
+    redis.zRem.mockImplementation(stalledCommand)
+    vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    expect(await answerWithinBound(takeTimelineQueryBudget())).toBe('exhausted')
   })
 })

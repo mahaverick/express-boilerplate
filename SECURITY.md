@@ -490,7 +490,10 @@ The store starts in memory and switches to Redis once Redis answers, so the
 limit is shared across replicas. Whenever a Redis command fails, that request
 is counted in the store's own memory instead, and the next successful command
 returns it to Redis. During an outage, then, counting is per process: with N
-replicas, a client can make up to N× the limit.
+replicas, a client can make up to N× the limit. A Redis that is connected but
+does not answer is handled as an outage, with the same cost for the limiters
+and the session denylist: a request-path call that has not answered in 300 ms
+fails, and for the next 5 s such calls fail without asking Redis.
 
 - **Register** keys on the client's **IP alone**, deliberately not the
   composite login uses. Both threats here come from one caller varying the
