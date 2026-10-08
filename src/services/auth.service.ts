@@ -444,16 +444,26 @@ export async function resetPassword(input: ResetPasswordInput): Promise<void> {
  *
  * Without a session id (no `sid` claim) every session is revoked, the
  * caller's included — that token cannot be told apart from a stolen one.
+ *
+ * When the request presented the caller's live refresh cookie, only that
+ * chain is spared: a sibling a grace-window replay minted in the caller's
+ * session is revoked too (`revokeSessionRows`). Its access tokens share the
+ * caller's `sid`, so they are not denied and last until ACCESS_TOKEN_TTL. No
+ * Origin check is needed: the route authenticates with a bearer token a
+ * browser never attaches cross-site, and the cookie only narrows what is
+ * spared.
  * @param userId - The authenticated caller's id.
  * @param currentSessionId - The session to spare, when the token carried one.
  * @param input - The validated `{ currentPassword, newPassword }` body.
+ * @param presentedRefreshToken - The refresh cookie the request carried, if any; it spares only the caller's own chain when it names it.
  * @returns Resolves once the password is stored; the notification is not awaited, so a mail failure never fails a change that already committed. The mail carries no secret.
  * @throws {HttpError} 401 when the account is gone; 400 for federated-only, a wrong current password, or no change.
  */
 export async function changePassword(
   userId: string,
   currentSessionId: string | undefined,
-  input: ChangePasswordInput
+  input: ChangePasswordInput,
+  presentedRefreshToken?: string
 ): Promise<void> {
   // request.user carries no passwordHash; re-load the real row.
   const user = await userRepository.findById(userId)
@@ -477,7 +487,9 @@ export async function changePassword(
 
   const passwordHash = await hashPassword(input.newPassword)
 
-  const revokeOptions = currentSessionId ? { exceptSessionId: currentSessionId } : {}
+  const revokeOptions = currentSessionId
+    ? { exceptSessionId: currentSessionId, presentedRefreshToken }
+    : {}
   const revokedSessionIds = await withTransaction(async (tx) => {
     const locked = await userRepository.lockById(user.id, 'no key update', tx)
     if (!locked) throw new HttpError('Account no longer exists or is inactive', 401)

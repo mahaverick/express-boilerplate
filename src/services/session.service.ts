@@ -578,24 +578,73 @@ export async function revokeRefreshToken(
 }
 
 /**
+ * The caller's own refresh row, named by the refresh cookie its request
+ * presented: found only when that row belongs to the caller, is a refresh
+ * token of the caller's session (the access token's `sid`), and is the live
+ * head of its chain (not revoked). Anything else (an unknown, revoked or
+ * foreign token, another session's) names nothing, and the caller's whole
+ * session is spared as before. Read in the caller's transaction, after its
+ * user row lock, so no rotation of that chain is in flight.
+ * @param userId - The authenticated caller.
+ * @param sessionId - The caller's session, from the access token's `sid`.
+ * @param presentedRefreshToken - The raw refresh token the request presented.
+ * @param tx - The caller's transaction.
+ * @returns The row's id, or undefined when the token does not name the caller's chain.
+ */
+async function findCallerRefreshTokenId(
+  userId: string,
+  sessionId: string,
+  presentedRefreshToken: string,
+  tx: DbTransaction
+): Promise<string | undefined> {
+  const row = await userTokenRepository.findByHash(hashToken(presentedRefreshToken), {}, tx)
+  if (!row) return undefined
+  const isCallersHead =
+    row.userId === userId &&
+    row.purpose === 'refresh' &&
+    row.sessionId === sessionId &&
+    row.revokedAt === null
+  return isCallersHead ? row.id : undefined
+}
+
+/**
  * Revoke a user's token rows in the caller's transaction and report the
  * sessions revoked. The denylist is left to `denySessionsAfterCommit`: a
  * denial written before commit would outlive a rollback.
+ *
+ * With `exceptSessionId` alone the whole session is spared. With a
+ * `presentedRefreshToken` that names the caller's live chain
+ * (`findCallerRefreshTokenId`), only that one row is spared, so a sibling a
+ * grace-window replay minted in the same session ends too. Run it after the
+ * user row lock, as every caller does.
  * @param userId - The user whose tokens are revoked, every purpose.
- * @param options - `exceptSessionId` spares that one session's tokens.
+ * @param options - What to spare.
  * @param options.exceptSessionId - The one session id to spare, if any.
+ * @param options.presentedRefreshToken - The caller's refresh cookie, if the request sent one; only read with `exceptSessionId`.
  * @param tx - The transaction the revocation commits with.
  * @returns The distinct ids of the sessions revoked, never the spared one.
  */
-export function revokeSessionRows(
+export async function revokeSessionRows(
   userId: string,
-  options: { exceptSessionId?: string },
+  options: { exceptSessionId?: string; presentedRefreshToken?: string | undefined },
   tx: DbTransaction
 ): Promise<string[]> {
-  if (options.exceptSessionId === undefined) {
+  const { exceptSessionId, presentedRefreshToken } = options
+  if (exceptSessionId === undefined) {
     return userTokenRepository.revokeAllForUser(userId, tx)
   }
-  return userTokenRepository.revokeAllForUserExceptSession(userId, options.exceptSessionId, tx)
+  const callerTokenId =
+    presentedRefreshToken === undefined
+      ? undefined
+      : await findCallerRefreshTokenId(userId, exceptSessionId, presentedRefreshToken, tx)
+  if (callerTokenId === undefined) {
+    return userTokenRepository.revokeAllForUserExceptSession(userId, exceptSessionId, tx)
+  }
+  return userTokenRepository.revokeAllForUserExceptToken(
+    userId,
+    { id: callerTokenId, sessionId: exceptSessionId },
+    tx
+  )
 }
 
 /**
@@ -635,14 +684,23 @@ function absoluteLifetimeCutoff(): Date {
  * under the user row lock, then deny each revoked session's access tokens
  * after commit, which also ends that session's notification stream at its
  * next heartbeat (`denySessionsAfterCommit`). Emits `other_sessions_revoked`.
+ *
+ * When the request presented the caller's live refresh cookie, a sibling
+ * chain a grace-window replay minted in the calling session is revoked too
+ * (`revokeSessionRows`); its access tokens share the caller's `sid`, so they
+ * are not denied and last until ACCESS_TOKEN_TTL. No Origin check is needed:
+ * the route authenticates with a bearer token a browser never attaches
+ * cross-site, and the cookie only narrows what is spared.
  * @param userId - The authenticated caller.
  * @param sessionId - The calling session (the token's `sid`), which is spared; undefined for a token without one.
- * @returns How many other sessions were signed in (held an unrevoked, unexpired refresh token, within SESSION_ABSOLUTE_TTL) and are now revoked; a lapsed session is revoked but not counted.
+ * @param presentedRefreshToken - The refresh cookie the request carried, if any; it spares only the caller's own chain when it names it.
+ * @returns How many other sessions were signed in (held an unrevoked, unexpired refresh token, within SESSION_ABSOLUTE_TTL) and are now revoked; a lapsed session is revoked but not counted, and neither is a sibling in the calling session.
  * @throws {HttpError} 401 with ACCESS_TOKEN_EXPIRED_CODE for a token without `sid`, or an account gone or inactive.
  */
 export async function revokeOtherSessions(
   userId: string,
-  sessionId: string | undefined
+  sessionId: string | undefined,
+  presentedRefreshToken?: string
 ): Promise<number> {
   if (sessionId === undefined) {
     throw new HttpError('Session ended', 401, ACCESS_TOKEN_EXPIRED_CODE)
@@ -658,7 +716,11 @@ export async function revokeOtherSessions(
       absoluteLifetimeCutoff(),
       tx
     )
-    const revokedSessionIds = await revokeSessionRows(userId, { exceptSessionId: sessionId }, tx)
+    const revokedSessionIds = await revokeSessionRows(
+      userId,
+      { exceptSessionId: sessionId, presentedRefreshToken },
+      tx
+    )
     return { revoked: revokedSessionIds, live: new Set(liveSessionIds) }
   })
   await denySessionsAfterCommit(userId, revoked)

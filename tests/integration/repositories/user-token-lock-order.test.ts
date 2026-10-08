@@ -1,5 +1,5 @@
 /**
- * @file The bulk writers (the four revokers and markSessionAuthenticated)
+ * @file The bulk writers (the five revokers and markSessionAuthenticated)
  * lock the rows they write in id order, whatever plan or physical row layout
  * Postgres uses (`user-token.repository.ts`'s header). Three groups of tests pin that
  * property: a race on a built physical layout, a plan-shape check, and a
@@ -150,6 +150,30 @@ async function unorderedRevokeAllForUserExceptSession(
 }
 
 /**
+ * A `revokeAllForUserExceptToken` stand-in that updates by its predicate directly.
+ * @param userId - The user.
+ * @param spared - The one row to spare, and its session.
+ * @param spared.id - The spared row's id.
+ * @param spared.sessionId - The spared row's session, left out of the result.
+ * @param executor - Where to run the query.
+ * @returns The distinct session ids revoked, never the spared row's.
+ */
+async function unorderedRevokeAllForUserExceptToken(
+  userId: string,
+  spared: { id: string; sessionId: string },
+  executor: DbExecutor = db
+): Promise<string[]> {
+  const rows = await executor
+    .update(userTokenModel)
+    .set(revokedNow())
+    .where(
+      sql`${userTokenModel.userId} = ${userId} and ${userTokenModel.id} <> ${spared.id} and ${userTokenModel.revokedAt} is null and ${userTokenModel.deletedAt} is null`
+    )
+    .returning({ sessionId: userTokenModel.sessionId })
+  return distinctSessionIds(rows).filter((sessionId) => sessionId !== spared.sessionId)
+}
+
+/**
  * A `revokeAllForUserAndPurpose` stand-in that updates by its predicate directly.
  * @param userId - The user.
  * @param purpose - The purpose.
@@ -170,7 +194,7 @@ async function unorderedRevokeAllForUserAndPurpose(
 }
 
 /**
- * Run `run` with the four revokers swapped for their unordered stand-ins.
+ * Run `run` with the five revokers swapped for their unordered stand-ins.
  * @param run - The test body.
  * @returns Resolves once `run` settles and every writer is restored.
  */
@@ -185,9 +209,15 @@ async function withUnorderedWriters(run: () => Promise<void>): Promise<void> {
         () =>
           withMutatedMethod(
             prototype,
-            'revokeAllForUserAndPurpose',
-            unorderedRevokeAllForUserAndPurpose,
-            run
+            'revokeAllForUserExceptToken',
+            unorderedRevokeAllForUserExceptToken,
+            () =>
+              withMutatedMethod(
+                prototype,
+                'revokeAllForUserAndPurpose',
+                unorderedRevokeAllForUserAndPurpose,
+                run
+              )
           )
       )
     )
@@ -436,6 +466,15 @@ const WRITERS: { name: string; run: (executor: DbExecutor) => Promise<unknown> }
     name: 'revokeAllForUserExceptSession',
     run: (executor) =>
       userTokenRepository.revokeAllForUserExceptSession(randomUUID(), randomUUID(), executor),
+  },
+  {
+    name: 'revokeAllForUserExceptToken',
+    run: (executor) =>
+      userTokenRepository.revokeAllForUserExceptToken(
+        randomUUID(),
+        { id: randomUUID(), sessionId: randomUUID() },
+        executor
+      ),
   },
   {
     name: 'revokeAllForUserAndPurpose',

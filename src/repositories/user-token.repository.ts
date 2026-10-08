@@ -1,6 +1,6 @@
 /**
  * @file Query access to `user_tokens`, on `BaseRepository`. The bulk writers
- * (the four revokers and `markSessionAuthenticated`) lock the rows they write
+ * (the five revokers and `markSessionAuthenticated`) lock the rows they write
  * in id order through `lockedIds`, so two sharing rows queue instead of
  * deadlocking; a new bulk writer must lock the same way and join `WRITERS` in
  * user-token-lock-order.test.ts.
@@ -283,12 +283,64 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
   }
 
   /**
+   * Revoke every still-live token belonging to a user EXCEPT one row: the
+   * caller's own refresh token, identified by the cookie it presented. Every
+   * other row goes, every purpose, including any other live row in the
+   * caller's own session (a sibling a grace-window replay minted). Used by a
+   * password change and by signing out other sessions when the caller's
+   * chain is known; `revokeAllForUserExceptSession` is the fallback when it
+   * is not.
+   *
+   * The returned ids leave out the spared row's session even when a sibling
+   * in it was revoked: denying that session would also deny the caller's own
+   * access token.
+   *
+   * The same mid-rotation caveat as `revokeAllForUser`, closed the same way:
+   * lock the user row first. Locks its rows in id order (`lockedIds`),
+   * whatever the plan or the physical row layout.
+   * @param userId - The user whose tokens should all be revoked, except one row.
+   * @param spared - The one row to leave untouched, and its session.
+   * @param spared.id - The spared row's id.
+   * @param spared.sessionId - The spared row's session, never among the returned ids.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns The distinct session ids of the rows it revoked, never the spared row's session.
+   */
+  async revokeAllForUserExceptToken(
+    userId: string,
+    spared: { id: string; sessionId: string },
+    executor: DbExecutor = db
+  ): Promise<string[]> {
+    const locked = this.lockedIds(
+      this.scope(
+        sql`${userTokenModel.userId} = ${userId} and ${userTokenModel.id} <> ${spared.id} and ${userTokenModel.revokedAt} is null`
+      ),
+      executor
+    )
+    const revoked = await executor
+      .update(userTokenModel)
+      .set(this.touched({ revokedAt: sql`now()` }))
+      .where(inArray(userTokenModel.id, locked))
+      .returning({ sessionId: userTokenModel.sessionId })
+
+    const sessionIds = new Set(
+      revoked
+        .map((row) => row.sessionId)
+        .filter(
+          (revokedSessionId): revokedSessionId is string =>
+            revokedSessionId !== null && revokedSessionId !== spared.sessionId
+        )
+    )
+    return [...sessionIds]
+  }
+
+  /**
    * The sessions of a user, other than one, that hold a live refresh token:
    * unrevoked (a rotation's claim revokes the row it spends), unexpired, and
    * started after `startedAfter`, the absolute lifetime rotation enforces.
    * Read under the user row lock, it is the set a following
-   * `revokeAllForUserExceptSession` ends that a person would call signed in;
-   * a lapsed session it also revokes is not among them.
+   * `revokeAllForUserExceptSession` or `revokeAllForUserExceptToken` ends
+   * that a person would call signed in; a lapsed session either also revokes
+   * is not among them, and neither is a sibling in the excluded session.
    * @param userId - The user whose sessions are read.
    * @param sessionId - The one session id to leave out.
    * @param startedAfter - A live session must have started after this, by the application clock: the caller's `SESSION_ABSOLUTE_TTL` bound.

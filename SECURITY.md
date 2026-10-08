@@ -69,7 +69,9 @@ concurrent caller falls into the reuse path below.
 Presenting a token that is **already revoked** (because it was already rotated,
 or already logged out) is reuse. Within `REFRESH_REUSE_GRACE_MS` (10s) of that
 rotation, and only if the session hasn't since been explicitly killed (logout,
-an earlier reuse, a password reset), reuse mints a sibling refresh token in the
+an earlier reuse, a password reset, or a password change or `revoke-others`
+from that session that ended a sibling in it, since any row revoked without
+being consumed marks the session killed), reuse mints a sibling refresh token in the
 same session instead of revoking it — the accepted trade-off that lets two
 legitimate concurrent requests (two tabs refreshing at once) both succeed. Past
 that window, or once the session is killed, reuse revokes every token sharing
@@ -84,11 +86,26 @@ and rotates on its own until `SESSION_ABSOLUTE_TTL`, until it goes unused for
 password reset, a password change or `POST /auth/sessions/revoke-others` made
 from another session, a Google account claim, a staff sign-out, deactivation or
 deletion, or a sign-in in a browser that presents either chain's cookie. A
-password change or `revoke-others` made from that session spares it, since each
-spares the caller's whole session. Reuse detection never catches it, unless a
-token one of the two chains already consumed is replayed after the window. The
-window is 10 s, so a thief must replay within 10 s of the real client's rotation
-to get one.
+password change or `revoke-others` made from that session ends it too when the
+browser presents its refresh cookie, which it does on both routes (they sit
+under the cookie's path). The cookie spares only its own row, and only when it
+is the caller's live refresh token: same user, the access token's session, not
+revoked. Every other row of the user goes, the sibling included. A client that
+presents no such cookie (a non-browser client, or a cookie that is unknown,
+revoked or another session's) spares the caller's whole session, sibling and
+all, as before. The sibling's access tokens carry the caller's session id, so
+they are not denied (that would deny the caller too) and stay valid until they
+expire (`ACCESS_TOKEN_TTL`). The sibling's next refresh is then reuse, which
+ends the whole session, the caller's chain included. With `COOKIE_DOMAIN` set
+the cookie is `__Secure-`, which a host under that domain can plant; a planted
+cookie still has to be a live refresh token of the same user and session (in
+practice the thief's own sibling), and then the request spares the thief's
+chain and ends the victim's, until either chain's next replay of a revoked
+token trips reuse. Without `COOKIE_DOMAIN` the cookie is `__Host-` and cannot
+be planted. Otherwise reuse detection never catches a sibling, unless a token
+one of the two chains already consumed is replayed after the window. The window
+is 10 s, so a thief must replay within 10 s of the real client's rotation to
+get one.
 
 A refresh answered 401 clears the cookie it read, in the same forms the
 logout clear uses for that name, so the browser stops presenting a dead token
@@ -214,8 +231,11 @@ password write either has its new token revoked or gets 401.
 `POST /auth/sessions/revoke-others` revokes every refresh token of the caller
 except the calling session's, plus reset and verification links, under the user
 row lock, then denies the revoked sessions' access tokens at once (best-effort,
-as every revocation). A token without a session id is refused 401. 10 an hour
-per user.
+as every revocation). When the request presents the caller's live refresh
+cookie, only that one token is spared, so a grace-window sibling in the calling
+session ends too; it is not counted in the reply's `revoked`, which counts other
+sessions. A password change spares the same way. A token without a session id
+is refused 401. 10 an hour per user.
 
 Every path that locks the user row:
 
@@ -494,8 +514,9 @@ replicas, a client can make up to N× the limit.
   window revokes the whole session. Within the grace window each replay of a
   stolen, already-rotated token mints a sibling, and this limiter caps how
   many an attacker can mint before the window closes. Each sibling is a second
-  chain that lives until `SESSION_ABSOLUTE_TTL` or its session ends (see
-  "Refresh rotation and reuse detection"). The limit is generous
+  chain that lives until `SESSION_ABSOLUTE_TTL`, its session ends, or a
+  password change or sign-out of other sessions from the real client's browser
+  ends it (see "Refresh rotation and reuse detection"). The limit is generous
   because tightening it only costs real users retrying a flaky connection.
 - **Logout** is unauthenticated by design (a user whose access token has just
   expired must still be able to end their session), so this limiter bounds

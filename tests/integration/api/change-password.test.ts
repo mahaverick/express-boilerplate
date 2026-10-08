@@ -25,10 +25,18 @@ import type { EmailJobData } from '@/jobs/email.job'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
-import { signAccessToken } from '@/services/session.service'
+import { isSessionDenied } from '@/services/session-denylist.service'
+import { issueRefreshToken, rotateRefreshToken, signAccessToken } from '@/services/session.service'
 import { hashPassword } from '@/utilities/password.utilities'
 import { startEmailWorker } from '@/workers/email.worker'
 import { startNotificationWorker } from '@/workers/notification.worker'
+import {
+  isTokenRowLive,
+  refreshCookieHeader,
+  rotatedSessionId,
+  sessionWithSibling,
+  type SessionWithSibling,
+} from '../../helpers/grace-sibling'
 import { deleteMailpitMessage, findMailpitMessages, getMailpitMessage } from '../../helpers/mailpit'
 import { request } from '../../helpers/request'
 
@@ -343,5 +351,99 @@ describe('POST /api/v1/auth/change-password', () => {
       .send({ currentPassword: CURRENT_PASSWORD, newPassword: NEW_PASSWORD })
 
     expect(response.status).toBe(401)
+  })
+})
+
+/**
+ * Change the password as `bearer`, presenting `cookie` when given.
+ * @param bearer - The caller's access token.
+ * @param cookie - The `Cookie` header to send, if any.
+ * @returns The supertest response.
+ */
+async function changePasswordWithCookie(bearer: string, cookie?: string): Promise<Response> {
+  const pending = request(app)
+    .post('/api/v1/auth/change-password')
+    .set('Authorization', `Bearer ${bearer}`)
+  if (cookie !== undefined) pending.set('Cookie', cookie)
+  return pending.send({ currentPassword: CURRENT_PASSWORD, newPassword: NEW_PASSWORD })
+}
+
+/**
+ * A grace-window replay mints a sibling: a second live chain in the caller's
+ * own session. Sessions here are issued with `issueRefreshToken`, so each has
+ * a real `user_tokens` row to revoke and deny. The refresh cookie the browser
+ * sends on this route names the caller's chain; without a usable one the
+ * whole session is spared, as before.
+ */
+describe('POST /api/v1/auth/change-password and a grace sibling', () => {
+  it('ends the sibling chain when the caller presents its refresh cookie, and keeps the caller', async () => {
+    const { user } = await createUserWithPassword()
+    const caller = await sessionWithSibling(user)
+    const other = await issueRefreshToken(user.id, randomUUID())
+
+    const response = await changePasswordWithCookie(
+      caller.bearer,
+      refreshCookieHeader(caller.head.raw)
+    )
+
+    expect(response.status).toBe(200)
+    await expect(rotateRefreshToken(other.raw)).rejects.toMatchObject({ statusCode: 401 })
+    expect(await isSessionDenied(other.sessionId)).toBe(true)
+    // Never the caller's own sid: that would end the caller's access token too.
+    expect(await isSessionDenied(caller.head.sessionId)).toBe(false)
+    expect(await probe(caller.bearer)).toHaveProperty('status', 200)
+    // The caller rotates before the sibling is replayed: a replay of the revoked sibling is reuse and ends the whole session.
+    expect(await rotatedSessionId(caller.head.raw)).toBe(caller.head.sessionId)
+    await expect(rotateRefreshToken(caller.sibling.raw)).rejects.toMatchObject({ statusCode: 401 })
+  })
+
+  it('spares the sibling when no refresh cookie is presented', async () => {
+    const { user } = await createUserWithPassword()
+    const caller = await sessionWithSibling(user)
+    const other = await issueRefreshToken(user.id, randomUUID())
+
+    const response = await changePasswordWithCookie(caller.bearer)
+
+    expect(response.status).toBe(200)
+    expect(await isSessionDenied(other.sessionId)).toBe(true)
+    expect(await isTokenRowLive(other.raw)).toBe(false)
+    expect(await rotatedSessionId(caller.sibling.raw)).toBe(caller.head.sessionId)
+    expect(await rotatedSessionId(caller.head.raw)).toBe(caller.head.sessionId)
+  })
+
+  it('spares the caller’s whole session for a cookie of another session of the user, and ends that session', async () => {
+    const { user } = await createUserWithPassword()
+    const caller = await sessionWithSibling(user)
+    const other = await issueRefreshToken(user.id, randomUUID())
+
+    const response = await changePasswordWithCookie(caller.bearer, refreshCookieHeader(other.raw))
+
+    expect(response.status).toBe(200)
+    await expect(rotateRefreshToken(other.raw)).rejects.toMatchObject({ statusCode: 401 })
+    expect(await isSessionDenied(other.sessionId)).toBe(true)
+    expect(await isSessionDenied(caller.head.sessionId)).toBe(false)
+    expect(await rotatedSessionId(caller.sibling.raw)).toBe(caller.head.sessionId)
+    expect(await rotatedSessionId(caller.head.raw)).toBe(caller.head.sessionId)
+  })
+
+  it.each([
+    ['an unknown cookie', (_caller: SessionWithSibling) => 'not-a-real-refresh-token'],
+    // The head's predecessor: same user and session, but revoked by its rotation.
+    ['a revoked cookie of the caller’s session', (caller: SessionWithSibling) => caller.spent],
+  ])('spares the caller’s whole session for %s', async (_label, cookieRaw) => {
+    const { user } = await createUserWithPassword()
+    const caller = await sessionWithSibling(user)
+    const other = await issueRefreshToken(user.id, randomUUID())
+
+    const response = await changePasswordWithCookie(
+      caller.bearer,
+      refreshCookieHeader(cookieRaw(caller))
+    )
+
+    expect(response.status).toBe(200)
+    expect(await isSessionDenied(other.sessionId)).toBe(true)
+    expect(await isSessionDenied(caller.head.sessionId)).toBe(false)
+    expect(await isTokenRowLive(caller.sibling.raw)).toBe(true)
+    expect(await isTokenRowLive(caller.head.raw)).toBe(true)
   })
 })

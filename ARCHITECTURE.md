@@ -226,7 +226,10 @@ verified flag to an address nobody verified.
   control, and deletes any federated sign-in linked to it.
 - `POST /api/v1/auth/change-password` (behind `requireAuth`) checks the current
   password and revokes every other session, or every session when the access
-  token carries no session id.
+  token carries no session id. When the browser presents its live refresh
+  cookie, it spares only that chain, so a grace-window sibling in the caller's
+  session ends too (SECURITY.md, "Refresh rotation and reuse detection");
+  `POST /auth/sessions/revoke-others` spares the same way.
 - A Google sign-in marks the address verified too (`google-auth.service.ts`).
 
 Each route carries its own rate limiters; SECURITY.md, "Rate limiting", lists
