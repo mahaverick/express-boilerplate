@@ -210,7 +210,7 @@ export function createOAuthSessionMiddleware(): RequestHandler {
   let middlewarePromise: Promise<RequestHandler> | undefined
 
   async function buildMiddleware(): Promise<RequestHandler> {
-    const client = await getRedis()
+    const client = await withRedisDeadline(() => getRedis(), 'OAuth session store')
     return session(buildOAuthSessionOptions(client))
   }
 

@@ -9,7 +9,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { REDIS_REQUEST_DEADLINE_MS, REDIS_STALL_COOLDOWN_MS } from '@/constants/platform.constants'
 import { RedisStalledError } from '@/errors/redis-errors'
 import { logger } from '@/services/logger.service'
-import { resetRedisDeadlineForTests, withRedisDeadline } from '@/services/redis-deadline.service'
+import {
+  resetRedisDeadlineForTests,
+  STILL_PENDING,
+  waitForRedisProbe,
+  waitForRedisWrite,
+  withRedisDeadline,
+} from '@/services/redis-deadline.service'
+
+/**
+ * When a stall's verdict lands in fake time: the deadline timer, then one
+ * immediate, which fake timers run 1 ms later.
+ */
+const VERDICT_MS = REDIS_REQUEST_DEADLINE_MS + 1
 
 /**
  * An operation that never settles, the way a command written to a stalled Redis behaves.
@@ -44,8 +56,50 @@ function track(call: Promise<string>): { outcome?: 'resolved' | 'rejected'; erro
  */
 async function openCooldown(): Promise<void> {
   const stalled = track(withRedisDeadline(never, 'stall'))
-  await vi.advanceTimersByTimeAsync(REDIS_REQUEST_DEADLINE_MS)
+  await vi.advanceTimersByTimeAsync(VERDICT_MS)
   expect(stalled.outcome).toBe('rejected')
+}
+
+/**
+ * A reply whose timer is registered after the deadline's, for the same
+ * moment: a reply the process reads only after its due timers have run.
+ * @returns The reply, `'PONG'`.
+ */
+function replyAfterTheTimer(): Promise<string> {
+  return new Promise<string>((resolve) => {
+    queueMicrotask(() => {
+      // eslint-disable-next-line no-restricted-syntax -- a fake timer, advanced by the test
+      setTimeout(() => {
+        resolve('PONG')
+      }, REDIS_REQUEST_DEADLINE_MS)
+    })
+  })
+}
+
+/**
+ * A call that fails 10 ms after the deadline, once it has been abandoned.
+ * @returns A promise rejected then.
+ */
+function rejectsJustAfterTheDeadline(): Promise<string> {
+  return new Promise<string>((_resolve, reject) => {
+    // eslint-disable-next-line no-restricted-syntax -- a fake timer, advanced by the test
+    setTimeout(() => {
+      reject(new Error('late'))
+    }, REDIS_REQUEST_DEADLINE_MS + 10)
+  })
+}
+
+/**
+ * A write that fails well after the deadline, as a dropped connection does.
+ * @returns A promise rejected at twice the deadline.
+ */
+function failsLate(): Promise<string> {
+  return new Promise<string>((_resolve, reject) => {
+    // eslint-disable-next-line no-restricted-syntax -- a fake timer, advanced by the test
+    setTimeout(() => {
+      reject(new Error('connection reset'))
+    }, REDIS_REQUEST_DEADLINE_MS * 2)
+  })
 }
 
 beforeEach(() => {
@@ -76,9 +130,9 @@ describe('withRedisDeadline', () => {
   it('rejects a call that never settles at the deadline, not before', async () => {
     vi.spyOn(logger, 'warn').mockImplementation(() => {})
     const stalled = track(withRedisDeadline(never, 'denylist read'))
-    await vi.advanceTimersByTimeAsync(REDIS_REQUEST_DEADLINE_MS - 1)
+    await vi.advanceTimersByTimeAsync(REDIS_REQUEST_DEADLINE_MS)
     expect(stalled.outcome).toBeUndefined()
-    await vi.advanceTimersByTimeAsync(1)
+    await vi.advanceTimersByTimeAsync(VERDICT_MS - REDIS_REQUEST_DEADLINE_MS)
     expect(stalled.outcome).toBe('rejected')
     expect(stalled.error).toBeInstanceOf(RedisStalledError)
     expect(vi.getTimerCount()).toBe(0)
@@ -115,7 +169,7 @@ describe('withRedisDeadline', () => {
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
     const first = track(withRedisDeadline(never, 'denylist read'))
     const second = track(withRedisDeadline(never, 'rate limit'))
-    await vi.advanceTimersByTimeAsync(REDIS_REQUEST_DEADLINE_MS)
+    await vi.advanceTimersByTimeAsync(VERDICT_MS)
     expect([first.outcome, second.outcome]).toEqual(['rejected', 'rejected'])
     await expect(withRedisDeadline(never, 'ping')).rejects.toBeInstanceOf(RedisStalledError)
     expect(warn).toHaveBeenCalledTimes(1)
@@ -133,15 +187,8 @@ describe('withRedisDeadline', () => {
 
   it('leaves no unhandled rejection when the abandoned operation fails later', async () => {
     vi.spyOn(logger, 'warn').mockImplementation(() => {})
-    const late = (): Promise<string> =>
-      new Promise<string>((_resolve, reject) => {
-        // eslint-disable-next-line no-restricted-syntax -- a fake timer, advanced by the test
-        setTimeout(() => {
-          reject(new Error('late'))
-        }, REDIS_REQUEST_DEADLINE_MS + 10)
-      })
-    const stalled = track(withRedisDeadline(late, 'ping'))
-    await vi.advanceTimersByTimeAsync(REDIS_REQUEST_DEADLINE_MS)
+    const stalled = track(withRedisDeadline(rejectsJustAfterTheDeadline, 'ping'))
+    await vi.advanceTimersByTimeAsync(VERDICT_MS)
     expect(stalled.error).toBeInstanceOf(RedisStalledError)
     // Vitest fails the run on an unhandled rejection: this must pass quietly.
     await vi.advanceTimersByTimeAsync(10)
@@ -162,5 +209,59 @@ describe('withRedisDeadline', () => {
     expect(stalled.outcome).toBe('rejected')
     expect(info).not.toHaveBeenCalled()
     await expect(withRedisDeadline(never, 'ping')).rejects.toBeInstanceOf(RedisStalledError)
+  })
+
+  it('lets a reply that arrives in the same turn the deadline timer fires win, opening nothing', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    const answered = track(withRedisDeadline(replyAfterTheTimer, 'ping'))
+    await vi.advanceTimersByTimeAsync(VERDICT_MS)
+    expect(answered.outcome).toBe('resolved')
+    expect(warn).not.toHaveBeenCalled()
+    await expect(withRedisDeadline(() => Promise.resolve('PONG'), 'ping')).resolves.toBe('PONG')
+  })
+})
+
+describe('waitForRedisWrite', () => {
+  it('sends the write even while a cooldown is open', async () => {
+    vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    await openCooldown()
+    const write = vi.fn(() => Promise.resolve('OK'))
+    await expect(waitForRedisWrite(write, 'deny', () => {})).resolves.toBe('OK')
+    expect(write).toHaveBeenCalledTimes(1)
+  })
+
+  it('answers STILL_PENDING at the deadline with one warn, opens no cooldown, and reports a later failure', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    const onLateFailure = vi.fn()
+    const pending = waitForRedisWrite(failsLate, 'deny', onLateFailure, { sessionId: 's-1' })
+    await vi.advanceTimersByTimeAsync(VERDICT_MS)
+    await expect(pending).resolves.toBe(STILL_PENDING)
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(/lands when Redis answers/),
+      expect.objectContaining({ label: 'deny', sessionId: 's-1' })
+    )
+    expect(onLateFailure).not.toHaveBeenCalled()
+    await expect(withRedisDeadline(() => Promise.resolve('PONG'), 'ping')).resolves.toBe('PONG')
+
+    await vi.advanceTimersByTimeAsync(REDIS_REQUEST_DEADLINE_MS)
+    expect(onLateFailure).toHaveBeenCalledWith(expect.any(Error))
+  })
+})
+
+describe('waitForRedisProbe', () => {
+  it('answers STILL_PENDING at the deadline without opening a cooldown', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    const probe = waitForRedisProbe(never)
+    await vi.advanceTimersByTimeAsync(VERDICT_MS)
+    await expect(probe).resolves.toBe(STILL_PENDING)
+    expect(warn).not.toHaveBeenCalled()
+    await expect(withRedisDeadline(() => Promise.resolve('PONG'), 'ping')).resolves.toBe('PONG')
+  })
+
+  it('is not skipped by an open cooldown', async () => {
+    vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    await openCooldown()
+    await expect(waitForRedisProbe(() => Promise.resolve('PONG'))).resolves.toBe('PONG')
   })
 })

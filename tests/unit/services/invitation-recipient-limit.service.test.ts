@@ -45,13 +45,16 @@ function spentKeys(counts: number[]): string[] {
     }
     return transaction
   }
-  vi.mocked(getRedis).mockResolvedValueOnce({ multi } as never)
+  // Each count asks getRedis() for the client.
+  vi.mocked(getRedis).mockResolvedValue({ multi } as never)
   return keys
 }
 
 describe('spendInvitationRecipientBudget', () => {
   beforeEach(() => {
     resetRedisDeadlineForTests()
+    // Back to the factory's rejecting getRedis: spentKeys' answer must not reach the next test.
+    vi.mocked(getRedis).mockReset()
   })
 
   it('lets the invitation through and warns when Redis is unreachable', async () => {

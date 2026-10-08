@@ -70,14 +70,13 @@ export async function spendInvitationRecipientBudget(
 ): Promise<InvitationRecipientBudget> {
   const key = recipientKey(email)
   try {
-    const redis = await getRedis()
     const tenantCount = await withRedisDeadline(
-      () => incrementInWindow(redis, `${key}:${tenantId}`),
+      async () => incrementInWindow(await getRedis(), `${key}:${tenantId}`),
       'invitation recipient budget'
     )
     if (tenantCount > INVITATION_RECIPIENT_TENANT_SHARE) return 'exhausted'
     const count = await withRedisDeadline(
-      () => incrementInWindow(redis, key),
+      async () => incrementInWindow(await getRedis(), key),
       'invitation recipient budget'
     )
     return count <= getEnv().INVITATION_RECIPIENT_DAILY_LIMIT ? 'spent' : 'exhausted'

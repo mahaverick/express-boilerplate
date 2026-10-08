@@ -121,8 +121,10 @@ async function auditTimelineView(
  */
 async function readCachedPage(key: string): Promise<TimelinePage | undefined> {
   try {
-    const redis = await getRedis()
-    const cached = await withRedisDeadline(() => redis.get(key), 'timeline cache read')
+    const cached = await withRedisDeadline(async () => {
+      const redis = await getRedis()
+      return redis.get(key)
+    }, 'timeline cache read')
     return cached === null ? undefined : (JSON.parse(cached) as TimelinePage)
   } catch (error) {
     logger.warn('Timeline cache read failed; asking PostHog', { error })
@@ -138,14 +140,12 @@ async function readCachedPage(key: string): Promise<TimelinePage | undefined> {
  */
 async function writeCachedPage(key: string, page: TimelinePage): Promise<void> {
   try {
-    const redis = await getRedis()
-    await withRedisDeadline(
-      () =>
-        redis.set(key, JSON.stringify(page), {
-          expiration: { type: 'EX', value: TIMELINE_CACHE_TTL_SECONDS },
-        }),
-      'timeline cache write'
-    )
+    await withRedisDeadline(async () => {
+      const redis = await getRedis()
+      return redis.set(key, JSON.stringify(page), {
+        expiration: { type: 'EX', value: TIMELINE_CACHE_TTL_SECONDS },
+      })
+    }, 'timeline cache write')
   } catch (error) {
     logger.warn('Timeline cache write failed', { error })
   }

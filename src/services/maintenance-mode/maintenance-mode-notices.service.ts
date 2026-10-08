@@ -13,6 +13,7 @@ import type { Job, Queue } from 'bullmq'
 import { MAINTENANCE_MODE_NOTICE_WAIT_MS } from '@/constants/maintenance-mode.constants'
 import { logger } from '@/services/logger.service'
 import { getEmailQueue, getNotificationQueue } from '@/services/queue.service'
+import { withRedisDeadline } from '@/services/redis-deadline.service'
 import { getRedis, redisKey } from '@/services/redis.service'
 import { emailJobIdFor } from '@/workers/notification.worker'
 
@@ -57,10 +58,12 @@ export function noticeIdsKey(): string {
  */
 export async function rememberNoticeJobs(ids: NoticeJobIds): Promise<void> {
   try {
-    const redis = await getRedis()
-    await redis.set(noticeIdsKey(), JSON.stringify(ids), {
-      expiration: { type: 'EX', value: NOTICE_IDS_TTL_SECONDS },
-    })
+    await withRedisDeadline(async () => {
+      const redis = await getRedis()
+      return redis.set(noticeIdsKey(), JSON.stringify(ids), {
+        expiration: { type: 'EX', value: NOTICE_IDS_TTL_SECONDS },
+      })
+    }, 'maintenance-mode notice ids')
   } catch (error) {
     logger.warn('Maintenance-mode notice ids could not be recorded', { error })
   }

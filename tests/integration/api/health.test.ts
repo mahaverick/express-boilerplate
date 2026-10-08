@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
 import { HttpError } from '@/errors/http-error'
 import { errorHandler } from '@/middlewares/error.middleware'
-import { resetRedisDeadlineForTests } from '@/services/redis-deadline.service'
+import { resetRedisDeadlineForTests, withRedisDeadline } from '@/services/redis-deadline.service'
 import { getRedis } from '@/services/redis.service'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { answerWithinBound, stalledCommand } from '../../helpers/redis-stall'
@@ -48,6 +48,12 @@ describe('health probes', () => {
       expect(response.status).toBe(503)
       expect(response.body).toMatchObject({ status: 'not-ready', checks: { redis: false } })
     })
+    // The probe has its own bound: a slow PING opens no cooldown, so request-path calls still ask Redis.
+    await expect(withRedisDeadline(async () => client.ping(), 'after the probe')).resolves.toBe(
+      'PONG'
+    )
+    const after = await request(app).get('/health/ready')
+    expect(after.body).toMatchObject({ checks: { redis: true } })
   })
 
   it('stamps a request id on every response', async () => {

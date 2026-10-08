@@ -44,16 +44,14 @@ export async function didClaimMailCooldown(
   options: { whenUnavailable: MailCooldownFallback }
 ): Promise<boolean> {
   try {
-    const client = await getRedis()
-    const result = await withRedisDeadline(
-      () =>
-        client.set(redisKey(scope, addressDigest(email)), '1', {
-          NX: true,
-          // Redis rejects a non-integer PX, and the catch below would then fail open.
-          PX: Math.ceil(cooldownMs),
-        }),
-      'mail cooldown'
-    )
+    const result = await withRedisDeadline(async () => {
+      const redis = await getRedis()
+      return redis.set(redisKey(scope, addressDigest(email)), '1', {
+        NX: true,
+        // Redis rejects a non-integer PX, and the catch below would then fail open.
+        PX: Math.ceil(cooldownMs),
+      })
+    }, 'mail cooldown')
     return result === 'OK'
   } catch (error) {
     logger.warn('Mail cooldown could not be read; falling back', {

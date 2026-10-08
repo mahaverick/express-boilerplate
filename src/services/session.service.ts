@@ -49,16 +49,16 @@ async function revokeSessionUnderUserLock(userId: string, sessionId: string): Pr
     await userRepository.lockById(userId, 'no key update', tx)
     return userTokenRepository.revokeAllForSession(sessionId, tx)
   })
-  await denySession(sessionId)
+  await denySession(sessionId, userId)
   return revoked
 }
 
 /**
  * Deny each session a revocation reported, concurrently. Best-effort and
- * never rejects: a session that cannot be denied is logged at warn by
- * `denySession`, and its access tokens stay valid until they expire.
+ * never rejects: a session that cannot be denied is logged by `denySession`,
+ * and its access tokens stay valid until they expire.
  * @param sessionIds - Distinct session ids the revocation touched.
- * @returns Resolves once every denial is written or its failure logged.
+ * @returns Resolves once every denial is written, left in flight past the deadline, or its failure logged.
  */
 export async function denySessions(sessionIds: readonly string[]): Promise<void> {
   await Promise.all(sessionIds.map((sessionId) => denySession(sessionId)))
@@ -654,13 +654,16 @@ export async function revokeSessionRows(
  * reset, or a staff deactivation, sign-out or deletion. Never rejects,
  * because the revocation already stands. When Redis refuses, those
  * sessions' access tokens stay valid for up to ACCESS_TOKEN_TTL, as when the
- * denylist fails open, and one error line is logged.
+ * denylist fails open, and one error line is logged. A denial still in flight
+ * at the deadline (`'pending'`) is not counted here: it lands when Redis
+ * answers, and if it fails instead `denySession` logs the same error line for
+ * it, with this user id.
  * @param userId - The user whose sessions were revoked.
  * @param sessionIds - The revoked session ids.
- * @returns Resolves once every denial is written or the failure is logged.
+ * @returns Resolves once every denial is written, left in flight past the deadline, or its failure logged.
  */
 export async function denySessionsAfterCommit(userId: string, sessionIds: string[]): Promise<void> {
-  const outcomes = await Promise.all(sessionIds.map((sessionId) => denySession(sessionId)))
+  const outcomes = await Promise.all(sessionIds.map((sessionId) => denySession(sessionId, userId)))
   const failed = outcomes.filter((outcome) => outcome === 'failed').length
   if (failed > 0) {
     logger.error('session denylist write failed after revocation', {

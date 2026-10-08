@@ -21,7 +21,11 @@ import { currentAnalyticsContext } from '@/services/analytics/analytics-context.
 import { buildFlagExposureEvent } from '@/services/analytics/analytics-event-builder.service'
 import { enqueueAnalyticsOrThrow } from '@/services/analytics/analytics-outbox.service'
 import { logger } from '@/services/logger.service'
-import { withRedisDeadline } from '@/services/redis-deadline.service'
+import {
+  STILL_PENDING,
+  waitForRedisWrite,
+  withRedisDeadline,
+} from '@/services/redis-deadline.service'
 import { getRedis, redisKey } from '@/services/redis.service'
 import type { ExposureOrigin, FlagContext, FlagEvaluation, FlagReason } from '@/types/flags'
 import { MS_PER_SECOND, requireDurationMs } from '@/utilities/duration.utilities'
@@ -75,11 +79,10 @@ function dedupeSeconds(context: FlagContext): number {
  */
 async function isFirstExposure(key: string, seconds: number): Promise<boolean> {
   try {
-    const redis = await getRedis()
-    const reply = await withRedisDeadline(
-      () => redis.set(key, '1', { NX: true, EX: seconds }),
-      'flag exposure dedupe'
-    )
+    const reply = await withRedisDeadline(async () => {
+      const redis = await getRedis()
+      return redis.set(key, '1', { NX: true, EX: seconds })
+    }, 'flag exposure dedupe')
     return reply !== null
   } catch (error) {
     logger.warn('Exposure dedupe unavailable; recording the exposure anyway', { error })
@@ -89,15 +92,23 @@ async function isFirstExposure(key: string, seconds: number): Promise<boolean> {
 
 /**
  * Release a dedupe key whose exposure was not recorded. Best effort: a
- * Redis failure leaves the key to expire.
+ * Redis failure leaves the key to expire. The delete waits at most
+ * `REDIS_REQUEST_DEADLINE_MS` and, still in flight then, lands when Redis
+ * answers (`waitForRedisWrite`).
  * @param key - The dedupe key.
- * @returns True once released, false when Redis failed.
+ * @returns True once released; false when Redis failed or has not answered yet.
  */
 async function didReleaseDedupeKey(key: string): Promise<boolean> {
   try {
-    const redis = await getRedis()
-    await redis.del(key)
-    return true
+    const outcome = await waitForRedisWrite(
+      async () => {
+        const redis = await getRedis()
+        return redis.del(key)
+      },
+      'flag exposure dedupe release',
+      () => {}
+    )
+    return outcome !== STILL_PENDING
   } catch {
     return false
   }

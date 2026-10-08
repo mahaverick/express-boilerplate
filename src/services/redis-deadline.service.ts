@@ -52,14 +52,51 @@ function closeCooldown(label: string): void {
 }
 
 /**
+ * What `answerByDeadline` and the waits built on it answer when Redis has not
+ * answered by the deadline.
+ */
+export const STILL_PENDING = Symbol('still pending')
+
+/**
+ * Wait at most `REDIS_REQUEST_DEADLINE_MS` for a Redis call already started.
+ *
+ * The verdict waits one more turn of the event loop after the timer fires: a
+ * process that was blocked past the deadline (a GC pause, CPU throttling)
+ * runs its due timers before it reads the sockets, and a reply already sitting
+ * in the socket buffer must win over the timer rather than count as a stall.
+ * The timer is cleared on every path and does not keep the process alive.
+ * @param pending - The call in flight.
+ * @returns Its value, or `STILL_PENDING`. Rejects when the call fails first.
+ */
+async function answerByDeadline<T>(pending: Promise<T>): Promise<T | typeof STILL_PENDING> {
+  const race = { settled: false }
+  let timer: NodeJS.Timeout | undefined
+  const deadline = new Promise<typeof STILL_PENDING>((resolve) => {
+    timer = setTimeout(() => {
+      setImmediate(() => {
+        if (!race.settled) resolve(STILL_PENDING)
+      })
+    }, REDIS_REQUEST_DEADLINE_MS)
+    timer.unref()
+  })
+  try {
+    // Promise.race subscribes to `pending`, so its failure after the deadline is handled, never an unhandled rejection.
+    return await Promise.race([pending, deadline])
+  } finally {
+    race.settled = true
+    clearTimeout(timer)
+  }
+}
+
+/**
  * Run one request-path Redis call with a deadline of
- * `REDIS_REQUEST_DEADLINE_MS`.
+ * `REDIS_REQUEST_DEADLINE_MS`. Put `getRedis()` inside `operation`, so a
+ * connect in flight counts against the deadline too.
  *
  * Inside a cooldown it rejects at once, without calling `operation`. A call
  * that misses the deadline is abandoned (its later outcome is ignored), opens
  * a cooldown of `REDIS_STALL_COOLDOWN_MS` and rejects. A call that fails
- * rejects with its own error and opens nothing. The timer is cleared on every
- * path and does not keep the process alive.
+ * rejects with its own error and opens nothing.
  * @param operation - Starts the call; not called during a cooldown.
  * @param label - What is being asked, for the warning.
  * @returns The call's result.
@@ -67,51 +104,77 @@ function closeCooldown(label: string): void {
  */
 export async function withRedisDeadline<T>(operation: () => Promise<T>, label: string): Promise<T> {
   if (isCoolingDown()) throw new RedisStalledError(label)
-  // Promise.race subscribes to it, so its failure after the deadline is handled, never an unhandled rejection.
-  const pending = operation()
-  let timer: NodeJS.Timeout | undefined
-  const deadline = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => {
-      openCooldown(label)
-      reject(new RedisStalledError(label))
-    }, REDIS_REQUEST_DEADLINE_MS)
-    timer.unref()
-  })
+  const result = await answerByDeadline(operation())
+  if (result === STILL_PENDING) {
+    openCooldown(label)
+    throw new RedisStalledError(label)
+  }
+  closeCooldown(label)
+  return result
+}
+
+/**
+ * Wait at most `REDIS_REQUEST_DEADLINE_MS` for a write whose loss would widen
+ * access: a session deny, an audit throttle key's release, a maintenance-mode
+ * change. Unlike `withRedisDeadline` it never consults or opens the stall
+ * cooldown, so the write is always sent; one still in flight at the deadline
+ * is left to land when Redis answers, never abandoned, with one `warn`, and
+ * `onLateFailure` runs if it then fails. If the connection drops first,
+ * node-redis rejects it and the write is lost; `onLateFailure` reports that.
+ * @param write - Starts the write, `getRedis()` included.
+ * @param label - What is being written, for the warning.
+ * @param onLateFailure - Reports a write that fails after the deadline; must not throw.
+ * @param context - Extra fields for the warning, such as the session id.
+ * @returns The write's value, or `STILL_PENDING`. Rejects when the write fails before the deadline.
+ */
+export async function waitForRedisWrite<T>(
+  write: () => Promise<T>,
+  label: string,
+  onLateFailure: (error: unknown) => void,
+  context: Record<string, unknown> = {}
+): Promise<T | typeof STILL_PENDING> {
+  const pending = write()
+  const result = await answerByDeadline(pending)
+  if (result === STILL_PENDING) {
+    logger.warn('Redis write not answered in time; it lands when Redis answers', {
+      ...context,
+      label,
+      timeoutMs: REDIS_REQUEST_DEADLINE_MS,
+    })
+    void watchLateWrite(pending, onLateFailure)
+  }
+  return result
+}
+
+/**
+ * Wait for a write left in flight, reporting a failure.
+ * @param pending - The write.
+ * @param onLateFailure - Reports its failure.
+ * @returns Resolves once the write settles; never rejects.
+ */
+async function watchLateWrite(
+  pending: Promise<unknown>,
+  onLateFailure: (error: unknown) => void
+): Promise<void> {
   try {
-    const result = await Promise.race([pending, deadline])
-    closeCooldown(label)
-    return result
-  } finally {
-    clearTimeout(timer)
+    await pending
+  } catch (error) {
+    onLateFailure(error)
   }
 }
 
 /**
- * What `waitForRedisWrite` answers when the write has not settled by the deadline.
+ * Wait at most `REDIS_REQUEST_DEADLINE_MS` for a readiness probe. It neither
+ * consults nor opens the stall cooldown: a slow probe makes only that probe
+ * answer not-ready, and a request's stall does not take the replica out of
+ * rotation.
+ * @param probe - Starts the probe, `getRedis()` included.
+ * @returns The probe's value, or `STILL_PENDING`. Rejects when the probe fails first.
  */
-export const STILL_PENDING = Symbol('still pending')
-
-/**
- * Wait at most `REDIS_REQUEST_DEADLINE_MS` for a write whose loss would widen
- * access, such as a session deny. It is not `withRedisDeadline`: it never
- * consults or opens the stall cooldown, so a deny is always sent, and a
- * write still in flight at the deadline is left to land when Redis answers,
- * never abandoned. The caller logs that and watches the write's outcome. The
- * timer is cleared on every path and does not keep the process alive.
- * @param write - The write, already sent.
- * @returns Its value, or `STILL_PENDING` at the deadline. Rejects when the write fails first.
- */
-export async function waitForRedisWrite<T>(write: Promise<T>): Promise<T | typeof STILL_PENDING> {
-  let timer: NodeJS.Timeout | undefined
-  const deadline = new Promise<typeof STILL_PENDING>((resolve) => {
-    timer = setTimeout(() => resolve(STILL_PENDING), REDIS_REQUEST_DEADLINE_MS)
-    timer.unref()
-  })
-  try {
-    return await Promise.race([write, deadline])
-  } finally {
-    clearTimeout(timer)
-  }
+export async function waitForRedisProbe<T>(
+  probe: () => Promise<T>
+): Promise<T | typeof STILL_PENDING> {
+  return answerByDeadline(probe())
 }
 
 /**

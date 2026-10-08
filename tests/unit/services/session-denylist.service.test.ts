@@ -103,20 +103,20 @@ describe('session denylist', () => {
     expect(warn).not.toHaveBeenCalled()
   })
 
-  it('warns when a deny write left in flight fails later', async () => {
+  it('logs the loss at error, with the user id, when a deny write left in flight fails later', async () => {
     const write = deferredWrite()
     redis.set.mockReturnValue(write.reply)
-    const warn = vi.spyOn(logger, 'warn')
+    const error = vi.spyOn(logger, 'error')
     const { denySession } = await import('@/services/session-denylist.service')
-    expect(await answerWithinBound(denySession('session-abc'))).toBe('pending')
+    expect(await answerWithinBound(denySession('session-abc', 'user-1'))).toBe('pending')
+    expect(error).not.toHaveBeenCalled()
 
-    warn.mockClear()
     write.fail()
     await expect(write.reply).rejects.toThrow('connection reset')
     await vi.waitFor(() => {
-      expect(warn).toHaveBeenCalledWith(
-        'Could not deny session; access tokens stay valid until they expire',
-        expect.objectContaining({ sessionId: 'session-abc' })
+      expect(error).toHaveBeenCalledWith(
+        'session denylist write failed after revocation',
+        expect.objectContaining({ userId: 'user-1', sessionId: 'session-abc', sessionCount: 1 })
       )
     })
   })

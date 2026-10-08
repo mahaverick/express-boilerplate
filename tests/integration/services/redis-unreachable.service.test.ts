@@ -49,6 +49,8 @@ describe('redis unreachable', () => {
   }, 10_000)
 
   it('starts a fresh connect after a failed one, instead of handing back the cached failure', async () => {
+    // The readiness probe above answers at its deadline, before its connect has failed: let that one finish first.
+    await expect(getRedis()).rejects.toThrow()
     vi.mocked(createClient).mockClear()
     await expect(getRedis()).rejects.toThrow()
     await expect(getRedis()).rejects.toThrow()

@@ -43,22 +43,18 @@ export async function takeTimelineQueryBudget(
   const key = redisKey('timeline', 'budget')
   const nowMs = now.getTime()
   const member = `${String(nowMs)}:${randomUUID()}`
-  let redis: Awaited<ReturnType<typeof getRedis>>
   let count: number
   try {
-    const client = await getRedis()
-    redis = client
-    const replies = await withRedisDeadline(
-      () =>
-        client
-          .multi()
-          .zRemRangeByScore(key, '-inf', nowMs - HOUR_MS)
-          .zAdd(key, { score: nowMs, value: member })
-          .zCard(key)
-          .expire(key, HOUR_SECONDS)
-          .exec(),
-      'timeline query budget'
-    )
+    const replies = await withRedisDeadline(async () => {
+      const redis = await getRedis()
+      return redis
+        .multi()
+        .zRemRangeByScore(key, '-inf', nowMs - HOUR_MS)
+        .zAdd(key, { score: nowMs, value: member })
+        .zCard(key)
+        .expire(key, HOUR_SECONDS)
+        .exec()
+    }, 'timeline query budget')
     count = Number(replies[ZCARD_REPLY_INDEX])
   } catch (error) {
     logger.warn('Timeline query budget unavailable; allowing the query', { error })
@@ -66,7 +62,10 @@ export async function takeTimelineQueryBudget(
   }
   if (count <= getEnv().TIMELINE_QUERY_BUDGET_PER_HOUR) return 'taken'
   try {
-    await withRedisDeadline(() => redis.zRem(key, member), 'timeline query budget return')
+    await withRedisDeadline(async () => {
+      const redis = await getRedis()
+      return redis.zRem(key, member)
+    }, 'timeline query budget return')
   } catch (error) {
     // The next call an hour later removes the entry (zRemRangeByScore), or the set expires, so this over-counts by one for at most an hour.
     logger.warn('Could not return a refused timeline query to the budget', { error })
