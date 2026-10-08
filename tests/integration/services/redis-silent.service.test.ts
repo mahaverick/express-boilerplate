@@ -10,6 +10,8 @@
 import net from 'node:net'
 import { createClient } from 'redis'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { RedisStalledError } from '@/errors/redis-errors'
+import { withRedisDeadline } from '@/services/redis-deadline.service'
 import {
   closeRedis,
   getRedis,
@@ -86,6 +88,10 @@ describe('a Redis that accepts connections and never answers', () => {
 
   it('fails the denylist read open within the deadline while the first connect hangs', async () => {
     expect(await answerWithinBound(isSessionDenied('session-abc'))).toBe(false)
+    // A connect still inside its bound is slow, not stalled: no cooldown, so the next call still asks Redis.
+    const operation = vi.fn(() => Promise.resolve('PONG'))
+    await expect(withRedisDeadline(operation, 'after a slow connect')).resolves.toBe('PONG')
+    expect(operation).toHaveBeenCalledTimes(1)
   })
 
   it(
@@ -94,6 +100,12 @@ describe('a Redis that accepts connections and never answers', () => {
       vi.mocked(createClient).mockClear()
       // The claim is the connect bound itself: twice it, to tell "bounded" from "never".
       expect(await settleWithin(getRedis(), REDIS_CONNECT_TIMEOUT_MS * 2)).toBe('rejected')
+      // A connect that ran out of time is a stall: the cooldown is open, and request-path calls skip Redis.
+      const operation = vi.fn(() => Promise.resolve('PONG'))
+      await expect(
+        withRedisDeadline(operation, 'after a timed-out connect')
+      ).rejects.toBeInstanceOf(RedisStalledError)
+      expect(operation).not.toHaveBeenCalled()
       await waitUntil(() => silent.sockets.size === 0, {
         message: 'the abandoned client closed its socket',
       })

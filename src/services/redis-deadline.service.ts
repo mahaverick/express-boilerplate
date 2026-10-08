@@ -15,7 +15,10 @@ import { logger } from '@/services/logger.service'
  * Per process. `stalledUntil` is when the current cooldown ends; it stays
  * set after that, until a call succeeds, so the recovery is logged once.
  */
-const state: { stalledUntil: number | undefined } = { stalledUntil: undefined }
+const state: { stalledUntil: number | undefined; connectsInFlight: number } = {
+  stalledUntil: undefined,
+  connectsInFlight: 0,
+}
 
 /**
  * Whether a cooldown is open now.
@@ -95,7 +98,8 @@ async function answerByDeadline<T>(pending: Promise<T>): Promise<T | typeof STIL
  *
  * Inside a cooldown it rejects at once, without calling `operation`. A call
  * that misses the deadline is abandoned (its later outcome is ignored), opens
- * a cooldown of `REDIS_STALL_COOLDOWN_MS` and rejects. A call that fails
+ * a cooldown of `REDIS_STALL_COOLDOWN_MS` (unless the shared client's connect
+ * is still in flight, see `trackRedisConnect`) and rejects. A call that fails
  * rejects with its own error and opens nothing.
  * @param operation - Starts the call; not called during a cooldown.
  * @param label - What is being asked, for the warning.
@@ -106,7 +110,8 @@ export async function withRedisDeadline<T>(operation: () => Promise<T>, label: s
   if (isCoolingDown()) throw new RedisStalledError(label)
   const result = await answerByDeadline(operation())
   if (result === STILL_PENDING) {
-    openCooldown(label)
+    // A connect still in flight is slow, not stalled: this call falls back, and the cooldown stays shut.
+    if (state.connectsInFlight === 0) openCooldown(label)
     throw new RedisStalledError(label)
   }
   closeCooldown(label)
@@ -175,6 +180,31 @@ export async function waitForRedisProbe<T>(
   probe: () => Promise<T>
 ): Promise<T | typeof STILL_PENDING> {
   return answerByDeadline(probe())
+}
+
+/**
+ * Mark the shared client's connect as in flight until it settles. A request-path
+ * call that misses its deadline meanwhile falls back without opening the cooldown:
+ * a connect still inside `REDIS_CONNECT_TIMEOUT_MS` is slow, not stalled.
+ * @param connect - The connect.
+ * @returns The connect's outcome.
+ */
+export async function trackRedisConnect<T>(connect: Promise<T>): Promise<T> {
+  state.connectsInFlight += 1
+  try {
+    return await connect
+  } finally {
+    state.connectsInFlight -= 1
+  }
+}
+
+/**
+ * Open the stall cooldown from outside a request-path call: the shared client's
+ * connect ran out of `REDIS_CONNECT_TIMEOUT_MS`.
+ * @param label - What stalled.
+ */
+export function openRedisStallCooldown(label: string): void {
+  openCooldown(label)
 }
 
 /**

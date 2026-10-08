@@ -6,7 +6,11 @@
 import { createClient, type RedisClientType } from 'redis'
 import { getEnv } from '@/configs/env.config'
 import { logger } from '@/services/logger.service'
-import { waitForRedisProbe } from '@/services/redis-deadline.service'
+import {
+  openRedisStallCooldown,
+  trackRedisConnect,
+  waitForRedisProbe,
+} from '@/services/redis-deadline.service'
 
 /**
  * Module state in one object, so no function reassigns a top-level binding.
@@ -95,6 +99,7 @@ async function connectRedis(): Promise<RedisClientType> {
     const outcome = await Promise.race([client.connect(), timeout])
     if (outcome === 'timed-out') {
       client.destroy()
+      openRedisStallCooldown('connect')
       throw new Error(`Redis did not finish connecting in ${String(REDIS_CONNECT_TIMEOUT_MS)} ms`)
     }
     return client
@@ -133,7 +138,7 @@ export async function getRedis(): Promise<RedisClientType> {
     throw new Error(CLOSED_MESSAGE)
   }
   if (state.client) return state.client
-  state.connecting ??= connectShared()
+  state.connecting ??= trackRedisConnect(connectShared())
   return state.connecting
 }
 

@@ -12,6 +12,7 @@ import { logger } from '@/services/logger.service'
 import {
   resetRedisDeadlineForTests,
   STILL_PENDING,
+  trackRedisConnect,
   waitForRedisProbe,
   waitForRedisWrite,
   withRedisDeadline,
@@ -263,5 +264,32 @@ describe('waitForRedisProbe', () => {
     vi.spyOn(logger, 'warn').mockImplementation(() => {})
     await openCooldown()
     await expect(waitForRedisProbe(() => Promise.resolve('PONG'))).resolves.toBe('PONG')
+  })
+})
+
+describe('trackRedisConnect', () => {
+  it('lets a call that misses the deadline during a connect fall back without opening the cooldown', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    const connect = { finish: () => {} }
+    const tracked = trackRedisConnect(
+      new Promise<void>((resolve) => {
+        connect.finish = resolve
+      })
+    )
+
+    const slow = track(withRedisDeadline(never, 'denylist read'))
+    await vi.advanceTimersByTimeAsync(VERDICT_MS)
+    expect(slow.error).toBeInstanceOf(RedisStalledError)
+    const next = vi.fn(() => Promise.resolve('PONG'))
+    await expect(withRedisDeadline(next, 'ping')).resolves.toBe('PONG')
+    expect(next).toHaveBeenCalledTimes(1)
+    expect(warn).not.toHaveBeenCalled()
+
+    connect.finish()
+    await tracked
+    // Connected: a stall is a stall again.
+    await openCooldown()
+    await expect(withRedisDeadline(next, 'ping')).rejects.toBeInstanceOf(RedisStalledError)
+    expect(next).toHaveBeenCalledTimes(1)
   })
 })

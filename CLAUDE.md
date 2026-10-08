@@ -106,7 +106,7 @@ rather than repeating them.
   maintenance-mode publish) **uses `waitForRedisWrite` instead:** it is never
   skipped for the cooldown, and one still in flight at the deadline is left
   to land. `tests/helpers/setup-global.ts` resets the cooldown before every
-  test and connects the shared client before an integration file starts.
+  test.
 - **`sendMail()` never rejects.** It returns `'sent' | 'failed'`, which the
   worker uses to decide whether BullMQ retries.
 - **An integration test that asserts mail delivery runs its own
