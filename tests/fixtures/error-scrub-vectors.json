@@ -1208,5 +1208,35 @@
     "rule": "kv",
     "input": "error code 500: the key was missing",
     "expected": "error code 500: the key was missing"
+  },
+  {
+    "rule": "kv",
+    "input": "passphrase=zqS7hunter2",
+    "expected": "passphrase=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "passcode: zqS8a91b",
+    "expected": "passcode: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "pin=zqS9x4821",
+    "expected": "pin=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "user_pin=4821",
+    "expected": "user_pin=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "pinned to top",
+    "expected": "pinned to top"
+  },
+  {
+    "rule": "kv",
+    "input": "spin=3 failed",
+    "expected": "spin=3 failed"
   }
 ]

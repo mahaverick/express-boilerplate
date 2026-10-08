@@ -67,8 +67,8 @@ const USERINFO_PATTERN = /\b([a-z][a-z0-9+.-]*:\/\/)(?:[^\s/?#<>"']|["'](?![,:;}
  * holds an `=`, so a question in prose is left alone. A word after `@` is
  * a domain, which the email rule handles.
  */
-// eslint-disable-next-line sonarjs/super-linear-regex, sonarjs/regex-complexity -- scrubText scans at most SCAN_MAX characters; one pattern per rule keeps the rule list the spec
 const QUERY_PATTERN =
+  // eslint-disable-next-line sonarjs/super-linear-regex, sonarjs/regex-complexity -- scrubText scans at most SCAN_MAX characters; one pattern per rule keeps the rule list the spec
   /((?:https?:\/\/|\/)[^\s?"'<>]*|(?<![@\w.-])[\w.-]+(?=\?[^\s"'<>]*=))\?[^\s"'<>]+/g
 
 /**
@@ -238,8 +238,9 @@ const AUTH_HEADER_PATTERN = new RegExp(
 /**
  * A secret-named key, singular or plural, and its value: `password=...`,
  * `"tokens":"..."`, `api_key: ...`, `sig=...`, `nonce=...`,
- * `response="..."`, `SAMLResponse=...`, `password%3D...`. `code` is a secret
- * key only after `?` or `&`, or later on a line that names OAuth or
+ * `response="..."`, `SAMLResponse=...`, `password%3D...`. `pin` is a secret key only
+ * as a whole word or after `_` or `-` (`user_pin`, never `spin`). `code` is one
+ * only after `?` or `&`, or later on a line that names OAuth or
  * authorization (an authorization code), so `code: 'ECONNREFUSED'` stays;
  * `key` only as a whole word before `=`. A `response` key
  * (any prefix) is a key after `=`, `=>` or `%3D`, or after `:` or `=>` with a
@@ -254,7 +255,7 @@ const AUTH_HEADER_PATTERN = new RegExp(
  * they are (`KEPT_VALUE`), so `token: undefined` stays readable.
  */
 const KV_SECRET_PATTERN = new RegExp(
-  String.raw`\b((?:[\w-]*?(?:pass(?:word|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|consumer[_-]?key|auth(?:orization)?[_-]code|session|sid|credential|signature|sig|hmac|nonce|(?<=[\w-])response|response(?=s?${KEY_QUOTE}?\s*(?:=|%3D|:\s*${KEY_QUOTE}))|jwt|otp)s?|code(?<=[?&]code)|code(?<=(?:oauth|authoriz)[^\n]*code)|key(?=\s*=(?!>)))${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?)` +
+  String.raw`\b((?:[\w-]*?(?:pass(?:word|wd|phrase|code)?|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|consumer[_-]?key|auth(?:orization)?[_-]code|session|sid|credential|signature|sig|hmac|nonce|(?<=[\w-])response|response(?=s?${KEY_QUOTE}?\s*(?:=|%3D|:\s*${KEY_QUOTE}))|(?<![A-Za-z\d])pin|jwt|otp)s?|code(?<=[?&]code)|code(?<=(?:oauth|authoriz)[^\n]*code)|key(?=\s*=(?!>)))${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?)` +
     `${KEPT_VALUE}(?:${QUOTED_VALUE}|${ARRAY_VALUE}|${UNQUOTED_VALUE})`,
   'gi'
 )
@@ -406,7 +407,7 @@ function capped(value: string, wasCut: boolean): string {
  * `cookie`, `set-cookie`), after any known scheme word, to its closing
  * quote or the end of the line, and the
  * value, an array included, of a secret-named key, singular or plural
- * (`password`, `token`, `secret`, `api_key`, `access_key`, `private_key`,
+ * (`password`, `passphrase`, `passcode`, `pin`, `token`, `secret`, `api_key`, `access_key`, `private_key`,
  * `consumer_key`, `session`, `sid`, `credential`, `jwt`, `otp`,
  * `signature`, `sig`, `hmac`, `nonce`, `response`; `code` after `?` or `&`
  * or on an OAuth or authorization line; `key` before `=`), become `[redacted]`; a JWT becomes `[jwt]`; a
