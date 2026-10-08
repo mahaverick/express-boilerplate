@@ -1378,5 +1378,55 @@
     "rule": "kv",
     "input": "{ code: 'ECONNREFUSED', headers: { authorization: 'x' } }",
     "expected": "{ code: 'ECONNREFUSED', headers: { authorization: '[redacted]' } }"
+  },
+  {
+    "rule": "kv",
+    "input": "SECRET_KEY=zqY1abc123",
+    "expected": "SECRET_KEY=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "signing_key=zqY2abc123",
+    "expected": "signing_key=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "encryption_key=zqY3abc123",
+    "expected": "encryption_key=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "hmac_key=zqY4abc123",
+    "expected": "hmac_key=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "keys=zqY5abc123",
+    "expected": "keys=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "primary_key=5",
+    "expected": "primary_key=5"
+  },
+  {
+    "rule": "kv",
+    "input": "sort_key=created_at",
+    "expected": "sort_key=created_at"
+  },
+  {
+    "rule": "kv",
+    "input": "foreign_key=user_id",
+    "expected": "foreign_key=user_id"
+  },
+  {
+    "rule": "kv",
+    "input": "cache_key=tenant_42",
+    "expected": "cache_key=tenant_42"
+  },
+  {
+    "rule": "kv",
+    "input": "partition_key=tenant_42",
+    "expected": "partition_key=tenant_42"
   }
 ]

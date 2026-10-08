@@ -246,7 +246,8 @@ const AUTH_HEADER_PATTERN = new RegExp(
  * only after `?` or `&`, first in a form body (`code=…&`), on a line that
  * names OAuth or authorization before it, or with that word later in the same
  * query or JSON object (an authorization code), so `code: 'ECONNREFUSED'` stays;
- * `key` only as a whole word before `=`. A `response` key
+ * `key` only before `=`, as a whole word or after `_` or `-` (`SECRET_KEY`), but
+ * not in `primary_key`, `foreign_key`, `sort_key` and the like. A `response` key
  * (any prefix) is a key after `=`, `=>` or `%3D`, or after `:` or `=>` with a
  * quoted value; after `:` and an unquoted value it is prose (`Unexpected
  * response: 502`) only when `response` stands alone; a prefixed one
@@ -259,7 +260,7 @@ const AUTH_HEADER_PATTERN = new RegExp(
  * they are (`KEPT_VALUE`), so `token: undefined` stays readable.
  */
 const KV_SECRET_PATTERN = new RegExp(
-  String.raw`\b((?:[\w-]*?(?:pass(?:word|wd|phrase|code)?|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|consumer[_-]?key|auth(?:orization)?[_-]code|session|sid|credential|signature|sig|hmac|nonce|(?<=[\w-])response|response(?=s?${KEY_QUOTE}?\s*(?:=|%3D|:\s*${KEY_QUOTE}))|(?<![A-Za-z\d])pin|jwt|otp)s?|code(?<=[?&]code)|code(?<=(?:oauth|authorization(?![a-z]))[^\n]*code)|code(?=\s*=[^\s&]*&)|code(?=[^\n{}]*(?:oauth|authorization(?![a-z])))|key(?=\s*=(?!>)))${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?)` +
+  String.raw`\b((?:[\w-]*?(?:pass(?:word|wd|phrase|code)?|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|consumer[_-]?key|auth(?:orization)?[_-]code|session|sid|credential|signature|sig|hmac|nonce|(?<=[\w-])response|response(?=s?${KEY_QUOTE}?\s*(?:=|%3D|:\s*${KEY_QUOTE}))|(?<![A-Za-z\d])pin|(?<![A-Za-z\d])(?<!(?:primary|foreign|sort|partition|cache|unique|index|s3)[_-])key(?=s?\s*=(?!>))|jwt|otp)s?|code(?<=[?&]code)|code(?<=(?:oauth|authorization(?![a-z]))[^\n]*code)|code(?=\s*=[^\s&]*&)|code(?=[^\n{}]*(?:oauth|authorization(?![a-z]))))${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?)` +
     `${KEPT_VALUE}(?:${QUOTED_VALUE}|${ARRAY_VALUE}|${UNQUOTED_VALUE})`,
   'gi'
 )
