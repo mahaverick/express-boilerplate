@@ -1496,7 +1496,7 @@
   },
   {
     "rule": "email",
-    "input": "to=xoxb-1234567890-zqT6ABCdef@acme-corp.co.uk",
+    "input": "to=xoxb-1234567890-zqT6ABCdef@example-corp.co.uk",
     "expected": "to=[email]"
   },
   {
@@ -1731,7 +1731,7 @@
   },
   {
     "rule": "email",
-    "input": "to=phx_zqTabcdEFGHij1234%40acme-corp.co.uk",
+    "input": "to=phx_zqTabcdEFGHij1234%40example-corp.co.uk",
     "expected": "to=[email]"
   }
 ]
