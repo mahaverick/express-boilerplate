@@ -241,8 +241,10 @@ const AUTH_HEADER_PATTERN = new RegExp(
 /**
  * A secret-named key, singular or plural, and its value: `password=...`,
  * `"tokens":"..."`, `api_key: ...`, `sig=...`, `nonce=...`,
- * `response="..."`, `SAMLResponse=...`, `password%3D...`. `pin` is a secret key only
- * as a whole word or after `_` or `-` (`user_pin`, never `spin`). `code` is one
+ * `response="..."`, `SAMLResponse=...`, `password%3D...`, `pass_phrase`,
+ * `passkey`, `otp_code`, `mfa_code`, `verification_code`, `recovery_code`,
+ * `backup_code`. `pin` (and `pin_code`, `pincode`, `pin_number`) is a secret
+ * key only as a whole word or after `_` or `-` (`user_pin`, never `spin`). `code` is one
  * only after `?` or `&` (written plainly, as `&amp;`, or encoded as `%3F` or
  * `%26`), first in a form body (`code=…&`), on a line that
  * names OAuth or authorization before it, or with that word later in the same
@@ -264,7 +266,7 @@ const AUTH_HEADER_PATTERN = new RegExp(
  * they are (`KEPT_VALUE`), so `token: undefined` stays readable.
  */
 const KV_SECRET_PATTERN = new RegExp(
-  String.raw`(?:\b|(?<=%26|%3F))((?:[\w-]*?(?:pass(?:word|wd|phrase|code)?|pwd|secret|token|api[_-]?key|access[_-]?key|(?:secret|private|consumer|signing|encryption|master|client)[_-]?key|auth(?:orization)?[_-]code|session|sid|credential|signature|sig|hmac|nonce|(?<=[\w-])response|response(?=s?${KEY_QUOTE}?\s*(?:=|%3D|&#61;|\\u003d|:\s*${KEY_QUOTE}))|(?<![A-Za-z\d])pin|(?<![A-Za-z\d])(?<!(?:primary|foreign|sort|partition|cache|unique|index|s3)[_-])key(?=s?\s*(?:=(?!>)|%3D|&#61;|\\u003d))|jwt|otp)s?|code(?<=(?:[?&]|&amp;|%26|%3F)code)|code(?<=(?:oauth|authoriz(?:ation|e)(?![a-z]))[^\n]*code)|code(?=\s*=[^\s&]*&)|code(?=[^\n{}]*(?:oauth|authoriz(?:ation|e)(?![a-z]))))${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?)` +
+  String.raw`(?:\b|(?<=%26|%3F))((?:[\w-]*?(?:pass(?:[_-]?(?:word|phrase|code|key)|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|(?:secret|private|consumer|signing|encryption|master|client)[_-]?key|auth(?:orization)?[_-]code|session|sid|credential|signature|sig|hmac|nonce|(?<=[\w-])response|response(?=s?${KEY_QUOTE}?\s*(?:=|%3D|&#61;|\\u003d|:\s*${KEY_QUOTE}))|(?<![A-Za-z\d])pin(?:[_-]?(?:code|number))?|(?:otp|mfa|verification|recovery|backup)[_-]?code|(?<![A-Za-z\d])(?<!(?:primary|foreign|sort|partition|cache|unique|index|s3)[_-])key(?=s?\s*(?:=(?!>)|%3D|&#61;|\\u003d))|jwt|otp)s?|code(?<=(?:[?&]|&amp;|%26|%3F)code)|code(?<=(?:oauth|authoriz(?:ation|e)(?![a-z]))[^\n]*code)|code(?=\s*=[^\s&]*&)|code(?=[^\n{}]*(?:oauth|authoriz(?:ation|e)(?![a-z]))))${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?)` +
     `${KEPT_VALUE}(?:${QUOTED_VALUE}|${ARRAY_VALUE}|${UNQUOTED_VALUE})`,
   'gi'
 )
@@ -475,7 +477,8 @@ function capped(value: string, wasCut: boolean): string {
  * (`authorization`, `auth`, `cookie`, `set-cookie`), after any known scheme
  * word, to its closing quote or the end of the line, and the value, an
  * array included, of a secret-named key, singular or plural (`password`,
- * `passphrase`, `passcode`, `pin`, `token`, `secret`, `api_key`,
+ * `passphrase`, `passcode`, `passkey`, `pin`, `otp_code` and the other
+ * one-time code names, `token`, `secret`, `api_key`,
  * `access_key`, `secret_key` and the other compound key names, `session`, `sid`,
  * `credential`, `jwt`, `otp`, `signature`, `sig`, `hmac`, `nonce`,
  * `response`; `code` after `?` or `&` or on an OAuth or authorization line;

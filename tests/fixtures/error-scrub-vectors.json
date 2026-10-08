@@ -1598,5 +1598,65 @@
     "rule": "kv",
     "input": "response\\u003dzqS4Zx9Kq2Lm8",
     "expected": "response\\u003d[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "pin_code: zqS4Zx9Kq2Lm8",
+    "expected": "pin_code: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "{ pincode: '4815' }",
+    "expected": "{ pincode: '[redacted]' }"
+  },
+  {
+    "rule": "kv",
+    "input": "pin_number=4815",
+    "expected": "pin_number=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "passkey: zqS4Zx9Kq2Lm8",
+    "expected": "passkey: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "pass_phrase: zqS4Zx9Kq2Lm8",
+    "expected": "pass_phrase: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "pass-code: zqS4Zx9Kq2Lm8",
+    "expected": "pass-code: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "{\"otp_code\":\"481516\"}",
+    "expected": "{\"otp_code\":\"[redacted]\"}"
+  },
+  {
+    "rule": "kv",
+    "input": "mfa_code: 481516",
+    "expected": "mfa_code: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "verification_code=481516",
+    "expected": "verification_code=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "recoveryCode: zqS4-Zx9K",
+    "expected": "recoveryCode: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "backup_code: zqS4-Zx9K",
+    "expected": "backup_code: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "spin_code: 7, error_code: 'E42', status_code: 500",
+    "expected": "spin_code: 7, error_code: 'E42', status_code: 500"
   }
 ]
