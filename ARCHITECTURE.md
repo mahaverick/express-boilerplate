@@ -1326,7 +1326,11 @@ Redis, then the next call tries again. A failure takes the caller's existing
 outage path (fail open, memory, or `next(error)`), so a stall is handled as an
 outage. One `warn` marks each cooldown and one `info` the first success after
 it. Workers, BullMQ, pub/sub and the status reads (bounded by
-`STATUS_READ_TIMEOUT_MS`) are outside it.
+`STATUS_READ_TIMEOUT_MS`) are outside it. A session deny (`denySession`) is a
+write whose loss would keep tokens valid, so it goes through
+`waitForRedisWrite` instead: it is always sent, cooldown or not, the request
+waits for it at most the same deadline, and one still in flight then lands
+when Redis answers (a `warn` marks it, and another if it then fails).
 
 A queue connection that
 gives up before its first `ready` is replaced on next use, and the producer's

@@ -87,6 +87,34 @@ export async function withRedisDeadline<T>(operation: () => Promise<T>, label: s
 }
 
 /**
+ * What `waitForRedisWrite` answers when the write has not settled by the deadline.
+ */
+export const STILL_PENDING = Symbol('still pending')
+
+/**
+ * Wait at most `REDIS_REQUEST_DEADLINE_MS` for a write whose loss would widen
+ * access, such as a session deny. It is not `withRedisDeadline`: it never
+ * consults or opens the stall cooldown, so a deny is always sent, and a
+ * write still in flight at the deadline is left to land when Redis answers,
+ * never abandoned. The caller logs that and watches the write's outcome. The
+ * timer is cleared on every path and does not keep the process alive.
+ * @param write - The write, already sent.
+ * @returns Its value, or `STILL_PENDING` at the deadline. Rejects when the write fails first.
+ */
+export async function waitForRedisWrite<T>(write: Promise<T>): Promise<T | typeof STILL_PENDING> {
+  let timer: NodeJS.Timeout | undefined
+  const deadline = new Promise<typeof STILL_PENDING>((resolve) => {
+    timer = setTimeout(() => resolve(STILL_PENDING), REDIS_REQUEST_DEADLINE_MS)
+    timer.unref()
+  })
+  try {
+    return await Promise.race([write, deadline])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/**
  * Close any cooldown, for tests only: the state is per process, and one
  * test's stall would otherwise make the next test's Redis calls fail.
  */

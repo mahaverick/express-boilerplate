@@ -288,7 +288,9 @@ Two effects are accepted:
   records the user id and the number of sessions not denied. The revoked
   sessions' access tokens then stay valid until they expire
   (`ACCESS_TOKEN_TTL`, 15 minutes by default). That is the same exposure as
-  the denylist failing open during a Redis outage.
+  the denylist failing open during a Redis outage. A stalled Redis does not
+  lose the write: the request waits for it at most 300 ms, and a write still
+  in flight then lands when Redis answers.
 
 ### User enumeration: closed on `/login` and `/register`
 

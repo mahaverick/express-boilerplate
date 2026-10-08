@@ -1,6 +1,10 @@
 import { getEnv } from '@/configs/env.config'
 import { logger } from '@/services/logger.service'
-import { withRedisDeadline } from '@/services/redis-deadline.service'
+import {
+  STILL_PENDING,
+  waitForRedisWrite,
+  withRedisDeadline,
+} from '@/services/redis-deadline.service'
 import { getRedis, redisKey } from '@/services/redis.service'
 import { MS_PER_SECOND, requireDurationMs } from '@/utilities/duration.utilities'
 
@@ -15,9 +19,26 @@ function denylistKey(sessionId: string): string {
 }
 
 /**
- * Whether a denial was written.
+ * Whether a denial was written: `pending` when Redis had not answered by the
+ * deadline and the write is still in flight, to land when Redis answers.
  */
-export type DenyOutcome = 'denied' | 'failed'
+export type DenyOutcome = 'denied' | 'pending' | 'failed'
+
+const DENY_FAILED_MESSAGE = 'Could not deny session; access tokens stay valid until they expire'
+
+/**
+ * Watch a deny write left in flight at the deadline, warning if it fails.
+ * @param write - The write still in flight.
+ * @param sessionId - The session it denies.
+ * @returns Resolves once the write settles; never rejects.
+ */
+async function watchLateDenial(write: Promise<unknown>, sessionId: string): Promise<void> {
+  try {
+    await write
+  } catch (error) {
+    logger.warn(DENY_FAILED_MESSAGE, { sessionId, error })
+  }
+}
 
 /**
  * Mark a session's access tokens as no longer honoured.
@@ -32,23 +53,31 @@ export type DenyOutcome = 'denied' | 'failed'
  * It never rethrows. Every revocation in session.service.ts calls this after
  * its database write, and a Redis blip must not turn one into a 500: the
  * database revocation is the half that ends the session.
+ *
+ * It waits at most `REDIS_REQUEST_DEADLINE_MS` and ignores the stall
+ * cooldown: a deny is always sent, and one Redis has not answered by the
+ * deadline stays in flight to land when Redis answers, logged at warn, and
+ * warned again if it then fails.
  * @param sessionId - The session whose access tokens should stop working.
- * @returns 'denied' once the entry is written; 'failed' once a failure is logged. Never rejects.
+ * @returns 'denied' once the entry is written; 'pending' when it is still in flight at the deadline; 'failed' once a failure is logged. Never rejects.
  */
 export async function denySession(sessionId: string): Promise<DenyOutcome> {
   try {
     const seconds = Math.ceil(requireDurationMs(getEnv().ACCESS_TOKEN_TTL) / MS_PER_SECOND)
     const redis = await getRedis()
     // `{ EX: seconds }` is `@deprecated` in `@redis/client@6.2.1` in favour of `expiration`.
-    await redis.set(denylistKey(sessionId), '1', {
+    const write = redis.set(denylistKey(sessionId), '1', {
       expiration: { type: 'EX', value: seconds },
     })
+    // A stalled Redis must neither hold the logout nor lose the deny: past the deadline it stays in flight.
+    if ((await waitForRedisWrite(write)) === STILL_PENDING) {
+      logger.warn('Session deny not answered in time; it lands when Redis answers', { sessionId })
+      void watchLateDenial(write, sessionId)
+      return 'pending'
+    }
     return 'denied'
   } catch (error) {
-    logger.warn('Could not deny session; access tokens stay valid until they expire', {
-      sessionId,
-      error,
-    })
+    logger.warn(DENY_FAILED_MESSAGE, { sessionId, error })
     return 'failed'
   }
 }

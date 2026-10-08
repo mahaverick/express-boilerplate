@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { getEnv } from '@/configs/env.config'
-import { resetRedisDeadlineForTests } from '@/services/redis-deadline.service'
+import { logger } from '@/services/logger.service'
+import { resetRedisDeadlineForTests, withRedisDeadline } from '@/services/redis-deadline.service'
 import { MS_PER_SECOND, requireDurationMs } from '@/utilities/duration.utilities'
 import { answerWithinBound, stalledCommand } from '../../helpers/redis-stall'
 
@@ -19,6 +20,23 @@ vi.mock('@/services/redis.service', async (importOriginal) => ({
 vi.mock('@/services/logger.service', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }))
+
+/**
+ * A deny write that Redis has not answered yet, released by the test.
+ * @returns The pending reply and the switches that settle it.
+ */
+function deferredWrite(): {
+  reply: Promise<string>
+  answer: () => void
+  fail: () => void
+} {
+  const switches = { answer: () => {}, fail: () => {} }
+  const reply = new Promise<string>((resolve, reject) => {
+    switches.answer = () => resolve('OK')
+    switches.fail = () => reject(new Error('connection reset'))
+  })
+  return { reply, ...switches }
+}
 
 describe('session denylist', () => {
   beforeEach(() => {
@@ -63,5 +81,50 @@ describe('session denylist', () => {
     redis.exists.mockImplementation(stalledCommand)
     const { isSessionDenied } = await import('@/services/session-denylist.service')
     expect(await answerWithinBound(isSessionDenied('session-abc'))).toBe(false)
+  })
+
+  it('answers within the deadline when the deny write stalls, and leaves the write in flight rather than dropping it', async () => {
+    const write = deferredWrite()
+    redis.set.mockReturnValue(write.reply)
+    const warn = vi.spyOn(logger, 'warn')
+    const { denySession } = await import('@/services/session-denylist.service')
+
+    expect(await answerWithinBound(denySession('session-abc'))).toBe('pending')
+    expect(redis.set).toHaveBeenCalledTimes(1)
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(/lands when Redis answers/),
+      expect.objectContaining({ sessionId: 'session-abc' })
+    )
+
+    warn.mockClear()
+    write.answer()
+    await write.reply
+    // Landed: nothing reports it lost.
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('warns when a deny write left in flight fails later', async () => {
+    const write = deferredWrite()
+    redis.set.mockReturnValue(write.reply)
+    const warn = vi.spyOn(logger, 'warn')
+    const { denySession } = await import('@/services/session-denylist.service')
+    expect(await answerWithinBound(denySession('session-abc'))).toBe('pending')
+
+    warn.mockClear()
+    write.fail()
+    await expect(write.reply).rejects.toThrow('connection reset')
+    await vi.waitFor(() => {
+      expect(warn).toHaveBeenCalledWith(
+        'Could not deny session; access tokens stay valid until they expire',
+        expect.objectContaining({ sessionId: 'session-abc' })
+      )
+    })
+  })
+
+  it('still writes the deny while a stall cooldown is open: the cooldown never skips a deny', async () => {
+    await expect(withRedisDeadline(stalledCommand, 'stall')).rejects.toThrow()
+    const { denySession } = await import('@/services/session-denylist.service')
+    expect(await denySession('session-abc')).toBe('denied')
+    expect(redis.set).toHaveBeenCalledWith(deniedKey(), '1', expect.anything())
   })
 })
