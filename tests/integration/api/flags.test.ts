@@ -15,6 +15,23 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 
 const flags = vi.hoisted(() => ({ isEnabled: true }))
 
+/**
+ * Whether the reference experiment is also an apex client flag. The registry
+ * declares no apex experiment, so the apex exposure route's success path is
+ * reached only with this switched on.
+ */
+const registry = vi.hoisted(() => ({ isCtaOnApex: false }))
+
+vi.mock('@/constants/flags.constants', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/constants/flags.constants')>()
+  const ctaOnApex = { ...actual.flagEntry('example_cta_experiment'), apps: ['react', 'apex'] }
+  return {
+    ...actual,
+    clientFlagsFor: (app: Parameters<typeof actual.clientFlagsFor>[0]) =>
+      app === 'apex' && registry.isCtaOnApex ? [ctaOnApex] : actual.clientFlagsFor(app),
+  }
+})
+
 vi.mock('@/configs/analytics.config', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/configs/analytics.config')>()
   return { ...actual, isAnalyticsEnabled: () => true, isFlagsEnabled: () => flags.isEnabled }
@@ -107,6 +124,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   flags.isEnabled = true
+  registry.isCtaOnApex = false
   await loadFlagDefinitions([betaPageDefinition(true), ctaExperimentDefinition()])
 })
 
@@ -338,6 +356,20 @@ describe('POST …/flags/exposures', () => {
 
     expect(response.status).toBe(400)
     expect(await recordedExposures()).toEqual([])
+  })
+
+  it('records an apex experiment reported on the platform route, answering 204', async () => {
+    registry.isCtaOnApex = true
+    const { token } = await createTrackedStaff('viewer')
+
+    const response = await report('/platform/me/flags/exposures', token, {
+      keys: ['example_cta_experiment'],
+    })
+
+    expect(response.status).toBe(204)
+    expect(await recordedExposures()).toEqual([
+      { flag: 'example_cta_experiment', response: 'bold', origin: 'apex', source: 'flag' },
+    ])
   })
 
   it('runs the flag-exposure limiter, 60 a minute', async () => {
