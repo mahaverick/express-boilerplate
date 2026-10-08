@@ -179,6 +179,11 @@ describe('getFlagsStatus', () => {
     })
   })
 
+  it('a snapshot whose checkedAt does not parse reads as stale', async () => {
+    vi.mocked(getFlagSnapshot).mockReturnValue(snapshotOf([], 'garbage'))
+    expect(await getFlagsStatus(NOW)).toMatchObject({ stale: true })
+  })
+
   it('is never stale while flags are not configured', async () => {
     vi.mocked(isFlagsEnabled).mockReturnValue(false)
     expect(await getFlagsStatus(NOW)).toMatchObject({ enabled: false, stale: false })

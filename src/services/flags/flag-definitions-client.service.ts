@@ -16,12 +16,14 @@ import type { FlagFetchErrorCode } from '@/types/flags'
 
 /**
  * How one fetch ended: the parsed body and the ETag header (null when
- * absent), a 304, or a failure code (with the status for an HTTP error).
+ * absent), a 304, a failure code (with the status for an HTTP error), or
+ * `aborted` when the caller's own signal ended it before PostHog answered.
  */
 export type FlagDefinitionsResult =
   | { kind: 'ok'; body: unknown; etag: string | null }
   | { kind: 'not_modified' }
   | { kind: 'error'; code: FlagFetchErrorCode; status?: number }
+  | { kind: 'aborted' }
 
 const RATE_LIMIT_WARNING_HEADER = 'x-posthog-rate-limit-warning'
 const LOGGED_HEADER_MAX = 200
@@ -141,6 +143,9 @@ export async function fetchFlagDefinitions(
     const response = await fetch(url, { headers, redirect: 'error', signal })
     return await resultOf(response)
   } catch (error) {
-    return { kind: 'error', code: isTimeoutError(error) ? 'timeout' : 'network' }
+    if (isTimeoutError(error)) return { kind: 'error', code: 'timeout' }
+    // The caller gave up (a shutdown, say): not PostHog's failure, so not recorded as one.
+    if (options.signal?.aborted === true) return { kind: 'aborted' }
+    return { kind: 'error', code: 'network' }
   }
 }

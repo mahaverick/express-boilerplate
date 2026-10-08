@@ -177,6 +177,20 @@ describe('flag snapshot store', () => {
     expect(store.get()?.etag).toBe('W/"killed"')
   })
 
+  it.each(['fetchedAt', 'checkedAt'])(
+    'refuses a stored snapshot whose %s does not parse, keeping the copy',
+    async (field) => {
+      await writeFlagSnapshot(snapshot('good'))
+      const store = await startedStore()
+      const redis = await getRedis()
+      await redis.set(flagSnapshotKey(), JSON.stringify({ ...snapshot('bad'), [field]: 'garbage' }))
+      await expect(readFlagSnapshot()).rejects.toThrow('The stored flag snapshot is not a snapshot')
+      vi.spyOn(logger, 'warn').mockImplementation(() => {})
+      await store.reload()
+      expect(store.get()?.etag).toBe('W/"good"')
+    }
+  )
+
   it('leaves no backstop timer when stopped while starting', async () => {
     const interval = vi.spyOn(globalThis, 'setInterval')
     const store = createFlagSnapshotStore({ backstopMs: 50 })

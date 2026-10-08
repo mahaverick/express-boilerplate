@@ -40,10 +40,20 @@ export function flagSnapshotChannel(): string {
 }
 
 /**
- * Whether a stored value has the snapshot's shape. A missing `fingerprint`
- * passes (a snapshot stored before fingerprints existed: replicas keep
- * evaluating it, and the definitions job treats it as a mismatch); one that
- * is not a string does not.
+ * Whether a value is a string `Date.parse` reads as a real time.
+ * @param value - Anything.
+ * @returns True for a parseable timestamp string.
+ */
+function isTimestamp(value: unknown): value is string {
+  return typeof value === 'string' && Number.isFinite(Date.parse(value))
+}
+
+/**
+ * Whether a stored value has the snapshot's shape, with both timestamps
+ * parseable (staleness and the older-copy check compare them). A missing
+ * `fingerprint` passes (a snapshot stored before fingerprints existed:
+ * replicas keep evaluating it, and the definitions job treats it as a
+ * mismatch); one that is not a string does not.
  * @param value - The parsed JSON.
  * @returns True when it has the snapshot's fields.
  */
@@ -51,8 +61,8 @@ function isSnapshot(value: unknown): value is ParsedSnapshot {
   if (typeof value !== 'object' || value === null) return false
   const candidate = value as Record<string, unknown>
   return (
-    typeof candidate.fetchedAt === 'string' &&
-    typeof candidate.checkedAt === 'string' &&
+    isTimestamp(candidate.fetchedAt) &&
+    isTimestamp(candidate.checkedAt) &&
     (candidate.fingerprint === undefined || typeof candidate.fingerprint === 'string') &&
     typeof candidate.flags === 'object' &&
     candidate.flags !== null &&

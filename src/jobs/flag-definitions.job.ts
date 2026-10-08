@@ -67,6 +67,7 @@ export async function runFlagDefinitionsJob(now: Date = new Date()): Promise<voi
   const isCurrent = stored?.snapshot.fingerprint === flagRegistryFingerprint()
   // eslint-disable-next-line unicorn/no-null -- the client's contract is null for an unconditional fetch
   const result = await fetchFlagDefinitions(isCurrent ? stored.snapshot.etag : null)
+  if (result.kind === 'aborted') return
   if (result.kind === 'error') {
     logger.warn('Fetching flag definitions failed; keeping the stored snapshot', {
       code: result.code,

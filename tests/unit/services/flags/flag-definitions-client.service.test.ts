@@ -145,6 +145,13 @@ describe('fetchFlagDefinitions', () => {
     expect(result).toEqual({ kind: 'error', code: 'timeout' })
   })
 
+  it('a fetch aborted by the caller is not classified as a network failure', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    const result = await fetchFlagDefinitions(NONE, { signal: controller.signal })
+    expect(result).toEqual({ kind: 'aborted' })
+  })
+
   it('classifies an unreachable host as network', async () => {
     target.host = 'http://127.0.0.1:1'
     await expect(fetchFlagDefinitions(NONE)).resolves.toEqual({ kind: 'error', code: 'network' })
