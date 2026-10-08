@@ -1490,6 +1490,22 @@ describe('/api/v1/tenants', () => {
       expect(await patchSettings({ metadata: nested(1000) })).toBe(400)
     })
 
+    it('refuses metadata nested 100,000 deep with a 400, not a 500', async () => {
+      const { user, token } = await createAuthenticatedUser()
+      const tenant = await createTenant(user.id)
+      // Raw JSON: serializing a value this deep would overflow the stack in the client too.
+      const levels = 100_000
+      const body = `{"metadata":${'{"a":'.repeat(levels - 1)}{}${'}'.repeat(levels - 1)}}`
+      const response = await request(app)
+        .patch(`/api/v1/tenants/${tenant.slug}/settings`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('Content-Type', 'application/json')
+        .send(body)
+      expect(response.status).toBe(400)
+      const { errors } = response.body as { errors: Record<string, string[]> }
+      expect(errors.metadata).toEqual(['Metadata must be nested at most 10 levels deep.'])
+    })
+
     it('accepts metadata at the size and depth caps, and refuses one past each', async () => {
       // 16 384 serialized characters: {"blob":"…"} is 11 characters of frame.
       expect(await patchSettings({ metadata: { blob: 'x'.repeat(16_384 - 11) } })).toBe(200)
