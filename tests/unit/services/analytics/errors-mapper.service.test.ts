@@ -136,6 +136,22 @@ describe('mapErrorIssues', () => {
     expect(mapErrorIssues(rows, LINK_BASE)).toEqual([])
   })
 
+  it.each([
+    'javascript:alert(1)',
+    'https://evil.example/phish',
+    '//evil.example',
+    '%2e%2e%2fsettings',
+    'a%2Fb',
+    '<script>alert(1)</script>',
+    '01a107cd-a5be-70c3-962f-84a46f9d9e46#x',
+    '../01a107cd-a5be-70c3-962f-84a46f9d9e46',
+    '01a107cd-a5be-70c3-962f-84a46f9d9e46\u{0}',
+  ])('never builds a link from the hostile issue id %j', (issueId) => {
+    const rows = [issueRow(seeded({ issueId })), issueRow(seeded())]
+    const links = mapErrorIssues(rows, LINK_BASE).map((issue) => issue.link)
+    expect(links).toEqual([`${LINK_BASE}/01a107cd-a5be-70c3-962f-84a46f9d9e46`])
+  })
+
   it('keeps an upper-case UUID issue id', () => {
     const issueId = '01A107CD-A5BE-70C3-962F-84A46F9D9E46'
     const rows = [issueRow(seeded({ issueId }))]
