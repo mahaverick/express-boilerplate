@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.2](https://github.com/mahaverick/express-boilerplate/compare/v2.0.1...v2.0.2) (2026-10-08)
+
+
+### Bug Fixes
+
+* **errors:** close scrubber gaps, scrub Slack and bound status reads ([#93](https://github.com/mahaverick/express-boilerplate/issues/93)) ([715d9df](https://github.com/mahaverick/express-boilerplate/commit/715d9df8a28267f8fb728f0b564fd50275a8c074))
+
 ## [2.0.1](https://github.com/mahaverick/express-boilerplate/compare/v2.0.0...v2.0.1) (2026-10-08)
 
 
