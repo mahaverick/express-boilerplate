@@ -55,6 +55,7 @@ describe('safeText', () => {
       '👍🏽',
       '👩🏽\u{200D}💻',
       '🏳\u{FE0F}\u{200D}🌈',
+      '\u{0D2E}\u{0D4B}\u{0D39}\u{0D28}\u{0D4D}\u{200D}',
     ]) {
       expect(safeText()(name)).toBe(true)
     }
@@ -73,6 +74,8 @@ describe('safeText', () => {
       'a\u{200D}\u{200D}b',
       '👨\u{200D}',
       'a\u{200D}.b',
+      '\u{0D4D}\u{200D}',
+      'abc\u{0D4D}\u{200D}\u{200D}',
     ]) {
       expect(safeText()(name)).toBe(false)
     }
