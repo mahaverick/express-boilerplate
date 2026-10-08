@@ -122,6 +122,22 @@ async function pendingFrom(tenantId: string, inviterId: string): Promise<string>
   return invitation.id
 }
 
+/**
+ * An object nested `levels` deep: `{ a: { a: … {} } }`.
+ * @param levels - How many objects deep.
+ * @returns The root.
+ */
+function nested(levels: number): Record<string, unknown> {
+  const root: Record<string, unknown> = {}
+  let cursor = root
+  for (let depth = 1; depth < levels; depth += 1) {
+    const next: Record<string, unknown> = {}
+    cursor.a = next
+    cursor = next
+  }
+  return root
+}
+
 describe('/api/v1/tenants', () => {
   const createdTenantIds: string[] = []
   const createdUserIds: string[] = []
@@ -170,6 +186,21 @@ describe('/api/v1/tenants', () => {
     })
     createdTenantIds.push(tenant.id)
     return tenant
+  }
+
+  /**
+   * PATCH the settings of a fresh tenant as its owner.
+   * @param body - The request body.
+   * @returns The response status.
+   */
+  async function patchSettings(body: unknown): Promise<number> {
+    const { user, token } = await createAuthenticatedUser()
+    const tenant = await createTenant(user.id)
+    const response = await request(app)
+      .patch(`/api/v1/tenants/${tenant.slug}/settings`)
+      .set('Authorization', `Bearer ${token}`)
+      .send(body as object)
+    return response.status
   }
 
   describe('POST /api/v1/tenants', () => {
@@ -1447,6 +1478,24 @@ describe('/api/v1/tenants', () => {
         .set('Authorization', `Bearer ${token}`)
         .send(body)
       expect(response.status).toBe(200)
+    })
+  })
+
+  describe('metadata is bounded', () => {
+    it('refuses 900 KB of metadata', async () => {
+      expect(await patchSettings({ metadata: { blob: 'x'.repeat(900_000) } })).toBe(400)
+    })
+
+    it('refuses metadata nested 1,000 deep', async () => {
+      expect(await patchSettings({ metadata: nested(1000) })).toBe(400)
+    })
+
+    it('accepts metadata at the size and depth caps, and refuses one past each', async () => {
+      // 16 384 serialized characters: {"blob":"…"} is 11 characters of frame.
+      expect(await patchSettings({ metadata: { blob: 'x'.repeat(16_384 - 11) } })).toBe(200)
+      expect(await patchSettings({ metadata: { blob: 'x'.repeat(16_384 - 10) } })).toBe(400)
+      expect(await patchSettings({ metadata: nested(10) })).toBe(200)
+      expect(await patchSettings({ metadata: nested(11) })).toBe(400)
     })
   })
 })

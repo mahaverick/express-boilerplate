@@ -18,6 +18,14 @@ const MAX_TENANT_LOGO_LENGTH = 255
 const MAX_TENANT_WEBSITE_LENGTH = 255
 const MAX_TENANT_TIMEZONE_LENGTH = 64
 const MAX_TENANT_LOCALE_LENGTH = 10
+/**
+ * `metadata` serialized with `JSON.stringify`, in UTF-16 code units.
+ */
+const MAX_TENANT_METADATA_LENGTH = 16_384
+/**
+ * `metadata`'s own object is level 1.
+ */
+const MAX_TENANT_METADATA_DEPTH = 10
 
 /**
  * `RESERVED_SLUGS` as a `Set<string>`: the tuple's `.includes` accepts only
@@ -285,7 +293,9 @@ export function isLocaleTag(value: string): boolean {
  * `PATCH /api/v1/tenants/:slug/settings` request body. `timezone` must name a
  * time zone the runtime knows (`isTimeZoneName`) and `locale` must be a BCP 47
  * tag (`isLocaleTag`), both within their column widths. `metadata` is `null`
- * to clear it or any JSON object, never a bare array or primitive.
+ * to clear it or a JSON object of at most 16 384 characters serialized and
+ * 10 levels deep (every member downloads it with each settings read), never a
+ * bare array or primitive.
  */
 export const updateTenantSettingsSchema = z.object({
   timezone: z
@@ -309,7 +319,27 @@ export const updateTenantSettingsSchema = z.object({
     .optional(),
   metadata: z
     .record(z.string(), z.unknown())
-    .refine((value) => !scanJson(value).hasNul, 'Metadata contains characters that are not allowed')
+    .superRefine((value, context) => {
+      const scan = scanJson(value)
+      if (scan.depth > MAX_TENANT_METADATA_DEPTH) {
+        context.addIssue({
+          code: 'custom',
+          message: `Metadata must be nested at most ${MAX_TENANT_METADATA_DEPTH} levels deep.`,
+        })
+      } else if (JSON.stringify(value).length > MAX_TENANT_METADATA_LENGTH) {
+        // Only serialized once shallow: stringify recurses and a deep value could overflow the stack.
+        context.addIssue({
+          code: 'custom',
+          message: `Metadata must be at most ${MAX_TENANT_METADATA_LENGTH} characters as JSON.`,
+        })
+      }
+      if (scan.hasNul) {
+        context.addIssue({
+          code: 'custom',
+          message: 'Metadata contains characters that are not allowed',
+        })
+      }
+    })
     .nullable()
     .optional(),
 })
