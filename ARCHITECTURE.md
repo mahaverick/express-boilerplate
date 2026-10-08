@@ -971,16 +971,19 @@ or a spent budget is the timelines' 502 `TIMELINE_UNAVAILABLE`. The
 timelines leave out `$exception` and both `*_errors_viewed` events.
 
 **System status.** `GET /platform/system/status` (platform admin and up,
-not audited) answers `{ release, errorTracking, flags }`: the image's
-`APP_VERSION`, the reporter's sent and dropped counts over the last 15
-minutes, summed from Redis across every API and worker process, and the
-flags' status (see [Feature flags](#feature-flags)). It is an open object;
+not audited) answers `{ release, errorTracking, flags, maintenance }`: the
+image's `APP_VERSION`, the reporter's sent and dropped counts over the last
+15 minutes, summed from Redis across every API and worker process, the
+flags' status (see [Feature flags](#feature-flags)) and the maintenance
+mode's state (see [Maintenance mode](#maintenance-mode)). It is an open object;
 later sections are added as keys. Each section that reads Redis (error
 tracking, flags, the maintenance queue states and pending-notice check) is bounded by
 `STATUS_READ_TIMEOUT_MS` (2000 ms, `withStatusTimeout` in
 `status-read.service.ts`): a stalled Redis answers the section with what it
-reports when Redis fails, and one `warn`, so the page staff open during an
-incident still loads.
+reports when Redis fails, and one `warn`. The bound covers the handler
+only. A request reaches it after `requireAuth`'s session denylist read and
+the route's rate limiter, and those Redis calls have no bound yet, so a
+stalled Redis can still hang an authenticated request, this page included.
 
 What an event may carry, and what it never does, is in
 [SECURITY.md](SECURITY.md#error-tracking-what-reaches-posthog).
