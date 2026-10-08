@@ -198,3 +198,12 @@ describe('scrubText on a secret glued to a preceding hex run', () => {
     expect(scrubText(once)).toBe(once)
   })
 })
+
+describe('scrubText on fragments', () => {
+  it.each(['webpack://app/src/main.tsx#L5', 'https://app.example.com/reset-password#step2'])(
+    'keeps %s',
+    (input) => {
+      expect(scrubText(input)).toBe(input)
+    }
+  )
+})

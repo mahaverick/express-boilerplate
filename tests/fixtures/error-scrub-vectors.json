@@ -643,5 +643,35 @@
     "rule": "basic",
     "input": "a3faa3faa3faa3faa3faa3faa3faa3fabasic dXNlcjpwYXNz",
     "expected": "[secret]basic [token]"
+  },
+  {
+    "rule": "fragment",
+    "input": "webpack://app/src/main.tsx#L5",
+    "expected": "webpack://app/src/main.tsx#L5"
+  },
+  {
+    "rule": "fragment",
+    "input": "https://app.example.com/src/a.ts#L10-L12",
+    "expected": "https://app.example.com/src/a.ts#L10-L12"
+  },
+  {
+    "rule": "fragment",
+    "input": "https://app.example.com/reset-password#step2",
+    "expected": "https://app.example.com/reset-password#step2"
+  },
+  {
+    "rule": "fragment",
+    "input": "https://app.example.com/docs#section-3",
+    "expected": "https://app.example.com/docs#section-3"
+  },
+  {
+    "rule": "fragment",
+    "input": "https://app.example.com/x#k8Fq2Zx9Lm",
+    "expected": "https://app.example.com/x#[fragment]"
+  },
+  {
+    "rule": "fragment",
+    "input": "https://app.example.com/x#abc123xyz",
+    "expected": "https://app.example.com/x#[fragment]"
   }
 ]

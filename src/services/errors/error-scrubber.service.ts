@@ -68,10 +68,40 @@ const USERINFO_PATTERN = /\b([a-z][a-z0-9+.-]*:\/\/)(?:[^\s/?#<>"']|["'](?![,:;}
 const QUERY_PATTERN = /((?:https?:\/\/|\/)[^\s?"'<>]*)\?[^\s"'<>]+/g
 
 /**
- * A URL's or path's fragment: the part before `#` is kept.
+ * A URL's or path's fragment: the part before `#` is kept, and so is a
+ * fragment `isHarmlessFragment` accepts.
  */
 // eslint-disable-next-line sonarjs/super-linear-regex -- scrubText scans at most SCAN_MAX characters
-const FRAGMENT_PATTERN = /((?:https?:\/\/|\/)[^\s#"'<>]*)#[^\s"'<>]+/g
+const FRAGMENT_PATTERN = /((?:https?:\/\/|\/)[^\s#"'<>]*)#([^\s"'<>]+)/g
+
+/**
+ * A source line anchor: `L5`, `L10-L12`.
+ */
+const LINE_ANCHOR_PATTERN = /^L\d+(?:-L\d+)?$/
+
+/**
+ * A short heading anchor: lowercase words joined by `-` or `_`, the first
+ * word's initial letter in either case and each word possibly ending in
+ * digits (`step2`, `section-3`, `Overview`).
+ */
+const HEADING_ANCHOR_PATTERN = /^[A-Za-z][a-z]*\d*(?:[-_][a-z]+\d*|[-_]\d+)*$/
+
+/**
+ * The longest fragment `isHarmlessFragment` keeps as a heading anchor.
+ */
+const HEADING_ANCHOR_MAX = 32
+
+/**
+ * Whether a URL fragment cannot carry a secret: a source line anchor, or a
+ * short heading anchor. Anything else, an `access_token=` list, a route
+ * (`/reset?token=…`) or a mixed-case run, is replaced.
+ * @param fragment - The text after `#`.
+ * @returns True when the fragment is kept.
+ */
+function isHarmlessFragment(fragment: string): boolean {
+  if (LINE_ANCHOR_PATTERN.test(fragment)) return true
+  return fragment.length <= HEADING_ANCHOR_MAX && HEADING_ANCHOR_PATTERN.test(fragment)
+}
 
 /**
  * `Bearer` and the credential after it, in any letter case. Besides a word
@@ -213,7 +243,8 @@ function capped(value: string, wasCut: boolean): string {
  * or `date/time field value out of range:`, the number in `value "n" is out of
  * range for type`, and the snippet in a V8 `is not valid JSON` error, become `"[value]"`; the userinfo of a URL
  * becomes `[credentials]@`; a URL's or path's query string becomes
- * `?[query]` and its fragment `#[fragment]`; `Bearer <credential>` becomes
+ * `?[query]` and its fragment, unless a line or heading anchor
+ * (`isHarmlessFragment`), `#[fragment]`; `Bearer <credential>` becomes
  * `Bearer [token]`; `Basic <base64>` becomes `Basic [token]`, the scheme's case kept; the value of a
  * secret-named key (`password`, `token`, `secret`, `api_key`, `access_key`,
  * `private_key`, `session`, `sid`, `cookie`, `credentials`, `authorization`, `auth`,
@@ -240,7 +271,9 @@ export function scrubText(value: string): string {
     .replaceAll(JSON_SNIPPET_PATTERN, '$1"[value]" is not valid JSON')
     .replaceAll(USERINFO_PATTERN, '$1[credentials]@')
     .replaceAll(QUERY_PATTERN, '$1?[query]')
-    .replaceAll(FRAGMENT_PATTERN, '$1#[fragment]')
+    .replaceAll(FRAGMENT_PATTERN, (match: string, base: string, fragment: string) =>
+      isHarmlessFragment(fragment) ? match : `${base}#[fragment]`
+    )
     .replaceAll(BEARER_PATTERN, 'Bearer [token]')
     .replaceAll(BASIC_PATTERN, '$1 [token]')
     .replaceAll(KV_SECRET_PATTERN, '$1[redacted]')
