@@ -193,7 +193,7 @@ const ROUTES: readonly GateRow[] = [
     requiresStepUp: false,
     target: 'email',
   },
-  // Step-up is per message (a platform-tenant invitation only), decided in the service.
+  // Step-up is per message (any invitation, on any tenant), decided in the service.
   {
     method: 'post',
     path: '/emails/:id/resend',

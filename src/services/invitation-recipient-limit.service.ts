@@ -56,7 +56,8 @@ async function incrementInWindow(redis: RedisClient, key: string): Promise<numbe
  * fits the budget. The tenant's share is counted first; a send past it is
  * refused without touching the address's count, so one tenant cannot spend
  * the other tenants' room. A refused send still counts against whichever
- * count refused it. A Redis failure returns `spent`, logged at `warn`: the
+ * count refused it, and one the address's global ceiling refuses has also spent one
+ * of the tenant's share. A Redis failure returns `spent`, logged at `warn`: the
  * ceiling fails open, as the limiters do.
  * @param email - The invited address, in any case.
  * @param tenantId - The tenant the invitation belongs to.

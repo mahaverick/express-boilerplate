@@ -4,7 +4,9 @@
  * notification-emitter.service.ts's Redis pub/sub, behind `requireAuth`.
  * Every rejection (503 shutting down, 401, 429 `too_many_streams`) is thrown
  * before `writeHead`, so `errorHandler` answers it with the ordinary JSON
- * error envelope, not an event stream that closes at once.
+ * error envelope, not an event stream that closes at once. The exception is
+ * 503 `stream_capacity`, written directly in the same envelope with
+ * `Retry-After` (see `didRefuseStream`).
  */
 import type { NextFunction, Request, Response } from 'express'
 import { getEnv } from '@/configs/env.config'

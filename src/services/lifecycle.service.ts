@@ -93,7 +93,7 @@ export function resetLifecycleForTests(): void {
  * higher, so a fault during a signal-started shutdown still exits 1.
  * @param shutdown - Runs graceful shutdown.
  * @param timeoutMs - Backstop after which the process exits 1 even if shutdown hangs. Defaults to `SHUTDOWN_TIMEOUT_MS`.
- * @returns A handler taking the exit function, and the code to exit with once shutdown succeeds (default 0).
+ * @returns A handler taking the exit function and a requested exit code (default 0); it exits with the highest code any call requested, 1 if shutdown rejects, or 1 at the `timeoutMs` backstop.
  */
 export function createShutdownHandler(
   shutdown: () => Promise<void>,

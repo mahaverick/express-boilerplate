@@ -106,9 +106,9 @@ function resend(token: string, message: EmailMessage, body?: object): Promise<Re
 }
 
 /**
- * A staff member with a token minted at a sign-in `authenticatedAt` ago
- * (fresh by default); `createTrackedStaff`'s own token carries no
- * `auth_time`, so it is always stale.
+ * A staff member with a token minted at a sign-in at `authenticatedAt`
+ * (now by default), so a test can pick a stale sign-in time;
+ * `createTrackedStaff`'s own token is always recent.
  * @param role - The platform role.
  * @param authenticatedAt - When the session signed in.
  * @returns The user and the token.
