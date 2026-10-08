@@ -83,7 +83,7 @@ export interface PlatformMaintenanceModeView {
    */
   message: string | null
   /**
-   * The reason given when the current mode was set, if any. A save that keeps the mode keeps it unless that save sends a new reason.
+   * The reason given when the current mode was set, if any. A save that keeps the mode keeps it unless that save sends a new reason or `null`, which clears it.
    */
   reason: string | null
   /**

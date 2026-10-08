@@ -382,7 +382,7 @@ export async function changeMaintenanceMode(
       return undefined
     }
     assertChangeAllowed(kind, body)
-    // eslint-disable-next-line unicorn/no-null -- the column is null when no reason was given
+    // eslint-disable-next-line unicorn/no-null -- the column is null when no reason was given or it was cleared
     const reason = body.reason ?? null
     const updated = await updateMaintenanceModeStateIfVersion(
       { mode: body.mode, message, reason: body.reason, changedBy: actor.userId },
@@ -412,6 +412,8 @@ export async function changeMaintenanceMode(
           // Compared as text: a mode that is off has no message, whatever the column holds.
           messageChanged:
             (message ?? '') !== (current.mode === 'off' ? '' : (current.message ?? '')),
+          // The reason stored after the save against the one stored before, so a clear is told from a keep.
+          reasonChanged: updated.reason !== current.reason,
         },
       },
       tx
@@ -421,7 +423,7 @@ export async function changeMaintenanceMode(
       from: current.mode,
       to: body.mode,
       message,
-      reason,
+      reason: updated.reason,
       changedAt: updated.changedAt,
       version: updated.version,
     }

@@ -22,7 +22,7 @@ const ROW_ID = 1
 
 /**
  * What one change writes; `version` and `changed_at` are set by the update itself (`changed_at` only when the mode changes).
- * When the mode stays the same the stored `changed_by` is kept, and so is the stored `reason` unless `reason` is given.
+ * When the mode stays the same the stored `changed_by` is kept, and so is the stored `reason` unless `reason` is given (`null` clears it).
  */
 export interface MaintenanceModeChange {
   mode: MaintenanceMode
