@@ -1428,5 +1428,30 @@
     "rule": "kv",
     "input": "partition_key=tenant_42",
     "expected": "partition_key=tenant_42"
+  },
+  {
+    "rule": "secret",
+    "input": "ENOENT: no such file or directory, open '/app/data/uploads/tenants/avatars/photo1.png'",
+    "expected": "ENOENT: no such file or directory, open '/app/data/uploads/tenants/avatars/photo1.png'"
+  },
+  {
+    "rule": "secret",
+    "input": "Cannot GET /lib/lib/lib/tenants/tenants/app/srv/app",
+    "expected": "Cannot GET /lib/lib/lib/tenants/tenants/app/srv/app"
+  },
+  {
+    "rule": "secret",
+    "input": "invite failed for wJalrXUtnFEMI+KxMDENGzbPxRfiCYEXAMPLEKEY@example.com",
+    "expected": "invite failed for [email]"
+  },
+  {
+    "rule": "secret",
+    "input": "maps key AIzaSyZqTfakeEXAMPLEexampleEXAMPLE_ex-0abc rejected",
+    "expected": "maps key [secret] rejected"
+  },
+  {
+    "rule": "secret",
+    "input": "calling re_index_2024_migration now",
+    "expected": "calling re_index_2024_migration now"
   }
 ]

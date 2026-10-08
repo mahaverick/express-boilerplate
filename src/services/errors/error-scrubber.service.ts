@@ -283,17 +283,23 @@ const POSTHOG_KEY_PATTERN = /\bph[cxs]_\w+/g
 /**
  * A vendor credential with a known prefix or shape, too short or too plain
  * for the base64 run rule: a Google OAuth client secret (`GOCSPX-`), a
- * Resend API key (`re_`, 16 or more characters with a digit, so `re_render`
- * is kept), an AWS access key id (`AKIA`, `ASIA`), a Slack token (`xoxb-`
+ * Resend API key (`re_`, 16 or more characters with a digit and an uppercase
+ * letter, so `re_render` and `re_index_2024_migration` are kept), an AWS access key id (`AKIA`, `ASIA`), a Slack token (`xoxb-`
  * and kin), a Stripe-style live or test key (`sk_live_`, `rk_test_`), a
  * bare Google API key (`AIza` and 35 more), a Stripe webhook secret
- * (`whsec_`) and an AWS secret access key: exactly 40 base64 characters
- * with at least one `/` or `+`, on its own between non-base64 characters.
- * Applied again after the hex rule, like the PostHog key rule.
+ * (`whsec_`). Applied again after the hex rule, like the PostHog key rule.
  */
 const VENDOR_KEY_PATTERN =
   // eslint-disable-next-line sonarjs/regex-complexity -- one pattern per rule keeps the rule list the spec
-  /\b(?:GOCSPX-[\w-]{20,}|re_(?=[A-Za-z_]*\d)\w{16,}|(?:AKIA|ASIA)[\dA-Z]{16}\b|xox[abprs]-[\w-]{10,}|[rs]k_(?:live|test)_\w{10,}|AIza[\w-]{35}|whsec_[A-Za-z\d+/=]{32,})|(?<![\w+/-])(?=[A-Za-z\d]*[+/])[A-Za-z\d+/]{40}(?![\w+/=-])/g
+  /\b(?:GOCSPX-[\w-]{20,}|re_(?=\w*[A-Z])(?=[A-Za-z_]*\d)\w{16,}|(?:AKIA|ASIA)[\dA-Z]{16}\b|xox[abprs]-[\w-]{10,}|[rs]k_(?:live|test)_\w{10,}|AIza[\w-]{35}(?![\w-])|whsec_[A-Za-z\d+/=]{32,})/g
+
+/**
+ * An AWS secret access key: exactly 40 base64 characters with at least one
+ * `/` or `+`, on its own between non-base64 characters (an `@` after it makes
+ * it an email local part). `isAwsSecretKey` then tells it from a 40-character
+ * path.
+ */
+const AWS_SECRET_KEY_PATTERN = /(?<![\w+/-])(?=[A-Za-z\d]*[+/])[A-Za-z\d+/]{40}(?![\w+/=@-])/g
 
 /**
  * An email address, in any script. The local part is a run of address
@@ -369,6 +375,21 @@ const BASE64_UPPERCASE_SHARE = 0.25
 const IDENTIFIER_RUN_PATTERN = /^[a-z]{1,20}(?:[-_][a-z]{1,20})+$/
 
 /**
+ * Whether an exactly-40-character run with a `/` or `+` is an AWS secret
+ * access key rather than a path: at least a quarter of its letters are
+ * uppercase. Unlike `isSecretRun`, it needs no digit, so a key without one is
+ * caught; a path such as `/app/data/uploads/tenants/avatars/photo1` is almost
+ * all lowercase.
+ * @param run - The matched run.
+ * @returns True when the run should be replaced.
+ */
+function isAwsSecretKey(run: string): boolean {
+  const letters = run.replaceAll(/[^A-Za-z]/g, '')
+  const uppercase = run.replaceAll(/[^A-Z]/g, '')
+  return uppercase.length >= letters.length * BASE64_UPPERCASE_SHARE
+}
+
+/**
  * Whether a long base64-alphabet run is a secret rather than a file path or
  * an identifier. A run with no `/` is, unless it is lowercase words joined
  * by `-` or `_` (`a-very-long-kebab-identifier`). One with a `/` is when it
@@ -434,7 +455,7 @@ function capped(value: string, wasCut: boolean): string {
  * `response`; `code` after `?` or `&` or on an OAuth or authorization line;
  * `key` before `=`), become `[redacted]`; a JWT becomes `[jwt]`; a PostHog
  * key (`phc_`, `phx_`, `phs_`) becomes `[posthog-key]` and a vendor
- * credential (`VENDOR_KEY_PATTERN`) `[secret]`; an email address
+ * credential (`VENDOR_KEY_PATTERN`, or an AWS secret access key) `[secret]`; an email address
  * (`EMAIL_PATTERN`: `@` written plainly, encoded or fullwidth, a quoted
  * local part, an IP-literal or single-label domain) becomes `[email]`; an
  * IPv4 or IPv6 address becomes `[ip]` and an international phone number
@@ -471,6 +492,7 @@ export function scrubText(value: string): string {
     .replaceAll(JWT_PATTERN, '[jwt]')
     .replaceAll(POSTHOG_KEY_PATTERN, '[posthog-key]')
     .replaceAll(VENDOR_KEY_PATTERN, '[secret]')
+    .replaceAll(AWS_SECRET_KEY_PATTERN, (run) => (isAwsSecretKey(run) ? '[secret]' : run))
     .replaceAll(EMAIL_PATTERN, '[email]')
     .replaceAll(IPV4_PATTERN, '[ip]')
     .replaceAll(IPV6_PATTERN, '[ip]')
@@ -478,6 +500,7 @@ export function scrubText(value: string): string {
     .replaceAll(HEX_RUN_PATTERN, '[secret]')
     .replaceAll(POSTHOG_KEY_PATTERN, '[posthog-key]')
     .replaceAll(VENDOR_KEY_PATTERN, '[secret]')
+    .replaceAll(AWS_SECRET_KEY_PATTERN, (run) => (isAwsSecretKey(run) ? '[secret]' : run))
     .replaceAll(BASE64_RUN_PATTERN, (run) => (isSecretRun(run) ? '[secret]' : run))
   return capped(scrubbed, input.length < value.length)
 }
