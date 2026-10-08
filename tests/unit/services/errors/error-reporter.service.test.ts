@@ -280,7 +280,7 @@ describe('queue and flush', () => {
 })
 
 describe('retry, back-off and refusal', () => {
-  it('backs off 5, 10, 20 and 40 s, then drops the batch as retry_exhausted', async () => {
+  it('backs off 5, 10, 20 and 40 s, then drops the event as retry_exhausted', async () => {
     posthog.answer = () => Promise.resolve({ kind: 'retry', status: 503 })
     reportError(new Error('x'), HTTP)
     await vi.advanceTimersByTimeAsync(5000)
@@ -290,6 +290,24 @@ describe('retry, back-off and refusal', () => {
     expect(counted('retry_exhausted')).toBe(1)
     expect(queuedErrorReportCount()).toBe(0)
     expect(recordErrorSendError).toHaveBeenCalledWith(503)
+  })
+
+  it('an event that joins a retried batch late is not dropped after a single send', async () => {
+    posthog.answer = () => Promise.resolve({ kind: 'retry', status: 503 })
+    reportError(new Error('early'), HTTP)
+    // Sends at +5 s, +10 s, +20 s, +40 s fail (4 of the 5 allowed).
+    await vi.advanceTimersByTimeAsync(5000 + 5000 + 10_000 + 20_000)
+    expect(posthog.batches).toHaveLength(4)
+    const lateId = reportError(new Error('late'), HTTP)
+    await vi.advanceTimersByTimeAsync(40_000)
+    expect(posthog.batches).toHaveLength(5)
+    const lateSends = posthog.batches.filter((batch) =>
+      batch.events.some((event) => event.uuid === lateId)
+    ).length
+    expect(lateSends).toBe(1)
+    // The late event has had one try, not ERROR_RETRY_LIMIT; it must still be queued.
+    expect(counted('retry_exhausted')).toBe(1)
+    expect(queuedErrorReportCount()).toBe(1)
   })
 
   it('keeps doubling across batches while PostHog stays down, up to 5 minutes', async () => {

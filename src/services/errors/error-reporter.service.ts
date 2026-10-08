@@ -51,7 +51,7 @@ type FlushOutcome = SendResult['kind'] | 'empty'
 /**
  * Module state in one object, so no function reassigns a top-level binding.
  * `retryAt` is the epoch millisecond before which the timer does not send;
- * `batchRetries` counts the current batch's retried sends and `backoffLevel`
+ * `attempts` counts each queued event's retried sends, and `backoffLevel`
  * every consecutive retried send, so the back-off keeps growing across
  * batches while PostHog stays down. `generation` changes on every reset, so
  * a flight started before one never touches the state after it.
@@ -62,7 +62,7 @@ const state: {
   inFlight: Promise<FlushOutcome> | undefined
   timer: NodeJS.Timeout | undefined
   retryAt: number
-  batchRetries: number
+  attempts: WeakMap<PosthogBatchEvent, number>
   backoffLevel: number
   isReporting: boolean
   sentTimes: number[]
@@ -74,7 +74,7 @@ const state: {
   inFlight: undefined,
   timer: undefined,
   retryAt: 0,
-  batchRetries: 0,
+  attempts: new WeakMap(),
   backoffLevel: 0,
   isReporting: false,
   sentTimes: [],
@@ -171,16 +171,17 @@ function backoffMs(level: number): number {
 }
 
 /**
- * Act on PostHog's answer to a batch: count it, and on a retry put it back
- * at the front of the queue and back off, or drop it as `retry_exhausted`
- * after `ERROR_RETRY_LIMIT` retried sends. A status PostHog answered with
- * that was not an acknowledgement becomes `lastSendError`.
+ * Act on PostHog's answer to a batch: count it, and on a retry back off and
+ * put each event back at the front of the queue, or drop it as
+ * `retry_exhausted` once it has been sent `ERROR_RETRY_LIMIT` times. Each
+ * event counts its own sends, so one that joined a retried batch late still
+ * gets every try. A status PostHog answered with that was not an
+ * acknowledgement becomes `lastSendError`.
  * @param batch - The events sent.
  * @param result - How PostHog answered.
  */
 function settle(batch: PosthogBatchEvent[], result: SendResult): void {
   if (result.kind === 'ack') {
-    state.batchRetries = 0
     state.backoffLevel = 0
     state.retryAt = 0
     void countErrorOutcome('sent', batch.length)
@@ -189,21 +190,22 @@ function settle(batch: PosthogBatchEvent[], result: SendResult): void {
   }
   if (result.status !== undefined) void recordErrorSendError(result.status)
   if (result.kind === 'rejected') {
-    state.batchRetries = 0
     state.backoffLevel = 0
     state.retryAt = 0
     drop('rejected', batch.length)
     return
   }
-  state.batchRetries += 1
   state.backoffLevel += 1
   state.retryAt = Date.now() + backoffMs(state.backoffLevel)
-  if (state.batchRetries >= ERROR_RETRY_LIMIT) {
-    state.batchRetries = 0
-    drop('retry_exhausted', batch.length)
-    return
+  const kept: PosthogBatchEvent[] = []
+  for (const event of batch) {
+    const sends = (state.attempts.get(event) ?? 0) + 1
+    if (sends >= ERROR_RETRY_LIMIT) continue
+    state.attempts.set(event, sends)
+    kept.push(event)
   }
-  state.queue.unshift(...batch)
+  if (kept.length < batch.length) drop('retry_exhausted', batch.length - kept.length)
+  state.queue.unshift(...kept)
   trimQueue()
 }
 
@@ -404,7 +406,7 @@ export function resetErrorReporter(): void {
   state.inFlight = undefined
   state.timer = undefined
   state.retryAt = 0
-  state.batchRetries = 0
+  state.attempts = new WeakMap()
   state.backoffLevel = 0
   state.isReporting = false
   state.sentTimes = []
