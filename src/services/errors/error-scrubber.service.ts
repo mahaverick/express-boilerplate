@@ -257,7 +257,8 @@ const AUTH_HEADER_PATTERN = new RegExp(
  * names OAuth or authorization before it, or with that word later in the same
  * query or JSON object (an authorization code), so `code: 'ECONNREFUSED'` stays;
  * `key` only before `=` (or `%3D`, `&#61;`, `\u003d`), as a whole word or after `_` or `-` (`MY_KEY`), but
- * not in `primary_key`, `foreign_key`, `sort_key` and the like; a compound
+ * not in `primary_key`, `foreign_key`, `sort_key`, `object_key`,
+ * `routing_key`, `translation_key` and the like; a compound
  * secret key name (`secret_key`, `secretKey`, `private-key`, `signing_key`,
  * `encryption_key`, `master_key`, `client_key`, `consumer_key`) before any
  * separator, `:` included. A `response` key
@@ -275,7 +276,7 @@ const AUTH_HEADER_PATTERN = new RegExp(
  * they are (`KEPT_VALUE`), so `token: undefined` stays readable.
  */
 const KV_SECRET_PATTERN = new RegExp(
-  String.raw`(?:\b|(?<=%26|%3F))((?:[\w-]*?(?:pass(?:[_-]?(?:word|phrase|code|key)|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|(?:secret|private|consumer|signing|encryption|master|client)[_-]?key|auth(?:orization)?[_-]code|session|sid|credential|signature|sig|hmac|nonce|(?<=[\w-])response|response(?=s?${KEY_QUOTE}?\s*(?:=|%3D|&#61;|\\u003d|:\s*${KEY_QUOTE}))|(?<![A-Za-z\d])pin(?:[_-]?(?:code|number))?|(?:otp|mfa|verification|recovery|backup)[_-]?code|(?<![A-Za-z\d])(?<!(?:primary|foreign|sort|partition|cache|unique|index|s3)[_-])key(?=s?\s*(?:=(?!>)|%3D|&#61;|\\u003d))|jwt|otp)s?|code(?<=(?:[?&]|&amp;|%26|%3F)code)|code(?<=(?:oauth|authoriz(?:ation|e)(?![a-z]))[^\n]*code)|code(?=\s*=[^\s&]*&)|code(?=[^\n{}]*(?:oauth|authoriz(?:ation|e)(?![a-z]))))${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?)` +
+  String.raw`(?:\b|(?<=%26|%3F))((?:[\w-]*?(?:pass(?:[_-]?(?:word|phrase|code|key)|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|(?:secret|private|consumer|signing|encryption|master|client)[_-]?key|auth(?:orization)?[_-]code|session|sid|credential|signature|sig|hmac|nonce|(?<=[\w-])response|response(?=s?${KEY_QUOTE}?\s*(?:=|%3D|&#61;|\\u003d|:\s*${KEY_QUOTE}))|(?<![A-Za-z\d])pin(?:[_-]?(?:code|number))?|(?:otp|mfa|verification|recovery|backup)[_-]?code|(?<![A-Za-z\d])(?<!(?:primary|foreign|sort|partition|cache|unique|index|s3|object|routing|shard|translation|i18n)[_-])key(?=s?\s*(?:=(?!>)|%3D|&#61;|\\u003d))|jwt|otp)s?|code(?<=(?:[?&]|&amp;|%26|%3F)code)|code(?<=(?:oauth|authoriz(?:ation|e)(?![a-z]))[^\n]*code)|code(?=\s*=[^\s&]*&)|code(?=[^\n{}]*(?:oauth|authoriz(?:ation|e)(?![a-z]))))${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?)` +
     `${KEPT_VALUE}(?:${QUOTED_VALUE}|${ARRAY_VALUE}|${SCHEMED_PLACEHOLDER_VALUE}|${UNQUOTED_VALUE})`,
   'gi'
 )

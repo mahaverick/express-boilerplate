@@ -1678,5 +1678,30 @@
     "rule": "kv",
     "input": "data=%7B%22password%22%3A%20%22zqS4Zx9Kq2Lm8%22%7D",
     "expected": "data=%7B%22password%22%3A[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "upload failed: object_key=avatars/0199a1b2.png",
+    "expected": "upload failed: object_key=avatars/0199a1b2.png"
+  },
+  {
+    "rule": "kv",
+    "input": "publish failed: routing_key=orders.created",
+    "expected": "publish failed: routing_key=orders.created"
+  },
+  {
+    "rule": "kv",
+    "input": "shard_key=tenant_id",
+    "expected": "shard_key=tenant_id"
+  },
+  {
+    "rule": "kv",
+    "input": "missing translation_key=errors.not_found, i18n_key=errors.title",
+    "expected": "missing translation_key=errors.not_found, i18n_key=errors.title"
+  },
+  {
+    "rule": "kv",
+    "input": "idempotency_key=zqS4Zx9Kq2Lm8",
+    "expected": "idempotency_key=[redacted]"
   }
 ]
