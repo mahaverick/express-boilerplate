@@ -139,10 +139,13 @@ export async function recordExposure(
     await enqueueAnalyticsOrThrow([row])
   } catch (error) {
     const isReleased = await didReleaseDedupeKey(dedupeKey)
+    // The same marker as every other failed outbox write (analytics-outbox.service.ts), so one search finds them all.
     logger.warn('Recording an exposure failed; its dedupe key is released when Redis allows', {
       flag: key,
       reason: error instanceof Error ? error.name : 'unknown',
       released: isReleased,
+      events: [row.event],
+      analyticsOutboxWriteFailed: 1,
     })
   }
 }
