@@ -54,17 +54,6 @@ async function revokeSessionUnderUserLock(userId: string, sessionId: string): Pr
 }
 
 /**
- * Deny each session a revocation reported, concurrently. Best-effort and
- * never rejects: a session that cannot be denied is logged by `denySession`,
- * and its access tokens stay valid until they expire.
- * @param sessionIds - Distinct session ids the revocation touched.
- * @returns Resolves once every denial is written, left in flight past the deadline, or its failure logged.
- */
-export async function denySessions(sessionIds: readonly string[]): Promise<void> {
-  await Promise.all(sessionIds.map((sessionId) => denySession(sessionId)))
-}
-
-/**
  * The claims this module signs into, and expects back out of, an access
  * token.
  */
@@ -651,7 +640,8 @@ export async function revokeSessionRows(
 
 /**
  * Deny the sessions a committed revocation revoked: a password change or
- * reset, or a staff deactivation, sign-out or deletion. Never rejects,
+ * reset, a Google account claim, or a staff deactivation, sign-out or
+ * deletion. Never rejects,
  * because the revocation already stands. When Redis refuses, those
  * sessions' access tokens stay valid for up to ACCESS_TOKEN_TTL, as when the
  * denylist fails open, and one error line is logged. A denial still in flight
@@ -744,7 +734,7 @@ export async function revokeOtherSessions(
  */
 export async function revokeAllSessions(userId: string): Promise<void> {
   const sessionIds = await withTransaction((tx) => revokeSessionRows(userId, {}, tx))
-  await denySessions(sessionIds)
+  await denySessionsAfterCommit(userId, sessionIds)
 }
 
 /**

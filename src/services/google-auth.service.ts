@@ -14,7 +14,7 @@ import { emitDomainEvent } from '@/services/domain-events.service'
 import { assertSignInAllowed } from '@/services/maintenance-mode/maintenance-mode.service'
 import { autoJoinSafely } from '@/services/platform.service'
 import {
-  denySessions,
+  denySessionsAfterCommit,
   issueRefreshToken,
   revokeAllSessions,
   revokeSessionRows,
@@ -94,7 +94,7 @@ export async function claimUnverifiedAccount(userId: string, googleId: string): 
     if (!updated) throw new HttpError('Update returned no row', 500)
     return { claimed: updated, revokedSessionIds: await revokeSessionRows(userId, {}, tx) }
   })
-  await denySessions(revokedSessionIds)
+  await denySessionsAfterCommit(userId, revokedSessionIds)
   return claimed
 }
 
