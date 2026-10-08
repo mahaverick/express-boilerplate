@@ -71,6 +71,21 @@ function change(token: string, body: Record<string, unknown>): Promise<Response>
 }
 
 /**
+ * The pending notices addressed to the test's own users. The worker database
+ * can hold platform staff another file left behind, and they are notified
+ * too, so a test counts only the recipients it created.
+ * @param userIds - The test's users.
+ * @returns Their pending notices.
+ */
+async function noticesTo(
+  userIds: readonly string[]
+): Promise<Awaited<ReturnType<typeof pendingMaintenanceNotices>>> {
+  const ours = new Set(userIds)
+  const notices = await pendingMaintenanceNotices()
+  return notices.filter((job) => ours.has(job.data.userId))
+}
+
+/**
  * The maintenance-mode audit entries.
  * @returns Their target and metadata.
  */
@@ -132,7 +147,6 @@ describe('PUT /platform/maintenance-mode', () => {
     const { user: otherOwner } = await createTrackedStaff('owner')
     const { user: admin } = await createTrackedStaff('admin')
     const { user: manager } = await createTrackedStaff('manager')
-    const ours = new Set([actor.id, otherOwner.id, admin.id, manager.id])
     const version = await currentVersion(token)
 
     const response = await change(token, {
@@ -165,9 +179,8 @@ describe('PUT /platform/maintenance-mode', () => {
         },
       },
     ])
-    const notices = await pendingMaintenanceNotices()
-    // Only this test's staff: the worker database may hold other platform staff.
-    const recipients = notices.map((job) => job.data.userId).filter((id) => ours.has(id))
+    const notices = await noticesTo([actor.id, otherOwner.id, admin.id, manager.id])
+    const recipients = notices.map((job) => job.data.userId)
     expect(recipients.toSorted(byText)).toEqual([otherOwner.id, admin.id].toSorted(byText))
   })
 
@@ -288,11 +301,7 @@ describe('PUT /platform/maintenance-mode', () => {
 
     expect(response.status).toBe(200)
     expect(viewOf(response).changedBy).toEqual({ id: actor.id, name: 'A staff member' })
-    const pending = await pendingMaintenanceNotices()
-    // Only this test's staff: the worker database may hold other platform staff.
-    const notices = pending.filter(
-      (job) => job.data.userId === actor.id || job.data.userId === admin.id
-    )
+    const notices = await noticesTo([actor.id, admin.id])
     expect(notices).toHaveLength(1)
     const [notice] = notices
     expect(notice?.data.body).toContain('A staff member set maintenance mode')
@@ -427,10 +436,8 @@ describe('PUT /platform/maintenance-mode', () => {
       since: NONE,
       reason: NONE,
     })
-    const notices = await pendingMaintenanceNotices()
-    // Only this test's staff: the worker database may hold other platform staff.
-    const ours = new Set([owner.id, admin.id])
-    expect(notices.map((job) => job.data.userId).filter((id) => ours.has(id))).toEqual([admin.id])
+    const notices = await noticesTo([owner.id, admin.id])
+    expect(notices.map((job) => job.data.userId)).toEqual([admin.id])
   })
 
   it('records messageChanged true when switching off a mode that had a message', async () => {
@@ -464,9 +471,8 @@ describe('PUT /platform/maintenance-mode', () => {
     const statuses = responses.map((response) => response.status)
     expect(statuses.toSorted((a, b) => a - b)).toEqual([200, 409])
     expect(await auditEntries()).toHaveLength(1)
-    const ours = new Set([first.user.id, second.user.id])
-    const notices = await pendingMaintenanceNotices()
-    expect(notices.filter((job) => ours.has(job.data.userId))).toHaveLength(1)
+    const notices = await noticesTo([first.user.id, second.user.id])
+    expect(notices).toHaveLength(1)
     expect(await currentVersion(first.token)).toBe(version + 1)
   })
 })
