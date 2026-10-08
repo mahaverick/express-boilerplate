@@ -1828,5 +1828,55 @@
     "rule": "fragment",
     "input": "https://app.example.com/docs#zz[secret]",
     "expected": "https://app.example.com/docs#[fragment]"
+  },
+  {
+    "rule": "kv",
+    "input": "password=https://app.example.com/x#abcdefabcdefabcdefabcdefabcdefabcdef zqS7correct horse zqS7battery",
+    "expected": "password=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "password: https://app.example.com/x#abcdefghijabcdefghijabcdefghijabcdefghijabcdefghij zqS7correct horse zqS7battery",
+    "expected": "password: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "password: https://app.example.com/x#foo-xoxb-abcdefghijkl zqS7correct horse zqS7battery",
+    "expected": "password: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "password: https://app.example.com/x#abc123 zqS7correct horse zqS7battery",
+    "expected": "password: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "code=https://app.example.com/x#abcdefghijabcdefghijabcdefghijabcdefghijabcdefghij zqS7correct horse&oauth",
+    "expected": "code=[redacted]&oauth"
+  },
+  {
+    "rule": "kv",
+    "input": "api_key=https://app.example.com/x?a=1 zqS7correct horse",
+    "expected": "api_key=[redacted]"
+  },
+  {
+    "rule": "email",
+    "input": "invite failed for wJalrXUtnFEMI/K7MDENG%2FbPxRfiCYEXAMPLEKEY@example.com",
+    "expected": "invite failed for wJalrXUtnFEMI/[email]"
+  },
+  {
+    "rule": "kv",
+    "input": "password: zqS7x jane@[192.0.2.1] zqS7correct horse",
+    "expected": "password: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "at https://app.example.com/docs#lsh-xoxb-abcdefghijotp = zqS7tail",
+    "expected": "at https://app.example.com/docs#[fragment] = [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "token: zqS7a zqS7b session=\"zqS7leak\"",
+    "expected": "token: [redacted]"
   }
 ]

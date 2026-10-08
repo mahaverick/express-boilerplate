@@ -77,6 +77,11 @@ const QUERY_PATTERN =
 const PLACEHOLDER = String.raw`\[(?:redacted|value|credentials|query|fragment|token|jwt|posthog-key|email|secret|ip|phone)\]`
 
 /**
+ * An email address's IP-literal domain: `[192.168.0.1]` or `[IPv6:…]`.
+ */
+const EMAIL_IP_LITERAL = String.raw`\[(?:\d{1,3}(?:\.\d{1,3}){3}|IPv6:[\dA-Fa-f:.]+)\]`
+
+/**
  * A URL's or path's fragment: the part before `#` is kept, and so is a
  * fragment `isHarmlessFragment` accepts.
  */
@@ -221,17 +226,57 @@ const SCHEMED_PLACEHOLDER_VALUE = String.raw`${AUTH_SCHEMES}[ \t]+${PLACEHOLDER}
 const ARRAY_VALUE = String.raw`\[[^\]\n]*\]`
 
 /**
+ * A bracketed token inside an unquoted value that is taken whole, so its `]`
+ * does not end the value: a placeholder an earlier rule wrote
+ * (`https://example.com/x#[fragment]`) or an address's IP literal
+ * (`jane@[192.168.0.1]`).
+ */
+const VALUE_BRACKETED = `(?:${PLACEHOLDER}|${EMAIL_IP_LITERAL})`
+
+/**
+ * One character of an unquoted value that may end it, or a bracketed token.
+ * A bracketed token's `[` is never taken as a lone character, so a match
+ * cannot back off into the token and end before its `]`.
+ */
+const VALUE_END_UNIT = String.raw`(?:${VALUE_BRACKETED}|(?!${VALUE_BRACKETED})[^\s"'\\,;&})\]])`
+
+/**
+ * A quoted string straight after a `:`, `=` or `=>` inside an unquoted value
+ * (`token: a session="…"`), to its closing quote or the end of the line, so
+ * a key written inside the value never leaves its quoted value behind.
+ */
+const VALUE_NESTED_QUOTED = String.raw`(?<=(?:[:=]|=>)\s*)(?:"(?:[^"\\\n]|\\.)*(?:"|(?=\n|$))|'(?:[^'\\\n]|\\.)*(?:'|(?=\n|$)))`
+
+/**
+ * One character inside an unquoted value after a plain separator, a space
+ * included, a bracketed token, or a nested quoted string.
+ */
+const VALUE_INNER_UNIT = String.raw`(?:${VALUE_BRACKETED}|${VALUE_NESTED_QUOTED}|(?!${VALUE_BRACKETED})[^\n"'\\,;&})\]])`
+
+/**
+ * The last unit of an unquoted value after a plain separator, or any unit of
+ * one after an encoded separator: one that may end it, or a nested quoted
+ * string.
+ */
+const VALUE_LAST_UNIT = `(?:${VALUE_NESTED_QUOTED}|${VALUE_END_UNIT})`
+
+/**
  * An unquoted value. After a plain `:`, `=` or `=>` it runs to the next field
  * delimiter (`,` `;` `&` `}` `)` `]`, a quote or the end of the line), so a
  * space-separated multi-word value goes whole, and one holding a delimiter
- * stops there; trailing spaces are kept. After an
- * encoded separator (`%3D`) it stops at whitespace too. It never
+ * stops there; trailing spaces are kept. A quoted string after a `:` or `=`
+ * inside it goes with it (`VALUE_NESTED_QUOTED`). After an
+ * encoded separator (`%3D`) it stops at whitespace too, outside such a
+ * quoted string. A placeholder an
+ * earlier rule wrote inside the value (a URL's `#[fragment]` or `?[query]`)
+ * and an address's IP literal are part of it (`VALUE_BRACKETED`), so their
+ * `]` never ends the value early. It never
  * starts with the `>` of an `=>`, so `=` cannot take half of it; a `>` after
  * any other separator is a value. Nor does it start with `%22`, the encoded
  * quote `QUOTED_VALUE` handles, nor with a JSON-escaped one; a lone backslash
  * before the value is skipped (`password=\zq…`).
  */
-const UNQUOTED_VALUE = String.raw`(?!%22)(?!\\u00(?:22|27))\\?(?:(?<=[:=>]\s*)(?!(?<==)>)[^\s"'\\,;&})\]](?:[^\n"'\\,;&})\]]*[^\s"'\\,;&})\]])?|(?!(?<==)>)[^\s"'\\,;&})\]][^\s"'\\,;&})\]]*)`
+const UNQUOTED_VALUE = String.raw`(?!%22)(?!\\u00(?:22|27))\\?(?:(?<=[:=>]\s*)(?!(?<==)>)${VALUE_END_UNIT}(?:${VALUE_INNER_UNIT}*${VALUE_LAST_UNIT})?|(?!(?<==)>)${VALUE_END_UNIT}${VALUE_LAST_UNIT}*)`
 
 /**
  * A quoted value: inside an escaped quote, up to the next escaped quote;
@@ -278,7 +323,9 @@ const AUTH_HEADER_PATTERN = new RegExp(
  * (any prefix) is a key after `=`, `=>`, `%3D`, `&#61;` or `\u003d`, or after `:` or `=>` with a
  * quoted value; after `:` and an unquoted value it is prose (`Unexpected
  * response: 502`) only when `response` stands alone; a prefixed one
- * (`mfa_response`, `SAMLResponse`) is always a key. The key and its separator are kept.
+ * (`mfa_response`, `SAMLResponse`) is always a key. A URL fragment the
+ * fragment rule replaced (`#[fragment] = …`) counts as a key too, since the
+ * fragment may have ended in one. The key and its separator are kept.
  * The value is a quoted string (spaces and escaped quotes included, also
  * inside a JSON string), an array to its `]`, a scheme word with the
  * placeholder the Bearer or Basic rule wrote (`Bearer [token]`, replaced
@@ -289,7 +336,7 @@ const AUTH_HEADER_PATTERN = new RegExp(
  * they are (`KEPT_VALUE`), so `token: undefined` stays readable.
  */
 const KV_SECRET_PATTERN = new RegExp(
-  String.raw`(?:\b|(?<=%26|%3F))((?:[\w-]*?(?:pass(?:[_-]?(?:word|phrase|code|key)|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|(?:secret|private|consumer|signing|encryption|master|client)[_-]?key|auth(?:orization)?[_-]code|code[_-]?verifier|session|sid|credential|signature|sig|hmac|nonce|(?<=[\w-])response|response(?=s?${KEY_QUOTE}?\s*(?:=|%3D|&#61;|\\u003d|:\s*${KEY_QUOTE}))|(?<![A-Za-z\d])pin(?:[_-]?(?:code|number))?|(?:otp|mfa|verification|recovery|backup)[_-]?code|(?<![A-Za-z\d])(?<!(?:primary|foreign|sort|partition|cache|unique|index|s3|object|routing|shard|translation|i18n)[_-])key(?=s?\s*(?:=(?!>)|%3D|&#61;|\\u003d))|jwt|otp)s?|code(?<=(?:[?&]|&amp;|%26|%3F)code)|code(?<=(?:oauth|authoriz(?:ation|e)(?![a-z]))[^\n]*code)|code(?=\s*=[^\s&]*&)|code(?=[^\n{}]*(?:oauth|authoriz(?:ation|e)(?![a-z]))))${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?)` +
+  String.raw`(?:\b|(?<=%26|%3F)|(?<=#)(?=\[fragment\]))((?:(?<=#)\[fragment\]|[\w-]*?(?:pass(?:[_-]?(?:word|phrase|code|key)|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|(?:secret|private|consumer|signing|encryption|master|client)[_-]?key|auth(?:orization)?[_-]code|code[_-]?verifier|session|sid|credential|signature|sig|hmac|nonce|(?<=[\w-])response|response(?=s?${KEY_QUOTE}?\s*(?:=|%3D|&#61;|\\u003d|:\s*${KEY_QUOTE}))|(?<![A-Za-z\d])pin(?:[_-]?(?:code|number))?|(?:otp|mfa|verification|recovery|backup)[_-]?code|(?<![A-Za-z\d])(?<!(?:primary|foreign|sort|partition|cache|unique|index|s3|object|routing|shard|translation|i18n)[_-])key(?=s?\s*(?:=(?!>)|%3D|&#61;|\\u003d))|jwt|otp)s?|code(?<=(?:[?&]|&amp;|%26|%3F)code)|code(?<=(?:oauth|authoriz(?:ation|e)(?![a-z]))[^\n]*code)|code(?=\s*=[^\s&]*&)|code(?=[^\n{}]*(?:oauth|authoriz(?:ation|e)(?![a-z]))))${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?)` +
     `${KEPT_VALUE}(?:${QUOTED_VALUE}|${ARRAY_VALUE}|${SCHEMED_PLACEHOLDER_VALUE}|${UNQUOTED_VALUE})`,
   'gi'
 )
@@ -377,7 +424,7 @@ const EMAIL_LOCAL_PART = String.raw`[\p{L}\p{N}_.%+-]+`
  * `[IPv6:…]`), or after a plain `@` a single label that starts with a letter
  * and is not a package or action ref. `EMAIL_PATTERN` describes each form.
  */
-const EMAIL_AT_AND_DOMAIN = String.raw`(?:(?:@|%40|%2540|＠|﹫)(?:\[(?:\d{1,3}(?:\.\d{1,3}){3}|IPv6:[\dA-Fa-f:.]+)\]|[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.\p{L}{2,})|@(?!(?:npm|workspace|file|github|gitlab|link|portal|patch|git\+[a-z]+):)(?!(?:latest|next|canary|beta|alpha|rc|main|master|sha\d+|v\d[\w.-]*)(?![\p{L}\p{N}-]))\p{L}[\p{L}\p{N}-]*(?=$|[\s"'<>,;:!?&/)\]}]|\.(?:$|\s)))`
+const EMAIL_AT_AND_DOMAIN = String.raw`(?:(?:@|%40|%2540|＠|﹫)(?:${EMAIL_IP_LITERAL}|[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.\p{L}{2,})|@(?!(?:npm|workspace|file|github|gitlab|link|portal|patch|git\+[a-z]+):)(?!(?:latest|next|canary|beta|alpha|rc|main|master|sha\d+|v\d[\w.-]*)(?![\p{L}\p{N}-]))\p{L}[\p{L}\p{N}-]*(?=$|[\s"'<>,;:!?&/)\]}]|\.(?:$|\s)))`
 
 /**
  * An email address, in any script. The local part is a run of address
@@ -594,8 +641,11 @@ function capped(value: string, wasCut: boolean): string {
  * the rule trades some readable text for never leaking a value. Applying it
  * twice gives the same text as applying it once, a placeholder in a URL
  * fragment included (`isHarmlessFragment`), except for contrived inputs that
- * glue a phone number, IP address or hex run to one another (a placeholder
- * written by the first pass can open a match for the second).
+ * glue a phone number, IP address or hex run to one another, put an address
+ * with a quoted local part (`"jane doe"@…`) straight against a URL's or
+ * path's query or fragment, or leave a placeholder in quotes straight before
+ * an `@` (a placeholder written by the first pass can open a match for the
+ * second, and a replaced quoted address no longer stops a path).
  * @param value - The text: an exception's type or value, or a frame's filename or function.
  * @returns The scrubbed text.
  */

@@ -1191,7 +1191,10 @@ query`: the SQL text is never sent. A thrown object that is not an `Error`
   Authorization credentials, every parameter of an Authorization header (any
   scheme, Digest and OAuth included) and of a Cookie line, to the end of the
   line; `key=value` secrets (plural keys, array values, `=>` and URL-, HTML- or
-  JSON-encoded separators, `sig`, `hmac`, `nonce`, `response`, `pin`,
+  JSON-encoded separators; an unquoted value runs over a placeholder an
+  earlier rule wrote inside it, an address's IP literal and a quoted string
+  after a `:` or `=` inside it, so a redacted URL or nested key never ends it
+  early; a value after a replaced URL fragment, `#[fragment] = …`, too; `sig`, `hmac`, `nonce`, `response`, `pin`,
   `passphrase` and the one-time code names, and compound key names such as
   `secret_key` before `:` too; only the bare values `undefined`, `null`,
   `missing`, `true` and `false`, and already-scrubbed placeholders, are kept);
@@ -1248,10 +1251,14 @@ query`: the SQL text is never sent. A thrown object that is not an `Error`
   (`[jwt]@example.com`); and the part before the last `/` of a run joined to
   an email address's local part when the run, with the local part's leading
   base64 characters, is under 40 characters or reads as a path rather than
-  base64 (the base64 run rule's test), or when it follows an address or a
-  dotted word directly (`jane@example.com/<secret>@example.com`). Scrubbing a
-  scrubbed text again changes nothing, except contrived inputs that glue a
-  phone number, IP address or hex run to one another. Regex scrubbing is
+  base64 (the base64 run rule's test), counting stopped by a `%2F`
+  (`abc/def%2Fghi@example.com` keeps `abc/`), or when it follows an address
+  character directly (a letter, digit, `.`, `%`, `+`, `-`, `_`, `/` or `@`:
+  `jane@example.com/<secret>@…`, `u.<secret>@…`). Scrubbing a scrubbed text
+  again changes nothing, except contrived inputs that glue a phone number, IP
+  address or hex run to one another, put an address with a quoted local part
+  (`"jane doe"@…`) straight against a URL's or path's query or fragment, or
+  leave a placeholder in quotes straight before an `@`. Regex scrubbing is
   best-effort: keep secrets out of error messages.
 - **Never attached:** request bodies, headers, query strings or cookies;
   a database error's `detail`, `parameters`, `query` or `where`, or the
