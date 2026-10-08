@@ -138,9 +138,28 @@ describe('exceptionListOf', () => {
       value: 'bad thing',
     })
     expect(exceptionListOf(42)[0]?.value).toBe('Primitive value captured as exception: 42')
-    expect(exceptionListOf({ code: 'E1' })[0]?.value).toBe(
-      'Object captured as exception with keys: code'
-    )
+    expect(exceptionListOf({ code: 'E1' })[0]).toMatchObject({
+      type: 'Error',
+      value: 'Non-Error object thrown',
+    })
+  })
+
+  it('a thrown plain object does not put its (user-controlled) key names in the value', () => {
+    // e.g. code that throws a parsed request body or a lookup map keyed by user input
+    const thrown = { 'reset-code-991847': true, 'jane.doe': 1, Zx9Kq2Lm: 'v' }
+    const [first] = exceptionListOf(thrown)
+    expect(first?.value).not.toContain('reset-code-991847')
+    expect(first?.value).not.toContain('Zx9Kq2Lm')
+  })
+
+  it('names a thrown class instance by its class', () => {
+    class LookupMiss {
+      readonly key = 'jane@example.com'
+    }
+    expect(exceptionListOf(new LookupMiss())[0]).toMatchObject({
+      type: 'LookupMiss',
+      value: 'Non-Error object thrown',
+    })
   })
 })
 

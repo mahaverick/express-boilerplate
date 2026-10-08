@@ -4,7 +4,8 @@
  * node stack parser, scrubbed by `scrubText`, its fingerprint for the
  * throttle, and the signed batch event with the release, the request or job,
  * the trace and the acting user and tenant. It reads only an error's name,
- * message, stack frames and `cause`: a Postgres error's `detail`, `query`,
+ * message, stack frames and `cause`, and a thrown non-Error object's class
+ * name, never its keys: a Postgres error's `detail`, `query`,
  * `parameters` and `where`, an `HttpError`'s `errors`, and a failed query's
  * bound parameters are never read.
  */
@@ -180,17 +181,41 @@ function errorIn(value: unknown): Error | undefined {
 }
 
 /**
+ * The value an event carries for a thrown object that is not an `Error`.
+ */
+const NON_ERROR_OBJECT_VALUE = 'Non-Error object thrown'
+
+/**
+ * A copy of a thrown value that holds no `Error`. An object becomes an
+ * error named for its class (`Error` for a plain object) with a fixed
+ * value, because its keys can be user input (a parsed body, a map keyed by
+ * address) and are never read. A primitive is returned as it is.
+ * @param value - Anything thrown that `errorIn` found no `Error` in.
+ * @returns The value to build from.
+ */
+function readableNonError(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null) return value
+  const constructorName = (value.constructor as { name?: unknown } | undefined)?.name
+  const name =
+    typeof constructorName === 'string' && constructorName !== '' && constructorName !== 'Object'
+      ? constructorName
+      : 'Error'
+  return new ReadableError(name, NON_ERROR_OBJECT_VALUE, [], undefined)
+}
+
+/**
  * A copy of a thrown value the builder can read safely. An `Error` (or an
  * object holding one) becomes a fresh `Error` carrying only its name, its
  * message (`messageOf`), its frame lines and, up to `ERROR_CAUSE_DEPTH`
- * links, its `cause` copied the same way. Anything else is returned as it is.
+ * links, its `cause` copied the same way. Anything else is copied by
+ * `readableNonError`.
  * @param value - Anything thrown.
  * @param depth - How many links precede this one.
  * @returns The value to build from.
  */
 function readable(value: unknown, depth: number): unknown {
   const error = errorIn(value)
-  if (error === undefined) return value
+  if (error === undefined) return readableNonError(value)
   const { cause } = error
   const hasCause = cause !== undefined && cause !== null && depth + 1 < ERROR_CAUSE_DEPTH
   return new ReadableError(
