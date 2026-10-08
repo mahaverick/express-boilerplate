@@ -643,8 +643,9 @@ function capped(value: string, wasCut: boolean): string {
  * fragment included (`isHarmlessFragment`), except for contrived inputs that
  * glue a phone number, IP address or hex run to one another, put an address
  * with a quoted local part (`"jane doe"@…`) straight against a URL's or
- * path's query or fragment, or leave a placeholder in quotes straight before
- * an `@` (a placeholder written by the first pass can open a match for the
+ * path's query or fragment, end an address with a `.` straight before a
+ * query (`jane@example.com.?a=1`), or leave a placeholder in quotes straight
+ * before an `@` (a placeholder written by the first pass can open a match for the
  * second, and a replaced quoted address no longer stops a path).
  * @param value - The text: an exception's type or value, or a frame's filename or function.
  * @returns The scrubbed text.

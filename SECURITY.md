@@ -1254,10 +1254,14 @@ query`: the SQL text is never sent. A thrown object that is not an `Error`
   base64 (the base64 run rule's test), counting stopped by a `%2F`
   (`abc/def%2Fghi@example.com` keeps `abc/`), or when it follows an address
   character directly (a letter, digit, `.`, `%`, `+`, `-`, `_`, `/` or `@`:
-  `jane@example.com/<secret>@…`, `u.<secret>@…`). Scrubbing a scrubbed text
+  `jane@example.com/<secret>@…`, `u.<secret>@…`); and a quoted value whose key
+  sits inside a URL query that an encoded key's value runs into
+  (`secret%3Dhttps://…?a=1/api_key="…"` keeps the quoted value). Scrubbing a
+  scrubbed text
   again changes nothing, except contrived inputs that glue a phone number, IP
   address or hex run to one another, put an address with a quoted local part
-  (`"jane doe"@…`) straight against a URL's or path's query or fragment, or
+  (`"jane doe"@…`) straight against a URL's or path's query or fragment, end
+  an address with a `.` straight before a query (`jane@example.com.?a=1`), or
   leave a placeholder in quotes straight before an `@`. Regex scrubbing is
   best-effort: keep secrets out of error messages.
 - **Never attached:** request bodies, headers, query strings or cookies;
