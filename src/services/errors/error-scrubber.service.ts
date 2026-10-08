@@ -115,10 +115,18 @@ const JWT_PATTERN = /\beyJ[\w-]+\.[\w-]+\.[\w-]*/g
 const POSTHOG_KEY_PATTERN = /\bph[cxs]_\w+/g
 
 /**
- * An email address, in any script, with `@` written plainly or as `%40`.
+ * An email address, in any script. The local part is a run of address
+ * characters or a quoted string (`"jane doe"`); the `@` is written plainly,
+ * as `%40` or `%2540`, or as a fullwidth `＠` or small `﹫`; the domain is a
+ * dotted name ending in a letter label, or an IP literal (`[192.168.0.1]`,
+ * `[IPv6:…]`). After a plain `@`, a single label that starts with a letter
+ * and ends the word (`jane@localhost`) is an address too; a label that
+ * starts with a digit is not, so a package version (`react-dom@19.0.0`)
+ * is kept.
  */
-// eslint-disable-next-line sonarjs/super-linear-regex -- scrubText scans at most SCAN_MAX characters
-const EMAIL_PATTERN = /[\p{L}\p{N}_.%+-]+(?:@|%40)[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.\p{L}{2,}/gu
+const EMAIL_PATTERN =
+  // eslint-disable-next-line sonarjs/regex-complexity, sonarjs/super-linear-regex -- one pattern per rule keeps the rule list the spec; scrubText scans at most SCAN_MAX characters
+  /(?:"[^"\n]{1,64}"|[\p{L}\p{N}_.%+-]+)(?:(?:@|%40|%2540|＠|﹫)(?:\[(?:\d{1,3}(?:\.\d{1,3}){3}|IPv6:[\dA-Fa-f:.]+)\]|[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.\p{L}{2,})|@\p{L}[\p{L}\p{N}-]*(?=$|[\s"'<>,;)\]}]|\.(?:$|\s)))/gu
 
 /**
  * A run of 32 or more hex digits: a hash, a token or a key. It is delimited
@@ -201,7 +209,9 @@ function capped(value: string, wasCut: boolean): string {
  * `private_key`, `session`, `sid`, `cookie`, `credentials`, `authorization`, `auth`,
  * `jwt`, `otp`, `signature`) becomes `[redacted]`; a JWT becomes `[jwt]`; a
  * PostHog key (`phc_`, `phx_`, `phs_`) becomes `[posthog-key]`; an email
- * address, written with `@` or `%40`, becomes `[email]`; a run of 32 or more
+ * address (`EMAIL_PATTERN`: `@` written plainly, encoded or fullwidth, a
+ * quoted local part, an IP-literal or single-label domain) becomes
+ * `[email]`; a run of 32 or more
  * hex digits, and a secret-looking run of 40 or more base64 characters
  * (`isSecretRun`), become `[secret]`; and the result is cut to 1024
  * characters, ending in `…[truncated]`. A key-named word is replaced even in

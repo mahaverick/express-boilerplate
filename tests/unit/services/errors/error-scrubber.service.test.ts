@@ -170,3 +170,14 @@ describe('scrubText on identifiers', () => {
     expect(scrubText(input)).toBe(input)
   })
 })
+
+describe('scrubText on email edge forms', () => {
+  it.each([
+    ['no TLD', 'invite failed for jane@localhost', 'jane'],
+    ['double-encoded %2540', 'invite failed for jane%2540example.com', 'jane'],
+    ['fullwidth at', 'invite failed for jane＠example.com', 'jane'],
+    ['quoted local part', 'invite failed for "jane doe"@example.com', 'jane doe'],
+  ])('%s: the address is scrubbed', (_shape, input, local) => {
+    expect(scrubText(input)).not.toContain(local)
+  })
+})

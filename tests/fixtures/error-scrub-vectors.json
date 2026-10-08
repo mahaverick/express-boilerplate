@@ -548,5 +548,60 @@
     "rule": "secret",
     "input": "token zqW1abcdefghijklmnopqrstuvwxyzABCDEFGHIJKL rejected",
     "expected": "token [secret] rejected"
+  },
+  {
+    "rule": "email",
+    "input": "invite failed for jane@localhost",
+    "expected": "invite failed for [email]"
+  },
+  {
+    "rule": "email",
+    "input": "invite failed for jane@localhost.",
+    "expected": "invite failed for [email]."
+  },
+  {
+    "rule": "email",
+    "input": "invite failed for jane%2540example.com",
+    "expected": "invite failed for [email]"
+  },
+  {
+    "rule": "email",
+    "input": "invite failed for jane＠example.com",
+    "expected": "invite failed for [email]"
+  },
+  {
+    "rule": "email",
+    "input": "invite failed for jane﹫example.com",
+    "expected": "invite failed for [email]"
+  },
+  {
+    "rule": "email",
+    "input": "invite failed for \"jane doe\"@example.com",
+    "expected": "invite failed for [email]"
+  },
+  {
+    "rule": "email",
+    "input": "rcpt jane.zqU2@[192.168.0.1] rejected",
+    "expected": "rcpt [email] rejected"
+  },
+  {
+    "rule": "email",
+    "input": "rcpt jane@[IPv6:2001:db8::1] rejected",
+    "expected": "rcpt [email] rejected"
+  },
+  {
+    "rule": "email",
+    "input": "@media (min-width: 640px) failed",
+    "expected": "@media (min-width: 640px) failed"
+  },
+  {
+    "rule": "email",
+    "input": "Cannot find module '@scope/pkg'",
+    "expected": "Cannot find module '@scope/pkg'"
+  },
+  {
+    "rule": "email",
+    "input": "install react-dom@19.0.0 failed",
+    "expected": "install react-dom@19.0.0 failed"
   }
 ]
