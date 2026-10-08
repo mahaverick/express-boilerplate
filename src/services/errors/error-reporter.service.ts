@@ -447,8 +447,9 @@ export function reportError(error: unknown, context: ErrorContext): string {
  * `reportError`, and the scrubbed stand-in the active span records, taken
  * from the exception list the report built, so a 5xx builds it once. When
  * the report built none (error tracking off, throttled before the build, a
- * failure inside), the stand-in is built from the error (`scrubbedErrorForSpan`).
- * Never throws.
+ * failure inside), the stand-in is built from the error (`scrubbedErrorForSpan`),
+ * under the same re-entry guard as a report, so a getter on the error that
+ * reports adds nothing. Never throws.
  * @param error - Anything thrown.
  * @param context - Where it was caught.
  * @returns The event uuid, and a function giving the span stand-in, called only when there is a span.
@@ -460,8 +461,23 @@ export function reportErrorWithSpan(
   const { errorId, exceptions } = report(error, context)
   return {
     errorId,
-    spanError: () =>
-      exceptions === undefined ? scrubbedErrorForSpan(error) : spanErrorOf(exceptions),
+    spanError: () => (exceptions === undefined ? guardedSpanError(error) : spanErrorOf(exceptions)),
+  }
+}
+
+/**
+ * The span stand-in built from the error, with reporting switched off while
+ * it is built, so a getter on the error that reports queues nothing.
+ * @param error - Anything thrown.
+ * @returns The stand-in.
+ */
+function guardedSpanError(error: unknown): SpanError {
+  const wasReporting = state.isReporting
+  state.isReporting = true
+  try {
+    return scrubbedErrorForSpan(error)
+  } finally {
+    state.isReporting = wasReporting
   }
 }
 

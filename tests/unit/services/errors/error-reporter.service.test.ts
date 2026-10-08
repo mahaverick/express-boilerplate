@@ -435,6 +435,21 @@ describe('reportErrorWithSpan', () => {
     expect(build).toHaveBeenCalledTimes(1)
     expect(inspect(stand, { depth: Infinity })).not.toContain(LEAKED_PARAM)
   })
+
+  it('a getter that reports while the fallback stand-in is built adds no report', () => {
+    reportDistinct(100)
+    const error = new Error('outer')
+    Object.defineProperty(error, 'message', {
+      get: () => {
+        reportError(new Error('re-entrant'), HTTP)
+        return 'outer'
+      },
+    })
+    const { spanError } = reportErrorWithSpan(error, HTTP)
+    expect(counted('throttled')).toBe(1)
+    spanError()
+    expect(counted('throttled')).toBe(1)
+  })
 })
 
 describe('queue and flush', () => {
