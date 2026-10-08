@@ -1415,4 +1415,38 @@ describe('/api/v1/tenants', () => {
       expect(envelopeOf(response).message).toBe('Member not found')
     })
   })
+
+  describe('timezone and locale refuse control and bidi characters', () => {
+    it.each([
+      ['timezone bidi override', { timezone: 'Etc/\u{202E}gnp' }],
+      ['timezone newline', { timezone: 'UTC\nX' }],
+      ['locale bell', { locale: 'en\u{7}' }],
+      ['timezone that names no zone', { timezone: 'Not/AZone' }],
+      ['timezone with a colon offset', { timezone: '+05:30' }],
+      ['locale with an underscore', { locale: 'en_US' }],
+      ['locale that is not a language tag', { locale: 'x-private' }],
+    ])('%s', async (_label, body) => {
+      const { user, token } = await createAuthenticatedUser()
+      const tenant = await createTenant(user.id)
+      const response = await request(app)
+        .patch(`/api/v1/tenants/${tenant.slug}/settings`)
+        .set('Authorization', `Bearer ${token}`)
+        .send(body)
+      expect(response.status).toBe(400)
+    })
+
+    it.each([
+      { timezone: 'UTC', locale: 'en' },
+      { timezone: 'Etc/GMT+5', locale: 'zh-Hant-TW' },
+      { timezone: 'America/Argentina/Buenos_Aires', locale: 'pt-BR' },
+    ])('accepts a real zone and language tag %j', async (body) => {
+      const { user, token } = await createAuthenticatedUser()
+      const tenant = await createTenant(user.id)
+      const response = await request(app)
+        .patch(`/api/v1/tenants/${tenant.slug}/settings`)
+        .set('Authorization', `Bearer ${token}`)
+        .send(body)
+      expect(response.status).toBe(200)
+    })
+  })
 })

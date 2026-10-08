@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { RESERVED_SLUGS } from '@/constants/tenant.constants'
 import {
+  isLocaleTag,
   isSlugShaped,
+  isTimeZoneName,
   newTenantSchema,
   scanJson,
   slugSchema,
@@ -130,5 +132,28 @@ describe('scanJson', () => {
     let deep: unknown = {}
     for (let level = 0; level < 100_000; level += 1) deep = { a: deep }
     expect(scanJson(deep).depth).toBe(100_001)
+  })
+})
+
+describe('isTimeZoneName', () => {
+  it.each(['UTC', 'Europe/Paris', 'Etc/GMT+5', 'America/Argentina/Buenos_Aires'])(
+    'accepts %s',
+    (zone) => {
+      expect(isTimeZoneName(zone)).toBe(true)
+    }
+  )
+
+  it.each(['Not/AZone', '+05:30', 'Etc/\u{202E}gnp', 'UTC X', ''])('refuses %j', (zone) => {
+    expect(isTimeZoneName(zone)).toBe(false)
+  })
+})
+
+describe('isLocaleTag', () => {
+  it.each(['en', 'fr', 'en-US', 'zh-Hant-TW', 'pt-BR'])('accepts %s', (tag) => {
+    expect(isLocaleTag(tag)).toBe(true)
+  })
+
+  it.each(['en_US', 'x-private', 'i-klingon', 'e', 'en-', 'en\u{7}'])('refuses %j', (tag) => {
+    expect(isLocaleTag(tag)).toBe(false)
   })
 })

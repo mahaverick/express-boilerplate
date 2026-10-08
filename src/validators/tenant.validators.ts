@@ -242,12 +242,48 @@ export function scanJson(value: unknown): JsonScan {
   return scan
 }
 
+const TIMEZONE_PATTERN = /^[A-Za-z0-9_+\-/]+$/
+const LOCALE_PATTERN = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/
+
 /**
- * `PATCH /api/v1/tenants/:slug/settings` request body. `timezone`/`locale`
- * are bounded to their column widths only, not checked as a real IANA zone
- * or BCP 47 tag: nothing in this codebase interprets either value, so a project
- * that depends on one should add that check. `metadata` is `null` to clear
- * it or any JSON object, never a bare array or primitive.
+ * Whether `value` names a time zone this runtime knows (an IANA name such as
+ * `Europe/Paris`, an alias such as `UTC`, or `Etc/GMT+5`), in the
+ * letters-digits-`_+-/` shape. A UTC offset like `+05:30` is refused for its
+ * colon: store the zone, not the offset.
+ * @param value - The trimmed candidate.
+ * @returns True when the value is a usable time zone name.
+ */
+export function isTimeZoneName(value: string): boolean {
+  if (!TIMEZONE_PATTERN.test(value)) return false
+  try {
+    new Intl.DateTimeFormat('en', { timeZone: value })
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Whether `value` is a BCP 47 language tag of the common shape (a 2-3
+ * letter language, then `-`-separated subtags such as `en-US` or
+ * `zh-Hant-TW`) that `Intl` accepts.
+ * @param value - The trimmed candidate.
+ * @returns True when the value is a usable locale tag.
+ */
+export function isLocaleTag(value: string): boolean {
+  if (!LOCALE_PATTERN.test(value)) return false
+  try {
+    return Intl.getCanonicalLocales(value).length === 1
+  } catch {
+    return false
+  }
+}
+
+/**
+ * `PATCH /api/v1/tenants/:slug/settings` request body. `timezone` must name a
+ * time zone the runtime knows (`isTimeZoneName`) and `locale` must be a BCP 47
+ * tag (`isLocaleTag`), both within their column widths. `metadata` is `null`
+ * to clear it or any JSON object, never a bare array or primitive.
  */
 export const updateTenantSettingsSchema = z.object({
   timezone: z
@@ -259,6 +295,7 @@ export const updateTenantSettingsSchema = z.object({
       `Timezone must be at most ${MAX_TENANT_TIMEZONE_LENGTH} characters.`
     )
     .refine(safeText(), 'Timezone contains characters that are not allowed')
+    .refine(isTimeZoneName, 'Timezone must be a time zone name such as Europe/Paris.')
     .optional(),
   locale: z
     .string()
@@ -266,6 +303,7 @@ export const updateTenantSettingsSchema = z.object({
     .min(1, 'Must not be empty.')
     .max(MAX_TENANT_LOCALE_LENGTH, `Locale must be at most ${MAX_TENANT_LOCALE_LENGTH} characters.`)
     .refine(safeText(), 'Locale contains characters that are not allowed')
+    .refine(isLocaleTag, 'Locale must be a language tag such as en or en-US.')
     .optional(),
   metadata: z
     .record(z.string(), z.unknown())
