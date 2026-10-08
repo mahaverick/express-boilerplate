@@ -1015,7 +1015,9 @@ every API and worker process: in-memory snapshot (reload on message, 60 s backst
 - **Snapshot**: each API and worker process starts its store at boot when
   flags are configured. Only the first reload is awaited; the Redis
   subscriber connects in the background, so a slow Redis never holds boot,
-  and the 60 s backstop reloads (and retries the subscription) meanwhile. A
+  and the 60 s backstop reloads (and retries the subscription) meanwhile.
+  The subscriber's handshake is bounded by `REDIS_CONNECT_TIMEOUT_MS` (5 s),
+  and `stop()` waits at most 1 s for one still connecting. A
   stored snapshot that can't be read at boot is treated as none, and the
   process answers fallbacks until a good one arrives; a later failed reload,
   or a read checked earlier than the copy in memory, keeps that copy. The snapshot stores a
@@ -1052,8 +1054,12 @@ every API and worker process: in-memory snapshot (reload on message, 60 s backst
   flag's aggregation, or a group property with no `group_type_index`; both
   are `group_type`), scope or kind drift against the registry,
   device-id bucketing, evaluation contexts, an unknown `filters` key, an
-  unknown property type or operator, a negated property, or a definition
-  that fails the schema) is marked unsupported and never evaluated.
+  unknown property type or operator, a negated property, a condition or
+  property key it does not know (`unknown_field`), or a definition that
+  fails the schema) is marked unsupported and never evaluated. Unknown keys
+  fail closed: the only ones let through are the display-only keys PostHog
+  writes, `sort_key` and `description` on a condition and `label`,
+  `cohort_name` and `group_key_names` on a property.
 - **Route gates** (`requireFlag`, `flag.middleware.ts`) mount after
   `requireAuth`, after `resolveTenant()` for a tenant-scoped flag, and
   before validators. A closed gate answers the unknown-route 404.
