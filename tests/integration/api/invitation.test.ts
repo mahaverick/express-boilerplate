@@ -33,6 +33,7 @@ import { hashToken, signAccessToken } from '@/services/session.service'
 import { hashRateLimitIdentity } from '@/utilities/rate-limit-key.utilities'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { backdateInvitationSend } from '../../helpers/backdate'
+import { withMutatedMethod } from '../../helpers/mutate'
 import { platformTenant } from '../../helpers/platform-staff'
 import {
   createTrackedStaff,
@@ -678,6 +679,42 @@ describe('invitations API', () => {
       const resent = await resendVia(tenant.slug, ownerToken, pending?.id ?? '')
 
       expect(resent.status).toBe(202)
+    })
+
+    it('refuses a resend whose invitation was sent again between the cooldown check and the token swap', async () => {
+      const { ownerToken, tenant } = await setup()
+      const invitee = uniqueEmail()
+      await inviteVia(tenant.slug, ownerToken, { email: invitee, role: 'viewer' })
+      const { token: rawToken } = await waitForInvitationEmail(invitee)
+      const [pending] = await invitationRepository.listPending(tenant.id)
+      const invitationId = pending?.id ?? ''
+      await backdateInvitationSend(invitationId)
+      // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
+      const realFind = TenantInvitationRepository.prototype.findPendingById
+      // A concurrent resend lands after this read: its send stamp is newer than the one read here.
+      const findThenRace: TenantInvitationRepository['findPendingById'] = async function (
+        this: TenantInvitationRepository,
+        ...arguments_
+      ) {
+        const found = await realFind.apply(this, arguments_)
+        await sql`update tenant_invitations set last_sent_at = clock_timestamp() where id = ${invitationId}`
+        return found
+      }
+
+      let resent: Response | undefined
+      await withMutatedMethod(
+        TenantInvitationRepository.prototype,
+        'findPendingById',
+        findThenRace,
+        async () => {
+          resent = await resendVia(tenant.slug, ownerToken, invitationId)
+        }
+      )
+
+      expect(resent?.status).toBe(429)
+      expect(resent?.body).toMatchObject({ code: 'invitation_resend_cooldown' })
+      const stillValid = await previewVia(rawToken)
+      expect(stillValid.status).toBe(200)
     })
 
     it('refuses the eleventh invitation to one address within a day 429 RATE_LIMITED, whoever sends it', async () => {

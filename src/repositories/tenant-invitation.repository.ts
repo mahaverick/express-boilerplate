@@ -3,7 +3,7 @@
  * the table has no `deletedAt`. Lookups by token join `tenants` and exclude a
  * soft-deleted tenant.
  */
-import { and, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm'
+import { and, desc, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm'
 import type { MembershipRole, TenantLifecycleState } from '@/constants/tenant.constants'
 import {
   tenantInvitationModel,
@@ -36,6 +36,19 @@ const NO_INVITER = null
  */
 export function pendingCondition() {
   return and(isNull(invitation.acceptedAt), isNull(invitation.revokedAt))
+}
+
+/**
+ * The row was never mailed, or was last mailed at least `cooldownMs` ago, by
+ * the database clock.
+ * @param cooldownMs - The resend cooldown in milliseconds.
+ * @returns The SQL condition.
+ */
+function cooldownOverCondition(cooldownMs: number) {
+  return or(
+    isNull(invitation.lastSentAt),
+    sql`${invitation.lastSentAt} <= now() - make_interval(secs => ${cooldownMs / 1000}::double precision)`
+  )
 }
 
 /**
@@ -341,23 +354,37 @@ export class TenantInvitationRepository {
 
   /**
    * Give a pending invitation a new token and expiry, stamped as mailed now.
-   * The old token stops resolving at once.
+   * The old token stops resolving at once. With `cooldownMs`, a row mailed
+   * within that long of the database's `now()` is left alone, so of two
+   * resends that both passed a cooldown check on an earlier read, the
+   * second one, blocked on the first's row lock, re-reads the new stamp
+   * and updates nothing.
    * @param id - The invitation id.
    * @param tokenHash - SHA-256 hex of the new raw token.
    * @param expiresAt - The new expiry.
    * @param executor - Where to run the query. Defaults to the pool.
-   * @returns The updated row, or undefined when the invitation is not pending.
+   * @param options - Update choices.
+   * @param options.cooldownMs - Skip a row whose `last_sent_at` is newer than this many milliseconds ago.
+   * @returns The updated row, or undefined when the invitation is not pending or is inside the cooldown.
    */
   async replaceToken(
     id: string,
     tokenHash: string,
     expiresAt: Date,
-    executor: DbExecutor = db
+    executor: DbExecutor = db,
+    options: { cooldownMs?: number } = {}
   ): Promise<TenantInvitation | undefined> {
+    const { cooldownMs } = options
     const [row] = await executor
       .update(invitation)
       .set({ tokenHash, expiresAt, lastSentAt: sql`now()`, updatedAt: sql`now()` })
-      .where(and(eq(invitation.id, id), pendingCondition()))
+      .where(
+        and(
+          eq(invitation.id, id),
+          pendingCondition(),
+          cooldownMs === undefined ? undefined : cooldownOverCondition(cooldownMs)
+        )
+      )
       .returning()
     return row
   }

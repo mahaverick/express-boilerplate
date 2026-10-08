@@ -585,14 +585,27 @@ export async function resend(
       throw new HttpError(GRANT_REFUSED_MESSAGE, 403)
     }
     // A staff resend (audited, with a reason) skips the cooldown.
-    if (options.resentFromId === undefined) assertResendCooldownOver(pending)
+    const hasCooldown = options.resentFromId === undefined
+    if (hasCooldown) assertResendCooldownOver(pending)
+    // The swap re-checks the cooldown: the read above took no row lock, so a concurrent resend may have landed since.
     const updated = await invitationRepository.replaceToken(
       pending.id,
       hashToken(rawToken),
       invitationExpiry(),
-      tx
+      tx,
+      hasCooldown ? { cooldownMs: requireDurationMs(getEnv().INVITATION_RESEND_COOLDOWN) } : {}
     )
-    if (!updated) throw invitationNotFound()
+    if (!updated) {
+      const stillPending = await invitationRepository.findPendingById(tenantId, invitationId, tx)
+      if (hasCooldown && stillPending) {
+        throw new HttpError(
+          INVITATION_RESEND_COOLDOWN_MESSAGE,
+          429,
+          INVITATION_RESEND_COOLDOWN_CODE
+        )
+      }
+      throw invitationNotFound()
+    }
     // After the token swap, so a refusal rolls it back and the mailed link keeps working.
     await assertRecipientBudget(updated.email, tenantId)
     await record(
