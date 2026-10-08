@@ -1023,5 +1023,15 @@
     "rule": "kv",
     "input": "{ cookie: 'theme=\"dark\"; sid2=zqS4abc' }",
     "expected": "{ cookie: '[redacted]' }"
+  },
+  {
+    "rule": "kv",
+    "input": "Unexpected response: 502 Bad Gateway",
+    "expected": "Unexpected response: 502 Bad Gateway"
+  },
+  {
+    "rule": "kv",
+    "input": "response=\"abc123\"",
+    "expected": "response=\"[redacted]\""
   }
 ]
