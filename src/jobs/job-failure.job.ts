@@ -124,7 +124,9 @@ export function reportFinalJobFailure(
 
 /**
  * A copy of a job's data in which every key ending in `Url` or `Token`, and
- * every address (`to`, `cc`, `bcc`, `replyTo`, `recipient`), at any depth, is `'[redacted]'`.
+ * every address key (`to`, `cc`, `bcc`, `replyTo`, `reply_to`, `recipient`,
+ * `recipients`, in any letter case), whatever its value's type, at any depth,
+ * is `'[redacted]'`.
  * @param data - The job's data.
  * @returns The scrubbed copy; the argument is not changed.
  */
