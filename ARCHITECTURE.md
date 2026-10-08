@@ -1435,7 +1435,11 @@ to its trace, and a trace to its logs.
 **Slack.** With `SLACK_WEBHOOK_URL` set, records at or above `SLACK_LOG_LEVEL`
 also go to Slack. The destination deduplicates by `${source}:${message}`: the
 first occurrence sends at once, repeats within 60 seconds are counted, and one
-summary is sent when the window closes if any were suppressed.
+summary is sent when the window closes if any were suppressed. The message,
+source, request id and stack it sends are scrubbed with `scrubText`, a
+stack's frame lines one by one so their paths stay readable; the time is
+sent only as an ISO instant; and a record whose scrub fails is replaced by a
+fixed notice.
 
 ## Local infrastructure
 
