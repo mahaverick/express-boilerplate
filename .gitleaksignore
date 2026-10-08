@@ -11,3 +11,7 @@ ba79a054262073ed589918914b584995db1fccb7:.gitleaksignore:generic-api-key:4
 # 197aa06: a made-up base64url string in the EMAIL_DETAIL_PATTERN test that the
 # detail CHECK must refuse; never a credential.
 197aa0643627ca89af6cb34cd37d4fbf14f61cda:tests/unit/constants/email.constants.test.ts:generic-api-key:92
+# 382ab65: a README sample login response whose accessToken was shortened to a
+# JWT header prefix and an ellipsis (no payload, no signature); the README no
+# longer carries it. Documentation placeholder, never a credential.
+382ab65dda493a1f0b524589bef49fc8e3da459c:README.md:generic-api-key:85
