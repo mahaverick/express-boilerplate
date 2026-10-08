@@ -35,7 +35,11 @@ deliberately opposite on every axis:
   accepted after a Redis flush can be identified in logs). They are
   stateless — verification never touches the database — and are sent as
   `Authorization: Bearer <token>`, checked by `requireAuth`
-  (`src/middlewares/auth.middleware.ts`) on every protected route.
+  (`src/middlewares/auth.middleware.ts`) on every protected route. A
+  revoked session's tokens are refused through the Redis session denylist,
+  whose read fails open on a Redis outage or stall; see
+  [Rate limiting](#rate-limiting-one-store-prefix-per-limiter) for the exact
+  cost.
   `requireAuth` also reloads the user by id on every request rather than
   trusting the token's claims alone, so disabling or soft-deleting an account
   invalidates every access token already issued to it, immediately, instead
@@ -284,7 +288,8 @@ Two effects are accepted:
   that write fails, the request still succeeds: the password is changed and
   the refresh tokens are revoked. One `error` line
   (`session denylist write failed after revocation`, for a reset too, for
-  `revoke-others`, and for a staff deactivation, sign-out or deletion)
+  a Google account claim, for `revoke-others`, and for a staff deactivation,
+  sign-out or deletion)
   records the user id and the number of sessions not denied. The revoked
   sessions' access tokens then stay valid until they expire
   (`ACCESS_TOKEN_TTL`, 15 minutes by default). That is the same exposure as
@@ -1248,7 +1253,7 @@ query`: the SQL text is never sent. A thrown object that is not an `Error`
   vendor tokens with no rule (`ya29.`, `glpat-`, `hf_`, Google `1//` refresh
   tokens); a host named like a package ref after `@` (`jane@main`, `jane@npm:`,
   `jane@workspace:`); the domain of an email whose local part is a JWT
-  (`[jwt]@example.com`); and the part before the last `/` of a run joined to
+  (`[jwt]@example.com`); the part before the last `/` of a run joined to
   an email address's local part when the run, with the local part's leading
   base64 characters, is under 40 characters or reads as a path rather than
   base64 (the base64 run rule's test), counting stopped by a `%2F`

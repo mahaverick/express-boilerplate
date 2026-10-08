@@ -988,8 +988,9 @@ tracking, flags, the maintenance queue states and pending-notice check) is bound
 reports when Redis fails, and one `warn`. The bound covers the handler
 only. A request reaches it after `requireAuth`'s session denylist read and
 the route's rate limiter, which have the shorter request-path deadline
-(see [Data layer](#data-layer)), so a stalled Redis costs this page at most
-that deadline before them.
+(see [Data layer](#data-layer)), so a stalled Redis costs this page about
+one 300 ms deadline before the handler runs (one per Redis call while the
+first connect is still in flight).
 
 What an event may carry, and what it never does, is in
 [SECURITY.md](SECURITY.md#error-tracking-what-reaches-posthog).
@@ -1334,14 +1335,17 @@ fails, and for the next `REDIS_STALL_COOLDOWN_MS` (5 s) every such call
 fails at once without asking Redis, then the next call tries again. A failure
 takes the caller's existing outage path (fail open, memory, or
 `next(error)`), so a stall is handled as an outage. One `warn` marks each
-cooldown and one `info` the first success after it. The verdict waits one
+cooldown (`Redis did not answer in 300 ms; request-path Redis calls fail at
+once for 5000 ms`) and one `info` the first success after it; a connect that
+runs out of time throws `Redis did not finish connecting in 5000 ms`. The verdict waits one
 turn of the event loop after the timer, so a reply already in the socket
 buffer when a blocked process wakes still wins. A write whose loss would widen
 access (the session deny, the dedupe and audit-throttle key releases, the
 maintenance-mode change publish) goes through `waitForRedisWrite` instead: it
 is always sent, cooldown or not, the request waits for it at most the
 deadline, and one still in flight then lands when Redis answers on the same
-connection (one `warn` marks it; if the connection drops first the write is
+connection (one `warn`, `Redis write not answered in time; it lands when
+Redis answers`, marks it; if the connection drops first the write is
 lost and its failure logged). The readiness check has its own bound
 (`waitForRedisProbe`, see [Health checks](#health-checks)). Workers, BullMQ,
 pub/sub, background publishes and counters, and the status reads (bounded

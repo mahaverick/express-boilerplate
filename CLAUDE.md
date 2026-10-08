@@ -100,7 +100,8 @@ rather than repeating them.
   (`redis-deadline.service.ts`), with `getRedis()` inside the operation and
   the call inside the caller's existing `try`/`catch`: node-redis never times
   out a written command, so a stalled Redis would hold the request. The
-  helper rejects after 300 ms and fails such calls at once for 5 s, so the
+  helper rejects after 300 ms and fails such calls at once for 5 s (not
+  while the first connect is still in flight: `trackRedisConnect`), so the
   stall takes the caller's outage path. **A write whose loss would widen
   access** (a session deny, a throttle or dedupe key's release, a
   maintenance-mode publish) **uses `waitForRedisWrite` instead:** it is never
