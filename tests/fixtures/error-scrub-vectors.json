@@ -172,7 +172,7 @@
   {
     "rule": "kv",
     "input": "login failed password=hunter2 for user",
-    "expected": "login failed password=[redacted] for user"
+    "expected": "login failed password=[redacted]"
   },
   {
     "rule": "kv",
@@ -182,7 +182,7 @@
   {
     "rule": "kv",
     "input": "api_key: xyz789 rejected",
-    "expected": "api_key: [redacted] rejected"
+    "expected": "api_key: [redacted]"
   },
   {
     "rule": "kv",
@@ -207,12 +207,12 @@
   {
     "rule": "kv",
     "input": "Cookie: session=s%3AAbC123xyzShort.sig; theme=dark",
-    "expected": "Cookie: [redacted]; theme=dark"
+    "expected": "Cookie: [redacted]"
   },
   {
     "rule": "kv",
     "input": "Set-Cookie: refresh_token=r_8sk2Lq; HttpOnly",
-    "expected": "Set-Cookie: [redacted]; HttpOnly"
+    "expected": "Set-Cookie: [redacted]"
   },
   {
     "rule": "basic",
@@ -953,5 +953,35 @@
     "rule": "basic",
     "input": "Basic Credential=abcdefgh",
     "expected": "Basic Credential=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "Cookie: theme=dark; app_rt=zqS4Zx9Kq2Lm8",
+    "expected": "Cookie: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "cookie: a=1; b=2; c=zqS4bLm8",
+    "expected": "cookie: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "password: zqS6correct horse zqS6battery staple",
+    "expected": "password: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "secret=zqS6alpha zqS6beta",
+    "expected": "secret=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "{password: zqS6correct horse, id: 5}",
+    "expected": "{password: [redacted], id: 5}"
+  },
+  {
+    "rule": "kv",
+    "input": "password%3Dhunter2 horse",
+    "expected": "password%3D[redacted] horse"
   }
 ]

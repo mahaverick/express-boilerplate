@@ -193,21 +193,30 @@ const KEPT_VALUE = [
 const ARRAY_VALUE = String.raw`\[[^\]\n]*\]`
 
 /**
+ * An unquoted value. After a plain `:` or `=` it runs to the next field
+ * delimiter (`,` `;` `&` `}` `)` `]`, a quote or the end of the line), so a
+ * multi-word passphrase goes whole; trailing spaces are kept. After an
+ * encoded separator (`%3D`) it stops at whitespace too.
+ */
+const UNQUOTED_VALUE = String.raw`(?<=[:=]\s*)[^\s"'\\,;&})\]](?:[^\n"'\\,;&})\]]*[^\s"'\\,;&})\]])?|[^\s"'\\,;&})\]]+`
+
+/**
  * A quoted value: inside an escaped quote, up to the next escaped quote;
  * inside a plain quote, up to the closing one, escaped quotes included.
  */
 const QUOTED_VALUE = String.raw`(?<=\\")(?:(?!\\")[^\n])+|(?<=["'])(?:[^"'\\\n]|\\.)+`
 
 /**
- * An Authorization-valued key (`authorization`, `auth`, `Proxy-Authorization`)
- * and its whole value. The key, its separator and a known scheme word are
- * kept (`Authorization: Digest [redacted]`). A quoted value is replaced to
- * its closing quote; an unquoted one to the end of the line, so every
- * parameter of a multi-parameter scheme (Digest, OAuth, AWS) and the whole
- * credential of an unknown scheme go.
+ * A header-valued key, Authorization (`authorization`, `auth`,
+ * `Proxy-Authorization`) or Cookie (`cookie`, `Set-Cookie`), and its whole
+ * value. The key, its separator and a known scheme word are kept
+ * (`Authorization: Digest [redacted]`). A quoted value is replaced to its
+ * closing quote; an unquoted one to the end of the line, so every parameter
+ * of a multi-parameter scheme (Digest, OAuth, AWS), the whole credential of
+ * an unknown scheme and every pair of a cookie list go.
  */
 const AUTH_HEADER_PATTERN = new RegExp(
-  String.raw`\b([\w-]*?(?:authorization|auth)${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?(?:${AUTH_SCHEMES}[ \t]+)?)` +
+  String.raw`\b([\w-]*?(?:authorization|auth|cookies?)${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?(?:${AUTH_SCHEMES}[ \t]+)?)` +
     String.raw`(?!${AUTH_SCHEMES}[ \t]+${PLACEHOLDER})${KEPT_VALUE}` +
     String.raw`(?:${QUOTED_VALUE}|(?<=["'][ \t]*${AUTH_SCHEMES}[ \t]+)(?=\S)(?:[^"'\\\n]|\\.)+|[^\s"'\\][^\n]*)`,
   'gi'
@@ -215,17 +224,18 @@ const AUTH_HEADER_PATTERN = new RegExp(
 
 /**
  * A secret-named key, singular or plural, and its value: `password=...`,
- * `"tokens":"..."`, `api_key: ...`, `Cookie: ...`, `sig=...`, `nonce=...`,
+ * `"tokens":"..."`, `api_key: ...`, `sig=...`, `nonce=...`,
  * `response="..."`, `password%3D...`. The key and its separator are kept.
  * The value is a quoted string (spaces and escaped quotes included, also
- * inside a JSON string), an array to its `]`, or a run up to a delimiter. A value
+ * inside a JSON string), an array to its `]`, or an unquoted run
+ * (`UNQUOTED_VALUE`). A value
  * already replaced by this scrubber (`[redacted]`, `[token]`...) and the
  * bare words `undefined`, `null`, `missing`, `true` and `false` are left as
  * they are (`KEPT_VALUE`), so `token: undefined` stays readable.
  */
 const KV_SECRET_PATTERN = new RegExp(
-  String.raw`\b([\w-]*?(?:pass(?:word|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|consumer[_-]?key|session|sid|cookie|credential|signature|sig|hmac|nonce|response|jwt|otp)s?${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?)` +
-    String.raw`${KEPT_VALUE}(?:${QUOTED_VALUE}|${ARRAY_VALUE}|[^\s"'\\,;&})\]]+)`,
+  String.raw`\b([\w-]*?(?:pass(?:word|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|consumer[_-]?key|session|sid|credential|signature|sig|hmac|nonce|response|jwt|otp)s?${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?)` +
+    `${KEPT_VALUE}(?:${QUOTED_VALUE}|${ARRAY_VALUE}|${UNQUOTED_VALUE})`,
   'gi'
 )
 
@@ -372,11 +382,12 @@ function capped(value: string, wasCut: boolean): string {
  * (`isHarmlessFragment`), `#[fragment]`; the segment after `/reset/`,
  * `/verify/`, `/invite/` or `/accept/` becomes `[token]`; `Bearer <credential>` becomes
  * `Bearer [token]`; `Basic <base64>` becomes `Basic [token]`, the scheme's case kept; an
- * Authorization-valued key's value (`authorization`, `auth`), after any
- * known scheme word, to its closing quote or the end of the line, and the
+ * Authorization- or Cookie-valued key's value (`authorization`, `auth`,
+ * `cookie`, `set-cookie`), after any known scheme word, to its closing
+ * quote or the end of the line, and the
  * value, an array included, of a secret-named key, singular or plural
  * (`password`, `token`, `secret`, `api_key`, `access_key`, `private_key`,
- * `consumer_key`, `session`, `sid`, `cookie`, `credential`, `jwt`, `otp`,
+ * `consumer_key`, `session`, `sid`, `credential`, `jwt`, `otp`,
  * `signature`, `sig`, `hmac`, `nonce`, `response`), become `[redacted]`; a JWT becomes `[jwt]`; a
  * PostHog key (`phc_`, `phx_`, `phs_`) becomes `[posthog-key]`; an email
  * address (`EMAIL_PATTERN`: `@` written plainly, encoded or fullwidth, a
@@ -386,7 +397,7 @@ function capped(value: string, wasCut: boolean): string {
  * PostHog key glued to it is replaced after it; a secret-looking run of 40
  * or more base64 characters (`isSecretRun`) becomes `[secret]`; and the result is cut to 1024
  * characters, ending in `…[truncated]`. A key-named word is replaced even in
- * prose (`Missing token: please log in` becomes `Missing token: [redacted] log in`): the
+ * prose (`Missing token: please log in` becomes `Missing token: [redacted]`): the
  * rule trades some readable text for never leaking a value. Applying it
  * twice gives the same text as applying it once.
  * @param value - The text: an exception's type or value, or a frame's filename or function.
