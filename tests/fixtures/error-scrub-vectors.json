@@ -1658,5 +1658,20 @@
     "rule": "kv",
     "input": "spin_code: 7, error_code: 'E42', status_code: 500",
     "expected": "spin_code: 7, error_code: 'E42', status_code: 500"
+  },
+  {
+    "rule": "kv",
+    "input": "x-auth-token: Bearer zqS4Zx9Kq2Lm8",
+    "expected": "x-auth-token: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "token: Bearer zqS4Zx9Kq2Lm8 zqS5extra",
+    "expected": "token: [redacted]"
+  },
+  {
+    "rule": "bearer",
+    "input": "Authorization: Bearer zqS4Zx9Kq2Lm8, retrying",
+    "expected": "Authorization: Bearer [token], retrying"
   }
 ]

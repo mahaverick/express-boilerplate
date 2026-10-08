@@ -196,6 +196,13 @@ const KEPT_VALUE = [
 ].join('')
 
 /**
+ * A scheme word and the placeholder an earlier rule wrote for its
+ * credential (`Bearer [token]`), with anything else up to the next field
+ * delimiter, so a secret key holding it is replaced whole.
+ */
+const SCHEMED_PLACEHOLDER_VALUE = String.raw`${AUTH_SCHEMES}[ \t]+${PLACEHOLDER}(?:[^\n"'\\,;&})\]]*[^\s"'\\,;&})\]])?`
+
+/**
  * An array value, to its first `]` on the line (`["hunter2", "x"]`).
  */
 const ARRAY_VALUE = String.raw`\[[^\]\n]*\]`
@@ -259,7 +266,9 @@ const AUTH_HEADER_PATTERN = new RegExp(
  * response: 502`) only when `response` stands alone; a prefixed one
  * (`mfa_response`, `SAMLResponse`) is always a key. The key and its separator are kept.
  * The value is a quoted string (spaces and escaped quotes included, also
- * inside a JSON string), an array to its `]`, or an unquoted run
+ * inside a JSON string), an array to its `]`, a scheme word with the
+ * placeholder the Bearer or Basic rule wrote (`Bearer [token]`, replaced
+ * whole), or an unquoted run
  * (`UNQUOTED_VALUE`). A value
  * already replaced by this scrubber (`[redacted]`, `[token]`...) and the
  * bare words `undefined`, `null`, `missing`, `true` and `false` are left as
@@ -267,7 +276,7 @@ const AUTH_HEADER_PATTERN = new RegExp(
  */
 const KV_SECRET_PATTERN = new RegExp(
   String.raw`(?:\b|(?<=%26|%3F))((?:[\w-]*?(?:pass(?:[_-]?(?:word|phrase|code|key)|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|(?:secret|private|consumer|signing|encryption|master|client)[_-]?key|auth(?:orization)?[_-]code|session|sid|credential|signature|sig|hmac|nonce|(?<=[\w-])response|response(?=s?${KEY_QUOTE}?\s*(?:=|%3D|&#61;|\\u003d|:\s*${KEY_QUOTE}))|(?<![A-Za-z\d])pin(?:[_-]?(?:code|number))?|(?:otp|mfa|verification|recovery|backup)[_-]?code|(?<![A-Za-z\d])(?<!(?:primary|foreign|sort|partition|cache|unique|index|s3)[_-])key(?=s?\s*(?:=(?!>)|%3D|&#61;|\\u003d))|jwt|otp)s?|code(?<=(?:[?&]|&amp;|%26|%3F)code)|code(?<=(?:oauth|authoriz(?:ation|e)(?![a-z]))[^\n]*code)|code(?=\s*=[^\s&]*&)|code(?=[^\n{}]*(?:oauth|authoriz(?:ation|e)(?![a-z]))))${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?)` +
-    `${KEPT_VALUE}(?:${QUOTED_VALUE}|${ARRAY_VALUE}|${UNQUOTED_VALUE})`,
+    `${KEPT_VALUE}(?:${QUOTED_VALUE}|${ARRAY_VALUE}|${SCHEMED_PLACEHOLDER_VALUE}|${UNQUOTED_VALUE})`,
   'gi'
 )
 
