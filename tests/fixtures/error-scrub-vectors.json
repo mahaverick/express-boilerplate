@@ -1338,5 +1338,45 @@
     "rule": "kv",
     "input": "token=\\u0027zqX4hunter2\\u0027",
     "expected": "token=\\u0027[redacted]\\u0027"
+  },
+  {
+    "rule": "kv",
+    "input": "code=zqX5abc123&state=x",
+    "expected": "code=[redacted]&state=x"
+  },
+  {
+    "rule": "kv",
+    "input": "code=zqX6abc123&grant_type=authorization_code",
+    "expected": "code=[redacted]&grant_type=authorization_code"
+  },
+  {
+    "rule": "kv",
+    "input": "{\"code\":\"zqX7abc123\",\"grant_type\":\"authorization_code\"}",
+    "expected": "{\"code\":\"[redacted]\",\"grant_type\":\"authorization_code\"}"
+  },
+  {
+    "rule": "kv",
+    "input": "Error exchanging code=zqX8abc123 for OAuth token",
+    "expected": "Error exchanging code=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "Unauthorized: error code=E401",
+    "expected": "Unauthorized: error code=E401"
+  },
+  {
+    "rule": "kv",
+    "input": "403 Not authorized, code: 'ERR_FORBIDDEN'",
+    "expected": "403 Not authorized, code: 'ERR_FORBIDDEN'"
+  },
+  {
+    "rule": "kv",
+    "input": "status code: 404",
+    "expected": "status code: 404"
+  },
+  {
+    "rule": "kv",
+    "input": "{ code: 'ECONNREFUSED', headers: { authorization: 'x' } }",
+    "expected": "{ code: 'ECONNREFUSED', headers: { authorization: '[redacted]' } }"
   }
 ]

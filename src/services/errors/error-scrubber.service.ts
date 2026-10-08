@@ -243,8 +243,9 @@ const AUTH_HEADER_PATTERN = new RegExp(
  * `"tokens":"..."`, `api_key: ...`, `sig=...`, `nonce=...`,
  * `response="..."`, `SAMLResponse=...`, `password%3D...`. `pin` is a secret key only
  * as a whole word or after `_` or `-` (`user_pin`, never `spin`). `code` is one
- * only after `?` or `&`, or later on a line that names OAuth or
- * authorization (an authorization code), so `code: 'ECONNREFUSED'` stays;
+ * only after `?` or `&`, first in a form body (`code=…&`), on a line that
+ * names OAuth or authorization before it, or with that word later in the same
+ * query or JSON object (an authorization code), so `code: 'ECONNREFUSED'` stays;
  * `key` only as a whole word before `=`. A `response` key
  * (any prefix) is a key after `=`, `=>` or `%3D`, or after `:` or `=>` with a
  * quoted value; after `:` and an unquoted value it is prose (`Unexpected
@@ -258,7 +259,7 @@ const AUTH_HEADER_PATTERN = new RegExp(
  * they are (`KEPT_VALUE`), so `token: undefined` stays readable.
  */
 const KV_SECRET_PATTERN = new RegExp(
-  String.raw`\b((?:[\w-]*?(?:pass(?:word|wd|phrase|code)?|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|consumer[_-]?key|auth(?:orization)?[_-]code|session|sid|credential|signature|sig|hmac|nonce|(?<=[\w-])response|response(?=s?${KEY_QUOTE}?\s*(?:=|%3D|:\s*${KEY_QUOTE}))|(?<![A-Za-z\d])pin|jwt|otp)s?|code(?<=[?&]code)|code(?<=(?:oauth|authoriz)[^\n]*code)|key(?=\s*=(?!>)))${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?)` +
+  String.raw`\b((?:[\w-]*?(?:pass(?:word|wd|phrase|code)?|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|consumer[_-]?key|auth(?:orization)?[_-]code|session|sid|credential|signature|sig|hmac|nonce|(?<=[\w-])response|response(?=s?${KEY_QUOTE}?\s*(?:=|%3D|:\s*${KEY_QUOTE}))|(?<![A-Za-z\d])pin|jwt|otp)s?|code(?<=[?&]code)|code(?<=(?:oauth|authorization(?![a-z]))[^\n]*code)|code(?=\s*=[^\s&]*&)|code(?=[^\n{}]*(?:oauth|authorization(?![a-z])))|key(?=\s*=(?!>)))${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?)` +
     `${KEPT_VALUE}(?:${QUOTED_VALUE}|${ARRAY_VALUE}|${UNQUOTED_VALUE})`,
   'gi'
 )
