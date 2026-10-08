@@ -1673,5 +1673,10 @@
     "rule": "bearer",
     "input": "Authorization: Bearer zqS4Zx9Kq2Lm8, retrying",
     "expected": "Authorization: Bearer [token], retrying"
+  },
+  {
+    "rule": "kv",
+    "input": "data=%7B%22password%22%3A%20%22zqS4Zx9Kq2Lm8%22%7D",
+    "expected": "data=%7B%22password%22%3A[redacted]"
   }
 ]
