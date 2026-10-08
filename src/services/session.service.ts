@@ -620,6 +620,16 @@ export async function denySessionsAfterCommit(userId: string, sessionIds: string
 }
 
 /**
+ * The earliest start a session can have and still rotate: `SESSION_ABSOLUTE_TTL`
+ * before now, as `continueSession` judges it. A session that started at or
+ * before it is past its absolute lifetime, so no rotation would succeed.
+ * @returns The cutoff, by the application clock.
+ */
+function absoluteLifetimeCutoff(): Date {
+  return new Date(Date.now() - requireDurationMs(getEnv().SESSION_ABSOLUTE_TTL))
+}
+
+/**
  * Sign a user out of every session but the one making the request: revoke
  * their other sessions' token rows (and any reset or verification token)
  * under the user row lock, then deny each revoked session's access tokens
@@ -627,7 +637,7 @@ export async function denySessionsAfterCommit(userId: string, sessionIds: string
  * next heartbeat (`denySessionsAfterCommit`). Emits `other_sessions_revoked`.
  * @param userId - The authenticated caller.
  * @param sessionId - The calling session (the token's `sid`), which is spared; undefined for a token without one.
- * @returns How many other sessions were signed in (held an unrevoked, unexpired refresh token) and are now revoked; a lapsed session is revoked but not counted.
+ * @returns How many other sessions were signed in (held an unrevoked, unexpired refresh token, within SESSION_ABSOLUTE_TTL) and are now revoked; a lapsed session is revoked but not counted.
  * @throws {HttpError} 401 with ACCESS_TOKEN_EXPIRED_CODE for a token without `sid`, or an account gone or inactive.
  */
 export async function revokeOtherSessions(
@@ -642,7 +652,12 @@ export async function revokeOtherSessions(
     if (!locked?.active) {
       throw new HttpError('Account no longer exists or is inactive', 401, ACCESS_TOKEN_EXPIRED_CODE)
     }
-    const liveSessionIds = await userTokenRepository.liveSessionIdsExcept(userId, sessionId, tx)
+    const liveSessionIds = await userTokenRepository.liveSessionIdsExcept(
+      userId,
+      sessionId,
+      absoluteLifetimeCutoff(),
+      tx
+    )
     const revokedSessionIds = await revokeSessionRows(userId, { exceptSessionId: sessionId }, tx)
     return { revoked: revokedSessionIds, live: new Set(liveSessionIds) }
   })
@@ -686,12 +701,10 @@ export function markSessionReauthenticated(
   const mark = async (transaction: DbTransaction): Promise<Date> => {
     const user = await userRepository.lockById(userId, 'no key update', transaction)
     if (!user?.active) throw new HttpError('Session ended', 401, ACCESS_TOKEN_EXPIRED_CODE)
-    // The absolute lifetime, as continueSession judges it: past it, no rotation would succeed either.
-    const startedAfter = new Date(Date.now() - requireDurationMs(getEnv().SESSION_ABSOLUTE_TTL))
     const authenticatedAt = await userTokenRepository.markSessionAuthenticated(
       userId,
       sessionId,
-      startedAfter,
+      absoluteLifetimeCutoff(),
       transaction
     )
     if (!authenticatedAt) throw new HttpError('Session ended', 401, ACCESS_TOKEN_EXPIRED_CODE)

@@ -284,18 +284,21 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
 
   /**
    * The sessions of a user, other than one, that hold a live refresh token:
-   * unrevoked (a rotation's claim revokes the row it spends) and unexpired.
+   * unrevoked (a rotation's claim revokes the row it spends), unexpired, and
+   * started after `startedAfter`, the absolute lifetime rotation enforces.
    * Read under the user row lock, it is the set a following
    * `revokeAllForUserExceptSession` ends that a person would call signed in;
    * a lapsed session it also revokes is not among them.
    * @param userId - The user whose sessions are read.
    * @param sessionId - The one session id to leave out.
+   * @param startedAfter - A live session must have started after this, by the application clock: the caller's `SESSION_ABSOLUTE_TTL` bound.
    * @param executor - Where to run the query. Defaults to the pool.
    * @returns The distinct live session ids, never the excluded one.
    */
   async liveSessionIdsExcept(
     userId: string,
     sessionId: string,
+    startedAfter: Date,
     executor: DbExecutor = db
   ): Promise<string[]> {
     const rows = await executor
@@ -303,7 +306,7 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
       .from(userTokenModel)
       .where(
         this.scope(
-          sql`${userTokenModel.userId} = ${userId} and ${userTokenModel.purpose} = 'refresh' and ${userTokenModel.sessionId} is distinct from ${sessionId} and ${userTokenModel.revokedAt} is null and ${userTokenModel.expiresAt} > now()`
+          sql`${userTokenModel.userId} = ${userId} and ${userTokenModel.purpose} = 'refresh' and ${userTokenModel.sessionId} is distinct from ${sessionId} and ${userTokenModel.revokedAt} is null and ${userTokenModel.expiresAt} > now() and ${userTokenModel.sessionStartedAt} > ${startedAfter.toISOString()}::timestamptz`
         )
       )
     return rows

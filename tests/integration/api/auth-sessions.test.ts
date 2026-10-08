@@ -123,6 +123,27 @@ describe('POST /api/v1/auth/sessions/revoke-others', () => {
     expect(lapsedRows[0]?.revoked_at).not.toBeNull()
   })
 
+  it('revokes a session past its absolute lifetime without counting it', async () => {
+    const user = await createTrackedUser()
+    const current = await sessionFor(user)
+    const live = await sessionFor(user)
+    const aged = await sessionFor(user)
+    // Unexpired and unrevoked, but started before SESSION_ABSOLUTE_TTL: rotation refuses it, so it is not signed in.
+    await sql`update user_tokens set session_started_at = now() - interval '400 days' where session_id = ${aged.refresh.sessionId}`
+
+    const response = await revokeOthers(current.bearer)
+
+    expect(response.status).toBe(200)
+    expect(response.body).toMatchObject({ data: { revoked: 1 } })
+    expect(await isSessionDenied(live.refresh.sessionId)).toBe(true)
+    expect(await isSessionDenied(aged.refresh.sessionId)).toBe(true)
+    const agedRows = await sql<{ revoked_at: string | null }[]>`
+      select revoked_at from user_tokens where session_id = ${aged.refresh.sessionId}
+    `
+    expect(agedRows).toHaveLength(1)
+    expect(agedRows[0]?.revoked_at).not.toBeNull()
+  })
+
   it('leaves another user’s sessions alone', async () => {
     const user = await createTrackedUser()
     const bystander = await createTrackedUser()
