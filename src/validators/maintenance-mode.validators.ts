@@ -39,13 +39,14 @@ function maintenanceText(field: string) {
 
 /**
  * `PUT /platform/maintenance-mode`: the new mode, the customer message,
- * the internal reason, the version the caller read, and the typed
+ * the internal reason (`null` clears a stored one on a save that keeps the
+ * mode; absent keeps it), the version the caller read, and the typed
  * environment name. Strict, so no other field rides along.
  */
 export const changeMaintenanceModeBody = z.strictObject({
   mode: z.enum(MAINTENANCE_MODES),
   message: maintenanceText('message').optional(),
-  reason: maintenanceText('reason').optional(),
+  reason: maintenanceText('reason').nullable().optional(),
   expectedVersion: z.number().int().min(0),
   confirm: z.string().max(CONFIRM_MAX_LENGTH).optional(),
 })

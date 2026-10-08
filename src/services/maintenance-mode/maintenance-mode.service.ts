@@ -171,7 +171,7 @@ function assertChangeAllowed(kind: ChangeKind, body: ChangeMaintenanceModeBody):
     })
   }
   if (kind !== 'switch_on' && kind !== 'escalate') return
-  if (body.reason === undefined) {
+  if (body.reason === undefined || body.reason === null) {
     throw new HttpError('Validation failed', 400, undefined, {
       reason: ['reason is required to switch maintenance mode on or escalate it.'],
     })
@@ -342,7 +342,8 @@ async function queueNoticesOrNone(actor: Actor, change: CommittedChange): Promis
  * reason sent or the stored one sent again) with the current state and
  * writes nothing, checks the change's rules, updates the
  * row (`version + 1`; a save that keeps the mode keeps `changed_at`, `changed_by`
- * and, unless the body sends one, the reason) and writes the audit entry. Then it publishes the
+ * and, unless the body sends one or `null`, which clears it, the reason) and
+ * writes the audit entry. Then it publishes the
  * reload and rereads this replica's copy, queues notices for a switch-on,
  * an escalation or a switch-off, and entering `full` waits for them under
  * one shared deadline before pausing every queue (a timeout or Redis error
@@ -384,7 +385,7 @@ export async function changeMaintenanceMode(
     // eslint-disable-next-line unicorn/no-null -- the column is null when no reason was given
     const reason = body.reason ?? null
     const updated = await updateMaintenanceModeStateIfVersion(
-      { mode: body.mode, message, reason, changedBy: actor.userId },
+      { mode: body.mode, message, reason: body.reason, changedBy: actor.userId },
       body.expectedVersion,
       tx
     )
