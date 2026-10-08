@@ -459,12 +459,14 @@ describe('email.worker', () => {
         rejectWithConnectionError as (typeof transporter)['sendMail'],
         async () => {
           // Extra address fields ride along on the job's data; the scrub must not depend on their shape.
-          const message = {
-            ...passwordResetMessage(recipient),
-            cc: [{ name: 'Ops', address: sentinel }],
-            bcc: [sentinel],
-            replyTo: { address: sentinel },
-          } as Parameters<typeof addEmailJob>[0]
+          const message: Parameters<typeof addEmailJob>[0] = Object.assign(
+            passwordResetMessage(recipient),
+            {
+              cc: [{ name: 'Ops', address: sentinel }],
+              bcc: [sentinel],
+              replyTo: { address: sentinel },
+            }
+          )
           const job = await addEmailJob(message, 'user-scrub-shapes', {
             attempts: 1,
           })
