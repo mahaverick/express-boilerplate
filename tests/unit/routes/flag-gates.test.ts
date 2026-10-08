@@ -52,22 +52,27 @@ const noop: RequestHandler = (_request, response) => {
 }
 
 /**
- * The path a middleware mounted with `use()` covers, relative to its router:
- * empty for a bare `use()`. Express 5 keeps no pattern on the layer, so it is
- * found by asking `layer.match()` about each route of the same router and
- * each known mount, and reading the part that matched (`layer.path`).
+ * The paths a middleware mounted with `use()` covers, relative to its router:
+ * a single empty path for a bare `use()`. Express 5 keeps no pattern on the
+ * layer, so each route of the same router and each known mount is offered to
+ * `layer.match()`, and the part that matched (`layer.path`) is kept for every
+ * one it matches, so a wildcard or param mount covers all of them whatever
+ * the declaration order.
  * @param layer - A non-router `use()` layer.
  * @param stack - The router's layers, whose routes are the candidates.
- * @returns The covered path, such as `/:slug/beta`, or undefined when no
- *   route or known mount sits under it.
+ * @returns The covered paths, such as `/:slug/beta`; empty when no route or
+ *   known mount sits under the layer.
  */
-function useMountOf(layer: StackLayer, stack: StackLayer[]): string | undefined {
-  if (layer.slash) return ''
+function useMountsOf(layer: StackLayer, stack: StackLayer[]): string[] {
+  if (layer.slash) return ['']
   const candidates = [
     ...stack.flatMap((sibling) => (sibling.route ? [sibling.route.path] : [])),
     ...KNOWN_MOUNTS,
   ]
-  return candidates.some((candidate) => layer.match(candidate)) ? layer.path : undefined
+  const mounts = candidates.flatMap((candidate) =>
+    layer.match(candidate) && layer.path !== undefined ? [layer.path] : []
+  )
+  return [...new Set(mounts)]
 }
 
 /**
@@ -75,7 +80,7 @@ function useMountOf(layer: StackLayer, stack: StackLayer[]): string | undefined 
  * into mounted routers. A mount is found by asking `layer.match()` about each
  * known mount and checking the whole mount matched (`layer.path`). A
  * `resolveTenant()` mounted with `use()` on a path counts only for gates on
- * that path.
+ * that path or below it, in this router (a nested router starts unresolved).
  * @param stack - A router's layers.
  * @param prefix - The mount path the layers sit under.
  * @param isResolved - Whether `resolveTenant()` already ran on every request that reaches this router.
@@ -87,7 +92,8 @@ function gatesIn(stack: StackLayer[], prefix: string, isResolved = false): Found
   let hasResolvedHere = isResolved
   const resolvedPaths: string[] = []
   const isResolvedAt = (path: string): boolean =>
-    hasResolvedHere || resolvedPaths.some((resolved) => path.startsWith(resolved))
+    hasResolvedHere ||
+    resolvedPaths.some((resolved) => path === resolved || path.startsWith(`${resolved}/`))
   return stack.flatMap((layer) => {
     if (layer.route) {
       const { path, stack: handlers } = layer.route
@@ -107,16 +113,18 @@ function gatesIn(stack: StackLayer[], prefix: string, isResolved = false): Found
       const isResolver = (layer.handle as unknown) === resolver
       if (mark === undefined && !isResolver) return []
       // A gate mounted with `use()` covers every route under its own path (the router's mount alone for a bare `use()`).
-      const mountPath = useMountOf(layer, stack)
+      const mountPaths = useMountsOf(layer, stack)
       if (mark === undefined) {
-        if (mountPath === '') hasResolvedHere = true
-        else if (mountPath !== undefined) resolvedPaths.push(mountPath)
+        if (mountPaths.includes('')) hasResolvedHere = true
+        else resolvedPaths.push(...mountPaths)
         return []
       }
-      if (mountPath === undefined) throw new Error('a gate is mounted at an unknown path')
-      return [
-        { path: `${prefix}${mountPath}`, mark, isAfterResolveTenant: isResolvedAt(mountPath) },
-      ]
+      if (mountPaths.length === 0) throw new Error('a gate is mounted at an unknown path')
+      return mountPaths.map((mountPath) => ({
+        path: `${prefix}${mountPath}`,
+        mark,
+        isAfterResolveTenant: isResolvedAt(mountPath),
+      }))
     }
     const mount = KNOWN_MOUNTS.find(
       (candidate) => layer.match(candidate) && layer.path === candidate
@@ -288,5 +296,54 @@ describe('the walk and a use() layer with its own path', () => {
     router.use('/nowhere', requireFlag('example_beta_page'))
 
     expect(() => gatesIn(stackOf(router), '')).toThrow('gate is mounted at an unknown path')
+  })
+
+  it.each([
+    ['the pathed route first', ['/:slug/beta', '/list']],
+    ['the other route first', ['/list', '/:slug/beta']],
+  ])(
+    'reports a wildcard use() gate that also covers a route outside /:slug, with %s',
+    (_name, paths) => {
+      const router = Router()
+      const inner = Router()
+      for (const path of paths) inner.get(path, noop)
+      inner.use('/{*splat}', resolveTenant(), requireFlag('example_beta_page'))
+      router.use('/tenants', inner)
+
+      const gates = gatesIn(stackOf(router), '')
+      const found = misplaced(gates).map(({ path }) => path)
+      expect(found).toContain('/tenants/list')
+      expect(found).not.toContain('/tenants/:slug/beta')
+    }
+  )
+
+  it('records a param use() gate at the param path even when a literal route comes first', () => {
+    const router = Router()
+    const inner = Router()
+    inner.get('/beta', noop)
+    inner.get('/:slug/x', noop)
+    inner.use('/:slug', resolveTenant(), requireFlag('example_beta_page'))
+    router.use('/tenants', inner)
+
+    const paths = gatesIn(stackOf(router), '').map(({ path }) => path)
+    expect(paths).toContain('/tenants/:slug')
+  })
+
+  it('does not count a resolveTenant on /:slug/other for a gate on /:slug/otherwise', () => {
+    const router = Router()
+    const inner = Router()
+    inner.get('/:slug/other', noop)
+    inner.use('/:slug/other', resolveTenant())
+    inner.get('/:slug/otherwise', requireFlag('example_beta_page'), noop)
+    router.use('/tenants', inner)
+
+    const gates = gatesIn(stackOf(router), '')
+    expect(misplaced(gates)).toEqual([
+      {
+        path: '/tenants/:slug/otherwise',
+        mark: { key: 'example_beta_page', shouldBeOn: true },
+        isAfterResolveTenant: false,
+      },
+    ])
   })
 })
