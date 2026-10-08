@@ -426,6 +426,15 @@ describe('reportErrorWithSpan', () => {
     expect(inspect(stand, { depth: Infinity })).not.toContain(LEAKED_PARAM)
     expect(stand).toEqual(scrubbedErrorForSpan(error))
   })
+
+  it('past the global cap, builds the stand-in of a query error once, without its parameters', () => {
+    reportDistinct(100)
+    const build = vi.spyOn(ErrorPropertiesBuilder.prototype, 'buildFromUnknown')
+    const stand = reportErrorWithSpan(fakeQueryError(), HTTP).spanError()
+    expect(counted('throttled')).toBe(1)
+    expect(build).toHaveBeenCalledTimes(1)
+    expect(inspect(stand, { depth: Infinity })).not.toContain(LEAKED_PARAM)
+  })
 })
 
 describe('queue and flush', () => {
