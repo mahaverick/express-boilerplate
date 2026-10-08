@@ -22,6 +22,7 @@ import {
   getMaintenanceMode,
   reloadMaintenanceMode,
 } from '@/services/maintenance-mode/maintenance-mode-store.service'
+import { getMaintenanceModeStatus } from '@/services/maintenance-mode/maintenance-mode.service'
 import { closeQueue, getAllQueues } from '@/services/queue.service'
 import type { PlatformMaintenanceModeView } from '@/types/maintenance-mode'
 import { truncateAuditLogs } from '../../helpers/audit-log'
@@ -285,6 +286,45 @@ describe('PUT /platform/maintenance-mode', () => {
     expect(refused.body).toMatchObject({ message: 'New.', since: began.toISOString() })
     expect(getMaintenanceMode().changedAt).toBe(began.toISOString())
     expect(queuePauseTarget(getMaintenanceMode(), new Date())).toBe('pause')
+  })
+
+  it('keeps the staff status changedAt across a message-only and a reason-only save', async () => {
+    const { user, token } = await createTrackedStaff('owner')
+    const { user: admin } = await createTrackedStaff('admin')
+    const began = new Date(Date.now() - 3_600_000)
+    await storeMaintenanceMode('read_only', { message: 'Old.', changedAt: began })
+    await reloadMaintenanceMode()
+    const version = await currentVersion(token)
+
+    const edited = await change(token, {
+      mode: 'read_only',
+      message: 'New.',
+      expectedVersion: version,
+    })
+    expect(edited.status).toBe(200)
+    await expect(getMaintenanceModeStatus()).resolves.toMatchObject({
+      changedAt: began.toISOString(),
+    })
+
+    const reasoned = await change(token, {
+      mode: 'read_only',
+      message: 'New.',
+      reason: 'Reason R2',
+      expectedVersion: viewOf(edited).version,
+    })
+    expect(reasoned.status).toBe(200)
+    expect(viewOf(reasoned)).toMatchObject({
+      reason: 'Reason R2',
+      since: began.toISOString(),
+      version: version + 2,
+    })
+    await expect(getMaintenanceModeStatus()).resolves.toMatchObject({
+      changedAt: began.toISOString(),
+    })
+    const entries = await auditEntries()
+    const reasonEdit = entries.find((entry) => entry.metadata.reason === 'Reason R2')
+    expect(reasonEdit?.metadata).toMatchObject({ messageChanged: false, reasonChanged: true })
+    expect(await noticesTo([user.id, admin.id])).toEqual([])
   })
 
   it('names a staff member with no name as "A staff member" in the notices, never by address', async () => {
