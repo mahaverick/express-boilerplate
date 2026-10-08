@@ -636,3 +636,8 @@ exemption.
   query fails; `lt(column, date)` is fine.
 - **Free-text fields use `safeText`:** single-line by default,
   `{ multiline: true }` for prose.
+- **A keyset cursor's timestamp uses `sortAtField` or `isoInstantField`**
+  (`src/validators/cursor.validators.ts`), inside a `cursorField`, never a
+  bare regex or `z.iso.datetime()`: a regex lets month 13 through and
+  `z.iso.datetime()` lets year 0000 through, and the `::timestamptz` cast
+  then fails as a 500.
