@@ -92,8 +92,8 @@ These move together, or a gate below catches the one you missed:
 - `pnpm lint:docs`: no history phrasing in the markdown or in `#` comments of
   config files, no broken relative link or anchor, and no code citing a doc
   that doesn't exist.
-- `pnpm audit --prod --audit-level high`: fails on high or critical advisories
-  in production dependencies.
+- `pnpm audit --prod --audit-level moderate`: fails on moderate, high or
+  critical advisories in production dependencies.
 - `.env.example` matches what `pnpm env:example` generates (step 2 above).
 - The test step's `env:` block and `.env.test` mirror each other (step 5
   above).
@@ -207,6 +207,10 @@ that adds it. The file's own comments carry the detail.
   `minimumReleaseAgeExclude` key, one `name@version` per entry, needed only
   until that version is 3 days old; delete the entry then, and the key itself
   once no exception remains.
+- **`overrides`**: patched versions of transitive dependencies whose parents
+  have not taken them yet, one entry per advisory line: `ip-address` (via
+  `express-rate-limit`, a production dependency). Remove an entry once
+  `pnpm why <name>` shows every parent resolving a patched version on its own.
 - **`auditConfig.ignoreGhsas: GHSA-vfj7-8cjw-p6xm`**: `braces` <=3.0.3 can
   exhaust the stack on deeply nested brace patterns, and no patched version
   exists yet. It is reached only through `http-proxy-middleware` >

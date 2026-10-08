@@ -211,7 +211,7 @@ jobs:
       - name: Build
         run: pnpm build
       - name: Audit production dependencies
-        run: pnpm audit --prod --audit-level high
+        run: pnpm audit --prod --audit-level moderate
       # .env.example is generated from the Zod schema. Nothing stops someone
       # editing EnvSchema and forgetting to regenerate, and the drift is
       # invisible until a new contributor's first run fails on a variable the
