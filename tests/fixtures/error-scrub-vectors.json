@@ -1703,5 +1703,25 @@
     "rule": "kv",
     "input": "idempotency_key=zqS4Zx9Kq2Lm8",
     "expected": "idempotency_key=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "{\"error\":\"invalid_grant\",\"code\":\"zqS4Zx9Kq2Lm8\"}",
+    "expected": "{\"error\":\"invalid_grant\",\"code\":\"[redacted]\"}"
+  },
+  {
+    "rule": "kv",
+    "input": "token request failed: invalid_grant\n{\n  code: 'zqS4Zx9Kq2Lm8'\n}",
+    "expected": "token request failed: invalid_grant\n{\n  code: '[redacted]'\n}"
+  },
+  {
+    "rule": "kv",
+    "input": "code_verifier=zqS4Zx9Kq2Lm8",
+    "expected": "code_verifier=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "{ codeVerifier: 'zqS4Zx9Kq2Lm8', code: 'zqS5Zx9Kq2Lm8' }",
+    "expected": "{ codeVerifier: '[redacted]', code: '[redacted]' }"
   }
 ]

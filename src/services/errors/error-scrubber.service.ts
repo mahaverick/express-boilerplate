@@ -250,7 +250,7 @@ const AUTH_HEADER_PATTERN = new RegExp(
  * `"tokens":"..."`, `api_key: ...`, `sig=...`, `nonce=...`,
  * `response="..."`, `SAMLResponse=...`, `password%3D...`, `pass_phrase`,
  * `passkey`, `otp_code`, `mfa_code`, `verification_code`, `recovery_code`,
- * `backup_code`. `pin` (and `pin_code`, `pincode`, `pin_number`) is a secret
+ * `backup_code`, `code_verifier`. `pin` (and `pin_code`, `pincode`, `pin_number`) is a secret
  * key only as a whole word or after `_` or `-` (`user_pin`, never `spin`). `code` is one
  * only after `?` or `&` (written plainly, as `&amp;`, or encoded as `%3F` or
  * `%26`), first in a form body (`code=…&`), on a line that
@@ -276,19 +276,21 @@ const AUTH_HEADER_PATTERN = new RegExp(
  * they are (`KEPT_VALUE`), so `token: undefined` stays readable.
  */
 const KV_SECRET_PATTERN = new RegExp(
-  String.raw`(?:\b|(?<=%26|%3F))((?:[\w-]*?(?:pass(?:[_-]?(?:word|phrase|code|key)|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|(?:secret|private|consumer|signing|encryption|master|client)[_-]?key|auth(?:orization)?[_-]code|session|sid|credential|signature|sig|hmac|nonce|(?<=[\w-])response|response(?=s?${KEY_QUOTE}?\s*(?:=|%3D|&#61;|\\u003d|:\s*${KEY_QUOTE}))|(?<![A-Za-z\d])pin(?:[_-]?(?:code|number))?|(?:otp|mfa|verification|recovery|backup)[_-]?code|(?<![A-Za-z\d])(?<!(?:primary|foreign|sort|partition|cache|unique|index|s3|object|routing|shard|translation|i18n)[_-])key(?=s?\s*(?:=(?!>)|%3D|&#61;|\\u003d))|jwt|otp)s?|code(?<=(?:[?&]|&amp;|%26|%3F)code)|code(?<=(?:oauth|authoriz(?:ation|e)(?![a-z]))[^\n]*code)|code(?=\s*=[^\s&]*&)|code(?=[^\n{}]*(?:oauth|authoriz(?:ation|e)(?![a-z]))))${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?)` +
+  String.raw`(?:\b|(?<=%26|%3F))((?:[\w-]*?(?:pass(?:[_-]?(?:word|phrase|code|key)|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|(?:secret|private|consumer|signing|encryption|master|client)[_-]?key|auth(?:orization)?[_-]code|code[_-]?verifier|session|sid|credential|signature|sig|hmac|nonce|(?<=[\w-])response|response(?=s?${KEY_QUOTE}?\s*(?:=|%3D|&#61;|\\u003d|:\s*${KEY_QUOTE}))|(?<![A-Za-z\d])pin(?:[_-]?(?:code|number))?|(?:otp|mfa|verification|recovery|backup)[_-]?code|(?<![A-Za-z\d])(?<!(?:primary|foreign|sort|partition|cache|unique|index|s3|object|routing|shard|translation|i18n)[_-])key(?=s?\s*(?:=(?!>)|%3D|&#61;|\\u003d))|jwt|otp)s?|code(?<=(?:[?&]|&amp;|%26|%3F)code)|code(?<=(?:oauth|authoriz(?:ation|e)(?![a-z]))[^\n]*code)|code(?=\s*=[^\s&]*&)|code(?=[^\n{}]*(?:oauth|authoriz(?:ation|e)(?![a-z]))))${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?)` +
     `${KEPT_VALUE}(?:${QUOTED_VALUE}|${ARRAY_VALUE}|${SCHEMED_PLACEHOLDER_VALUE}|${UNQUOTED_VALUE})`,
   'gi'
 )
 
 /**
  * The words that mark a text as an OAuth exchange: a token request's field
- * names (`grant_type`, `redirect_uri`, `client_id`, `authorization_code`) and
- * the word `OAuth`. A bare `authorization` is left out: a request dump with
+ * names (`grant_type`, `redirect_uri`, `client_id`, `authorization_code`,
+ * `code_verifier`), the token endpoint's `invalid_grant` error and the word
+ * `OAuth`. A bare `authorization` is left out: a request dump with
  * an Authorization header is not an exchange. A fixed word list with no
  * repetition, so testing it is linear.
  */
-const OAUTH_CONTEXT_PATTERN = /grant_type|redirect_uri|client_id|authorization_code|oauth/i
+const OAUTH_CONTEXT_PATTERN =
+  /grant_type|redirect_uri|client_id|authorization_code|invalid_grant|code[_-]?verifier|oauth/i
 
 /**
  * A `code` key and its value, wherever it stands in the text: the same
