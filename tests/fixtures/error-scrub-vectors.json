@@ -277,7 +277,7 @@
   {
     "rule": "kv",
     "input": "password: [hunter2]",
-    "expected": "password: [redacted]]"
+    "expected": "password: [redacted]"
   },
   {
     "rule": "kv",
@@ -808,5 +808,150 @@
     "rule": "kv",
     "input": "Authorization: OAuth oauth_consumer_key=\"ck123\", oauth_token=\"tok456\", oauth_signature=\"sig789\"",
     "expected": "Authorization: OAuth [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "Authorization: Custom abc123secret",
+    "expected": "Authorization: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "authorization=Custom abc123secret",
+    "expected": "authorization=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "{\"password\": [\"hunter2\", \"x\"]}",
+    "expected": "{\"password\": [redacted]}"
+  },
+  {
+    "rule": "kv",
+    "input": "tokens: [\"hunter2\"]",
+    "expected": "tokens: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "passwords=hunter2",
+    "expected": "passwords=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "sig=Zx9Kq2Lm",
+    "expected": "sig=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "hmac=Zx9Kq2Lm",
+    "expected": "hmac=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "cnonce=\"0a4f113b\"",
+    "expected": "cnonce=\"[redacted]\""
+  },
+  {
+    "rule": "kv",
+    "input": "nonce: abc",
+    "expected": "nonce: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "response=\"abc12\"",
+    "expected": "response=\"[redacted]\""
+  },
+  {
+    "rule": "kv",
+    "input": "oauth_consumer_key=ck123",
+    "expected": "oauth_consumer_key=[redacted]"
+  },
+  {
+    "rule": "ip",
+    "input": "connect failed from 10.1.2.3",
+    "expected": "connect failed from [ip]"
+  },
+  {
+    "rule": "ip",
+    "input": "connect ECONNREFUSED 10.1.2.3:5432.",
+    "expected": "connect ECONNREFUSED [ip]:5432."
+  },
+  {
+    "rule": "ip",
+    "input": "connect failed from 2001:db8::8a2e:370:7334",
+    "expected": "connect failed from [ip]"
+  },
+  {
+    "rule": "ip",
+    "input": "connect ECONNREFUSED ::1:6379",
+    "expected": "connect ECONNREFUSED [ip]"
+  },
+  {
+    "rule": "ip",
+    "input": "connect failed from fe80:0:0:0:202:b3ff:fe1e:8329",
+    "expected": "connect failed from [ip]"
+  },
+  {
+    "rule": "ip",
+    "input": "timeout at 12:30:45 in v1.2.3",
+    "expected": "timeout at 12:30:45 in v1.2.3"
+  },
+  {
+    "rule": "ip",
+    "input": "std::vector out of range",
+    "expected": "std::vector out of range"
+  },
+  {
+    "rule": "phone",
+    "input": "sms to +1 415 555 0100 failed",
+    "expected": "sms to [phone] failed"
+  },
+  {
+    "rule": "phone",
+    "input": "sms to +14155550100 failed",
+    "expected": "sms to [phone] failed"
+  },
+  {
+    "rule": "phone",
+    "input": "offset +05:30 applied",
+    "expected": "offset +05:30 applied"
+  },
+  {
+    "rule": "secret",
+    "input": "user 3f2504e0-4f89-11d3-9a0c-0305e82c3301 not found",
+    "expected": "user 3f2504e0-4f89-11d3-9a0c-0305e82c3301 not found"
+  },
+  {
+    "rule": "path-token",
+    "input": "GET /reset/abc123XYZ failed",
+    "expected": "GET /reset/[token] failed"
+  },
+  {
+    "rule": "path-token",
+    "input": "GET /api/v1/invite/k8Fq2Zx9/accept failed",
+    "expected": "GET /api/v1/invite/[token]/accept failed"
+  },
+  {
+    "rule": "path-token",
+    "input": "GET /verify/abc123 and /accept/xyz789",
+    "expected": "GET /verify/[token] and /accept/[token]"
+  },
+  {
+    "rule": "path-token",
+    "input": "GET /reset-password failed",
+    "expected": "GET /reset-password failed"
+  },
+  {
+    "rule": "jwt",
+    "input": "token ewogICJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2ln rejected",
+    "expected": "token [jwt] rejected"
+  },
+  {
+    "rule": "jwt",
+    "input": "see ewan.smith.x for details",
+    "expected": "see ewan.smith.x for details"
+  },
+  {
+    "rule": "basic",
+    "input": "Basic Credential=abcdefgh",
+    "expected": "Basic Credential=[redacted]"
   }
 ]

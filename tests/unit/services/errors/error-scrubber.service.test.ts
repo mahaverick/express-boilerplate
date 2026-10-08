@@ -67,6 +67,9 @@ describe('scrubText vectors', () => {
         'secret',
         'path',
         'cap',
+        'ip',
+        'phone',
+        'path-token',
       ])
     )
   })
@@ -310,5 +313,55 @@ describe('scrubText on quoted bare words and Digest', () => {
     expect(scrubText('Authorization: Digest username="jane", response="abc12"')).not.toContain(
       'abc12'
     )
+  })
+})
+
+describe('scrubText on the shapes it once let through', () => {
+  it.each([
+    [
+      'unknown-scheme Authorization (header form)',
+      'Authorization: Custom abc123secret',
+      'abc123secret',
+    ],
+    ['unknown-scheme Authorization (kv form)', 'authorization=Custom abc123secret', 'abc123secret'],
+    [
+      'multi-param OAuth consumer key',
+      'Authorization: OAuth oauth_consumer_key="ck123", oauth_token="tok456", oauth_signature="sig789"',
+      'ck123',
+    ],
+    [
+      'multi-param Digest username',
+      'Authorization: Digest username="jane", realm="r", response="abc12"',
+      'jane',
+    ],
+    [
+      'multi-param Digest short response',
+      'Authorization: Digest username="jane", realm="r", response="abc12"',
+      'abc12',
+    ],
+    ['array-valued secret (JSON)', '{"password": ["hunter2", "x"]}', 'hunter2'],
+    ['array-valued secret (plural key)', 'tokens: ["hunter2"]', 'hunter2'],
+    ['short non-hex signature', 'sig=Zx9Kq2Lm', 'Zx9Kq2Lm'],
+    // eslint-disable-next-line sonarjs/no-hardcoded-ip -- a sample address the scrubber must remove
+    ['IPv4 address', 'connect failed from 10.1.2.3', '10.1.2.3'],
+    ['phone number', 'sms to +1 415 555 0100 failed', '415 555 0100'],
+    ['short opaque token in a path', 'GET /reset/abc123XYZ failed', 'abc123XYZ'],
+    [
+      'odd JWT shape (whitespace JSON header)',
+      'token ewogICJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2ln rejected',
+      'eyJzdWIiOiIxIn0',
+    ],
+  ])('%s: the value is scrubbed', (_shape, input, secret) => {
+    expect(scrubText(input)).not.toContain(secret)
+  })
+
+  it('keeps a UUID, an id rather than a secret', () => {
+    const text = 'user 3f2504e0-4f89-11d3-9a0c-0305e82c3301 not found'
+    expect(scrubText(text)).toBe(text)
+  })
+
+  it('Basic Credential= is idempotent', () => {
+    const once = scrubText('Basic Credential=abcdefgh')
+    expect(scrubText(once)).toBe(once)
   })
 })

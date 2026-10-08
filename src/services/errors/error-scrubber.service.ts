@@ -121,6 +121,12 @@ function isHarmlessFragment(fragment: string): boolean {
 }
 
 /**
+ * The path segment after `/reset/`, `/verify/`, `/invite/` or `/accept/`:
+ * a token however short (`/reset/abc123XYZ`). The prefix is kept.
+ */
+const PATH_TOKEN_PATTERN = /(\/(?:reset|verify|invite|accept)\/)(?!\[)[^\s/?#"'<>]+/g
+
+/**
  * `Bearer` and the credential after it, in any letter case. Besides a word
  * boundary it may follow a digit or a hex letter (the case-insensitive
  * `[G-Z_]` refuses every other letter and `_`), so one glued to a long hex
@@ -132,11 +138,12 @@ const BEARER_PATTERN = /(?<![G-Z_])Bearer\s+[^\s"',;]+/gi
  * HTTP Basic credentials: `Basic` in the case `Basic`, `basic` or `BASIC`, and a base64 value of
  * at least eight characters that holds an uppercase letter, a digit, `+` or
  * `/`, so prose such as `Basic validation failed` is left alone. Like
- * `Bearer`, it may follow a digit or a hex letter directly.
+ * `Bearer`, it may follow a digit or a hex letter directly. A value followed
+ * by `=` or `[` is a key (`Basic Credential=[redacted]`), not a credential.
  */
 const BASIC_PATTERN =
   // eslint-disable-next-line sonarjs/regex-complexity -- one pattern per rule keeps the rule list the spec
-  /(?<![G-Zg-z_])([Bb]asic|BASIC)\s+(?=[A-Za-z0-9+/]*[A-Z0-9+/])(?:[A-Za-z0-9+/]{4}){2,}(?:[A-Za-z0-9+/]{2,3}={0,2})?(?![\w+/=])/g
+  /(?<![G-Zg-z_])([Bb]asic|BASIC)\s+(?=[A-Za-z0-9+/]*[A-Z0-9+/])(?:[A-Za-z0-9+/]{4}){2,}(?:[A-Za-z0-9+/]{2,3}={0,2})?(?![\w+/=[])/g
 
 /**
  * The separator between a secret-named key and its value: `:`, `=` or a
@@ -181,6 +188,11 @@ const KEPT_VALUE = [
 ].join('')
 
 /**
+ * An array value, to its first `]` on the line (`["hunter2", "x"]`).
+ */
+const ARRAY_VALUE = String.raw`\[[^\]\n]*\]`
+
+/**
  * A quoted value: inside an escaped quote, up to the next escaped quote;
  * inside a plain quote, up to the closing one, escaped quotes included.
  */
@@ -202,26 +214,29 @@ const AUTH_HEADER_PATTERN = new RegExp(
 )
 
 /**
- * A secret-named key and its value: `password=...`, `"token":"..."`,
- * `api_key: ...`, `Cookie: ...`, `password%3D...`. The key and its separator
- * are kept. The value is a quoted string (spaces and escaped quotes
- * included, also inside a JSON string) or a run up to a delimiter. A value
+ * A secret-named key, singular or plural, and its value: `password=...`,
+ * `"tokens":"..."`, `api_key: ...`, `Cookie: ...`, `sig=...`, `nonce=...`,
+ * `response="..."`, `password%3D...`. The key and its separator are kept.
+ * The value is a quoted string (spaces and escaped quotes included, also
+ * inside a JSON string), an array to its `]`, or a run up to a delimiter. A value
  * already replaced by this scrubber (`[redacted]`, `[token]`...) and the
  * bare words `undefined`, `null`, `missing`, `true` and `false` are left as
  * they are (`KEPT_VALUE`), so `token: undefined` stays readable.
  */
 const KV_SECRET_PATTERN = new RegExp(
-  String.raw`\b([\w-]*?(?:pass(?:word|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|session|sid|cookie|credentials?|signature|jwt|otp)${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?)` +
-    String.raw`${KEPT_VALUE}(?:${QUOTED_VALUE}|[^\s"'\\,;&})\]]+)`,
+  String.raw`\b([\w-]*?(?:pass(?:word|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|consumer[_-]?key|session|sid|cookie|credential|signature|sig|hmac|nonce|response|jwt|otp)s?${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?)` +
+    String.raw`${KEPT_VALUE}(?:${QUOTED_VALUE}|${ARRAY_VALUE}|[^\s"'\\,;&})\]]+)`,
   'gi'
 )
 
 /**
- * A JSON Web Token: three dot-separated base64url segments, the first
- * starting `eyJ` (`{"`). The signature may be empty (an unsigned token).
- * Like `Bearer`, it may follow a digit or a hex letter directly.
+ * A JSON Web Token: three dot-separated base64url segments, the first a
+ * base64 JSON object: `eyJ` (`{"`), or, at nine or more characters, `eyA`
+ * (`{ `) or `ew` (`{` and a line break or tab). The signature may be empty
+ * (an unsigned token). Like `Bearer`, it may follow a digit or a hex letter
+ * directly.
  */
-const JWT_PATTERN = /(?<![G-Zg-z_])eyJ[\w-]+\.[\w-]+\.[\w-]*/g
+const JWT_PATTERN = /(?<![G-Zg-z_])e(?:yJ[\w-]+|(?:yA|w[\w-])[\w-]{6,})\.[\w-]+\.[\w-]*/g
 
 /**
  * A PostHog project, personal or secret key. Applied again after the hex
@@ -245,6 +260,35 @@ const POSTHOG_KEY_PATTERN = /\bph[cxs]_\w+/g
 const EMAIL_PATTERN =
   // eslint-disable-next-line sonarjs/regex-complexity, sonarjs/super-linear-regex -- one pattern per rule keeps the rule list the spec; scrubText scans at most SCAN_MAX characters
   /(?:"[^"\n]{1,64}"|[\p{L}\p{N}_.%+-]+)(?:(?:@|%40|%2540|＠|﹫)(?:\[(?:\d{1,3}(?:\.\d{1,3}){3}|IPv6:[\dA-Fa-f:.]+)\]|[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.\p{L}{2,})|@(?!(?:npm|workspace|file|github|gitlab|link|portal|patch|git\+[a-z]+):)(?!(?:latest|next|canary|beta|alpha|rc|main|master|sha\d+|v\d[\w.-]*)(?![\p{L}\p{N}-]))\p{L}[\p{L}\p{N}-]*(?=$|[\s"'<>,;:!?&/)\]}]|\.(?:$|\s)))/gu
+
+/**
+ * One IPv4 octet, 0 to 255.
+ */
+const IPV4_OCTET = String.raw`(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)`
+
+/**
+ * An IPv4 address: four octets, not part of a longer dotted number.
+ */
+const IPV4_PATTERN = new RegExp(
+  String.raw`(?<![\w.])(?:${IPV4_OCTET}\.){3}${IPV4_OCTET}(?![\w]|\.\d)`,
+  'g'
+)
+
+/**
+ * An IPv6 address: eight hex groups, or a `::` form with at least one
+ * group (`::1`, `fe80::1`, `2001:db8::8a2e:370:7334`). A `::` inside a word
+ * (`std::vector`) and a clock time (`12:30:45`) are not one; a port after a
+ * `::` form (`::1:6379`) reads as one more group and goes with it.
+ */
+const IPV6_PATTERN =
+  // eslint-disable-next-line sonarjs/regex-complexity -- one pattern per rule keeps the rule list the spec
+  /(?<![\w:])(?:(?:[\dA-Fa-f]{1,4}:){7}[\dA-Fa-f]{1,4}|(?:[\dA-Fa-f]{1,4}(?::[\dA-Fa-f]{1,4}){0,6})?::[\dA-Fa-f]{1,4}(?::[\dA-Fa-f]{1,4}){0,6}|[\dA-Fa-f]{1,4}(?::[\dA-Fa-f]{1,4}){0,6}::)(?![\w:])/g
+
+/**
+ * An international phone number: `+`, then 8 to 15 digits, single spaces,
+ * dots or hyphens between them (`+1 415 555 0100`).
+ */
+const PHONE_PATTERN = /(?<![\w+])\+\d(?:[ .-]?\d){7,14}(?!\d)/g
 
 /**
  * A run of 32 or more hex digits: a hash, a token or a key. It is delimited
@@ -325,17 +369,20 @@ function capped(value: string, wasCut: boolean): string {
  * range for type`, and the snippet in a V8 `is not valid JSON` error, become `"[value]"`; the userinfo of a URL
  * becomes `[credentials]@`; a URL's or path's query string becomes
  * `?[query]` and its fragment, unless a line or heading anchor
- * (`isHarmlessFragment`), `#[fragment]`; `Bearer <credential>` becomes
+ * (`isHarmlessFragment`), `#[fragment]`; the segment after `/reset/`,
+ * `/verify/`, `/invite/` or `/accept/` becomes `[token]`; `Bearer <credential>` becomes
  * `Bearer [token]`; `Basic <base64>` becomes `Basic [token]`, the scheme's case kept; an
  * Authorization-valued key's value (`authorization`, `auth`), after any
  * known scheme word, to its closing quote or the end of the line, and the
- * value of a secret-named key (`password`, `token`, `secret`, `api_key`,
- * `access_key`, `private_key`, `session`, `sid`, `cookie`, `credentials`,
- * `jwt`, `otp`, `signature`), become `[redacted]`; a JWT becomes `[jwt]`; a
+ * value, an array included, of a secret-named key, singular or plural
+ * (`password`, `token`, `secret`, `api_key`, `access_key`, `private_key`,
+ * `consumer_key`, `session`, `sid`, `cookie`, `credential`, `jwt`, `otp`,
+ * `signature`, `sig`, `hmac`, `nonce`, `response`), become `[redacted]`; a JWT becomes `[jwt]`; a
  * PostHog key (`phc_`, `phx_`, `phs_`) becomes `[posthog-key]`; an email
  * address (`EMAIL_PATTERN`: `@` written plainly, encoded or fullwidth, a
  * quoted local part, an IP-literal or single-label domain) becomes
- * `[email]`; a run of 32 or more hex digits becomes `[secret]`, and a
+ * `[email]`; an IPv4 or IPv6 address becomes `[ip]` and an international
+ * phone number `[phone]` (a UUID is an id and is kept); a run of 32 or more hex digits becomes `[secret]`, and a
  * PostHog key glued to it is replaced after it; a secret-looking run of 40
  * or more base64 characters (`isSecretRun`) becomes `[secret]`; and the result is cut to 1024
  * characters, ending in `…[truncated]`. A key-named word is replaced even in
@@ -357,6 +404,7 @@ export function scrubText(value: string): string {
     .replaceAll(FRAGMENT_PATTERN, (match: string, base: string, fragment: string) =>
       isHarmlessFragment(fragment) ? match : `${base}#[fragment]`
     )
+    .replaceAll(PATH_TOKEN_PATTERN, '$1[token]')
     .replaceAll(BEARER_PATTERN, 'Bearer [token]')
     .replaceAll(BASIC_PATTERN, '$1 [token]')
     .replaceAll(AUTH_HEADER_PATTERN, '$1[redacted]')
@@ -364,6 +412,9 @@ export function scrubText(value: string): string {
     .replaceAll(JWT_PATTERN, '[jwt]')
     .replaceAll(POSTHOG_KEY_PATTERN, '[posthog-key]')
     .replaceAll(EMAIL_PATTERN, '[email]')
+    .replaceAll(IPV4_PATTERN, '[ip]')
+    .replaceAll(IPV6_PATTERN, '[ip]')
+    .replaceAll(PHONE_PATTERN, '[phone]')
     .replaceAll(HEX_RUN_PATTERN, '[secret]')
     .replaceAll(POSTHOG_KEY_PATTERN, '[posthog-key]')
     .replaceAll(BASE64_RUN_PATTERN, (run) => (isSecretRun(run) ? '[secret]' : run))
