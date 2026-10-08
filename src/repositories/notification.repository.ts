@@ -11,6 +11,7 @@ import {
 } from '@/database/models/notification.model'
 import { HttpError } from '@/errors/http-error'
 import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
+import { encodeCursor } from '@/utilities/cursor.utilities'
 
 /**
  * The two fields a keyset pagination cursor for `NotificationRepository.list`
@@ -31,16 +32,15 @@ export interface NotificationCursor {
 
 /**
  * Encode a page's last row into the opaque, URL-safe cursor string
- * `NotificationRepository.list` returns as `nextCursor`. `createdAt` is
+ * `NotificationRepository.list` returns as `nextCursor`, through the shared
+ * `encodeCursor` that `cursorField` decodes against. `createdAt` is
  * serialized with `toISOString()`, since the cursor goes to the client and
  * comes back as a query parameter.
  * @param cursor - The last row's `createdAt` and `id`.
  * @returns A base64url-encoded, opaque cursor string.
  */
 export function encodeNotificationCursor(cursor: NotificationCursor): string {
-  return Buffer.from(
-    JSON.stringify({ createdAt: cursor.createdAt.toISOString(), id: cursor.id })
-  ).toString('base64url')
+  return encodeCursor({ createdAt: cursor.createdAt.toISOString(), id: cursor.id })
 }
 
 /**
