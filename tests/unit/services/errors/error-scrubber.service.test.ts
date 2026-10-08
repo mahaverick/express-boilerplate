@@ -181,3 +181,20 @@ describe('scrubText on email edge forms', () => {
     expect(scrubText(input)).not.toContain(local)
   })
 })
+
+describe('scrubText on a secret glued to a preceding hex run', () => {
+  const hex = 'a3f9'.repeat(8)
+
+  it.each([
+    ['posthog key', `${hex}phc_abcdef123`, 'phc_abcdef123'],
+    ['jwt', `${hex}eyJhIjoxfQ.eyJiIjoyfQ.c2lnbmF0dXJl`, 'eyJiIjoyfQ.c2lnbmF0dXJl'],
+    ['bearer', `${hex}Bearer abc123secret`, 'abc123secret'],
+  ])('%s: the first pass removes it', (_shape, input, secret) => {
+    expect(scrubText(input)).not.toContain(secret)
+  })
+
+  it('is idempotent on the glued shape', () => {
+    const once = scrubText(`${hex}phc_abcdef123`)
+    expect(scrubText(once)).toBe(once)
+  })
+})

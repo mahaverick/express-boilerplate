@@ -603,5 +603,45 @@
     "rule": "email",
     "input": "install react-dom@19.0.0 failed",
     "expected": "install react-dom@19.0.0 failed"
+  },
+  {
+    "rule": "posthog-key",
+    "input": "a3f9a3f9a3f9a3f9a3f9a3f9a3f9a3f9phc_abcdef123",
+    "expected": "[secret][posthog-key]"
+  },
+  {
+    "rule": "posthog-key",
+    "input": "a3faa3faa3faa3faa3faa3faa3faa3faphc_abcdef123",
+    "expected": "[secret][posthog-key]"
+  },
+  {
+    "rule": "jwt",
+    "input": "a3f9a3f9a3f9a3f9a3f9a3f9a3f9a3f9eyJhIjoxfQ.eyJiIjoyfQ.c2lnbmF0dXJl",
+    "expected": "[secret][jwt]"
+  },
+  {
+    "rule": "jwt",
+    "input": "a3faa3faa3faa3faa3faa3faa3faa3faeyJhIjoxfQ.eyJiIjoyfQ.c2lnbmF0dXJl",
+    "expected": "[secret][jwt]"
+  },
+  {
+    "rule": "bearer",
+    "input": "a3f9a3f9a3f9a3f9a3f9a3f9a3f9a3f9Bearer abc123secret",
+    "expected": "[secret]Bearer [token]"
+  },
+  {
+    "rule": "bearer",
+    "input": "a3faa3faa3faa3faa3faa3faa3faa3faBearer abc123secret",
+    "expected": "[secret]Bearer [token]"
+  },
+  {
+    "rule": "basic",
+    "input": "a3f9a3f9a3f9a3f9a3f9a3f9a3f9a3f9Basic dXNlcjpwYXNz",
+    "expected": "[secret]Basic [token]"
+  },
+  {
+    "rule": "basic",
+    "input": "a3faa3faa3faa3faa3faa3faa3faa3fabasic dXNlcjpwYXNz",
+    "expected": "[secret]basic [token]"
   }
 ]

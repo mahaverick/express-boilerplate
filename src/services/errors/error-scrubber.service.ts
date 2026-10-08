@@ -74,17 +74,22 @@ const QUERY_PATTERN = /((?:https?:\/\/|\/)[^\s?"'<>]*)\?[^\s"'<>]+/g
 const FRAGMENT_PATTERN = /((?:https?:\/\/|\/)[^\s#"'<>]*)#[^\s"'<>]+/g
 
 /**
- * `Bearer` and the credential after it, in any letter case.
+ * `Bearer` and the credential after it, in any letter case. Besides a word
+ * boundary it may follow a digit or a hex letter (the case-insensitive
+ * `[G-Z_]` refuses every other letter and `_`), so one glued to a long hex
+ * run is replaced before the hex rule takes the run and `Be` with it.
  */
-const BEARER_PATTERN = /\bBearer\s+[^\s"',;]+/gi
+const BEARER_PATTERN = /(?<![G-Z_])Bearer\s+[^\s"',;]+/gi
 
 /**
  * HTTP Basic credentials: `Basic` in the case `Basic`, `basic` or `BASIC`, and a base64 value of
  * at least eight characters that holds an uppercase letter, a digit, `+` or
- * `/`, so prose such as `Basic validation failed` is left alone.
+ * `/`, so prose such as `Basic validation failed` is left alone. Like
+ * `Bearer`, it may follow a digit or a hex letter directly.
  */
 const BASIC_PATTERN =
-  /\b([Bb]asic|BASIC)\s+(?=[A-Za-z0-9+/]*[A-Z0-9+/])(?:[A-Za-z0-9+/]{4}){2,}(?:[A-Za-z0-9+/]{2,3}={0,2})?(?![\w+/=])/g
+  // eslint-disable-next-line sonarjs/regex-complexity -- one pattern per rule keeps the rule list the spec
+  /(?<![G-Zg-z_])([Bb]asic|BASIC)\s+(?=[A-Za-z0-9+/]*[A-Z0-9+/])(?:[A-Za-z0-9+/]{4}){2,}(?:[A-Za-z0-9+/]{2,3}={0,2})?(?![\w+/=])/g
 
 /**
  * A secret-named key and its value: `password=...`, `"token":"..."`,
@@ -106,11 +111,13 @@ const KV_SECRET_PATTERN =
 /**
  * A JSON Web Token: three dot-separated base64url segments, the first
  * starting `eyJ` (`{"`). The signature may be empty (an unsigned token).
+ * Like `Bearer`, it may follow a digit or a hex letter directly.
  */
-const JWT_PATTERN = /\beyJ[\w-]+\.[\w-]+\.[\w-]*/g
+const JWT_PATTERN = /(?<![G-Zg-z_])eyJ[\w-]+\.[\w-]+\.[\w-]*/g
 
 /**
- * A PostHog project, personal or secret key.
+ * A PostHog project, personal or secret key. Applied again after the hex
+ * rule, which can leave one glued to the `[secret]` it wrote.
  */
 const POSTHOG_KEY_PATTERN = /\bph[cxs]_\w+/g
 
@@ -131,9 +138,12 @@ const EMAIL_PATTERN =
 /**
  * A run of 32 or more hex digits: a hash, a token or a key. It is delimited
  * by hex digits rather than word boundaries, so a run stuck to other word
- * characters (`key_<hex>`, `<hex>suffix`) is still replaced.
+ * characters (`key_<hex>`, `<hex>suffix`) is still replaced. A run glued to
+ * a `Bearer [token]` or `Basic [token]` the earlier rules wrote stops before
+ * the scheme, whose first letters are hex digits too.
  */
-const HEX_RUN_PATTERN = /(?<![0-9A-Fa-f])[0-9A-Fa-f]{32,}(?![0-9A-Fa-f])/g
+const HEX_RUN_PATTERN =
+  /(?<![0-9A-Fa-f])(?:[0-9A-Fa-f]{32,}?(?=(?:Bearer|[Bb]asic|BASIC) \[token\])|[0-9A-Fa-f]{32,}(?![0-9A-Fa-f]))/g
 
 /**
  * A run of 40 or more base64 or base64url characters, with its padding.
@@ -211,9 +221,9 @@ function capped(value: string, wasCut: boolean): string {
  * PostHog key (`phc_`, `phx_`, `phs_`) becomes `[posthog-key]`; an email
  * address (`EMAIL_PATTERN`: `@` written plainly, encoded or fullwidth, a
  * quoted local part, an IP-literal or single-label domain) becomes
- * `[email]`; a run of 32 or more
- * hex digits, and a secret-looking run of 40 or more base64 characters
- * (`isSecretRun`), become `[secret]`; and the result is cut to 1024
+ * `[email]`; a run of 32 or more hex digits becomes `[secret]`, and a
+ * PostHog key glued to it is replaced after it; a secret-looking run of 40
+ * or more base64 characters (`isSecretRun`) becomes `[secret]`; and the result is cut to 1024
  * characters, ending in `…[truncated]`. A key-named word is replaced even in
  * prose (`Missing token: please log in` becomes `Missing token: [redacted] log in`): the
  * rule trades some readable text for never leaking a value. Applying it
@@ -238,6 +248,7 @@ export function scrubText(value: string): string {
     .replaceAll(POSTHOG_KEY_PATTERN, '[posthog-key]')
     .replaceAll(EMAIL_PATTERN, '[email]')
     .replaceAll(HEX_RUN_PATTERN, '[secret]')
+    .replaceAll(POSTHOG_KEY_PATTERN, '[posthog-key]')
     .replaceAll(BASE64_RUN_PATTERN, (run) => (isSecretRun(run) ? '[secret]' : run))
   return capped(scrubbed, input.length < value.length)
 }
