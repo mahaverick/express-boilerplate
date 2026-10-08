@@ -142,6 +142,20 @@ function countOf(value: unknown): number {
 }
 
 /**
+ * This process's error-tracking switch, read so it cannot throw: a failed
+ * read (an unreadable configuration) reports the switch off, logged at `warn`.
+ * @returns Whether error tracking is on.
+ */
+function isTrackingSwitchOn(): boolean {
+  try {
+    return isErrorTrackingEnabled()
+  } catch (error) {
+    logger.warn('Error tracking switch unreadable; reporting it off', { error })
+    return false
+  }
+}
+
+/**
  * Zero counts for every drop reason.
  * @returns The record.
  */
@@ -153,14 +167,14 @@ function noDrops(): Record<ErrorDropReason, number> {
  * The error-tracking status: this process's switch, and the outcomes of
  * every process summed over the current minute and the
  * `ERROR_STATUS_WINDOW_MINUTES - 1` before it, read in one `MGET`. Never
- * rejects: when Redis fails it reports zero counts and no last send, logged
- * at `warn`.
+ * rejects: when Redis fails it reports zero counts and no last send, and
+ * when the switch cannot be read it reports it off, each logged at `warn`.
  * @param at - The end of the window; defaults to now.
  * @returns The status.
  */
 export async function getErrorTrackingStatus(at: Date = new Date()): Promise<ErrorTrackingStatus> {
   const status: ErrorTrackingStatus = {
-    enabled: isErrorTrackingEnabled(),
+    enabled: isTrackingSwitchOn(),
     window: '15m',
     sent: 0,
     dropped: noDrops(),

@@ -21,7 +21,7 @@ import {
 import { logger } from '@/services/logger.service'
 import { redisKey } from '@/services/redis.service'
 
-const tracking = vi.hoisted(() => ({ isEnabled: false }))
+const tracking = vi.hoisted(() => ({ isEnabled: false, shouldThrow: false }))
 
 const fake = vi.hoisted(() => {
   const state = {
@@ -68,7 +68,13 @@ const fake = vi.hoisted(() => {
 
 vi.mock('@/configs/analytics.config', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/configs/analytics.config')>()
-  return { ...actual, isErrorTrackingEnabled: () => tracking.isEnabled }
+  return {
+    ...actual,
+    isErrorTrackingEnabled: () => {
+      if (tracking.shouldThrow) throw new Error('config unreadable')
+      return tracking.isEnabled
+    },
+  }
 })
 
 vi.mock('@/services/analytics/posthog-batch.service', async (importOriginal) => {
@@ -92,6 +98,7 @@ const MINUTE = Math.floor(AT.getTime() / 60_000)
 
 afterEach(() => {
   tracking.isEnabled = false
+  tracking.shouldThrow = false
   resetErrorReporter()
   vi.useRealTimers()
   fake.state.isDown = false
@@ -167,6 +174,29 @@ describe('getErrorTrackingStatus', () => {
       lastSendError: null,
     })
     expect(warn).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('getErrorTrackingStatus "never rejects"', () => {
+  it('resolves even when the switch read throws', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    tracking.shouldThrow = true
+    await expect(getErrorTrackingStatus(AT)).resolves.toMatchObject({
+      enabled: false,
+      window: '15m',
+    })
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
+
+  it('resolves with zeros when the switch read throws and Redis is down', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    tracking.shouldThrow = true
+    fake.state.isDown = true
+    await expect(getErrorTrackingStatus(AT)).resolves.toMatchObject({
+      enabled: false,
+      sent: 0,
+    })
+    expect(warn).toHaveBeenCalledTimes(2)
   })
 })
 
