@@ -18,6 +18,7 @@ import { definitionOf, flagStateOf } from '@/services/flags/flag-evaluator.servi
 import { getFlagSnapshot } from '@/services/flags/flag-snapshot.service'
 import { logger } from '@/services/logger.service'
 import { getRedis, redisKey } from '@/services/redis.service'
+import { withStatusTimeout } from '@/services/status-read.service'
 import type { FlagFetchErrorCode, FlagsStatus } from '@/types/flags'
 import type { ParsedSnapshot } from '@/validators/flag-definition.validators'
 
@@ -143,8 +144,9 @@ function countsOf(
  * the counts by state, every replica's last fetch outcome, and the
  * undeclared variants of the current minute and the
  * `FLAG_UNKNOWN_VARIANT_WINDOW_MINUTES - 1` before it, read in one `MGET`.
- * Never rejects: when Redis fails it reports no fetch outcome and zero
- * undeclared variants, logged at warn.
+ * Never rejects: when Redis fails, or does not answer within
+ * `STATUS_READ_TIMEOUT_MS`, it reports no fetch outcome and zero undeclared
+ * variants, logged at warn.
  * @param at - The moment staleness and the window are measured to; defaults to now.
  * @returns The status.
  */
@@ -177,12 +179,20 @@ export async function getFlagsStatus(at: Date = new Date()): Promise<FlagsStatus
     (_, index) => current - index
   )
   try {
-    const redis = await getRedis()
-    const [lastOk, lastError, ...counters] = await redis.mGet([
-      redisKey(...LAST_FETCH_OK_KEY),
-      redisKey(...LAST_FETCH_ERROR_KEY),
-      ...minutes.map((minute) => unknownVariantKey(minute)),
-    ])
+    const values = await withStatusTimeout(
+      (async () => {
+        const redis = await getRedis()
+        return redis.mGet([
+          redisKey(...LAST_FETCH_OK_KEY),
+          redisKey(...LAST_FETCH_ERROR_KEY),
+          ...minutes.map((minute) => unknownVariantKey(minute)),
+        ])
+      })(),
+      undefined,
+      'Flag counters'
+    )
+    if (values === undefined) return status
+    const [lastOk, lastError, ...counters] = values
     if (typeof lastOk === 'string') status.lastFetchOk = lastOk
     if (typeof lastError === 'string' && FETCH_ERROR_CODES.has(lastError)) {
       status.lastFetchError = lastError as FlagFetchErrorCode

@@ -7,6 +7,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createApp } from '@/app'
+import { STATUS_READ_TIMEOUT_MS } from '@/constants/platform.constants'
 import { sql } from '@/services/database.service'
 import * as counters from '@/services/errors/error-counters.service'
 import * as flagCounters from '@/services/flags/flag-counters.service'
@@ -107,6 +108,32 @@ describe('GET /platform/system/status', () => {
     const [row] = await sql<{ count: number }[]>`
       select count(*)::int as count from audit_logs where actor_user_id = ${user.id}`
     expect(row?.count).toBe(0)
+  })
+
+  it('answers within the bound when a section’s Redis read never settles', async () => {
+    const redis = await import('@/services/redis.service')
+    const real = await redis.getRedis()
+    const stalled = new Proxy(real, {
+      get: (target, property, receiver) =>
+        property === 'mGet'
+          ? () => new Promise<never>(() => {})
+          : (Reflect.get(target, property, receiver) as unknown),
+    })
+    vi.spyOn(redis, 'getRedis').mockResolvedValue(stalled)
+    vi.spyOn(maintenanceMode, 'getMaintenanceModeStatus').mockResolvedValue(
+      sampleMaintenanceStatus()
+    )
+    const { token } = await createTrackedStaff('admin')
+    const startedAt = Date.now()
+
+    const response = await request(app)
+      .get('/api/v1/platform/system/status')
+      .set('Authorization', `Bearer ${token}`)
+
+    expect(response.status).toBe(200)
+    expect(Date.now() - startedAt).toBeLessThan(STATUS_READ_TIMEOUT_MS + 2000)
+    const data = (response.body as { data: { errorTracking: { sent: number } } }).data
+    expect(data.errorTracking.sent).toBe(0)
   })
 
   it('refuses a viewer with 404 without reading the counters', async () => {

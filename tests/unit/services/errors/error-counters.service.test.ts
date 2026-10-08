@@ -6,6 +6,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ERROR_GLOBAL_PER_MINUTE } from '@/constants/error-tracking.constants'
+import { STATUS_READ_TIMEOUT_MS } from '@/constants/platform.constants'
 import {
   countErrorOutcome,
   getErrorTrackingStatus,
@@ -26,6 +27,7 @@ const tracking = vi.hoisted(() => ({ isEnabled: false, shouldThrow: false }))
 const fake = vi.hoisted(() => {
   const state = {
     isDown: false,
+    isHung: false,
     commands: [] as unknown[][],
     values: new Map<string, string>(),
   }
@@ -59,6 +61,7 @@ const fake = vi.hoisted(() => {
     },
     mGet: (keys: string[]) => {
       record('mGet', [keys])
+      if (state.isHung) return new Promise<never>(() => {})
       // eslint-disable-next-line unicorn/no-null -- Redis answers null for a missing key
       return Promise.resolve(keys.map((key) => state.values.get(key) ?? null))
     },
@@ -102,6 +105,7 @@ afterEach(() => {
   resetErrorReporter()
   vi.useRealTimers()
   fake.state.isDown = false
+  fake.state.isHung = false
   fake.state.commands = []
   fake.state.values.clear()
   vi.restoreAllMocks()
@@ -197,6 +201,31 @@ describe('getErrorTrackingStatus "never rejects"', () => {
       sent: 0,
     })
     expect(warn).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('getErrorTrackingStatus with a Redis that stalls', () => {
+  it('resolves at the bound with zeros and one warning when MGET never answers', async () => {
+    vi.useFakeTimers({ now: AT })
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    fake.state.isHung = true
+    const settled = vi.fn()
+    const pending = (async () => {
+      settled(await getErrorTrackingStatus(AT))
+    })()
+    await vi.advanceTimersByTimeAsync(STATUS_READ_TIMEOUT_MS - 1)
+    expect(settled).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    await pending
+    expect(settled).toHaveBeenCalledWith(expect.objectContaining({ sent: 0 }))
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('leaves no timer after a prompt answer', async () => {
+    vi.useFakeTimers({ now: AT })
+    await getErrorTrackingStatus(AT)
+    expect(vi.getTimerCount()).toBe(0)
   })
 })
 

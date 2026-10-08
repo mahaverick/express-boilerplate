@@ -22,6 +22,7 @@ import { MAINTENANCE_MODE_PAUSE_GRACE_MS } from '@/constants/maintenance-mode.co
 import { logger } from '@/services/logger.service'
 import { getMaintenanceMode } from '@/services/maintenance-mode/maintenance-mode-store.service'
 import { getAllQueues } from '@/services/queue.service'
+import { withStatusTimeout } from '@/services/status-read.service'
 import type { MaintenanceModeSnapshot, QueuePauseState } from '@/types/maintenance-mode'
 
 /**
@@ -262,16 +263,30 @@ export async function getQueuePauseStates(): Promise<QueuePauseState[]> {
   } catch {
     return []
   }
-  return Promise.all(
-    queues.map(async (queue) => {
-      const [paused, active] = await Promise.allSettled([queue.isPaused(), queue.getActiveCount()])
-      return {
-        name: queue.name,
-        // eslint-disable-next-line unicorn/no-null -- the contract is null for "Redis did not answer"
-        paused: paused.status === 'fulfilled' ? paused.value : null,
-        // eslint-disable-next-line unicorn/no-null -- as above
-        active: active.status === 'fulfilled' ? active.value : null,
-      }
-    })
+  const unanswered = queues.map((queue) => ({
+    name: queue.name,
+    // eslint-disable-next-line unicorn/no-null -- the contract is null for "Redis did not answer"
+    paused: null,
+    // eslint-disable-next-line unicorn/no-null -- as above
+    active: null,
+  }))
+  return withStatusTimeout(
+    Promise.all(
+      queues.map(async (queue) => {
+        const [paused, active] = await Promise.allSettled([
+          queue.isPaused(),
+          queue.getActiveCount(),
+        ])
+        return {
+          name: queue.name,
+          // eslint-disable-next-line unicorn/no-null -- the contract is null for "Redis did not answer"
+          paused: paused.status === 'fulfilled' ? paused.value : null,
+          // eslint-disable-next-line unicorn/no-null -- as above
+          active: active.status === 'fulfilled' ? active.value : null,
+        }
+      })
+    ),
+    unanswered,
+    'Queue pause states'
   )
 }

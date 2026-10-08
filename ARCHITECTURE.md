@@ -969,7 +969,12 @@ not audited) answers `{ release, errorTracking, flags }`: the image's
 `APP_VERSION`, the reporter's sent and dropped counts over the last 15
 minutes, summed from Redis across every API and worker process, and the
 flags' status (see [Feature flags](#feature-flags)). It is an open object;
-later sections are added as keys.
+later sections are added as keys. Each section that reads Redis (error
+tracking, flags, the maintenance queues) is bounded by
+`STATUS_READ_TIMEOUT_MS` (2000 ms, `withStatusTimeout` in
+`status-read.service.ts`): a stalled Redis answers the section with what it
+reports when Redis fails, and one `warn`, so the page staff open during an
+incident still loads.
 
 What an event may carry, and what it never does, is in
 [SECURITY.md](SECURITY.md#error-tracking-what-reaches-posthog).
