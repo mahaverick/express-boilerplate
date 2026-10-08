@@ -20,12 +20,21 @@ const REDACTED = '[redacted]'
 const SECRET_KEY_PATTERN = /(?:Url|Token)$/
 
 /**
- * Keys whose values hold an address: an email job's `to` (also on a
- * notification job's paired `email`) and any `cc`, `bcc`, `replyTo` or
- * `recipient`. A failed job is kept for days; the `email_messages` row
- * already holds the recipient.
+ * Keys whose values hold an address, lowercased: an email job's `to` (also
+ * on a notification job's paired `email`) and any `cc`, `bcc`, `replyTo`
+ * (`reply_to`), `recipient` or `recipients`, matched in any letter case. A
+ * failed job is kept for days; the `email_messages` row already holds the
+ * recipient.
  */
-const ADDRESS_KEYS: ReadonlySet<string> = new Set(['to', 'cc', 'bcc', 'replyTo', 'recipient'])
+const ADDRESS_KEYS: ReadonlySet<string> = new Set([
+  'to',
+  'cc',
+  'bcc',
+  'replyto',
+  'reply_to',
+  'recipient',
+  'recipients',
+])
 
 /**
  * Whether a key's whole value is replaced: a link, token or address key's
@@ -36,7 +45,7 @@ const ADDRESS_KEYS: ReadonlySet<string> = new Set(['to', 'cc', 'bcc', 'replyTo',
  * @returns True when the value becomes `'[redacted]'`.
  */
 function isRedactedEntry(key: string): boolean {
-  return SECRET_KEY_PATTERN.test(key) || ADDRESS_KEYS.has(key)
+  return SECRET_KEY_PATTERN.test(key) || ADDRESS_KEYS.has(key.toLowerCase())
 }
 
 /**

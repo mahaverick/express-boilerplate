@@ -159,6 +159,27 @@ describe('scrubJobData', () => {
     expect(JSON.stringify(scrubbed)).not.toContain(sentinel)
   })
 
+  it('redacts an address key in any letter case, and a recipients list', () => {
+    const sentinel = 'leak-sentinel@example.com'
+    const data = {
+      To: sentinel,
+      CC: sentinel,
+      ReplyTo: sentinel,
+      reply_to: sentinel,
+      recipients: [sentinel],
+      templateKey: 'password_reset',
+    }
+
+    expect(scrubJobData(data)).toEqual({
+      To: '[redacted]',
+      CC: '[redacted]',
+      ReplyTo: '[redacted]',
+      reply_to: '[redacted]',
+      recipients: '[redacted]',
+      templateKey: 'password_reset',
+    })
+  })
+
   it('returns a copy and leaves its argument untouched', () => {
     const data = { variables: { resetUrl: 'https://x.test/r' } }
     const scrubbed = scrubJobData(data)
