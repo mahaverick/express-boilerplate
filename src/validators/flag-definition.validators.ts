@@ -142,8 +142,11 @@ const KNOWN_FILTER_KEYS: ReadonlySet<string> = new Set([
 ])
 
 /**
- * The condition keys the evaluator knows. `sort_key` only orders conditions
- * in PostHog's UI; any other key may change what the condition matches.
+ * The condition keys the evaluator knows. `sort_key` and `description` are
+ * stored for display only (PostHog's UI strips `sort_key` on save, so it
+ * comes from other writers; `description` is `null` once cleared). They are
+ * listed so a flag saved in the UI stays supported; any other key may change
+ * what the condition matches, so it fails closed.
  */
 const KNOWN_CONDITION_KEYS: ReadonlySet<string> = new Set([
   'properties',
@@ -151,11 +154,15 @@ const KNOWN_CONDITION_KEYS: ReadonlySet<string> = new Set([
   'variant',
   'aggregation_group_type_index',
   'sort_key',
+  'description',
 ])
 
 /**
- * The property keys the evaluator knows; any other may change how the
- * property matches (a case-sensitivity switch, say).
+ * The property keys the evaluator knows. `label`, `cohort_name` and
+ * `group_key_names` are stored or injected by PostHog for display only; they
+ * are listed so a flag saved in the UI stays supported (every `$group_key`
+ * property carries `group_key_names`). Any other key may change how the
+ * property matches (a case-sensitivity switch, say), so it fails closed.
  */
 const KNOWN_PROPERTY_KEYS: ReadonlySet<string> = new Set([
   'key',
@@ -164,6 +171,9 @@ const KNOWN_PROPERTY_KEYS: ReadonlySet<string> = new Set([
   'value',
   'group_type_index',
   'negation',
+  'label',
+  'cohort_name',
+  'group_key_names',
 ])
 
 /**

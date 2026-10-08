@@ -699,6 +699,31 @@ function definitionWith(condition: Record<string, unknown>): FlagDefinitionJson 
   })
 }
 
+/**
+ * A tenant-aggregated flag with one `$group_key`-style property.
+ * @param property - Fields of its one property.
+ * @returns The parsed definition.
+ */
+function tenantFlagWith(property: Record<string, unknown>): FlagDefinitionJson {
+  return flagDefinitionSchema.parse({
+    id: 2,
+    key: 'example_beta_page',
+    active: true,
+    deleted: false,
+    filters: {
+      aggregation_group_type_index: 0,
+      groups: [
+        {
+          aggregation_group_type_index: 0,
+          properties: [property],
+          rollout_percentage: 100,
+          description: NONE,
+        },
+      ],
+    },
+  })
+}
+
 describe('unknown condition and property fields', () => {
   it('a condition with a field the evaluator does not know is unsupported, not evaluated without it', () => {
     const parsed = definitionWith({ sort_key: 'x', exclude_matching: true })
@@ -736,6 +761,57 @@ describe('unknown condition and property fields', () => {
       ],
     })
     expect(detectUnsupported(parsed, flagEntry('example_cta_experiment'), NONE)).toBeNull()
+  })
+
+  it('keeps a flag saved in the PostHog UI supported, display-only keys included', () => {
+    const plain = { key: 'app_env', type: 'person', operator: 'exact', value: ['local'] }
+    const entry = flagEntry('example_cta_experiment')
+    for (const description of [NONE, 'beta users']) {
+      expect(
+        detectUnsupported(definitionWith({ description, properties: [plain] }), entry, NONE)
+      ).toBeNull()
+    }
+    expect(
+      detectUnsupported(
+        definitionWith({ properties: [{ ...plain, label: 'Environment' }] }),
+        entry,
+        NONE
+      )
+    ).toBeNull()
+    expect(
+      detectUnsupported(
+        definitionWith({
+          properties: [{ key: 'seg', type: 'cohort', value: 7, cohort_name: 'Beta' }],
+        }),
+        entry,
+        NONE
+      )
+    ).toBe('cohort')
+  })
+
+  it('keeps a tenant flag targeting $group_key supported when PostHog injects group_key_names', () => {
+    const groupKey = {
+      key: '$group_key',
+      type: 'group',
+      group_type_index: 0,
+      operator: 'exact',
+      value: ['t1'],
+    }
+    const entry = flagEntry('example_beta_page')
+    expect(detectUnsupported(tenantFlagWith(groupKey), entry, 0)).toBeNull()
+    expect(
+      detectUnsupported(
+        tenantFlagWith({ ...groupKey, group_key_names: { t1: 'Tenant One' } }),
+        entry,
+        0
+      )
+    ).toBeNull()
+    expect(
+      detectUnsupported(tenantFlagWith({ ...groupKey, group_key_names: {} }), entry, 0)
+    ).toBeNull()
+    expect(
+      detectUnsupported(tenantFlagWith({ ...groupKey, case_insensitive: true }), entry, 0)
+    ).toBe('unknown_field')
   })
 
   it('is a parser change, so the version moves and stored snapshots are re-parsed', () => {
