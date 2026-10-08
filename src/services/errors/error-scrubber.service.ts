@@ -266,6 +266,28 @@ const KV_SECRET_PATTERN = new RegExp(
 )
 
 /**
+ * The words that mark a text as an OAuth exchange: a token request's field
+ * names (`grant_type`, `redirect_uri`, `client_id`, `authorization_code`) and
+ * the word `OAuth`. A bare `authorization` is left out: a request dump with
+ * an Authorization header is not an exchange. A fixed word list with no
+ * repetition, so testing it is linear.
+ */
+const OAUTH_CONTEXT_PATTERN = /grant_type|redirect_uri|client_id|authorization_code|oauth/i
+
+/**
+ * A `code` key and its value, wherever it stands in the text: the same
+ * separators, quotes and values as `KV_SECRET_PATTERN`. Applied only to a
+ * text that `OAUTH_CONTEXT_PATTERN` matches, so a `code` in a pretty-printed or
+ * nested dump of a token request goes, while `{ code: 'ECONNREFUSED' }` in
+ * any other text stays.
+ */
+const CODE_KEY_PATTERN = new RegExp(
+  String.raw`\b(code${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?)` +
+    `${KEPT_VALUE}(?:${QUOTED_VALUE}|${ARRAY_VALUE}|${UNQUOTED_VALUE})`,
+  'gi'
+)
+
+/**
  * A JSON Web Token: three dot-separated base64url segments, the first a
  * base64 JSON object: `eyJ` (`{"`), or, at nine or more characters, `eyA`
  * (`{ `) or `ew` (`{` and a line break or tab). The signature may be empty
@@ -453,7 +475,8 @@ function capped(value: string, wasCut: boolean): string {
  * `access_key`, `private_key`, `consumer_key`, `session`, `sid`,
  * `credential`, `jwt`, `otp`, `signature`, `sig`, `hmac`, `nonce`,
  * `response`; `code` after `?` or `&` or on an OAuth or authorization line;
- * `key` before `=`), become `[redacted]`; a JWT becomes `[jwt]`; a PostHog
+ * `key` before `=`; and every `code` in a text that names an OAuth exchange
+ * (`OAUTH_CONTEXT_PATTERN`)), become `[redacted]`; a JWT becomes `[jwt]`; a PostHog
  * key (`phc_`, `phx_`, `phs_`) becomes `[posthog-key]` and a vendor
  * credential (`VENDOR_KEY_PATTERN`, or an AWS secret access key) `[secret]`; an email address
  * (`EMAIL_PATTERN`: `@` written plainly, encoded or fullwidth, a quoted
@@ -474,6 +497,7 @@ function capped(value: string, wasCut: boolean): string {
  */
 export function scrubText(value: string): string {
   const input = scanned(value)
+  const hasOauthContext = OAUTH_CONTEXT_PATTERN.test(input)
   const scrubbed = input
     .replaceAll(KEY_DETAIL_PATTERN, 'Key ($1)=([value])')
     .replaceAll(PG_INPUT_PATTERN, '$1"[value]"')
@@ -489,6 +513,9 @@ export function scrubText(value: string): string {
     .replaceAll(BASIC_PATTERN, '$1 [token]')
     .replaceAll(AUTH_HEADER_PATTERN, '$1[redacted]')
     .replaceAll(KV_SECRET_PATTERN, '$1[redacted]')
+    .replaceAll(CODE_KEY_PATTERN, (match: string, key: string) =>
+      hasOauthContext ? `${key}[redacted]` : match
+    )
     .replaceAll(JWT_PATTERN, '[jwt]')
     .replaceAll(POSTHOG_KEY_PATTERN, '[posthog-key]')
     .replaceAll(VENDOR_KEY_PATTERN, '[secret]')

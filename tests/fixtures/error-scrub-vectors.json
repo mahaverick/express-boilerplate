@@ -1458,5 +1458,25 @@
     "rule": "kv",
     "input": "Failed to authorize: code=abc123XYZ",
     "expected": "Failed to authorize: code=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "{\n  \"code\": \"abc123XYZ\",\n  \"grant_type\": \"authorization_code\"\n}",
+    "expected": "{\n  \"code\": \"[redacted]\",\n  \"grant_type\": \"authorization_code\"\n}"
+  },
+  {
+    "rule": "kv",
+    "input": "{ body: { code: 'abc123XYZ' }, grant_type: 'authorization_code' }",
+    "expected": "{ body: { code: '[redacted]' }, grant_type: 'authorization_code' }"
+  },
+  {
+    "rule": "kv",
+    "input": "code=abc123XYZ\nstate=x\ngrant_type=authorization_code",
+    "expected": "code=[redacted]\nstate=x\ngrant_type=authorization_code"
+  },
+  {
+    "rule": "kv",
+    "input": "{\n  code: 'ECONNREFUSED',\n  errno: -111\n}",
+    "expected": "{\n  code: 'ECONNREFUSED',\n  errno: -111\n}"
   }
 ]
