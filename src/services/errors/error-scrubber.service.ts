@@ -276,6 +276,21 @@ const JWT_PATTERN = /(?<![G-Zg-z_])e(?:yJ[\w-]+|(?:yA|w[\w-])[\w-]{6,})\.[\w-]+\
 const POSTHOG_KEY_PATTERN = /\bph[cxs]_\w+/g
 
 /**
+ * A vendor credential with a known prefix or shape, too short or too plain
+ * for the base64 run rule: a Google OAuth client secret (`GOCSPX-`), a
+ * Resend API key (`re_`, 16 or more characters with a digit, so `re_render`
+ * is kept), an AWS access key id (`AKIA`, `ASIA`), a Slack token (`xoxb-`
+ * and kin), a Stripe-style live or test key (`sk_live_`, `rk_test_`), a
+ * bare Google API key (`AIza` and 35 more), a Stripe webhook secret
+ * (`whsec_`) and an AWS secret access key: exactly 40 base64 characters
+ * with at least one `/` or `+`, on its own between non-base64 characters.
+ * Applied again after the hex rule, like the PostHog key rule.
+ */
+const VENDOR_KEY_PATTERN =
+  // eslint-disable-next-line sonarjs/regex-complexity -- one pattern per rule keeps the rule list the spec
+  /\b(?:GOCSPX-[\w-]{20,}|re_(?=[A-Za-z_]*\d)\w{16,}|(?:AKIA|ASIA)[\dA-Z]{16}\b|xox[abprs]-[\w-]{10,}|[rs]k_(?:live|test)_\w{10,}|AIza[\w-]{35}|whsec_[A-Za-z\d+/=]{32,})|(?<![\w+/-])(?=[A-Za-z\d]*[+/])[A-Za-z\d+/]{40}(?![\w+/=-])/g
+
+/**
  * An email address, in any script. The local part is a run of address
  * characters or a quoted string (`"jane doe"`); the `@` is written plainly,
  * as `%40` or `%2540`, or as a fullwidth `＠` or small `﹫`; the domain is a
@@ -396,31 +411,35 @@ function capped(value: string, wasCut: boolean): string {
  * this order: Postgres `Key (col)=(value)` details keep the columns and lose
  * the value (`([value])`); a value Postgres echoes after `invalid input
  * syntax for type`, `invalid input value for enum`, `malformed ... literal:`
- * or `date/time field value out of range:`, the number in `value "n" is out of
- * range for type`, and the snippet in a V8 `is not valid JSON` error, become `"[value]"`; the userinfo of a URL
- * becomes `[credentials]@`; a URL's, path's or bare word's query string becomes
- * `?[query]` and its fragment, unless a line or heading anchor
- * (`isHarmlessFragment`), `#[fragment]`; the segment after `/reset/`,
- * `/verify/`, `/invite/` or `/accept/` becomes `[token]`; `Bearer <credential>` becomes
- * `Bearer [token]`; `Basic <base64>` becomes `Basic [token]`, the scheme's case kept; an
- * Authorization- or Cookie-valued key's value (`authorization`, `auth`,
- * `cookie`, `set-cookie`), after any known scheme word, to its closing
- * quote or the end of the line, and the
- * value, an array included, of a secret-named key, singular or plural
- * (`password`, `passphrase`, `passcode`, `pin`, `token`, `secret`, `api_key`, `access_key`, `private_key`,
- * `consumer_key`, `session`, `sid`, `credential`, `jwt`, `otp`,
- * `signature`, `sig`, `hmac`, `nonce`, `response`; `code` after `?` or `&`
- * or on an OAuth or authorization line; `key` before `=`), become `[redacted]`; a JWT becomes `[jwt]`; a
- * PostHog key (`phc_`, `phx_`, `phs_`) becomes `[posthog-key]`; an email
- * address (`EMAIL_PATTERN`: `@` written plainly, encoded or fullwidth, a
- * quoted local part, an IP-literal or single-label domain) becomes
- * `[email]`; an IPv4 or IPv6 address becomes `[ip]` and an international
- * phone number `[phone]` (a UUID is an id and is kept); a run of 32 or more hex digits becomes `[secret]`, and a
- * PostHog key glued to it is replaced after it; a secret-looking run of 40
- * or more base64 characters (`isSecretRun`) becomes `[secret]`; and the result is cut to 1024
+ * or `date/time field value out of range:`, the number in `value "n" is out
+ * of range for type`, and the snippet in a V8 `is not valid JSON` error,
+ * become `"[value]"`; the userinfo of a URL becomes `[credentials]@`; a
+ * URL's, path's or bare word's query string becomes `?[query]`; a fragment,
+ * unless a line or heading anchor (`isHarmlessFragment`), becomes
+ * `#[fragment]`; the segment after `/reset/`, `/verify/`, `/invite/` or
+ * `/accept/` becomes `[token]`; `Bearer <credential>` becomes
+ * `Bearer [token]`; `Basic <base64>` becomes `Basic [token]`, the scheme's
+ * case kept; an Authorization- or Cookie-valued key's value
+ * (`authorization`, `auth`, `cookie`, `set-cookie`), after any known scheme
+ * word, to its closing quote or the end of the line, and the value, an
+ * array included, of a secret-named key, singular or plural (`password`,
+ * `passphrase`, `passcode`, `pin`, `token`, `secret`, `api_key`,
+ * `access_key`, `private_key`, `consumer_key`, `session`, `sid`,
+ * `credential`, `jwt`, `otp`, `signature`, `sig`, `hmac`, `nonce`,
+ * `response`; `code` after `?` or `&` or on an OAuth or authorization line;
+ * `key` before `=`), become `[redacted]`; a JWT becomes `[jwt]`; a PostHog
+ * key (`phc_`, `phx_`, `phs_`) becomes `[posthog-key]` and a vendor
+ * credential (`VENDOR_KEY_PATTERN`) `[secret]`; an email address
+ * (`EMAIL_PATTERN`: `@` written plainly, encoded or fullwidth, a quoted
+ * local part, an IP-literal or single-label domain) becomes `[email]`; an
+ * IPv4 or IPv6 address becomes `[ip]` and an international phone number
+ * `[phone]` (a UUID is an id and is kept); a run of 32 or more hex digits
+ * becomes `[secret]`, and a PostHog key or vendor credential glued to it is
+ * replaced after it; a secret-looking run of 40 or more base64 characters
+ * (`isSecretRun`) becomes `[secret]`; and the result is cut to 1024
  * characters, ending in `…[truncated]`. A key-named word is replaced even in
- * prose (`Missing token: please log in` becomes `Missing token: [redacted]`): the
- * rule trades some readable text for never leaking a value. Applying it
+ * prose (`Missing token: please log in` becomes `Missing token: [redacted]`):
+ * the rule trades some readable text for never leaking a value. Applying it
  * twice gives the same text as applying it once, except for contrived
  * inputs that glue a phone number, address or hex run to one another (a
  * placeholder written by the first pass can open a match for the second).
@@ -446,12 +465,14 @@ export function scrubText(value: string): string {
     .replaceAll(KV_SECRET_PATTERN, '$1[redacted]')
     .replaceAll(JWT_PATTERN, '[jwt]')
     .replaceAll(POSTHOG_KEY_PATTERN, '[posthog-key]')
+    .replaceAll(VENDOR_KEY_PATTERN, '[secret]')
     .replaceAll(EMAIL_PATTERN, '[email]')
     .replaceAll(IPV4_PATTERN, '[ip]')
     .replaceAll(IPV6_PATTERN, '[ip]')
     .replaceAll(PHONE_PATTERN, '[phone]')
     .replaceAll(HEX_RUN_PATTERN, '[secret]')
     .replaceAll(POSTHOG_KEY_PATTERN, '[posthog-key]')
+    .replaceAll(VENDOR_KEY_PATTERN, '[secret]')
     .replaceAll(BASE64_RUN_PATTERN, (run) => (isSecretRun(run) ? '[secret]' : run))
   return capped(scrubbed, input.length < value.length)
 }

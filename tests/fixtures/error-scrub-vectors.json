@@ -1238,5 +1238,85 @@
     "rule": "kv",
     "input": "spin=3 failed",
     "expected": "spin=3 failed"
+  },
+  {
+    "rule": "secret",
+    "input": "InvalidAccessKeyId: AKIAIOSFODNN7EXAMPLE is not valid",
+    "expected": "InvalidAccessKeyId: [secret] is not valid"
+  },
+  {
+    "rule": "secret",
+    "input": "client config GOCSPX-zqT3abcdEFGH1234ijklMNOP567q",
+    "expected": "client config [secret]"
+  },
+  {
+    "rule": "secret",
+    "input": "using re_zqT4Abc123_DEFghi456JKL",
+    "expected": "using [secret]"
+  },
+  {
+    "rule": "secret",
+    "input": "slack xoxb-1234567890-zqT6ABCdef",
+    "expected": "slack [secret]"
+  },
+  {
+    "rule": "secret",
+    "input": "stripe sk_live_zqT7abcDEF1234567",
+    "expected": "stripe [secret]"
+  },
+  {
+    "rule": "secret",
+    "input": "a3f9a3f9a3f9a3f9a3f9a3f9a3f9a3f9sk_live_zqT7abcDEF1234567",
+    "expected": "[secret][secret]"
+  },
+  {
+    "rule": "secret",
+    "input": "re_render failed in re_render_queue_handler",
+    "expected": "re_render failed in re_render_queue_handler"
+  },
+  {
+    "rule": "secret",
+    "input": "maps key AIzaSyZqTfakeEXAMPLEexampleEXAMPLE_ex-0 rejected",
+    "expected": "maps key [secret] rejected"
+  },
+  {
+    "rule": "secret",
+    "input": "webhook whsec_zqTfakeEXAMPLEexampleEXAMPLE+ex/0= mismatch",
+    "expected": "webhook [secret] mismatch"
+  },
+  {
+    "rule": "secret",
+    "input": "secret access key wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY rejected",
+    "expected": "secret access key [secret] rejected"
+  },
+  {
+    "rule": "secret",
+    "input": "secret access key wJalrXUtnFEMI+KxMDENGzbPxRfiCYEXAMPLEKEY rejected",
+    "expected": "secret access key [secret] rejected"
+  },
+  {
+    "rule": "secret",
+    "input": "commit 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b done",
+    "expected": "commit [secret] done"
+  },
+  {
+    "rule": "secret",
+    "input": "id zqTabcdEFGHijkl/MNOPqrstUVWXyzab/CDEFghix here",
+    "expected": "id zqTabcdEFGHijkl/MNOPqrstUVWXyzab/CDEFghix here"
+  },
+  {
+    "rule": "secret",
+    "input": "id zqTabcdEFGHijkl/MNOPqrstUVWXyzab/CDEFgh here",
+    "expected": "id zqTabcdEFGHijkl/MNOPqrstUVWXyzab/CDEFgh here"
+  },
+  {
+    "rule": "secret",
+    "input": "id AIzaSyZqTfakeEXAMPLEexampleEXAMPLE_ex- here",
+    "expected": "id AIzaSyZqTfakeEXAMPLEexampleEXAMPLE_ex- here"
+  },
+  {
+    "rule": "secret",
+    "input": "id whsec_zqTfakeEXAMPLEexample here",
+    "expected": "id whsec_zqTfakeEXAMPLEexample here"
   }
 ]
