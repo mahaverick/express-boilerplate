@@ -13,6 +13,7 @@
  */
 import net from 'node:net'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { getEnv } from '@/configs/env.config'
 import {
   createFlagSnapshotStore,
   flagSnapshotChannel,
@@ -36,6 +37,7 @@ import { waitUntil } from '../../../helpers/timing'
 const subscriber = vi.hoisted(() => ({
   url: undefined as string | undefined,
   redirectNext: false,
+  client: undefined as { unref: () => void } | undefined,
 }))
 
 vi.mock('redis', async (importOriginal) => {
@@ -45,11 +47,13 @@ vi.mock('redis', async (importOriginal) => {
     createClient: (options: Parameters<typeof actual.createClient>[0]) => {
       const isSubscriber = subscriber.redirectNext
       subscriber.redirectNext = false
-      return actual.createClient({
+      const client = actual.createClient({
         ...options,
         ...(isSubscriber && subscriber.url !== undefined && { url: subscriber.url }),
         ...(isSubscriber && subscriber.url === undefined && { name: 'flag-snapshot-subscriber' }),
       })
+      if (isSubscriber) subscriber.client = client
+      return client
     },
   }
 })
@@ -99,6 +103,7 @@ async function subscriberCount(): Promise<number> {
 beforeEach(async () => {
   subscriber.url = undefined
   subscriber.redirectNext = false
+  subscriber.client = undefined
   // Another file in this worker may have left a snapshot under the shared prefix.
   const redis = await getRedis()
   await redis.del(flagSnapshotKey())
@@ -358,6 +363,28 @@ describe('start() and stop() while the subscriber never finishes its handshake',
     } finally {
       silent.close()
     }
+  })
+})
+
+describe('a subscriber stopped before its connect landed', () => {
+  it('is unref’d, so the connection that lands afterwards never holds the process open', async () => {
+    // Unnamed, so a connection left open here is never taken for another test's subscriber.
+    subscriber.url = getEnv().REDIS_URL
+    const store = createFlagSnapshotStore({ backstopMs: 600_000 })
+    stores.push(store)
+    subscriber.redirectNext = true
+    await store.start()
+    const client = subscriber.client
+    if (client === undefined) throw new Error('setup: start() created the subscriber')
+    const unref = vi.spyOn(client, 'unref')
+
+    // In the same tick as start(): the TCP connect has not landed, so destroy() cannot close it.
+    await store.stop()
+
+    await waitUntil(() => unref.mock.calls.length > 0, {
+      message: 'the subscriber whose connect landed after stop() was unref’d',
+    })
+    expect(unref).toHaveBeenCalled()
   })
 })
 

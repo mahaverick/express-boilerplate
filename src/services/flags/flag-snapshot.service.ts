@@ -221,7 +221,8 @@ function isOlder(incoming: ParsedSnapshot, current: ParsedSnapshot | null): bool
  * TCP connect has not landed yet is not closed by this: node-redis has no
  * socket to destroy until then. Once the connect lands, the handshake
  * deadline's destroy releases it against a silent peer; against a healthy
- * Redis it stays open until the process exits.
+ * Redis it stays open until the process exits, unref'd by the caller so it
+ * never keeps the process alive.
  * @param client - The client.
  */
 function destroyQuietly(client: RedisClientType): void {
@@ -335,6 +336,8 @@ export function createFlagSnapshotStore(options: { backstopMs?: number } = {}): 
       void reload()
     } catch (error) {
       if (state.subscriber === client) state.subscriber = undefined
+      // A connect that landed after stop() cannot be closed through node-redis; unref'd, it never holds the process.
+      client.unref()
       destroyQuietly(client)
       if (!state.isClosed) {
         logger.warn('Flag snapshot subscriber failed to start; the backstop keeps reloading', {
@@ -402,7 +405,9 @@ export async function startFlagSnapshot(): Promise<void> {
 /**
  * Stop this process's snapshot store, for graceful shutdown. Safe to call
  * twice, and when it never started.
- * @returns Resolves once the subscriber is closed.
+ * @returns Resolves once the subscriber is closed or, for one still
+ *   connecting, after at most `STOP_SUBSCRIBER_WAIT_MS`; a connect that
+ *   lands later stays open, unref'd.
  */
 export async function stopFlagSnapshot(): Promise<void> {
   await defaultStore.stop()
