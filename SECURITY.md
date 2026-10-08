@@ -97,15 +97,25 @@ expire (`ACCESS_TOKEN_TTL`). The sibling's next refresh is then reuse, which
 ends the whole session, the caller's chain included. Ending the sibling does not
 cost the caller's chain its grace window: only a kill recorded at or after the
 replayed token's rotation refuses grace (`isSessionKilled`), and the sibling's
-revoke is older than any later rotation of the caller's chain. The one
-exception is a replay, within its 10 s window, of a token rotated just before
-that revoke: it is refused as reuse. With `COOKIE_DOMAIN` set
-the cookie is `__Secure-`, which a host under that domain can plant; a planted
-cookie still has to be a live refresh token of the same user and session (in
-practice the thief's own sibling), and then the request spares the thief's
-chain and ends the victim's, until either chain's next replay of a revoked
-token trips reuse. Without `COOKIE_DOMAIN` the cookie is `__Host-` and cannot
-be planted. Otherwise reuse detection never catches a sibling, unless a token
+revoke is older than any later rotation of the caller's chain. A kill's
+`revoked_at` is stamped when its revoke statement starts, after it holds the
+user row (`statement_timestamp()`, never the transaction's `now()`), so a kill
+that began before a racing rotation's claim still reads as later than it and
+still refuses grace. The one exception is a replay, within its 10 s window, of a
+token rotated just before that revoke: it is refused as reuse. The caller can
+also be the thief: whoever holds the sibling and its access token is a caller of
+the same session, and a `revoke-others` with the sibling's cookie spares the
+thief's chain and ends the victim's, until the victim's next refresh is reuse
+and ends both. That adds nothing: a logout with the sibling's cookie already
+ends the session, and `revoke-others` already ended every other session. Under
+`COOKIE_SECURE` with `COOKIE_DOMAIN` set the cookie is `__Secure-`, which a host
+under that domain can plant; a planted cookie still has to be a live refresh
+token of the same user and session (in practice the thief's own sibling), and
+then the request spares the thief's chain and ends the victim's in the same
+way. Under `COOKIE_SECURE` without `COOKIE_DOMAIN` the cookie is `__Host-` and
+cannot be planted. Without `COOKIE_SECURE` it is the unprefixed `refreshToken`,
+which a sibling host or an on-path attacker over plain http can plant.
+Otherwise reuse detection never catches a sibling, unless a token
 one of the two chains already consumed is replayed after the window. The window
 is 10 s, so a thief must replay within 10 s of the real client's rotation to
 get one.

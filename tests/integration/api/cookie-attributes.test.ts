@@ -28,6 +28,7 @@ import {
 import { parseDurationMs } from '@/utilities/duration.utilities'
 import { hashPassword } from '@/utilities/password.utilities'
 import { clearOutbox, outboxRowsOf } from '../../helpers/analytics-outbox'
+import { isTokenRowLive, sessionWithSibling } from '../../helpers/grace-sibling'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { request } from '../../helpers/request'
 
@@ -400,6 +401,34 @@ describe('refresh cookie: the legacy refreshToken name', () => {
         expect(clears.filter((line) => SCOPED_DOMAIN.test(line))).toHaveLength(1)
       }
       expect(await tokenState(legacy)).toEqual({ isConsumed: false, isRevoked: true })
+    }
+  )
+
+  it.each([
+    {
+      label: 'the legacy name spares the whole session',
+      cookie: PLAIN_COOKIE,
+      isSiblingLive: true,
+    },
+    { label: 'the current name ends the sibling', cookie: HOST_COOKIE, isSiblingLive: false },
+  ])(
+    'never lets the legacy cookie name the caller’s chain on revoke-others: $label',
+    async ({ cookie, isSiblingLive }) => {
+      const app = appWith(SECURE_HOST_ONLY)
+      const user = await userRepository.findByEmail(await createVerifiedUser())
+      if (!user) throw new Error('setup: user vanished')
+      const caller = await sessionWithSibling(user)
+
+      const response = await request(app)
+        .post('/api/v1/auth/sessions/revoke-others')
+        .set('X-Forwarded-Proto', 'https')
+        .set('Authorization', `Bearer ${caller.bearer}`)
+        .set('Cookie', `${cookie}=${encodeURIComponent(caller.head.raw)}`)
+        .send({})
+
+      expect(response.status).toBe(200)
+      expect(await isTokenRowLive(caller.head.raw)).toBe(true)
+      expect(await isTokenRowLive(caller.sibling.raw)).toBe(isSiblingLive)
     }
   )
 
