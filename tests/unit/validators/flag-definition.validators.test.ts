@@ -675,3 +675,70 @@ describe('detectUnsupported', () => {
     expect(flagEntry('example_beta_page').scope).toBe('tenant')
   })
 })
+
+/**
+ * The registry's multivariate experiment with one condition.
+ * @param condition - Fields of its one condition.
+ * @returns The parsed definition.
+ */
+function definitionWith(condition: Record<string, unknown>): FlagDefinitionJson {
+  return flagDefinitionSchema.parse({
+    id: 1,
+    key: 'example_cta_experiment',
+    active: true,
+    deleted: false,
+    filters: {
+      groups: [{ properties: [], rollout_percentage: 100, ...condition }],
+      multivariate: {
+        variants: [
+          { key: 'control', rollout_percentage: 50 },
+          { key: 'bold', rollout_percentage: 50 },
+        ],
+      },
+    },
+  })
+}
+
+describe('unknown condition and property fields', () => {
+  it('a condition with a field the evaluator does not know is unsupported, not evaluated without it', () => {
+    const parsed = definitionWith({ sort_key: 'x', exclude_matching: true })
+    expect(parsed.filters.groups[0]).toHaveProperty('exclude_matching')
+    expect(detectUnsupported(parsed, flagEntry('example_cta_experiment'), NONE)).toBe(
+      'unknown_field'
+    )
+  })
+
+  it('a property with a field the evaluator does not know is unsupported', () => {
+    const parsed = definitionWith({
+      properties: [
+        {
+          key: 'app_env',
+          type: 'person',
+          operator: 'exact',
+          value: ['local'],
+          case_insensitive: false,
+        },
+      ],
+    })
+    expect(parsed.filters.groups[0]?.properties?.[0]).toHaveProperty('case_insensitive')
+    expect(detectUnsupported(parsed, flagEntry('example_cta_experiment'), NONE)).toBe(
+      'unknown_field'
+    )
+  })
+
+  it('accepts the fields PostHog sends today, sort_key included', () => {
+    const parsed = definitionWith({
+      sort_key: 'a1b2',
+      variant: 'bold',
+      aggregation_group_type_index: NONE,
+      properties: [
+        { key: 'app_env', type: 'person', operator: 'exact', value: ['local'], negation: false },
+      ],
+    })
+    expect(detectUnsupported(parsed, flagEntry('example_cta_experiment'), NONE)).toBeNull()
+  })
+
+  it('is a parser change, so the version moves and stored snapshots are re-parsed', () => {
+    expect(FLAG_PARSER_VERSION).toBe(2)
+  })
+})
