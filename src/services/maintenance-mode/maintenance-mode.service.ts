@@ -114,8 +114,9 @@ export function getPublicMaintenanceStatus(): PublicMaintenanceStatus {
 
 /**
  * The maintenance section of the staff system status, as this replica sees
- * it: the mode, whether it is known, each queue's pause state, whether the
- * last change's notices are still pending, and the last reload failure.
+ * it: the mode, when it began and when it last changed (also while off),
+ * whether it is known, each queue's pause state, whether the last change's
+ * notices are still pending, and the last reload failure.
  * @returns The section; never rejects (a Redis failure shows as null queue fields and no pending notices).
  */
 export async function getMaintenanceModeStatus(): Promise<MaintenanceModeStatus> {
@@ -124,6 +125,7 @@ export async function getMaintenanceModeStatus(): Promise<MaintenanceModeStatus>
   return {
     mode: snapshot.mode,
     since: snapshot.since,
+    changedAt: snapshot.changedAt,
     known: snapshot.known,
     queuesPaused: queues.length > 0 && queues.every((queue) => queue.paused === true),
     queues,

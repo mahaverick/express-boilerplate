@@ -55,6 +55,12 @@ export interface MaintenanceModeStatus {
   mode: MaintenanceMode
   since: string | null
   /**
+   * When the mode last changed (ISO 8601), in every mode, `off` included,
+   * where `since` is null; a message or reason edit leaves it. Null only
+   * while this replica has never read the row.
+   */
+  changedAt: string | null
+  /**
    * False while this replica has never read the row: Apex shows "unknown".
    */
   known: boolean

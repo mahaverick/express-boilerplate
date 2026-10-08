@@ -68,6 +68,7 @@ function sampleMaintenanceStatus(): MaintenanceModeStatus {
   return {
     mode: 'full',
     since: '2026-10-06T10:42:00.000Z',
+    changedAt: '2026-10-06T10:42:00.000Z',
     known: true,
     queuesPaused: true,
     queues: [{ name: 'email', paused: true, active: 0 }],
