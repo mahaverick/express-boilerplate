@@ -166,7 +166,7 @@ const AUTH_SCHEMES = String.raw`(?:Bearer|Basic|Token|ApiKey|Digest|Negotiate|NT
 /**
  * A value this scrubber already wrote, left as it is.
  */
-const PLACEHOLDER = String.raw`\[(?:redacted|value|credentials|query|fragment|token|jwt|posthog-key|email|secret)\]`
+const PLACEHOLDER = String.raw`\[(?:redacted|value|credentials|query|fragment|token|jwt|posthog-key|email|secret|ip|phone)\]`
 
 /**
  * The bare words a secret-named key may hold and keep: `token: undefined`
@@ -196,7 +196,8 @@ const ARRAY_VALUE = String.raw`\[[^\]\n]*\]`
 /**
  * An unquoted value. After a plain `:`, `=` or `=>` it runs to the next field
  * delimiter (`,` `;` `&` `}` `)` `]`, a quote or the end of the line), so a
- * multi-word passphrase goes whole; trailing spaces are kept. After an
+ * space-separated multi-word value goes whole, and one holding a delimiter
+ * stops there; trailing spaces are kept. After an
  * encoded separator (`%3D`) it stops at whitespace too. It never
  * starts with the `>` of an `=>`, so `=` cannot take half of it; a `>` after
  * any other separator is a value.
@@ -404,7 +405,9 @@ function capped(value: string, wasCut: boolean): string {
  * characters, ending in `…[truncated]`. A key-named word is replaced even in
  * prose (`Missing token: please log in` becomes `Missing token: [redacted]`): the
  * rule trades some readable text for never leaking a value. Applying it
- * twice gives the same text as applying it once.
+ * twice gives the same text as applying it once, except for contrived
+ * inputs that glue a phone number, address or hex run to one another (a
+ * placeholder written by the first pass can open a match for the second).
  * @param value - The text: an exception's type or value, or a frame's filename or function.
  * @returns The scrubbed text.
  */

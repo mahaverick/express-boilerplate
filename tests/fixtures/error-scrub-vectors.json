@@ -1033,5 +1033,10 @@
     "rule": "kv",
     "input": "response=\"abc123\"",
     "expected": "response=\"[redacted]\""
+  },
+  {
+    "rule": "kv",
+    "input": "token: [ip] and sig=[phone]",
+    "expected": "token: [ip] and sig=[phone]"
   }
 ]
