@@ -83,3 +83,18 @@ export type OnboardingTenantStateFilter = (typeof ONBOARDING_TENANT_STATE_FILTER
  * server would otherwise hold the whole status request open.
  */
 export const STATUS_READ_TIMEOUT_MS = 2000
+
+/**
+ * The longest a Redis call on the request path waits for an answer before it
+ * is treated as failed (`withRedisDeadline`, redis-deadline.service.ts).
+ * node-redis stops timing a command once it is written, so a connected but
+ * stalled server would otherwise hold every request that touches it.
+ */
+export const REDIS_REQUEST_DEADLINE_MS = 300
+
+/**
+ * How long request-path Redis calls fail at once, without trying Redis,
+ * after one of them missed `REDIS_REQUEST_DEADLINE_MS`: a stalled server
+ * then costs each request nothing instead of the whole deadline.
+ */
+export const REDIS_STALL_COOLDOWN_MS = 5000
