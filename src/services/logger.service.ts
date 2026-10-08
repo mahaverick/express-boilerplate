@@ -212,22 +212,34 @@ async function sendToSlack(webhookUrl: string, payload: Record<string, unknown>)
 }
 
 /**
- * A stack as Slack may receive it: each line scrubbed on its own
- * (`scrubText`), so the message lines lose their secrets and the frame
- * lines keep their paths.
+An ISO 8601 UTC instant, the only form of `timestamp` sent to Slack.
+ */
+const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/
+
+/**
+ * A stack as Slack may receive it: the message head (everything before the
+ * first frame line) scrubbed as one text with `scrubText`, so a credential
+ * split over lines is still seen whole; the frame lines scrubbed one by one,
+ * so their paths stay readable.
  * @param stack - The serialised error's stack.
  * @returns The scrubbed stack.
  */
 function scrubbedStack(stack: string): string {
-  return stack
-    .split('\n')
-    .map((line) => scrubText(line))
-    .join('\n')
+  const firstFrame = stack.search(/\n[ \t]+at /)
+  const head = firstFrame === -1 ? stack : stack.slice(0, firstFrame)
+  const frames = firstFrame === -1 ? '' : stack.slice(firstFrame)
+  return (
+    scrubText(head) +
+    frames
+      .split('\n')
+      .map((line) => scrubText(line))
+      .join('\n')
+  )
 }
 
 /**
  * Build the Slack Block Kit payload for one log record. Every text taken
- * from the record (message, source, request id, stack) is scrubbed with
+ * from the record (message, source, request id, stack) and the time is scrubbed with
  * the error tracker's `scrubText` first: the channel is a third party, as
  * PostHog is.
  * @param info - The parsed JSON log record.
@@ -238,7 +250,11 @@ function buildSlackPayload(info: Record<string, unknown>): Record<string, unknow
   const message = typeof info.message === 'string' ? scrubText(info.message) : ''
   const source = typeof info.source === 'string' ? scrubText(info.source) : 'unknown'
   const requestId = typeof info.requestId === 'string' ? scrubText(info.requestId) : undefined
-  const timestamp = typeof info.timestamp === 'string' ? info.timestamp : new Date().toISOString()
+  // A meta key named `timestamp` overrides pino's own; only an ISO instant is trusted.
+  const timestamp =
+    typeof info.timestamp === 'string' && ISO_INSTANT.test(info.timestamp)
+      ? info.timestamp
+      : new Date().toISOString()
   const errorStack =
     info.error && typeof info.error === 'object' && 'stack' in info.error
       ? info.error.stack
@@ -297,6 +313,11 @@ const SLACK_SCRUB_FAILED_PAYLOAD = {
 }
 
 /**
+Error names printed by name when a scrub fails; any other name could carry data.
+ */
+const SAFE_ERROR_NAMES = new Set(['Error', 'TypeError', 'RangeError', 'SyntaxError'])
+
+/**
  * Build a Slack body, or the fixed `SLACK_SCRUB_FAILED_PAYLOAD` if building
  * (the scrub) throws. Reports through `console.error`, never the logger:
  * this destination is part of the logger, and a logger call here would
@@ -308,7 +329,10 @@ function safeSlackPayload(build: () => Record<string, unknown>): Record<string, 
   try {
     return build()
   } catch (error: unknown) {
-    console.error('Slack payload scrub failed', error instanceof Error ? error.name : typeof error)
+    console.error(
+      'Slack payload scrub failed',
+      error instanceof Error && SAFE_ERROR_NAMES.has(error.name) ? error.name : typeof error
+    )
     return SLACK_SCRUB_FAILED_PAYLOAD
   }
 }
