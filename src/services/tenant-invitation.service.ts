@@ -36,7 +36,7 @@ import { hashToken } from '@/services/session.service'
 import { lockActorRole } from '@/services/tenant-membership.service'
 import { buildInvitationAcceptUrl, frontendUrl } from '@/services/verification.service'
 import { TENANT_INVITATION_TEMPLATE_KEY } from '@/templates/email/tenant-invitation.template'
-import type { Actor } from '@/types/actor'
+import type { Actor, StaffReasonOption } from '@/types/actor'
 import type { DomainEventOf } from '@/types/domain-event'
 import type { EmailResendOptions } from '@/types/email-context'
 import type { EmailDelivery } from '@/types/email-delivery'
@@ -362,13 +362,15 @@ async function tenantForMessages(
  * @param tenantId - The tenant.
  * @param email - The address to invite, in any case.
  * @param role - The role offered.
+ * @param options - `reason` when staff invite through platform access, recorded in the audit entry.
  * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access, or when the tenant is gone; 403 when the actor is now below admin or may not grant `role`; 409 `already_member` when the address belongs to a member; 429 `RATE_LIMITED` when the address has had its day's invitation mail; 409 `invitation_conflict` from a racing duplicate invite.
  */
 export async function invite(
   actor: Actor,
   tenantId: string,
   email: string,
-  role: MembershipRole
+  role: MembershipRole,
+  options: StaffReasonOption = {}
 ): Promise<void> {
   const normalizedEmail = email.trim().toLowerCase()
   const rawToken = generateInvitationToken()
@@ -410,7 +412,11 @@ export async function invite(
         access,
         tenantId,
         targetId: invitation.id,
-        metadata: { role, emailDomain: auditEmailDomain(normalizedEmail) },
+        metadata: {
+          role,
+          emailDomain: auditEmailDomain(normalizedEmail),
+          ...(options.reason !== undefined && { reason: options.reason }),
+        },
       },
       tx
     )
@@ -557,14 +563,14 @@ export async function listPending(tenantId: string): Promise<PendingInvitationSu
  * @param actor - The signed-in user resending it, named in the email.
  * @param tenantId - The tenant it must belong to.
  * @param invitationId - The invitation.
- * @param options - `resentFromId` when a staff resend re-runs this for an earlier message.
+ * @param options - `resentFromId` when a staff resend re-runs this for an earlier message; `reason` when staff resend through platform access.
  * @throws {HttpError} 404 when the tenant is gone, before anything is written; 404 `Tenant not found` when the actor no longer has access; 403 when the actor is now below admin; 404 `invitation_not_found` when it is not pending in this tenant; 403 when the actor may not grant its role; 429 `invitation_resend_cooldown` inside the cooldown; 429 `RATE_LIMITED` when the address has had its day's invitation mail.
  */
 export async function resend(
   actor: Actor,
   tenantId: string,
   invitationId: string,
-  options: EmailResendOptions = {}
+  options: EmailResendOptions & StaffReasonOption = {}
 ): Promise<void> {
   // Before the write, so a vanished tenant cannot leave the old link replaced and no email sent.
   const tenant = await tenantForMessages(tenantId)
@@ -594,7 +600,11 @@ export async function resend(
         access,
         tenantId,
         targetId: updated.id,
-        metadata: { role: updated.role, emailDomain: auditEmailDomain(updated.email) },
+        metadata: {
+          role: updated.role,
+          emailDomain: auditEmailDomain(updated.email),
+          ...(options.reason !== undefined && { reason: options.reason }),
+        },
       },
       tx
     )
@@ -610,8 +620,11 @@ export async function resend(
     inviterName: inviterDisplayName(inviter),
     invitee,
   }
+  // The email context takes only `resentFromId`: the staff reason stays in the audit entry.
+  const resendOptions: EmailResendOptions =
+    options.resentFromId === undefined ? {} : { resentFromId: options.resentFromId }
   // eslint-disable-next-line unicorn/prefer-await -- fire-and-forget: the response must not wait on the queue
-  dispatchInvitationMessages(context, undefined, options).catch((error: unknown) => {
+  dispatchInvitationMessages(context, undefined, resendOptions).catch((error: unknown) => {
     logger.error('Invitation messages failed', { error, invitationId: invitation.id })
   })
 }
@@ -623,9 +636,15 @@ export async function resend(
  * @param actor - The signed-in user revoking it.
  * @param tenantId - The tenant it must belong to.
  * @param invitationId - The invitation.
+ * @param options - `reason` when staff revoke through platform access, recorded in the audit entry.
  * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access; 403 when the actor is now below admin; 404 `invitation_not_found` when it is not pending in this tenant; 403 when the actor may not grant its role.
  */
-export async function revoke(actor: Actor, tenantId: string, invitationId: string): Promise<void> {
+export async function revoke(
+  actor: Actor,
+  tenantId: string,
+  invitationId: string,
+  options: StaffReasonOption = {}
+): Promise<void> {
   await db.transaction(async (tx) => {
     const { role: actorRole, access } = await lockActorRole(actor, tenantId, 'admin', tx)
     // Read first: the audit entry needs the role and address the revoke doesn't return.
@@ -643,7 +662,11 @@ export async function revoke(actor: Actor, tenantId: string, invitationId: strin
         access,
         tenantId,
         targetId: pending.id,
-        metadata: { role: pending.role, emailDomain: auditEmailDomain(pending.email) },
+        metadata: {
+          role: pending.role,
+          emailDomain: auditEmailDomain(pending.email),
+          ...(options.reason !== undefined && { reason: options.reason }),
+        },
       },
       tx
     )

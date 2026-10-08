@@ -378,6 +378,10 @@ uuid))` on every column,** as `errors-query.service.ts` does: per-column
   tenant and address. A revoke needs no recent sign-in: it only removes a
   pending grant. Keep these to the platform tenant:
   on a customer tenant an owner acts only on their own ownership.
+- **Staff acting on a customer tenant through platform access give a reason.**
+  The member and invitation writes there carry
+  `requireRecentAuthAndReasonOnPlatformAccess`: step-up and a body `reason`,
+  recorded in the audit entry. A member is unaffected.
 - **A tenant with no active owner is the one place an admin grants owner.**
   `POST /platform/tenants/:id/owner-invitation` (platform admin, step-up, a
   reason) goes through `createOwnerInvitation`, which skips

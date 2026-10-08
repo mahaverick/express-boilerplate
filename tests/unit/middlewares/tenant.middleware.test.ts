@@ -13,6 +13,7 @@ import type { UserMembership } from '@/database/models/user-membership.model'
 import { HttpError } from '@/errors/http-error'
 import {
   requireMembership,
+  requireRecentAuthAndReasonOnPlatformAccess,
   requireRecentAuthOnPlatformTenant,
   requireRole,
   resolveTenant,
@@ -583,5 +584,82 @@ describe('requireRecentAuthOnPlatformTenant', () => {
 
     expect(next).toHaveBeenCalledTimes(1)
     expect(lastCallArgument()).toBeUndefined()
+  })
+})
+
+/**
+ * A request from staff reaching a customer tenant through their platform role.
+ * @param fields - What else the request carries.
+ * @param fields.authTime - The token's `auth_time`, if any.
+ * @param fields.body - The request body.
+ * @returns The request.
+ */
+function staffRequest(fields: { authTime?: number; body?: unknown }): Request {
+  const principal: RequestPrincipal = {
+    ...memberPrincipal('owner'),
+    // eslint-disable-next-line unicorn/no-null -- staff reach this tenant with no membership
+    memberRole: null,
+    platformRole: 'owner',
+    access: 'platform',
+  }
+  return { principal, user: { id: 'staff-1' }, ...fields } as unknown as Request
+}
+
+/**
+ * Now, in seconds since the epoch: a fresh `auth_time`.
+ * @returns The current time in seconds.
+ */
+function nowSeconds(): number {
+  return Math.floor(Date.now() / 1000)
+}
+
+describe('requireRecentAuthAndReasonOnPlatformAccess', () => {
+  it('fails closed with 500 when request.principal is missing (resolveTenant never ran)', () => {
+    const { next, lastCallArgument } = mockNext()
+
+    requireRecentAuthAndReasonOnPlatformAccess()(buildPrincipalRequest(), noResponse, next)
+
+    expect((lastCallArgument() as HttpError).statusCode).toBe(500)
+  })
+
+  it('lets a member through with no step-up and no reason', () => {
+    const request = { principal: memberPrincipal('owner'), body: {} } as unknown as Request
+    const { next, lastCallArgument } = mockNext()
+
+    requireRecentAuthAndReasonOnPlatformAccess()(request, noResponse, next)
+
+    expect(next).toHaveBeenCalledTimes(1)
+    expect(lastCallArgument()).toBeUndefined()
+    expect(request.staffReason).toBeUndefined()
+  })
+
+  it('asks staff with a stale sign-in to step up before asking for a reason', () => {
+    const { next, lastCallArgument } = mockNext()
+
+    requireRecentAuthAndReasonOnPlatformAccess()(staffRequest({ body: {} }), noResponse, next)
+
+    expect(lastCallArgument()).toMatchObject({ statusCode: 401, code: 'REAUTH_REQUIRED' })
+  })
+
+  it('refuses recently signed-in staff with no reason 400 REASON_REQUIRED', () => {
+    const { next, lastCallArgument } = mockNext()
+
+    requireRecentAuthAndReasonOnPlatformAccess()(
+      staffRequest({ authTime: nowSeconds(), body: {} }),
+      noResponse,
+      next
+    )
+
+    expect(lastCallArgument()).toMatchObject({ statusCode: 400, code: 'REASON_REQUIRED' })
+  })
+
+  it('keeps the trimmed reason on the request for recently signed-in staff', () => {
+    const request = staffRequest({ authTime: nowSeconds(), body: { reason: '  Ticket 4411  ' } })
+    const { next, lastCallArgument } = mockNext()
+
+    requireRecentAuthAndReasonOnPlatformAccess()(request, noResponse, next)
+
+    expect(lastCallArgument()).toBeUndefined()
+    expect(request.staffReason).toBe('Ticket 4411')
   })
 })

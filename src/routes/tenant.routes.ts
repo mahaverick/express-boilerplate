@@ -21,6 +21,7 @@ import { requireFlag } from '@/middlewares/flag.middleware'
 import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
 import {
   requireMembership,
+  requireRecentAuthAndReasonOnPlatformAccess,
   requireRecentAuthOnPlatformTenant,
   requireRole,
   resolveTenant,
@@ -34,7 +35,10 @@ import {
  * every invitation and every resend also need a recent sign-in
  * (`requireRecentAuthOnPlatformTenant`): every platform role, viewer included,
  * reads every user, tenant and address.
- * A revoke needs no recent sign-in: it only removes a pending grant.
+ * A revoke there needs no recent sign-in: it only removes a pending grant.
+ * On a customer tenant, staff acting through their platform role need a
+ * recent sign-in and a `reason` for the same member and invitation writes,
+ * and for a revoke (`requireRecentAuthAndReasonOnPlatformAccess`).
  * @returns A router mounted at `/api/v1/tenants` by `index.routes.ts`, every route behind `requireAuth`.
  */
 export function createTenantRouter(): Router {
@@ -69,6 +73,7 @@ export function createTenantRouter(): Router {
     resolveTenant(),
     requireRole('owner'),
     requireRecentAuthOnPlatformTenant(),
+    requireRecentAuthAndReasonOnPlatformAccess(),
     tenantController.updateMemberRole
   )
   router.delete(
@@ -78,6 +83,7 @@ export function createTenantRouter(): Router {
     resolveTenant(),
     requireRole('owner', 'admin'),
     requireRecentAuthOnPlatformTenant(),
+    requireRecentAuthAndReasonOnPlatformAccess(),
     tenantController.removeMember
   )
 
@@ -96,6 +102,7 @@ export function createTenantRouter(): Router {
     resolveTenant(),
     requireRole('owner', 'admin'),
     requireRecentAuthOnPlatformTenant(),
+    requireRecentAuthAndReasonOnPlatformAccess(),
     tenantController.inviteMember
   )
   router.post(
@@ -105,6 +112,7 @@ export function createTenantRouter(): Router {
     resolveTenant(),
     requireRole('owner', 'admin'),
     requireRecentAuthOnPlatformTenant(),
+    requireRecentAuthAndReasonOnPlatformAccess(),
     tenantController.resendInvitation
   )
   router.delete(
@@ -113,6 +121,7 @@ export function createTenantRouter(): Router {
     writeLimiter,
     resolveTenant(),
     requireRole('owner', 'admin'),
+    requireRecentAuthAndReasonOnPlatformAccess(),
     tenantController.revokeInvitation
   )
 

@@ -1223,10 +1223,17 @@ describe('an invitation outlives its sender', () => {
   it('customer tenant: a staff admin invites on platform access, is removed from staff, then the invitation is accepted', async () => {
     const platform = await platformTenant()
     const { tenant } = await tenantWith('viewer')
-    const { user: staffAdmin, token: adminToken } = await createTrackedStaff('admin')
+    const { user: staffAdmin } = await createTrackedStaff('admin')
     const { user: staffOwner } = await createTrackedStaff('owner')
     const email = `sender-${randomUUID()}@example.test`
-    const rawToken = await inviteAs(tenant.slug, adminToken, email, 'manager')
+    // Staff inviting on a customer tenant need a recent sign-in and a reason.
+    const invited = await inviteVia(tenant.slug, recentAuthTokenFor(staffAdmin), {
+      email,
+      role: 'manager',
+      reason: 'Customer asked us to, ticket 4411',
+    })
+    expect(invited.status).toBe(202)
+    const { token: rawToken } = await waitForInvitationEmail(email)
 
     const removal = await request(app)
       .delete(`/api/v1/tenants/${platform.slug}/members/${staffAdmin.id}`)

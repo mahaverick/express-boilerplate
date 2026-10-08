@@ -233,13 +233,15 @@ describe('the staff role is re-read under lock (platform role changed after reso
       tenantId: tenant.id,
       role: 'viewer',
     })
-    const { user: staff, token } = await staffUser('owner')
+    const { user: staff } = await staffUser('owner')
+    // Staff member writes on a customer tenant need a recent sign-in and a reason.
+    const recentToken = signAccessToken(staff, randomUUID(), new Date())
 
     await withPlatformRoleChangedAfterResolve(staff, 'demote-to-viewer', {}, async () => {
       const response = await request(app)
         .patch(`/api/v1/tenants/${tenant.slug}/members/${target.id}`)
-        .set('Authorization', `Bearer ${token}`)
-        .send({ role: 'editor' })
+        .set('Authorization', `Bearer ${recentToken}`)
+        .send({ role: 'editor', reason: 'Customer asked us to, ticket 4411' })
       expect(response.status).toBe(403)
       expect(response.body).toMatchObject({ statusCode: 403, message: 'Insufficient permissions' })
     })

@@ -27,7 +27,7 @@ import {
   resolveActorAccess,
   type ActorAccess,
 } from '@/services/tenant-access.service'
-import type { Actor, TenantAccess } from '@/types/actor'
+import type { Actor, StaffReasonOption, TenantAccess } from '@/types/actor'
 import type { RowLockMode } from '@/types/lock-mode'
 import { hostnameDomain } from '@/utilities/email.utilities'
 
@@ -50,6 +50,7 @@ function rolesUngrantableBy(role: MembershipRole): MembershipRole[] {
  * @param actor - The signed-in user whose change triggered the revoke.
  * @param access - How the actor reached the tenant they changed.
  * @param revoked - The revoked rows.
+ * @param options - The staff reason for the change, recorded on each entry too.
  * @param tx - The change's transaction.
  * @returns Resolves once every entry is written.
  */
@@ -57,6 +58,7 @@ async function auditRevokedInvitations(
   actor: Actor,
   access: TenantAccess,
   revoked: readonly TenantInvitation[],
+  options: StaffReasonOption,
   tx: DbTransaction
 ): Promise<void> {
   for (const invitation of revoked) {
@@ -71,6 +73,7 @@ async function auditRevokedInvitations(
           role: invitation.role,
           // eslint-disable-next-line unicorn/no-null -- stored as JSON null in the audit metadata
           emailDomain: hostnameDomain(invitation.email) ?? null,
+          ...(options.reason !== undefined && { reason: options.reason }),
         },
       },
       tx
@@ -87,6 +90,7 @@ async function auditRevokedInvitations(
  * @param tenantId - The tenant.
  * @param inviterId - The member whose invitations go.
  * @param roles - Only offers of these roles; every offer when absent.
+ * @param options - The staff reason for the change, recorded on each entry too.
  * @param tx - The change's transaction.
  * @returns Resolves once every invitation is revoked and audited.
  */
@@ -96,6 +100,7 @@ async function revokeInvitationsSentIn(
   tenantId: string,
   inviterId: string,
   roles: readonly MembershipRole[] | undefined,
+  options: StaffReasonOption,
   tx: DbTransaction
 ): Promise<void> {
   const revoked = await tenantInvitationRepository.revokePendingByInviterInTenant(
@@ -104,7 +109,7 @@ async function revokeInvitationsSentIn(
     roles === undefined ? {} : { roles },
     tx
   )
-  await auditRevokedInvitations(actor, access, revoked, tx)
+  await auditRevokedInvitations(actor, access, revoked, options, tx)
 }
 
 /**
@@ -140,7 +145,7 @@ async function revokeInvitationsBeyondAuthorityElsewhere(
       authority === undefined ? {} : { roles: rolesUngrantableBy(authority) },
       tx
     )
-    await auditRevokedInvitations(actor, 'platform', revoked, tx)
+    await auditRevokedInvitations(actor, 'platform', revoked, {}, tx)
   }
 }
 
@@ -222,9 +227,9 @@ async function assertAnotherOwnerRemains(
 }
 
 /**
- * Options the membership writes take from the route.
+ * Options the membership writes take from the route, the staff reason included.
  */
-export interface MembershipWriteOptions {
+export interface MembershipWriteOptions extends StaffReasonOption {
   /**
    * The tenant is the platform tenant (`request.principal.isPlatformTenant`):
    * its members are staff, so an owner may act on another owner and the
@@ -303,7 +308,7 @@ async function assertOwnerRemainsFor(
  * @param tenantId - The tenant.
  * @param targetUserId - The member whose role changes.
  * @param role - The new role.
- * @param options - Pass isPlatformTenant for the platform tenant: owner-on-owner and the active-owner guard.
+ * @param options - Pass isPlatformTenant for the platform tenant: owner-on-owner and the active-owner guard; `reason` for a staff change.
  * @returns The updated membership.
  * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access; 403 when the actor is no longer an owner or the matrix refuses; 404 `Member not found` when the target is not a member; 409 when the target is the last live (on the platform tenant, active) owner and `role` is not owner.
  */
@@ -339,7 +344,7 @@ export async function changeRole(
     if (!updated) throw new HttpError('Member not found', 404)
     // Offers the new role could not make itself stop admitting people.
     const ungrantable = rolesUngrantableBy(role)
-    await revokeInvitationsSentIn(actor, access, tenantId, targetUserId, ungrantable, tx)
+    await revokeInvitationsSentIn(actor, access, tenantId, targetUserId, ungrantable, options, tx)
     if (options.isPlatformTenant === true) {
       await revokeInvitationsBeyondAuthorityElsewhere(actor, targetUserId, role, tx)
     }
@@ -350,7 +355,12 @@ export async function changeRole(
         access,
         tenantId,
         targetId: updated.id,
-        metadata: { userId: targetUserId, from: target.role, to: role },
+        metadata: {
+          userId: targetUserId,
+          from: target.role,
+          to: role,
+          ...(options.reason !== undefined && { reason: options.reason }),
+        },
       },
       tx
     )
@@ -368,7 +378,7 @@ export async function changeRole(
  * @param actor - The signed-in user removing the member.
  * @param tenantId - The tenant.
  * @param targetUserId - The member to remove.
- * @param options - Pass isPlatformTenant for the platform tenant: owner-on-owner and the active-owner guard.
+ * @param options - Pass isPlatformTenant for the platform tenant: owner-on-owner and the active-owner guard; `reason` for a staff removal.
  * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access; 403 when the actor is now below admin or the matrix refuses; 404 `Member not found` when the target is not a member; 409 when the target is the last live (on the platform tenant, active) owner.
  */
 export async function removeMember(
@@ -401,7 +411,7 @@ export async function removeMember(
     }
     const wasDeleted = await userMembershipRepository.delete(target.id, tx)
     if (!wasDeleted) throw new HttpError('Member not found', 404)
-    await revokeInvitationsSentIn(actor, access, tenantId, targetUserId, undefined, tx)
+    await revokeInvitationsSentIn(actor, access, tenantId, targetUserId, undefined, options, tx)
     if (options.isPlatformTenant === true) {
       await revokeInvitationsBeyondAuthorityElsewhere(actor, targetUserId, undefined, tx)
     }
@@ -412,7 +422,12 @@ export async function removeMember(
         access,
         tenantId,
         targetId: target.id,
-        metadata: { userId: targetUserId, role: target.role, self: targetUserId === actor.userId },
+        metadata: {
+          userId: targetUserId,
+          role: target.role,
+          self: targetUserId === actor.userId,
+          ...(options.reason !== undefined && { reason: options.reason }),
+        },
       },
       tx
     )
