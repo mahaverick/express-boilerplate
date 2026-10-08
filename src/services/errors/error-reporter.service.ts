@@ -2,7 +2,8 @@
  * @file The server error reporter: `reportError` builds, scrubs, throttles
  * and queues one `$exception` synchronously and returns its id; the queue
  * is sent to PostHog through `sendBatch` every `ERROR_FLUSH_INTERVAL_MS`, or
- * at once when `ERROR_FLUSH_BATCH` events wait, one request at a time, and
+ * at once when `ERROR_FLUSH_BATCH` events wait, one request at a time
+ * outside a deadline flush (`flushErrorReports`), and
  * backs off while PostHog asks to retry. It is in memory, not the outbox,
  * because errors often happen while the database is down, and it never
  * depends on Redis, which only counts outcomes. Nothing here throws, and
@@ -344,7 +345,9 @@ export function reportError(error: unknown, context: ErrorContext): string {
  * Send every queued report, ignoring any back-off, until the queue is empty,
  * PostHog asks to retry (a send that fails outright counts as that), or
  * `deadlineMs` passes. A batch PostHog refuses is dropped and the flush goes
- * on. For process
+ * on. A send already in flight is waited for, but not queued behind: while
+ * it is out, the queued events go in batches of their own beside it, so a
+ * fatal event is never stuck behind a hung request. For process
  * faults and graceful shutdown. The deadline timer is not unref'd, so the
  * process stays up until the flush ends or the deadline passes. Never rejects.
  * @param deadlineMs - The most milliseconds to spend.
@@ -353,18 +356,23 @@ export function reportError(error: unknown, context: ErrorContext): string {
 export async function flushErrorReports(deadlineMs: number): Promise<void> {
   const deadline = Date.now() + deadlineMs
   const run = { isExpired: false }
+  const { generation, inFlight } = state
   const drain = async (): Promise<void> => {
     while (!run.isExpired && state.queue.length > 0) {
       const remaining = deadline - Date.now()
       if (remaining <= 0) return
-      const outcome = await startFlush(Math.min(remaining, ANALYTICS_SEND_TIMEOUT_MS), false)
+      const timeoutMs = Math.min(remaining, ANALYTICS_SEND_TIMEOUT_MS)
+      const outcome =
+        state.inFlight === undefined
+          ? await startFlush(timeoutMs, false)
+          : settleSent(await sendNextBatch(timeoutMs), generation)
       if (outcome === 'retry') return
     }
   }
   let timer: NodeJS.Timeout | undefined
   try {
     await Promise.race([
-      drain(),
+      Promise.all([inFlight, drain()]),
       new Promise<void>((resolve) => {
         timer = setTimeout(resolve, Math.max(0, deadlineMs))
       }),

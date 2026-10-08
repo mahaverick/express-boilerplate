@@ -408,6 +408,21 @@ describe('flushErrorReports', () => {
     expect(queuedErrorReportCount()).toBe(2)
   })
 
+  it('sends a newly queued fatal event even while an earlier send hangs', async () => {
+    posthog.answer = () => new Promise<SendResult>(() => {})
+    reportError(new Error('earlier'), HTTP)
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(posthog.batches).toHaveLength(1)
+    posthog.answer = () => Promise.resolve({ kind: 'ack' })
+    const fatalId = reportError(new Error('fatal'), { capturePoint: 'process', handled: false })
+    const flushed = flushErrorReports(2000)
+    await vi.advanceTimersByTimeAsync(2000)
+    await flushed
+    expect(posthog.batches.flatMap((batch) => batch.events.map((event) => event.uuid))).toContain(
+      fatalId
+    )
+  })
+
   it('resolves at once with nothing queued', async () => {
     await expect(flushErrorReports(2000)).resolves.toBeUndefined()
     expect(posthog.batches).toHaveLength(0)
