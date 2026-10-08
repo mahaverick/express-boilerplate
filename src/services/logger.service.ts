@@ -11,6 +11,7 @@ import type { PrettyOptions } from 'pino-pretty'
 import { getEnv, logFormat, type Env } from '@/configs/env.config'
 import { isQueryError, redactedForLog } from '@/errors/postgres-errors'
 import { scrubText } from '@/services/errors/error-scrubber.service'
+import { frameLineIndexesOf } from '@/services/errors/stack-frame.service'
 import { requestContextStore } from '@/services/request-context.service'
 
 /**
@@ -217,24 +218,32 @@ An ISO 8601 UTC instant, the only form of `timestamp` sent to Slack.
 const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/
 
 /**
- * A stack as Slack may receive it: the message head (everything before the
- * first frame line) scrubbed as one text with `scrubText`, so a credential
- * split over lines is still seen whole; the frame lines scrubbed one by one,
- * so their paths stay readable.
+ * A stack as Slack may receive it. Its frame lines, those with a real V8
+ * frame's shape after the message (`frameLineIndexesOf`), are scrubbed one
+ * by one with `scrubText`, so their paths stay readable; every run of other
+ * lines, the message among them, is scrubbed as one text, so a credential
+ * split over lines, or behind a message line that starts with `at `, is
+ * still seen whole.
  * @param stack - The serialised error's stack.
+ * @param message - The serialised error's message, when it has one.
  * @returns The scrubbed stack.
  */
-function scrubbedStack(stack: string): string {
-  const firstFrame = stack.search(/\n[ \t]+at /)
-  const head = firstFrame === -1 ? stack : stack.slice(0, firstFrame)
-  const frames = firstFrame === -1 ? '' : stack.slice(firstFrame)
-  return (
-    scrubText(head) +
-    frames
-      .split('\n')
-      .map((line) => scrubText(line))
-      .join('\n')
-  )
+function scrubbedStack(stack: string, message: string | undefined): string {
+  const lines = stack.split('\n')
+  const frameIndexes = new Set(frameLineIndexesOf(lines, message))
+  const parts: string[] = []
+  let text: string[] = []
+  for (const [index, line] of lines.entries()) {
+    if (!frameIndexes.has(index)) {
+      text.push(line)
+      continue
+    }
+    if (text.length > 0) parts.push(scrubText(text.join('\n')))
+    text = []
+    parts.push(scrubText(line))
+  }
+  if (text.length > 0) parts.push(scrubText(text.join('\n')))
+  return parts.join('\n')
 }
 
 /**
@@ -259,7 +268,13 @@ function buildSlackPayload(info: Record<string, unknown>): Record<string, unknow
     info.error && typeof info.error === 'object' && 'stack' in info.error
       ? info.error.stack
       : undefined
-  const stack = typeof errorStack === 'string' ? scrubbedStack(errorStack) : undefined
+  const errorMessage =
+    info.error && typeof info.error === 'object' && 'message' in info.error
+      ? info.error.message
+      : undefined
+  const messageOfStack = typeof errorMessage === 'string' ? errorMessage : undefined
+  const stack =
+    typeof errorStack === 'string' ? scrubbedStack(errorStack, messageOfStack) : undefined
 
   const fields = [
     { type: 'mrkdwn', text: `*Source:* \`${source}\`` },

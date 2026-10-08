@@ -445,6 +445,35 @@ describe('Slack transport scrubbing', () => {
     expect(sentBodies()).toContain('at handle (/app/src/services/auth.service.ts:10:5)')
   })
 
+  it.each([
+    ['an indented `at` line after a key', `login failed password:\n    at ${LEAKED_PARAM}`, '\n'],
+    [
+      'an `at` line in prose before a code',
+      `oauth exchange failed\n  at least one retry\n{ code: '${LEAKED_PARAM}' }`,
+      '\n',
+    ],
+    [
+      'an `at` line in prose before a code, CRLF',
+      `oauth exchange failed\r\n  at least one retry\r\n{ code: '${LEAKED_PARAM}' }`,
+      '\r\n',
+    ],
+    [
+      'a frame-shaped line inside the message',
+      `login failed password:\n    at ${LEAKED_PARAM} (/app/src/x.ts:1:1)`,
+      '\n',
+    ],
+  ])('scrubs a message line that looks like a stack frame: %s', async (_name, text, eol) => {
+    const error = new Error(text)
+    Object.defineProperty(error, 'stack', {
+      value: `Error: ${text}${eol}    at handle (/app/src/services/auth.service.ts:10:5)`,
+    })
+    slackLogger().error({ error }, 'handler failed')
+    await nextTick()
+    expect(mockFetch).toHaveBeenCalledOnce()
+    expect(sentBodies()).not.toContain(LEAKED_PARAM)
+    expect(sentBodies()).toContain('at handle (/app/src/services/auth.service.ts:10:5)')
+  })
+
   it('scrubs the duplicate summary too', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     const log = slackLogger()

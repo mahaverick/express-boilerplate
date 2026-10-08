@@ -29,6 +29,7 @@ import {
   type PosthogBatchEvent,
 } from '@/services/analytics/posthog-batch.service'
 import { scrubText } from '@/services/errors/error-scrubber.service'
+import { frameLineIndexesOf } from '@/services/errors/stack-frame.service'
 import { requestContextStore } from '@/services/request-context.service'
 
 /**
@@ -88,12 +89,6 @@ const builder = new ErrorPropertiesBuilder(
 )
 
 /**
- * A V8 stack frame line: indented, then `at `. Any other line of a stack is
- * the message, which can carry what the scrubber does not know to remove.
- */
-const FRAME_LINE = /^\s+at /
-
-/**
  * The value an event carries for a thrown value whose message, or whose
  * every property, throws when read.
  */
@@ -129,14 +124,20 @@ function isErrorValue(value: unknown): value is Error {
 
 /**
  * The stack frame lines of an error, without the message lines a stack
- * starts with.
+ * starts with: only lines with a real V8 frame's shape
+ * (`isStackFrameLine`) after the message (`frameLineIndexesOf`), so a
+ * message line such as `    at <secret>` is never sent as a frame.
  * @param error - The error.
  * @returns The `at …` lines, possibly none.
  */
 function frameLinesOf(error: Error): string[] {
   const stack = readSafely<unknown>(() => error.stack, undefined)
   if (typeof stack !== 'string') return []
-  return stack.split('\n').filter((line) => FRAME_LINE.test(line))
+  const message = readSafely<unknown>(() => error.message, undefined)
+  const lines = stack.split('\n')
+  return frameLineIndexesOf(lines, typeof message === 'string' ? message : undefined).map(
+    (index) => lines[index] ?? ''
+  )
 }
 
 /**

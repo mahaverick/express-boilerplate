@@ -21,6 +21,7 @@ import {
   exceptionListOf,
   fingerprintOf,
   scrubbedErrorForSpan,
+  spanErrorOf,
   type ErrorContext,
 } from '@/services/errors/error-event.service'
 import { requestContextStore } from '@/services/request-context.service'
@@ -493,6 +494,26 @@ describe('exceptionListOf with hostile values', () => {
     const [first] = exceptionListOf(new Error(`jane@example.com ${'a'.repeat(5_000_000)}`))
     expect(first?.value).not.toContain('jane@example.com')
     expect(first?.value?.length).toBeLessThanOrEqual(ERROR_VALUE_MAX + 20)
+  })
+})
+
+describe('a message line that looks like a stack frame', () => {
+  it.each([
+    ['an indented `at` line after a key', `login failed password:\n    at ${LEAKED_PARAM}`],
+    [
+      'an `at` line in prose before a code',
+      `oauth exchange failed\n  at least one retry\n{ code: '${LEAKED_PARAM}' }`,
+    ],
+    [
+      'a frame-shaped line inside the message',
+      `login failed password:\n    at ${LEAKED_PARAM} (/app/src/x.ts:1:1)`,
+    ],
+  ])('never becomes a frame of the event or the span: %s', (_name, message) => {
+    const error = new Error(message)
+    const exceptions = exceptionListOf(error)
+    expect(JSON.stringify(exceptions)).not.toContain(LEAKED_PARAM)
+    expect(spanErrorOf(exceptions).stack).not.toContain(LEAKED_PARAM)
+    expect(exceptions[0]?.stacktrace?.frames.length).toBeGreaterThan(0)
   })
 })
 
