@@ -656,13 +656,13 @@
   },
   {
     "rule": "fragment",
-    "input": "https://app.example.com/reset-password#step2",
-    "expected": "https://app.example.com/reset-password#step2"
+    "input": "https://app.example.com/reset-password#installation",
+    "expected": "https://app.example.com/reset-password#installation"
   },
   {
     "rule": "fragment",
-    "input": "https://app.example.com/docs#section-3",
-    "expected": "https://app.example.com/docs#section-3"
+    "input": "https://app.example.com/docs#getting-started",
+    "expected": "https://app.example.com/docs#getting-started"
   },
   {
     "rule": "fragment",
@@ -713,5 +713,40 @@
     "rule": "email",
     "input": "pin lodash@latest and actions/setup-node@main",
     "expected": "pin lodash@latest and actions/setup-node@main"
+  },
+  {
+    "rule": "fragment",
+    "input": "https://app.example.com/src/a.ts#L10C3-L12C8",
+    "expected": "https://app.example.com/src/a.ts#L10C3-L12C8"
+  },
+  {
+    "rule": "fragment",
+    "input": "https://app.example.com/x#abcdef123456",
+    "expected": "https://app.example.com/x#[fragment]"
+  },
+  {
+    "rule": "fragment",
+    "input": "https://app.example.com/x#piano-tiger-4815",
+    "expected": "https://app.example.com/x#[fragment]"
+  },
+  {
+    "rule": "fragment",
+    "input": "https://app.example.com/x#otp-123456",
+    "expected": "https://app.example.com/x#[fragment]"
+  },
+  {
+    "rule": "fragment",
+    "input": "https://app.example.com/x#pin_4821",
+    "expected": "https://app.example.com/x#[fragment]"
+  },
+  {
+    "rule": "fragment",
+    "input": "https://app.example.com/x#token_abcdefghijklmnop",
+    "expected": "https://app.example.com/x#[fragment]"
+  },
+  {
+    "rule": "fragment",
+    "input": "https://app.example.com/x#step2",
+    "expected": "https://app.example.com/x#[fragment]"
   }
 ]

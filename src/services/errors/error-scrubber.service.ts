@@ -75,32 +75,44 @@ const QUERY_PATTERN = /((?:https?:\/\/|\/)[^\s?"'<>]*)\?[^\s"'<>]+/g
 const FRAGMENT_PATTERN = /((?:https?:\/\/|\/)[^\s#"'<>]*)#([^\s"'<>]+)/g
 
 /**
- * A source line anchor: `L5`, `L10-L12`.
+ * A source line anchor: `L5`, `L10-L12`, `L10C3-L12C8`.
  */
-const LINE_ANCHOR_PATTERN = /^L\d+(?:-L\d+)?$/
+const LINE_ANCHOR_PATTERN = /^L\d+(?:C\d+)?(?:-L\d+(?:C\d+)?)?$/
 
 /**
- * A short heading anchor: lowercase words joined by `-` or `_`, the first
- * word's initial letter in either case and each word possibly ending in
- * digits (`step2`, `section-3`, `Overview`).
+ * A heading slug: lowercase words of letters only, joined by `-`, with no
+ * digit anywhere.
  */
-const HEADING_ANCHOR_PATTERN = /^[A-Za-z][a-z]*\d*(?:[-_][a-z]+\d*|[-_]\d+)*$/
+const HEADING_ANCHOR_PATTERN = /^[a-z]+(?:-[a-z]+)*$/
 
 /**
- * The longest fragment `isHarmlessFragment` keeps as a heading anchor.
+ * A word that marks a fragment as carrying a credential, wherever it sits
+ * in the slug.
  */
-const HEADING_ANCHOR_MAX = 32
+const KEY_LIKE_WORD_PATTERN = /token|otp|pin|code|key|secret|state|session|auth|pass|nonce|sig/
 
 /**
- * Whether a URL fragment cannot carry a secret: a source line anchor, or a
- * short heading anchor. Anything else, an `access_token=` list, a route
- * (`/reset?token=…`) or a mixed-case run, is replaced.
+ * The longest fragment `isHarmlessFragment` keeps as a heading slug.
+ */
+const HEADING_ANCHOR_MAX = 64
+
+/**
+ * Whether a URL fragment is a real anchor: a source line anchor, or a
+ * heading slug (`installation`, `getting-started`) of at most 64 characters
+ * that holds no digit, `_` or key-like word. Anything else, an
+ * `access_token=` list, a route (`/reset?token=…`), a code with digits or a
+ * mixed-case run, is replaced. A random lowercase fragment of letters only
+ * and at most 64 characters is indistinguishable from a slug and survives.
  * @param fragment - The text after `#`.
  * @returns True when the fragment is kept.
  */
 function isHarmlessFragment(fragment: string): boolean {
   if (LINE_ANCHOR_PATTERN.test(fragment)) return true
-  return fragment.length <= HEADING_ANCHOR_MAX && HEADING_ANCHOR_PATTERN.test(fragment)
+  return (
+    fragment.length <= HEADING_ANCHOR_MAX &&
+    HEADING_ANCHOR_PATTERN.test(fragment) &&
+    !KEY_LIKE_WORD_PATTERN.test(fragment)
+  )
 }
 
 /**

@@ -200,12 +200,46 @@ describe('scrubText on a secret glued to a preceding hex run', () => {
 })
 
 describe('scrubText on fragments', () => {
-  it.each(['webpack://app/src/main.tsx#L5', 'https://app.example.com/reset-password#step2'])(
-    'keeps %s',
-    (input) => {
-      expect(scrubText(input)).toBe(input)
+  it.each([
+    'webpack://app/src/main.tsx#L5',
+    'https://app.example.com/src/a.ts#L42-L48',
+    'https://app.example.com/src/a.ts#L10C3-L12C8',
+    'https://app.example.com/docs#installation',
+    'https://app.example.com/docs#getting-started',
+  ])('keeps %s', (input) => {
+    expect(scrubText(input)).toBe(input)
+  })
+
+  it.each([
+    'abcdef123456',
+    'piano-tiger-4815',
+    'otp-123456',
+    'pin_4821',
+    'token_abcdefghijklmnop',
+    'step2',
+    'reset-code-words',
+  ])('scrubs the fragment #%s', (fragment) => {
+    expect(scrubText(`https://app.example.com/reset-password#${fragment}`)).toBe(
+      'https://app.example.com/reset-password#[fragment]'
+    )
+  })
+
+  it('scrubs 200 random letters-then-digits fragments', () => {
+    let seed = 12_345
+    const next = (limit: number): number => {
+      seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648
+      return seed % limit
     }
-  )
+    for (let index = 0; index < 200; index += 1) {
+      const letters = Array.from({ length: 4 + next(10) }, () =>
+        String.fromCodePoint(97 + next(26))
+      ).join('')
+      const digits = Array.from({ length: 1 + next(8) }, () => next(10)).join('')
+      expect(scrubText(`https://app.example.com/x#${letters}${digits}`)).toBe(
+        'https://app.example.com/x#[fragment]'
+      )
+    }
+  })
 })
 
 describe('scrubText on an address with no TLD before punctuation, and on package refs', () => {
