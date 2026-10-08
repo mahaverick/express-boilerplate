@@ -127,7 +127,7 @@ export const GOOGLE_STRATEGY_NAME = 'google'
 /**
  * How long after a refresh token's rotation a replay of it gets a sibling token instead of revoking the session.
  *
- * Accepted trade-off: concurrent tabs stop logging each other out; a token stolen and replayed within the window also gets a sibling, a second chain that lives until SESSION_ABSOLUTE_TTL, its logout or a password change, and that reuse detection never catches.
+ * Accepted trade-off: concurrent tabs stop logging each other out; a token stolen and replayed within the window also gets a sibling, a second chain that reuse detection never catches. The sibling shares the session, so it lives until SESSION_ABSOLUTE_TTL, until it goes unused for REFRESH_TOKEN_TTL, or until the session ends: a logout from either chain, a password reset, a password change or `POST /auth/sessions/revoke-others` from another session, a Google account claim, a staff sign-out, deactivation or deletion, or a sign-in in a browser that presents either chain's cookie. A password change or revoke-others from that session spares it.
  */
 export const REFRESH_REUSE_GRACE_MS = 10_000
 
