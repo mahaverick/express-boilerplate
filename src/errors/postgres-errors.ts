@@ -34,6 +34,12 @@ export function isUniqueViolation(error: unknown, constraintName?: string): bool
 const UNSTORABLE_TEXT_CODES: ReadonlySet<string> = new Set(['22021', '22P05'])
 
 /**
+ * Postgres's SQLSTATE for `untranslatable_character`: a NUL in `jsonb`, but
+ * also what a database in a non-UTF8 encoding raises for ordinary text.
+ */
+const UNTRANSLATABLE_CHARACTER_CODE = '22P05'
+
+/**
  * Whether an error (or its Drizzle-wrapped cause) is Postgres refusing a
  * character in caller-supplied text: the client's input, not a server
  * fault. Request validation refuses these first; this is the backstop for
@@ -44,6 +50,18 @@ const UNSTORABLE_TEXT_CODES: ReadonlySet<string> = new Set(['22021', '22P05'])
 export function isUnstorableTextError(error: unknown): boolean {
   const cause = error instanceof DrizzleQueryError ? error.cause : error
   return cause instanceof postgres.PostgresError && UNSTORABLE_TEXT_CODES.has(cause.code)
+}
+
+/**
+ * Whether an error (or its Drizzle-wrapped cause) is Postgres's 22P05. Unlike
+ * a 22021, this one can be a deployment fault (a database encoding mismatch),
+ * so a handler that answers 400 for it should still leave a trace.
+ * @param error - The thrown or forwarded error.
+ * @returns True when error is (or wraps) a 22P05 driver error.
+ */
+export function isUntranslatableCharacterError(error: unknown): boolean {
+  const cause = error instanceof DrizzleQueryError ? error.cause : error
+  return cause instanceof postgres.PostgresError && cause.code === UNTRANSLATABLE_CHARACTER_CODE
 }
 
 /**

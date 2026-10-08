@@ -5,7 +5,11 @@
 import { DrizzleQueryError } from 'drizzle-orm'
 import postgres from 'postgres'
 import { describe, expect, it } from 'vitest'
-import { isUniqueViolation, isUnstorableTextError } from '@/errors/postgres-errors'
+import {
+  isUniqueViolation,
+  isUnstorableTextError,
+  isUntranslatableCharacterError,
+} from '@/errors/postgres-errors'
 
 /**
  * Build a real `postgres.PostgresError`, typed correctly for callers.
@@ -108,5 +112,16 @@ describe('isUnstorableTextError', () => {
     expect(isUnstorableTextError(pgError({ message: 'too long', code: '22001' }))).toBe(false)
     const lookalike = Object.assign(new Error('x'), { code: '22021' })
     expect(isUnstorableTextError(lookalike)).toBe(false)
+  })
+})
+
+describe('isUntranslatableCharacterError', () => {
+  it('is true only for 22P05, bare or Drizzle-wrapped', () => {
+    const cause = pgError({ message: 'untranslatable', code: '22P05' })
+    expect(isUntranslatableCharacterError(cause)).toBe(true)
+    expect(isUntranslatableCharacterError(new DrizzleQueryError('select $1', ['x'], cause))).toBe(
+      true
+    )
+    expect(isUntranslatableCharacterError(pgError({ message: 'nul', code: '22021' }))).toBe(false)
   })
 })

@@ -1356,6 +1356,18 @@ describe('/api/v1/tenants', () => {
       expect(response.status).toBe(404)
     })
 
+    it.each([
+      ['DELETE', '/api/v1/tenants/a%00b/membership'],
+      ['PATCH', '/api/v1/tenants/a%00b/members/0198f8a0-0000-7000-8000-000000000000'],
+    ] as const)('%s %s answers 404', async (method, path) => {
+      const { token } = await createAuthenticatedUser()
+      const response = await request(app)
+        [method.toLowerCase() as 'delete' | 'patch'](path)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ role: 'viewer' })
+      expect(response.status).toBe(404)
+    })
+
     it('a member :userId with NUL answers 404', async () => {
       const { user, token } = await createAuthenticatedUser()
       const tenant = await createTenant(user.id)

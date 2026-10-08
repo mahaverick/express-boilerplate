@@ -27,10 +27,10 @@ import {
 import type { StaffReasonOption } from '@/types/actor'
 import { messageResponse, successResponse } from '@/utilities/response.utilities'
 import { parseBody } from '@/validators/parse.validators'
+import { parseIdParameter } from '@/validators/platform.validators'
 import {
   invitationIdSchema,
   inviteMemberSchema,
-  memberUserIdSchema,
   newTenantSchema,
   updateMemberRoleSchema,
   updateTenantSchema,
@@ -48,9 +48,7 @@ const INVITATION_SENT_MESSAGE = 'If that address can be invited, an invitation h
  * @throws {HttpError} 404 `Member not found`, when `:userId` is not a UUID.
  */
 function targetUserIdParameter(request: Request): string {
-  const parsed = memberUserIdSchema.safeParse(request.params.userId)
-  if (!parsed.success) throw new HttpError('Member not found', 404)
-  return parsed.data
+  return parseIdParameter(request.params.userId, 'Member not found')
 }
 
 /**

@@ -5,8 +5,14 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vite
 import { HttpError } from '@/errors/http-error'
 import { TimelineUnavailableError } from '@/errors/timeline-errors'
 import { errorHandler } from '@/middlewares/error.middleware'
+import { reportError } from '@/services/errors/error-reporter.service'
 import { logger } from '@/services/logger.service'
 import { requestContextStore } from '@/services/request-context.service'
+
+vi.mock('@/services/errors/error-reporter.service', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/services/errors/error-reporter.service')>()),
+  reportError: vi.fn(() => 'reported-id'),
+}))
 
 /**
  * Build a minimal mock Express response, enough for errorHandler to call
@@ -43,6 +49,7 @@ describe('errorHandler', () => {
 
   afterEach(() => {
     vi.restoreAllMocks()
+    vi.mocked(reportError).mockClear()
   })
 
   it('uses HttpError.statusCode and message for a client error', () => {
@@ -147,23 +154,38 @@ describe('errorHandler', () => {
     expect(body()).toMatchObject({ success: false, message: 'Internal server error' })
   })
 
-  it('answers 400, masked and unlogged, when Postgres refuses a character in client text', () => {
-    const { response, body, status } = mockResponse()
-    const cause = Object.assign(new postgres.PostgresError('invalid byte sequence for encoding'), {
-      code: '22021',
-    })
-    errorHandler(
-      new DrizzleQueryError('select * from tenants where slug = $1', ['a\u{0}b'], cause),
-      {} as never,
-      response,
-      vi.fn()
-    )
+  it.each([
+    ['22021', false],
+    ['22P05', true],
+  ])(
+    'answers 400, masked and not captured, when Postgres refuses a character (%s)',
+    (code, warns) => {
+      const loggerWarn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+      const { response, body, status } = mockResponse()
+      const cause = Object.assign(
+        new postgres.PostgresError('invalid byte sequence for encoding'),
+        { code }
+      )
+      errorHandler(
+        new DrizzleQueryError('select * from tenants where slug = $1', ['a\u{0}b'], cause),
+        {} as never,
+        response,
+        vi.fn()
+      )
 
-    expect(status).toHaveBeenCalledWith(400)
-    expect(body()).toMatchObject({ success: false, message: 'Bad Request', statusCode: 400 })
-    expect(JSON.stringify(body())).not.toContain('a\u{0}b')
-    expect(loggerError).not.toHaveBeenCalled()
-  })
+      expect(status).toHaveBeenCalledWith(400)
+      expect(body()).toMatchObject({ success: false, message: 'Bad Request', statusCode: 400 })
+      expect(JSON.stringify(body())).not.toContain('a\u{0}b')
+      expect(loggerError).not.toHaveBeenCalled()
+      expect(reportError).not.toHaveBeenCalled()
+      if (warns) {
+        expect(loggerWarn).toHaveBeenCalledTimes(1)
+        expect(JSON.stringify(loggerWarn.mock.calls)).not.toContain('a\u{0}b')
+      } else {
+        expect(loggerWarn).not.toHaveBeenCalled()
+      }
+    }
+  )
 
   it('logs the original error for a non-HttpError, not just the masked message', () => {
     // The client-facing contract (masked message, 500) is covered above; this is the other half of that same failure — a 5xx must not vanish without a trace an operator can search for and a bug report can cite.

@@ -188,12 +188,6 @@ export const invitationIdSchema = z.object({
 })
 
 /**
- * The `:userId` path parameter of `/tenants/:slug/members/:userId` routes.
- * A malformed id answers like an unknown member (404), never a 400 or a 500.
- */
-export const memberUserIdSchema = z.uuid()
-
-/**
  * `PATCH /api/v1/tenants/:slug/members/:userId` request body: the member's
  * new role. The actor->target matrix (`canActorModifyTarget`,
  * tenant.policy.ts) is applied in `changeRole` (tenant-membership.service.ts),
@@ -214,11 +208,11 @@ export type UpdateMemberRoleInput = z.infer<typeof updateMemberRoleSchema>
  */
 interface JsonScan {
   /**
-  A key or string value holds U+0000, which Postgres `jsonb` refuses (22P05).
+   * A key or string value holds U+0000, which Postgres `jsonb` refuses (22P05).
    */
   hasNul: boolean
   /**
-  The deepest object or array nesting; a bare primitive is 0.
+   * The deepest object or array nesting; a bare primitive is 0.
    */
   depth: number
 }
