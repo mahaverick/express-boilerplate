@@ -80,7 +80,7 @@ rather than repeating them.
   exits the process. A retryable attempt logs `warn`; the last one calls
   `recordPermanentFailure` (`src/jobs/job-failure.job.ts`), which scrubs every
   `…Url`/`…Token` key and every address key (`to`, `cc`, `bcc`, `replyTo`,
-  `recipient`, `recipients`, in any letter case), whatever the value's type
+  `reply_to`, `recipient`, `recipients`, in any letter case), whatever the value's type
   (a string, a list, an object), and
   logs `job failed permanently` once. BullMQ counts
   the attempt before it emits `failed`, so the terminal test is

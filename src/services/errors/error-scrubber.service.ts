@@ -498,8 +498,9 @@ function capped(value: string, wasCut: boolean): string {
  * (`OAUTH_CONTEXT_PATTERN`)), become `[redacted]`; a JWT becomes `[jwt]`; an
  * email address (`EMAIL_PATTERN`: `@` written plainly, encoded or fullwidth,
  * a quoted local part, an IP-literal or single-label domain) becomes
- * `[email]`, before the key rules run, so an address whose local part looks
- * like a key goes whole, domain included; a PostHog key (`phc_`, `phx_`,
+ * `[email]`, before the PostHog-key and vendor-credential rules run, so an
+ * address whose local part looks like one of those keys goes whole, domain
+ * included; a PostHog key (`phc_`, `phx_`,
  * `phs_`) becomes `[posthog-key]` and a vendor credential
  * (`VENDOR_KEY_PATTERN`, or an AWS secret access key) `[secret]`; an
  * IPv4 or IPv6 address becomes `[ip]` and an international phone number
