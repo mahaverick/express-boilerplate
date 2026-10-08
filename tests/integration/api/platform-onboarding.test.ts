@@ -303,3 +303,28 @@ describe('GET /api/v1/platform/tenants/:id/onboarding', () => {
     }
   })
 })
+
+/**
+ * Encode a decoded cursor the way it travels: base64url JSON.
+ * @param value - The decoded cursor.
+ * @returns The cursor.
+ */
+function b64(value: unknown): string {
+  return Buffer.from(JSON.stringify(value)).toString('base64url')
+}
+
+describe('out-of-range staff dates are a 400', () => {
+  const ID = '01a1156d-00b7-75d4-887f-2dd37e110303'
+
+  it.each([
+    ['/onboarding/tenants', { cursor: b64({ sortAt: '2026-13-45T25:61:61.000000Z', id: ID }) }],
+    ['/onboarding/tenants', { cursor: b64({ sortAt: '0000-01-01T00:00:00.000000Z', id: ID }) }],
+  ])('GET %s %j', async (path, query) => {
+    const { token } = await createTrackedStaff('viewer')
+    const response = await request(app)
+      .get(`/api/v1/platform${path}`)
+      .query(query)
+      .set('Authorization', `Bearer ${token}`)
+    expect(response.status).toBe(400)
+  })
+})
