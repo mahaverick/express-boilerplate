@@ -1,5 +1,6 @@
 import { DrizzleQueryError } from 'drizzle-orm'
 import { type Response } from 'express'
+import postgres from 'postgres'
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { HttpError } from '@/errors/http-error'
 import { TimelineUnavailableError } from '@/errors/timeline-errors'
@@ -144,6 +145,24 @@ describe('errorHandler', () => {
 
     expect(status).toHaveBeenCalledWith(500)
     expect(body()).toMatchObject({ success: false, message: 'Internal server error' })
+  })
+
+  it('answers 400, masked and unlogged, when Postgres refuses a character in client text', () => {
+    const { response, body, status } = mockResponse()
+    const cause = Object.assign(new postgres.PostgresError('invalid byte sequence for encoding'), {
+      code: '22021',
+    })
+    errorHandler(
+      new DrizzleQueryError('select * from tenants where slug = $1', ['a\u{0}b'], cause),
+      {} as never,
+      response,
+      vi.fn()
+    )
+
+    expect(status).toHaveBeenCalledWith(400)
+    expect(body()).toMatchObject({ success: false, message: 'Bad Request', statusCode: 400 })
+    expect(JSON.stringify(body())).not.toContain('a\u{0}b')
+    expect(loggerError).not.toHaveBeenCalled()
   })
 
   it('logs the original error for a non-HttpError, not just the masked message', () => {

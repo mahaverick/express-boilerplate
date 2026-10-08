@@ -25,6 +25,7 @@ import { getPlatformMembership } from '@/services/platform.service'
 import { requestContextStore, type TenantContext } from '@/services/request-context.service'
 import type { RequestPrincipal } from '@/types/actor'
 import { reasonSchema } from '@/validators/platform.validators'
+import { isSlugShaped } from '@/validators/tenant.validators'
 
 const tenantRepository = new TenantRepository()
 const userMembershipRepository = new UserMembershipRepository()
@@ -32,13 +33,15 @@ const userMembershipRepository = new UserMembershipRepository()
 /**
  * Read `request.params.slug`: every tenant-scoped route names its tenant.
  * `ParamsDictionary` also allows an array, which a plain `:slug` never
- * produces; it is treated as no slug, which fails safe as a 404.
+ * produces; it is treated as no slug, which fails safe as a 404, as is a
+ * segment no stored slug could match (a NUL, an upper-case letter, an
+ * over-long value), which is never sent to the database.
  * @param request - The incoming request.
  * @returns The slug as supplied, or undefined when the request supplies none.
  */
 function tenantIdentifierFrom(request: Request): string | undefined {
   const slug = request.params.slug
-  return typeof slug === 'string' ? slug : undefined
+  return typeof slug === 'string' && isSlugShaped(slug) ? slug : undefined
 }
 
 /**

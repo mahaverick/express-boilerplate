@@ -30,6 +30,7 @@ import { parseBody } from '@/validators/parse.validators'
 import {
   invitationIdSchema,
   inviteMemberSchema,
+  memberUserIdSchema,
   newTenantSchema,
   updateMemberRoleSchema,
   updateTenantSchema,
@@ -39,21 +40,17 @@ import {
 const INVITATION_SENT_MESSAGE = 'If that address can be invited, an invitation has been sent.'
 
 /**
- * The `:userId` route param on a member-management route, narrowed to a
- * plain string.
- *
- * `ParamsDictionary` types it `string | string[] | undefined`, though a plain
- * `:userId` segment never produces an array.
+ * The `:userId` route param on a member-management route, validated as a
+ * UUID. A malformed id answers like an unknown member, so it never reaches
+ * the database (a NUL would answer 500 there).
  * @param request - The incoming request.
  * @returns The `:userId` param.
- * @throws {HttpError} 400, when the route did not supply a single string param — a routing bug, not a real request shape.
+ * @throws {HttpError} 404 `Member not found`, when `:userId` is not a UUID.
  */
 function targetUserIdParameter(request: Request): string {
-  const userId = request.params.userId
-  if (typeof userId !== 'string') {
-    throw new HttpError('Malformed member id', 400)
-  }
-  return userId
+  const parsed = memberUserIdSchema.safeParse(request.params.userId)
+  if (!parsed.success) throw new HttpError('Member not found', 404)
+  return parsed.data
 }
 
 /**

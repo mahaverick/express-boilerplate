@@ -1346,4 +1346,61 @@ describe('/api/v1/tenants', () => {
       )
     })
   })
+
+  describe('NUL in unvalidated input answers 4xx, not 500', () => {
+    it('a :slug with NUL answers 404 to any signed-in user', async () => {
+      const { token } = await createAuthenticatedUser()
+      const response = await request(app)
+        .get('/api/v1/tenants/a%00b')
+        .set('Authorization', `Bearer ${token}`)
+      expect(response.status).toBe(404)
+    })
+
+    it('a member :userId with NUL answers 404', async () => {
+      const { user, token } = await createAuthenticatedUser()
+      const tenant = await createTenant(user.id)
+      const response = await request(app)
+        .delete(`/api/v1/tenants/${tenant.slug}/members/a%00b`)
+        .set('Authorization', `Bearer ${token}`)
+      expect(response.status).toBe(404)
+    })
+
+    it.each([
+      ['timezone', { timezone: 'UTC\u{0}x' }],
+      ['locale', { locale: 'en\u{0}' }],
+      ['metadata value', { metadata: { a: 'x\u{0}y' } }],
+      ['metadata key', { metadata: { 'a\u{0}': 1 } }],
+    ])('settings %s with NUL answers 400', async (_label, body) => {
+      const { user, token } = await createAuthenticatedUser()
+      const tenant = await createTenant(user.id)
+      const response = await request(app)
+        .patch(`/api/v1/tenants/${tenant.slug}/settings`)
+        .set('Authorization', `Bearer ${token}`)
+        .send(body)
+      expect(response.status).toBe(400)
+    })
+
+    it('a nested metadata string with NUL answers 400', async () => {
+      const { user, token } = await createAuthenticatedUser()
+      const tenant = await createTenant(user.id)
+      const response = await request(app)
+        .patch(`/api/v1/tenants/${tenant.slug}/settings`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ metadata: { a: [{ b: 'x\u{0}' }] } })
+      expect(response.status).toBe(400)
+    })
+  })
+
+  describe('PATCH /api/v1/tenants/:slug/members/:userId with a malformed id', () => {
+    it('answers 404 for a member id that is not a uuid', async () => {
+      const { user, token } = await createAuthenticatedUser()
+      const tenant = await createTenant(user.id)
+      const response = await request(app)
+        .patch(`/api/v1/tenants/${tenant.slug}/members/not-a-uuid`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ role: 'viewer' })
+      expect(response.status).toBe(404)
+      expect(envelopeOf(response).message).toBe('Member not found')
+    })
+  })
 })

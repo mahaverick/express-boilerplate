@@ -15,7 +15,7 @@ import { uuidv7 } from '@posthog/core/vendor/uuidv7'
 import { type NextFunction, type Request, type Response } from 'express'
 import { HttpError } from '@/errors/http-error'
 import { MaintenanceModeError } from '@/errors/maintenance-mode-errors'
-import { redactedForLog } from '@/errors/postgres-errors'
+import { isUnstorableTextError, redactedForLog } from '@/errors/postgres-errors'
 import { TimelineUnavailableError } from '@/errors/timeline-errors'
 import { REQUEST_ID_HEADER } from '@/middlewares/request-id.middleware'
 import { routeTemplateOf } from '@/middlewares/route-template.middleware'
@@ -29,6 +29,7 @@ import { errorResponse } from '@/utilities/response.utilities'
 
 const CLIENT_ERROR_MIN = 400
 const CLIENT_ERROR_MAX = 499
+const BAD_REQUEST = 400
 
 /**
  * The status error tracking records for a failure after the headers were
@@ -183,7 +184,11 @@ export function errorHandler(
   }
 
   const httpError = error instanceof HttpError ? error : undefined
-  const statusCode = httpError?.statusCode ?? clientStatusOf(error) ?? 500
+  // A character Postgres cannot store came from the client: a 400, masked and unlogged like any 4xx.
+  const statusCode =
+    httpError?.statusCode ??
+    clientStatusOf(error) ??
+    (isUnstorableTextError(error) ? BAD_REQUEST : 500)
 
   if (statusCode < 500) {
     errorResponse(
