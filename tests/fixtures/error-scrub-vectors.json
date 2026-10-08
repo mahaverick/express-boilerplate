@@ -1453,5 +1453,10 @@
     "rule": "secret",
     "input": "calling re_index_2024_migration now",
     "expected": "calling re_index_2024_migration now"
+  },
+  {
+    "rule": "kv",
+    "input": "Failed to authorize: code=abc123XYZ",
+    "expected": "Failed to authorize: code=[redacted]"
   }
 ]
