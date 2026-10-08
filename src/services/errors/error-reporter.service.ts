@@ -1,6 +1,7 @@
 /**
- * @file The server error reporter: `reportError` builds, scrubs, throttles
- * and queues one `$exception` synchronously and returns its id; the queue
+ * @file The server error reporter: `reportError` checks the global cap,
+ * then builds, scrubs, throttles and queues one `$exception` synchronously
+ * and returns its id; the queue
  * is sent to PostHog through `sendBatch` every `ERROR_FLUSH_INTERVAL_MS`, or
  * at once when `ERROR_FLUSH_BATCH` events wait, one request at a time
  * outside a deadline flush (`flushErrorReports`), and
@@ -392,8 +393,9 @@ interface Report {
 }
 
 /**
- * Build, scrub, throttle and queue one event (`reportError`), keeping the
- * exception list it built. Past the global cap nothing is built.
+ * Check the global cap, then build, scrub, throttle and queue one event
+ * (`reportError`), keeping the exception list it built. Past the global cap
+ * nothing is built.
  * @param error - Anything thrown.
  * @param context - Where it was caught.
  * @returns The id, and the exception list when one was built.
@@ -428,13 +430,14 @@ function report(error: unknown, context: ErrorContext): Report {
 
 /**
  * Report an unexpected error to PostHog Error Tracking. Synchronous: it
- * builds, scrubs, throttles and queues the event and returns before any
- * I/O. The id is minted first, so it is returned also when error tracking
- * is off, the event is throttled, or building it failed; it then names a
- * log line, not an event. Past the global cap the event is not even built.
- * Never throws: a failure inside is logged at `warn`
- * at most once a minute and never reported. A call made while another is
- * running (a getter on the error that reports) returns an id and queues nothing.
+ * checks the global cap, then builds, scrubs, throttles and queues the
+ * event, and returns before any I/O; past the global cap the event is not
+ * built at all. The id is minted first, so it is returned also when error
+ * tracking is off, the event is throttled, or building it failed; it then
+ * names a log line, not an event. Never throws: a failure inside is logged
+ * at `warn` at most once a minute and never reported. A call made while
+ * another is running (a getter on the error that reports) returns an id and
+ * queues nothing.
  * @param error - Anything thrown.
  * @param context - Where it was caught.
  * @returns The event uuid (UUIDv7): the `errorId` logs and responses carry.
@@ -483,12 +486,15 @@ function guardedSpanError(error: unknown): SpanError {
 
 /**
  * Send every queued report, ignoring any back-off, until the queue is empty,
- * PostHog asks to retry (a send that fails outright counts as that), or
- * `deadlineMs` passes. A batch PostHog refuses is dropped and the flush goes
- * on. A flight already out when the flush starts, or started while it runs
- * (the end of one schedules the next), is waited for, also once the queue
- * is empty, since it may carry the fatal event; a flight that ends asking to
- * retry ends the flush too. It is not queued behind: while it is out, the
+ * PostHog asks to retry a batch this flush sent (a send that fails outright
+ * counts as that), or `deadlineMs` passes. A batch PostHog refuses is
+ * dropped and the flush goes on. A flight already out when the flush
+ * starts, or started while it runs (the end of one schedules the next), is
+ * waited for once the queue is empty, since it may carry the fatal event,
+ * and ends the flush if it ends asking to retry; while the queue still
+ * holds events, its retry only puts its batch back, and the flush goes on.
+ * Each retried batch, the flight's and this flush's alike, raises the
+ * back-off level once. The flight is not queued behind: while it is out, the
  * queued events go in batches of their own beside it, so a fatal event is
  * never stuck behind a hung request. A reset ends the flush. For process
  * faults and graceful shutdown. The deadline timer is not unref'd, so the
