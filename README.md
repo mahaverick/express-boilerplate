@@ -377,8 +377,8 @@ staff-forced `user.signed_out` becomes `user_sessions_revoked`), with its
 metadata in snake_case, a free-text `reason` reduced to `has_reason`, and a
 tenant's `name` and `slug` left out;
 the product events `user_signed_up`, `user_signed_in`, `user_signed_out`,
-`password_changed`, `password_reset_completed`, `email_verified` and
-`onboarding_step_completed`; and each email tracking event as `email_<type>`
+`password_changed`, `other_sessions_revoked`, `password_reset_completed`,
+`email_verified` and `onboarding_step_completed`; and each email tracking event as `email_<type>`
 (`email_delivered`, `email_opened`, ...). Each carries `source` (`audit`,
 `product` or `email`), `access`, `app: 'api'`, `$groups.tenant` when it
 belongs to a tenant, and, only when tracing is on

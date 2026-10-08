@@ -620,6 +620,36 @@ export async function denySessionsAfterCommit(userId: string, sessionIds: string
 }
 
 /**
+ * Sign a user out of every session but the one making the request: revoke
+ * their other sessions' token rows (and any reset or verification token)
+ * under the user row lock, then deny each revoked session's access tokens
+ * after commit, which also ends that session's notification stream at its
+ * next heartbeat (`denySessionsAfterCommit`). Emits `other_sessions_revoked`.
+ * @param userId - The authenticated caller.
+ * @param sessionId - The calling session (the token's `sid`), which is spared; undefined for a token without one.
+ * @returns How many other sessions were revoked.
+ * @throws {HttpError} 401 with ACCESS_TOKEN_EXPIRED_CODE for a token without `sid`, or an account gone or inactive.
+ */
+export async function revokeOtherSessions(
+  userId: string,
+  sessionId: string | undefined
+): Promise<number> {
+  if (sessionId === undefined) {
+    throw new HttpError('Session ended', 401, ACCESS_TOKEN_EXPIRED_CODE)
+  }
+  const revoked = await withTransaction(async (tx) => {
+    const locked = await userRepository.lockById(userId, 'no key update', tx)
+    if (!locked?.active) {
+      throw new HttpError('Account no longer exists or is inactive', 401, ACCESS_TOKEN_EXPIRED_CODE)
+    }
+    return revokeSessionRows(userId, { exceptSessionId: sessionId }, tx)
+  })
+  await denySessionsAfterCommit(userId, revoked)
+  await emitDomainEvent({ type: 'other_sessions_revoked', userId, at: new Date() })
+  return revoked.length
+}
+
+/**
  * Revoke every live token belonging to a user, across every session, and
  * deny each revoked session's access tokens (best-effort — see
  * `denySession`). It takes no user row lock, so a rotation in flight can

@@ -39,8 +39,13 @@ import {
 } from '@/services/notification-emitter.service'
 import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
 import { getRedis } from '@/services/redis.service'
-import { denySession } from '@/services/session-denylist.service'
-import { revokeSession, signAccessToken } from '@/services/session.service'
+import { denySession, isSessionDenied } from '@/services/session-denylist.service'
+import {
+  issueRefreshToken,
+  revokeOtherSessions,
+  revokeSession,
+  signAccessToken,
+} from '@/services/session.service'
 import { startNotificationWorker } from '@/workers/notification.worker'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { deferred } from '../../helpers/lock-probe'
@@ -900,6 +905,27 @@ describe('GET /api/v1/notifications/stream', () => {
       timeout: 2000,
     })
     expect(listenerCount(userId)).toBe(0)
+  }, 10_000)
+
+  // Signing out other sessions writes the same denylist entry a revocation does; this proves it reaches a live stream of the revoked session and spares the caller's.
+  it('closes another session’s open stream when the user signs out their other sessions', async () => {
+    const user = await userRepository.create({ email: uniqueEmail() })
+    createdUserIds.push(user.id)
+    const caller = await issueRefreshToken(user.id, randomUUID())
+    const other = await issueRefreshToken(user.id, randomUUID())
+    const stream = openStream({ header: `Bearer ${signAccessToken(user, other.sessionId)}` })
+    await stream.waitForResponse()
+    // Alive first, or the close below proves nothing.
+    await expect(stream.nextFrame()).resolves.toBeDefined()
+
+    await expect(revokeOtherSessions(user.id, caller.sessionId)).resolves.toBe(1)
+
+    await expect(stream.closed(getEnv().SSE_HEARTBEAT_INTERVAL_MS * 2)).resolves.toBe(true)
+    await waitUntil(() => listenerCount(user.id) === 0, {
+      message: 'the revoked stream removes its listener',
+      timeout: 2000,
+    })
+    expect(await isSessionDenied(caller.sessionId)).toBe(false)
   }, 10_000)
 
   /**

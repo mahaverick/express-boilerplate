@@ -55,7 +55,7 @@ export interface RateLimiterSpec {
 }
 
 /**
- * The 29 rate limiters this API defines, by name.
+ * The 30 rate limiters this API defines, by name.
  */
 export type RateLimitName =
   | 'register'
@@ -87,6 +87,7 @@ export type RateLimitName =
   | 'flagExposure'
   | 'maintenanceStatus'
   | 'maintenanceModeChange'
+  | 'revokeOtherSessions'
 
 const RATE_LIMITED_MESSAGE = 'Too many attempts. Please try again later.'
 
@@ -191,7 +192,7 @@ export function flagExposureRateLimitKey(request: Request): string {
 }
 
 /**
- * The 29 rate-limit specs this API enforces, each with the reason for its
+ * The 30 rate-limit specs this API enforces, each with the reason for its
  * window, limit and key. `name` is the live Redis key prefix
  * (`redisKey('rl', name)`): changing one resets that limiter's counters in
  * every deployment, and tests/unit/constants/rate-limit.constants.test.ts
@@ -580,6 +581,18 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
   maintenanceModeChange: {
     name: 'maintenance-mode-change',
     windowMs: 60_000,
+    limit: 10,
+    keyBy: 'user',
+    message: RATE_LIMITED_MESSAGE,
+  },
+  /**
+   * 10 an hour per user for `POST /auth/sessions/revoke-others`, behind
+   * `requireAuth`: a person signs out their other devices a few times at most,
+   * and each call locks the user row and writes a denial per session.
+   */
+  revokeOtherSessions: {
+    name: 'revoke-other-sessions',
+    windowMs: 60 * 60 * 1000,
     limit: 10,
     keyBy: 'user',
     message: RATE_LIMITED_MESSAGE,

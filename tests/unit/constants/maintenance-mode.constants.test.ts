@@ -40,6 +40,7 @@ const AUTH_WRITES = [
   '/api/v1/auth/verify-email',
   '/api/v1/auth/resend-verification',
   '/api/v1/auth/change-password',
+  '/api/v1/auth/sessions/revoke-others',
 ]
 
 const READS = [

@@ -24,7 +24,7 @@ import { toProfileResponse } from '@/presenters/user.presenter'
 import * as authService from '@/services/auth.service'
 import { completeGoogleSignIn } from '@/services/google-auth.service'
 import { logger } from '@/services/logger.service'
-import { revokeRefreshToken } from '@/services/session.service'
+import { revokeOtherSessions, revokeRefreshToken } from '@/services/session.service'
 import { frontendUrl } from '@/services/verification.service'
 import { messageResponse, successResponse } from '@/utilities/response.utilities'
 import {
@@ -530,6 +530,17 @@ class AuthController extends BaseController {
     )
 
     successResponse(response, { accessToken: result.accessToken }, 'Identity confirmed.')
+  })
+
+  /**
+   * `POST /auth/sessions/revoke-others`: sign the caller out of every other
+   * session, behind `requireAuth`, keeping the one this request came from
+   * (`request.sessionId`). Takes `{}`; answers how many sessions ended.
+   */
+  revokeOtherSessions = this.handle(async (request, response) => {
+    const revoked = await revokeOtherSessions(authenticatedUserId(request), request.sessionId)
+
+    successResponse(response, { revoked }, 'Other sessions signed out.')
   })
 
   /**

@@ -97,6 +97,13 @@ export function createAuthRouter(): Router {
     createRateLimiter(RATE_LIMITS.changePassword),
     authController.changePassword
   )
+  // requireAuth first: this limiter keys on request.user.id, which requireAuth sets.
+  router.post(
+    '/sessions/revoke-others',
+    requireAuth,
+    createRateLimiter(RATE_LIMITS.revokeOtherSessions),
+    authController.revokeOtherSessions
+  )
   // Staff-only step-up: the platform gate answers non-staff the unknown-route 404 before this limiter keys on request.user.id.
   router.post(
     '/reauthenticate',
