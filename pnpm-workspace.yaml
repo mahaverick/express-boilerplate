@@ -33,6 +33,17 @@ overrides:
   # GHSA-h3mg-xc3c-68pw, GHSA-j6r3-76f7-8jcv: via express-rate-limit, which
   # calls only ipKeyGenerator (never isInSubnet). Production dependency.
   ip-address@<10.7.1: ^10.7.1
+  # GHSA-68fv-2mgg-jv7q: via vitest > vite > postcss. Dev only.
+  source-map-js@<1.2.2: ^1.2.2
+  # GHSA-6j4f-fj2g-mc7p, GHSA-qhr7-859c-m2p7, GHSA-q2hr-2g5m-vwhr: via
+  # commitizen's and eslint's minimatch, one entry per major line. Dev only.
+  brace-expansion@>=1 <1.1.21: ^1.1.21
+  brace-expansion@>=5 <5.0.12: ^5.0.12
+  # GHSA-hrr3-gc8f-f4qj: via commitizen > @commitlint > ajv. Dev only.
+  fast-uri@>=3 <3.1.8: ^3.1.8
+  # GHSA-67mh-4wv8-2f99: drizzle-kit's legacy @esbuild-kit loader pins
+  # esbuild 0.18; 0.25 is the version drizzle-kit itself already uses. Dev only.
+  '@esbuild-kit/core-utils>esbuild': 0.25.12
 auditConfig:
   ignoreGhsas:
     # braces <=3.0.3 stack exhaustion on deeply nested brace patterns; no
