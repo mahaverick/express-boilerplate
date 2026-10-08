@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.0.0](https://github.com/mahaverick/express-boilerplate/compare/v1.9.0...v2.0.0) (2026-10-08)
+
+
+### ⚠ BREAKING CHANGES
+
+* harden auth, sessions, limits and invitations; staff reason, leave tenant, sign out others ([#89](https://github.com/mahaverick/express-boilerplate/issues/89))
+
+### Features
+
+* harden auth, sessions, limits and invitations; staff reason, leave tenant, sign out others ([#89](https://github.com/mahaverick/express-boilerplate/issues/89)) ([830bef4](https://github.com/mahaverick/express-boilerplate/commit/830bef4fffd7a51ce172ab0d94058454f6beb827))
+
 ## [1.9.0](https://github.com/mahaverick/express-boilerplate/compare/v1.8.1...v1.9.0) (2026-10-06)
 
 
