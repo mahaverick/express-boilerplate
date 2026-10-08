@@ -6,6 +6,7 @@
  * capture rule. Error tracking is switched on through a mocked
  * `isErrorTrackingEnabled`; no Redis or PostHog.
  */
+import { Writable } from 'node:stream'
 import { inspect } from 'node:util'
 import { ErrorPropertiesBuilder } from '@posthog/core/error-tracking'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -27,10 +28,14 @@ import {
   shouldCaptureHttpError,
   type ErrorContext,
 } from '@/services/errors/error-reporter.service'
-import { logger } from '@/services/logger.service'
+import { createPinoLogger, logger } from '@/services/logger.service'
 import { fakeQueryError, LEAKED_PARAM } from '../../../helpers/query-error'
 
-const tracking = vi.hoisted(() => ({ isEnabled: true, shouldThrow: false }))
+const tracking = vi.hoisted((): { isEnabled: boolean; shouldThrow: boolean; thrown: unknown } => ({
+  isEnabled: true,
+  shouldThrow: false,
+  thrown: undefined,
+}))
 
 const posthog = vi.hoisted(() => ({
   batches: [] as { events: PosthogBatchEvent[]; at: number }[],
@@ -43,6 +48,8 @@ vi.mock('@/configs/analytics.config', async (importOriginal) => {
     ...actual,
     isErrorTrackingEnabled: () => {
       if (tracking.shouldThrow) throw new Error('config unreadable')
+      // eslint-disable-next-line @typescript-eslint/only-throw-error -- a thrown non-Error is the value under test
+      if (tracking.thrown !== undefined) throw tracking.thrown
       return tracking.isEnabled
     },
   }
@@ -162,6 +169,7 @@ beforeEach(() => {
   vi.useFakeTimers({ now: new Date('2026-10-04T12:00:00.000Z') })
   tracking.isEnabled = true
   tracking.shouldThrow = false
+  tracking.thrown = undefined
   posthog.batches = []
   posthog.answer = () => Promise.resolve({ kind: 'ack' })
 })
@@ -254,6 +262,30 @@ describe('reportError gating and ids', () => {
     })
     expect(reportError(error, HTTP)).toMatch(UUIDV7)
     expect(queuedErrorReportCount()).toBe(1)
+  })
+})
+
+describe('internal failure log', () => {
+  it('the internal-failure warn line carries no secret from the thrown value', () => {
+    const lines: string[] = []
+    const destination = new Writable({
+      write(chunk, _encoding, done) {
+        lines.push(String(chunk))
+        done()
+      },
+    })
+    const pinoLogger = createPinoLogger({ level: 'warn', format: 'json', destination })
+    vi.spyOn(logger, 'warn').mockImplementation(
+      (message: string, meta?: Record<string, unknown>) => {
+        pinoLogger.warn(meta ?? {}, message)
+      }
+    )
+    tracking.thrown = 'connect failed: password=hunter2 user=jane@example.com'
+    reportError(new Error('outer'), HTTP)
+    const output = lines.join('')
+    expect(output).toContain('Error reporter failed')
+    expect(output).not.toContain('hunter2')
+    expect(output).not.toContain('jane@example.com')
   })
 })
 

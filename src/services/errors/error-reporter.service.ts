@@ -43,6 +43,7 @@ import {
   type ErrorContext,
   type SpanError,
 } from '@/services/errors/error-event.service'
+import { scrubText } from '@/services/errors/error-scrubber.service'
 import { logger } from '@/services/logger.service'
 
 export type {
@@ -110,6 +111,45 @@ function warnOncePerMinute(topic: string, message: string, meta: Record<string, 
   } catch {
     // A logger failure must not reach the code that reported an error.
   }
+}
+
+/**
+ * A thrown value as text, `[unreadable]` when even that throws (a hostile
+ * `toString`).
+ * @param value - Anything thrown.
+ * @returns The text.
+ */
+function textOf(value: unknown): string {
+  try {
+    return String(value)
+  } catch {
+    return '[unreadable]'
+  }
+}
+
+/**
+ * A thrown value's kind: an `Error`'s name, else its `typeof`.
+ * @param value - Anything thrown.
+ * @returns The kind.
+ */
+function kindOf(value: unknown): string {
+  try {
+    return value instanceof Error ? value.name : typeof value
+  } catch {
+    return typeof value
+  }
+}
+
+/**
+ * The log fields for a failure inside the reporter: the thrown value's kind
+ * and its text, scrubbed like an event (`scrubText`). The value itself is
+ * never logged: a non-Error would reach the log, and through it Slack, as
+ * it is.
+ * @param error - What was thrown.
+ * @returns `{ errorType, message }`.
+ */
+function failureFields(error: unknown): { errorType: string; message: string } {
+  return { errorType: kindOf(error), message: scrubText(textOf(error)) }
 }
 
 /**
@@ -271,7 +311,7 @@ function settleSent(sent: SentBatch | undefined, generation: number): FlushOutco
   try {
     settle(sent.batch, sent.result)
   } catch (error) {
-    warnOncePerMinute('internal', 'Error reporter failed', { error })
+    warnOncePerMinute('internal', 'Error reporter failed', failureFields(error))
   }
   return sent.result.kind
 }
@@ -365,7 +405,7 @@ function report(error: unknown, context: ErrorContext): Report {
     scheduleFlush()
     return { errorId, exceptions }
   } catch (error_) {
-    warnOncePerMinute('internal', 'Error reporter failed', { error: error_ })
+    warnOncePerMinute('internal', 'Error reporter failed', failureFields(error_))
     return { errorId }
   } finally {
     state.isReporting = false
@@ -456,7 +496,7 @@ export async function flushErrorReports(deadlineMs: number): Promise<void> {
       }),
     ])
   } catch (error) {
-    warnOncePerMinute('internal', 'Error reporter failed', { error })
+    warnOncePerMinute('internal', 'Error reporter failed', failureFields(error))
   } finally {
     run.isExpired = true
     clearTimeout(timer)
