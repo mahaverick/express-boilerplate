@@ -11,6 +11,11 @@ import { countAllStreams, resetLifecycleForTests } from '@/services/lifecycle.se
 import { isSessionDenied } from '@/services/session-denylist.service'
 
 vi.mock('@/services/session-denylist.service', () => ({ isSessionDenied: vi.fn() }))
+// The real emitter opens a Redis subscriber whose connect timer would race the timer-count checks.
+vi.mock('@/services/notification-emitter.service', () => ({
+  onNotification: vi.fn(),
+  offNotification: vi.fn(),
+}))
 
 /**
  * Build a fake request and response pair for an authenticated stream call.
