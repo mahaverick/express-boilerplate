@@ -571,6 +571,20 @@ describe('platform access over the API', () => {
       }
     )
 
+    // An older client sends no reason: it must learn to re-authenticate first, not to add one.
+    it.each(writes)(
+      '$name: refuses staff with a stale sign-in and no reason 401 REAUTH_REQUIRED, step-up before reason',
+      async (write) => {
+        const { tenant } = await ownedTenant()
+        const { staleToken } = await staffUser('owner')
+
+        const response = await write.send(tenant, staleToken, {})
+
+        expect(response.status).toBe(401)
+        expect(response.body).toMatchObject({ code: REAUTH_REQUIRED_CODE })
+      }
+    )
+
     it.each(writes)('$name: refuses staff with no reason 400 REASON_REQUIRED', async (write) => {
       const { tenant } = await ownedTenant()
       const { token } = await staffUser('owner')
