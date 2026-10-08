@@ -160,9 +160,10 @@ const KEY_SEPARATOR = String.raw`(?:=>|[:=]|%3[AD]|&#(?:58|61);|\\u003[ad])`
 
 /**
  * The quote that may close a key or open its value: `"` or `'`, possibly
- * escaped (a JSON string inside a JSON string), or a URL-encoded `"` (`%22`).
+ * escaped (a JSON string inside a JSON string), a URL-encoded `"` (`%22`), or
+ * a JSON-escaped quote (`\u0022`, `\u0027`).
  */
-const KEY_QUOTE = String.raw`(?:\\?["']|%22)`
+const KEY_QUOTE = String.raw`(?:\\?["']|%22|\\u00(?:22|27))`
 
 /**
  * The Authorization scheme words kept in front of a replaced credential.
@@ -207,17 +208,19 @@ const ARRAY_VALUE = String.raw`\[[^\]\n]*\]`
  * encoded separator (`%3D`) it stops at whitespace too. It never
  * starts with the `>` of an `=>`, so `=` cannot take half of it; a `>` after
  * any other separator is a value. Nor does it start with `%22`, the encoded
- * quote `QUOTED_VALUE` handles.
+ * quote `QUOTED_VALUE` handles, nor with a JSON-escaped one; a lone backslash
+ * before the value is skipped (`password=\zq…`).
  */
-const UNQUOTED_VALUE = String.raw`(?!%22)(?:(?<=[:=>]\s*)(?!(?<==)>)[^\s"'\\,;&})\]](?:[^\n"'\\,;&})\]]*[^\s"'\\,;&})\]])?|(?!(?<==)>)[^\s"'\\,;&})\]][^\s"'\\,;&})\]]*)`
+const UNQUOTED_VALUE = String.raw`(?!%22)(?!\\u00(?:22|27))\\?(?:(?<=[:=>]\s*)(?!(?<==)>)[^\s"'\\,;&})\]](?:[^\n"'\\,;&})\]]*[^\s"'\\,;&})\]])?|(?!(?<==)>)[^\s"'\\,;&})\]][^\s"'\\,;&})\]]*)`
 
 /**
  * A quoted value: inside an escaped quote, up to the next escaped quote;
  * inside a plain quote, up to the quote that opened it (the other quote
  * character is part of the value), escaped quotes included; inside a
- * URL-encoded quote (`%22`), up to the next one.
+ * URL-encoded quote (`%22`) or a JSON-escaped one (`\u0022`), up to the next
+ * one.
  */
-const QUOTED_VALUE = String.raw`(?<=\\")(?:(?!\\")[^\n])+|(?<=")(?:[^"\\\n]|\\.)+|(?<=')(?:[^'\\\n]|\\.)+|(?<=%22)(?:(?!%22)[^\s"'\\&])+`
+const QUOTED_VALUE = String.raw`(?<=\\")(?:(?!\\")[^\n])+|(?<=")(?:[^"\\\n]|\\.)+|(?<=')(?:[^'\\\n]|\\.)+|(?<=%22)(?:(?!%22)[^\s"'\\&])+|(?<=\\u00(?:22|27))(?:(?!\\u00(?:22|27))[^\s"'\\]|\\(?!u00(?:22|27)))+`
 
 /**
  * A header-valued key, Authorization (`authorization`, `auth`,

@@ -1318,5 +1318,25 @@
     "rule": "secret",
     "input": "id whsec_zqTfakeEXAMPLEexample here",
     "expected": "id whsec_zqTfakeEXAMPLEexample here"
+  },
+  {
+    "rule": "kv",
+    "input": "password=\\u0022zqX1hunter2\\u0022",
+    "expected": "password=\\u0022[redacted]\\u0022"
+  },
+  {
+    "rule": "kv",
+    "input": "{\\u0022password\\u0022:\\u0022zqX2hunter2\\u0022}",
+    "expected": "{\\u0022password\\u0022:\\u0022[redacted]\\u0022}"
+  },
+  {
+    "rule": "kv",
+    "input": "password=\\zqX3hunter2",
+    "expected": "password=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "token=\\u0027zqX4hunter2\\u0027",
+    "expected": "token=\\u0027[redacted]\\u0027"
   }
 ]
