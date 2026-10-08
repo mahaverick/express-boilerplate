@@ -7,9 +7,11 @@ import { inspect } from 'node:util'
 import type { MockInstance } from 'vitest'
 
 /**
- * The bound parameter a test must never find in a log payload.
+ * The bound parameter a test must never find in a log payload: a sentinel
+ * no scrubber placeholder (`[secret]`, `[email]`, …) can spell, so a plain
+ * `not.toContain` finds a leak however the surrounding text was redacted.
  */
-export const LEAKED_PARAM = 'secret'
+export const LEAKED_PARAM = 'zqleak7731'
 
 /**
  * A query error whose message and `params` both carry `LEAKED_PARAM`.
