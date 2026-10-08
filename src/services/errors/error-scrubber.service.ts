@@ -246,8 +246,11 @@ const AUTH_HEADER_PATTERN = new RegExp(
  * only after `?` or `&`, first in a form body (`code=…&`), on a line that
  * names OAuth or authorization before it, or with that word later in the same
  * query or JSON object (an authorization code), so `code: 'ECONNREFUSED'` stays;
- * `key` only before `=`, as a whole word or after `_` or `-` (`SECRET_KEY`), but
- * not in `primary_key`, `foreign_key`, `sort_key` and the like. A `response` key
+ * `key` only before `=`, as a whole word or after `_` or `-` (`MY_KEY`), but
+ * not in `primary_key`, `foreign_key`, `sort_key` and the like; a compound
+ * secret key name (`secret_key`, `secretKey`, `private-key`, `signing_key`,
+ * `encryption_key`, `master_key`, `client_key`, `consumer_key`) before any
+ * separator, `:` included. A `response` key
  * (any prefix) is a key after `=`, `=>` or `%3D`, or after `:` or `=>` with a
  * quoted value; after `:` and an unquoted value it is prose (`Unexpected
  * response: 502`) only when `response` stands alone; a prefixed one
@@ -260,7 +263,7 @@ const AUTH_HEADER_PATTERN = new RegExp(
  * they are (`KEPT_VALUE`), so `token: undefined` stays readable.
  */
 const KV_SECRET_PATTERN = new RegExp(
-  String.raw`\b((?:[\w-]*?(?:pass(?:word|wd|phrase|code)?|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|consumer[_-]?key|auth(?:orization)?[_-]code|session|sid|credential|signature|sig|hmac|nonce|(?<=[\w-])response|response(?=s?${KEY_QUOTE}?\s*(?:=|%3D|:\s*${KEY_QUOTE}))|(?<![A-Za-z\d])pin|(?<![A-Za-z\d])(?<!(?:primary|foreign|sort|partition|cache|unique|index|s3)[_-])key(?=s?\s*=(?!>))|jwt|otp)s?|code(?<=[?&]code)|code(?<=(?:oauth|authoriz(?:ation|e)(?![a-z]))[^\n]*code)|code(?=\s*=[^\s&]*&)|code(?=[^\n{}]*(?:oauth|authoriz(?:ation|e)(?![a-z]))))${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?)` +
+  String.raw`\b((?:[\w-]*?(?:pass(?:word|wd|phrase|code)?|pwd|secret|token|api[_-]?key|access[_-]?key|(?:secret|private|consumer|signing|encryption|master|client)[_-]?key|auth(?:orization)?[_-]code|session|sid|credential|signature|sig|hmac|nonce|(?<=[\w-])response|response(?=s?${KEY_QUOTE}?\s*(?:=|%3D|:\s*${KEY_QUOTE}))|(?<![A-Za-z\d])pin|(?<![A-Za-z\d])(?<!(?:primary|foreign|sort|partition|cache|unique|index|s3)[_-])key(?=s?\s*=(?!>))|jwt|otp)s?|code(?<=[?&]code)|code(?<=(?:oauth|authoriz(?:ation|e)(?![a-z]))[^\n]*code)|code(?=\s*=[^\s&]*&)|code(?=[^\n{}]*(?:oauth|authoriz(?:ation|e)(?![a-z]))))${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?)` +
     `${KEPT_VALUE}(?:${QUOTED_VALUE}|${ARRAY_VALUE}|${UNQUOTED_VALUE})`,
   'gi'
 )
@@ -472,7 +475,7 @@ function capped(value: string, wasCut: boolean): string {
  * word, to its closing quote or the end of the line, and the value, an
  * array included, of a secret-named key, singular or plural (`password`,
  * `passphrase`, `passcode`, `pin`, `token`, `secret`, `api_key`,
- * `access_key`, `private_key`, `consumer_key`, `session`, `sid`,
+ * `access_key`, `secret_key` and the other compound key names, `session`, `sid`,
  * `credential`, `jwt`, `otp`, `signature`, `sig`, `hmac`, `nonce`,
  * `response`; `code` after `?` or `&` or on an OAuth or authorization line;
  * `key` before `=`; and every `code` in a text that names an OAuth exchange

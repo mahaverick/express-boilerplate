@@ -1498,5 +1498,65 @@
     "rule": "email",
     "input": "to=xoxb-1234567890-zqT6ABCdef@acme-corp.co.uk",
     "expected": "to=[email]"
+  },
+  {
+    "rule": "kv",
+    "input": "SECRET_KEY: zqS4Zx9Kq2Lm8",
+    "expected": "SECRET_KEY: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "secret_key: zqS4Zx9Kq2Lm8",
+    "expected": "secret_key: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "secret-key: zqS4Zx9Kq2Lm8",
+    "expected": "secret-key: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "stripe_secret_key: zqS4Zx9Kq2Lm8",
+    "expected": "stripe_secret_key: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "{\"secretKey\": \"zqS4Zx9Kq2Lm8\"}",
+    "expected": "{\"secretKey\": \"[redacted]\"}"
+  },
+  {
+    "rule": "kv",
+    "input": "{\"encryptionKey\": \"zqS4Zx9Kq2Lm8\"}",
+    "expected": "{\"encryptionKey\": \"[redacted]\"}"
+  },
+  {
+    "rule": "kv",
+    "input": "config invalid: { secretKey: 'zqS4Zx9Kq2Lm8', region: 'eu' }",
+    "expected": "config invalid: { secretKey: '[redacted]', region: 'eu' }"
+  },
+  {
+    "rule": "kv",
+    "input": "signing_key: zqS4Zx9Kq2Lm8",
+    "expected": "signing_key: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "MASTER-KEY: zqS4Zx9Kq2Lm8",
+    "expected": "MASTER-KEY: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "client_key: zqS4Zx9Kq2Lm8",
+    "expected": "client_key: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "lookup failed for key: 'tenant.settings'",
+    "expected": "lookup failed for key: 'tenant.settings'"
+  },
+  {
+    "rule": "kv",
+    "input": "column primary_key: id",
+    "expected": "column primary_key: id"
   }
 ]
