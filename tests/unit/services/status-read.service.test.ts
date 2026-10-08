@@ -39,6 +39,10 @@ describe('withStatusTimeout', () => {
     await pending
     expect(settled).toHaveBeenCalledWith('fallback')
     expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn).toHaveBeenCalledWith(expect.any(String), {
+      section: 'Flag counters',
+      timeoutMs: STATUS_READ_TIMEOUT_MS,
+    })
     expect(vi.getTimerCount()).toBe(0)
   })
 

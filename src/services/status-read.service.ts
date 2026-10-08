@@ -10,7 +10,8 @@ import { logger } from '@/services/logger.service'
 /**
  * Wait for a status read, at most `STATUS_READ_TIMEOUT_MS`. A read that has
  * not settled by then is abandoned (its later outcome is ignored) and the
- * fallback is returned, with one `warn`. A read that rejects still rejects,
+ * fallback is returned, with one `warn` that carries `section` (the label)
+ * and `timeoutMs` as fields. A read that rejects still rejects,
  * for the caller's own handling. The timer is cleared on every path and does
  * not keep the process alive.
  * @param read - The read in flight.
@@ -27,7 +28,8 @@ export async function withStatusTimeout<T>(
   const deadline = new Promise<T>((resolve) => {
     timer = setTimeout(() => {
       logger.warn(
-        `${label} did not answer in ${String(STATUS_READ_TIMEOUT_MS)} ms; reporting without them`
+        `${label} did not answer in ${String(STATUS_READ_TIMEOUT_MS)} ms; reporting without them`,
+        { section: label, timeoutMs: STATUS_READ_TIMEOUT_MS }
       )
       resolve(fallback)
     }, STATUS_READ_TIMEOUT_MS)
