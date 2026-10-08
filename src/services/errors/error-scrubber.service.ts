@@ -243,15 +243,16 @@ const AUTH_HEADER_PATTERN = new RegExp(
  * `"tokens":"..."`, `api_key: ...`, `sig=...`, `nonce=...`,
  * `response="..."`, `SAMLResponse=...`, `password%3D...`. `pin` is a secret key only
  * as a whole word or after `_` or `-` (`user_pin`, never `spin`). `code` is one
- * only after `?` or `&`, first in a form body (`code=…&`), on a line that
+ * only after `?` or `&` (written plainly, as `&amp;`, or encoded as `%3F` or
+ * `%26`), first in a form body (`code=…&`), on a line that
  * names OAuth or authorization before it, or with that word later in the same
  * query or JSON object (an authorization code), so `code: 'ECONNREFUSED'` stays;
- * `key` only before `=`, as a whole word or after `_` or `-` (`MY_KEY`), but
+ * `key` only before `=` (or `%3D`, `&#61;`, `\u003d`), as a whole word or after `_` or `-` (`MY_KEY`), but
  * not in `primary_key`, `foreign_key`, `sort_key` and the like; a compound
  * secret key name (`secret_key`, `secretKey`, `private-key`, `signing_key`,
  * `encryption_key`, `master_key`, `client_key`, `consumer_key`) before any
  * separator, `:` included. A `response` key
- * (any prefix) is a key after `=`, `=>` or `%3D`, or after `:` or `=>` with a
+ * (any prefix) is a key after `=`, `=>`, `%3D`, `&#61;` or `\u003d`, or after `:` or `=>` with a
  * quoted value; after `:` and an unquoted value it is prose (`Unexpected
  * response: 502`) only when `response` stands alone; a prefixed one
  * (`mfa_response`, `SAMLResponse`) is always a key. The key and its separator are kept.
@@ -263,7 +264,7 @@ const AUTH_HEADER_PATTERN = new RegExp(
  * they are (`KEPT_VALUE`), so `token: undefined` stays readable.
  */
 const KV_SECRET_PATTERN = new RegExp(
-  String.raw`\b((?:[\w-]*?(?:pass(?:word|wd|phrase|code)?|pwd|secret|token|api[_-]?key|access[_-]?key|(?:secret|private|consumer|signing|encryption|master|client)[_-]?key|auth(?:orization)?[_-]code|session|sid|credential|signature|sig|hmac|nonce|(?<=[\w-])response|response(?=s?${KEY_QUOTE}?\s*(?:=|%3D|:\s*${KEY_QUOTE}))|(?<![A-Za-z\d])pin|(?<![A-Za-z\d])(?<!(?:primary|foreign|sort|partition|cache|unique|index|s3)[_-])key(?=s?\s*=(?!>))|jwt|otp)s?|code(?<=[?&]code)|code(?<=(?:oauth|authoriz(?:ation|e)(?![a-z]))[^\n]*code)|code(?=\s*=[^\s&]*&)|code(?=[^\n{}]*(?:oauth|authoriz(?:ation|e)(?![a-z]))))${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?)` +
+  String.raw`(?:\b|(?<=%26|%3F))((?:[\w-]*?(?:pass(?:word|wd|phrase|code)?|pwd|secret|token|api[_-]?key|access[_-]?key|(?:secret|private|consumer|signing|encryption|master|client)[_-]?key|auth(?:orization)?[_-]code|session|sid|credential|signature|sig|hmac|nonce|(?<=[\w-])response|response(?=s?${KEY_QUOTE}?\s*(?:=|%3D|&#61;|\\u003d|:\s*${KEY_QUOTE}))|(?<![A-Za-z\d])pin|(?<![A-Za-z\d])(?<!(?:primary|foreign|sort|partition|cache|unique|index|s3)[_-])key(?=s?\s*(?:=(?!>)|%3D|&#61;|\\u003d))|jwt|otp)s?|code(?<=(?:[?&]|&amp;|%26|%3F)code)|code(?<=(?:oauth|authoriz(?:ation|e)(?![a-z]))[^\n]*code)|code(?=\s*=[^\s&]*&)|code(?=[^\n{}]*(?:oauth|authoriz(?:ation|e)(?![a-z]))))${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?)` +
     `${KEPT_VALUE}(?:${QUOTED_VALUE}|${ARRAY_VALUE}|${UNQUOTED_VALUE})`,
   'gi'
 )

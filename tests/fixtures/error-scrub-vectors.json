@@ -1558,5 +1558,45 @@
     "rule": "kv",
     "input": "column primary_key: id",
     "expected": "column primary_key: id"
+  },
+  {
+    "rule": "kv",
+    "input": "key%3DzqS4Zx9Kq2Lm8",
+    "expected": "key%3D[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "key&#61;zqS4Zx9Kq2Lm8",
+    "expected": "key&#61;[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "key\\u003dzqS4Zx9Kq2Lm8",
+    "expected": "key\\u003d[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "body: grant=1%26code%3DzqS4Zx9Kq2Lm8",
+    "expected": "body: grant=1%26code%3D[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "href=\"/cb?a=1&amp;code=zqS4Zx9Kq2Lm8\"",
+    "expected": "href=\"/cb?[query]\""
+  },
+  {
+    "rule": "kv",
+    "input": "state=x&amp;code=zqS4Zx9Kq2Lm8",
+    "expected": "state=x&amp;code=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "response&#61;zqS4Zx9Kq2Lm8",
+    "expected": "response&#61;[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "response\\u003dzqS4Zx9Kq2Lm8",
+    "expected": "response\\u003d[redacted]"
   }
 ]
