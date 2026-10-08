@@ -1103,5 +1103,25 @@
     "rule": "kv",
     "input": "{\"response\":\"abc\"}",
     "expected": "{\"response\":\"[redacted]\"}"
+  },
+  {
+    "rule": "kv",
+    "input": "mfa_response: 123456",
+    "expected": "mfa_response: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "challenge-response: abc",
+    "expected": "challenge-response: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "oauth_response: xyz",
+    "expected": "oauth_response: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "x-captcha-response: tok",
+    "expected": "x-captcha-response: [redacted]"
   }
 ]

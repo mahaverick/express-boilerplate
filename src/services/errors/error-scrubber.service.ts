@@ -233,7 +233,8 @@ const AUTH_HEADER_PATTERN = new RegExp(
  * `response="..."`, `SAMLResponse=...`, `password%3D...`. A `response` key
  * (any prefix) is a key after `=`, `=>` or `%3D`, or after `:` or `=>` with a
  * quoted value; after `:` and an unquoted value it is prose (`Unexpected
- * response: 502`), except `saml`, `captcha-` and `turnstile-` responses. The key and its separator are kept.
+ * response: 502`) only when `response` stands alone; a prefixed one
+ * (`mfa_response`, `SAMLResponse`) is always a key. The key and its separator are kept.
  * The value is a quoted string (spaces and escaped quotes included, also
  * inside a JSON string), an array to its `]`, or an unquoted run
  * (`UNQUOTED_VALUE`). A value
@@ -242,7 +243,7 @@ const AUTH_HEADER_PATTERN = new RegExp(
  * they are (`KEPT_VALUE`), so `token: undefined` stays readable.
  */
 const KV_SECRET_PATTERN = new RegExp(
-  String.raw`\b([\w-]*?(?:pass(?:word|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|consumer[_-]?key|session|sid|credential|signature|sig|hmac|nonce|(?:saml|captcha-|turnstile-)response|response(?=s?${KEY_QUOTE}?\s*(?:=|%3D|:\s*${KEY_QUOTE}))|jwt|otp)s?${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?)` +
+  String.raw`\b([\w-]*?(?:pass(?:word|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|consumer[_-]?key|session|sid|credential|signature|sig|hmac|nonce|(?<=[\w-])response|response(?=s?${KEY_QUOTE}?\s*(?:=|%3D|:\s*${KEY_QUOTE}))|jwt|otp)s?${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?)` +
     `${KEPT_VALUE}(?:${QUOTED_VALUE}|${ARRAY_VALUE}|${UNQUOTED_VALUE})`,
   'gi'
 )
