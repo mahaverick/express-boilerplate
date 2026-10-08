@@ -627,7 +627,7 @@ export async function denySessionsAfterCommit(userId: string, sessionIds: string
  * next heartbeat (`denySessionsAfterCommit`). Emits `other_sessions_revoked`.
  * @param userId - The authenticated caller.
  * @param sessionId - The calling session (the token's `sid`), which is spared; undefined for a token without one.
- * @returns How many other sessions were revoked.
+ * @returns How many other sessions were signed in (held an unrevoked, unexpired refresh token) and are now revoked; a lapsed session is revoked but not counted.
  * @throws {HttpError} 401 with ACCESS_TOKEN_EXPIRED_CODE for a token without `sid`, or an account gone or inactive.
  */
 export async function revokeOtherSessions(
@@ -637,16 +637,18 @@ export async function revokeOtherSessions(
   if (sessionId === undefined) {
     throw new HttpError('Session ended', 401, ACCESS_TOKEN_EXPIRED_CODE)
   }
-  const revoked = await withTransaction(async (tx) => {
+  const { revoked, live } = await withTransaction(async (tx) => {
     const locked = await userRepository.lockById(userId, 'no key update', tx)
     if (!locked?.active) {
       throw new HttpError('Account no longer exists or is inactive', 401, ACCESS_TOKEN_EXPIRED_CODE)
     }
-    return revokeSessionRows(userId, { exceptSessionId: sessionId }, tx)
+    const liveSessionIds = await userTokenRepository.liveSessionIdsExcept(userId, sessionId, tx)
+    const revokedSessionIds = await revokeSessionRows(userId, { exceptSessionId: sessionId }, tx)
+    return { revoked: revokedSessionIds, live: new Set(liveSessionIds) }
   })
   await denySessionsAfterCommit(userId, revoked)
   await emitDomainEvent({ type: 'other_sessions_revoked', userId, at: new Date() })
-  return revoked.length
+  return revoked.filter((revokedSessionId) => live.has(revokedSessionId)).length
 }
 
 /**

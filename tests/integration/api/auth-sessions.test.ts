@@ -11,6 +11,7 @@ import { createApp } from '@/app'
 import { ACCESS_TOKEN_EXPIRED_CODE } from '@/constants/auth.constants'
 import type { User } from '@/database/models/user.model'
 import { registerAnalyticsSubscribers } from '@/services/analytics/analytics-forwarder.service'
+import { sql } from '@/services/database.service'
 import { resetDomainEventSubscribers } from '@/services/domain-events.service'
 import { isSessionDenied } from '@/services/session-denylist.service'
 import {
@@ -79,7 +80,12 @@ describe('POST /api/v1/auth/sessions/revoke-others', () => {
     await expect(rotateRefreshToken(other.refresh.raw)).rejects.toMatchObject({ statusCode: 401 })
     await expect(rotateRefreshToken(third.refresh.raw)).rejects.toMatchObject({ statusCode: 401 })
     expect(await isSessionDenied(other.refresh.sessionId)).toBe(true)
+    expect(await isSessionDenied(third.refresh.sessionId)).toBe(true)
     expect(await isSessionDenied(current.refresh.sessionId)).toBe(false)
+    const signedOut = await request(app)
+      .get('/api/v1/profile')
+      .set('Authorization', `Bearer ${other.bearer}`)
+    expect(signedOut.status).toBe(401)
     const rotated = await rotateRefreshToken(current.refresh.raw)
     expect(rotated.sessionId).toBe(current.refresh.sessionId)
     const stillIn = await request(app)
@@ -96,6 +102,25 @@ describe('POST /api/v1/auth/sessions/revoke-others', () => {
 
     expect(response.status).toBe(200)
     expect(response.body).toMatchObject({ data: { revoked: 0 } })
+  })
+
+  it('revokes a lapsed session without counting it', async () => {
+    const user = await createTrackedUser()
+    const current = await sessionFor(user)
+    const live = await sessionFor(user)
+    const lapsed = await sessionFor(user)
+    await sql`update user_tokens set expires_at = now() - interval '1 minute' where session_id = ${lapsed.refresh.sessionId}`
+
+    const response = await revokeOthers(current.bearer)
+
+    expect(response.status).toBe(200)
+    expect(response.body).toMatchObject({ data: { revoked: 1 } })
+    expect(await isSessionDenied(live.refresh.sessionId)).toBe(true)
+    const lapsedRows = await sql<{ revoked_at: string | null }[]>`
+      select revoked_at from user_tokens where session_id = ${lapsed.refresh.sessionId}
+    `
+    expect(lapsedRows).toHaveLength(1)
+    expect(lapsedRows[0]?.revoked_at).not.toBeNull()
   })
 
   it('leaves another user’s sessions alone', async () => {
@@ -145,6 +170,33 @@ describe('POST /api/v1/auth/sessions/revoke-others', () => {
     expect(response.status).toBe(401)
     expect(response.body).toMatchObject({ code: ACCESS_TOKEN_EXPIRED_CODE })
     expect(await isSessionDenied(other.refresh.sessionId)).toBe(false)
+  })
+
+  it('refuses a body with an unknown key 400, revoking nothing', async () => {
+    const user = await createTrackedUser()
+    const current = await sessionFor(user)
+    const other = await sessionFor(user)
+
+    const response = await request(app)
+      .post('/api/v1/auth/sessions/revoke-others')
+      .set('Authorization', `Bearer ${current.bearer}`)
+      .send({ everywhere: true })
+
+    expect(response.status).toBe(400)
+    expect(await isSessionDenied(other.refresh.sessionId)).toBe(false)
+  })
+
+  it('accepts a request with no body', async () => {
+    const user = await createTrackedUser()
+    const current = await sessionFor(user)
+    await sessionFor(user)
+
+    const response = await request(app)
+      .post('/api/v1/auth/sessions/revoke-others')
+      .set('Authorization', `Bearer ${current.bearer}`)
+
+    expect(response.status).toBe(200)
+    expect(response.body).toMatchObject({ data: { revoked: 1 } })
   })
 
   it('refuses a body that is not JSON 415', async () => {

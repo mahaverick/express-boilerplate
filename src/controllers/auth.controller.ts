@@ -34,6 +34,7 @@ import {
   reauthenticateSchema,
   registerSchema,
   resetPasswordSchema,
+  revokeOtherSessionsSchema,
 } from '@/validators/auth.validators'
 import { parseBody } from '@/validators/parse.validators'
 
@@ -535,9 +536,12 @@ class AuthController extends BaseController {
   /**
    * `POST /auth/sessions/revoke-others`: sign the caller out of every other
    * session, behind `requireAuth`, keeping the one this request came from
-   * (`request.sessionId`). Takes `{}`; answers how many sessions ended.
+   * (`request.sessionId`). Takes `{}` or no body; answers how many
+   * signed-in sessions ended.
    */
   revokeOtherSessions = this.handle(async (request, response) => {
+    // A body-less POST leaves request.body undefined; it means the same as `{}`.
+    parseBody(revokeOtherSessionsSchema, request.body ?? {})
     const revoked = await revokeOtherSessions(authenticatedUserId(request), request.sessionId)
 
     successResponse(response, { revoked }, 'Other sessions signed out.')
