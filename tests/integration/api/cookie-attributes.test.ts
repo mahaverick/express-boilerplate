@@ -27,6 +27,7 @@ import {
 } from '@/services/session.service'
 import { parseDurationMs } from '@/utilities/duration.utilities'
 import { hashPassword } from '@/utilities/password.utilities'
+import { clearOutbox, outboxRowsOf } from '../../helpers/analytics-outbox'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { request } from '../../helpers/request'
 
@@ -40,6 +41,13 @@ import { request } from '../../helpers/request'
 vi.mock('@/configs/env.config', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/configs/env.config')>()
   return { ...actual, getEnv: vi.fn(actual.getEnv) }
+})
+
+const analytics = vi.hoisted(() => ({ isEnabled: false }))
+
+vi.mock('@/configs/analytics.config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/configs/analytics.config')>()
+  return { ...actual, isAnalyticsEnabled: () => analytics.isEnabled }
 })
 
 const realEnv = getEnv()
@@ -85,6 +93,7 @@ const createdIds: string[] = []
 
 afterEach(async () => {
   vi.mocked(getEnv).mockReturnValue(realEnv)
+  analytics.isEnabled = false
   passport.unuse(GOOGLE_STRATEGY_NAME)
   if (createdIds.length === 0) return
   await sql`delete from users where id = any(${createdIds})`
@@ -358,12 +367,19 @@ describe('refresh cookie: name, path and domain per deployment', () => {
   })
 })
 
+/**
+ * Under COOKIE_SECURE the unprefixed name is never redeemed: a sibling
+ * subdomain or an on-path attacker on plain http can plant it (cookie
+ * tossing), which the `__Host-` prefix exists to stop. A refresh presenting
+ * only that cookie revokes its session, clears it and answers 401; logout
+ * still revokes and clears it.
+ */
 describe('refresh cookie: the legacy refreshToken name', () => {
   it.each([
     { label: 'no COOKIE_DOMAIN', env: SECURE_HOST_ONLY, name: HOST_COOKIE, legacyClears: 1 },
     { label: 'COOKIE_DOMAIN', env: SECURE_SCOPED, name: SECURE_COOKIE, legacyClears: 2 },
   ])(
-    'refreshes a client holding only the legacy cookie, sets $name and clears the legacy one ($label)',
+    'answers 401 to a client holding only the legacy cookie, revokes and clears it, and sets no $name ($label)',
     async ({ env, name, legacyClears }) => {
       const app = appWith(env)
       const email = await createVerifiedUser()
@@ -374,10 +390,8 @@ describe('refresh cookie: the legacy refreshToken name', () => {
         .set('X-Forwarded-Proto', 'https')
         .set('Cookie', `${PLAIN_COOKIE}=${legacy}`)
 
-      expect(refreshed.status).toBe(200)
-      const current = cookieLines(refreshed, name)
-      expect(current).toHaveLength(1)
-      expect(current[0]).not.toMatch(EPOCH_EXPIRY)
+      expect(refreshed.status).toBe(401)
+      expect(cookieLines(refreshed, name)).toHaveLength(0)
       const clears = cookieLines(refreshed, PLAIN_COOKIE)
       expect(clears).toHaveLength(legacyClears)
       expect(clears.every((line) => EPOCH_EXPIRY.test(line) && PATH_AUTH.test(line))).toBe(true)
@@ -385,10 +399,27 @@ describe('refresh cookie: the legacy refreshToken name', () => {
       if (legacyClears === 2) {
         expect(clears.filter((line) => SCOPED_DOMAIN.test(line))).toHaveLength(1)
       }
-      const legacyState = await tokenState(legacy)
-      expect(legacyState?.isConsumed).toBe(true)
+      expect(await tokenState(legacy)).toEqual({ isConsumed: false, isRevoked: true })
     }
   )
+
+  it('revokes a legacy-only cookie without a user_signed_out, which is not a sign-out', async () => {
+    analytics.isEnabled = true
+    await clearOutbox()
+    const app = appWith(SECURE_HOST_ONLY)
+    const email = await createVerifiedUser()
+    const legacy = await sessionFor(email)
+
+    const refreshed = await request(app)
+      .post('/api/v1/auth/refresh')
+      .set('X-Forwarded-Proto', 'https')
+      .set('Cookie', `${PLAIN_COOKIE}=${legacy}`)
+
+    expect(refreshed.status).toBe(401)
+    expect(await tokenState(legacy)).toEqual({ isConsumed: false, isRevoked: true })
+    expect(await outboxRowsOf('user_signed_out')).toEqual([])
+    await clearOutbox()
+  })
 
   it('uses the current cookie when a client holds both, and leaves the legacy session alone', async () => {
     const app = appWith(SECURE_HOST_ONLY)
@@ -437,7 +468,7 @@ describe('refresh cookie: the legacy refreshToken name', () => {
     expect(currentState?.isRevoked).toBe(true)
   })
 
-  it('two tabs presenting the same legacy cookie at once both refresh, and both get the new cookie', async () => {
+  it('two tabs presenting the same legacy cookie at once both answer 401 and neither gets a current cookie', async () => {
     const app = appWith(SECURE_HOST_ONLY)
     const email = await createVerifiedUser()
     const legacy = await sessionFor(email)
@@ -449,12 +480,34 @@ describe('refresh cookie: the legacy refreshToken name', () => {
         .set('Cookie', `${PLAIN_COOKIE}=${legacy}`)
     const [first, second] = await Promise.all([send(), send()])
 
-    expect([first.status, second.status]).toEqual([200, 200])
+    expect([first.status, second.status]).toEqual([401, 401])
     for (const response of [first, second]) {
-      const current = cookieLines(response, HOST_COOKIE)
-      expect(current).toHaveLength(1)
-      expect(current[0]).not.toMatch(EPOCH_EXPIRY)
+      expect(cookieLines(response, HOST_COOKIE)).toHaveLength(0)
+      const clears = cookieLines(response, PLAIN_COOKIE)
+      expect(clears).toHaveLength(1)
+      expect(EPOCH_EXPIRY.test(clears[0] ?? '')).toBe(true)
     }
+    expect(await tokenState(legacy)).toEqual({ isConsumed: false, isRevoked: true })
+  })
+
+  // A plain cookie planted by a sibling subdomain must not sign a browser with no current cookie into the planter's session.
+  it('SEC-authn-01: does not sign a signed-out browser into a session planted as a plain refreshToken cookie', async () => {
+    const app = appWith(SECURE_HOST_ONLY)
+    const attackerEmail = await createVerifiedUser()
+    const planted = await sessionFor(attackerEmail)
+
+    const refreshed = await request(app)
+      .post('/api/v1/auth/refresh')
+      .set('X-Forwarded-Proto', 'https')
+      .set('Cookie', `${PLAIN_COOKIE}=${planted}`)
+
+    expect(refreshed.status).toBe(401)
+    expect(
+      cookieLines(refreshed, HOST_COOKIE).filter((line) => !EPOCH_EXPIRY.test(line))
+    ).toHaveLength(0)
+    const clears = cookieLines(refreshed, PLAIN_COOKIE)
+    expect(clears).toHaveLength(1)
+    expect(clears[0]).toMatch(EPOCH_EXPIRY)
   })
 })
 
@@ -549,15 +602,42 @@ describe('refresh cookie: Google callback with a legacy cookie', () => {
  * header is missing.
  */
 describe('oauth.sid (express-session)', () => {
+  // An unprefixed session cookie can be planted by a sibling subdomain, binding the victim's callback to the planter's `state`.
+  it('SEC-authn-01: names the OAuth session cookie with a __Host- prefix when secure with no COOKIE_DOMAIN', async () => {
+    const app = appWith(SECURE_HOST_ONLY)
+
+    const response = await request(app).get('/api/v1/auth/google').set('X-Forwarded-Proto', 'https')
+
+    expect(response.status).toBe(302)
+    const names = ((response.headers['set-cookie'] as string[] | undefined) ?? []).map(
+      (line) => line.split('=', 1)[0]
+    )
+    expect(names).toContain(`__Host-${OAUTH_SESSION_COOKIE}`)
+    expect(names).not.toContain(OAUTH_SESSION_COOKIE)
+  })
+
   it('carries Secure and COOKIE_DOMAIN when COOKIE_SECURE=true and the request is https via the proxy', async () => {
     const app = appWith(SECURE_SCOPED)
 
     const response = await request(app).get('/api/v1/auth/google').set('X-Forwarded-Proto', 'https')
 
     expect(response.status).toBe(302)
-    const sessionCookie = cookieLine(response, OAUTH_SESSION_COOKIE)
+    const sessionCookie = cookieLine(response, `__Secure-${OAUTH_SESSION_COOKIE}`)
     expect(sessionCookie).toMatch(SECURE)
     expect(sessionCookie).toMatch(SCOPED_DOMAIN)
+    expect(cookieLine(response, OAUTH_SESSION_COOKIE)).toBeUndefined()
+  })
+
+  it('carries Secure, Path=/ and no Domain as __Host-oauth.sid when COOKIE_SECURE=true with no COOKIE_DOMAIN', async () => {
+    const app = appWith(SECURE_HOST_ONLY)
+
+    const response = await request(app).get('/api/v1/auth/google').set('X-Forwarded-Proto', 'https')
+
+    expect(response.status).toBe(302)
+    const sessionCookie = cookieLine(response, `__Host-${OAUTH_SESSION_COOKIE}`)
+    expect(sessionCookie).toMatch(SECURE)
+    expect(sessionCookie).toMatch(PATH_ROOT)
+    expect(sessionCookie).not.toMatch(ANY_DOMAIN)
   })
 
   it('is withheld when COOKIE_SECURE=true but the request is not seen as https', async () => {
@@ -566,7 +646,10 @@ describe('oauth.sid (express-session)', () => {
     const response = await request(app).get('/api/v1/auth/google')
 
     expect(response.status).toBe(302)
-    expect(cookieLine(response, OAUTH_SESSION_COOKIE)).toBeUndefined()
+    const names = ((response.headers['set-cookie'] as string[] | undefined) ?? []).map(
+      (line) => line.split('=', 1)[0]
+    )
+    expect(names.filter((name) => name?.endsWith(OAUTH_SESSION_COOKIE))).toEqual([])
   })
 
   it('has neither Secure nor Domain when COOKIE_SECURE=false and COOKIE_DOMAIN is unset', async () => {

@@ -582,7 +582,9 @@ describe('the mode each call site passes', () => {
     })
     await makeStaff(staff.id, 'admin')
 
-    const calls = await recordModes(() => removeMember({ userId: staff.id }, tenant.id, member.id))
+    const calls = await recordModes(() =>
+      removeMember({ userId: staff.id }, tenant.id, member.id, { reason: 'Ticket 4411' })
+    )
 
     expect(calls).toEqual(['lockOwners:update', 'lockMemberships:update', 'lockPlatformRole'])
   })
@@ -600,7 +602,9 @@ describe('the mode each call site passes', () => {
     await makeStaff(staff.id, 'owner')
 
     const calls = await recordModes(async () => {
-      await changeRole({ userId: staff.id }, tenant.id, member.id, 'editor')
+      await changeRole({ userId: staff.id }, tenant.id, member.id, 'editor', {
+        reason: 'Ticket 4411',
+      })
       await updateTenant({ userId: staff.id }, tenant.id, { name: 'Renamed' })
     })
 

@@ -4,7 +4,9 @@
  * also runs after `resolveTenant`. Writes pass the actor, never
  * `principal.role`: the services re-read the actor's role under lock and apply
  * policies/tenant.policy.ts there, so the router's `requireRole` is only the
- * early gate.
+ * early gate. A member or invitation write by staff through platform access
+ * also passes on the `reason` its route middleware validated, for the audit
+ * entry.
  */
 import type { Request } from 'express'
 import { BaseController } from '@/controllers/base.controller'
@@ -12,7 +14,7 @@ import { actorFrom, authenticatedUserId, tenantPrincipal } from '@/controllers/h
 import { HttpError } from '@/errors/http-error'
 import { toPublicTenant, toTenantDetail, toTenantListRow } from '@/presenters/tenant.presenter'
 import { invite, listPending, resend, revoke } from '@/services/tenant-invitation.service'
-import { changeRole, removeMember } from '@/services/tenant-membership.service'
+import { changeRole, leaveTenant, removeMember } from '@/services/tenant-membership.service'
 import {
   createTenant,
   getSettings,
@@ -22,6 +24,7 @@ import {
   updateSettings,
   updateTenant,
 } from '@/services/tenant.service'
+import type { StaffReasonOption } from '@/types/actor'
 import { messageResponse, successResponse } from '@/utilities/response.utilities'
 import { parseBody } from '@/validators/parse.validators'
 import {
@@ -61,6 +64,16 @@ function targetUserIdParameter(request: Request): string {
  */
 function invitationIdParameter(request: Request): string {
   return parseBody(invitationIdSchema, request.params).id
+}
+
+/**
+ * The reason staff gave for a member or invitation write, as
+ * `requireRecentAuthAndReasonOnPlatformAccess` left it on the request.
+ * @param request - The incoming request.
+ * @returns `{ reason }` for a staff write, `{}` for a member's.
+ */
+function staffReasonOf(request: Request): StaffReasonOption {
+  return request.staffReason === undefined ? {} : { reason: request.staffReason }
 }
 
 /**
@@ -139,6 +152,7 @@ class TenantController extends BaseController {
 
     const updated = await changeRole(actor, principal.tenantId, targetUserId, input.role, {
       isPlatformTenant: principal.isPlatformTenant,
+      ...staffReasonOf(request),
     })
     successResponse(response, updated, 'Member role updated.')
   })
@@ -157,8 +171,22 @@ class TenantController extends BaseController {
 
     await removeMember(actor, principal.tenantId, targetUserId, {
       isPlatformTenant: principal.isPlatformTenant,
+      ...staffReasonOf(request),
     })
     messageResponse(response, 'Member removed.')
+  })
+
+  /**
+   * `DELETE /tenants/:slug/membership`: the caller leaves the tenant. Members
+   * only (`requireMembership`, tenant.routes.ts); any role may leave except
+   * the last owner, who gets 409 `LAST_OWNER`. Takes no body (`{}`).
+   */
+  leaveTenant = this.handle(async (request, response) => {
+    const principal = tenantPrincipal(request)
+    await leaveTenant(actorFrom(request), principal.tenantId, {
+      isPlatformTenant: principal.isPlatformTenant,
+    })
+    messageResponse(response, 'You left the tenant.')
   })
 
   /**
@@ -183,7 +211,7 @@ class TenantController extends BaseController {
     const principal = tenantPrincipal(request)
     const actor = actorFrom(request)
     const input = parseBody(inviteMemberSchema, request.body)
-    await invite(actor, principal.tenantId, input.email, input.role)
+    await invite(actor, principal.tenantId, input.email, input.role, staffReasonOf(request))
     messageResponse(response, INVITATION_SENT_MESSAGE, 202)
   })
 
@@ -198,7 +226,7 @@ class TenantController extends BaseController {
     const principal = tenantPrincipal(request)
     const actor = actorFrom(request)
     const invitationId = invitationIdParameter(request)
-    await resend(actor, principal.tenantId, invitationId)
+    await resend(actor, principal.tenantId, invitationId, staffReasonOf(request))
     messageResponse(response, INVITATION_SENT_MESSAGE, 202)
   })
 
@@ -211,7 +239,7 @@ class TenantController extends BaseController {
     const principal = tenantPrincipal(request)
     const actor = actorFrom(request)
     const invitationId = invitationIdParameter(request)
-    await revoke(actor, principal.tenantId, invitationId)
+    await revoke(actor, principal.tenantId, invitationId, staffReasonOf(request))
     messageResponse(response, 'Invitation revoked.')
   })
 

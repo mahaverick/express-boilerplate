@@ -62,7 +62,11 @@ function mockNext(): { next: NextFunction; lastCallArgument: () => unknown } {
   return { next: spy, lastCallArgument: () => spy.mock.calls.at(-1)?.[0] }
 }
 
-const noResponse = {} as Response
+/**
+ * A response with only `set`, which requireAuth calls for its Cache-Control
+ * header before anything else; the tests read the outcome off `next`.
+ */
+const noResponse = { set: vi.fn() } as unknown as Response
 
 describe('requireAuth', () => {
   const createdIds: string[] = []
@@ -291,5 +295,16 @@ describe('requireAuth', () => {
     const error = lastCallArgument()
     expect(error).toBeInstanceOf(HttpError)
     expect((error as HttpError).statusCode).toBe(401)
+  })
+})
+
+describe('requireAuth: Cache-Control', () => {
+  it('marks the response no-store before it authenticates, refusal included', async () => {
+    const set = vi.fn()
+    const { next } = mockNext()
+
+    await requireAuth(buildRequest(), { set } as unknown as Response, next)
+
+    expect(set).toHaveBeenCalledWith('Cache-Control', 'no-store')
   })
 })

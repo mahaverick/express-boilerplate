@@ -19,6 +19,7 @@ import { verificationController } from '@/controllers/verification.controller'
 import { requireAuth } from '@/middlewares/auth.middleware'
 import { requireJsonContentType } from '@/middlewares/content-type.middleware'
 import { rememberOAuthApp } from '@/middlewares/oauth-app.middleware'
+import { requireAllowedOriginWhenPresent } from '@/middlewares/origin.middleware'
 import { requirePlatformRole } from '@/middlewares/platform.middleware'
 import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
 
@@ -27,7 +28,10 @@ import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
  *
  * `requireJsonContentType` is mounted router-wide, ahead of every route, as a
  * CSRF control (see content-type.middleware.ts). A GET carries no content
- * type, which it allows, so the Google routes pass it too.
+ * type, which it allows, so the Google routes pass it too. `/refresh` and
+ * `/logout`, which read the refresh cookie and take no body, also refuse a
+ * disallowed `Origin` (origin.middleware.ts): a same-site sibling page could
+ * otherwise send them a body-less POST with the cookie attached.
  *
  * Google OAuth routes are mounted only when `isGoogleOAuthEnabled()`.
  * `configurePassport()` runs here, before either route can handle a request;
@@ -50,8 +54,19 @@ export function createAuthRouter(): Router {
     createRateLimiter(RATE_LIMITS.loginAccount),
     authController.login
   )
-  router.post('/refresh', createRateLimiter(RATE_LIMITS.refresh), authController.refresh)
-  router.post('/logout', createRateLimiter(RATE_LIMITS.logout), authController.logout)
+  // The two routes that read the refresh cookie: the Origin check runs before the limiter, so a refused page spends no budget.
+  router.post(
+    '/refresh',
+    requireAllowedOriginWhenPresent,
+    createRateLimiter(RATE_LIMITS.refresh),
+    authController.refresh
+  )
+  router.post(
+    '/logout',
+    requireAllowedOriginWhenPresent,
+    createRateLimiter(RATE_LIMITS.logout),
+    authController.logout
+  )
   router.post(
     '/verify-email',
     createRateLimiter(RATE_LIMITS.verifyEmail),
@@ -64,11 +79,10 @@ export function createAuthRouter(): Router {
     createRateLimiter(RATE_LIMITS.resendVerificationEmail),
     verificationController.resendVerification
   )
-  // Per-IP and per-address limiters bound the mail one IP or one victim address can trigger.
+  // Per-IP only: a per-address limit would let anyone deny the owner; the service's mail cooldown bounds one inbox.
   router.post(
     '/forgot-password',
     createRateLimiter(RATE_LIMITS.forgotPasswordIp),
-    createRateLimiter(RATE_LIMITS.forgotPasswordEmail),
     authController.forgotPassword
   )
   router.post(
@@ -82,6 +96,13 @@ export function createAuthRouter(): Router {
     requireAuth,
     createRateLimiter(RATE_LIMITS.changePassword),
     authController.changePassword
+  )
+  // requireAuth first: this limiter keys on request.user.id, which requireAuth sets.
+  router.post(
+    '/sessions/revoke-others',
+    requireAuth,
+    createRateLimiter(RATE_LIMITS.revokeOtherSessions),
+    authController.revokeOtherSessions
   )
   // Staff-only step-up: the platform gate answers non-staff the unknown-route 404 before this limiter keys on request.user.id.
   router.post(

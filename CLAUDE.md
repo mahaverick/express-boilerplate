@@ -270,17 +270,22 @@ uuid))` on every column,** as `errors-query.service.ts` does: per-column
   scheme and trailing slash included.
 - **Sessions are OAuth-scoped only.** `express-session` runs on `/auth/google`
   and `/auth/google/callback` (5-minute TTL); the rest of the API is stateless.
-- **`oauth.sid` needs `req.secure` when `COOKIE_SECURE` resolves true.**
+- **`oauth.sid` needs `req.secure` when `COOKIE_SECURE` resolves true,**
+  and then carries the prefix the refresh cookie does
+  (`oauthSessionCookieName`: `__Host-oauth.sid`, or `__Secure-oauth.sid`
+  with `COOKIE_DOMAIN`).
   express-session silently skips a `Secure` cookie on a non-HTTPS request, so
   behind TLS termination set `TRUST_PROXY` and forward `X-Forwarded-Proto`.
 - **The refresh cookie's name, path and domain come only from
   `refreshCookieSpec`** (`auth.constants.ts`); don't write them anywhere else.
   A browser silently drops a `__Host-` cookie with a `Domain` or a path other
   than `/`, which looks like a logout. The controller reads the current cookie
-  only through `currentRefreshCookie(env)`. Refresh and logout also read the
-  legacy `refreshToken` cookie (`LEGACY_REFRESH_TOKEN_COOKIE_NAME`); a login,
-  a successful refresh, a Google sign-in or a logout clears it when presented,
-  and a refresh answered 401 clears only the cookie name it read.
+  only through `currentRefreshCookie(env)`. Under `COOKIE_SECURE` the legacy
+  `refreshToken` cookie (`LEGACY_REFRESH_TOKEN_COOKIE_NAME`) is never
+  redeemed: a sibling subdomain or a plain-http attacker can plant it. Logout
+  revokes it, a refresh that carried no current cookie revokes it and answers
+  401, and a login, a successful refresh, a Google sign-in or a logout clears it when presented;
+  a refresh answered 401 clears only the cookie name it read.
 - **`COOKIE_DOMAIN` goes on the refresh-cookie set, its clear, and the OAuth
   session cookie.** A clear with a different domain leaves the cookie behind.
   After a domain change the browser sends two cookies of one name, oldest
@@ -368,9 +373,19 @@ uuid))` on every column,** as `errors-query.service.ts` does: per-column
   change. There an owner may demote or remove another owner
   (`canPlatformActorModifyTarget`); the last-owner guard counts active
   owners only (`countActiveOwners`); and a role change, a removal, a resend,
-  or an invitation offering admin or owner needs step-up
-  (`requireRecentAuthOnPlatformTenant`). Keep these to the platform tenant:
+  an invitation of any role, or leaving needs step-up
+  (`requireRecentAuthOnPlatformTenant`): every platform role reads every user,
+  tenant and address. A revoke needs no recent sign-in: it only removes a
+  pending grant. Keep these to the platform tenant:
   on a customer tenant an owner acts only on their own ownership.
+- **Staff acting on a customer tenant through platform access give a reason.**
+  The member and invitation writes there carry
+  `requireRecentAuthAndReasonOnPlatformAccess`: step-up and a body `reason`,
+  recorded in the audit entry. A member is unaffected. The services re-check
+  under lock (`assertStaffReasonGiven`), since a membership deleted after
+  `resolveTenant` leaves only platform access. A staff email resend of an
+  invitation (`POST /platform/emails/:id/resend`) needs step-up on every
+  tenant and passes its reason on.
 - **A tenant with no active owner is the one place an admin grants owner.**
   `POST /platform/tenants/:id/owner-invitation` (platform admin, step-up, a
   reason) goes through `createOwnerInvitation`, which skips

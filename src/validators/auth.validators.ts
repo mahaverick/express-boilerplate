@@ -156,3 +156,9 @@ export const reauthenticateSchema = z.object({
  * The validated shape of a reauthenticate request body.
  */
 export type ReauthenticateInput = z.infer<typeof reauthenticateSchema>
+
+/**
+ * Sign-out-of-other-sessions request body: empty. Strict, so an unknown key
+ * is a 400 rather than silently ignored.
+ */
+export const revokeOtherSessionsSchema = z.strictObject({})

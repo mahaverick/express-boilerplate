@@ -7,7 +7,11 @@
  * assembled.
  */
 import { type NextFunction, type Request, type Response } from 'express'
-import { type MembershipRole } from '@/constants/tenant.constants'
+import {
+  REASON_REQUIRED_CODE,
+  REASON_REQUIRED_MESSAGE,
+  type MembershipRole,
+} from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import { HttpError } from '@/errors/http-error'
 import { redactedForLog } from '@/errors/postgres-errors'
@@ -20,6 +24,7 @@ import { logger } from '@/services/logger.service'
 import { getPlatformMembership } from '@/services/platform.service'
 import { requestContextStore, type TenantContext } from '@/services/request-context.service'
 import type { RequestPrincipal } from '@/types/actor'
+import { reasonSchema } from '@/validators/platform.validators'
 
 const tenantRepository = new TenantRepository()
 const userMembershipRepository = new UserMembershipRepository()
@@ -228,37 +233,87 @@ export function requireMembership(): (
 const recentAuth = requireRecentAuth()
 
 /**
- * Step-up on the platform tenant only: a request that changes who holds
- * staff power (a member's role, a removal, an invitation offering admin or
- * owner, a resend) needs a recent sign-in there, as the `/platform` staff
- * actions do. Customer tenants pass straight through. Must run after
- * `resolveTenant`, which sets `request.principal`; without a principal it
- * answers 500, failing closed, since it cannot tell which tenant it guards.
- * @param isApplicable - Narrows the check to some requests on the platform tenant (e.g. by the offered role); all of them by default.
- * @returns An Express middleware.
+ * The middleware `requireRecentAuthOnPlatformTenant` returns — see its JSDoc.
+ * @param request - The incoming request, after `resolveTenant`.
+ * @param response - The response, passed to the step-up check.
+ * @param next - Continues the chain, or forwards the 401 or 500.
  */
-export function requireRecentAuthOnPlatformTenant(
-  isApplicable: (request: Request) => boolean = () => true
-): (request: Request, response: Response, next: NextFunction) => void {
-  return (request, response, next) => {
-    if (request.principal === undefined) {
-      next(new HttpError('Tenant step-up check is misconfigured', 500))
-      return
-    }
-    if (!request.principal.isPlatformTenant || !isApplicable(request)) {
-      next()
-      return
-    }
-    recentAuth(request, response, next)
+function stepUpOnPlatformTenant(request: Request, response: Response, next: NextFunction): void {
+  if (request.principal === undefined) {
+    next(new HttpError('Tenant step-up check is misconfigured', 500))
+    return
   }
+  if (!request.principal.isPlatformTenant) {
+    next()
+    return
+  }
+  recentAuth(request, response, next)
 }
 
 /**
- * Whether an invitation request offers a role with staff power on the platform tenant.
- * @param request - The invitation request; its body is validated later by the handler.
- * @returns True for an offered `admin` or `owner`.
+ * Step-up on the platform tenant only: a request that changes who holds
+ * staff power (a member's role, a removal, an invitation of any role, a
+ * resend) needs a recent sign-in there, as the `/platform` staff actions
+ * do. Customer tenants pass straight through. Must run after
+ * `resolveTenant`, which sets `request.principal`; without a principal it
+ * answers 500, failing closed, since it cannot tell which tenant it guards.
+ * @returns An Express middleware.
  */
-export function isOfferingAdminOrOwner(request: Request): boolean {
-  const role: unknown = (request.body as { role?: unknown } | undefined)?.role
-  return role === 'admin' || role === 'owner'
+export function requireRecentAuthOnPlatformTenant(): (
+  request: Request,
+  response: Response,
+  next: NextFunction
+) => void {
+  return stepUpOnPlatformTenant
+}
+
+/**
+ * The middleware `requireRecentAuthAndReasonOnPlatformAccess` returns — see its JSDoc.
+ * @param request - The incoming request, after `resolveTenant`.
+ * @param response - The response, passed to the step-up check.
+ * @param next - Continues the chain, or forwards the 401, 400 or 500.
+ */
+function admitStaffWithReason(request: Request, response: Response, next: NextFunction): void {
+  if (request.principal === undefined) {
+    next(new HttpError('Staff reason check is misconfigured', 500))
+    return
+  }
+  if (request.principal.access !== 'platform') {
+    next()
+    return
+  }
+  recentAuth(request, response, (error?: unknown) => {
+    if (error !== undefined) {
+      next(error)
+      return
+    }
+    const parsed = reasonSchema.safeParse(
+      (request.body as { reason?: unknown } | undefined)?.reason
+    )
+    if (!parsed.success) {
+      next(new HttpError(REASON_REQUIRED_MESSAGE, 400, REASON_REQUIRED_CODE))
+      return
+    }
+    request.staffReason = parsed.data
+    next()
+  })
+}
+
+/**
+ * Step-up and a stated reason for staff acting on a customer tenant through
+ * their platform role: a member or invitation write by a caller whose
+ * access is `platform` needs a recent sign-in (401 `REAUTH_REQUIRED`) and a
+ * body `reason` (trimmed, 1 to 500 characters, multi-line text allowed;
+ * otherwise 400 `REASON_REQUIRED`), which is kept on `request.staffReason`
+ * for the audit entry. A member, the platform tenant's staff included,
+ * passes straight through and may omit `reason`. Must run after
+ * `resolveTenant`; without a principal it answers 500, failing closed.
+ * @returns An Express middleware.
+ */
+export function requireRecentAuthAndReasonOnPlatformAccess(): (
+  request: Request,
+  response: Response,
+  next: NextFunction
+) => void {
+  return admitStaffWithReason
 }

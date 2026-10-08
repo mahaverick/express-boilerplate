@@ -1,7 +1,8 @@
 /**
- * @file Moves a row's `updated_at` into the past so a later update's
- * timestamp cannot tie it: a create and its following update can land in
- * the same millisecond, the finest grain a JS `Date` keeps.
+ * @file Moves a row's timestamps into the past: `updated_at`, so a later
+ * update's timestamp cannot tie it (a create and its following update can
+ * land in the same millisecond, the finest grain a JS `Date` keeps), and an
+ * invitation's `last_sent_at`, so a resend is past its cooldown.
  */
 import { sql } from '@/services/database.service'
 
@@ -28,4 +29,18 @@ export async function backdateUpdatedAt(
   `
   if (!row) throw new Error(`backdateUpdatedAt: no ${table} row where ${key.column} = ${key.value}`)
   return new Date(row.updated_at)
+}
+
+/**
+ * Move an invitation's last send a day into the past, beyond any resend cooldown.
+ * @param invitationId - The invitation.
+ * @throws {Error} When no invitation has that id.
+ */
+export async function backdateInvitationSend(invitationId: string): Promise<void> {
+  const rows = await sql`
+    update tenant_invitations set last_sent_at = now() - interval '1 day'
+    where id = ${invitationId}
+    returning id
+  `
+  if (rows.length === 0) throw new Error(`backdateInvitationSend: no invitation ${invitationId}`)
 }

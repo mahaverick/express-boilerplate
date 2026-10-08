@@ -65,6 +65,14 @@ declare global {
       authTime?: number
 
       /**
+       * The reason a staff member gave for a member or invitation write on a
+       * customer tenant, trimmed and validated by
+       * `requireRecentAuthAndReasonOnPlatformAccess` (tenant.middleware.ts).
+       * Absent on a member's request and on every other route.
+       */
+      staffReason?: string
+
+      /**
        * This request's flag evaluation context, memoised by `flagContextFor`
        * (flag-context.middleware.ts). Absent until it is first read.
        */

@@ -56,6 +56,7 @@ describe('createTenantRouter', () => {
       ['patch', '/:slug'],
       ['patch', '/:slug/members/:userId'],
       ['delete', '/:slug/members/:userId'],
+      ['delete', '/:slug/membership'],
       ['delete', '/:slug/invitations/:id'],
       ['patch', '/:slug/settings'],
       ['post', '/:slug/onboarding/steps/:key/complete'],

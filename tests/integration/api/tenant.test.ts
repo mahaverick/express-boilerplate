@@ -20,15 +20,17 @@ import { createApp } from '@/app'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
+import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'
 import { TenantSettingsRepository } from '@/repositories/tenant-settings.repository'
 import { TenantRepository, type CreateTenantInput } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import type { DbExecutor } from '@/services/database.service'
 import { sql } from '@/services/database.service'
-import { signAccessToken } from '@/services/session.service'
+import { hashToken, signAccessToken } from '@/services/session.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { withMutatedMethod } from '../../helpers/mutate'
+import { makeStaff, platformTenant } from '../../helpers/platform-staff'
 import { request } from '../../helpers/request'
 import { settle } from '../../helpers/timing'
 
@@ -88,6 +90,36 @@ async function addMembership(
   role: MembershipRole
 ): Promise<void> {
   await userMembershipRepository.create({ userId, tenantId, role })
+}
+
+/**
+ * Leave `slug` as the bearer of `token`.
+ * @param slug - The tenant.
+ * @param token - The caller's token, or none.
+ * @returns The response.
+ */
+async function leave(slug: string, token?: string): Promise<Response> {
+  const pending = request(app).delete(`/api/v1/tenants/${slug}/membership`)
+  if (token !== undefined) pending.set('Authorization', `Bearer ${token}`)
+  return pending.send({})
+}
+
+/**
+ * A pending invitation sent by `inviterId`, written straight to the table.
+ * @param tenantId - The tenant.
+ * @param inviterId - The sender.
+ * @returns The invitation id.
+ */
+async function pendingFrom(tenantId: string, inviterId: string): Promise<string> {
+  const invitation = await new TenantInvitationRepository().createPending({
+    tenantId,
+    email: uniqueEmail(),
+    role: 'viewer',
+    tokenHash: hashToken(randomUUID()),
+    invitedBy: inviterId,
+    expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+  })
+  return invitation.id
 }
 
 describe('/api/v1/tenants', () => {
@@ -1031,6 +1063,146 @@ describe('/api/v1/tenants', () => {
 
       const membership = await userMembershipRepository.findByUserAndTenant(target.id, tenant.id)
       expect(membership?.role).toBe('owner')
+    })
+  })
+
+  describe('DELETE /api/v1/tenants/:slug/membership (leave)', () => {
+    it.each<MembershipRole>(['admin', 'manager', 'editor', 'viewer'])(
+      'lets the %s leave: the membership goes and member.left is recorded',
+      async (role) => {
+        const { user: owner } = await createAuthenticatedUser()
+        const tenant = await createTenant(owner.id)
+        const { user, token } = await createAuthenticatedUser()
+        await addMembership(user.id, tenant.id, role)
+
+        const response = await leave(tenant.slug, token)
+
+        expect(response.status).toBe(200)
+        expect(response.body).toMatchObject({
+          success: true,
+          message: 'You left the tenant.',
+          // eslint-disable-next-line unicorn/no-null -- the API envelope uses JSON null for "no data"
+          data: null,
+        })
+        expect(
+          await userMembershipRepository.findByUserAndTenant(user.id, tenant.id)
+        ).toBeUndefined()
+        const rows = await sql<{ actor_user_id: string; access: string; metadata: unknown }[]>`
+          select actor_user_id, access, metadata from audit_logs
+          where tenant_id = ${tenant.id} and action = 'member.left'`
+        expect(rows).toEqual([{ actor_user_id: user.id, access: 'member', metadata: { role } }])
+      }
+    )
+
+    it('revokes the leaver’s pending invitations there, one invitation.revoked entry each', async () => {
+      const { user: owner } = await createAuthenticatedUser()
+      const tenant = await createTenant(owner.id)
+      const { user: admin, token } = await createAuthenticatedUser()
+      await addMembership(admin.id, tenant.id, 'admin')
+      const first = await pendingFrom(tenant.id, admin.id)
+      const second = await pendingFrom(tenant.id, admin.id)
+      const ownersOwn = await pendingFrom(tenant.id, owner.id)
+
+      const response = await leave(tenant.slug, token)
+
+      expect(response.status).toBe(200)
+      const pending = await sql<{ id: string }[]>`
+        select id from tenant_invitations
+        where tenant_id = ${tenant.id} and revoked_at is null and accepted_at is null`
+      expect(pending.map((row) => row.id)).toEqual([ownersOwn])
+      const revoked = await sql<{ target_id: string; actor_user_id: string }[]>`
+        select target_id, actor_user_id from audit_logs
+        where tenant_id = ${tenant.id} and action = 'invitation.revoked' order by target_id`
+      expect(revoked).toEqual(
+        [first, second]
+          .toSorted((a, b) => a.localeCompare(b))
+          .map((target_id) => ({ target_id, actor_user_id: admin.id }))
+      )
+    })
+
+    it('refuses the last owner 409 LAST_OWNER, and they stay', async () => {
+      const { user: owner, token } = await createAuthenticatedUser()
+      const tenant = await createTenant(owner.id)
+
+      const response = await leave(tenant.slug, token)
+
+      expect(response.status).toBe(409)
+      expect(response.body).toMatchObject({ code: 'LAST_OWNER' })
+      const kept = await userMembershipRepository.findByUserAndTenant(owner.id, tenant.id)
+      expect(kept?.role).toBe('owner')
+    })
+
+    it('lets an owner leave while another owner remains', async () => {
+      const { user: owner, token } = await createAuthenticatedUser()
+      const tenant = await createTenant(owner.id)
+      const { user: coOwner } = await createAuthenticatedUser()
+      await addMembership(coOwner.id, tenant.id, 'owner')
+
+      const response = await leave(tenant.slug, token)
+
+      expect(response.status).toBe(200)
+      expect(
+        await userMembershipRepository.findByUserAndTenant(owner.id, tenant.id)
+      ).toBeUndefined()
+    })
+
+    it('answers 401 without a bearer token', async () => {
+      const { user: owner } = await createAuthenticatedUser()
+      const tenant = await createTenant(owner.id)
+
+      const response = await leave(tenant.slug)
+
+      expect(response.status).toBe(401)
+    })
+
+    it('answers 404 to a caller who is not a member, as for an unknown tenant', async () => {
+      const { user: owner } = await createAuthenticatedUser()
+      const tenant = await createTenant(owner.id)
+      const { token } = await createAuthenticatedUser()
+
+      const response = await leave(tenant.slug, token)
+
+      expect(response.status).toBe(404)
+      expect(response.body).toMatchObject({ message: 'Tenant not found' })
+    })
+
+    it('answers 404 to staff who reach the tenant only through their platform role', async () => {
+      const { user: owner } = await createAuthenticatedUser()
+      const tenant = await createTenant(owner.id)
+      const { user: staff, token } = await createAuthenticatedUser()
+      await makeStaff(staff.id, 'owner')
+
+      const response = await leave(tenant.slug, token)
+
+      expect(response.status).toBe(404)
+      expect(await sql`select id from audit_logs where action = 'member.left'`).toHaveLength(0)
+    })
+
+    it('leaves only the named tenant: a membership in another tenant stays', async () => {
+      const { user: owner } = await createAuthenticatedUser()
+      const tenant = await createTenant(owner.id)
+      const other = await createTenant(owner.id)
+      const { user, token } = await createAuthenticatedUser()
+      await addMembership(user.id, tenant.id, 'viewer')
+      await addMembership(user.id, other.id, 'viewer')
+
+      const response = await leave(tenant.slug, token)
+
+      expect(response.status).toBe(200)
+      expect(await userMembershipRepository.findByUserAndTenant(user.id, other.id)).toBeDefined()
+    })
+
+    it('needs a recent sign-in to leave the platform tenant, as a self-removal there does', async () => {
+      const platform = await platformTenant()
+      const { user: staff, token } = await createAuthenticatedUser()
+      await makeStaff(staff.id, 'viewer')
+
+      const stale = await leave(platform.slug, token)
+      const fresh = await leave(platform.slug, signAccessToken(staff, randomUUID(), new Date()))
+
+      expect(stale.status).toBe(401)
+      expect(stale.body).toMatchObject({ code: 'REAUTH_REQUIRED' })
+      expect(fresh.status).toBe(200)
     })
   })
 

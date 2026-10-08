@@ -22,6 +22,15 @@ export interface ActorAccess {
 }
 
 /**
+ * The role a staff member acts with in a tenant they are not a member of.
+ * @param platformRole - Their role in the platform tenant.
+ * @returns Their effective role through platform access.
+ */
+export function platformAccessRole(platformRole: MembershipRole): MembershipRole {
+  return platformRole
+}
+
+/**
  * An actor's access, with every membership in the tenant that was locked on the way.
  */
 export interface LockedTenantAccess {
@@ -64,7 +73,7 @@ export async function lockTenantAccess(
 
   const platformRole = await userMembershipRepository.lockPlatformRole(actor.userId, tx)
   if (!platformRole) throw new HttpError('Tenant not found', 404)
-  return { actor: { role: platformRole, access: 'platform' }, memberships }
+  return { actor: { role: platformAccessRole(platformRole), access: 'platform' }, memberships }
 }
 
 /**

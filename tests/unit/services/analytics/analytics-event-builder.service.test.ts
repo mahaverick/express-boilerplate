@@ -747,6 +747,7 @@ describe('buildProductEvent', () => {
   it.each([
     'user_signed_out',
     'password_changed',
+    'other_sessions_revoked',
     'password_reset_completed',
     'email_verified',
   ] as const)('sends %s as the user with only the common properties and no group', (type) => {
@@ -823,6 +824,7 @@ describe('buildProductEvent', () => {
       { type: 'user_signed_in', userId: ACTOR_ID, method: 'google', at: OCCURRED_AT },
       { type: 'user_signed_out', userId: ACTOR_ID, at: OCCURRED_AT },
       { type: 'password_changed', userId: ACTOR_ID, at: OCCURRED_AT },
+      { type: 'other_sessions_revoked', userId: ACTOR_ID, at: OCCURRED_AT },
       { type: 'password_reset_completed', userId: ACTOR_ID, at: OCCURRED_AT },
       { type: 'email_verified', userId: ACTOR_ID, at: OCCURRED_AT },
       {

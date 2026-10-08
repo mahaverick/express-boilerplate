@@ -176,6 +176,13 @@
       "when": 1791281586391,
       "tag": "0024_maintenance_mode",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1791395175250,
+      "tag": "0025_invitation_last_sent_at",
+      "breakpoints": true
     }
   ]
 }

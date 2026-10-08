@@ -229,6 +229,36 @@ const EnvSchema = z.object({
     ),
 
   /**
+   * Replaces a per-address limiter on forgot-password, which anyone who
+   * knows an address could spend to deny its owner their reset mail.
+   */
+  PASSWORD_RESET_MAIL_COOLDOWN: z
+    .string()
+    .default('5m')
+    .refine((value) => (parseDurationMs(value) ?? 0) > 0, {
+      message:
+        'PASSWORD_RESET_MAIL_COOLDOWN must be a positive duration string ms() can parse, e.g. "5m" or "300000".',
+    })
+    .describe(
+      'Shortest gap between two password-reset mails to one address, as an ms()-parseable duration (e.g. "5m"). Forgot-password answers the same 202 to every request; a request inside the gap mails nothing, so an owner\'s own request is at most one gap late and one address gets at most 12 reset mails an hour at the default. Defaults to 5m.'
+    ),
+
+  /**
+   * A notice, not a login path: it is skipped when Redis is down. No 429 on
+   * register instead, which would tell a caller the address is taken.
+   */
+  REGISTRATION_ATTEMPT_NOTICE_COOLDOWN: z
+    .string()
+    .default('1h')
+    .refine((value) => (parseDurationMs(value) ?? 0) > 0, {
+      message:
+        'REGISTRATION_ATTEMPT_NOTICE_COOLDOWN must be a positive duration string ms() can parse, e.g. "1h" or "3600000".',
+    })
+    .describe(
+      'Shortest gap between two "someone tried to register with your address" notices to one address, as an ms()-parseable duration (e.g. "1h"). Register answers the same 202 either way; an attempt inside the gap mails nothing, so nobody can mail-bomb an account owner through register. Defaults to 1h.'
+    ),
+
+  /**
    * Longer than PASSWORD_RESET_TTL: the recipient of a staff-created account
    * did not ask for the mail. The link is single-use either way.
    */
@@ -251,6 +281,24 @@ const EnvSchema = z.object({
     })
     .describe(
       'How long a tenant invitation link stays valid, as an ms()-parseable duration string (e.g. "7d"). Resending an invitation issues a new link with a fresh lifetime. Defaults to 7d.'
+    ),
+  INVITATION_RESEND_COOLDOWN: z
+    .string()
+    .default('10m')
+    .refine((value) => parseDurationMs(value) !== undefined, {
+      message:
+        'INVITATION_RESEND_COOLDOWN must be a duration string ms() can parse, e.g. "10m" or "600000".',
+    })
+    .describe(
+      'How long after an invitation is mailed before it can be resent, as an ms()-parseable duration string. A resend sooner answers 429 invitation_resend_cooldown. Defaults to 10m.'
+    ),
+  INVITATION_RECIPIENT_DAILY_LIMIT: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(10)
+    .describe(
+      'Most tenant invitation mails (invites and resends) one address may receive in 24 hours, across every tenant and sender, of which one tenant may send at most 3; past either the sender gets 429 RATE_LIMITED. Staff owner-invitations of new tenants are not counted. Defaults to 10.'
     ),
 
   /**
@@ -289,14 +337,14 @@ const EnvSchema = z.object({
     })
     .optional()
     .describe(
-      "Domain attribute for the refresh-token and OAuth session cookies, e.g. \"example.com\" to share them with subdomains. Unset means host-only cookies, the narrowest scope. Boot refuses a value that APP_URL's host is not within, since browsers would reject the cookies. With COOKIE_SECURE on, the refresh cookie is __Secure-refreshToken when this is set and __Host-refreshToken (Path=/) when it is not, so setting or unsetting it on a live deployment signs users in again once. With COOKIE_SECURE on, an unprefixed refreshToken cookie is also read, then cleared in its host-only form and under this domain; that fallback is removed in the next major version. Within one name the API reads the most recently created cookie. Reverting to an earlier value is the exception: the browser keeps that cookie's original creation time, so the other scope's cookie reads as newer and refresh fails until the user logs in again or it expires."
+      "Domain attribute for the refresh-token and OAuth session cookies, e.g. \"example.com\" to share them with subdomains. Unset means host-only cookies, the narrowest scope. Boot refuses a value that APP_URL's host is not within, since browsers would reject the cookies. With COOKIE_SECURE on, the refresh cookie is __Secure-refreshToken when this is set and __Host-refreshToken (Path=/) when it is not, so setting or unsetting it on a live deployment signs users in again once. The OAuth session cookie takes the same prefix: __Secure-oauth.sid or __Host-oauth.sid. With COOKIE_SECURE on, an unprefixed refreshToken cookie is never redeemed: a logout, or a refresh that carries no current cookie, revokes its session, and it is cleared in its host-only form and under this domain; that revoke-and-clear is removed in the next major version. Within one name the API reads the most recently created cookie. Reverting to an earlier value is the exception: the browser keeps that cookie's original creation time, so the other scope's cookie reads as newer and refresh fails until the user logs in again or it expires."
     ),
 
   CORS_ALLOWED_ORIGINS: z
     .string()
     .optional()
     .describe(
-      'Extra browser origins allowed to call this API, comma-separated (e.g. "https://admin.example.com,https://shop.example.com"). WEB_URL is ALWAYS allowed and does not need listing here, and same-origin requests send no Origin header at all. Leave empty for a single-frontend deployment. Never a wildcard: this API sends credentials, and the CORS spec forbids "*" with credentials.'
+      'Extra browser origins allowed to call this API, comma-separated (e.g. "https://admin.example.com,https://shop.example.com"). WEB_URL and APEX_URL are always allowed and need no entry. Browsers send Origin on a same-origin POST, and POST /auth/refresh and /auth/logout refuse a present Origin that is none of WEB_URL, APEX_URL or an entry here unless Sec-Fetch-Site is same-origin, so a frontend served on any other origin must be listed. Leave empty for a single-frontend deployment. Never a wildcard: this API sends credentials, and the CORS spec forbids "*" with credentials.'
     ),
 
   /**
@@ -614,6 +662,20 @@ const EnvSchema = z.object({
     .default(5)
     .describe(
       'Most notification SSE streams one user may hold open at once, per process. A request over the cap gets 429 too_many_streams. Defaults to 5 (several tabs and devices).'
+    ),
+
+  /**
+   * Per process, beside the per-user cap: without it enough verified
+   * accounts could hold every connection a proxy in front has.
+   */
+  SSE_MAX_STREAMS_TOTAL: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(100_000)
+    .default(2000)
+    .describe(
+      'Most notification SSE streams this process holds open at once, across all users (1-100000). A request over the cap gets 503 stream_capacity with Retry-After: 30, and the client retries with backoff. Size it under what the proxy in front can hold: each stream through nginx costs it two connections (client and upstream). Defaults to 2000.'
     ),
 
   /**

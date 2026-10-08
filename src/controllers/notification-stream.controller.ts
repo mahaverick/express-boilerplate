@@ -4,7 +4,9 @@
  * notification-emitter.service.ts's Redis pub/sub, behind `requireAuth`.
  * Every rejection (503 shutting down, 401, 429 `too_many_streams`) is thrown
  * before `writeHead`, so `errorHandler` answers it with the ordinary JSON
- * error envelope, not an event stream that closes at once.
+ * error envelope, not an event stream that closes at once. The exception is
+ * 503 `stream_capacity`, written directly in the same envelope with
+ * `Retry-After` (see `didRefuseStream`).
  */
 import type { NextFunction, Request, Response } from 'express'
 import { getEnv } from '@/configs/env.config'
@@ -14,11 +16,17 @@ import { BaseController } from '@/controllers/base.controller'
 import { authenticatedUserId } from '@/controllers/helpers.controller'
 import type { Notification } from '@/database/models/notification.model'
 import { HttpError } from '@/errors/http-error'
-import { countStreams, isShuttingDown, registerStream } from '@/services/lifecycle.service'
+import {
+  countAllStreams,
+  countStreams,
+  isShuttingDown,
+  registerStream,
+} from '@/services/lifecycle.service'
 import { logger } from '@/services/logger.service'
 import { offNotification, onNotification } from '@/services/notification-emitter.service'
 import { fetchMissedNotifications } from '@/services/notification.service'
 import { isSessionDenied } from '@/services/session-denylist.service'
+import { errorResponse } from '@/utilities/response.utilities'
 
 /**
  * The SSE `retry:` reconnect delay sent once at connect. An `EventSource`
@@ -26,6 +34,11 @@ import { isSessionDenied } from '@/services/session-denylist.service'
  * backoff and ignores it.
  */
 const SSE_RETRY_MS = 3000
+
+/**
+ * The `Retry-After`, in seconds, on a refusal at the server-wide stream cap.
+ */
+const STREAM_CAPACITY_RETRY_AFTER_SECONDS = 30
 
 /**
  * setTimeout's ceiling (2^31-1 ms). A longer delay fires immediately.
@@ -110,6 +123,38 @@ function writeNotificationEvent(response: Response, notification: Notification):
 }
 
 /**
+ * Decide, before a stream opens, whether to refuse it. A client already gone
+ * (it aborted during `requireAuth`'s awaits, before any `'close'` listener
+ * exists here) gets nothing, since no listener would ever unregister its
+ * stream. Only the response is checked: Node destroys a request once its
+ * body is fully read, which a live GET carrying a `Content-Length` has done
+ * by now, while a real abort destroys the response. Otherwise apply the two stream caps. Over the per-user cap
+ * (`SSE_MAX_STREAMS_PER_USER`) throws 429 `too_many_streams`; at the
+ * process-wide cap (`SSE_MAX_STREAMS_TOTAL`) answers 503 `stream_capacity`
+ * with `Retry-After`, written here rather than thrown: `errorHandler` would
+ * mask a 503's message and log it as a fault.
+ * @param userId - The authenticated caller.
+ * @param response - The response, still unwritten.
+ * @returns True when no stream may open: the client is gone, or the 503 was written.
+ * @throws {HttpError} 429 `too_many_streams` over the per-user cap.
+ */
+function didRefuseStream(userId: string, response: Response): boolean {
+  if (response.destroyed) return true
+  if (countStreams(userId) >= getEnv().SSE_MAX_STREAMS_PER_USER) {
+    throw new HttpError('Too many open notification streams', 429, 'too_many_streams')
+  }
+  if (countAllStreams() < getEnv().SSE_MAX_STREAMS_TOTAL) return false
+  response.setHeader('Retry-After', String(STREAM_CAPACITY_RETRY_AFTER_SECONDS))
+  errorResponse(
+    response,
+    'The server is at its notification stream capacity. Try again shortly.',
+    503,
+    'stream_capacity'
+  )
+  return true
+}
+
+/**
  * The SSE handler for `GET /api/v1/notifications/stream`.
  */
 class NotificationStreamController extends BaseController {
@@ -146,10 +191,8 @@ class NotificationStreamController extends BaseController {
         throw new HttpError('Server is shutting down', 503)
       }
       const userId = authenticatedUserId(request)
-      // No await between this and registerStream, so the count is exact in this process.
-      if (countStreams(userId) >= getEnv().SSE_MAX_STREAMS_PER_USER) {
-        throw new HttpError('Too many open notification streams', 429, 'too_many_streams')
-      }
+      // No await between this and registerStream, so the counts are exact in this process.
+      if (didRefuseStream(userId, response)) return
       const sessionId = requireSessionId(request)
 
       response.writeHead(200, {
@@ -189,9 +232,7 @@ class NotificationStreamController extends BaseController {
         if (response.writableEnded || response.destroyed) return
         void (async () => {
           if (await isSessionDenied(sessionId)) {
-            clearInterval(heartbeat)
-            offNotification(userId, handleNotification)
-            response.end()
+            closeStream()
             return
           }
           // The client may have disconnected during the Redis round trip.
@@ -206,10 +247,14 @@ class NotificationStreamController extends BaseController {
       /**
        * The teardown for every server-initiated close: shutdown (registry),
        * token expiry and a stalled client. Safe to call after the stall path
-       * has destroyed the response.
+       * has destroyed the response, and to call twice. Also the teardown when
+       * the response closes, so a slot never depends on a close event the
+       * request may have fired before this handler listened.
        */
       const closeStream = (): void => {
+        unregisterStream()
         clearInterval(heartbeat)
+        clearTimeout(expiryTimer)
         offNotification(userId, handleNotification)
         if (!response.writableEnded && !response.destroyed) response.end()
       }
@@ -219,8 +264,8 @@ class NotificationStreamController extends BaseController {
        * Run after every write: a client over `SSE_MAX_BUFFERED_BYTES` has
        * stopped reading. Destroy, never end: `end()` queues behind the
        * stalled buffer and keeps the socket open. Destroyed first, so
-       * `closeStream` skips `end()`; the destroy still fires request
-       * `'close'`, which unregisters.
+       * `closeStream` skips `end()`, and `closeStream` itself
+       * unregisters the stream.
        */
       const dropIfStalled = (): void => {
         if (response.writableLength <= SSE_MAX_BUFFERED_BYTES) return
@@ -237,12 +282,10 @@ class NotificationStreamController extends BaseController {
       expiryTimer?.unref()
 
       let isClosed = false
-      request.on('close', () => {
+      // The response, not the request: a request whose body was read has already closed.
+      response.on('close', () => {
         isClosed = true
-        unregisterStream()
-        offNotification(userId, handleNotification)
-        clearInterval(heartbeat)
-        clearTimeout(expiryTimer)
+        closeStream()
       })
 
       if (lastEventId) {

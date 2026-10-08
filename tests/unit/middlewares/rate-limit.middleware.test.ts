@@ -16,13 +16,9 @@ import path from 'node:path'
 import express, { type Express, type RequestHandler } from 'express'
 import type { Test } from 'supertest'
 import { describe, expect, it, vi } from 'vitest'
-import { RATE_LIMITS } from '@/constants/rate-limit.constants'
+import { RATE_LIMITED_CODE, RATE_LIMITS } from '@/constants/rate-limit.constants'
 import { errorHandler } from '@/middlewares/error.middleware'
-import {
-  createRateLimiter,
-  RATE_LIMITED_CODE,
-  RATE_LIMITER_MARK,
-} from '@/middlewares/rate-limit.middleware'
+import { createRateLimiter, RATE_LIMITER_MARK } from '@/middlewares/rate-limit.middleware'
 import { request } from '../../helpers/request'
 
 vi.mock('@/services/redis.service', async (importOriginal) => ({
@@ -215,33 +211,48 @@ describe('RATE_LIMITS.loginIp', () => {
  * The account limiter behind a proxy-aware bare app, so each request can
  * claim its own client IP via X-Forwarded-For. 'loopback' trusts exactly
  * supertest's 127.0.0.1 hop; `true` would trip express-rate-limit's
- * permissive-trust-proxy validation.
+ * permissive-trust-proxy validation. The stub answers like the real login:
+ * 400 for a body with no password, 200 for `OWNER_PASSWORD`, else 401.
  * @param limit - Max attempts per window.
  * @returns The app.
  */
 function buildAccountLimitedApp(limit: number): Express {
-  const app = buildAppBehind(
-    createRateLimiter(RATE_LIMITS.loginAccount, { limit, windowMs: 60_000 })
-  )
+  const app = express()
   app.set('trust proxy', 'loopback')
+  app.use(express.json())
+  app.post(
+    '/endpoint',
+    createRateLimiter(RATE_LIMITS.loginAccount, { limit, windowMs: 60_000 }),
+    (thisRequest, response) => {
+      const body = thisRequest.body as { password?: unknown }
+      if (typeof body.password !== 'string' || body.password === '') {
+        response.status(400).json({ success: false })
+        return
+      }
+      response.status(body.password === OWNER_PASSWORD ? 200 : 401).json({})
+    }
+  )
+  app.use(errorHandler)
   return app
 }
+
+const OWNER_PASSWORD = 'the-owners-password'
 
 describe('RATE_LIMITS.loginAccount', () => {
   it('returns 429 once one account is guessed at from many different IPs', async () => {
     const app = buildAccountLimitedApp(3)
 
     for (let index = 0; index < 3; index += 1) {
-      const allowed = await request(app)
+      const refused = await request(app)
         .post('/endpoint')
         .set('X-Forwarded-For', `203.0.113.${index + 1}`)
-        .send({ email: 'Victim@Example.com' })
-      expect(allowed.status).toBe(201)
+        .send({ email: 'Victim@Example.com', password: 'a-wrong-guess' })
+      expect(refused.status).toBe(401)
     }
     const limited = await request(app)
       .post('/endpoint')
       .set('X-Forwarded-For', '203.0.113.99')
-      .send({ email: 'victim@example.com' })
+      .send({ email: 'victim@example.com', password: OWNER_PASSWORD })
 
     expect(limited.status).toBe(429)
     expect(limited.body).toMatchObject({ success: false, code: RATE_LIMITED_CODE })
@@ -250,8 +261,37 @@ describe('RATE_LIMITS.loginAccount', () => {
     const bystander = await request(app)
       .post('/endpoint')
       .set('X-Forwarded-For', '203.0.113.99')
-      .send({ email: 'someone-else@example.com' })
-    expect(bystander.status).toBe(201)
+      .send({ email: 'someone-else@example.com', password: 'a-wrong-guess' })
+    expect(bystander.status).toBe(401)
+  })
+
+  it('never counts a malformed attempt: password-less requests from many IPs leave the owner able to sign in', async () => {
+    const app = buildAccountLimitedApp(3)
+
+    for (let index = 0; index < 10; index += 1) {
+      const malformed = await request(app)
+        .post('/endpoint')
+        .set('X-Forwarded-For', `198.51.100.${index + 1}`)
+        .send({ email: 'owner@example.com' })
+      expect(malformed.status).toBe(400)
+    }
+    const owner = await request(app)
+      .post('/endpoint')
+      .set('X-Forwarded-For', '192.0.2.10')
+      .send({ email: 'owner@example.com', password: OWNER_PASSWORD })
+
+    expect(owner.status).toBe(200)
+  })
+
+  it("never counts the owner's own successful sign-ins", async () => {
+    const app = buildAccountLimitedApp(2)
+
+    for (let index = 0; index < 5; index += 1) {
+      const signedIn = await request(app)
+        .post('/endpoint')
+        .send({ email: 'owner@example.com', password: OWNER_PASSWORD })
+      expect(signedIn.status).toBe(200)
+    }
   })
 })
 
@@ -346,25 +386,6 @@ describe('RATE_LIMITS.forgotPasswordIp', () => {
     expect(second.status).toBe(201)
     expect(limited.status).toBe(429)
     expect(limited.body).toMatchObject({ success: false, code: RATE_LIMITED_CODE })
-  })
-})
-
-describe('RATE_LIMITS.forgotPasswordEmail', () => {
-  it('keys on the submitted address alone: a different address is unaffected by the victim’s counter', async () => {
-    const app = buildAppBehind(
-      createRateLimiter(RATE_LIMITS.forgotPasswordEmail, { limit: 2, windowMs: 60_000 })
-    )
-
-    await request(app).post('/endpoint').send({ email: 'victim@example.com' })
-    await request(app).post('/endpoint').send({ email: 'victim@example.com' })
-    const victimBlocked = await request(app).post('/endpoint').send({ email: 'victim@example.com' })
-    expect(victimBlocked.status).toBe(429)
-
-    // A different address, same supertest agent (same client IP) — must be entirely unaffected by victim@example.com's counter, since an attacker who knows only the victim's address must not be able to spend anyone else's budget.
-    const bystander = await request(app)
-      .post('/endpoint')
-      .send({ email: 'someone-else@example.com' })
-    expect(bystander.status).toBe(201)
   })
 })
 
@@ -494,18 +515,21 @@ describe('RATE_LIMITS.invitationPreview', () => {
 })
 
 describe('RATE_LIMITS.invitationAccept', () => {
-  // Keyed on IP, not the user: two different signed-in callers behind one IP share the bucket, because the limiter runs before requireAuth.
-  it('returns 429 once the limit is exceeded, whoever the caller claims to be', async () => {
+  // Keyed on the user, behind requireAuth: a second signed-in caller behind the same IP keeps their own budget.
+  it('returns 429 once one user spends the budget, and keys on the user id', async () => {
     const app = buildAppBehindAsUser(
       createRateLimiter(RATE_LIMITS.invitationAccept, { limit: 1, windowMs: 60_000 })
     )
+    const invitee = randomUUID()
 
-    const allowed = await request(app).post('/endpoint').set('x-test-user-id', randomUUID())
-    const limited = await request(app).post('/endpoint').set('x-test-user-id', randomUUID())
+    const allowed = await request(app).post('/endpoint').set('x-test-user-id', invitee)
+    const limited = await request(app).post('/endpoint').set('x-test-user-id', invitee)
+    const bystander = await request(app).post('/endpoint').set('x-test-user-id', randomUUID())
 
     expect(allowed.status).toBe(201)
     expect(limited.status).toBe(429)
     expect(limited.body).toMatchObject({ success: false, code: RATE_LIMITED_CODE })
+    expect(bystander.status).toBe(201)
   })
 })
 

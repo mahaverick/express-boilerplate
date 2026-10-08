@@ -218,7 +218,13 @@ describe('reconcileOnboarding: what it never credits', () => {
     const { tenant } = await createOnboardingTenant({ startedAt: daysAgo(2) })
     const { user: staff } = await createTrackedStaff('admin')
     await updateSettings({ userId: staff.id }, tenant.id, { timezone: 'Asia/Tokyo' })
-    await invite({ userId: staff.id }, tenant.id, `invitee-${randomUUID()}@example.test`, 'viewer')
+    await invite(
+      { userId: staff.id },
+      tenant.id,
+      `invitee-${randomUUID()}@example.test`,
+      'viewer',
+      { reason: 'Ticket 4411' }
+    )
 
     await reconcileOnboarding()
 

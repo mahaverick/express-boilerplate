@@ -122,3 +122,15 @@ export const SLUG_TAKEN_CODE = 'slug_taken'
  * deactivated, so a form can put the message on its email field.
  */
 export const INVITEE_DEACTIVATED_CODE = 'invitee_deactivated'
+
+/**
+ * `code` on the 400 for a staff member or invitation write on a customer
+ * tenant that gives no valid `reason`, so a client can ask for one.
+ */
+export const REASON_REQUIRED_CODE = 'REASON_REQUIRED'
+
+/**
+ * The message on that 400, from the route middleware and from the services'
+ * locked re-check alike.
+ */
+export const REASON_REQUIRED_MESSAGE = 'Give a reason of 1 to 500 characters for this change.'

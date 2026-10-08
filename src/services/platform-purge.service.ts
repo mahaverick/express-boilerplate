@@ -8,6 +8,7 @@
  */
 import { sql } from 'drizzle-orm'
 import { ANALYTICS_DELETION_DELAY_MS } from '@/constants/analytics.constants'
+import type { UserMembership } from '@/database/models/user-membership.model'
 import { HttpError } from '@/errors/http-error'
 import { analyticsDeletionRepository } from '@/repositories/analytics-deletion.repository'
 import { analyticsOutboxRepository } from '@/repositories/analytics-outbox.repository'
@@ -24,7 +25,7 @@ import { currentAnalyticsContext } from '@/services/analytics/analytics-context.
 import { buildTenantGroupIdentify } from '@/services/analytics/analytics-event-builder.service'
 import { enqueueAnalytics } from '@/services/analytics/analytics-outbox.service'
 import { record } from '@/services/audit.service'
-import { withTransaction } from '@/services/database.service'
+import { withTransaction, type DbTransaction } from '@/services/database.service'
 import { platformTenantOrThrow } from '@/services/platform-user.service'
 import { assertStillPlatformRole } from '@/services/platform.service'
 import type { Actor } from '@/types/actor'
@@ -41,11 +42,45 @@ const userMembershipRepository = new UserMembershipRepository()
 const userRepository = new UserRepository()
 
 /**
+ * Lock every membership row of a user, in the order every membership write
+ * takes: each customer tenant's owner rows then the user's membership there
+ * (tenant-id order), then the same on the platform tenant. A role change or
+ * removal running at the same time waits here, before the purge has locked
+ * anything else, instead of deadlocking against the purge's delete.
+ * @param userId - The user being purged.
+ * @param platformTenantId - The platform tenant, whose rows are locked last.
+ * @param tx - The purge's transaction.
+ * @returns The user's memberships, locked FOR UPDATE.
+ */
+async function lockMembershipsForPurge(
+  userId: string,
+  platformTenantId: string,
+  tx: DbTransaction
+): Promise<UserMembership[]> {
+  const tenantIds = await userMembershipRepository.listTenantIdsForUser(userId, tx)
+  const customerTenantIds = tenantIds
+    .filter((tenantId) => tenantId !== platformTenantId)
+    .toSorted((a, b) => a.localeCompare(b))
+  const ordered = tenantIds.includes(platformTenantId)
+    ? [...customerTenantIds, platformTenantId]
+    : customerTenantIds
+  const locked: UserMembership[] = []
+  for (const tenantId of ordered) {
+    await userMembershipRepository.lockOwners(tenantId, 'update', tx)
+    locked.push(
+      ...(await userMembershipRepository.lockMemberships(tenantId, [userId], 'update', tx))
+    )
+  }
+  return locked
+}
+
+/**
  * Permanently delete a soft-deleted user: redact them from the audit
  * entries they acted in, delete the email messages (with their attempts and
  * events) sent to their account, delete the mail log rows, email messages
  * and invitations addressed to their address up to their deletion, forget
- * them as the lifter of any email suppression, delete the row (the rest
+ * them as the lifter of any email suppression, delete their memberships
+ * (locked first, in the membership lock order) and then the row (the rest
  * cascades), record `user.purged` in the platform tenant, queue the deletion
  * of their PostHog person, events and recordings (`analytics_deletions`, sent
  * an hour later by the `analytics-deletions` job), and delete their
@@ -70,6 +105,9 @@ export async function purgeUser(actor: Actor, userId: string, reason: string): P
   if (deletedAt === null) throw new HttpError('Delete the user before purging them', 409)
 
   await withTransaction(async (tx) => {
+    const platform = await platformTenantOrThrow(tx)
+    // First, before any other lock: the delete below would otherwise take these rows out of order.
+    const memberships = await lockMembershipsForPurge(userId, platform.id, tx)
     await assertStillPlatformRole(actor, 'owner', tx)
     await tx.execute(sql`select set_config('app.audit_redact', 'on', true)`)
     await auditLogRepository.redactActor(userId, tx)
@@ -86,10 +124,11 @@ export async function purgeUser(actor: Actor, userId: string, reason: string): P
       tx
     )
     await emailSuppressionRepository.clearLiftedBy(userId, tx)
+    // Deleted here, under the locks taken above, so the user row's cascade finds none.
+    for (const membership of memberships) await userMembershipRepository.delete(membership.id, tx)
     if (!(await userRepository.purgeDeleted(userId, tx))) {
       throw new HttpError('Delete the user before purging them', 409)
     }
-    const platform = await platformTenantOrThrow(tx)
     await record(
       {
         action: 'user.purged',
@@ -115,7 +154,8 @@ export async function purgeUser(actor: Actor, userId: string, reason: string): P
 /**
  * Permanently delete an archived customer tenant: delete its own audit
  * entries (the customer's data) and its email messages (which carry its
- * name), then the row (settings, memberships and invitations cascade),
+ * name), then the row (settings, memberships and invitations cascade; the
+ * memberships are locked first, in the membership lock order),
  * record `tenant.purged` in the platform tenant, and queue a `$groupidentify`
  * marker for it, which the drainer sends with the group's name cleared and
  * its status `purged` (PostHog cannot reliably delete a group).
@@ -134,6 +174,9 @@ export async function purgeTenant(actor: Actor, tenantId: string, reason: string
   }
 
   await withTransaction(async (tx) => {
+    // The tenant's owner rows, then every membership, before the platform role: the order every membership write takes.
+    await userMembershipRepository.lockOwners(tenantId, 'update', tx)
+    await userMembershipRepository.lockAllMemberships(tenantId, 'update', tx)
     await assertStillPlatformRole(actor, 'owner', tx)
     const members = await userMembershipRepository.listByTenant(tenantId, tx)
     await tx.execute(

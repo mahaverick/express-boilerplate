@@ -14,12 +14,16 @@ import type { MembershipRole } from '@/constants/tenant.constants'
 import type { EmailMessage } from '@/database/models/email-message.model'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
+import type { EmailJobData } from '@/jobs/email.job'
 import type { NotificationJobData } from '@/jobs/notification.job'
 import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { sql } from '@/services/database.service'
 import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
+import { getRedis, redisKey } from '@/services/redis.service'
 import { hashToken, signAccessToken } from '@/services/session.service'
+import { TENANT_INVITATION_TEMPLATE_KEY } from '@/templates/email/tenant-invitation.template'
+import { hashRateLimitIdentity } from '@/utilities/rate-limit-key.utilities'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import {
   createTrackedMessage,
@@ -102,9 +106,9 @@ function resend(token: string, message: EmailMessage, body?: object): Promise<Re
 }
 
 /**
- * A staff member with a token minted at a sign-in `authenticatedAt` ago
- * (fresh by default); `createTrackedStaff`'s own token carries no
- * `auth_time`, so it is always stale.
+ * A staff member with a token minted at a sign-in at `authenticatedAt`
+ * (now by default), so a test can pick a stale sign-in time;
+ * `createTrackedStaff`'s own token is always recent.
  * @param role - The platform role.
  * @param authenticatedAt - When the session signed in.
  * @returns The user and the token.
@@ -332,8 +336,21 @@ describe('POST /platform/emails/:id/resend: verification messages', () => {
 })
 
 describe('POST /platform/emails/:id/resend: invitations', () => {
-  it('resends a customer-tenant invitation with a stale sign-in: 202 with no emailSent', async () => {
-    const { token } = await createTrackedStaff('admin')
+  it('asks for a recent sign-in on a customer-tenant invitation, and writes nothing', async () => {
+    const tenant = await customerTenant()
+    const { invitationId, message } = await invitationMessage(tenant)
+    const { token: stale } = await staffSignedIn('admin', new Date(Date.now() - 11 * 60 * 1000))
+
+    const refused = await resend(stale, message)
+
+    expect(refused.status).toBe(401)
+    expect((refused.body as ApiEnvelope<unknown>).code).toBe(REAUTH_REQUIRED_CODE)
+    expect(await auditRows(invitationId)).toEqual([])
+    expect(await auditActions(message.id)).toEqual([])
+  })
+
+  it('resends a customer-tenant invitation once fresh: 202 with no emailSent, the reason audited and never mailed', async () => {
+    const { token } = await staffSignedIn('admin')
     const tenant = await customerTenant()
     const { invitationId, message } = await invitationMessage(tenant)
 
@@ -345,6 +362,7 @@ describe('POST /platform/emails/:id/resend: invitations', () => {
     expect(invitationAudit.map((row) => [row.action, row.tenant_id, row.access])).toEqual([
       ['invitation.resent', tenant.id, 'platform'],
     ])
+    expect(invitationAudit[0]?.metadata).toMatchObject({ reason: REASON })
     expect(await auditActions(message.id)).toEqual(['email.resent'])
     await waitUntil(
       async () => {
@@ -355,6 +373,35 @@ describe('POST /platform/emails/:id/resend: invitations', () => {
         message: 'the invitation resend creates a message linked back to the original',
       }
     )
+    // The email context carries only resentFromId: the reason stays in the audit entry.
+    const job = await waitForJob<EmailJobData>(
+      getEmailQueue(),
+      (data) => data.to === message.recipient && data.templateKey === TENANT_INVITATION_TEMPLATE_KEY
+    )
+    expect(JSON.stringify(job.data)).not.toContain(REASON)
+    const messageRows = await sql<{ row: unknown }[]>`
+      select to_jsonb(email_messages) as row from email_messages where resent_from_id = ${message.id}`
+    expect(messageRows).toHaveLength(1)
+    expect(JSON.stringify(messageRows[0]?.row)).not.toContain(REASON)
+  })
+
+  it('resends straight after the last mail, skipping the cooldown, and still spends the address budget', async () => {
+    const { token } = await createTrackedStaff('admin')
+    const tenant = await customerTenant()
+    // The invitation is stamped as mailed now, well inside the cooldown.
+    const { message } = await invitationMessage(tenant)
+
+    const response = await resend(token, message)
+
+    expect(response.status).toBe(202)
+    const redis = await getRedis()
+    const key = redisKey(
+      'rl',
+      'invitation-recipient',
+      hashRateLimitIdentity(message.recipient.toLowerCase())
+    )
+    expect(await redis.get(key)).toBe('1')
+    expect(await redis.get(`${key}:${tenant.id}`)).toBe('1')
   })
 
   it('asks for a recent sign-in on a platform-tenant invitation, and resends once fresh', async () => {

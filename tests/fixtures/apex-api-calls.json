@@ -1,8 +1,9 @@
 {
-  "source": "apex-boilerplate origin/main c8d3d01: every API call outside /platform/*, as METHOD path under /api/v1, with apex parameter names. Update it when apex adds a call; see MAINTENANCE_STAFF_ROUTES.",
+  "source": "apex-boilerplate origin/main c8d3d01, plus DELETE /tenants/:slug/membership and POST /auth/sessions/revoke-others, which apex adds with its leave and sign-out-others controls: every API call outside /platform/*, as METHOD path under /api/v1, with apex parameter names. Update it when apex adds a call; see MAINTENANCE_STAFF_ROUTES.",
   "calls": [
     "DELETE /api/v1/tenants/:slug/invitations/:invitationId",
     "DELETE /api/v1/tenants/:slug/members/:userId",
+    "DELETE /api/v1/tenants/:slug/membership",
     "GET /api/v1/auth/google",
     "GET /api/v1/auth/google/callback",
     "GET /api/v1/auth/providers",
@@ -23,6 +24,7 @@
     "POST /api/v1/auth/register",
     "POST /api/v1/auth/resend-verification",
     "POST /api/v1/auth/reset-password",
+    "POST /api/v1/auth/sessions/revoke-others",
     "POST /api/v1/auth/verify-email",
     "POST /api/v1/collect",
     "POST /api/v1/invitations/accept",

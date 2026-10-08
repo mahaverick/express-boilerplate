@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-async function load(webUrl: string, allowed?: string) {
+async function load(webUrl: string, allowed?: string, apexUrl?: string) {
   vi.doMock('@/configs/env.config', () => ({
-    getEnv: () => ({ WEB_URL: webUrl, CORS_ALLOWED_ORIGINS: allowed }),
+    getEnv: () => ({ WEB_URL: webUrl, CORS_ALLOWED_ORIGINS: allowed, APEX_URL: apexUrl }),
   }))
   const module = await import('@/utilities/origin.utilities')
   return module.isAllowedOrigin
@@ -42,6 +42,15 @@ describe('isAllowedOrigin', () => {
     )
     expect(isAllowedOrigin('https://admin.example.com')).toBe(true)
     expect(isAllowedOrigin('https://shop.example.com')).toBe(true)
+  })
+
+  it("always allows APEX_URL's origin, path dropped, with an empty allowlist", async () => {
+    const isAllowedOrigin = await load(
+      'https://app.example.com',
+      undefined,
+      'https://admin.example.com/console'
+    )
+    expect(isAllowedOrigin('https://admin.example.com')).toBe(true)
   })
 
   it('rejects anything else', async () => {

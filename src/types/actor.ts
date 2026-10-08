@@ -12,6 +12,15 @@ export interface Actor {
 }
 
 /**
+ * What a member or invitation write takes from a staff caller: the reason
+ * they gave (`request.staffReason`), recorded in the audit entry. Absent for
+ * a member's write.
+ */
+export interface StaffReasonOption {
+  reason?: string
+}
+
+/**
  * How a caller reached a tenant: as a member, or through their platform role.
  */
 export type TenantAccess = 'member' | 'platform'

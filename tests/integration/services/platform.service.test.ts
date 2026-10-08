@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
+import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
@@ -20,10 +21,12 @@ import {
   bootstrapGrant,
   getPlatformMembership,
 } from '@/services/platform.service'
+import { hashToken } from '@/services/session.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { withMutatedMethod } from '../../helpers/mutate'
 
 const tenantRepository = new TenantRepository()
+const invitationRepository = new TenantInvitationRepository()
 const userMembershipRepository = new UserMembershipRepository()
 const userRepository = new UserRepository()
 
@@ -308,6 +311,54 @@ describe('platform.service', () => {
         }
       )
       expect(await getPlatformMembership(user.id)).toBe('owner')
+    })
+
+    it('revokes on a script demotion the invitations the new role cannot grant, here and in customer tenants', async () => {
+      const staff = await createUser(staffEmail(), { isVerified: true })
+      const customerOwner = await createUser(`grant-${randomUUID()}@example.test`, {
+        isVerified: true,
+      })
+      await grantPlatformRole(staff.id, 'admin')
+      const platform = await platformTenant()
+      const customer = await tenantRepository.create({
+        name: 'Acme Inc',
+        slug: `tenant-${randomUUID()}`,
+        ownerId: customerOwner.id,
+      })
+      const invite = (tenantId: string, role: MembershipRole) =>
+        invitationRepository.createPending({
+          tenantId,
+          email: `platform-service-invitee-${randomUUID()}@example.test`,
+          role,
+          tokenHash: hashToken(randomUUID()),
+          invitedBy: staff.id,
+          expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+        })
+      const platformOffer = await invite(platform.id, 'admin')
+      const customerOffer = await invite(customer.id, 'admin')
+      try {
+        await bootstrapGrant(staff.email, 'viewer')
+
+        const rows = await sql<{ id: string; revoked: boolean }[]>`
+          select id, revoked_at is not null as revoked from tenant_invitations
+          where id = any(${[platformOffer.id, customerOffer.id]})`
+        expect(rows.every((row) => row.revoked)).toBe(true)
+        expect(rows).toHaveLength(2)
+        const entries = await sql<{ targetId: string; actorKind: string; access: string }[]>`
+          select target_id as "targetId", actor_kind as "actorKind", access from audit_logs
+          where action = 'invitation.revoked' and target_id = any(${[platformOffer.id, customerOffer.id]})
+          order by target_id`
+        expect(entries).toEqual(
+          [platformOffer.id, customerOffer.id]
+            .toSorted((a, b) => a.localeCompare(b))
+            .map((targetId) => ({ targetId, actorKind: 'system', access: 'system' }))
+        )
+      } finally {
+        await sql`delete from tenant_invitations where id = ${platformOffer.id}`
+        // The revoke's audit rows reference the tenant.
+        await truncateAuditLogs()
+        await sql`delete from tenants where id = ${customer.id}`
+      }
     })
   })
 })

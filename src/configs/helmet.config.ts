@@ -9,7 +9,10 @@ import type { HelmetOptions } from 'helmet'
  * of `cors` and every route, so no response can be produced without these
  * headers attached. CORP is `same-site`, not `same-origin`: it applies only to
  * no-cors embeds, and keeps one from a sibling-subdomain frontend working;
- * credentialed fetches are gated by CORS alone.
+ * credentialed fetches are gated by CORS alone. HSTS is off: the
+ * TLS-terminating edge owns it (the clients' nginx.conf says the same), so an
+ * express served straight over TLS with no edge sends none until the
+ * operator adds it there.
  */
 export const helmetOptions: HelmetOptions = {
   contentSecurityPolicy: {
@@ -21,4 +24,5 @@ export const helmetOptions: HelmetOptions = {
   },
   crossOriginResourcePolicy: { policy: 'same-site' },
   referrerPolicy: { policy: 'no-referrer' },
+  strictTransportSecurity: false,
 }

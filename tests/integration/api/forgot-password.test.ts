@@ -38,6 +38,7 @@ import {
 import { withMutatedMethod } from '../../helpers/mutate'
 import { testRefreshCookie } from '../../helpers/refresh-cookie'
 import { request } from '../../helpers/request'
+import { settle, waitUntil } from '../../helpers/timing'
 
 const app = createApp()
 const userRepository = new UserRepository()
@@ -318,14 +319,36 @@ describe('POST /api/v1/auth/forgot-password', () => {
     expect(limited.headers).toHaveProperty('ratelimit-limit')
   })
 
-  it('runs both forgot-password limiters — proven by counters incrementing under both prefixes', async () => {
-    // RateLimit-* headers alone only ever prove the last limiter in the chain ran, so reading the store directly is the only way to prove both fired.
-    await forgotPassword(uniqueEmail())
+  it('answers repeated requests for one address 202, with no per-address limiter, and issues one reset link', async () => {
+    const { user, email } = await seedUser()
 
+    for (let index = 0; index < 3; index += 1) {
+      const response = await forgotPassword(email)
+      expect(response.status).toBe(202)
+      expect(response.body).toEqual(FORGOT_PASSWORD_RESPONSE_BODY)
+    }
+
+    expect(await redisKeysMatching(`${redisKey('rl', 'forgot-password-email')}:*`)).toEqual([])
     const ipKeys = await redisKeysMatching(`${redisKey('rl', 'forgot-password-ip')}:*`)
-    const emailKeys = await redisKeysMatching(`${redisKey('rl', 'forgot-password-email')}:*`)
     expect(ipKeys.length).toBeGreaterThan(0)
-    expect(emailKeys.length).toBeGreaterThan(0)
+    await waitUntil(
+      async () => {
+        const [row] = await sql<{ count: number }[]>`
+          select count(*)::int as count from user_tokens
+          where user_id = ${user.id} and purpose = 'password_reset'
+        `
+        return (row?.count ?? 0) >= 1 ? row : undefined
+      },
+      { message: 'the reset token the first request issues' }
+    )
+    await settle(500, 'a second link would be issued fire-and-forget; absence has no event')
+    const [row] = await sql<{ count: number }[]>`
+      select count(*)::int as count from user_tokens
+      where user_id = ${user.id} and purpose = 'password_reset'
+    `
+    expect(row?.count).toBe(1)
+    const messages = await findMailpitMessages(email)
+    for (const message of messages) await deleteMailpitMessage(message.ID)
   })
 })
 

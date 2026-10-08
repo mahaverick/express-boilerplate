@@ -1,7 +1,7 @@
 /**
  * @file What a Worker's `'failed'` handler does once a job will not be
- * retried: report it to error tracking, replace the stored payload's links
- * and tokens, mark an email job's message `failed`, then log one error line.
+ * retried: report it to error tracking, replace the stored payload's links,
+ * tokens and recipient, mark an email job's message `failed`, then log one error line.
  * Until then the payload keeps them, because a retry has to send them.
  */
 import { UnrecoverableError, type Job } from 'bullmq'
@@ -14,9 +14,10 @@ const REDACTED = '[redacted]'
 
 /**
  * Keys whose values are scrubbed: verificationUrl, resetUrl and acceptUrl
- * carry a raw token in their query string.
+ * carry a raw token in their query string, and `to` is the recipient
+ * address, which the message's `email_messages` row already keeps.
  */
-const SECRET_KEY_PATTERN = /(?:Url|Token)$/
+const SECRET_KEY_PATTERN = /(?:Url|Token)$|^to$/
 
 /**
  * Whether a value is a non-array object, not null. It matches any such
@@ -93,7 +94,7 @@ export function reportFinalJobFailure(
 }
 
 /**
- * A copy of a job's data in which every key ending in `Url` or `Token`, at any depth, is `'[redacted]'`.
+ * A copy of a job's data in which every key ending in `Url` or `Token`, and every `to`, at any depth, is `'[redacted]'`.
  * @param data - The job's data.
  * @returns The scrubbed copy; the argument is not changed.
  */

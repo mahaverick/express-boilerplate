@@ -104,8 +104,9 @@ export interface MaintenanceRouteRule {
 
 /**
  * The customer routes Apex calls outside `/platform/*` (its tenant,
- * members, invitations and Staff pages, a staff member's own profile and
- * password, and accepting an invitation), as `METHOD path`. Platform staff pass the gate on these in
+ * members, invitations and Staff pages, leaving a tenant, a staff member's
+ * own profile, password and other sessions, and accepting an invitation), as
+ * `METHOD path`. Platform staff pass the gate on these in
  * both modes; everyone else is refused as on any route. Every one sits
  * behind `requireAuth`, which runs the staff check.
  * `tests/unit/routes/maintenance-mode-gates.test.ts` compares this list with
@@ -115,12 +116,14 @@ export interface MaintenanceRouteRule {
 export const MAINTENANCE_STAFF_ROUTES: readonly string[] = [
   'PATCH /api/v1/profile',
   'POST /api/v1/auth/change-password',
+  'POST /api/v1/auth/sessions/revoke-others',
   'POST /api/v1/invitations/accept',
   'GET /api/v1/tenants/:slug',
   'PATCH /api/v1/tenants/:slug',
   'GET /api/v1/tenants/:slug/members',
   'PATCH /api/v1/tenants/:slug/members/:userId',
   'DELETE /api/v1/tenants/:slug/members/:userId',
+  'DELETE /api/v1/tenants/:slug/membership',
   'GET /api/v1/tenants/:slug/invitations',
   'POST /api/v1/tenants/:slug/invitations',
   'POST /api/v1/tenants/:slug/invitations/:id/resend',
@@ -231,6 +234,7 @@ export const MAINTENANCE_ROUTE_RULES: readonly MaintenanceRouteRule[] = [
   write('POST', '/api/v1/auth/forgot-password'),
   write('POST', '/api/v1/auth/reset-password'),
   write('POST', '/api/v1/auth/change-password'),
+  write('POST', '/api/v1/auth/sessions/revoke-others'),
   write('PATCH', '/api/v1/profile'),
   read('/api/v1/notifications/stream'),
   read('/api/v1/notifications'),
@@ -246,6 +250,7 @@ export const MAINTENANCE_ROUTE_RULES: readonly MaintenanceRouteRule[] = [
   read('/api/v1/tenants/:slug/members'),
   write('PATCH', '/api/v1/tenants/:slug/members/:userId'),
   write('DELETE', '/api/v1/tenants/:slug/members/:userId'),
+  write('DELETE', '/api/v1/tenants/:slug/membership'),
   read('/api/v1/tenants/:slug/invitations'),
   write('POST', '/api/v1/tenants/:slug/invitations'),
   write('POST', '/api/v1/tenants/:slug/invitations/:id/resend'),
@@ -261,7 +266,8 @@ export const MAINTENANCE_ROUTE_RULES: readonly MaintenanceRouteRule[] = [
   // Flag exposure recording: telemetry, on the read-only allowlist.
   readOnlyWrite('POST', '/api/v1/tenants/:slug/flags/exposures'),
   read('/api/v1/tenants/:slug/beta'),
-  write('POST', '/api/v1/invitations/preview'),
+  // Token lookup sent as POST to keep the token out of the URL; it writes nothing.
+  readOnlyWrite('POST', '/api/v1/invitations/preview'),
   write('POST', '/api/v1/invitations/accept'),
   read('/api/v1/flags'),
   readOnlyWrite('POST', '/api/v1/flags/exposures'),

@@ -20,8 +20,8 @@ import { requireJsonContentType } from '@/middlewares/content-type.middleware'
 import { requireFlag } from '@/middlewares/flag.middleware'
 import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
 import {
-  isOfferingAdminOrOwner,
   requireMembership,
+  requireRecentAuthAndReasonOnPlatformAccess,
   requireRecentAuthOnPlatformTenant,
   requireRole,
   resolveTenant,
@@ -30,10 +30,15 @@ import {
 /**
  * Build the tenant routes. `requireRole` checks the effective role, so staff
  * admins pass the owner/admin routes (the audit log included) and staff
- * viewers do not. The onboarding writes add `requireMembership`, so no
- * platform role acts on them. On the platform tenant, member role changes, removals,
- * admin/owner invitations and every resend also need a recent sign-in
- * (`requireRecentAuthOnPlatformTenant`).
+ * viewers do not. The onboarding writes and leaving add `requireMembership`,
+ * so no platform role acts on them. On the platform tenant, member role changes, removals,
+ * leaving, every invitation and every resend also need a recent sign-in
+ * (`requireRecentAuthOnPlatformTenant`): every platform role, viewer included,
+ * reads every user, tenant and address.
+ * A revoke there needs no recent sign-in: it only removes a pending grant.
+ * On a customer tenant, staff acting through their platform role need a
+ * recent sign-in and a `reason` for the same member and invitation writes,
+ * and for a revoke (`requireRecentAuthAndReasonOnPlatformAccess`).
  * @returns A router mounted at `/api/v1/tenants` by `index.routes.ts`, every route behind `requireAuth`.
  */
 export function createTenantRouter(): Router {
@@ -68,6 +73,7 @@ export function createTenantRouter(): Router {
     resolveTenant(),
     requireRole('owner'),
     requireRecentAuthOnPlatformTenant(),
+    requireRecentAuthAndReasonOnPlatformAccess(),
     tenantController.updateMemberRole
   )
   router.delete(
@@ -77,7 +83,19 @@ export function createTenantRouter(): Router {
     resolveTenant(),
     requireRole('owner', 'admin'),
     requireRecentAuthOnPlatformTenant(),
+    requireRecentAuthAndReasonOnPlatformAccess(),
     tenantController.removeMember
+  )
+
+  // Leaving is a member's own act: staff reaching the tenant through a platform role get 404.
+  router.delete(
+    '/:slug/membership',
+    requireJsonContentType,
+    writeLimiter,
+    resolveTenant(),
+    requireMembership(),
+    requireRecentAuthOnPlatformTenant(),
+    tenantController.leaveTenant
   )
 
   // Invite and resend share one budget, on Redis (same prefix) and in memory (one instance).
@@ -94,7 +112,8 @@ export function createTenantRouter(): Router {
     inviteRateLimiter,
     resolveTenant(),
     requireRole('owner', 'admin'),
-    requireRecentAuthOnPlatformTenant(isOfferingAdminOrOwner),
+    requireRecentAuthOnPlatformTenant(),
+    requireRecentAuthAndReasonOnPlatformAccess(),
     tenantController.inviteMember
   )
   router.post(
@@ -104,6 +123,7 @@ export function createTenantRouter(): Router {
     resolveTenant(),
     requireRole('owner', 'admin'),
     requireRecentAuthOnPlatformTenant(),
+    requireRecentAuthAndReasonOnPlatformAccess(),
     tenantController.resendInvitation
   )
   router.delete(
@@ -112,6 +132,7 @@ export function createTenantRouter(): Router {
     writeLimiter,
     resolveTenant(),
     requireRole('owner', 'admin'),
+    requireRecentAuthAndReasonOnPlatformAccess(),
     tenantController.revokeInvitation
   )
 

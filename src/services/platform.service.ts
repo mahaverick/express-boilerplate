@@ -23,6 +23,11 @@ import {
   type DbTransaction,
 } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
+import {
+  revokeInvitationsBeyondAuthorityElsewhere,
+  revokeInvitationsSentIn,
+  rolesUngrantableBy,
+} from '@/services/tenant-membership.service'
 import type { Actor } from '@/types/actor'
 import { emailDomain } from '@/utilities/email.utilities'
 
@@ -180,10 +185,13 @@ export async function autoJoinSafely(
 
 /**
  * Change an existing platform membership's role, refusing to demote the
- * last platform owner.
+ * last platform owner. A lower role also revokes, as a system action, the
+ * member's pending invitations it could not grant: on the platform tenant,
+ * and in customer tenants where their remaining authority cannot grant them,
+ * as `changeRole` (tenant-membership.service.ts) does for the member route.
  * @param existing - The membership, locked in this transaction.
  * @param role - The new role.
- * @param tx - The transaction holding the owner lock.
+ * @param tx - The transaction holding the owner and membership locks.
  * @returns The updated membership.
  * @throws {HttpError} 409 when `existing` is the last platform owner and `role` is not owner.
  */
@@ -198,6 +206,19 @@ async function regrant(
   }
   const updated = await userMembershipRepository.updateRole(existing.id, role, tx)
   if (!updated) throw new HttpError('Membership not found', 404)
+  if (!isRoleAtLeast(role, existing.role)) {
+    const ungrantable = rolesUngrantableBy(role)
+    await revokeInvitationsSentIn(
+      'system',
+      'system',
+      existing.tenantId,
+      existing.userId,
+      ungrantable,
+      {},
+      tx
+    )
+    await revokeInvitationsBeyondAuthorityElsewhere('system', existing.userId, role, tx)
+  }
   return updated
 }
 

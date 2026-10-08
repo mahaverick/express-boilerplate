@@ -8,6 +8,7 @@
  */
 import { randomBytes } from 'node:crypto'
 import { getEnv } from '@/configs/env.config'
+import { RATE_LIMITED_CODE } from '@/constants/rate-limit.constants'
 import {
   INVITATION_TOKEN_BYTES,
   INVITEE_DEACTIVATED_CODE,
@@ -29,12 +30,13 @@ import { UserRepository } from '@/repositories/user.repository'
 import { record } from '@/services/audit.service'
 import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
 import { emitDomainEvent } from '@/services/domain-events.service'
+import { spendInvitationRecipientBudget } from '@/services/invitation-recipient-limit.service'
 import { logger } from '@/services/logger.service'
 import { hashToken } from '@/services/session.service'
-import { lockActorRole } from '@/services/tenant-membership.service'
+import { assertStaffReasonGiven, lockActorRole } from '@/services/tenant-membership.service'
 import { buildInvitationAcceptUrl, frontendUrl } from '@/services/verification.service'
 import { TENANT_INVITATION_TEMPLATE_KEY } from '@/templates/email/tenant-invitation.template'
-import type { Actor } from '@/types/actor'
+import type { Actor, StaffReasonOption } from '@/types/actor'
 import type { DomainEventOf } from '@/types/domain-event'
 import type { EmailResendOptions } from '@/types/email-context'
 import type { EmailDelivery } from '@/types/email-delivery'
@@ -99,6 +101,23 @@ export const INVITATION_EMAIL_UNVERIFIED_MESSAGE =
  * Error code: no pending invitation with that id in this tenant.
  */
 export const INVITATION_NOT_FOUND_CODE = 'invitation_not_found'
+
+/**
+ * Error code: a resend inside `INVITATION_RESEND_COOLDOWN` of the invitation's last send.
+ */
+export const INVITATION_RESEND_COOLDOWN_CODE = 'invitation_resend_cooldown'
+
+/**
+ * Message for `INVITATION_RESEND_COOLDOWN_CODE`.
+ */
+export const INVITATION_RESEND_COOLDOWN_MESSAGE =
+  'This invitation was just sent. Try again in a few minutes.'
+
+/**
+ * The 429 message when an address has had its day's share of invitation mail.
+ */
+export const INVITATION_RECIPIENT_LIMITED_MESSAGE =
+  'This address has received too many invitations today. Try again tomorrow.'
 
 const INVITATION_NOT_FOUND_MESSAGE = 'Invitation not found'
 /**
@@ -213,6 +232,34 @@ function invitationNotFound(): HttpError {
 }
 
 /**
+ * Refuse an invitation mail the recipient's daily budget has no room for.
+ * Call it after the transaction's last write that can fail, so a refusal
+ * rolls those writes back and an attempt refused earlier spends nothing.
+ * @param email - The invited address.
+ * @param tenantId - The tenant sending it, whose share of the budget is counted too.
+ * @throws {HttpError} 429 `RATE_LIMITED` when the tenant has had its share of the address's invitation mails in the window, or the address has had `INVITATION_RECIPIENT_DAILY_LIMIT`.
+ */
+async function assertRecipientBudget(email: string, tenantId: string): Promise<void> {
+  if ((await spendInvitationRecipientBudget(email, tenantId)) === 'exhausted') {
+    throw new HttpError(INVITATION_RECIPIENT_LIMITED_MESSAGE, 429, RATE_LIMITED_CODE)
+  }
+}
+
+/**
+ * Refuse a resend sooner than `INVITATION_RESEND_COOLDOWN` after the
+ * invitation's last send. A row never stamped is let through.
+ * @param invitation - The pending invitation.
+ * @throws {HttpError} 429 `invitation_resend_cooldown` inside the cooldown.
+ */
+function assertResendCooldownOver(invitation: TenantInvitation): void {
+  if (invitation.lastSentAt === null) return
+  const elapsedMs = Date.now() - invitation.lastSentAt.getTime()
+  if (elapsedMs < requireDurationMs(getEnv().INVITATION_RESEND_COOLDOWN)) {
+    throw new HttpError(INVITATION_RESEND_COOLDOWN_MESSAGE, 429, INVITATION_RESEND_COOLDOWN_CODE)
+  }
+}
+
+/**
  * The one 404 for every token that cannot be previewed or accepted.
  * @returns The error to throw.
  */
@@ -315,19 +362,22 @@ async function tenantForMessages(
  * @param tenantId - The tenant.
  * @param email - The address to invite, in any case.
  * @param role - The role offered.
- * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access, or when the tenant is gone; 403 when the actor is now below admin or may not grant `role`; 409 `already_member` when the address belongs to a member; 409 `invitation_conflict` from a racing duplicate invite.
+ * @param options - `reason` when staff invite through platform access, recorded in the audit entry.
+ * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access, or when the tenant is gone; 403 when the actor is now below admin or may not grant `role`; 409 `already_member` when the address belongs to a member; 429 `RATE_LIMITED` when the address has had its day's invitation mail; 409 `invitation_conflict` from a racing duplicate invite; 400 `REASON_REQUIRED` when the actor now reaches the tenant through platform access and gave no reason.
  */
 export async function invite(
   actor: Actor,
   tenantId: string,
   email: string,
-  role: MembershipRole
+  role: MembershipRole,
+  options: StaffReasonOption = {}
 ): Promise<void> {
   const normalizedEmail = email.trim().toLowerCase()
   const rawToken = generateInvitationToken()
 
   const { context, access } = await db.transaction(async (tx) => {
     const { role: actorRole, access } = await lockActorRole(actor, tenantId, 'admin', tx)
+    assertStaffReasonGiven(access, options)
     if (!canActorGrantRole(actorRole, role)) throw new HttpError(GRANT_REFUSED_MESSAGE, 403)
 
     const invitee = await userRepository.findByEmail(normalizedEmail, {}, tx)
@@ -354,6 +404,8 @@ export async function invite(
       },
       tx
     )
+    // After the writes that can fail, so a 404 or a 409 spends nothing; a refusal rolls the insert back.
+    await assertRecipientBudget(normalizedEmail, tenantId)
     await record(
       {
         action: 'invitation.created',
@@ -361,7 +413,11 @@ export async function invite(
         access,
         tenantId,
         targetId: invitation.id,
-        metadata: { role, emailDomain: auditEmailDomain(normalizedEmail) },
+        metadata: {
+          role,
+          emailDomain: auditEmailDomain(normalizedEmail),
+          ...(options.reason !== undefined && { reason: options.reason }),
+        },
       },
       tx
     )
@@ -502,36 +558,56 @@ export async function listPending(tenantId: string): Promise<PendingInvitationSu
  * Give a pending invitation a new link and a fresh lifetime, and mail it
  * again. The old link stops working at once. Resending re-issues the
  * invitation's role, so the grant rule runs again, on the actor's role as
- * re-read under lock.
+ * re-read under lock. A resend within `INVITATION_RESEND_COOLDOWN` of the
+ * last send is refused, except a staff resend (`resentFromId`), which is
+ * audited with a reason; every resend spends the recipient's daily budget.
  * @param actor - The signed-in user resending it, named in the email.
  * @param tenantId - The tenant it must belong to.
  * @param invitationId - The invitation.
- * @param options - `resentFromId` when a staff resend re-runs this for an earlier message.
- * @throws {HttpError} 404 when the tenant is gone, before anything is written; 404 `Tenant not found` when the actor no longer has access; 403 when the actor is now below admin; 404 `invitation_not_found` when it is not pending in this tenant; 403 when the actor may not grant its role.
+ * @param options - `resentFromId` when a staff resend re-runs this for an earlier message; `reason` when staff resend through platform access.
+ * @throws {HttpError} 404 when the tenant is gone, before anything is written; 404 `Tenant not found` when the actor no longer has access; 403 when the actor is now below admin; 404 `invitation_not_found` when it is not pending in this tenant; 403 when the actor may not grant its role; 429 `invitation_resend_cooldown` inside the cooldown; 429 `RATE_LIMITED` when the address has had its day's invitation mail; 400 `REASON_REQUIRED` when the actor now reaches the tenant through platform access and gave no reason.
  */
 export async function resend(
   actor: Actor,
   tenantId: string,
   invitationId: string,
-  options: EmailResendOptions = {}
+  options: EmailResendOptions & StaffReasonOption = {}
 ): Promise<void> {
   // Before the write, so a vanished tenant cannot leave the old link replaced and no email sent.
   const tenant = await tenantForMessages(tenantId)
   const rawToken = generateInvitationToken()
   const invitation = await db.transaction(async (tx) => {
     const { role: actorRole, access } = await lockActorRole(actor, tenantId, 'admin', tx)
+    assertStaffReasonGiven(access, options)
     const pending = await invitationRepository.findPendingById(tenantId, invitationId, tx)
     if (!pending) throw invitationNotFound()
     if (!canActorGrantRole(actorRole, pending.role)) {
       throw new HttpError(GRANT_REFUSED_MESSAGE, 403)
     }
+    // A staff resend (audited, with a reason) skips the cooldown.
+    const hasCooldown = options.resentFromId === undefined
+    if (hasCooldown) assertResendCooldownOver(pending)
+    // The swap re-checks the cooldown: the read above took no row lock, so a concurrent resend may have landed since.
     const updated = await invitationRepository.replaceToken(
       pending.id,
       hashToken(rawToken),
       invitationExpiry(),
-      tx
+      tx,
+      hasCooldown ? { cooldownMs: requireDurationMs(getEnv().INVITATION_RESEND_COOLDOWN) } : {}
     )
-    if (!updated) throw invitationNotFound()
+    if (!updated) {
+      const stillPending = await invitationRepository.findPendingById(tenantId, invitationId, tx)
+      if (hasCooldown && stillPending) {
+        throw new HttpError(
+          INVITATION_RESEND_COOLDOWN_MESSAGE,
+          429,
+          INVITATION_RESEND_COOLDOWN_CODE
+        )
+      }
+      throw invitationNotFound()
+    }
+    // After the token swap, so a refusal rolls it back and the mailed link keeps working.
+    await assertRecipientBudget(updated.email, tenantId)
     await record(
       {
         action: 'invitation.resent',
@@ -539,7 +615,11 @@ export async function resend(
         access,
         tenantId,
         targetId: updated.id,
-        metadata: { role: updated.role, emailDomain: auditEmailDomain(updated.email) },
+        metadata: {
+          role: updated.role,
+          emailDomain: auditEmailDomain(updated.email),
+          ...(options.reason !== undefined && { reason: options.reason }),
+        },
       },
       tx
     )
@@ -555,25 +635,40 @@ export async function resend(
     inviterName: inviterDisplayName(inviter),
     invitee,
   }
+  // The email context takes only `resentFromId`: the staff reason stays in the audit entry.
+  const resendOptions: EmailResendOptions =
+    options.resentFromId === undefined ? {} : { resentFromId: options.resentFromId }
   // eslint-disable-next-line unicorn/prefer-await -- fire-and-forget: the response must not wait on the queue
-  dispatchInvitationMessages(context, undefined, options).catch((error: unknown) => {
+  dispatchInvitationMessages(context, undefined, resendOptions).catch((error: unknown) => {
     logger.error('Invitation messages failed', { error, invitationId: invitation.id })
   })
 }
 
 /**
- * Revoke a pending invitation. The actor's role is re-read under lock.
+ * Revoke a pending invitation. The actor's role is re-read under lock, and
+ * the grant rule applies as it does to invite and resend: an admin cannot
+ * revoke an owner or admin invitation it could not have sent.
  * @param actor - The signed-in user revoking it.
  * @param tenantId - The tenant it must belong to.
  * @param invitationId - The invitation.
- * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access; 403 when the actor is now below admin; 404 `invitation_not_found` when it is not pending in this tenant.
+ * @param options - `reason` when staff revoke through platform access, recorded in the audit entry.
+ * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access; 403 when the actor is now below admin; 404 `invitation_not_found` when it is not pending in this tenant; 403 when the actor may not grant its role; 400 `REASON_REQUIRED` when the actor now reaches the tenant through platform access and gave no reason.
  */
-export async function revoke(actor: Actor, tenantId: string, invitationId: string): Promise<void> {
+export async function revoke(
+  actor: Actor,
+  tenantId: string,
+  invitationId: string,
+  options: StaffReasonOption = {}
+): Promise<void> {
   await db.transaction(async (tx) => {
-    const { access } = await lockActorRole(actor, tenantId, 'admin', tx)
+    const { role: actorRole, access } = await lockActorRole(actor, tenantId, 'admin', tx)
+    assertStaffReasonGiven(access, options)
     // Read first: the audit entry needs the role and address the revoke doesn't return.
     const pending = await invitationRepository.findPendingById(tenantId, invitationId, tx)
     if (!pending) throw invitationNotFound()
+    if (!canActorGrantRole(actorRole, pending.role)) {
+      throw new HttpError(GRANT_REFUSED_MESSAGE, 403)
+    }
     const wasRevoked = await invitationRepository.revoke(tenantId, invitationId, tx)
     if (!wasRevoked) throw invitationNotFound()
     await record(
@@ -583,7 +678,11 @@ export async function revoke(actor: Actor, tenantId: string, invitationId: strin
         access,
         tenantId,
         targetId: pending.id,
-        metadata: { role: pending.role, emailDomain: auditEmailDomain(pending.email) },
+        metadata: {
+          role: pending.role,
+          emailDomain: auditEmailDomain(pending.email),
+          ...(options.reason !== undefined && { reason: options.reason }),
+        },
       },
       tx
     )

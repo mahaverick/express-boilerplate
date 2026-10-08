@@ -167,6 +167,43 @@ export class UserMembershipRepository {
   }
 
   /**
+   * The ids of every tenant a user has a membership in, soft-deleted
+   * tenants included: a purge must lock and delete every one of those rows.
+   * @param userId - The user.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns The tenant ids, in no particular order.
+   */
+  async listTenantIdsForUser(userId: string, executor: DbExecutor = db): Promise<string[]> {
+    const rows = await executor
+      .select({ tenantId: userMembershipModel.tenantId })
+      .from(userMembershipModel)
+      .where(eq(userMembershipModel.userId, userId))
+    return rows.map((row) => row.tenantId)
+  }
+
+  /**
+   * Lock every membership row of a tenant until the transaction ends, in
+   * `user_id` order, whatever the members' state: a tenant purge deletes them
+   * all. Lock order: after `lockOwners`.
+   * @param tenantId - The tenant.
+   * @param mode - The row lock to take.
+   * @param executor - The transaction to hold the locks in.
+   * @returns The locked memberships.
+   */
+  async lockAllMemberships(
+    tenantId: string,
+    mode: RowLockMode,
+    executor: DbTransaction
+  ): Promise<UserMembership[]> {
+    return executor
+      .select()
+      .from(userMembershipModel)
+      .where(eq(userMembershipModel.tenantId, tenantId))
+      .orderBy(userMembershipModel.userId)
+      .for(mode)
+  }
+
+  /**
    * Add a member to a tenant, failing if they already belong to it.
    *
    * Members of a customer tenant join through `insertIfAbsent` (invitation

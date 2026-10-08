@@ -22,6 +22,7 @@ import { accept, invite, resend, revoke } from '@/services/tenant-invitation.ser
 import { changeRole, removeMember } from '@/services/tenant-membership.service'
 import { createTenant, updateSettings, updateTenant } from '@/services/tenant.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
+import { backdateInvitationSend } from '../../helpers/backdate'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { makeStaff } from '../../helpers/platform-staff'
 
@@ -421,11 +422,15 @@ describe('member.removed', () => {
     const staff = await seedUser()
     await makeStaff(staff.id, 'admin')
 
-    await removeMember({ userId: staff.id }, tenant.id, member.id)
+    await removeMember({ userId: staff.id }, tenant.id, member.id, { reason: 'Ticket 4411' })
 
     const rows = await rowsFor(tenant.id, 'member.removed')
     expect(rows).toHaveLength(1)
-    expect(rows[0]).toMatchObject({ actor_user_id: staff.id, access: 'platform' })
+    expect(rows[0]).toMatchObject({
+      actor_user_id: staff.id,
+      access: 'platform',
+      metadata: { reason: 'Ticket 4411' },
+    })
   })
 
   it('marks self true when an owner removes themself', async () => {
@@ -486,6 +491,7 @@ describe('invitation.resent', () => {
   it('writes one row with the role and the address domain only', async () => {
     const { owner, tenant } = await seedTenant()
     const { invitation } = await seedInvitation(tenant, owner, uniqueEmail())
+    await backdateInvitationSend(invitation.id)
 
     await resend({ userId: owner.id }, tenant.id, invitation.id)
 
@@ -503,6 +509,7 @@ describe('invitation.resent', () => {
   it('keeps the old token and writes no row when the transaction rolls back', async () => {
     const { owner, tenant } = await seedTenant()
     const { invitation } = await seedInvitation(tenant, owner, uniqueEmail())
+    await backdateInvitationSend(invitation.id)
 
     await expectRollback(() => resend({ userId: owner.id }, tenant.id, invitation.id))
 
@@ -525,6 +532,7 @@ describe('an invitation whose stored domain is no hostname', () => {
   it('resends, recording a null domain', async () => {
     const { owner, tenant } = await seedTenant()
     const { invitation } = await seedInvitation(tenant, owner, badAddress)
+    await backdateInvitationSend(invitation.id)
 
     await resend({ userId: owner.id }, tenant.id, invitation.id)
 
@@ -636,6 +644,7 @@ describe('audit metadata', () => {
     const invitee = await seedUser({ verified: true })
     await invite({ userId: owner.id }, tenant.id, uniqueEmail(), 'viewer')
     const cycled = await seedInvitation(tenant, owner, uniqueEmail())
+    await backdateInvitationSend(cycled.invitation.id)
     await resend({ userId: owner.id }, tenant.id, cycled.invitation.id)
     await revoke({ userId: owner.id }, tenant.id, cycled.invitation.id)
     const accepted = await seedInvitation(tenant, owner, invitee.email)

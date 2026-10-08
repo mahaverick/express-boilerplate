@@ -53,6 +53,17 @@ export function countStreams(userId: string): number {
 }
 
 /**
+ * How many streams are open in this process, across every user: the count
+ * `SSE_MAX_STREAMS_TOTAL` caps.
+ * @returns The number of registered streams.
+ */
+export function countAllStreams(): number {
+  let total = 0
+  for (const closers of state.streams.values()) total += closers.size
+  return total
+}
+
+/**
  * End every registered stream and empty the registry.
  */
 export function closeAllStreams(): void {
@@ -77,30 +88,32 @@ export function resetLifecycleForTests(): void {
 }
 
 /**
- * Build the process shutdown handler: the first call runs shutdown and exits; later calls are ignored.
+ * Build the process shutdown handler: the first call runs shutdown and exits;
+ * a later call starts nothing, but raises the exit code to its own when
+ * higher, so a fault during a signal-started shutdown still exits 1.
  * @param shutdown - Runs graceful shutdown.
  * @param timeoutMs - Backstop after which the process exits 1 even if shutdown hangs. Defaults to `SHUTDOWN_TIMEOUT_MS`.
- * @returns A handler taking the exit function, and the code to exit with once shutdown succeeds (default 0).
+ * @returns A handler taking the exit function and a requested exit code (default 0); it exits with the highest code any call requested, 1 if shutdown rejects, or 1 at the `timeoutMs` backstop.
  */
 export function createShutdownHandler(
   shutdown: () => Promise<void>,
   timeoutMs: number = getEnv().SHUTDOWN_TIMEOUT_MS
 ): (exit: (code: number) => void, exitCode?: number) => void {
-  const guard = { hasStarted: false }
+  const guard = { hasStarted: false, exitCode: 0 }
   return (exit, exitCode = 0) => {
+    guard.exitCode = Math.max(guard.exitCode, exitCode)
     if (guard.hasStarted) return
     guard.hasStarted = true
     const forced = setTimeout(() => exit(1), timeoutMs)
     void (async () => {
-      let code = exitCode
       try {
         await shutdown()
       } catch (error) {
         logger.error('Graceful shutdown failed', { error })
-        code = 1
+        guard.exitCode = 1
       }
       clearTimeout(forced)
-      exit(code)
+      exit(guard.exitCode)
     })()
   }
 }

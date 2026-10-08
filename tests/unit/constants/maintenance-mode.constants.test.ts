@@ -40,6 +40,7 @@ const AUTH_WRITES = [
   '/api/v1/auth/verify-email',
   '/api/v1/auth/resend-verification',
   '/api/v1/auth/change-password',
+  '/api/v1/auth/sessions/revoke-others',
 ]
 
 const READS = [
@@ -89,6 +90,23 @@ describe('maintenanceVerdict', () => {
   it.each(EXPOSURES)('lets POST %s through in read_only only (the allowlist)', (path) => {
     expect(maintenanceVerdict('read_only', 'POST', path)).toBe('allow')
     expect(maintenanceVerdict('full', 'POST', path)).toBe(MAINTENANCE_MODE_CODE)
+  })
+
+  describe('invitation preview in maintenance', () => {
+    // A token lookup sent as POST to keep the token out of the URL; it writes nothing.
+    it('lets the preview through in read_only, as a read', () => {
+      expect(maintenanceVerdict('read_only', 'POST', '/api/v1/invitations/preview')).toBe('allow')
+    })
+
+    it('still refuses it in full, as every read', () => {
+      expect(maintenanceVerdict('full', 'POST', '/api/v1/invitations/preview')).toBe(
+        MAINTENANCE_MODE_CODE
+      )
+    })
+
+    it('gives it no staff pass: the caller is anonymous', () => {
+      expect(classifyMaintenanceRoute('POST', '/api/v1/invitations/preview')?.staffPass).toBe(false)
+    })
   })
 
   it('lets OPTIONS through on any path in both modes', () => {

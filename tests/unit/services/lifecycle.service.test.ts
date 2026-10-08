@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { getEnv } from '@/configs/env.config'
 import {
   closeAllStreams,
+  countAllStreams,
   countStreams,
   createProcessFaultHandler,
   createShutdownHandler,
@@ -43,6 +44,19 @@ describe('lifecycle.service', () => {
     unregisterFirst()
     expect(countStreams('user-a')).toBe(1)
     expect(countStreams('nobody')).toBe(0)
+  })
+
+  it('counts every open stream across users, and forgets unregistered ones', () => {
+    const first = registerStream('user-a', () => {})
+    registerStream('user-a', () => {})
+    registerStream('user-b', () => {})
+    expect(countAllStreams()).toBe(3)
+
+    first()
+    first()
+    expect(countAllStreams()).toBe(2)
+    closeAllStreams()
+    expect(countAllStreams()).toBe(0)
   })
 
   it('closeAllStreams calls every closer exactly once and empties the registry', () => {
@@ -96,6 +110,35 @@ describe('lifecycle.service', () => {
       const exit = vi.fn()
       createShutdownHandler(async () => {}, 25_000)(exit, 1)
       await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(1))
+    })
+
+    it('exits 1 when a fault arrives after SIGTERM began shutdown', async () => {
+      const release: { finish?: () => void } = {}
+      const shutdown = vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            release.finish = resolve
+          })
+      )
+      const exit = vi.fn()
+      const handler = createShutdownHandler(shutdown, 60_000)
+      const faults = createProcessFaultHandler(
+        () => Promise.resolve(),
+        (code) => {
+          handler(exit, code)
+        }
+      )
+
+      faults.onSignal()
+      await faults.onFault('Uncaught exception', new Error('crash during drain'))
+      release.finish?.()
+
+      await vi.waitFor(() => {
+        expect(exit).toHaveBeenCalled()
+      })
+      expect(shutdown).toHaveBeenCalledTimes(1)
+      expect(exit).toHaveBeenCalledTimes(1)
+      expect(exit).toHaveBeenCalledWith(1)
     })
 
     it('exits 1 when shutdown rejects', async () => {

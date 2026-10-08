@@ -76,6 +76,13 @@ const changedFields = z.array(z.string().regex(/^[a-z][A-Za-z\d]{0,63}$/)).max(3
 const reason = z.string().min(1).max(500)
 
 /**
+ * The reason on a member or invitation write: present when staff acted
+ * through platform access, absent when a member did. Optional rather than
+ * nullable, so a member's entry keeps its existing shape.
+ */
+const staffReason = reason.optional()
+
+/**
  * An onboarding step key, in the registry's shape.
  */
 const stepKey = z.string().max(ONBOARDING_STEP_KEY_MAX_LENGTH).regex(ONBOARDING_STEP_KEY_PATTERN)
@@ -110,23 +117,25 @@ export const AUDIT_ACTIONS = {
   },
   'member.role_changed': {
     target: 'membership',
-    metadata: z.strictObject({ userId: id, from: role, to: role }),
+    metadata: z.strictObject({ userId: id, from: role, to: role, reason: staffReason }),
   },
   'member.removed': {
     target: 'membership',
-    metadata: z.strictObject({ userId: id, role, self: z.boolean() }),
+    metadata: z.strictObject({ userId: id, role, self: z.boolean(), reason: staffReason }),
   },
+  // A member left a tenant themselves (`DELETE /tenants/:slug/membership`).
+  'member.left': { target: 'membership', metadata: z.strictObject({ role }) },
   'invitation.created': {
     target: 'invitation',
-    metadata: z.strictObject({ role, emailDomain: invitationEmailDomain }),
+    metadata: z.strictObject({ role, emailDomain: invitationEmailDomain, reason: staffReason }),
   },
   'invitation.resent': {
     target: 'invitation',
-    metadata: z.strictObject({ role, emailDomain: invitationEmailDomain }),
+    metadata: z.strictObject({ role, emailDomain: invitationEmailDomain, reason: staffReason }),
   },
   'invitation.revoked': {
     target: 'invitation',
-    metadata: z.strictObject({ role, emailDomain: invitationEmailDomain }),
+    metadata: z.strictObject({ role, emailDomain: invitationEmailDomain, reason: staffReason }),
   },
   'invitation.accepted': {
     target: 'membership',

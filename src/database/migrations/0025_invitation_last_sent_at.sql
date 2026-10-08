@@ -1,0 +1,1 @@
+ALTER TABLE "tenant_invitations" ADD COLUMN "last_sent_at" timestamp with time zone;

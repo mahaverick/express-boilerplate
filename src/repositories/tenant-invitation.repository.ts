@@ -3,13 +3,14 @@
  * the table has no `deletedAt`. Lookups by token join `tenants` and exclude a
  * soft-deleted tenant.
  */
-import { and, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm'
+import { and, desc, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm'
 import type { MembershipRole, TenantLifecycleState } from '@/constants/tenant.constants'
 import {
   tenantInvitationModel,
   type TenantInvitation,
 } from '@/database/models/tenant-invitation.model'
 import { tenantModel } from '@/database/models/tenant.model'
+import { userMembershipModel } from '@/database/models/user-membership.model'
 import { userModel } from '@/database/models/user.model'
 import { HttpError } from '@/errors/http-error'
 import { isUniqueViolation } from '@/errors/postgres-errors'
@@ -35,6 +36,19 @@ const NO_INVITER = null
  */
 export function pendingCondition() {
   return and(isNull(invitation.acceptedAt), isNull(invitation.revokedAt))
+}
+
+/**
+ * The row was never mailed, or was last mailed at least `cooldownMs` ago, by
+ * the database clock.
+ * @param cooldownMs - The resend cooldown in milliseconds.
+ * @returns The SQL condition.
+ */
+function cooldownOverCondition(cooldownMs: number) {
+  return or(
+    isNull(invitation.lastSentAt),
+    sql`${invitation.lastSentAt} <= now() - make_interval(secs => ${cooldownMs / 1000}::double precision)`
+  )
 }
 
 /**
@@ -98,7 +112,8 @@ export interface ValidInvitation extends InvitationWithTenant {
 export class TenantInvitationRepository {
   /**
    * Revoke any pending invitation for this tenant and address, then insert a
-   * new one. Call it inside a transaction so the two writes commit together.
+   * new one, stamped as mailed now. Call it inside a transaction so the two
+   * writes commit together.
    * @param input - The new invitation's columns.
    * @param executor - Where to run the queries. Defaults to the pool.
    * @returns The inserted row.
@@ -119,7 +134,10 @@ export class TenantInvitationRepository {
         )
       )
     try {
-      const [row] = await executor.insert(invitation).values(input).returning()
+      const [row] = await executor
+        .insert(invitation)
+        .values({ ...input, lastSentAt: sql`now()` })
+        .returning()
       if (!row) throw new HttpError('Insert returned no row', 500)
       return row
     } catch (error) {
@@ -335,24 +353,38 @@ export class TenantInvitationRepository {
   }
 
   /**
-   * Give a pending invitation a new token and expiry. The old token stops
-   * resolving at once.
+   * Give a pending invitation a new token and expiry, stamped as mailed now.
+   * The old token stops resolving at once. With `cooldownMs`, a row mailed
+   * within that long of the database's `now()` is left alone, so of two
+   * resends that both passed a cooldown check on an earlier read, the
+   * second one, blocked on the first's row lock, re-reads the new stamp
+   * and updates nothing.
    * @param id - The invitation id.
    * @param tokenHash - SHA-256 hex of the new raw token.
    * @param expiresAt - The new expiry.
    * @param executor - Where to run the query. Defaults to the pool.
-   * @returns The updated row, or undefined when the invitation is not pending.
+   * @param options - Update choices.
+   * @param options.cooldownMs - Skip a row whose `last_sent_at` is newer than this many milliseconds ago.
+   * @returns The updated row, or undefined when the invitation is not pending or is inside the cooldown.
    */
   async replaceToken(
     id: string,
     tokenHash: string,
     expiresAt: Date,
-    executor: DbExecutor = db
+    executor: DbExecutor = db,
+    options: { cooldownMs?: number } = {}
   ): Promise<TenantInvitation | undefined> {
+    const { cooldownMs } = options
     const [row] = await executor
       .update(invitation)
-      .set({ tokenHash, expiresAt, updatedAt: sql`now()` })
-      .where(and(eq(invitation.id, id), pendingCondition()))
+      .set({ tokenHash, expiresAt, lastSentAt: sql`now()`, updatedAt: sql`now()` })
+      .where(
+        and(
+          eq(invitation.id, id),
+          pendingCondition(),
+          cooldownMs === undefined ? undefined : cooldownOverCondition(cooldownMs)
+        )
+      )
       .returning()
     return row
   }
@@ -387,6 +419,69 @@ export class TenantInvitationRepository {
       .set({ revokedAt: sql`now()`, updatedAt: sql`now()` })
       .where(and(eq(invitation.invitedBy, userId), pendingCondition()))
       .returning()
+  }
+
+  /**
+   * Revoke the pending invitations one user sent in one tenant, expired or
+   * not: once they lose their place or their rank there, nothing should
+   * still admit people on their authority. `roles` narrows the revoke to the
+   * offers of those roles (a demotion revokes only what the new role can no
+   * longer grant); an empty list revokes nothing.
+   * @param inviterId - The sender.
+   * @param tenantId - The tenant.
+   * @param options - `roles` limits the revoke to offers of those roles; all roles when absent.
+   * @param options.roles - The offered roles to revoke.
+   * @param executor - Where to run the query; the caller's transaction.
+   * @returns The revoked rows, for their audit entries.
+   */
+  async revokePendingByInviterInTenant(
+    inviterId: string,
+    tenantId: string,
+    options: { roles?: readonly MembershipRole[] },
+    executor: DbExecutor = db
+  ): Promise<TenantInvitation[]> {
+    if (options.roles?.length === 0) return []
+    return executor
+      .update(invitation)
+      .set({ revokedAt: sql`now()`, updatedAt: sql`now()` })
+      .where(
+        and(
+          eq(invitation.invitedBy, inviterId),
+          eq(invitation.tenantId, tenantId),
+          options.roles === undefined ? undefined : inArray(invitation.role, [...options.roles]),
+          pendingCondition()
+        )
+      )
+      .returning()
+  }
+
+  /**
+   * The customer tenants where one user has pending invitations (expired or
+   * not), each with the role the user holds there as a member, if any. The
+   * platform tenant is left out: it is members-only, and its offers are the
+   * in-tenant revoke's.
+   * @param inviterId - The sender.
+   * @param executor - Where to run the query; the caller's transaction.
+   * @returns One row per tenant; `memberRole` is undefined where the sender is not a member.
+   */
+  async findCustomerTenantsWithPendingFrom(
+    inviterId: string,
+    executor: DbExecutor = db
+  ): Promise<{ tenantId: string; memberRole: MembershipRole | undefined }[]> {
+    const membership = userMembershipModel
+    const rows = await executor
+      .selectDistinct({ tenantId: invitation.tenantId, memberRole: membership.role })
+      .from(invitation)
+      .innerJoin(
+        tenantModel,
+        and(eq(tenantModel.id, invitation.tenantId), eq(tenantModel.isPlatform, false))
+      )
+      .leftJoin(
+        membership,
+        and(eq(membership.tenantId, invitation.tenantId), eq(membership.userId, inviterId))
+      )
+      .where(and(eq(invitation.invitedBy, inviterId), pendingCondition()))
+    return rows.map((row) => ({ tenantId: row.tenantId, memberRole: row.memberRole ?? undefined }))
   }
 
   /**

@@ -107,10 +107,16 @@ async function loadAuthenticatedUser(userId: string): Promise<AuthenticatedUser>
  * (`maintenanceRefusalFor`), so staff keep working in Apex during
  * maintenance; an unauthenticated call is still answered 401 first.
  *
+ * Every response behind it, refusal included, is `Cache-Control: no-store`
+ * (ASVS 8.2.1): without it a browser keeps an authenticated body on disk,
+ * readable with no credential after sign-out. Not `no-cache` or `private`,
+ * which still store the body. A handler that sets its own policy afterwards
+ * (the SSE stream's `no-cache`) wins.
+ *
  * Catches and calls `next(error)` itself, so a test that calls it directly
  * sees a call to `next`, not an unhandled rejection.
  * @param request - The incoming request.
- * @param response - The response, read for the gate's staff-pass mark; a rejection is written by the terminal error handler, not here.
+ * @param response - The response: given `Cache-Control: no-store`, and read for the gate's staff-pass mark; a rejection is written by the terminal error handler, not here.
  * @param next - Passes control on once `request.user` is populated, or forwards the rejection.
  */
 export async function requireAuth(
@@ -118,6 +124,7 @@ export async function requireAuth(
   response: Response,
   next: NextFunction
 ): Promise<void> {
+  response.set('Cache-Control', 'no-store')
   try {
     const token = getBearerToken(request)
     const { payload } = verifyBearerToken(token)

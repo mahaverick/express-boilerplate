@@ -30,6 +30,7 @@ export const PRODUCT_EVENTS = [
   'user_signed_in',
   'user_signed_out',
   'password_changed',
+  'other_sessions_revoked',
   'password_reset_completed',
   'email_verified',
   'onboarding_step_completed',

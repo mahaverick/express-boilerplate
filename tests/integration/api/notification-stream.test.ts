@@ -24,8 +24,10 @@ import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import {
+  countAllStreams,
   countStreams,
   markShuttingDown,
+  registerStream,
   resetLifecycleForTests,
 } from '@/services/lifecycle.service'
 import {
@@ -37,8 +39,13 @@ import {
 } from '@/services/notification-emitter.service'
 import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
 import { getRedis } from '@/services/redis.service'
-import { denySession } from '@/services/session-denylist.service'
-import { revokeSession, signAccessToken } from '@/services/session.service'
+import { denySession, isSessionDenied } from '@/services/session-denylist.service'
+import {
+  issueRefreshToken,
+  revokeOtherSessions,
+  revokeSession,
+  signAccessToken,
+} from '@/services/session.service'
 import { startNotificationWorker } from '@/workers/notification.worker'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { deferred } from '../../helpers/lock-probe'
@@ -900,6 +907,27 @@ describe('GET /api/v1/notifications/stream', () => {
     expect(listenerCount(userId)).toBe(0)
   }, 10_000)
 
+  // Signing out other sessions writes the same denylist entry a revocation does; this proves it reaches a live stream of the revoked session and spares the caller's.
+  it('closes another session’s open stream when the user signs out their other sessions', async () => {
+    const user = await userRepository.create({ email: uniqueEmail() })
+    createdUserIds.push(user.id)
+    const caller = await issueRefreshToken(user.id, randomUUID())
+    const other = await issueRefreshToken(user.id, randomUUID())
+    const stream = openStream({ header: `Bearer ${signAccessToken(user, other.sessionId)}` })
+    await stream.waitForResponse()
+    // Alive first, or the close below proves nothing.
+    await expect(stream.nextFrame()).resolves.toBeDefined()
+
+    await expect(revokeOtherSessions(user.id, caller.sessionId)).resolves.toBe(1)
+
+    await expect(stream.closed(getEnv().SSE_HEARTBEAT_INTERVAL_MS * 2)).resolves.toBe(true)
+    await waitUntil(() => listenerCount(user.id) === 0, {
+      message: 'the revoked stream removes its listener',
+      timeout: 2000,
+    })
+    expect(await isSessionDenied(caller.sessionId)).toBe(false)
+  }, 10_000)
+
   /**
    * Pairs with the test above: that one proves a session denied after
    * connect closes an already-open stream (the heartbeat, the only
@@ -1000,6 +1028,31 @@ describe('GET /api/v1/notifications/stream', () => {
       message: 'a closed stream frees its slot under the cap',
       timeout: 2000,
     })
+    const again = openStream({ header: `Bearer ${token}` })
+    const reopened = await again.waitForResponse()
+    expect(reopened.statusCode).toBe(200)
+  })
+
+  it('answers 503 stream_capacity with Retry-After, before any stream opens, at the server-wide cap', async () => {
+    const { user, token } = await createAuthenticatedUser()
+    const total = getEnv().SSE_MAX_STREAMS_TOTAL
+    // Other accounts' streams fill the process: one fake closer each, no sockets needed.
+    const unregister = Array.from({ length: total }, (_, index) =>
+      registerStream(`capacity-filler-${String(index)}`, () => {})
+    )
+    expect(countAllStreams()).toBe(total)
+
+    const refused = openStream({ header: `Bearer ${token}` })
+    const response = await refused.waitForResponse()
+    expect(response.statusCode).toBe(503)
+    expect(response.headers['retry-after']).toBe('30')
+    expect(response.headers['content-type']).not.toContain('text/event-stream')
+    const parsed = JSON.parse(await refused.collectBody()) as { code?: string; message?: string }
+    expect(parsed.code).toBe('stream_capacity')
+    expect(countStreams(user.id)).toBe(0)
+
+    // One slot freed anywhere lets the next stream open.
+    unregister[0]?.()
     const again = openStream({ header: `Bearer ${token}` })
     const reopened = await again.waitForResponse()
     expect(reopened.statusCode).toBe(200)

@@ -54,7 +54,14 @@ function mediaTypeOf(request: Request): string {
  *
  * A request with no content type is allowed on purpose: `/refresh` and
  * `/logout` are called with no body, and an untyped body is never parsed, so
- * `request.body` stays empty and a validator answers 400.
+ * `request.body` stays empty and a validator answers 400. That also means a
+ * body-less POST needs no preflight, and `SameSite=Strict` still attaches the
+ * refresh cookie when the page is same-site (a sibling subdomain), so those
+ * two routes add an Origin check (`requireAllowedOriginWhenPresent`,
+ * origin.middleware.ts). The "no configuration" property above holds for
+ * every other route; on those two a frontend's origin must be `WEB_URL`,
+ * `APEX_URL` or listed in `CORS_ALLOWED_ORIGINS`, unless the browser marks
+ * the request same-origin.
  * @param request - The incoming request.
  * @param _response - The response. Unused: a rejection travels via `next`.
  * @param next - Forwards the request onward, or the rejection to the terminal error handler.

@@ -20,6 +20,7 @@ import {
   submittedEmailRateLimitKey,
   type RateLimitName,
 } from '@/constants/rate-limit.constants'
+import { hashRateLimitIdentity } from '@/utilities/rate-limit-key.utilities'
 
 const EXPECTED_NAMES_IN_ORDER = [
   'register',
@@ -32,7 +33,6 @@ const EXPECTED_NAMES_IN_ORDER = [
   'resend-verification-ip',
   'resend-verification-email',
   'forgot-password-ip',
-  'forgot-password-email',
   'reset-password',
   'google-oauth',
   'google-oauth-callback',
@@ -52,6 +52,7 @@ const EXPECTED_NAMES_IN_ORDER = [
   'flag-exposure',
   'maintenance-status',
   'maintenance-mode-change',
+  'revoke-other-sessions',
 ]
 
 /**
@@ -96,13 +97,6 @@ const EXPECTED_RATE_LIMITS: {
     limit: 5,
     keyBy: 'ip',
   },
-  {
-    key: 'forgotPasswordEmail',
-    name: 'forgot-password-email',
-    windowMs: 3_600_000,
-    limit: 20,
-    keyBy: 'email',
-  },
   { key: 'resetPassword', name: 'reset-password', windowMs: 900_000, limit: 10, keyBy: 'ip' },
   { key: 'googleOAuth', name: 'google-oauth', windowMs: 300_000, limit: 300, keyBy: 'ip' },
   {
@@ -133,7 +127,7 @@ const EXPECTED_RATE_LIMITS: {
     name: 'invitation-accept',
     windowMs: 900_000,
     limit: 20,
-    keyBy: 'ip',
+    keyBy: 'user',
   },
   { key: 'platformSearch', name: 'platform-search', windowMs: 60_000, limit: 60, keyBy: 'user' },
   {
@@ -188,6 +182,13 @@ const EXPECTED_RATE_LIMITS: {
     limit: 10,
     keyBy: 'user',
   },
+  {
+    key: 'revokeOtherSessions',
+    name: 'revoke-other-sessions',
+    windowMs: 3_600_000,
+    limit: 10,
+    keyBy: 'user',
+  },
 ]
 
 describe('RATE_LIMITS key stability', () => {
@@ -211,19 +212,32 @@ describe('RATE_LIMITS key stability', () => {
     }
   )
 
-  it('derives the same composite key for login: ip + ":" + normalised email', () => {
+  it('counts only well-formed, refused attempts against loginAccount', () => {
+    const spec = RATE_LIMITS.loginAccount
+    expect(spec.counts).toBe('rejected')
+    const wellFormed = { body: { email: 'owner@example.com', password: 'x' } } as unknown as Request
+    const noPassword = { body: { email: 'owner@example.com' } } as unknown as Request
+    const noBody = {} as unknown as Request
+    expect(spec.skip?.(wellFormed)).toBe(false)
+    expect(spec.skip?.(noPassword)).toBe(true)
+    expect(spec.skip?.(noBody)).toBe(true)
+  })
+
+  it('derives the composite key for login: ip + ":" + the hashed normalised email', () => {
     const request = {
       ip: '203.0.113.5',
       body: { email: 'Victim@Example.com' },
     } as unknown as Request
     const keyBy = RATE_LIMITS.login.keyBy
     if (typeof keyBy !== 'function') throw new Error('login.keyBy must be a function')
-    expect(keyBy(request)).toBe('203.0.113.5:victim@example.com')
+    expect(keyBy(request)).toBe(`203.0.113.5:${hashRateLimitIdentity('victim@example.com')}`)
+    expect(keyBy(request)).not.toContain('example.com')
   })
 
-  it('derives the same email-only key: the normalised submitted email, ip ignored', () => {
+  it('derives the email-only key from the normalised submitted email, hashed, ip ignored', () => {
     const request = { body: { email: 'Victim@Example.com' } } as unknown as Request
-    expect(submittedEmailRateLimitKey(request)).toBe('victim@example.com')
+    expect(submittedEmailRateLimitKey(request)).toBe(hashRateLimitIdentity('victim@example.com'))
+    expect(submittedEmailRateLimitKey(request)).not.toContain('example.com')
   })
 
   it('derives the same user key: request.user.id, or "anonymous" when unset', () => {

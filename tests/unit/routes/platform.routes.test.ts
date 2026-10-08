@@ -40,11 +40,16 @@ describe('createPlatformRouter', () => {
     expect(handler).toBeDefined()
   })
 
-  it('gates the platform audit log at admin, with no limiter', () => {
-    const handlers = handlersFor(createPlatformRouter(), 'get', '/audit-log')
+  it('gates the platform audit log at admin, then the shared search limiter', () => {
+    const router = createPlatformRouter()
+    const handlers = handlersFor(router, 'get', '/audit-log')
 
-    expect(handlers).toHaveLength(2)
+    expect(handlers).toHaveLength(3)
     expect(handlers[0]).not.toHaveProperty('resetKey')
+    expect((handlers[1] as unknown as Record<symbol, unknown>)[RATE_LIMITER_MARK]).toBe(
+      'platform-search'
+    )
+    expect(handlers[1]).toBe(handlersFor(router, 'get', '/tenants')[1])
   })
 
   it('shares one search limiter across the viewer GETs, so they draw on one budget', () => {

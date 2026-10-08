@@ -252,9 +252,8 @@ beside it. The two security notices, `password_changed` and
 action needs (409 `not_resendable`); a suppressed recipient gets 409
 `recipient_suppressed` and a template this build no longer has 409
 `template_unavailable`. An invitation to a tenant that is not active gets
-the member routes' 404, and one to the platform tenant needs a sign-in
-within the last 10 minutes (401 `REAUTH_REQUIRED`), as the member route
-does.
+the member routes' 404, and every invitation resend, on any tenant, needs a
+sign-in within the last 10 minutes (401 `REAUTH_REQUIRED`).
 
 ## Onboarding
 
@@ -377,11 +376,11 @@ staff-forced `user.signed_out` becomes `user_sessions_revoked`), with its
 metadata in snake_case, a free-text `reason` reduced to `has_reason`, and a
 tenant's `name` and `slug` left out;
 the product events `user_signed_up`, `user_signed_in`, `user_signed_out`,
-`password_changed`, `password_reset_completed`, `email_verified` and
-`onboarding_step_completed`; and each email tracking event as `email_<type>`
-(`email_delivered`, `email_opened`, ...). Each carries `source` (`audit`,
-`product` or `email`), `access`, `app: 'api'`, `$groups.tenant` when it
-belongs to a tenant, and, only when tracing is on
+`password_changed`, `other_sessions_revoked`, `password_reset_completed`,
+`email_verified` and `onboarding_step_completed`; and each email tracking
+event as `email_<type>` (`email_delivered`, `email_opened`, ...). Each
+carries `source` (`audit`, `product` or `email`), `access`, `app: 'api'`,
+`$groups.tenant` when it belongs to a tenant, and, only when tracing is on
 (`OTEL_EXPORTER_OTLP_ENDPOINT` set), the request's `trace_id` and `span_id`,
 so PostHog's events line up with the API's traces; with tracing off they carry
 neither. No name, full address, reason, subject or recipient is ever sent; the

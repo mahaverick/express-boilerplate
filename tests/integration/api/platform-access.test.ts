@@ -8,19 +8,23 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import type { Response } from 'supertest'
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
+import { REAUTH_REQUIRED_CODE } from '@/constants/auth.constants'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
 import { PlatformTenantRepository } from '@/repositories/platform-tenant.repository'
+import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
-import { signAccessToken } from '@/services/session.service'
+import { hashToken, signAccessToken } from '@/services/session.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
+import { backdateInvitationSend } from '../../helpers/backdate'
 import { makeStaff, platformTenant } from '../../helpers/platform-staff'
 import { request } from '../../helpers/request'
 
@@ -34,6 +38,11 @@ afterAll(async () => {
   await getNotificationQueue().obliterate({ force: true })
   await closeQueue()
 })
+
+/**
+ * The reason every staff member and invitation write below gives; a member ignores it.
+ */
+const STAFF_REASON = 'Customer asked us to, ticket 4411'
 
 /**
  * A disposable email, unique to one call.
@@ -63,7 +72,7 @@ async function invite(tenant: Tenant, token: string, role: MembershipRole) {
   return request(app)
     .post(`/api/v1/tenants/${tenant.slug}/invitations`)
     .set('Authorization', `Bearer ${token}`)
-    .send({ email: uniqueEmail(), role })
+    .send({ email: uniqueEmail(), role, reason: STAFF_REASON })
 }
 
 /**
@@ -78,7 +87,7 @@ async function changeRole(tenant: Tenant, token: string, target: User, role: Mem
   return request(app)
     .patch(`/api/v1/tenants/${tenant.slug}/members/${target.id}`)
     .set('Authorization', `Bearer ${token}`)
-    .send({ role })
+    .send({ role, reason: STAFF_REASON })
 }
 
 /**
@@ -92,6 +101,7 @@ async function removeMember(tenant: Tenant, token: string, target: User) {
   return request(app)
     .delete(`/api/v1/tenants/${tenant.slug}/members/${target.id}`)
     .set('Authorization', `Bearer ${token}`)
+    .send({ reason: STAFF_REASON })
 }
 
 /**
@@ -103,6 +113,25 @@ async function removeMember(tenant: Tenant, token: string, target: User) {
 async function roleOf(tenant: Tenant, target: User): Promise<string | undefined> {
   const membership = await userMembershipRepository.findByUserAndTenant(target.id, tenant.id)
   return membership?.role
+}
+
+/**
+ * A pending viewer invitation sent by `inviter`, mailed a day ago.
+ * @param tenant - The tenant.
+ * @param inviter - The sender.
+ * @returns The invitation id.
+ */
+async function pendingInvitation(tenant: Tenant, inviter: User): Promise<string> {
+  const invitation = await new TenantInvitationRepository().createPending({
+    tenantId: tenant.id,
+    email: uniqueEmail(),
+    role: 'viewer',
+    tokenHash: hashToken(randomUUID()),
+    invitedBy: inviter.id,
+    expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+  })
+  await backdateInvitationSend(invitation.id)
+  return invitation.id
 }
 
 describe('platform access over the API', () => {
@@ -151,14 +180,20 @@ describe('platform access over the API', () => {
   }
 
   /**
-   * A fresh staff user with `role`, and a token.
+   * A fresh staff user with `role`, a token that passes step-up, and one that does not.
    * @param role - The platform role.
-   * @returns The user and a token.
+   * @returns The user, a recent token and a stale one.
    */
-  async function staffUser(role: MembershipRole): Promise<{ user: User; token: string }> {
+  async function staffUser(
+    role: MembershipRole
+  ): Promise<{ user: User; token: string; staleToken: string }> {
     const staff = await createAuthenticatedUser()
     await makeStaff(staff.user.id, role)
-    return staff
+    return {
+      user: staff.user,
+      token: signAccessToken(staff.user, randomUUID(), new Date()),
+      staleToken: staff.token,
+    }
   }
 
   /**
@@ -446,6 +481,165 @@ describe('platform access over the API', () => {
         message: 'Insufficient permissions to remove this member',
       })
       expect(await roleOf(tenant, owner)).toBe('owner')
+    })
+  })
+
+  describe('staff member and invitation writes on a customer tenant', () => {
+    /**
+     * One staff write on a customer tenant, sent with `body`.
+     */
+    interface StaffWrite {
+      name: string
+      action: string
+      success: number
+      send: (tenant: Tenant, token: string, body: object) => Promise<Response>
+    }
+
+    const writes: StaffWrite[] = [
+      {
+        name: 'PATCH /members/:userId',
+        action: 'member.role_changed',
+        success: 200,
+        send: async (tenant, token, body) => {
+          const member = await addMember(tenant, 'manager')
+          return request(app)
+            .patch(`/api/v1/tenants/${tenant.slug}/members/${member.id}`)
+            .set('Authorization', `Bearer ${token}`)
+            .send({ role: 'editor', ...body })
+        },
+      },
+      {
+        name: 'DELETE /members/:userId',
+        action: 'member.removed',
+        success: 200,
+        send: async (tenant, token, body) => {
+          const member = await addMember(tenant, 'manager')
+          return request(app)
+            .delete(`/api/v1/tenants/${tenant.slug}/members/${member.id}`)
+            .set('Authorization', `Bearer ${token}`)
+            .send(body)
+        },
+      },
+      {
+        name: 'POST /invitations',
+        action: 'invitation.created',
+        success: 202,
+        send: async (tenant, token, body) =>
+          request(app)
+            .post(`/api/v1/tenants/${tenant.slug}/invitations`)
+            .set('Authorization', `Bearer ${token}`)
+            .send({ email: uniqueEmail(), role: 'viewer', ...body }),
+      },
+      {
+        name: 'POST /invitations/:id/resend',
+        action: 'invitation.resent',
+        success: 202,
+        send: async (tenant, token, body) => {
+          const owner = await addMember(tenant, 'owner')
+          const id = await pendingInvitation(tenant, owner)
+          return request(app)
+            .post(`/api/v1/tenants/${tenant.slug}/invitations/${id}/resend`)
+            .set('Authorization', `Bearer ${token}`)
+            .send(body)
+        },
+      },
+      {
+        name: 'DELETE /invitations/:id',
+        action: 'invitation.revoked',
+        success: 200,
+        send: async (tenant, token, body) => {
+          const owner = await addMember(tenant, 'owner')
+          const id = await pendingInvitation(tenant, owner)
+          return request(app)
+            .delete(`/api/v1/tenants/${tenant.slug}/invitations/${id}`)
+            .set('Authorization', `Bearer ${token}`)
+            .send(body)
+        },
+      },
+    ]
+
+    it.each(writes)(
+      '$name: refuses staff with a stale sign-in 401 REAUTH_REQUIRED',
+      async (write) => {
+        const { tenant } = await ownedTenant()
+        const { staleToken } = await staffUser('owner')
+
+        const response = await write.send(tenant, staleToken, { reason: STAFF_REASON })
+
+        expect(response.status).toBe(401)
+        expect(response.body).toMatchObject({ code: REAUTH_REQUIRED_CODE })
+      }
+    )
+
+    // An older client sends no reason: it must learn to re-authenticate first, not to add one.
+    it.each(writes)(
+      '$name: refuses staff with a stale sign-in and no reason 401 REAUTH_REQUIRED, step-up before reason',
+      async (write) => {
+        const { tenant } = await ownedTenant()
+        const { staleToken } = await staffUser('owner')
+
+        const response = await write.send(tenant, staleToken, {})
+
+        expect(response.status).toBe(401)
+        expect(response.body).toMatchObject({ code: REAUTH_REQUIRED_CODE })
+      }
+    )
+
+    it.each(writes)('$name: refuses staff with no reason 400 REASON_REQUIRED', async (write) => {
+      const { tenant } = await ownedTenant()
+      const { token } = await staffUser('owner')
+
+      const response = await write.send(tenant, token, {})
+
+      expect(response.status).toBe(400)
+      expect(response.body).toMatchObject({ code: 'REASON_REQUIRED' })
+    })
+
+    it.each(writes)('$name: records the staff reason in the audit entry', async (write) => {
+      const { tenant } = await ownedTenant()
+      const { user, token } = await staffUser('owner')
+
+      const response = await write.send(tenant, token, { reason: `  ${STAFF_REASON}  ` })
+
+      expect(response.status).toBe(write.success)
+      const rows = await sql<{ access: string; metadata: { reason?: string } }[]>`
+        select access, metadata from audit_logs
+        where tenant_id = ${tenant.id} and action = ${write.action} and actor_user_id = ${user.id}`
+      expect(rows).toHaveLength(1)
+      expect(rows[0]).toMatchObject({ access: 'platform', metadata: { reason: STAFF_REASON } })
+    })
+
+    it.each(writes)(
+      '$name: lets a member act with a stale sign-in and no reason',
+      async (write) => {
+        const { tenant, owner } = await ownedTenant()
+        const memberToken = signAccessToken(owner, randomUUID())
+
+        const response = await write.send(tenant, memberToken, {})
+
+        expect(response.status).toBe(write.success)
+        const rows = await sql<{ metadata: Record<string, unknown> }[]>`
+        select metadata from audit_logs where tenant_id = ${tenant.id} and action = ${write.action}`
+        expect(rows).toHaveLength(1)
+        expect(rows[0]?.metadata).not.toHaveProperty('reason')
+      }
+    )
+
+    it.each([
+      ['an empty reason', ' '.repeat(3)],
+      ['a reason over 500 characters', 'x'.repeat(501)],
+      ['a reason with a control character', 'ticket\u{7}4411'],
+    ])('refuses staff giving %s 400 REASON_REQUIRED', async (_label, reason) => {
+      const { tenant } = await ownedTenant()
+      const { token } = await staffUser('owner')
+
+      const response = await request(app)
+        .post(`/api/v1/tenants/${tenant.slug}/invitations`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ email: uniqueEmail(), role: 'viewer', reason })
+
+      expect(response.status).toBe(400)
+      expect(response.body).toMatchObject({ code: 'REASON_REQUIRED' })
     })
   })
 })
