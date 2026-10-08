@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.1](https://github.com/mahaverick/express-boilerplate/compare/v2.0.0...v2.0.1) (2026-10-08)
+
+
+### Bug Fixes
+
+* harden input, cursors and flag parsing; maintenance reason fixes, dependency advisories ([#91](https://github.com/mahaverick/express-boilerplate/issues/91)) ([941c263](https://github.com/mahaverick/express-boilerplate/commit/941c2635ab30052fdb9445663456e97f0e164d11))
+
 ## [2.0.0](https://github.com/mahaverick/express-boilerplate/compare/v1.9.0...v2.0.0) (2026-10-08)
 
 
