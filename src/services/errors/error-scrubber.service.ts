@@ -62,10 +62,14 @@ const JSON_SNIPPET_PATTERN = /(^|[\s(])(?:\.\.\.)?"[\s\S]*?"(?:\.\.\.)? is not v
 const USERINFO_PATTERN = /\b([a-z][a-z0-9+.-]*:\/\/)(?:[^\s/?#<>"']|["'](?![,:;}\]\s]))+@/gi
 
 /**
- * A URL or path followed by a query string: the part before `?` is kept.
+ * A URL or path followed by a query string: the part before `?` is kept. A
+ * bare word before `?` (`callback?code=…`) counts as a path when the query
+ * holds an `=`, so a question in prose is left alone. A word after `@` is
+ * a domain, which the email rule handles.
  */
-// eslint-disable-next-line sonarjs/super-linear-regex -- scrubText scans at most SCAN_MAX characters
-const QUERY_PATTERN = /((?:https?:\/\/|\/)[^\s?"'<>]*)\?[^\s"'<>]+/g
+// eslint-disable-next-line sonarjs/super-linear-regex, sonarjs/regex-complexity -- scrubText scans at most SCAN_MAX characters; one pattern per rule keeps the rule list the spec
+const QUERY_PATTERN =
+  /((?:https?:\/\/|\/)[^\s?"'<>]*|(?<![@\w.-])[\w.-]+(?=\?[^\s"'<>]*=))\?[^\s"'<>]+/g
 
 /**
  * A URL's or path's fragment: the part before `#` is kept, and so is a
@@ -147,16 +151,18 @@ const BASIC_PATTERN =
 
 /**
  * The separator between a secret-named key and its value: `:`, `=`, `=>`
- * (Node's inspection of a `Map` or `URLSearchParams`) or a URL-encoded `=`.
- * `=>` is tried first, so `=` never takes half of it.
+ * (Node's inspection of a `Map` or `URLSearchParams`), or `:` or `=`
+ * encoded for a URL (`%3A`, `%3D`), for HTML (`&#58;`, `&#61;`) or as a
+ * JSON escape (`\u003a`, `\u003d`). `=>` is tried first, so `=` never
+ * takes half of it.
  */
-const KEY_SEPARATOR = '(?:=>|[:=]|%3D)'
+const KEY_SEPARATOR = String.raw`(?:=>|[:=]|%3[AD]|&#(?:58|61);|\\u003[ad])`
 
 /**
  * The quote that may close a key or open its value: `"` or `'`, possibly
- * escaped (a JSON string inside a JSON string).
+ * escaped (a JSON string inside a JSON string), or a URL-encoded `"` (`%22`).
  */
-const KEY_QUOTE = String.raw`\\?["']`
+const KEY_QUOTE = String.raw`(?:\\?["']|%22)`
 
 /**
  * The Authorization scheme words kept in front of a replaced credential.
@@ -200,16 +206,18 @@ const ARRAY_VALUE = String.raw`\[[^\]\n]*\]`
  * stops there; trailing spaces are kept. After an
  * encoded separator (`%3D`) it stops at whitespace too. It never
  * starts with the `>` of an `=>`, so `=` cannot take half of it; a `>` after
- * any other separator is a value.
+ * any other separator is a value. Nor does it start with `%22`, the encoded
+ * quote `QUOTED_VALUE` handles.
  */
-const UNQUOTED_VALUE = String.raw`(?<=[:=>]\s*)(?!(?<==)>)[^\s"'\\,;&})\]](?:[^\n"'\\,;&})\]]*[^\s"'\\,;&})\]])?|(?!(?<==)>)[^\s"'\\,;&})\]][^\s"'\\,;&})\]]*`
+const UNQUOTED_VALUE = String.raw`(?!%22)(?:(?<=[:=>]\s*)(?!(?<==)>)[^\s"'\\,;&})\]](?:[^\n"'\\,;&})\]]*[^\s"'\\,;&})\]])?|(?!(?<==)>)[^\s"'\\,;&})\]][^\s"'\\,;&})\]]*)`
 
 /**
  * A quoted value: inside an escaped quote, up to the next escaped quote;
  * inside a plain quote, up to the quote that opened it (the other quote
- * character is part of the value), escaped quotes included.
+ * character is part of the value), escaped quotes included; inside a
+ * URL-encoded quote (`%22`), up to the next one.
  */
-const QUOTED_VALUE = String.raw`(?<=\\")(?:(?!\\")[^\n])+|(?<=")(?:[^"\\\n]|\\.)+|(?<=')(?:[^'\\\n]|\\.)+`
+const QUOTED_VALUE = String.raw`(?<=\\")(?:(?!\\")[^\n])+|(?<=")(?:[^"\\\n]|\\.)+|(?<=')(?:[^'\\\n]|\\.)+|(?<=%22)(?:(?!%22)[^\s"'\\&])+`
 
 /**
  * A header-valued key, Authorization (`authorization`, `auth`,
@@ -223,14 +231,17 @@ const QUOTED_VALUE = String.raw`(?<=\\")(?:(?!\\")[^\n])+|(?<=")(?:[^"\\\n]|\\.)
 const AUTH_HEADER_PATTERN = new RegExp(
   String.raw`\b([\w-]*?(?:authorization|auth|cookies?)${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?(?:${AUTH_SCHEMES}[ \t]+)?)` +
     String.raw`(?!${AUTH_SCHEMES}[ \t]+${PLACEHOLDER})${KEPT_VALUE}` +
-    String.raw`(?:${QUOTED_VALUE}|(?=\S)(?<="[ \t]*${AUTH_SCHEMES}[ \t]+)(?:[^"\\\n]|\\.)+|(?=\S)(?<='[ \t]*${AUTH_SCHEMES}[ \t]+)(?:[^'\\\n]|\\.)+|(?!(?<==)>)[^\s"'\\][^\n]*)`,
+    String.raw`(?:${QUOTED_VALUE}|(?=\S)(?<="[ \t]*${AUTH_SCHEMES}[ \t]+)(?:[^"\\\n]|\\.)+|(?=\S)(?<='[ \t]*${AUTH_SCHEMES}[ \t]+)(?:[^'\\\n]|\\.)+|(?!%22)(?!(?<==)>)[^\s"'\\][^\n]*)`,
   'gi'
 )
 
 /**
  * A secret-named key, singular or plural, and its value: `password=...`,
  * `"tokens":"..."`, `api_key: ...`, `sig=...`, `nonce=...`,
- * `response="..."`, `SAMLResponse=...`, `password%3D...`. A `response` key
+ * `response="..."`, `SAMLResponse=...`, `password%3D...`. `code` is a secret
+ * key only after `?` or `&`, or later on a line that names OAuth or
+ * authorization (an authorization code), so `code: 'ECONNREFUSED'` stays;
+ * `key` only as a whole word before `=`. A `response` key
  * (any prefix) is a key after `=`, `=>` or `%3D`, or after `:` or `=>` with a
  * quoted value; after `:` and an unquoted value it is prose (`Unexpected
  * response: 502`) only when `response` stands alone; a prefixed one
@@ -243,7 +254,7 @@ const AUTH_HEADER_PATTERN = new RegExp(
  * they are (`KEPT_VALUE`), so `token: undefined` stays readable.
  */
 const KV_SECRET_PATTERN = new RegExp(
-  String.raw`\b([\w-]*?(?:pass(?:word|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|consumer[_-]?key|session|sid|credential|signature|sig|hmac|nonce|(?<=[\w-])response|response(?=s?${KEY_QUOTE}?\s*(?:=|%3D|:\s*${KEY_QUOTE}))|jwt|otp)s?${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?)` +
+  String.raw`\b((?:[\w-]*?(?:pass(?:word|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|consumer[_-]?key|auth(?:orization)?[_-]code|session|sid|credential|signature|sig|hmac|nonce|(?<=[\w-])response|response(?=s?${KEY_QUOTE}?\s*(?:=|%3D|:\s*${KEY_QUOTE}))|jwt|otp)s?|code(?<=[?&]code)|code(?<=(?:oauth|authoriz)[^\n]*code)|key(?=\s*=(?!>)))${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?)` +
     `${KEPT_VALUE}(?:${QUOTED_VALUE}|${ARRAY_VALUE}|${UNQUOTED_VALUE})`,
   'gi'
 )
@@ -386,7 +397,7 @@ function capped(value: string, wasCut: boolean): string {
  * syntax for type`, `invalid input value for enum`, `malformed ... literal:`
  * or `date/time field value out of range:`, the number in `value "n" is out of
  * range for type`, and the snippet in a V8 `is not valid JSON` error, become `"[value]"`; the userinfo of a URL
- * becomes `[credentials]@`; a URL's or path's query string becomes
+ * becomes `[credentials]@`; a URL's, path's or bare word's query string becomes
  * `?[query]` and its fragment, unless a line or heading anchor
  * (`isHarmlessFragment`), `#[fragment]`; the segment after `/reset/`,
  * `/verify/`, `/invite/` or `/accept/` becomes `[token]`; `Bearer <credential>` becomes
@@ -397,7 +408,8 @@ function capped(value: string, wasCut: boolean): string {
  * value, an array included, of a secret-named key, singular or plural
  * (`password`, `token`, `secret`, `api_key`, `access_key`, `private_key`,
  * `consumer_key`, `session`, `sid`, `credential`, `jwt`, `otp`,
- * `signature`, `sig`, `hmac`, `nonce`, `response`), become `[redacted]`; a JWT becomes `[jwt]`; a
+ * `signature`, `sig`, `hmac`, `nonce`, `response`; `code` after `?` or `&`
+ * or on an OAuth or authorization line; `key` before `=`), become `[redacted]`; a JWT becomes `[jwt]`; a
  * PostHog key (`phc_`, `phx_`, `phs_`) becomes `[posthog-key]`; an email
  * address (`EMAIL_PATTERN`: `@` written plainly, encoded or fullwidth, a
  * quoted local part, an IP-literal or single-label domain) becomes

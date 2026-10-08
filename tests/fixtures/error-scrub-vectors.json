@@ -252,7 +252,7 @@
   {
     "rule": "kv",
     "input": "Invalid URL reset-password?token=AbC123xyz",
-    "expected": "Invalid URL reset-password?token=[redacted]"
+    "expected": "Invalid URL reset-password?[query]"
   },
   {
     "rule": "kv",
@@ -1123,5 +1123,90 @@
     "rule": "kv",
     "input": "x-captcha-response: tok",
     "expected": "x-captcha-response: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "password%3AzqT9hunter2",
+    "expected": "password%3A[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "data=%7B%22password%22%3A%22zqT8hunter2%22%7D",
+    "expected": "data=%7B%22password%22%3A%22[redacted]%22%7D"
+  },
+  {
+    "rule": "kv",
+    "input": "password&#61;zqV2hunter2",
+    "expected": "password&#61;[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "password&#58; zqV2hunter2",
+    "expected": "password&#58; [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "password\\u003dzqV3hunter2",
+    "expected": "password\\u003d[redacted]"
+  },
+  {
+    "rule": "query",
+    "input": "callback?code=zqU3abc&state=x",
+    "expected": "callback?[query]"
+  },
+  {
+    "rule": "query",
+    "input": "Is it ready? Try again later",
+    "expected": "Is it ready? Try again later"
+  },
+  {
+    "rule": "kv",
+    "input": "state=xyz&code=zqT1abcDEF123",
+    "expected": "state=xyz&code=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "OAuth callback failed: code=zqT1abcDEF123",
+    "expected": "OAuth callback failed: code=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "authorization code: zqT1abcDEF123 expired",
+    "expected": "authorization code: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "authorization_code=zqT1abcDEF123",
+    "expected": "authorization_code=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "key=zqU9abc123",
+    "expected": "key=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "code: 'ECONNREFUSED'",
+    "expected": "code: 'ECONNREFUSED'"
+  },
+  {
+    "rule": "kv",
+    "input": "error code 23505",
+    "expected": "error code 23505"
+  },
+  {
+    "rule": "kv",
+    "input": "key: value missing",
+    "expected": "key: value missing"
+  },
+  {
+    "rule": "kv",
+    "input": "monkey=banana",
+    "expected": "monkey=banana"
+  },
+  {
+    "rule": "kv",
+    "input": "error code 500: the key was missing",
+    "expected": "error code 500: the key was missing"
   }
 ]
