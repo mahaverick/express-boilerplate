@@ -961,6 +961,8 @@ describe('invitations API', () => {
 
     it('404s POST /tenants/:slug/invitations/:id/resend for a non-member, leaving the invitation alone', async () => {
       const { tenant, invitationId, rawToken, tokens } = await outsiders()
+      // Past the resend cooldown, so only the tenant gate can refuse.
+      await backdateInvitationSend(invitationId)
       for (const token of tokens) {
         const response = await request(app)
           .post(`/api/v1/tenants/${tenant.slug}/invitations/${invitationId}/resend`)
