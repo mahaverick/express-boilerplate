@@ -64,3 +64,15 @@ export function frameLineIndexesOf(lines: string[], message: string | undefined)
   }
   return indexes
 }
+
+/**
+ * A stack's frame lines (`frameLineIndexesOf`), in order, without the
+ * message lines it starts with.
+ * @param stack - The stack.
+ * @param message - The error's message, when known.
+ * @returns The frame lines, possibly none.
+ */
+export function stackFrameLinesOf(stack: string, message: string | undefined): string[] {
+  const lines = stack.split('\n')
+  return frameLineIndexesOf(lines, message).map((index) => lines[index] ?? '')
+}

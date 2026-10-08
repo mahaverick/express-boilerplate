@@ -23,7 +23,7 @@ import {
 import { getEnv } from '@/configs/env.config'
 import { ERROR_CAUSE_DEPTH, ERROR_FRAME_LIMIT } from '@/constants/error-tracking.constants'
 import { isQueryError } from '@/errors/postgres-errors'
-import { frameLineIndexesOf } from '@/errors/stack-frames'
+import { stackFrameLinesOf } from '@/errors/stack-frames'
 import { currentAnalyticsContext } from '@/services/analytics/analytics-context.service'
 import {
   toPosthogBatchEvent,
@@ -134,10 +134,7 @@ function frameLinesOf(error: Error): string[] {
   const stack = readSafely<unknown>(() => error.stack, undefined)
   if (typeof stack !== 'string') return []
   const message = readSafely<unknown>(() => error.message, undefined)
-  const lines = stack.split('\n')
-  return frameLineIndexesOf(lines, typeof message === 'string' ? message : undefined).map(
-    (index) => lines[index] ?? ''
-  )
+  return stackFrameLinesOf(stack, typeof message === 'string' ? message : undefined)
 }
 
 /**
