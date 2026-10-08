@@ -361,15 +361,18 @@ export async function runFlagsSync(argv: readonly string[]): Promise<number> {
     const exitCode = driftedKeys > 0 ? EXIT_DRIFT : EXIT_OK
     if (isDryRun) {
       for (const entry of missing) process.stdout.write(`would create ${entry.key}\n`)
-      const present = FLAGS.length - missing.length
+      // Disjoint counts that add up to the registry: a drifted flag is not also present.
+      const present = FLAGS.length - missing.length - driftedKeys
       process.stdout.write(
         `Dry run: ${String(missing.length)} to create, ${String(present)} present, ${String(driftedKeys)} drifted.\n`
       )
       return exitCode
     }
     const created = await createMissing(missing, tenantIndex)
+    // A create that lost a race counts as present, beside the flags already in sync.
+    const present = FLAGS.length - created - driftedKeys
     process.stdout.write(
-      `Created ${String(created)}, present ${String(FLAGS.length - created)}, drifted ${String(driftedKeys)}.\n`
+      `Created ${String(created)}, present ${String(present)}, drifted ${String(driftedKeys)}.\n`
     )
     return exitCode
   } catch (error) {
