@@ -1,7 +1,8 @@
 /**
  * @file The cursor query field for keyset endpoints that reject a bad cursor:
  * a malformed cursor is a 400 through `parseBody`, not a silent first page.
- * Also the `sortAt` field the staff list cursors share.
+ * Also the `sortAt` field the staff list cursors share, and the instant field
+ * the audit and notification cursors share.
  */
 import { z } from 'zod'
 import { decodeCursor } from '@/utilities/cursor.utilities'

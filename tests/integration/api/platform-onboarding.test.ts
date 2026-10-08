@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto'
 import type { Response } from 'supertest'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
+import { encodeCursor } from '@/utilities/cursor.utilities'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import {
   addCompletion,
@@ -304,21 +305,18 @@ describe('GET /api/v1/platform/tenants/:id/onboarding', () => {
   })
 })
 
-/**
- * Encode a decoded cursor the way it travels: base64url JSON.
- * @param value - The decoded cursor.
- * @returns The cursor.
- */
-function b64(value: unknown): string {
-  return Buffer.from(JSON.stringify(value)).toString('base64url')
-}
-
 describe('out-of-range staff dates are a 400', () => {
   const ID = '01a1156d-00b7-75d4-887f-2dd37e110303'
 
   it.each([
-    ['/onboarding/tenants', { cursor: b64({ sortAt: '2026-13-45T25:61:61.000000Z', id: ID }) }],
-    ['/onboarding/tenants', { cursor: b64({ sortAt: '0000-01-01T00:00:00.000000Z', id: ID }) }],
+    [
+      '/onboarding/tenants',
+      { cursor: encodeCursor({ sortAt: '2026-13-45T25:61:61.000000Z', id: ID }) },
+    ],
+    [
+      '/onboarding/tenants',
+      { cursor: encodeCursor({ sortAt: '0000-01-01T00:00:00.000000Z', id: ID }) },
+    ],
   ])('GET %s %j', async (path, query) => {
     const { token } = await createTrackedStaff('viewer')
     const response = await request(app)

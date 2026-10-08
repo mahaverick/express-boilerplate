@@ -11,6 +11,7 @@ import { createApp } from '@/app'
 import { getEnv } from '@/configs/env.config'
 import { sql } from '@/services/database.service'
 import { TOKEN_MASK } from '@/services/platform-email.service'
+import { encodeCursor } from '@/utilities/cursor.utilities'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import {
   addAttempt,
@@ -518,23 +519,17 @@ describe('GET /api/v1/platform/email-suppressions', () => {
   })
 })
 
-/**
- * Encode a decoded cursor the way it travels: base64url JSON.
- * @param value - The decoded cursor.
- * @returns The cursor.
- */
-function b64(value: unknown): string {
-  return Buffer.from(JSON.stringify(value)).toString('base64url')
-}
-
 describe('out-of-range staff dates are a 400', () => {
   const ID = '01a1156d-00b7-75d4-887f-2dd37e110303'
 
   it.each([
     ['/emails', { from: '9999-12-31', to: '9999-12-31' }],
     ['/emails', { from: '0000-01-01' }],
-    ['/emails', { cursor: b64({ sortAt: '9999-99-99T99:99:99.999999Z', id: ID }) }],
-    ['/email-suppressions', { cursor: b64({ sortAt: '2026-02-30T00:00:00.000000Z', id: ID }) }],
+    ['/emails', { cursor: encodeCursor({ sortAt: '9999-99-99T99:99:99.999999Z', id: ID }) }],
+    [
+      '/email-suppressions',
+      { cursor: encodeCursor({ sortAt: '2026-02-30T00:00:00.000000Z', id: ID }) },
+    ],
   ])('GET %s %j', async (path, query) => {
     const { token } = await createTrackedStaff('viewer')
     const response = await request(app)
@@ -553,7 +548,7 @@ describe('out-of-range staff dates are a 400', () => {
     expect(range.status).toBe(200)
     const cursor = await request(app)
       .get('/api/v1/platform/email-suppressions')
-      .query({ cursor: b64({ sortAt: '2024-02-29T23:59:59.999999Z', id: ID }) })
+      .query({ cursor: encodeCursor({ sortAt: '2024-02-29T23:59:59.999999Z', id: ID }) })
       .set('Authorization', `Bearer ${token}`)
     expect(cursor.status).toBe(200)
   })

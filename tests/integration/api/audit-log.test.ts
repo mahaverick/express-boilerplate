@@ -15,6 +15,7 @@ import { UserMembershipRepository } from '@/repositories/user-membership.reposit
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { signAccessToken } from '@/services/session.service'
+import { encodeCursor } from '@/utilities/cursor.utilities'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { makeStaff, platformTenant } from '../../helpers/platform-staff'
 import { request } from '../../helpers/request'
@@ -69,16 +70,7 @@ function withoutRequestId(body: unknown): Record<string, unknown> {
   return copy
 }
 
-/**
- * A cursor as it travels: base64url JSON.
- * @param value - The decoded cursor.
- * @returns The cursor.
- */
-function b64(value: unknown): string {
-  return Buffer.from(JSON.stringify(value)).toString('base64url')
-}
-
-const YEAR_ZERO_CURSOR = b64({ occurredAt: '0000-01-01T00:00:00.000Z', id: randomUUID() })
+const YEAR_ZERO_CURSOR = encodeCursor({ occurredAt: '0000-01-01T00:00:00.000Z', id: randomUUID() })
 
 function readTenantLog(slug: string, token: string, query: Record<string, string> = {}) {
   return request(app)

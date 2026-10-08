@@ -25,12 +25,15 @@ describe('sortAtField', () => {
 })
 
 describe('isoInstantField', () => {
-  it.each(['0001-01-01T00:00:00.000Z', '2026-10-07T12:34:56.123Z', '9999-12-31T23:59:59.999Z'])(
-    'accepts %s',
-    (value) => {
-      expect(isoInstantField.safeParse(value).success).toBe(true)
-    }
-  )
+  it.each([
+    '0001-01-01T00:00:00.000Z',
+    '2026-10-07T12:34:56.123Z',
+    '2026-10-07T12:34:56.123456789Z',
+    '9999-12-31T23:59:59.999Z',
+    '9999-12-31T23:59:59.999999999Z',
+  ])('accepts %s', (value) => {
+    expect(isoInstantField.safeParse(value).success).toBe(true)
+  })
 
   it.each([
     '0000-01-01T00:00:00.000Z',
