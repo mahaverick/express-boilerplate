@@ -205,9 +205,10 @@ const UNQUOTED_VALUE = String.raw`(?<=[:=>]\s*)(?!(?<==)>)[^\s"'\\,;&})\]](?:[^\
 
 /**
  * A quoted value: inside an escaped quote, up to the next escaped quote;
- * inside a plain quote, up to the closing one, escaped quotes included.
+ * inside a plain quote, up to the quote that opened it (the other quote
+ * character is part of the value), escaped quotes included.
  */
-const QUOTED_VALUE = String.raw`(?<=\\")(?:(?!\\")[^\n])+|(?<=["'])(?:[^"'\\\n]|\\.)+`
+const QUOTED_VALUE = String.raw`(?<=\\")(?:(?!\\")[^\n])+|(?<=")(?:[^"\\\n]|\\.)+|(?<=')(?:[^'\\\n]|\\.)+`
 
 /**
  * A header-valued key, Authorization (`authorization`, `auth`,
@@ -221,7 +222,7 @@ const QUOTED_VALUE = String.raw`(?<=\\")(?:(?!\\")[^\n])+|(?<=["'])(?:[^"'\\\n]|
 const AUTH_HEADER_PATTERN = new RegExp(
   String.raw`\b([\w-]*?(?:authorization|auth|cookies?)${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?(?:${AUTH_SCHEMES}[ \t]+)?)` +
     String.raw`(?!${AUTH_SCHEMES}[ \t]+${PLACEHOLDER})${KEPT_VALUE}` +
-    String.raw`(?:${QUOTED_VALUE}|(?<=["'][ \t]*${AUTH_SCHEMES}[ \t]+)(?=\S)(?:[^"'\\\n]|\\.)+|(?!(?<==)>)[^\s"'\\][^\n]*)`,
+    String.raw`(?:${QUOTED_VALUE}|(?=\S)(?<="[ \t]*${AUTH_SCHEMES}[ \t]+)(?:[^"\\\n]|\\.)+|(?=\S)(?<='[ \t]*${AUTH_SCHEMES}[ \t]+)(?:[^'\\\n]|\\.)+|(?!(?<==)>)[^\s"'\\][^\n]*)`,
   'gi'
 )
 

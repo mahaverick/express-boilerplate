@@ -1013,5 +1013,15 @@
     "rule": "kv",
     "input": "password=>>zqS3V",
     "expected": "password=>[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "{ authorization: 'Digest username=\"jane\", realm=\"r\", uri=\"/x\", response=\"abc\"' }",
+    "expected": "{ authorization: 'Digest [redacted]' }"
+  },
+  {
+    "rule": "kv",
+    "input": "{ cookie: 'theme=\"dark\"; sid2=zqS4abc' }",
+    "expected": "{ cookie: '[redacted]' }"
   }
 ]

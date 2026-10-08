@@ -365,3 +365,26 @@ describe('scrubText on the shapes it once let through', () => {
     expect(scrubText(once)).toBe(once)
   })
 })
+
+describe('scrubText on single-quoted header values (util.inspect)', () => {
+  it.each([
+    [
+      'Digest parameters',
+      `{ authorization: 'Digest username="jane", realm="r", uri="/x", response="abc"' }`,
+      ['jane', 'realm', '/x', 'abc'],
+    ],
+    [
+      'OAuth parameters',
+      `{ authorization: 'OAuth oauth_consumer_key="ck123", oauth_token="tok456"' }`,
+      ['ck123', 'tok456'],
+    ],
+    [
+      'a cookie list with a quoted pair',
+      `{ cookie: 'theme="dark"; sid2=zqS4abc' }`,
+      ['dark', 'zqS4abc'],
+    ],
+  ])('%s: no inner value survives', (_shape, input, secrets) => {
+    const scrubbed = scrubText(input)
+    for (const secret of secrets) expect(scrubbed).not.toContain(secret)
+  })
+})
