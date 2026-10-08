@@ -213,7 +213,7 @@ async function sendToSlack(webhookUrl: string, payload: Record<string, unknown>)
 }
 
 /**
-An ISO 8601 UTC instant, the only form of `timestamp` sent to Slack.
+ * An ISO 8601 UTC instant, the only form of `timestamp` sent to Slack.
  */
 const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/
 
@@ -248,9 +248,10 @@ function scrubbedStack(stack: string, message: string | undefined): string {
 
 /**
  * Build the Slack Block Kit payload for one log record. Every text taken
- * from the record (message, source, request id, stack) and the time is scrubbed with
+ * from the record (message, source, request id, stack) is scrubbed with
  * the error tracker's `scrubText` first: the channel is a third party, as
- * PostHog is.
+ * PostHog is. The time is not scrubbed but validated: it is sent only as an
+ * ISO instant, else replaced by the current time.
  * @param info - The parsed JSON log record.
  * @returns The webhook body.
  */
@@ -328,7 +329,7 @@ const SLACK_SCRUB_FAILED_PAYLOAD = {
 }
 
 /**
-Error names printed by name when a scrub fails; any other name could carry data.
+ * Error names printed by name when a scrub fails; any other name could carry data.
  */
 const SAFE_ERROR_NAMES = new Set(['Error', 'TypeError', 'RangeError', 'SyntaxError'])
 
