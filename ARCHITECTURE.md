@@ -160,8 +160,9 @@ password hashing, user-enumeration resistance and rate limiting.
 **Authenticated routes** sit behind `requireAuth`
 (`src/middlewares/auth.middleware.ts`). The profile, notification, tenant and
 platform routers mount it once with `router.use(requireAuth)`, so a route added
-later inherits the gate. `change-password`, `reauthenticate`, `providers` and
-`POST /invitations/accept` mount it per route. `requireAuth` verifies the
+later inherits the gate. `change-password`, `sessions/revoke-others`,
+`reauthenticate`, `providers` and `POST /invitations/accept` mount it per
+route. `requireAuth` verifies the
 bearer access token (`verifyAccessToken`), refuses a token whose session is on
 the Redis denylist (`isSessionDenied`), then reloads the user by id. The reload
 costs one database read per authenticated request; in exchange, a disabled or
@@ -172,7 +173,8 @@ expires.
 access token, since it has often expired by the time either is called. Both
 read the refresh-token cookie off the raw `Cookie` header. There is no
 `cookie-parser`: the names are known in advance (`refreshCookieSpec`, plus the
-legacy `refreshToken`; see SECURITY.md, "Cookies").
+legacy `refreshToken`; see SECURITY.md, "Cookies"). Both refuse a disallowed
+`Origin` 403 (`requireAllowedOriginWhenPresent`) before their limiters.
 
 **The repository layer** (`src/repositories/`) is a thin layer over
 `src/database/models/`. `BaseRepository` owns soft-delete filtering,
