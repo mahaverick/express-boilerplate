@@ -207,3 +207,26 @@ describe('scrubText on fragments', () => {
     }
   )
 })
+
+describe('scrubText on an address with no TLD before punctuation, and on package refs', () => {
+  it.each([
+    'invite failed for jane@localhost: smtp down',
+    'invite failed for jane@intranet!',
+    'to=jane@localhost&x=1',
+    'jane@localhost?x=1',
+    'jane@corp/x',
+  ])('scrubs the address in %s', (input) => {
+    expect(scrubText(input)).not.toContain('jane')
+  })
+
+  it.each([
+    'react@canary',
+    'lodash@latest',
+    'vitest@next',
+    'actions/checkout@v4',
+    'actions/setup-node@main',
+    'node@sha256',
+  ])('keeps the package ref %s', (input) => {
+    expect(scrubText(input)).toBe(input)
+  })
+})

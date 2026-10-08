@@ -673,5 +673,45 @@
     "rule": "fragment",
     "input": "https://app.example.com/x#abc123xyz",
     "expected": "https://app.example.com/x#[fragment]"
+  },
+  {
+    "rule": "email",
+    "input": "invite failed for jane@localhost: smtp down",
+    "expected": "invite failed for [email]: smtp down"
+  },
+  {
+    "rule": "email",
+    "input": "invite failed for jane@intranet!",
+    "expected": "invite failed for [email]!"
+  },
+  {
+    "rule": "email",
+    "input": "to=jane@localhost&x=1",
+    "expected": "to=[email]&x=1"
+  },
+  {
+    "rule": "email",
+    "input": "jane@localhost?x=1",
+    "expected": "[email]?x=1"
+  },
+  {
+    "rule": "email",
+    "input": "jane@corp/x",
+    "expected": "[email]/x"
+  },
+  {
+    "rule": "email",
+    "input": "install react@canary failed",
+    "expected": "install react@canary failed"
+  },
+  {
+    "rule": "email",
+    "input": "uses actions/checkout@v4 and node@sha256",
+    "expected": "uses actions/checkout@v4 and node@sha256"
+  },
+  {
+    "rule": "email",
+    "input": "pin lodash@latest and actions/setup-node@main",
+    "expected": "pin lodash@latest and actions/setup-node@main"
   }
 ]

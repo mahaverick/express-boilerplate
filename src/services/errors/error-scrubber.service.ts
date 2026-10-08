@@ -157,13 +157,15 @@ const POSTHOG_KEY_PATTERN = /\bph[cxs]_\w+/g
  * as `%40` or `%2540`, or as a fullwidth `＠` or small `﹫`; the domain is a
  * dotted name ending in a letter label, or an IP literal (`[192.168.0.1]`,
  * `[IPv6:…]`). After a plain `@`, a single label that starts with a letter
- * and ends the word (`jane@localhost`) is an address too; a label that
- * starts with a digit is not, so a package version (`react-dom@19.0.0`)
- * is kept.
+ * and ends the word (`jane@localhost`, also before `: ! ? & /`) is an
+ * address too; a label that starts with a digit is not, so a package
+ * version (`react-dom@19.0.0`) is kept, and neither is a package or action
+ * ref (`react@canary`, `actions/checkout@v4`, `node@sha256`). The cost: a
+ * host named like one of those refs (`jane@main`) is not scrubbed.
  */
 const EMAIL_PATTERN =
   // eslint-disable-next-line sonarjs/regex-complexity, sonarjs/super-linear-regex -- one pattern per rule keeps the rule list the spec; scrubText scans at most SCAN_MAX characters
-  /(?:"[^"\n]{1,64}"|[\p{L}\p{N}_.%+-]+)(?:(?:@|%40|%2540|＠|﹫)(?:\[(?:\d{1,3}(?:\.\d{1,3}){3}|IPv6:[\dA-Fa-f:.]+)\]|[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.\p{L}{2,})|@\p{L}[\p{L}\p{N}-]*(?=$|[\s"'<>,;)\]}]|\.(?:$|\s)))/gu
+  /(?:"[^"\n]{1,64}"|[\p{L}\p{N}_.%+-]+)(?:(?:@|%40|%2540|＠|﹫)(?:\[(?:\d{1,3}(?:\.\d{1,3}){3}|IPv6:[\dA-Fa-f:.]+)\]|[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.\p{L}{2,})|@(?!(?:latest|next|canary|beta|alpha|rc|main|master|sha\d+|v\d[\w.-]*)(?![\p{L}\p{N}-]))\p{L}[\p{L}\p{N}-]*(?=$|[\s"'<>,;:!?&/)\]}]|\.(?:$|\s)))/gu
 
 /**
  * A run of 32 or more hex digits: a hash, a token or a key. It is delimited
