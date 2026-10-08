@@ -44,39 +44,6 @@ export function encodeNotificationCursor(cursor: NotificationCursor): string {
 }
 
 /**
- * Decode a cursor string produced by `encodeNotificationCursor` back into
- * the `{ createdAt, id }` pair `NotificationRepository.list` accepts as
- * `options.cursor`.
- *
- * Never throws: the cursor is client-supplied, and a malformed or tampered one
- * decodes as no cursor (the first page), not a 500.
- * @param raw - The cursor string, as returned by `encodeNotificationCursor` or supplied by a client.
- * @returns The decoded `{ createdAt, id }` pair, or undefined when `raw` is not a validly-encoded cursor.
- */
-export function decodeNotificationCursor(raw: string): NotificationCursor | undefined {
-  try {
-    const decoded: unknown = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'))
-    if (
-      typeof decoded !== 'object' ||
-      decoded === null ||
-      !('createdAt' in decoded) ||
-      !('id' in decoded) ||
-      typeof decoded.createdAt !== 'string' ||
-      typeof decoded.id !== 'string'
-    ) {
-      return undefined
-    }
-
-    const createdAt = new Date(decoded.createdAt)
-    if (Number.isNaN(createdAt.getTime())) return undefined
-
-    return { createdAt, id: decoded.id }
-  } catch {
-    return undefined
-  }
-}
-
-/**
  * Query access to the `notifications` table: create a notification,
  * paginate a user's inbox, look up or mutate a single notification scoped
  * to its owner, and bulk mark-as-read. Every lookup or mutation that targets

@@ -1,8 +1,7 @@
 /**
- * @file Request shapes for notification.routes.ts: the list query, the `:id`
- * path parameter and the preferences body, each parsed with `parseBody`.
- * Cursor decoding is not here: notification.service.ts uses the repository's
- * `decodeNotificationCursor`, the one place that knows the format.
+ * @file Request shapes for notification.routes.ts: the list query (its cursor
+ * decoded here; a malformed one is a 400), the `:id` path parameter and the
+ * preferences body, each parsed with `parseBody`.
  */
 import { z } from 'zod'
 import {
@@ -11,10 +10,19 @@ import {
   NOTIFICATION_TYPES,
   STAFF_ONLY_NOTIFICATION_TYPES,
 } from '@/constants/notification.constants'
+import { cursorField } from '@/validators/cursor.validators'
+
+/**
+ * The notifications cursor's decoded shape: the last row's `createdAt` (as
+ * `encodeNotificationCursor` writes it) and `id`.
+ */
+export const notificationCursorSchema = z
+  .object({ createdAt: z.iso.datetime(), id: z.uuid() })
+  .strict()
 
 /**
  * `GET /api/v1/notifications` query string: an optional page size (capped,
- * defaulted) and an optional opaque cursor.
+ * defaulted) and an optional cursor, decoded.
  */
 export const listNotificationsSchema = z.object({
   limit: z.coerce
@@ -23,7 +31,7 @@ export const listNotificationsSchema = z.object({
     .min(1)
     .max(MAX_NOTIFICATION_PAGE_SIZE, `limit must be at most ${MAX_NOTIFICATION_PAGE_SIZE}.`)
     .default(DEFAULT_NOTIFICATION_PAGE_SIZE),
-  cursor: z.string().optional(),
+  cursor: cursorField(notificationCursorSchema).optional(),
 })
 
 /**

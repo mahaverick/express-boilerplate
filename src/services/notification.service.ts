@@ -14,10 +14,7 @@ import {
   NotificationPreferenceRepository,
   type PreferenceMatrix,
 } from '@/repositories/notification-preference.repository'
-import {
-  decodeNotificationCursor,
-  NotificationRepository,
-} from '@/repositories/notification.repository'
+import { NotificationRepository } from '@/repositories/notification.repository'
 import { getPlatformMembership } from '@/services/platform.service'
 import type { UpdatePreferencesInput } from '@/validators/notification.validators'
 
@@ -25,25 +22,25 @@ const notificationRepository = new NotificationRepository()
 const notificationPreferenceRepository = new NotificationPreferenceRepository()
 
 /**
- * One page of the user's notifications, newest first. An invalid or stale
- * cursor reads as no cursor and returns the first page, never a 400.
+ * One page of the user's notifications, newest first. The cursor arrives
+ * decoded and validated (`notificationCursorSchema`); a malformed one was
+ * already a 400.
  * @param userId - The owner.
  * @param options - The page request.
  * @param options.limit - The page size.
- * @param options.cursor - The opaque cursor from the previous page, if any.
+ * @param options.cursor - The previous page's last row, if any.
  * @returns The page, and `nextCursor` when more rows remain.
  */
 export async function listNotifications(
   userId: string,
-  options: { limit: number; cursor?: string | undefined }
+  options: { limit: number; cursor?: { createdAt: string; id: string } | undefined }
 ): Promise<{ notifications: Notification[]; nextCursor?: string }> {
-  const decodedCursor =
-    options.cursor === undefined ? undefined : decodeNotificationCursor(options.cursor)
+  const { limit, cursor } = options
   return notificationRepository.list(
     userId,
-    decodedCursor === undefined
-      ? { limit: options.limit }
-      : { limit: options.limit, cursor: decodedCursor }
+    cursor === undefined
+      ? { limit }
+      : { limit, cursor: { createdAt: new Date(cursor.createdAt), id: cursor.id } }
   )
 }
 

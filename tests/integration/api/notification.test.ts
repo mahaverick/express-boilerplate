@@ -72,6 +72,17 @@ function envelopeOf<TData>(response: Response): ApiEnvelope<TData> {
 }
 
 /**
+ * Encode a value the way a cursor travels: base64url JSON, or a raw string.
+ * @param value - The decoded cursor, or a string to encode as is.
+ * @returns The cursor.
+ */
+function b64(value: unknown): string {
+  return Buffer.from(typeof value === 'string' ? value : JSON.stringify(value)).toString(
+    'base64url'
+  )
+}
+
+/**
  * A disposable email, unique to one test run.
  * @returns An email guaranteed unique to this call.
  */
@@ -180,7 +191,7 @@ describe('/api/v1/notifications', () => {
       expect(seenIds).toEqual(new Set(seeded.map((n) => n.id)))
     })
 
-    it('treats a garbage cursor as no cursor, returning the first page rather than an error', async () => {
+    it('answers 400 to a garbage cursor rather than serving the first page', async () => {
       const { user, token } = await createAuthenticatedUser()
       await seedNotification(user.id)
 
@@ -188,8 +199,28 @@ describe('/api/v1/notifications', () => {
         .get('/api/v1/notifications?cursor=not-a-real-cursor')
         .set('Authorization', `Bearer ${token}`)
 
-      expect(response.status).toBe(200)
-      expect(envelopeOf<NotificationListBody>(response).data?.notifications).toHaveLength(1)
+      expect(response.status).toBe(400)
+      expect(envelopeOf(response).errors).toEqual({ cursor: ['cursor is invalid.'] })
+    })
+
+    describe('a bad notifications cursor is a 400', () => {
+      const ID = '01a1156d-00b7-75d4-887f-2dd37e110303'
+
+      it.each([
+        ['not base64 JSON', '!!!notbase64'],
+        ['JSON that is not an object', b64('hello')],
+        ['a non-uuid id', b64({ createdAt: '2026-10-07T00:00:00Z', id: 'not-a-uuid' })],
+        ['a NUL in the id', b64({ createdAt: '2026-10-07T00:00:00Z', id: 'a\u{0}b' })],
+        ['a year Postgres cannot hold', b64({ createdAt: '+275760-09-13T00:00:00Z', id: ID })],
+        ['a negative year', b64({ createdAt: '-271821-04-20T00:00:00Z', id: ID })],
+      ])('%s', async (_label, cursor) => {
+        const { token } = await createAuthenticatedUser()
+        const response = await request(app)
+          .get('/api/v1/notifications')
+          .query({ cursor })
+          .set('Authorization', `Bearer ${token}`)
+        expect(response.status).toBe(400)
+      })
     })
 
     it('never returns another user’s notifications', async () => {
