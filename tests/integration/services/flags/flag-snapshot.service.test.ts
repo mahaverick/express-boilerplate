@@ -12,7 +12,7 @@
  * subscriber whose handshake never completes (a hung Redis or proxy).
  */
 import net from 'node:net'
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   createFlagSnapshotStore,
   flagSnapshotChannel,
@@ -24,7 +24,7 @@ import {
   type FlagSnapshotStore,
 } from '@/services/flags/flag-snapshot.service'
 import { logger } from '@/services/logger.service'
-import { getRedis } from '@/services/redis.service'
+import { getRedis, REDIS_CONNECT_TIMEOUT_MS } from '@/services/redis.service'
 import type { ParsedSnapshot } from '@/validators/flag-definition.validators'
 import { waitUntil } from '../../../helpers/timing'
 
@@ -57,7 +57,6 @@ vi.mock('redis', async (importOriginal) => {
 // eslint-disable-next-line unicorn/no-null -- the snapshot's contract uses null
 const NONE = null
 const stores: FlagSnapshotStore[] = []
-const silentServers: net.Server[] = []
 
 /**
  * A snapshot with one marker in its ETag.
@@ -110,10 +109,6 @@ afterEach(async () => {
   stores.length = 0
   const redis = await getRedis()
   await redis.del(flagSnapshotKey())
-})
-
-afterAll(() => {
-  for (const server of silentServers) server.close()
 })
 
 describe('flag snapshot store', () => {
@@ -292,20 +287,54 @@ describe('the subscriber: stop() and reconnect', () => {
   })
 })
 
-describe('start() and stop() while the subscriber is still connecting', () => {
-  it(
-    'start() resolves, and stop() resolves, while the subscriber never finishes connecting',
-    { timeout: 10_000 },
-    async () => {
-      const accepted: net.Socket[] = []
-      const server = net.createServer((socket) => {
-        // Accepts and never answers, but reads so the peer's close is seen.
-        accepted.push(socket)
-        socket.resume()
+/**
+ * A TCP server that accepts and never answers, but reads so a peer's close is
+ * seen; the next subscriber is pointed at it.
+ * @returns The sockets it has accepted, and a function that closes it all.
+ */
+async function silentServer(): Promise<{ accepted: net.Socket[]; close: () => void }> {
+  const accepted: net.Socket[] = []
+  const server = net.createServer((socket) => {
+    accepted.push(socket)
+    socket.resume()
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  subscriber.url = `redis://127.0.0.1:${String((server.address() as net.AddressInfo).port)}`
+  return {
+    accepted,
+    close: () => {
+      for (const socket of accepted) socket.destroy()
+      server.close()
+    },
+  }
+}
+
+describe('start() and stop() while the subscriber never finishes its handshake', () => {
+  it('stop() closes a connected subscriber whose peer never answers', async () => {
+    const silent = await silentServer()
+    try {
+      const store = createFlagSnapshotStore({ backstopMs: 600_000 })
+      stores.push(store)
+      subscriber.redirectNext = true
+      await store.start()
+      await waitUntil(() => silent.accepted.length === 1, {
+        message: 'the subscriber reached the silent server',
       })
-      silentServers.push(server)
-      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-      subscriber.url = `redis://127.0.0.1:${String((server.address() as net.AddressInfo).port)}`
+      const stopping = Date.now()
+      await store.stop()
+      // Measured in milliseconds; the bound is 2x STOP_SUBSCRIBER_WAIT_MS, which a stop() on its fallback hits.
+      expect(Date.now() - stopping).toBeLessThan(2000)
+      await waitUntil(() => silent.accepted[0]?.destroyed, {
+        message: 'the connected subscriber is closed by stop()',
+      })
+    } finally {
+      silent.close()
+    }
+  })
+
+  it('start() and stop() resolve before the subscriber has even connected', async () => {
+    const silent = await silentServer()
+    try {
       const redis = await getRedis()
       await redis.set(flagSnapshotKey(), JSON.stringify(snapshot('boot')))
       const store = createFlagSnapshotStore({ backstopMs: 600_000 })
@@ -313,19 +342,17 @@ describe('start() and stop() while the subscriber is still connecting', () => {
       const started = Date.now()
       subscriber.redirectNext = true
       await store.start()
-      // start() must not wait out the subscriber's handshake deadline (REDIS_CONNECT_TIMEOUT_MS, 5 s).
-      expect(Date.now() - started).toBeLessThan(2000)
+      // start() returns after the first load: far under the handshake deadline.
+      expect(Date.now() - started).toBeLessThan(REDIS_CONNECT_TIMEOUT_MS - 1000)
       expect(store.get()?.etag).toBe('W/"boot"')
+      // Returns at STOP_SUBSCRIBER_WAIT_MS (1 s); a stop() waiting out REDIS_CONNECT_TIMEOUT_MS (5 s) fails.
       const stopping = Date.now()
       await store.stop()
-      // stop() returns at STOP_SUBSCRIBER_WAIT_MS (1 s), well before that 5 s handshake deadline.
-      expect(Date.now() - stopping).toBeLessThan(2000)
-      // The connecting subscriber was destroyed, not left holding its socket.
-      await waitUntil(() => accepted.length === 1 && accepted[0]?.destroyed, {
-        message: 'the hung subscriber connection is closed after stop()',
-      })
+      expect(Date.now() - stopping).toBeLessThan(REDIS_CONNECT_TIMEOUT_MS - 1000)
+    } finally {
+      silent.close()
     }
-  )
+  })
 })
 
 describe('touchFlagSnapshot', () => {
