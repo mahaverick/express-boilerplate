@@ -98,10 +98,10 @@ ends the whole session, the caller's chain included. Ending the sibling does not
 cost the caller's chain its grace window: only a kill recorded at or after the
 replayed token's rotation refuses grace (`isSessionKilled`), and the sibling's
 revoke is older than any later rotation of the caller's chain. A kill's
-`revoked_at` is stamped when its revoke statement starts, after it holds the
-user row (`statement_timestamp()`, never the transaction's `now()`), so a kill
-that began before a racing rotation's claim still reads as later than it and
-still refuses grace. The one exception is a replay, within its 10 s window, of a
+`revoked_at` is stamped at the moment of the write (`clock_timestamp()`, never
+the transaction's `now()`), so it is never earlier than a claim that committed
+before it: a kill that began before a racing rotation's claim still reads as
+later than it and still refuses grace. The one exception is a replay, within its 10 s window, of a
 token rotated just before that revoke: it is refused as reuse. The caller can
 also be the thief: whoever holds the sibling and its access token is a caller of
 the same session, and a `revoke-others` with the sibling's cookie spares the

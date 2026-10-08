@@ -21,20 +21,19 @@ import {
 import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
 
 /**
- * The `revoked_at` every bulk revoker stamps: `statement_timestamp()`, the
- * start of the revoking statement, never `now()`, the start of its
- * transaction. A locked kill begins its transaction, then waits for the user
- * row FOR NO KEY UPDATE, which a rotation holding it FOR SHARE releases only
- * when it commits. A rotation can therefore claim (`consumed_at`, its own
- * transaction start) after the kill's transaction began. The stamp must be
- * taken after the user-row lock, so that it is never earlier than a claim
- * that committed before the kill: `isSessionKilled` counts only markers
+ * The `revoked_at` every bulk revoker stamps: `clock_timestamp()`, the moment
+ * each row is written, never `now()`, the start of the revoking transaction.
+ * A kill can begin its transaction before a rotation claims (`consumed_at`,
+ * the rotation's own transaction start) and still revoke the row that
+ * rotation committed. Stamped at the moment of the write, a marker is never
+ * earlier than a claim that committed before it, whether the revoker holds
+ * the user-row lock or not: `isSessionKilled` counts only markers at or
  * after the replayed row's consumption, and a `now()` stamp would hide such
  * a kill and let the grace window revive the session it ended.
  * @returns The SQL expression for the stamp.
  */
 function killStamp(): SQL {
-  return sql`statement_timestamp()`
+  return sql`clock_timestamp()`
 }
 
 /**
@@ -163,11 +162,10 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
    * (logout, reuse, reset, an account claim, a staff revoke) at or after the
    * presented row's own `consumed_at`.
    *
-   * The bulk revokers stamp `killStamp()`, the start of the revoking
-   * statement, which runs after its transaction holds the user row FOR NO
-   * KEY UPDATE. A rotation holds that row FOR SHARE from before its claim to
-   * its commit, so a kill that reaches the presented chain is stamped after
-   * that chain's claim committed, and so after its `consumed_at`. A marker
+   * The bulk revokers stamp `killStamp()`, the moment each row is written.
+   * A kill that reaches the presented chain revokes a row the chain's claim
+   * committed, so its stamp is never earlier than that claim's
+   * `consumed_at`, however early the kill's transaction began. A marker
    * older than the consumption is a revoke that spared this chain: a sibling
    * ended by a password change or sign-out of other sessions
    * (`revokeAllForUserExceptToken`). Compared on Postgres's own timestamps,
@@ -221,7 +219,7 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
     )
     const revoked = await executor
       .update(userTokenModel)
-      // Stamped after the user-row lock, never now(): see killStamp.
+      // Stamped at the moment of the write, never now(): see killStamp.
       .set(this.touched({ revokedAt: killStamp() }))
       .where(inArray(userTokenModel.id, locked))
       .returning({ id: userTokenModel.id })
@@ -266,7 +264,7 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
     )
     const revoked = await executor
       .update(userTokenModel)
-      // Stamped after the user-row lock, never now(): see killStamp.
+      // Stamped at the moment of the write, never now(): see killStamp.
       .set(this.touched({ revokedAt: killStamp() }))
       .where(inArray(userTokenModel.id, locked))
       .returning({ sessionId: userTokenModel.sessionId })
@@ -313,7 +311,7 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
     )
     const revoked = await executor
       .update(userTokenModel)
-      // Stamped after the user-row lock, never now(): see killStamp.
+      // Stamped at the moment of the write, never now(): see killStamp.
       .set(this.touched({ revokedAt: killStamp() }))
       .where(inArray(userTokenModel.id, locked))
       .returning({ sessionId: userTokenModel.sessionId })
@@ -362,7 +360,7 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
     )
     const revoked = await executor
       .update(userTokenModel)
-      // Stamped after the user-row lock, never now(): see killStamp.
+      // Stamped at the moment of the write, never now(): see killStamp.
       .set(this.touched({ revokedAt: killStamp() }))
       .where(inArray(userTokenModel.id, locked))
       .returning({ sessionId: userTokenModel.sessionId })
@@ -435,7 +433,7 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
     )
     await executor
       .update(userTokenModel)
-      // Stamped after the user-row lock, never now(): see killStamp.
+      // Stamped at the moment of the write, never now(): see killStamp.
       .set(this.touched({ revokedAt: killStamp() }))
       .where(inArray(userTokenModel.id, locked))
   }
