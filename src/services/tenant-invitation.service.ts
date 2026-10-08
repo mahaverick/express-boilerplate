@@ -33,7 +33,7 @@ import { emitDomainEvent } from '@/services/domain-events.service'
 import { spendInvitationRecipientBudget } from '@/services/invitation-recipient-limit.service'
 import { logger } from '@/services/logger.service'
 import { hashToken } from '@/services/session.service'
-import { lockActorRole } from '@/services/tenant-membership.service'
+import { assertStaffReasonGiven, lockActorRole } from '@/services/tenant-membership.service'
 import { buildInvitationAcceptUrl, frontendUrl } from '@/services/verification.service'
 import { TENANT_INVITATION_TEMPLATE_KEY } from '@/templates/email/tenant-invitation.template'
 import type { Actor, StaffReasonOption } from '@/types/actor'
@@ -363,7 +363,7 @@ async function tenantForMessages(
  * @param email - The address to invite, in any case.
  * @param role - The role offered.
  * @param options - `reason` when staff invite through platform access, recorded in the audit entry.
- * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access, or when the tenant is gone; 403 when the actor is now below admin or may not grant `role`; 409 `already_member` when the address belongs to a member; 429 `RATE_LIMITED` when the address has had its day's invitation mail; 409 `invitation_conflict` from a racing duplicate invite.
+ * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access, or when the tenant is gone; 403 when the actor is now below admin or may not grant `role`; 409 `already_member` when the address belongs to a member; 429 `RATE_LIMITED` when the address has had its day's invitation mail; 409 `invitation_conflict` from a racing duplicate invite; 400 `REASON_REQUIRED` when the actor now reaches the tenant through platform access and gave no reason.
  */
 export async function invite(
   actor: Actor,
@@ -377,6 +377,7 @@ export async function invite(
 
   const { context, access } = await db.transaction(async (tx) => {
     const { role: actorRole, access } = await lockActorRole(actor, tenantId, 'admin', tx)
+    assertStaffReasonGiven(access, options)
     if (!canActorGrantRole(actorRole, role)) throw new HttpError(GRANT_REFUSED_MESSAGE, 403)
 
     const invitee = await userRepository.findByEmail(normalizedEmail, {}, tx)
@@ -564,7 +565,7 @@ export async function listPending(tenantId: string): Promise<PendingInvitationSu
  * @param tenantId - The tenant it must belong to.
  * @param invitationId - The invitation.
  * @param options - `resentFromId` when a staff resend re-runs this for an earlier message; `reason` when staff resend through platform access.
- * @throws {HttpError} 404 when the tenant is gone, before anything is written; 404 `Tenant not found` when the actor no longer has access; 403 when the actor is now below admin; 404 `invitation_not_found` when it is not pending in this tenant; 403 when the actor may not grant its role; 429 `invitation_resend_cooldown` inside the cooldown; 429 `RATE_LIMITED` when the address has had its day's invitation mail.
+ * @throws {HttpError} 404 when the tenant is gone, before anything is written; 404 `Tenant not found` when the actor no longer has access; 403 when the actor is now below admin; 404 `invitation_not_found` when it is not pending in this tenant; 403 when the actor may not grant its role; 429 `invitation_resend_cooldown` inside the cooldown; 429 `RATE_LIMITED` when the address has had its day's invitation mail; 400 `REASON_REQUIRED` when the actor now reaches the tenant through platform access and gave no reason.
  */
 export async function resend(
   actor: Actor,
@@ -577,6 +578,7 @@ export async function resend(
   const rawToken = generateInvitationToken()
   const invitation = await db.transaction(async (tx) => {
     const { role: actorRole, access } = await lockActorRole(actor, tenantId, 'admin', tx)
+    assertStaffReasonGiven(access, options)
     const pending = await invitationRepository.findPendingById(tenantId, invitationId, tx)
     if (!pending) throw invitationNotFound()
     if (!canActorGrantRole(actorRole, pending.role)) {
@@ -637,7 +639,7 @@ export async function resend(
  * @param tenantId - The tenant it must belong to.
  * @param invitationId - The invitation.
  * @param options - `reason` when staff revoke through platform access, recorded in the audit entry.
- * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access; 403 when the actor is now below admin; 404 `invitation_not_found` when it is not pending in this tenant; 403 when the actor may not grant its role.
+ * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access; 403 when the actor is now below admin; 404 `invitation_not_found` when it is not pending in this tenant; 403 when the actor may not grant its role; 400 `REASON_REQUIRED` when the actor now reaches the tenant through platform access and gave no reason.
  */
 export async function revoke(
   actor: Actor,
@@ -647,6 +649,7 @@ export async function revoke(
 ): Promise<void> {
   await db.transaction(async (tx) => {
     const { role: actorRole, access } = await lockActorRole(actor, tenantId, 'admin', tx)
+    assertStaffReasonGiven(access, options)
     // Read first: the audit entry needs the role and address the revoke doesn't return.
     const pending = await invitationRepository.findPendingById(tenantId, invitationId, tx)
     if (!pending) throw invitationNotFound()

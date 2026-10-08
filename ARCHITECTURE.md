@@ -127,7 +127,7 @@ on other staff owners. Each route names its own `requirePlatformRole`, which
 answers 404 below it. Deactivate, delete, both purges, suspend, archive and
 the owner re-invitation also need a sign-in within the last 10 minutes
 (`requireRecentAuth`, 401 `REAUTH_REQUIRED`), and so does an email resend of
-a platform-tenant invitation, which the service decides per message with the
+an invitation, on any tenant, which the service decides per message with the
 same predicate (`isRecentAuth`, `src/utilities/recent-auth.utilities.ts`);
 `POST /auth/reauthenticate`
 (staff only, password only) renews it. A staff sign-out, deactivation or

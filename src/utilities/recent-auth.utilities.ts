@@ -1,7 +1,7 @@
 /**
  * @file The recent-sign-in predicate behind step-up, shared by the
  * `requireRecentAuth` middleware and the services that decide step-up per
- * request (a resend of a platform-tenant invitation), which may not import
+ * request (an email resend of an invitation), which may not import
  * a middleware.
  */
 import { STEP_UP_MAX_AGE_MS } from '@/constants/auth.constants'

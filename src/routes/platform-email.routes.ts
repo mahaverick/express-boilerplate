@@ -5,8 +5,8 @@
  * behind its router-wide `requireAuth`. Each route names its own role gate
  * and runs it first, before the JSON gate and the limiter, so a refused
  * caller gets the plain 404. The resend route has no `requireRecentAuth`:
- * only a resend of a platform-tenant invitation needs a recent sign-in, and
- * the service decides that per message.
+ * only a resend of an invitation needs a recent sign-in, and the service
+ * decides that per message.
  */
 import { Router } from 'express'
 import { platformEmailController } from '@/controllers/platform-email.controller'

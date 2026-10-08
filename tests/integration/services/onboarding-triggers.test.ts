@@ -306,7 +306,13 @@ describe('staff acting through platform access', () => {
     const { user: staff } = await createTrackedStaff('admin')
 
     await updateSettings({ userId: staff.id }, tenant.id, { timezone: 'Asia/Tokyo' })
-    await invite({ userId: staff.id }, tenant.id, `invitee-${randomUUID()}@example.test`, 'viewer')
+    await invite(
+      { userId: staff.id },
+      tenant.id,
+      `invitee-${randomUUID()}@example.test`,
+      'viewer',
+      { reason: 'Ticket 4411' }
+    )
 
     expect(await completedKeys(tenant.id)).toEqual([])
   })

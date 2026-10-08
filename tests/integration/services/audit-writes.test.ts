@@ -422,11 +422,15 @@ describe('member.removed', () => {
     const staff = await seedUser()
     await makeStaff(staff.id, 'admin')
 
-    await removeMember({ userId: staff.id }, tenant.id, member.id)
+    await removeMember({ userId: staff.id }, tenant.id, member.id, { reason: 'Ticket 4411' })
 
     const rows = await rowsFor(tenant.id, 'member.removed')
     expect(rows).toHaveLength(1)
-    expect(rows[0]).toMatchObject({ actor_user_id: staff.id, access: 'platform' })
+    expect(rows[0]).toMatchObject({
+      actor_user_id: staff.id,
+      access: 'platform',
+      metadata: { reason: 'Ticket 4411' },
+    })
   })
 
   it('marks self true when an owner removes themself', async () => {

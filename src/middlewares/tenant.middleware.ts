@@ -7,7 +7,11 @@
  * assembled.
  */
 import { type NextFunction, type Request, type Response } from 'express'
-import { REASON_REQUIRED_CODE, type MembershipRole } from '@/constants/tenant.constants'
+import {
+  REASON_REQUIRED_CODE,
+  REASON_REQUIRED_MESSAGE,
+  type MembershipRole,
+} from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import { HttpError } from '@/errors/http-error'
 import { redactedForLog } from '@/errors/postgres-errors'
@@ -287,13 +291,7 @@ function admitStaffWithReason(request: Request, response: Response, next: NextFu
       (request.body as { reason?: unknown } | undefined)?.reason
     )
     if (!parsed.success) {
-      next(
-        new HttpError(
-          'Give a reason of 1 to 500 characters for this change.',
-          400,
-          REASON_REQUIRED_CODE
-        )
-      )
+      next(new HttpError(REASON_REQUIRED_MESSAGE, 400, REASON_REQUIRED_CODE))
       return
     }
     request.staffReason = parsed.data

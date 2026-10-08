@@ -7,7 +7,12 @@
  * owners on the platform tenant); write; revoke the pending invitations the
  * member can no longer stand behind; audit.
  */
-import { MEMBERSHIP_ROLES, type MembershipRole } from '@/constants/tenant.constants'
+import {
+  MEMBERSHIP_ROLES,
+  REASON_REQUIRED_CODE,
+  REASON_REQUIRED_MESSAGE,
+  type MembershipRole,
+} from '@/constants/tenant.constants'
 import type { TenantInvitation } from '@/database/models/tenant-invitation.model'
 import type { UserMembership } from '@/database/models/user-membership.model'
 import { HttpError } from '@/errors/http-error'
@@ -145,6 +150,7 @@ async function revokeInvitationsBeyondAuthorityElsewhere(
       authority === undefined ? {} : { roles: rolesUngrantableBy(authority) },
       tx
     )
+    // No reason: these rows are a side effect of a platform-tenant write, whose caller is a member there.
     await auditRevokedInvitations(actor, 'platform', revoked, {}, tx)
   }
 }
@@ -158,6 +164,24 @@ async function revokeInvitationsBeyondAuthorityElsewhere(
 function assertRoleAtLeast(access: ActorAccess, minimum: MembershipRole): void {
   if (!isRoleAtLeast(access.role, minimum)) {
     throw new HttpError('Insufficient permissions', 403)
+  }
+}
+
+/**
+ * Refuse a member or invitation write that reaches the tenant through
+ * platform access without a staff reason. The route middleware admits a
+ * caller who was a member when `resolveTenant` read them with no step-up and
+ * no reason; if that membership went before the lock, the locked re-read
+ * finds platform access, and the write must not go through on it. A reason
+ * is present only when the middleware saw platform access and a recent
+ * sign-in.
+ * @param access - How the actor reached the tenant, as locked in this transaction.
+ * @param options - The staff reason from the route, if any.
+ * @throws {HttpError} 400 `REASON_REQUIRED` on platform access with no reason.
+ */
+export function assertStaffReasonGiven(access: TenantAccess, options: StaffReasonOption): void {
+  if (access === 'platform' && options.reason === undefined) {
+    throw new HttpError(REASON_REQUIRED_MESSAGE, 400, REASON_REQUIRED_CODE)
   }
 }
 
@@ -310,7 +334,7 @@ async function assertOwnerRemainsFor(
  * @param role - The new role.
  * @param options - Pass isPlatformTenant for the platform tenant: owner-on-owner and the active-owner guard; `reason` for a staff change.
  * @returns The updated membership.
- * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access; 403 when the actor is no longer an owner or the matrix refuses; 404 `Member not found` when the target is not a member; 409 when the target is the last live (on the platform tenant, active) owner and `role` is not owner.
+ * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access; 403 when the actor is no longer an owner or the matrix refuses; 404 `Member not found` when the target is not a member; 409 when the target is the last live (on the platform tenant, active) owner and `role` is not owner; 400 `REASON_REQUIRED` when the actor now reaches the tenant through platform access and gave no reason.
  */
 export async function changeRole(
   actor: Actor,
@@ -328,6 +352,7 @@ export async function changeRole(
       'no key update',
       tx
     )
+    assertStaffReasonGiven(access, options)
     if (!modifyRuleFor(options)(actorRole, target.role, targetUserId === actor.userId)) {
       throw new HttpError("Insufficient permissions to change this member's role", 403)
     }
@@ -379,7 +404,7 @@ export async function changeRole(
  * @param tenantId - The tenant.
  * @param targetUserId - The member to remove.
  * @param options - Pass isPlatformTenant for the platform tenant: owner-on-owner and the active-owner guard; `reason` for a staff removal.
- * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access; 403 when the actor is now below admin or the matrix refuses; 404 `Member not found` when the target is not a member; 409 when the target is the last live (on the platform tenant, active) owner.
+ * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access; 403 when the actor is now below admin or the matrix refuses; 404 `Member not found` when the target is not a member; 409 when the target is the last live (on the platform tenant, active) owner; 400 `REASON_REQUIRED` when the actor now reaches the tenant through platform access and gave no reason.
  */
 export async function removeMember(
   actor: Actor,
@@ -397,6 +422,7 @@ export async function removeMember(
       'update',
       tx
     )
+    assertStaffReasonGiven(access, options)
     if (!modifyRuleFor(options)(actorRole, target.role, targetUserId === actor.userId)) {
       throw new HttpError('Insufficient permissions to remove this member', 403)
     }

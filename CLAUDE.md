@@ -381,7 +381,11 @@ uuid))` on every column,** as `errors-query.service.ts` does: per-column
 - **Staff acting on a customer tenant through platform access give a reason.**
   The member and invitation writes there carry
   `requireRecentAuthAndReasonOnPlatformAccess`: step-up and a body `reason`,
-  recorded in the audit entry. A member is unaffected.
+  recorded in the audit entry. A member is unaffected. The services re-check
+  under lock (`assertStaffReasonGiven`), since a membership deleted after
+  `resolveTenant` leaves only platform access. A staff email resend of an
+  invitation (`POST /platform/emails/:id/resend`) needs step-up on every
+  tenant and passes its reason on.
 - **A tenant with no active owner is the one place an admin grants owner.**
   `POST /platform/tenants/:id/owner-invitation` (platform admin, step-up, a
   reason) goes through `createOwnerInvitation`, which skips

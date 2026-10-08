@@ -6,18 +6,21 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import type { Response } from 'supertest'
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import type { Tenant } from '@/database/models/tenant.model'
 import type { User } from '@/database/models/user.model'
+import { TenantInvitationRepository } from '@/repositories/tenant-invitation.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql, type DbExecutor } from '@/services/database.service'
 import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
-import { signAccessToken } from '@/services/session.service'
+import { hashToken, signAccessToken } from '@/services/session.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
+import { backdateInvitationSend } from '../../helpers/backdate'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { makeStaff, platformTenant } from '../../helpers/platform-staff'
 import { request } from '../../helpers/request'
@@ -87,6 +90,66 @@ async function withPlatformRoleChangedAfterResolve(
 
   await withMutatedMethod(UserMembershipRepository.prototype, 'findPlatformRole', changingFind, run)
   expect(hasChanged).toBe(true)
+}
+
+/**
+ * Run `run` while resolveTenant's pool read of the staff user's membership
+ * in `tenant` returns the row as read, then deletes it. The request
+ * therefore passes the route as a member, and the service's locked re-read
+ * finds only their platform role.
+ * @param staff - The staff user who is also a member of `tenant`.
+ * @param tenant - The tenant the request names.
+ * @param run - The request(s) to make while the hook is installed.
+ */
+async function withMembershipRemovedAfterResolve(
+  staff: User,
+  tenant: Tenant,
+  run: () => Promise<void>
+): Promise<void> {
+  // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
+  const realFind = UserMembershipRepository.prototype.findByUserAndTenant
+  let hasChanged = false
+  const removingFind: typeof realFind = async function (
+    this: UserMembershipRepository,
+    userId: string,
+    tenantId: string,
+    executor?: DbExecutor
+  ) {
+    const row = await realFind.call(this, userId, tenantId, executor)
+    const isResolveRead = executor === undefined && userId === staff.id && tenantId === tenant.id
+    if (!hasChanged && row && isResolveRead) {
+      hasChanged = true
+      await userMembershipRepository.delete(row.id)
+    }
+    return row
+  }
+
+  await withMutatedMethod(
+    UserMembershipRepository.prototype,
+    'findByUserAndTenant',
+    removingFind,
+    run
+  )
+  expect(hasChanged).toBe(true)
+}
+
+/**
+ * A pending viewer invitation sent by `inviter`, mailed a day ago.
+ * @param tenant - The tenant.
+ * @param inviter - The sender.
+ * @returns The invitation id.
+ */
+async function pendingInvitation(tenant: Tenant, inviter: User): Promise<string> {
+  const invitation = await new TenantInvitationRepository().createPending({
+    tenantId: tenant.id,
+    email: `platform-race-${randomUUID()}@example.test`,
+    role: 'viewer',
+    tokenHash: hashToken(randomUUID()),
+    invitedBy: inviter.id,
+    expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+  })
+  await backdateInvitationSend(invitation.id)
+  return invitation.id
 }
 
 /**
@@ -183,6 +246,17 @@ describe('the staff role is re-read under lock (platform role changed after reso
     return staff
   }
 
+  /**
+   * A fresh manager of `tenant`.
+   * @param tenant - The tenant.
+   * @returns The member's user id.
+   */
+  async function manager(tenant: Tenant): Promise<string> {
+    const { user } = await createAuthenticatedUser()
+    await userMembershipRepository.create({ userId: user.id, tenantId: tenant.id, role: 'manager' })
+    return user.id
+  }
+
   it('refuses a tenant update by a staff admin demoted to viewer, and the name stays', async () => {
     const tenant = await ownedTenant()
     const { user: staff, token } = await staffUser('admin')
@@ -277,6 +351,93 @@ describe('the staff role is re-read under lock (platform role changed after reso
       expect(response.status).toBe(403)
     })
     expect(await storedName(tenant)).toBe('Acme Inc')
+  })
+
+  describe('a staff member whose membership goes after resolveTenant', () => {
+    /**
+     * One member or invitation write, sent with no reason.
+     */
+    interface MemberWrite {
+      name: string
+      action: string
+      send: (tenant: Tenant, token: string, staff: User) => Promise<Response>
+    }
+
+    const writes: MemberWrite[] = [
+      {
+        name: 'PATCH /members/:userId',
+        action: 'member.role_changed',
+        send: async (tenant, token) =>
+          request(app)
+            .patch(`/api/v1/tenants/${tenant.slug}/members/${await manager(tenant)}`)
+            .set('Authorization', `Bearer ${token}`)
+            .send({ role: 'editor' }),
+      },
+      {
+        name: 'DELETE /members/:userId',
+        action: 'member.removed',
+        send: async (tenant, token) =>
+          request(app)
+            .delete(`/api/v1/tenants/${tenant.slug}/members/${await manager(tenant)}`)
+            .set('Authorization', `Bearer ${token}`)
+            .send({}),
+      },
+      {
+        name: 'POST /invitations',
+        action: 'invitation.created',
+        send: async (tenant, token) =>
+          request(app)
+            .post(`/api/v1/tenants/${tenant.slug}/invitations`)
+            .set('Authorization', `Bearer ${token}`)
+            .send({ email: `platform-race-${randomUUID()}@example.test`, role: 'viewer' }),
+      },
+      {
+        name: 'POST /invitations/:id/resend',
+        action: 'invitation.resent',
+        send: async (tenant, token, staff) =>
+          request(app)
+            .post(
+              `/api/v1/tenants/${tenant.slug}/invitations/${await pendingInvitation(tenant, staff)}/resend`
+            )
+            .set('Authorization', `Bearer ${token}`)
+            .send({}),
+      },
+      {
+        name: 'DELETE /invitations/:id',
+        action: 'invitation.revoked',
+        send: async (tenant, token, staff) =>
+          request(app)
+            .delete(
+              `/api/v1/tenants/${tenant.slug}/invitations/${await pendingInvitation(tenant, staff)}`
+            )
+            .set('Authorization', `Bearer ${token}`)
+            .send({}),
+      },
+    ]
+
+    it.each(writes)(
+      '$name: refuses 400 REASON_REQUIRED once only platform access is left, and writes nothing',
+      async (write) => {
+        const tenant = await ownedTenant()
+        const { user: staff, token } = await staffUser('owner')
+        await userMembershipRepository.create({
+          userId: staff.id,
+          tenantId: tenant.id,
+          role: 'owner',
+        })
+
+        await withMembershipRemovedAfterResolve(staff, tenant, async () => {
+          const response = await write.send(tenant, token, staff)
+          expect(response.status).toBe(400)
+          expect(response.body).toMatchObject({ code: 'REASON_REQUIRED' })
+        })
+
+        const rows = await sql`
+          select 1 from audit_logs
+          where tenant_id = ${tenant.id} and action = ${write.action} and actor_user_id = ${staff.id}`
+        expect(rows).toHaveLength(0)
+      }
+    )
   })
 
   /**

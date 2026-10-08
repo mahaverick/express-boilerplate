@@ -694,15 +694,15 @@ function resendTargetOf(
  * queued, and a retry rotates the token again. Checks, in order: the message exists; its template is in the
  * registry; it has a resend action and the ids it needs; the recipient is
  * not suppressed; for an invitation, its tenant is active (the member
- * route's `resolveTenant` gate) and, on the platform tenant, the caller
- * signed in within the step-up window.
+ * route's `resolveTenant` gate) and the caller signed in within the step-up
+ * window, on any tenant, as the member route asks of staff.
  * @param actor - The signed-in staff admin.
  * @param id - The message id.
- * @param reason - Why, for the audit log.
+ * @param reason - Why, for the audit log: on the `email.resent` entry, and on an invitation's `invitation.resent` entry.
  * @param authTime - The access token's `auth_time` (`request.authTime`).
  * @param now - The current time in ms; injectable for tests.
  * @returns `emailSent` when the delegated action reports it; empty for an invitation, whose mail is queued without waiting.
- * @throws {HttpError} 404 unknown message, or an invitation's tenant not active; 409 `template_unavailable`, `not_resendable` or `recipient_suppressed`; 401 `REAUTH_REQUIRED` for a platform-tenant invitation with a stale sign-in; and whatever the delegated action throws.
+ * @throws {HttpError} 404 unknown message, or an invitation's tenant not active; 409 `template_unavailable`, `not_resendable` or `recipient_suppressed`; 401 `REAUTH_REQUIRED` for an invitation with a stale sign-in; and whatever the delegated action throws.
  */
 export async function resendEmail(
   actor: Actor,
@@ -748,10 +748,11 @@ export async function resendEmail(
     case 'invitation': {
       const tenant = await platformEmailRepository.tenantState(target.tenantId)
       if (tenant?.lifecycleState !== 'active') throw new HttpError('Tenant not found', 404)
-      if (tenant.isPlatform && !isRecentAuth(authTime, now)) {
+      if (!isRecentAuth(authTime, now)) {
         throw new HttpError('Confirm your identity to continue', 401, REAUTH_REQUIRED_CODE)
       }
-      await resendInvitation(actor, target.tenantId, target.invitationId, options)
+      // The reason goes on the invitation.resent entry too, as the member route's staff path does.
+      await resendInvitation(actor, target.tenantId, target.invitationId, { ...options, reason })
       break
     }
   }
