@@ -19,6 +19,10 @@ describe('the timeline cursor', () => {
     '2026-10-04T10:00:42Z',
     '2026-10-04T10:00:42.5+00:00',
     '2026-10-04T12:00:42.123456+02:00',
+    '2026-10-04T10:00:42.1Z',
+    '2024-02-29T23:59:59.999999-05:30',
+    '1900-01-01T00:00:00Z',
+    '2299-12-31T23:59:59.999999+14:00',
   ])('round-trips %s verbatim', (t) => {
     expect(decodeTimelineCursor(encodeTimelineCursor({ t, u: UUID }))).toEqual({ t, u: UUID })
   })
@@ -51,6 +55,17 @@ describe('the timeline cursor', () => {
     ['a date without a time', encodeCursor({ t: '2026-10-04', u: UUID })],
     ['no zone', encodeCursor({ t: '2026-10-04T10:00:42.886001', u: UUID })],
     ['an injected timestamp', encodeCursor({ t: "2026-10-04T10:00:42Z' or 1=1", u: UUID })],
+    ['month 13', encodeCursor({ t: '2026-13-01T00:00:00.000000Z', u: UUID })],
+    ['30 February', encodeCursor({ t: '2026-02-30T00:00:00.000000Z', u: UUID })],
+    ['29 February in a common year', encodeCursor({ t: '2025-02-29T00:00:00Z', u: UUID })],
+    ['hour 24', encodeCursor({ t: '2026-10-04T24:00:00Z', u: UUID })],
+    ['minute 60', encodeCursor({ t: '2026-10-04T10:60:00Z', u: UUID })],
+    ['second 60', encodeCursor({ t: '2026-10-04T10:00:60Z', u: UUID })],
+    ['an offset of 99:99', encodeCursor({ t: '2026-10-04T10:00:00+99:99', u: UUID })],
+    ['an offset past 14 hours', encodeCursor({ t: '2026-10-04T10:00:00+15:00', u: UUID })],
+    ['year 0000', encodeCursor({ t: '0000-01-01T00:00:00.000000Z', u: UUID })],
+    ['year 1899', encodeCursor({ t: '1899-12-31T23:59:59Z', u: UUID })],
+    ['year 2300', encodeCursor({ t: '2300-01-01T00:00:00Z', u: UUID })],
     ['a uuid that is not one', encodeCursor({ t: '2026-10-04T10:00:42Z', u: 'not-a-uuid' })],
     ['a missing uuid', encodeCursor({ t: '2026-10-04T10:00:42Z' })],
     ['an extra key', encodeCursor({ t: '2026-10-04T10:00:42Z', u: UUID, view: 'key' })],
