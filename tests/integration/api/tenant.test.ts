@@ -1521,6 +1521,10 @@ describe('/api/v1/tenants', () => {
       ['logo javascript:', { logo: 'javascript:alert(1)' }],
       ['logo data:', { logo: 'data:text/html,<script>alert(1)</script>' }],
       ['website not a URL', { website: 'call us maybe' }],
+      ['website userinfo host swap', { website: 'https://bank.example@evil.example/' }],
+      ['website credentials', { website: 'https://user:pw@host.example/' }],
+      ['website backslash before @', { website: String.raw`https://evil.example\@good.example/` }],
+      ['logo backslash in path', { logo: String.raw`https://good.example/a\b` }],
     ])('PATCH refuses %s', async (_label, body) => {
       const { user, token } = await createAuthenticatedUser()
       const tenant = await createTenant(user.id)
@@ -1556,6 +1560,18 @@ describe('/api/v1/tenants', () => {
       const created = envelopeOf<{ id: string; website: string }>(accepted).data
       if (created) createdTenantIds.push(created.id)
       expect(created?.website).toBe('https://acme.example/')
+    })
+
+    it('POST still accepts an @ in the path or query', async () => {
+      const { token } = await createAuthenticatedUser()
+      const response = await request(app)
+        .post('/api/v1/tenants')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ name: 'Acme', slug: uniqueSlug(), website: 'https://example.com/u/@name?x=a@b' })
+      const created = envelopeOf<{ id: string; website: string }>(response).data
+      if (created) createdTenantIds.push(created.id)
+      expect(response.status).toBe(201)
+      expect(created?.website).toBe('https://example.com/u/@name?x=a@b')
     })
   })
 })

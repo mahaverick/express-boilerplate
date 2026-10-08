@@ -88,7 +88,9 @@ const tenantDescriptionField = z
  * A tenant's `logo` or `website`: an absolute `http:` or `https:` URL, trimmed
  * and capped at the column width, never `javascript:`, `data:` or free
  * text, so a client that renders it as a link or image source cannot be
- * made to run or load anything else.
+ * made to run or load anything else. A backslash anywhere, or credentials
+ * (`user:pw@`) in the URL, are refused too, so one host cannot read as
+ * another; an `@` in the path or query is fine.
  * @param label - The field's name in its messages (`Logo`, `Website`).
  * @param maxLength - The column width.
  * @returns The field schema; callers add `.nullable()`/`.optional()`.
@@ -100,6 +102,12 @@ function httpUrlField(label: string, maxLength: number) {
     .min(1, 'Must not be empty.')
     .max(maxLength, `${label} must be at most ${maxLength} characters.`)
     .refine(safeText(), `${label} contains characters that are not allowed`)
+    .refine((value) => {
+      if (value.includes('\\')) return false
+      if (!URL.canParse(value)) return true
+      const { username, password } = new URL(value)
+      return username === '' && password === ''
+    }, `${label} must be an http or https URL.`)
     .pipe(z.url({ protocol: /^https?$/, message: `${label} must be an http or https URL.` }))
 }
 
