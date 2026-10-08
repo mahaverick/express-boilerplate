@@ -338,8 +338,9 @@ async function queueNoticesOrNone(actor: Actor, change: CommittedChange): Promis
 /**
  * Change the maintenance mode, as the platform owner. In order: one
  * transaction re-checks the owner role under lock, locks the row, checks
- * `expectedVersion` (409), answers a no-op (same mode and message) with the
- * current state and writes nothing, checks the change's rules, updates the
+ * `expectedVersion` (409), answers a no-op (same mode and message, and no
+ * reason sent or the stored one sent again) with the current state and
+ * writes nothing, checks the change's rules, updates the
  * row (`version + 1`; a save that keeps the mode keeps `changed_at`, `changed_by`
  * and, unless the body sends one, the reason) and writes the audit entry. Then it publishes the
  * reload and rereads this replica's copy, queues notices for a switch-on,
@@ -371,7 +372,14 @@ export async function changeMaintenanceMode(
     const kind = changeKindOf(current.mode, body.mode)
     // eslint-disable-next-line unicorn/no-null -- the column is null while off
     const message = body.mode === 'off' ? null : (body.message ?? null)
-    if (kind === 'message' && (body.mode === 'off' || message === current.message)) return undefined
+    // A same-mode save changes something when the message or a sent reason differs from the stored one.
+    const isReasonChanged = body.reason !== undefined && body.reason !== current.reason
+    if (
+      kind === 'message' &&
+      (body.mode === 'off' || (!isReasonChanged && message === current.message))
+    ) {
+      return undefined
+    }
     assertChangeAllowed(kind, body)
     // eslint-disable-next-line unicorn/no-null -- the column is null when no reason was given
     const reason = body.reason ?? null

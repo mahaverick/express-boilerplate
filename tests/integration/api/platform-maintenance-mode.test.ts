@@ -326,6 +326,50 @@ describe('PUT /platform/maintenance-mode', () => {
     expect(await pendingMaintenanceNotices()).toEqual([])
   })
 
+  it('stores a new reason sent with the same mode and message (it is not a no-op)', async () => {
+    const { token } = await createTrackedStaff('owner')
+    const { user: admin } = await createTrackedStaff('admin')
+    await storeMaintenanceMode('read_only', { message: 'Same.' })
+    await sql`update maintenance_mode_state set reason = 'Old reason.' where id = 1`
+    await reloadMaintenanceMode()
+    const version = await currentVersion(token)
+
+    const response = await change(token, {
+      mode: 'read_only',
+      message: 'Same.',
+      reason: 'New reason.',
+      expectedVersion: version,
+    })
+
+    expect(response.status).toBe(200)
+    expect(viewOf(response).reason).toBe('New reason.')
+    expect(viewOf(response).version).toBe(version + 1)
+    const entries = await auditEntries()
+    expect(entries.map((entry) => entry.metadata)).toEqual([
+      { from: 'read_only', to: 'read_only', reason: 'New reason.', messageChanged: false },
+    ])
+    expect(await noticesTo([admin.id])).toEqual([])
+  })
+
+  it('still answers a no-op when the same reason is sent again', async () => {
+    const { token } = await createTrackedStaff('owner')
+    await storeMaintenanceMode('read_only', { message: 'Same.' })
+    await sql`update maintenance_mode_state set reason = 'Kept.' where id = 1`
+    await reloadMaintenanceMode()
+    const version = await currentVersion(token)
+
+    const response = await change(token, {
+      mode: 'read_only',
+      message: 'Same.',
+      reason: 'Kept.',
+      expectedVersion: version,
+    })
+
+    expect(response.status).toBe(200)
+    expect(viewOf(response).version).toBe(version)
+    expect(await auditEntries()).toEqual([])
+  })
+
   it('edits the message with no reason or confirm, audited but not notified', async () => {
     const { token } = await createTrackedStaff('owner')
     await createTrackedStaff('admin')
