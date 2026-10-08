@@ -254,6 +254,22 @@ describe('scrubText on fragments', () => {
       )
     }
   })
+
+  it('gives the same text twice for 300 random lowercase and hex-letter fragments', () => {
+    let seed = 54_321
+    const next = (limit: number): number => {
+      seed = (seed * 1_103_515 + 12_345) % 2_147_483_648
+      return seed % limit
+    }
+    for (let index = 0; index < 300; index += 1) {
+      const alphabet = index % 2 === 0 ? 'abcdefghijklmnopqrstuvwxyz' : 'abcdef'
+      const fragment = Array.from({ length: 1 + next(80) }, () =>
+        alphabet.charAt(next(alphabet.length))
+      ).join('')
+      const once = scrubText(`https://app.example.com/docs#${fragment}`)
+      expect(scrubText(once)).toBe(once)
+    }
+  })
 })
 
 describe('scrubText on an address with no TLD before punctuation, and on package refs', () => {

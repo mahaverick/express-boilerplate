@@ -72,6 +72,11 @@ const QUERY_PATTERN =
   /((?:https?:\/\/|\/)[^\s?"'<>]*|(?<![@\w.-])[\w.-]+(?=\?[^\s"'<>]*=))\?[^\s"'<>]+/g
 
 /**
+ * A value this scrubber already wrote, left as it is.
+ */
+const PLACEHOLDER = String.raw`\[(?:redacted|value|credentials|query|fragment|token|jwt|posthog-key|email|secret|ip|phone)\]`
+
+/**
  * A URL's or path's fragment: the part before `#` is kept, and so is a
  * fragment `isHarmlessFragment` accepts.
  */
@@ -106,21 +111,34 @@ const KEY_LIKE_WORD_PATTERN =
 const HEADING_ANCHOR_MAX = 64
 
 /**
- * Whether a URL fragment is a real anchor: a source line anchor, or a
- * heading slug (`installation`, `getting-started`) of at most 64 characters
- * that holds no digit, `_` or key-like word (`token-abc`, `api-key`). Anything else, an
- * `access_token=` list, a route (`/reset?token=…`), a code with digits or a
- * mixed-case run, is replaced. A random lowercase fragment of letters only
- * and at most 64 characters is indistinguishable from a slug and survives.
+ * A fragment that is one placeholder and nothing else (`#[secret]`).
+ */
+const PLACEHOLDER_FRAGMENT_PATTERN = new RegExp(`^${PLACEHOLDER}$`)
+
+/**
+ * Whether a URL fragment is a real anchor: a source line anchor, a
+ * placeholder an earlier scrub wrote (`#[secret]`), or a heading slug
+ * (`installation`, `getting-started`) of at most 64 characters that holds no
+ * digit, `_` or key-like word (`token-abc`, `api-key`) and that the other
+ * rules leave whole. Anything else, an `access_token=` list, a route
+ * (`/reset?token=…`), a code with digits or a mixed-case run, is replaced. A
+ * slug another rule would rewrite (40 or more characters with a word longer
+ * than 20 letters, a run of 32 or more of the letters `a` to `f`, a vendor key
+ * prefix such as `xoxb-`) is replaced whole too, so the fragment never comes
+ * out as a slug glued to a placeholder that a second scrub would read
+ * differently. A random lowercase fragment of letters only and at most 64
+ * characters that no other rule touches is indistinguishable from a slug and
+ * survives.
  * @param fragment - The text after `#`.
  * @returns True when the fragment is kept.
  */
 function isHarmlessFragment(fragment: string): boolean {
-  if (LINE_ANCHOR_PATTERN.test(fragment)) return true
+  if (LINE_ANCHOR_PATTERN.test(fragment) || PLACEHOLDER_FRAGMENT_PATTERN.test(fragment)) return true
   return (
     fragment.length <= HEADING_ANCHOR_MAX &&
     HEADING_ANCHOR_PATTERN.test(fragment) &&
-    !KEY_LIKE_WORD_PATTERN.test(fragment)
+    !KEY_LIKE_WORD_PATTERN.test(fragment) &&
+    scrubText(fragment) === fragment
   )
 }
 
@@ -169,11 +187,6 @@ const KEY_QUOTE = String.raw`(?:\\?["']|%22|\\u00(?:22|27))`
  * The Authorization scheme words kept in front of a replaced credential.
  */
 const AUTH_SCHEMES = String.raw`(?:Bearer|Basic|Token|ApiKey|Digest|Negotiate|NTLM|Hawk|HOBA|DPoP|OAuth|AWS4-HMAC-SHA256|SCRAM-SHA-\d+)`
-
-/**
- * A value this scrubber already wrote, left as it is.
- */
-const PLACEHOLDER = String.raw`\[(?:redacted|value|credentials|query|fragment|token|jwt|posthog-key|email|secret|ip|phone)\]`
 
 /**
  * The bare words a secret-named key may hold and keep: `token: undefined`
@@ -335,11 +348,36 @@ const VENDOR_KEY_PATTERN =
 
 /**
  * An AWS secret access key: exactly 40 base64 characters with at least one
- * `/` or `+`, on its own between non-base64 characters (an `@` after it makes
- * it an email local part). `isAwsSecretKey` then tells it from a 40-character
- * path.
+ * `/` or `+`, on its own between non-base64 characters. An `@` after it makes
+ * it an email local part, which the email rules replace whole
+ * (`SLASHED_SECRET_EMAIL_PATTERN`). `isAwsSecretKey` then tells it from a
+ * 40-character path.
  */
 const AWS_SECRET_KEY_PATTERN = /(?<![\w+/-])(?=[A-Za-z\d]*[+/])[A-Za-z\d+/]{40}(?![\w+/=@-])/g
+
+/**
+ * The length of an AWS secret access key.
+ */
+const AWS_SECRET_KEY_LENGTH = 40
+
+/**
+ * A run of standard base64 characters only, with no `-` or `_`.
+ */
+const STANDARD_BASE64_PATTERN = /^[A-Za-z\d+/]+$/
+
+/**
+ * An unquoted email local part: a run of address characters in any script.
+ */
+const EMAIL_LOCAL_PART = String.raw`[\p{L}\p{N}_.%+-]+`
+
+/**
+ * An email address after its local part: the `@`, written plainly, as `%40`
+ * or `%2540`, or as a fullwidth `＠` or small `﹫`, and the domain, a dotted
+ * name ending in a letter label or an IP literal (`[192.168.0.1]`,
+ * `[IPv6:…]`), or after a plain `@` a single label that starts with a letter
+ * and is not a package or action ref. `EMAIL_PATTERN` describes each form.
+ */
+const EMAIL_AT_AND_DOMAIN = String.raw`(?:(?:@|%40|%2540|＠|﹫)(?:\[(?:\d{1,3}(?:\.\d{1,3}){3}|IPv6:[\dA-Fa-f:.]+)\]|[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.\p{L}{2,})|@(?!(?:npm|workspace|file|github|gitlab|link|portal|patch|git\+[a-z]+):)(?!(?:latest|next|canary|beta|alpha|rc|main|master|sha\d+|v\d[\w.-]*)(?![\p{L}\p{N}-]))\p{L}[\p{L}\p{N}-]*(?=$|[\s"'<>,;:!?&/)\]}]|\.(?:$|\s)))`
 
 /**
  * An email address, in any script. The local part is a run of address
@@ -354,9 +392,32 @@ const AWS_SECRET_KEY_PATTERN = /(?<![\w+/-])(?=[A-Za-z\d]*[+/])[A-Za-z\d+/]{40}(
  * `pkg@workspace:*`, `react@npm:@preact/compat`). The cost: a
  * host named like one of those refs (`jane@main`) is not scrubbed.
  */
-const EMAIL_PATTERN =
-  // eslint-disable-next-line sonarjs/regex-complexity, sonarjs/super-linear-regex -- one pattern per rule keeps the rule list the spec; scrubText scans at most SCAN_MAX characters
-  /(?:"[^"\n]{1,64}"|[\p{L}\p{N}_.%+-]+)(?:(?:@|%40|%2540|＠|﹫)(?:\[(?:\d{1,3}(?:\.\d{1,3}){3}|IPv6:[\dA-Fa-f:.]+)\]|[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.\p{L}{2,})|@(?!(?:npm|workspace|file|github|gitlab|link|portal|patch|git\+[a-z]+):)(?!(?:latest|next|canary|beta|alpha|rc|main|master|sha\d+|v\d[\w.-]*)(?![\p{L}\p{N}-]))\p{L}[\p{L}\p{N}-]*(?=$|[\s"'<>,;:!?&/)\]}]|\.(?:$|\s)))/gu
+const EMAIL_PATTERN = new RegExp(
+  String.raw`(?:"[^"\n]{1,64}"|${EMAIL_LOCAL_PART})${EMAIL_AT_AND_DOMAIN}`,
+  'gu'
+)
+
+/**
+ * An email address whose unquoted local part comes straight after a `/`,
+ * with the run of base64 characters before that `/` (`abc/def/ghi@…`):
+ * `EMAIL_PATTERN`'s local part stops at the `/`, so the part of a secret
+ * before it would be kept. The run starts after a character that cannot be
+ * part of an address, so it never takes the end of an address before it, and
+ * the local part and domain are what `EMAIL_PATTERN` would match at the same
+ * place. The match is replaced whole only when `isSlashedSecret` calls the
+ * run and the local part's leading base64 characters a secret; otherwise it
+ * is left for `EMAIL_PATTERN`, so a path before an address
+ * (`/home/jane/x@example.com`) keeps its directories.
+ */
+const SLASHED_SECRET_EMAIL_PATTERN = new RegExp(
+  String.raw`(?<![\p{L}\p{N}_.%+/@＠﹫-])([\w+/-]*/)(${EMAIL_LOCAL_PART})${EMAIL_AT_AND_DOMAIN}`,
+  'gu'
+)
+
+/**
+ * The base64 characters a local part starts with.
+ */
+const LEADING_BASE64_PATTERN = /^[\w+-]*/
 
 /**
  * One IPv4 octet, 0 to 255.
@@ -403,6 +464,11 @@ const HEX_RUN_PATTERN =
 const BASE64_RUN_PATTERN = /[\w+/-]{40,}={0,2}/g
 
 /**
+ * The shortest run `BASE64_RUN_PATTERN` takes.
+ */
+const SECRET_RUN_MIN = 40
+
+/**
  * The share of a slash-containing run's letters that must be uppercase for
  * it to read as base64 rather than a file path.
  */
@@ -447,6 +513,20 @@ function isSecretRun(run: string): boolean {
 }
 
 /**
+ * Whether a run of base64 characters with a `/`, ending in the base64 start
+ * of an email address's local part, is a secret: at least 40 characters, and
+ * an AWS secret access key (`isAwsSecretKey`, exactly 40 characters of
+ * standard base64) or a run `isSecretRun` calls a secret.
+ * @param run - The run before the `/` and the local part's leading base64 characters.
+ * @returns True when the run and the address are replaced together.
+ */
+function isSlashedSecret(run: string): boolean {
+  if (run.length < SECRET_RUN_MIN) return false
+  const isAwsShaped = run.length === AWS_SECRET_KEY_LENGTH && STANDARD_BASE64_PATTERN.test(run)
+  return (isAwsShaped && isAwsSecretKey(run)) || isSecretRun(run)
+}
+
+/**
  * The text the rules scan: at most `SCAN_MAX` characters, and when cut,
  * only up to the last whitespace before the cut, so half a secret is never
  * kept. A cut text with no whitespace is dropped whole.
@@ -481,8 +561,8 @@ function capped(value: string, wasCut: boolean): string {
  * of range for type`, and the snippet in a V8 `is not valid JSON` error,
  * become `"[value]"`; the userinfo of a URL becomes `[credentials]@`; a
  * URL's, path's or bare word's query string becomes `?[query]`; a fragment,
- * unless a line or heading anchor (`isHarmlessFragment`), becomes
- * `#[fragment]`; the segment after `/reset/`, `/verify/`, `/invite/` or
+ * unless a line or heading anchor or a placeholder (`isHarmlessFragment`),
+ * becomes `#[fragment]`; the segment after `/reset/`, `/verify/`, `/invite/` or
  * `/accept/` becomes `[token]`; `Bearer <credential>` becomes
  * `Bearer [token]`; `Basic <base64>` becomes `Basic [token]`, the scheme's
  * case kept; an Authorization- or Cookie-valued key's value
@@ -498,9 +578,10 @@ function capped(value: string, wasCut: boolean): string {
  * (`OAUTH_CONTEXT_PATTERN`)), become `[redacted]`; a JWT becomes `[jwt]`; an
  * email address (`EMAIL_PATTERN`: `@` written plainly, encoded or fullwidth,
  * a quoted local part, an IP-literal or single-label domain) becomes
- * `[email]`, before the PostHog-key and vendor-credential rules run, so an
- * address whose local part looks like one of those keys goes whole, domain
- * included; a PostHog key (`phc_`, `phx_`,
+ * `[email]`, together with a secret-looking base64 run joined to its local
+ * part by `/` (`SLASHED_SECRET_EMAIL_PATTERN`), before the PostHog-key and
+ * vendor-credential rules run, so an address whose local part looks like one
+ * of those keys goes whole, domain included; a PostHog key (`phc_`, `phx_`,
  * `phs_`) becomes `[posthog-key]` and a vendor credential
  * (`VENDOR_KEY_PATTERN`, or an AWS secret access key) `[secret]`; an
  * IPv4 or IPv6 address becomes `[ip]` and an international phone number
@@ -511,9 +592,10 @@ function capped(value: string, wasCut: boolean): string {
  * characters, ending in `…[truncated]`. A key-named word is replaced even in
  * prose (`Missing token: please log in` becomes `Missing token: [redacted]`):
  * the rule trades some readable text for never leaking a value. Applying it
- * twice gives the same text as applying it once, except for contrived
- * inputs that glue a phone number, address or hex run to one another (a
- * placeholder written by the first pass can open a match for the second).
+ * twice gives the same text as applying it once, a placeholder in a URL
+ * fragment included (`isHarmlessFragment`), except for contrived inputs that
+ * glue a phone number, IP address or hex run to one another (a placeholder
+ * written by the first pass can open a match for the second).
  * @param value - The text: an exception's type or value, or a frame's filename or function.
  * @returns The scrubbed text.
  */
@@ -539,6 +621,9 @@ export function scrubText(value: string): string {
       hasOauthContext ? `${key}[redacted]` : match
     )
     .replaceAll(JWT_PATTERN, '[jwt]')
+    .replaceAll(SLASHED_SECRET_EMAIL_PATTERN, (match: string, run: string, local: string) =>
+      isSlashedSecret(`${run}${LEADING_BASE64_PATTERN.exec(local)?.[0] ?? ''}`) ? '[email]' : match
+    )
     .replaceAll(EMAIL_PATTERN, '[email]')
     .replaceAll(POSTHOG_KEY_PATTERN, '[posthog-key]')
     .replaceAll(VENDOR_KEY_PATTERN, '[secret]')

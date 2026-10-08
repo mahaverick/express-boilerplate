@@ -1733,5 +1733,100 @@
     "rule": "email",
     "input": "to=phx_zqTabcdEFGHij1234%40example-corp.co.uk",
     "expected": "to=[email]"
+  },
+  {
+    "rule": "email",
+    "input": "invite failed for wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY@example.com",
+    "expected": "invite failed for [email]"
+  },
+  {
+    "rule": "email",
+    "input": "to=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY%40example-corp.co.uk",
+    "expected": "to=[email]"
+  },
+  {
+    "rule": "email",
+    "input": "invite failed for wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY%2540example.com",
+    "expected": "invite failed for [email]"
+  },
+  {
+    "rule": "email",
+    "input": "invite failed for wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY＠example.com",
+    "expected": "invite failed for [email]"
+  },
+  {
+    "rule": "email",
+    "input": "invite failed for wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY﹫example.com",
+    "expected": "invite failed for [email]"
+  },
+  {
+    "rule": "email",
+    "input": "invite failed for wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY@localhost: smtp down",
+    "expected": "invite failed for [email]: smtp down"
+  },
+  {
+    "rule": "email",
+    "input": "invite failed for TestOnlyValue/NotARealKey/ForScrubVectors2026@example.com",
+    "expected": "invite failed for [email]"
+  },
+  {
+    "rule": "email",
+    "input": "invite failed for jane/doe@example.com",
+    "expected": "invite failed for jane/[email]"
+  },
+  {
+    "rule": "email",
+    "input": "open /home/jane/x@example.com failed",
+    "expected": "open /home/jane/[email] failed"
+  },
+  {
+    "rule": "email",
+    "input": "GET https://app.example.com/path/user@example.com failed",
+    "expected": "GET https://app.example.com/path/[email] failed"
+  },
+  {
+    "rule": "email",
+    "input": "at /srv/app/node_modules/some-package/dist/user@example.com",
+    "expected": "at /srv/app/node_modules/some-package/dist/[email]"
+  },
+  {
+    "rule": "email",
+    "input": "at src/a/b@1.2.3 and node_modules/pkg@4.0.0/index.js",
+    "expected": "at src/a/b@1.2.3 and node_modules/pkg@4.0.0/index.js"
+  },
+  {
+    "rule": "email",
+    "input": "install @scope/pkg@1.2.3, pkg@npm:@scope/x and pkg@workspace:* failed",
+    "expected": "install @scope/pkg@1.2.3, pkg@npm:@scope/x and pkg@workspace:* failed"
+  },
+  {
+    "rule": "fragment",
+    "input": "https://app.example.com/docs#abcdefghijabcdefghijabcdefghijabcdefghijabcdefghij",
+    "expected": "https://app.example.com/docs#[fragment]"
+  },
+  {
+    "rule": "fragment",
+    "input": "https://app.example.com/docs#foo-abcdefabcdefabcdefabcdefabcdefabcdef",
+    "expected": "https://app.example.com/docs#[fragment]"
+  },
+  {
+    "rule": "fragment",
+    "input": "https://app.example.com/docs#foo-xoxb-abcdefghijkl",
+    "expected": "https://app.example.com/docs#[fragment]"
+  },
+  {
+    "rule": "fragment",
+    "input": "https://app.example.com/docs#[secret]",
+    "expected": "https://app.example.com/docs#[secret]"
+  },
+  {
+    "rule": "fragment",
+    "input": "https://app.example.com/docs#[email]",
+    "expected": "https://app.example.com/docs#[email]"
+  },
+  {
+    "rule": "fragment",
+    "input": "https://app.example.com/docs#zz[secret]",
+    "expected": "https://app.example.com/docs#[fragment]"
   }
 ]

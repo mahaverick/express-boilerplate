@@ -1203,7 +1203,8 @@ query`: the SQL text is never sent. A thrown object that is not an `Error`
   `oauth`); `key` only before `=`; JWTs, PostHog keys, Google, Resend, AWS,
   Slack and Stripe-style keys, email addresses (including unicode, `%40`,
   `%2540`, fullwidth `＠`, quoted local parts, IP-literal and single-label
-  domains), IP addresses, `+`-prefixed phone numbers, the token segment after
+  domains, and a secret-looking base64 run joined to the local part by `/`,
+  which goes with the address), IP addresses, `+`-prefixed phone numbers, the token segment after
   `/reset/`, `/verify/`, `/invite/` or `/accept/`, and long hex and base64
   runs. Each value is then capped at 1024 characters. The span that records
   the exception (`span.recordException`) gets the same scrubbed name, message
@@ -1237,16 +1238,20 @@ query`: the SQL text is never sent. A thrown object that is not an `Error`
   (`%26key%3D`); a URL fragment of lowercase letters and hyphens with no
   key-like word (`#api-key` and `#token-abc` are replaced): under 40 characters,
   or up to 64 when each hyphen-joined word has at most 20 letters, which reads
-  as a heading; a kebab- or snake-case run of lowercase words of up to 20
+  as a heading, unless another rule would replace part of it (32 or more of
+  the letters `a` to `f`, a Slack-style `xoxb-` prefix), when it is replaced
+  whole; a kebab- or snake-case run of lowercase words of up to 20
   letters each, 40 or more characters in all, which reads as an identifier;
   vendor tokens with no rule (`ya29.`, `glpat-`, `hf_`, Google `1//` refresh
   tokens); a host named like a package ref after `@` (`jane@main`, `jane@npm:`,
   `jane@workspace:`); the domain of an email whose local part is a JWT
-  (`[jwt]@example.com`); and the part before the last `/` of a secret glued to
-  an email address (`abc/def/ghi@example.com` keeps `abc/def/`). Scrubbing a
-  scrubbed text again changes nothing, except a URL fragment the base64 rule
-  replaced (`#[secret]` becomes `#[fragment]`) and contrived inputs that glue a
-  phone number, address or hex run to one another. Regex scrubbing is
+  (`[jwt]@example.com`); and the part before the last `/` of a run joined to
+  an email address's local part when the run, with the local part's leading
+  base64 characters, is under 40 characters or reads as a path rather than
+  base64 (the base64 run rule's test), or when it follows an address or a
+  dotted word directly (`jane@example.com/<secret>@example.com`). Scrubbing a
+  scrubbed text again changes nothing, except contrived inputs that glue a
+  phone number, IP address or hex run to one another. Regex scrubbing is
   best-effort: keep secrets out of error messages.
 - **Never attached:** request bodies, headers, query strings or cookies;
   a database error's `detail`, `parameters`, `query` or `where`, or the
