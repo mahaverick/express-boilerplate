@@ -135,7 +135,9 @@ rather than repeating them.
 - **Report a server error only from its one capture point:** `errorHandler`,
   the process-fault handlers in `index.ts`, or a Worker's `failed` listener
   through `reportFinalJobFailure`. Never add a logger transport, and never
-  call `reportError` for an error the code already handles and logs. A
+  call `reportError` or `reportErrorWithSpan` for an error the code already
+  handles and logs; `errorHandler` reports through `reportErrorWithSpan`, so
+  the span reuses the event's scrubbed exception list. A
   deliberate 5xx `HttpError` is reported only when it carries `{ cause }`;
   pass one when it wraps a real fault. Mount a new Worker's `failed`
   listener with `reportFinalJobFailure` first. See

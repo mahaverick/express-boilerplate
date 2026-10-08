@@ -910,6 +910,12 @@ one capture point per kind of failure, and no logger transport:
 | `process.on('uncaughtException' / 'unhandledRejection')` (`index.ts`)                   | always                                                                                                | `process`       |
 | each Worker's `failed` listener, through `reportFinalJobFailure` (`job-failure.job.ts`) | the attempt BullMQ will not retry (`isTerminalFailure`: attempts used up, or an `UnrecoverableError`) | `job`           |
 
+`errorHandler` reports through `reportErrorWithSpan`, which returns the
+event's id and the active span's stand-in, taken from the exception list
+the report built, so a 5xx is built once and its span never carries what
+the event may not. The process-fault handlers and `reportFinalJobFailure`
+call `reportError`.
+
 **The capture rule** (`shouldCaptureHttpError`): an error that is not an
 `HttpError` and resolves to 500 is always reported. An `HttpError` with a
 status of 500 or more is a deliberate answer, reported only when it wraps a
