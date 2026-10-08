@@ -374,8 +374,9 @@ describe('a failed query’s bound parameters, proven', () => {
             depth: Infinity,
           })
           const span = inspect(subject.scrubbedErrorForSpan(fakeQueryError()), { depth: Infinity })
-          expect(event).not.toContain(LEAKED_PARAM)
-          expect(span).not.toContain(LEAKED_PARAM)
+          // Soft, so the span half is checked and reported even when the event half fails.
+          expect.soft(event).not.toContain(LEAKED_PARAM)
+          expect.soft(span).not.toContain(LEAKED_PARAM)
         }
       )
     }

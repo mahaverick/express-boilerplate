@@ -386,7 +386,7 @@ describe('the Errors audit with Redis down', () => {
   it('answers 200 and writes one user.errors_viewed per call: the throttle fails toward auditing', async () => {
     const subject = await createTrackedUser()
     const { token } = await createTrackedStaff('admin')
-    vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
     target.isRedisDown = true
 
     const first = await getErrors(token, `/users/${subject.id}/errors`)
@@ -394,6 +394,10 @@ describe('the Errors audit with Redis down', () => {
 
     expect([first.status, second.status]).toEqual([200, 200])
     expect(await errorsAudits(subject.id)).toBe(2)
+    const throttleWarnings = warn.mock.calls.filter(([message]) =>
+      message.endsWith('audit throttle unavailable; writing the audit entry anyway')
+    )
+    expect(throttleWarnings).toHaveLength(2)
   })
 
   /**

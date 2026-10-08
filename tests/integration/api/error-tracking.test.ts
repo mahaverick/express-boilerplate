@@ -410,8 +410,10 @@ describe('a client that goes away while a 5xx is being produced', () => {
 
   it('still reports any other failure after the client is gone', async () => {
     vi.spyOn(logger, 'error').mockImplementation(() => {})
+    const report = vi.spyOn(reporter, 'reportError')
 
     expect(await failAfterClientLeft('plain')).toBe(500)
+    expect(report).toHaveBeenCalledTimes(1)
     expect(await sentExceptions()).toHaveLength(1)
   })
 })
