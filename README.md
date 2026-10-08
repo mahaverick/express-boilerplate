@@ -252,9 +252,8 @@ beside it. The two security notices, `password_changed` and
 action needs (409 `not_resendable`); a suppressed recipient gets 409
 `recipient_suppressed` and a template this build no longer has 409
 `template_unavailable`. An invitation to a tenant that is not active gets
-the member routes' 404, and one to the platform tenant needs a sign-in
-within the last 10 minutes (401 `REAUTH_REQUIRED`), as the member route
-does.
+the member routes' 404, and every invitation resend, on any tenant, needs a
+sign-in within the last 10 minutes (401 `REAUTH_REQUIRED`).
 
 ## Onboarding
 

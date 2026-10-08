@@ -373,7 +373,7 @@ uuid))` on every column,** as `errors-query.service.ts` does: per-column
   change. There an owner may demote or remove another owner
   (`canPlatformActorModifyTarget`); the last-owner guard counts active
   owners only (`countActiveOwners`); and a role change, a removal, a resend,
-  or an invitation of any role needs step-up
+  an invitation of any role, or leaving needs step-up
   (`requireRecentAuthOnPlatformTenant`): every platform role reads every user,
   tenant and address. A revoke needs no recent sign-in: it only removes a
   pending grant. Keep these to the platform tenant:
