@@ -345,9 +345,12 @@ export function reportError(error: unknown, context: ErrorContext): string {
  * Send every queued report, ignoring any back-off, until the queue is empty,
  * PostHog asks to retry (a send that fails outright counts as that), or
  * `deadlineMs` passes. A batch PostHog refuses is dropped and the flush goes
- * on. A send already in flight is waited for, but not queued behind: while
- * it is out, the queued events go in batches of their own beside it, so a
- * fatal event is never stuck behind a hung request. For process
+ * on. A flight already out when the flush starts, or started while it runs
+ * (the end of one schedules the next), is waited for, also once the queue
+ * is empty, since it may carry the fatal event; a flight that ends asking to
+ * retry ends the flush too. It is not queued behind: while it is out, the
+ * queued events go in batches of their own beside it, so a fatal event is
+ * never stuck behind a hung request. A reset ends the flush. For process
  * faults and graceful shutdown. The deadline timer is not unref'd, so the
  * process stays up until the flush ends or the deadline passes. Never rejects.
  * @param deadlineMs - The most milliseconds to spend.
@@ -356,14 +359,19 @@ export function reportError(error: unknown, context: ErrorContext): string {
 export async function flushErrorReports(deadlineMs: number): Promise<void> {
   const deadline = Date.now() + deadlineMs
   const run = { isExpired: false }
-  const { generation, inFlight } = state
+  const { generation } = state
   const drain = async (): Promise<void> => {
-    while (!run.isExpired && state.queue.length > 0) {
+    while (!run.isExpired && generation === state.generation) {
+      const { inFlight } = state
+      if (state.queue.length === 0) {
+        if (inFlight === undefined || (await inFlight) === 'retry') return
+        continue
+      }
       const remaining = deadline - Date.now()
       if (remaining <= 0) return
       const timeoutMs = Math.min(remaining, ANALYTICS_SEND_TIMEOUT_MS)
       const outcome =
-        state.inFlight === undefined
+        inFlight === undefined
           ? await startFlush(timeoutMs, false)
           : settleSent(await sendNextBatch(timeoutMs), generation)
       if (outcome === 'retry') return
@@ -372,7 +380,7 @@ export async function flushErrorReports(deadlineMs: number): Promise<void> {
   let timer: NodeJS.Timeout | undefined
   try {
     await Promise.race([
-      Promise.all([inFlight, drain()]),
+      drain(),
       new Promise<void>((resolve) => {
         timer = setTimeout(resolve, Math.max(0, deadlineMs))
       }),

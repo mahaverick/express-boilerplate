@@ -105,6 +105,54 @@ function sendGaps(): number[] {
   return posthog.batches.slice(1).map((batch, index) => batch.at - posthog.batches[index]!.at)
 }
 
+/**
+ * Answer every send with a promise the test settles by hand.
+ * @returns The resolvers, one per send, in send order.
+ */
+function holdSends(): ((result: SendResult) => void)[] {
+  const pending: ((result: SendResult) => void)[] = []
+  posthog.answer = () =>
+    new Promise((resolve) => {
+      pending.push(resolve)
+    })
+  return pending
+}
+
+/**
+ * Leave one send hanging, queue 99 events and a fatal one a minute later,
+ * start a deadline flush that sends 50 beside the hanging send, then let the
+ * hanging send ack, so its end starts a new flight with the last 50
+ * (the fatal one among them) while the flush runs.
+ * @returns The resolvers, the fatal event's id, and the flush's state.
+ */
+async function flushWhileAFlightStarts(): Promise<{
+  pending: ((result: SendResult) => void)[]
+  fatalId: string
+  flush: { isDone: boolean; done: Promise<void> }
+}> {
+  const pending = holdSends()
+  reportError(new Error('earlier'), HTTP)
+  await vi.advanceTimersByTimeAsync(5000)
+  // A minute on, so the throttle's global window has room for 100 more.
+  await vi.advanceTimersByTimeAsync(60_000)
+  reportDistinct(99, 'storm')
+  const fatalId = reportError(new Error('fatal'), { capturePoint: 'process', handled: false })
+  const flush = { isDone: false, done: Promise.resolve() }
+  flush.done = (async () => {
+    await flushErrorReports(2000)
+    flush.isDone = true
+  })()
+  await vi.advanceTimersByTimeAsync(0)
+  expect(posthog.batches.map((batch) => batch.events.length)).toEqual([1, 50])
+  pending[0]?.({ kind: 'ack' })
+  await vi.advanceTimersByTimeAsync(0)
+  expect(posthog.batches.map((batch) => batch.events.length)).toEqual([1, 50, 50])
+  expect(posthog.batches[2]?.events.map((event) => event.uuid)).toContain(fatalId)
+  pending[1]?.({ kind: 'ack' })
+  await vi.advanceTimersByTimeAsync(0)
+  return { pending, fatalId, flush }
+}
+
 beforeEach(() => {
   vi.useFakeTimers({ now: new Date('2026-10-04T12:00:00.000Z') })
   tracking.isEnabled = true
@@ -409,6 +457,7 @@ describe('flushErrorReports', () => {
   })
 
   it('sends a newly queued fatal event even while an earlier send hangs', async () => {
+    // The hanging send never settles; the reset in afterEach fences it off.
     posthog.answer = () => new Promise<SendResult>(() => {})
     reportError(new Error('earlier'), HTTP)
     await vi.advanceTimersByTimeAsync(5000)
@@ -421,6 +470,47 @@ describe('flushErrorReports', () => {
     expect(posthog.batches.flatMap((batch) => batch.events.map((event) => event.uuid))).toContain(
       fatalId
     )
+  })
+
+  it('waits for a flight that started during the flush, with the fatal event in it', async () => {
+    const { pending, flush } = await flushWhileAFlightStarts()
+    expect(flush.isDone).toBe(false)
+    pending[2]?.({ kind: 'ack' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(flush.isDone).toBe(true)
+    await flush.done
+    expect(counted('sent')).toBe(101)
+    expect(queuedErrorReportCount()).toBe(0)
+  })
+
+  it('resolves at the deadline when a flight that started during the flush hangs', async () => {
+    const { flush } = await flushWhileAFlightStarts()
+    await vi.advanceTimersByTimeAsync(1999)
+    expect(flush.isDone).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(flush.isDone).toBe(true)
+    await flush.done
+  })
+
+  it('stops sending when the reporter is reset during the flush', async () => {
+    const pending = holdSends()
+    reportError(new Error('earlier'), HTTP)
+    await vi.advanceTimersByTimeAsync(5000)
+    reportError(new Error('beside'), HTTP)
+    const flushed = flushErrorReports(2000)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(posthog.batches).toHaveLength(2)
+    resetErrorReporter()
+    reportDistinct(51, 'after')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(posthog.batches).toHaveLength(3)
+    pending[1]?.({ kind: 'ack' })
+    await vi.advanceTimersByTimeAsync(0)
+    // The reset reporter's last event waits for its own flush, not the old one.
+    expect(posthog.batches).toHaveLength(3)
+    expect(queuedErrorReportCount()).toBe(1)
+    await vi.advanceTimersByTimeAsync(2000)
+    await flushed
   })
 
   it('resolves at once with nothing queued', async () => {
@@ -446,6 +536,22 @@ describe('resetErrorReporter', () => {
     await vi.advanceTimersByTimeAsync(0)
     // Only the post-reset event belongs to the fresh reporter.
     expect(queuedErrorReportCount()).toBe(1)
+  })
+
+  it('a flight started before reset does not end the flight started after it', async () => {
+    const pending = holdSends()
+    reportError(new Error('before reset'), HTTP)
+    await vi.advanceTimersByTimeAsync(5000)
+    resetErrorReporter()
+    reportDistinct(50)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(posthog.batches).toHaveLength(2)
+    pending[0]?.({ kind: 'ack' })
+    await vi.advanceTimersByTimeAsync(0)
+    reportDistinct(50, 'f')
+    await vi.advanceTimersByTimeAsync(0)
+    // The post-reset flight is still out, so the next 50 wait for it.
+    expect(posthog.batches).toHaveLength(2)
   })
 })
 
