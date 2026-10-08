@@ -14,6 +14,7 @@ import {
   dedupeSchedulerJobs,
   getQueuePauseStates,
   reconcileQueuePause,
+  resetQueueFailureStreaks,
   setAllQueuesPaused,
 } from '@/services/maintenance-mode/maintenance-mode-queues.service'
 import {
@@ -74,6 +75,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.restoreAllMocks()
+  resetQueueFailureStreaks()
   await setAllQueuesPaused(false)
   await resetMaintenanceMode()
   await reloadMaintenanceMode()
@@ -124,6 +126,49 @@ describe('reconcileQueuePause', () => {
     failing.mockRestore()
     expect(await pauseFlags()).toEqual({ ...ALL_PAUSED, email: false })
     expect(warn).toHaveBeenCalledTimes(1)
+  })
+})
+
+const DEDUPE_WARNING =
+  'Duplicate scheduler runs could not be removed before the queue resumed; duplicate runs may follow'
+
+/**
+ * Pause every queue, then reconcile to `read_only`, which resumes them.
+ */
+async function pauseThenResume(): Promise<void> {
+  await setAllQueuesPaused(true)
+  await reconcileQueuePause(snapshot('read_only', 0), NOW)
+}
+
+describe('the failure streaks', () => {
+  it('logs a failing duplicate cleanup once per streak, and again once the streaks are reset', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    vi.spyOn(getEmailQueue(), 'getJobSchedulers').mockRejectedValue(
+      new Error('Connection is closed.')
+    )
+    const dedupeWarnings = (): number =>
+      warn.mock.calls.filter(([message]) => message === DEDUPE_WARNING).length
+
+    await pauseThenResume()
+    await pauseThenResume()
+    expect(dedupeWarnings()).toBe(1)
+
+    resetQueueFailureStreaks()
+    await pauseThenResume()
+    expect(dedupeWarnings()).toBe(2)
+    expect(await pauseFlags()).toEqual(NONE_PAUSED)
+  })
+
+  // Follows a test that ends in a failing streak; only the afterEach reset lets this log its first failure.
+  it('starts every test with no queue in a failing streak', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    vi.spyOn(getEmailQueue(), 'getJobSchedulers').mockRejectedValue(
+      new Error('Connection is closed.')
+    )
+
+    await pauseThenResume()
+
+    expect(warn.mock.calls.filter(([message]) => message === DEDUPE_WARNING)).toHaveLength(1)
   })
 })
 
