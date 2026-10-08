@@ -14,10 +14,18 @@ import { cursorField } from '@/validators/cursor.validators'
 
 /**
  * The notifications cursor's decoded shape: the last row's `createdAt` (as
- * `encodeNotificationCursor` writes it) and `id`.
+ * `encodeNotificationCursor` writes it, from `toISOString()` at millisecond
+ * precision) and `id`. `createdAt` must be a real instant in year 0001 or
+ * later: Postgres has no year 0, so `0000-…` would pass the format check and
+ * then fail the `::timestamptz` cast as a 500.
  */
 export const notificationCursorSchema = z
-  .object({ createdAt: z.iso.datetime(), id: z.uuid() })
+  .object({
+    createdAt: z.iso
+      .datetime()
+      .refine((value) => !Number.isNaN(Date.parse(value)) && new Date(value).getUTCFullYear() >= 1),
+    id: z.uuid(),
+  })
   .strict()
 
 /**

@@ -213,6 +213,8 @@ describe('/api/v1/notifications', () => {
         ['a NUL in the id', b64({ createdAt: '2026-10-07T00:00:00Z', id: 'a\u{0}b' })],
         ['a year Postgres cannot hold', b64({ createdAt: '+275760-09-13T00:00:00Z', id: ID })],
         ['a negative year', b64({ createdAt: '-271821-04-20T00:00:00Z', id: ID })],
+        ['year zero', b64({ createdAt: '0000-01-01T00:00:00Z', id: ID })],
+        ['an oversized cursor', 'A'.repeat(5000)],
       ])('%s', async (_label, cursor) => {
         const { token } = await createAuthenticatedUser()
         const response = await request(app)
@@ -220,6 +222,7 @@ describe('/api/v1/notifications', () => {
           .query({ cursor })
           .set('Authorization', `Bearer ${token}`)
         expect(response.status).toBe(400)
+        expect(Object.keys(envelopeOf(response).errors ?? {})).toEqual(['cursor'])
       })
     })
 

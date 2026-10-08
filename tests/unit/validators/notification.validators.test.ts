@@ -24,6 +24,13 @@ describe('listNotificationsSchema cursor', () => {
     expect(new Date(parsed.cursor?.createdAt ?? '').getTime()).toBe(createdAt.getTime())
   })
 
+  it('accepts the earliest instant Postgres holds, year 0001', () => {
+    const parsed = listNotificationsSchema.parse({
+      cursor: b64({ createdAt: '0001-01-01T00:00:00.000Z', id: ID }),
+    })
+    expect(parsed.cursor?.createdAt).toBe('0001-01-01T00:00:00.000Z')
+  })
+
   it('leaves the cursor out when none is sent', () => {
     expect(listNotificationsSchema.parse({}).cursor).toBeUndefined()
   })
@@ -34,6 +41,7 @@ describe('listNotificationsSchema cursor', () => {
     ['JSON missing the fields', b64({ foo: 'bar' })],
     ['a createdAt that is not a date', b64({ createdAt: 'not-a-date', id: ID })],
     ['an extra field', b64({ createdAt: '2026-01-15T10:30:00.007Z', id: ID, userId: ID })],
+    ['year zero, which Postgres cannot hold', b64({ createdAt: '0000-01-01T00:00:00Z', id: ID })],
     ['an offset instead of Z', b64({ createdAt: '2026-01-15T10:30:00+02:00', id: ID })],
   ])('refuses %s with "cursor is invalid."', (_label, cursor) => {
     const result = listNotificationsSchema.safeParse({ cursor })
