@@ -129,6 +129,7 @@ describe('reconcileQueuePause', () => {
   })
 })
 
+const PAUSE_WARNING = 'A queue could not be paused for maintenance mode; the next reload retries'
 const DEDUPE_WARNING =
   'Duplicate scheduler runs could not be removed before the queue resumed; duplicate runs may follow'
 
@@ -159,16 +160,19 @@ describe('the failure streaks', () => {
     expect(await pauseFlags()).toEqual(NONE_PAUSED)
   })
 
-  // Follows a test that ends in a failing streak; only the afterEach reset lets this log its first failure.
-  it('starts every test with no queue in a failing streak', async () => {
+  it('logs a failing pause check once per streak, and again once the streaks are reset', async () => {
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
-    vi.spyOn(getEmailQueue(), 'getJobSchedulers').mockRejectedValue(
-      new Error('Connection is closed.')
-    )
+    vi.spyOn(getEmailQueue(), 'isPaused').mockRejectedValue(new Error('Connection is closed.'))
+    const pauseWarnings = (): number =>
+      warn.mock.calls.filter(([message]) => message === PAUSE_WARNING).length
 
-    await pauseThenResume()
+    await reconcileQueuePause(snapshot('full', 60_000), NOW)
+    await reconcileQueuePause(snapshot('full', 60_000), NOW)
+    expect(pauseWarnings()).toBe(1)
 
-    expect(warn.mock.calls.filter(([message]) => message === DEDUPE_WARNING)).toHaveLength(1)
+    resetQueueFailureStreaks()
+    await reconcileQueuePause(snapshot('full', 60_000), NOW)
+    expect(pauseWarnings()).toBe(2)
   })
 })
 
