@@ -474,6 +474,27 @@ describe('Slack transport scrubbing', () => {
     expect(sentBodies()).toContain('at handle (/app/src/services/auth.service.ts:10:5)')
   })
 
+  it('does not send a secret from the error’s cause chain', async () => {
+    const error = new Error('request failed', {
+      cause: new Error(`upstream rejected password=${LEAKED_PARAM}`),
+    })
+    slackLogger().error({ error }, 'handler failed')
+    await nextTick()
+    expect(mockFetch).toHaveBeenCalledOnce()
+    expect(sentBodies()).not.toContain(LEAKED_PARAM)
+  })
+
+  it('does not send a URL’s query token', async () => {
+    slackLogger().error(
+      { error: new Error(`GET https://app.example.com/reset?token=${LEAKED_PARAM} failed`) },
+      `fetch https://app.example.com/reset?token=${LEAKED_PARAM} failed`
+    )
+    await nextTick()
+    expect(mockFetch).toHaveBeenCalledOnce()
+    expect(sentBodies()).not.toContain(LEAKED_PARAM)
+    expect(sentBodies()).toContain('https://app.example.com/reset?[query]')
+  })
+
   it('scrubs the duplicate summary too', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     const log = slackLogger()
