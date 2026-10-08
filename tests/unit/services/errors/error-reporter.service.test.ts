@@ -212,7 +212,7 @@ describe('reportError gating and ids', () => {
     expect(warn).toHaveBeenCalledTimes(2)
   })
 
-  it('survives a cause getter that throws, returning an id and warning at most once a minute', () => {
+  it('an error whose cause getter throws is still reported (without its cause)', async () => {
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
     const error = new Error('hostile cause')
     Object.defineProperty(error, 'cause', {
@@ -221,14 +221,14 @@ describe('reportError gating and ids', () => {
       },
     })
     expect(reportError(error, HTTP)).toMatch(UUIDV7)
-    expect(reportError(error, HTTP)).toMatch(UUIDV7)
-    expect(warn.mock.calls.filter(([message]) => message === 'Error reporter failed')).toHaveLength(
-      1
-    )
-    expect(queuedErrorReportCount()).toBe(0)
+    expect(queuedErrorReportCount()).toBe(1)
+    await vi.advanceTimersByTimeAsync(5000)
+    const exceptions = posthog.batches[0]?.events[0]?.properties.$exception_list as unknown[]
+    expect(exceptions).toHaveLength(1)
+    expect(warn).not.toHaveBeenCalled()
   })
 
-  it('survives a Proxy whose every access throws, without recursing', () => {
+  it('a Proxy whose every access throws gives one deterministic outcome per report', async () => {
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
     const trap = (): never => {
       throw new Error('proxy trap')
@@ -245,10 +245,14 @@ describe('reportError gating and ids', () => {
     )
     expect(reportError(hostile, HTTP)).toMatch(UUIDV7)
     expect(reportError(hostile, HTTP)).toMatch(UUIDV7)
-    expect(queuedErrorReportCount()).toBeLessThanOrEqual(2)
-    expect(
-      warn.mock.calls.filter(([message]) => message === 'Error reporter failed').length
-    ).toBeLessThanOrEqual(1)
+    // Each report is queued, with the fallback value.
+    expect(queuedErrorReportCount()).toBe(2)
+    await vi.advanceTimersByTimeAsync(5000)
+    const values = posthog.batches[0]?.events.map(
+      (event) => (event.properties.$exception_list as { value?: string }[])[0]?.value
+    )
+    expect(values).toEqual(['[unreadable error]', '[unreadable error]'])
+    expect(warn).not.toHaveBeenCalled()
     expect(reportError(new Error('after'), HTTP)).toMatch(UUIDV7)
   })
 

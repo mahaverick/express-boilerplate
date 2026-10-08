@@ -402,6 +402,55 @@ describe('a failed query’s bound parameters, proven', () => {
   )
 })
 
+const trap = (): never => {
+  throw new Error('trap')
+}
+
+describe('exceptionListOf with hostile values', () => {
+  it('reads an error whose name, message and stack getters all throw', () => {
+    const error = new Error('x')
+    for (const key of ['name', 'message', 'stack']) {
+      Object.defineProperty(error, key, { get: trap })
+    }
+    expect(exceptionListOf(error)).toMatchObject([{ type: 'Error', value: '[unreadable error]' }])
+  })
+
+  it('reads a revoked Proxy', () => {
+    const { proxy, revoke } = Proxy.revocable({}, {})
+    revoke()
+    expect(exceptionListOf(proxy)).toMatchObject([{ type: 'Error', value: '[unreadable error]' }])
+  })
+
+  it('stops at the depth limit on a circular cause', () => {
+    const error = new Error('loop')
+    Object.defineProperty(error, 'cause', { get: () => error })
+    expect(exceptionListOf(error).length).toBeLessThanOrEqual(ERROR_CAUSE_DEPTH)
+  })
+
+  it('never calls a throwing toString or Symbol.toPrimitive on a thrown object or message', () => {
+    const hostile = {
+      toString: trap,
+      [Symbol.toPrimitive]: trap,
+    }
+    expect(exceptionListOf(hostile)[0]?.value).toBe('Non-Error object thrown')
+    const error = new Error('x')
+    Object.defineProperty(error, 'message', { value: hostile })
+    expect(exceptionListOf(error)[0]?.value).toBe('')
+  })
+
+  it('reads a null-prototype object and a null-prototype error', () => {
+    expect(exceptionListOf(Object.create(null) as object)[0]?.value).toBe('Non-Error object thrown')
+    // eslint-disable-next-line unicorn/no-null -- a null prototype is the case under test
+    const error = Object.setPrototypeOf(new Error('np'), null) as Error
+    expect(exceptionListOf(error)[0]?.value).toBe('np')
+  })
+
+  it('bounds a huge message and keeps a secret in it out of the value', () => {
+    const [first] = exceptionListOf(new Error(`${'a'.repeat(5_000_000)} jane@example.com`))
+    expect(first?.value).not.toContain('jane@example.com')
+  })
+})
+
 describe('scrubbedErrorForSpan', () => {
   it('carries only scrubbed text', () => {
     const error = errorWithFrames('no account for jane@example.com', [
@@ -432,6 +481,6 @@ describe('scrubbedErrorForSpan', () => {
         throw new Error('read refused')
       },
     })
-    expect(scrubbedErrorForSpan(hostile)).toEqual({ name: 'Error', message: 'Unreadable error' })
+    expect(scrubbedErrorForSpan(hostile)).toEqual({ name: 'Error', message: '[unreadable error]' })
   })
 })

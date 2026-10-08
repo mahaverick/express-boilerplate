@@ -94,12 +94,37 @@ const builder = new ErrorPropertiesBuilder(
 const FRAME_LINE = /^\s+at /
 
 /**
- * Whether a value is an `Error`, including one from another realm.
+ * The value an event carries for a thrown value whose message, or whose
+ * every property, throws when read.
+ */
+const UNREADABLE_VALUE = '[unreadable error]'
+
+/**
+ * Read one part of a thrown value, which may be a getter or a Proxy trap
+ * that throws.
+ * @param read - Reads the part.
+ * @param fallback - What to use when reading throws.
+ * @returns The part, or the fallback.
+ */
+function readSafely<T>(read: () => T, fallback: T): T {
+  try {
+    return read()
+  } catch {
+    return fallback
+  }
+}
+
+/**
+ * Whether a value is an `Error`, including one from another realm. A value
+ * that throws when asked is not.
  * @param value - Anything thrown.
  * @returns True for an `Error` instance or an object tagged `[object Error]`.
  */
 function isErrorValue(value: unknown): value is Error {
-  return value instanceof Error || Object.prototype.toString.call(value) === '[object Error]'
+  return readSafely(
+    () => value instanceof Error || Object.prototype.toString.call(value) === '[object Error]',
+    false
+  )
 }
 
 /**
@@ -109,9 +134,23 @@ function isErrorValue(value: unknown): value is Error {
  * @returns The `at …` lines, possibly none.
  */
 function frameLinesOf(error: Error): string[] {
-  const { stack } = error
+  const stack = readSafely<unknown>(() => error.stack, undefined)
   if (typeof stack !== 'string') return []
   return stack.split('\n').filter((line) => FRAME_LINE.test(line))
+}
+
+/**
+ * The name of a value's class, or undefined when it has none or reading
+ * it throws.
+ * @param value - An object.
+ * @returns The name.
+ */
+function constructorNameOf(value: object): string | undefined {
+  const name = readSafely<unknown>(
+    () => (value.constructor as { name?: unknown } | undefined)?.name,
+    undefined
+  )
+  return typeof name === 'string' && name !== '' ? name : undefined
 }
 
 /**
@@ -120,21 +159,23 @@ function frameLinesOf(error: Error): string[] {
  * @returns The name.
  */
 function nameOf(error: Error): string {
-  if (typeof error.name === 'string' && error.name !== '') return error.name
-  const constructorName = (error.constructor as { name?: unknown } | undefined)?.name
-  return typeof constructorName === 'string' && constructorName !== '' ? constructorName : 'Error'
+  const name = readSafely<unknown>(() => error.name, undefined)
+  if (typeof name === 'string' && name !== '') return name
+  return constructorNameOf(error) ?? 'Error'
 }
 
 /**
  * An error's message as an event may carry it. A failed query's message
  * embeds its bound parameters, and its SQL text can carry inlined literals,
- * so neither is kept: the message is `Failed query`.
+ * so neither is kept: the message is `Failed query`. A message that throws
+ * when read is `[unreadable error]`.
  * @param error - The error.
  * @returns The message.
  */
 function messageOf(error: Error): string {
-  if (isQueryError(error)) return 'Failed query'
-  return typeof error.message === 'string' ? error.message : ''
+  if (readSafely(() => isQueryError(error), false)) return 'Failed query'
+  const message = readSafely<unknown>(() => error.message, UNREADABLE_VALUE)
+  return typeof message === 'string' ? message : ''
 }
 
 /**
@@ -144,7 +185,8 @@ function messageOf(error: Error): string {
  * @returns The `Error`, or undefined.
  */
 function nestedErrorOf(value: object): Error | undefined {
-  for (const nested of Object.values(value) as unknown[]) {
+  const values = readSafely<unknown[]>(() => Object.values(value), [])
+  for (const nested of values) {
     if (isErrorValue(nested)) return nested
   }
   return undefined
@@ -189,26 +231,33 @@ const NON_ERROR_OBJECT_VALUE = 'Non-Error object thrown'
  * A copy of a thrown value that holds no `Error`. An object becomes an
  * error named for its class (`Error` for a plain object) with a fixed
  * value, because its keys can be user input (a parsed body, a map keyed by
- * address) and are never read. A primitive is returned as it is.
+ * address) and are never read. An object that throws when asked anything
+ * (a hostile Proxy) becomes `[unreadable error]`. A primitive is returned
+ * as it is.
  * @param value - Anything thrown that `errorIn` found no `Error` in.
  * @returns The value to build from.
  */
 function readableNonError(value: unknown): unknown {
   if (typeof value !== 'object' || value === null) return value
-  const constructorName = (value.constructor as { name?: unknown } | undefined)?.name
-  const name =
-    typeof constructorName === 'string' && constructorName !== '' && constructorName !== 'Object'
-      ? constructorName
-      : 'Error'
-  return new ReadableError(name, NON_ERROR_OBJECT_VALUE, [], undefined)
+  const hasConstructor = readSafely<boolean | undefined>(() => 'constructor' in value, undefined)
+  if (hasConstructor === undefined)
+    return new ReadableError('Error', UNREADABLE_VALUE, [], undefined)
+  const name = constructorNameOf(value)
+  return new ReadableError(
+    name === undefined || name === 'Object' ? 'Error' : name,
+    NON_ERROR_OBJECT_VALUE,
+    [],
+    undefined
+  )
 }
 
 /**
  * A copy of a thrown value the builder can read safely. An `Error` (or an
  * object holding one) becomes a fresh `Error` carrying only its name, its
  * message (`messageOf`), its frame lines and, up to `ERROR_CAUSE_DEPTH`
- * links, its `cause` copied the same way. Anything else is copied by
- * `readableNonError`.
+ * links, its `cause` copied the same way. Each part is read through
+ * `readSafely`, so a getter that throws costs that part, not the event.
+ * Anything else is copied by `readableNonError`.
  * @param value - Anything thrown.
  * @param depth - How many links precede this one.
  * @returns The value to build from.
@@ -216,7 +265,7 @@ function readableNonError(value: unknown): unknown {
 function readable(value: unknown, depth: number): unknown {
   const error = errorIn(value)
   if (error === undefined) return readableNonError(value)
-  const { cause } = error
+  const cause = readSafely<unknown>(() => error.cause, undefined)
   const hasCause = cause !== undefined && cause !== null && depth + 1 < ERROR_CAUSE_DEPTH
   return new ReadableError(
     nameOf(error),
@@ -430,6 +479,6 @@ export function scrubbedErrorForSpan(error: unknown): SpanError {
   try {
     return spanErrorOf(exceptionListOf(error))
   } catch {
-    return { name: 'Error', message: 'Unreadable error' }
+    return { name: 'Error', message: UNREADABLE_VALUE }
   }
 }
