@@ -81,6 +81,19 @@ describe('redactedMailErrorForLog', () => {
     expect(redacted.stack).toBeUndefined()
   })
 
+  it.each([
+    ['an indented `at` line', `550 rejected\n    at secret-token-should-not-survive`],
+    [
+      'a frame-shaped line',
+      `550 rejected\n    at secret-token-should-not-survive (/app/src/x.ts:1:1)`,
+    ],
+  ])('drops a message line that forms %s, keeping the real frames', (_name, message) => {
+    const redacted = redactedMailErrorForLog(new Error(message)) as { stack?: string }
+    expect(redacted.stack).toBeDefined()
+    expect(redacted.stack).not.toContain('secret-token-should-not-survive')
+    expect(redacted.stack).toMatch(/^ {4}at /)
+  })
+
   it('leaves `stack` undefined when .stack has no usable "at " frame lines', () => {
     const redacted = redactedMailErrorForLog({ stack: 'Error: just a message, no frames' }) as {
       stack?: string

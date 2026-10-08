@@ -10,6 +10,8 @@ import pino, { type DestinationStream, type Logger, type StreamEntry } from 'pin
 import type { PrettyOptions } from 'pino-pretty'
 import { getEnv, logFormat, type Env } from '@/configs/env.config'
 import { isQueryError, redactedForLog } from '@/errors/postgres-errors'
+import { frameLineIndexesOf } from '@/errors/stack-frames'
+import { scrubText } from '@/services/errors/error-scrubber.service'
 import { requestContextStore } from '@/services/request-context.service'
 
 /**
@@ -211,21 +213,69 @@ async function sendToSlack(webhookUrl: string, payload: Record<string, unknown>)
 }
 
 /**
- * Build the Slack Block Kit payload for one log record.
+ * An ISO 8601 UTC instant, the only form of `timestamp` sent to Slack.
+ */
+const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/
+
+/**
+ * A stack as Slack may receive it. Its frame lines, those with a real V8
+ * frame's shape after the message (`frameLineIndexesOf`), are scrubbed one
+ * by one with `scrubText`, so their paths stay readable; every run of other
+ * lines, the message among them, is scrubbed as one text, so a credential
+ * split over lines, or behind a message line that starts with `at `, is
+ * still seen whole.
+ * @param stack - The serialised error's stack.
+ * @param message - The serialised error's message, when it has one.
+ * @returns The scrubbed stack.
+ */
+function scrubbedStack(stack: string, message: string | undefined): string {
+  const lines = stack.split('\n')
+  const frameIndexes = new Set(frameLineIndexesOf(lines, message))
+  const parts: string[] = []
+  let text: string[] = []
+  for (const [index, line] of lines.entries()) {
+    if (!frameIndexes.has(index)) {
+      text.push(line)
+      continue
+    }
+    if (text.length > 0) parts.push(scrubText(text.join('\n')))
+    text = []
+    parts.push(scrubText(line))
+  }
+  if (text.length > 0) parts.push(scrubText(text.join('\n')))
+  return parts.join('\n')
+}
+
+/**
+ * Build the Slack Block Kit payload for one log record. Every text taken
+ * from the record (message, source, request id, stack) is scrubbed with
+ * the error tracker's `scrubText` first: the channel is a third party, as
+ * PostHog is. The time is not scrubbed but validated: it is sent only as an
+ * ISO instant, else replaced by the current time.
  * @param info - The parsed JSON log record.
  * @returns The webhook body.
  */
 function buildSlackPayload(info: Record<string, unknown>): Record<string, unknown> {
   const level = typeof info.level === 'string' ? info.level : 'error'
-  const message = typeof info.message === 'string' ? info.message : ''
-  const source = typeof info.source === 'string' ? info.source : 'unknown'
-  const requestId = typeof info.requestId === 'string' ? info.requestId : undefined
-  const timestamp = typeof info.timestamp === 'string' ? info.timestamp : new Date().toISOString()
+  const message = typeof info.message === 'string' ? scrubText(info.message) : ''
+  const source = typeof info.source === 'string' ? scrubText(info.source) : 'unknown'
+  const requestId = typeof info.requestId === 'string' ? scrubText(info.requestId) : undefined
+  // A meta key named `timestamp` overrides pino's own; only an ISO instant is trusted.
+  const timestamp =
+    typeof info.timestamp === 'string' && ISO_INSTANT.test(info.timestamp)
+      ? info.timestamp
+      : new Date().toISOString()
   const errorStack =
     info.error && typeof info.error === 'object' && 'stack' in info.error
       ? info.error.stack
       : undefined
-  const stack = typeof errorStack === 'string' ? errorStack : undefined
+  const errorMessage =
+    info.error && typeof info.error === 'object' && 'message' in info.error
+      ? info.error.message
+      : undefined
+  const messageOfStack = typeof errorMessage === 'string' ? errorMessage : undefined
+  const stack =
+    typeof errorStack === 'string' ? scrubbedStack(errorStack, messageOfStack) : undefined
 
   const fields = [
     { type: 'mrkdwn', text: `*Source:* \`${source}\`` },
@@ -253,7 +303,8 @@ function buildSlackPayload(info: Record<string, unknown>): Record<string, unknow
 }
 
 /**
- * Build the "suppressed N duplicates" summary sent when a dedup window closes.
+ * Build the "suppressed N duplicates" summary sent when a dedup window
+ * closes, its source and message scrubbed as `buildSlackPayload` scrubs them.
  * @param source - The record's source field.
  * @param message - The record's message.
  * @param suppressedCount - How many repeats were swallowed.
@@ -265,13 +316,47 @@ function buildSlackSummaryPayload(
   suppressedCount: number
 ): Record<string, unknown> {
   return {
-    text: `⚠️ Suppressed ${suppressedCount} duplicate occurrence${suppressedCount === 1 ? '' : 's'} of "${message}" from \`${source}\` in the last 60s`,
+    text: `⚠️ Suppressed ${suppressedCount} duplicate occurrence${suppressedCount === 1 ? '' : 's'} of "${scrubText(message)}" from \`${scrubText(source)}\` in the last 60s`,
+  }
+}
+
+/**
+ * The body sent in place of a record whose scrub threw: fixed text, nothing
+ * from the record.
+ */
+const SLACK_SCRUB_FAILED_PAYLOAD = {
+  text: 'A log record could not be scrubbed and was not forwarded; see the application logs.',
+}
+
+/**
+ * Error names printed by name when a scrub fails; any other name could carry data.
+ */
+const SAFE_ERROR_NAMES = new Set(['Error', 'TypeError', 'RangeError', 'SyntaxError'])
+
+/**
+ * Build a Slack body, or the fixed `SLACK_SCRUB_FAILED_PAYLOAD` if building
+ * (the scrub) throws. Reports through `console.error`, never the logger:
+ * this destination is part of the logger, and a logger call here would
+ * re-enter it. The unscrubbed record is never sent.
+ * @param build - Builds the scrubbed body.
+ * @returns The body to send.
+ */
+function safeSlackPayload(build: () => Record<string, unknown>): Record<string, unknown> {
+  try {
+    return build()
+  } catch (error: unknown) {
+    console.error(
+      'Slack payload scrub failed',
+      error instanceof Error && SAFE_ERROR_NAMES.has(error.name) ? error.name : typeof error
+    )
+    return SLACK_SCRUB_FAILED_PAYLOAD
   }
 }
 
 /**
  * A pino destination that forwards records to Slack, deduplicating by
- * `${source}:${message}` within a 60 s window: the first occurrence sends at
+ * `${source}:${message}` (the raw text, kept in this process only) within a
+ * 60 s window: the first occurrence sends at
  * once, repeats are counted, and one summary is sent when the window closes
  * if there were any. Level filtering is done by pino.multistream, not here.
  * @param options - The webhook settings.
@@ -304,14 +389,17 @@ export function createSlackDestination(options: { webhookUrl: string }): Destina
         if (entry && entry.count > 1) {
           void sendToSlack(
             options.webhookUrl,
-            buildSlackSummaryPayload(source, message, entry.count - 1)
+            safeSlackPayload(() => buildSlackSummaryPayload(source, message, entry.count - 1))
           )
         }
       }, DEDUP_WINDOW_MS)
       timer.unref()
 
       dedup.set(key, { count: 1, firstSeen: Date.now(), timer })
-      void sendToSlack(options.webhookUrl, buildSlackPayload(info))
+      void sendToSlack(
+        options.webhookUrl,
+        safeSlackPayload(() => buildSlackPayload(info))
+      )
     },
   }
 }

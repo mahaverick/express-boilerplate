@@ -273,6 +273,7 @@ describe('notification.worker', () => {
             userId,
             metadata: { templateKey: 'email_verification' },
             email: {
+              to: '[redacted]',
               templateKey: 'email_verification',
               variables: { firstName: 'Ada', verificationUrl: '[redacted]', appName: 'Test App' },
             },

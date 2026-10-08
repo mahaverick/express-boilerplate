@@ -22,6 +22,7 @@ import { MAINTENANCE_MODE_PAUSE_GRACE_MS } from '@/constants/maintenance-mode.co
 import { logger } from '@/services/logger.service'
 import { getMaintenanceMode } from '@/services/maintenance-mode/maintenance-mode-store.service'
 import { getAllQueues } from '@/services/queue.service'
+import { withStatusTimeout } from '@/services/status-read.service'
 import type { MaintenanceModeSnapshot, QueuePauseState } from '@/types/maintenance-mode'
 
 /**
@@ -252,8 +253,12 @@ export async function reconcileQueuePause(
 
 /**
  * Each queue's pause state and running-job count, read from Redis, which
- * every replica sees alike.
- * @returns One entry per queue, in registry order; a field Redis could not answer is null.
+ * every replica sees alike. The reads are bounded by `STATUS_READ_TIMEOUT_MS`
+ * as one: when they have not all answered by then, every queue's fields are
+ * null, those of queues that did answer included. The staff system status,
+ * the staff maintenance-mode view and the view a mode change answers with
+ * all show this list, for display only.
+ * @returns One entry per queue, in registry order; a field Redis could not answer in time is null.
  */
 export async function getQueuePauseStates(): Promise<QueuePauseState[]> {
   let queues: Queue[]
@@ -262,16 +267,30 @@ export async function getQueuePauseStates(): Promise<QueuePauseState[]> {
   } catch {
     return []
   }
-  return Promise.all(
-    queues.map(async (queue) => {
-      const [paused, active] = await Promise.allSettled([queue.isPaused(), queue.getActiveCount()])
-      return {
-        name: queue.name,
-        // eslint-disable-next-line unicorn/no-null -- the contract is null for "Redis did not answer"
-        paused: paused.status === 'fulfilled' ? paused.value : null,
-        // eslint-disable-next-line unicorn/no-null -- as above
-        active: active.status === 'fulfilled' ? active.value : null,
-      }
-    })
+  const unanswered = queues.map((queue) => ({
+    name: queue.name,
+    // eslint-disable-next-line unicorn/no-null -- the contract is null for "Redis did not answer"
+    paused: null,
+    // eslint-disable-next-line unicorn/no-null -- as above
+    active: null,
+  }))
+  return withStatusTimeout(
+    Promise.all(
+      queues.map(async (queue) => {
+        const [paused, active] = await Promise.allSettled([
+          queue.isPaused(),
+          queue.getActiveCount(),
+        ])
+        return {
+          name: queue.name,
+          // eslint-disable-next-line unicorn/no-null -- the contract is null for "Redis did not answer"
+          paused: paused.status === 'fulfilled' ? paused.value : null,
+          // eslint-disable-next-line unicorn/no-null -- as above
+          active: active.status === 'fulfilled' ? active.value : null,
+        }
+      })
+    ),
+    unanswered,
+    'Queue pause states'
   )
 }

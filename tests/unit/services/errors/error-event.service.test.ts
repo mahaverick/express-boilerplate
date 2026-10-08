@@ -10,7 +10,7 @@ import { trace } from '@opentelemetry/api'
 import postgres from 'postgres'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ANALYTICS_SIGNATURE_PROPERTY } from '@/constants/analytics.constants'
-import { ERROR_CAUSE_DEPTH } from '@/constants/error-tracking.constants'
+import { ERROR_CAUSE_DEPTH, ERROR_VALUE_MAX } from '@/constants/error-tracking.constants'
 import { HttpError } from '@/errors/http-error'
 import {
   isAnalyticsSignatureValid,
@@ -21,6 +21,7 @@ import {
   exceptionListOf,
   fingerprintOf,
   scrubbedErrorForSpan,
+  spanErrorOf,
   type ErrorContext,
 } from '@/services/errors/error-event.service'
 import { requestContextStore } from '@/services/request-context.service'
@@ -138,9 +139,45 @@ describe('exceptionListOf', () => {
       value: 'bad thing',
     })
     expect(exceptionListOf(42)[0]?.value).toBe('Primitive value captured as exception: 42')
-    expect(exceptionListOf({ code: 'E1' })[0]?.value).toBe(
-      'Object captured as exception with keys: code'
-    )
+    expect(exceptionListOf({ code: 'E1' })[0]).toMatchObject({
+      type: 'Error',
+      value: 'Non-Error object thrown',
+    })
+  })
+
+  it('a thrown plain object does not put its (user-controlled) key names in the value', () => {
+    // e.g. code that throws a parsed request body or a lookup map keyed by user input
+    const thrown = { 'reset-code-991847': true, 'jane.doe': 1, Zx9Kq2Lm: 'v' }
+    const [first] = exceptionListOf(thrown)
+    expect(first?.value).not.toContain('reset-code-991847')
+    expect(first?.value).not.toContain('Zx9Kq2Lm')
+  })
+
+  it.each([
+    ['a string', '{"constructor":"Zx9Kq2Lm"}'],
+    ['an object with a name', '{"constructor":{"name":"Zx9Kq2Lm"}}'],
+  ])('ignores an own `constructor` key holding %s (a parsed body)', (_label, json) => {
+    const thrown: unknown = JSON.parse(json)
+    const list = exceptionListOf(thrown)
+    expect(list[0]).toMatchObject({ type: 'Error', value: 'Non-Error object thrown' })
+    expect(fingerprintOf(list)).not.toContain('Zx9Kq2Lm')
+    expect(inspect(scrubbedErrorForSpan(thrown), { depth: Infinity })).not.toContain('Zx9Kq2Lm')
+  })
+
+  it('ignores an own `constructor` key on an Error with no name', () => {
+    const error = Object.assign(new Error('x'), { constructor: { name: 'Zx9Kq2Lm' } })
+    Object.defineProperty(error, 'name', { value: '' })
+    expect(inspect(exceptionListOf(error), { depth: Infinity })).not.toContain('Zx9Kq2Lm')
+  })
+
+  it('names a thrown class instance by its class', () => {
+    class LookupMiss {
+      readonly key = 'jane@example.com'
+    }
+    expect(exceptionListOf(new LookupMiss())[0]).toMatchObject({
+      type: 'LookupMiss',
+      value: 'Non-Error object thrown',
+    })
   })
 })
 
@@ -383,6 +420,103 @@ describe('a failed query’s bound parameters, proven', () => {
   )
 })
 
+const trap = (): never => {
+  throw new Error('trap')
+}
+
+describe('exceptionListOf with hostile values', () => {
+  it('reads an error whose name, message and stack getters all throw', () => {
+    const error = new Error('x')
+    for (const key of ['name', 'message', 'stack']) {
+      Object.defineProperty(error, key, { get: trap })
+    }
+    expect(exceptionListOf(error)).toMatchObject([{ type: 'Error', value: '[unreadable error]' }])
+  })
+
+  it('reports a thrown function without its source or a throwing toString', () => {
+    const thrown = Object.assign(() => 'Zx9Kq2Lm', { toString: trap })
+    expect(exceptionListOf(thrown)).toMatchObject([
+      { type: 'Error', value: 'Non-Error object thrown' },
+    ])
+    expect(
+      inspect(
+        exceptionListOf(() => 'Zx9Kq2Lm'),
+        { depth: Infinity }
+      )
+    ).not.toContain('Zx9Kq2Lm')
+  })
+
+  it('reads a revoked function Proxy and a function Proxy whose traps all throw', () => {
+    const { proxy, revoke } = Proxy.revocable(() => 1, {})
+    revoke()
+    expect(exceptionListOf(proxy)).toMatchObject([{ type: 'Error', value: '[unreadable error]' }])
+    const hostile = new Proxy(() => 1, {
+      get: trap,
+      has: trap,
+      ownKeys: trap,
+      getPrototypeOf: trap,
+      getOwnPropertyDescriptor: trap,
+    })
+    expect(exceptionListOf(hostile)).toMatchObject([{ type: 'Error', value: '[unreadable error]' }])
+  })
+
+  it('reads a revoked Proxy', () => {
+    const { proxy, revoke } = Proxy.revocable({}, {})
+    revoke()
+    expect(exceptionListOf(proxy)).toMatchObject([{ type: 'Error', value: '[unreadable error]' }])
+  })
+
+  it('stops at the depth limit on a circular cause', () => {
+    const error = new Error('loop')
+    Object.defineProperty(error, 'cause', { get: () => error })
+    expect(exceptionListOf(error)).toHaveLength(ERROR_CAUSE_DEPTH)
+  })
+
+  it('never calls a throwing toString or Symbol.toPrimitive on a thrown object or message', () => {
+    const hostile = {
+      toString: trap,
+      [Symbol.toPrimitive]: trap,
+    }
+    expect(exceptionListOf(hostile)[0]?.value).toBe('Non-Error object thrown')
+    const error = new Error('x')
+    Object.defineProperty(error, 'message', { value: hostile })
+    expect(exceptionListOf(error)[0]?.value).toBe('')
+  })
+
+  it('reads a null-prototype object and a null-prototype error', () => {
+    expect(exceptionListOf(Object.create(null) as object)[0]?.value).toBe('Non-Error object thrown')
+    // eslint-disable-next-line unicorn/no-null -- a null prototype is the case under test
+    const error = Object.setPrototypeOf(new Error('np'), null) as Error
+    expect(exceptionListOf(error)[0]?.value).toBe('np')
+  })
+
+  it('bounds a huge message and keeps a secret in it out of the value', () => {
+    const [first] = exceptionListOf(new Error(`jane@example.com ${'a'.repeat(5_000_000)}`))
+    expect(first?.value).not.toContain('jane@example.com')
+    expect(first?.value?.length).toBeLessThanOrEqual(ERROR_VALUE_MAX + 20)
+  })
+})
+
+describe('a message line that looks like a stack frame', () => {
+  it.each([
+    ['an indented `at` line after a key', `login failed password:\n    at ${LEAKED_PARAM}`],
+    [
+      'an `at` line in prose before a code',
+      `oauth exchange failed\n  at least one retry\n{ code: '${LEAKED_PARAM}' }`,
+    ],
+    [
+      'a frame-shaped line inside the message',
+      `login failed password:\n    at ${LEAKED_PARAM} (/app/src/x.ts:1:1)`,
+    ],
+  ])('never becomes a frame of the event or the span: %s', (_name, message) => {
+    const error = new Error(message)
+    const exceptions = exceptionListOf(error)
+    expect(JSON.stringify(exceptions)).not.toContain(LEAKED_PARAM)
+    expect(spanErrorOf(exceptions).stack).not.toContain(LEAKED_PARAM)
+    expect(exceptions[0]?.stacktrace?.frames?.length ?? 0).toBeGreaterThan(0)
+  })
+})
+
 describe('scrubbedErrorForSpan', () => {
   it('carries only scrubbed text', () => {
     const error = errorWithFrames('no account for jane@example.com', [
@@ -413,6 +547,6 @@ describe('scrubbedErrorForSpan', () => {
         throw new Error('read refused')
       },
     })
-    expect(scrubbedErrorForSpan(hostile)).toEqual({ name: 'Error', message: 'Unreadable error' })
+    expect(scrubbedErrorForSpan(hostile)).toEqual({ name: 'Error', message: '[unreadable error]' })
   })
 })

@@ -6,6 +6,9 @@
  * capture rule. Error tracking is switched on through a mocked
  * `isErrorTrackingEnabled`; no Redis or PostHog.
  */
+import { Writable } from 'node:stream'
+import { inspect } from 'node:util'
+import { ErrorPropertiesBuilder } from '@posthog/core/error-tracking'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { HttpError } from '@/errors/http-error'
 import { TimelineUnavailableError } from '@/errors/timeline-errors'
@@ -15,17 +18,24 @@ import {
   recordErrorSendError,
   recordErrorSendOk,
 } from '@/services/errors/error-counters.service'
+import { scrubbedErrorForSpan } from '@/services/errors/error-event.service'
 import {
   flushErrorReports,
   queuedErrorReportCount,
   reportError,
+  reportErrorWithSpan,
   resetErrorReporter,
   shouldCaptureHttpError,
   type ErrorContext,
 } from '@/services/errors/error-reporter.service'
-import { logger } from '@/services/logger.service'
+import { createPinoLogger, logger } from '@/services/logger.service'
+import { fakeQueryError, LEAKED_PARAM } from '../../../helpers/query-error'
 
-const tracking = vi.hoisted(() => ({ isEnabled: true, shouldThrow: false }))
+const tracking = vi.hoisted((): { isEnabled: boolean; shouldThrow: boolean; thrown: unknown } => ({
+  isEnabled: true,
+  shouldThrow: false,
+  thrown: undefined,
+}))
 
 const posthog = vi.hoisted(() => ({
   batches: [] as { events: PosthogBatchEvent[]; at: number }[],
@@ -38,6 +48,8 @@ vi.mock('@/configs/analytics.config', async (importOriginal) => {
     ...actual,
     isErrorTrackingEnabled: () => {
       if (tracking.shouldThrow) throw new Error('config unreadable')
+      // eslint-disable-next-line @typescript-eslint/only-throw-error -- a thrown non-Error is the value under test
+      if (tracking.thrown !== undefined) throw tracking.thrown
       return tracking.isEnabled
     },
   }
@@ -105,10 +117,66 @@ function sendGaps(): number[] {
   return posthog.batches.slice(1).map((batch, index) => batch.at - posthog.batches[index]!.at)
 }
 
+/**
+ * Answer every send with a promise the test settles by hand.
+ * @returns The resolvers, one per send, in send order.
+ */
+function holdSends(): ((result: SendResult) => void)[] {
+  const pending: ((result: SendResult) => void)[] = []
+  posthog.answer = () =>
+    new Promise((resolve) => {
+      pending.push(resolve)
+    })
+  return pending
+}
+
+/**
+ * Leave one send hanging, queue 99 events and a fatal one a minute later,
+ * start a deadline flush that sends 50 beside the hanging send, then let the
+ * hanging send ack, so its end starts a new flight with the last 50
+ * (the fatal one among them) while the flush runs.
+ * @returns The resolvers, the fatal event's id, and the flush's state.
+ */
+async function flushWhileAFlightStarts(): Promise<{
+  pending: ((result: SendResult) => void)[]
+  fatalId: string
+  flush: { isDone: boolean; done: Promise<void> }
+}> {
+  const pending = holdSends()
+  reportError(new Error('earlier'), HTTP)
+  await vi.advanceTimersByTimeAsync(5000)
+  // A minute on, so the throttle's global window has room for 100 more.
+  await vi.advanceTimersByTimeAsync(60_000)
+  reportDistinct(99, 'storm')
+  const fatalId = reportError(new Error('fatal'), { capturePoint: 'process', handled: false })
+  const flush = { isDone: false, done: Promise.resolve() }
+  flush.done = (async () => {
+    await flushErrorReports(2000)
+    flush.isDone = true
+  })()
+  await vi.advanceTimersByTimeAsync(0)
+  expect(posthog.batches.map((batch) => batch.events.length)).toEqual([1, 50])
+  pending[0]?.({ kind: 'ack' })
+  await vi.advanceTimersByTimeAsync(0)
+  expect(posthog.batches.map((batch) => batch.events.length)).toEqual([1, 50, 50])
+  expect(posthog.batches[2]?.events.map((event) => event.uuid)).toContain(fatalId)
+  pending[1]?.({ kind: 'ack' })
+  await vi.advanceTimersByTimeAsync(0)
+  return { pending, fatalId, flush }
+}
+
+/**
+ * A Proxy trap that throws a message holding the leak sentinel.
+ */
+function leakyTrap(): never {
+  throw new Error('proxy trap Zx9Kq2Lm')
+}
+
 beforeEach(() => {
   vi.useFakeTimers({ now: new Date('2026-10-04T12:00:00.000Z') })
   tracking.isEnabled = true
   tracking.shouldThrow = false
+  tracking.thrown = undefined
   posthog.batches = []
   posthog.answer = () => Promise.resolve({ kind: 'ack' })
 })
@@ -151,7 +219,7 @@ describe('reportError gating and ids', () => {
     expect(warn).toHaveBeenCalledTimes(2)
   })
 
-  it('survives a cause getter that throws, returning an id and warning at most once a minute', () => {
+  it('an error whose cause getter throws is still reported (without its cause)', async () => {
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
     const error = new Error('hostile cause')
     Object.defineProperty(error, 'cause', {
@@ -160,14 +228,14 @@ describe('reportError gating and ids', () => {
       },
     })
     expect(reportError(error, HTTP)).toMatch(UUIDV7)
-    expect(reportError(error, HTTP)).toMatch(UUIDV7)
-    expect(warn.mock.calls.filter(([message]) => message === 'Error reporter failed')).toHaveLength(
-      1
-    )
-    expect(queuedErrorReportCount()).toBe(0)
+    expect(queuedErrorReportCount()).toBe(1)
+    await vi.advanceTimersByTimeAsync(5000)
+    const exceptions = posthog.batches[0]?.events[0]?.properties.$exception_list as unknown[]
+    expect(exceptions).toHaveLength(1)
+    expect(warn).not.toHaveBeenCalled()
   })
 
-  it('survives a Proxy whose every access throws, without recursing', () => {
+  it('a Proxy whose every access throws gives one deterministic outcome per report', async () => {
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
     const trap = (): never => {
       throw new Error('proxy trap')
@@ -184,11 +252,31 @@ describe('reportError gating and ids', () => {
     )
     expect(reportError(hostile, HTTP)).toMatch(UUIDV7)
     expect(reportError(hostile, HTTP)).toMatch(UUIDV7)
-    expect(queuedErrorReportCount()).toBeLessThanOrEqual(2)
-    expect(
-      warn.mock.calls.filter(([message]) => message === 'Error reporter failed').length
-    ).toBeLessThanOrEqual(1)
+    // Each report is queued, with the fallback value.
+    expect(queuedErrorReportCount()).toBe(2)
+    await vi.advanceTimersByTimeAsync(5000)
+    const values = posthog.batches[0]?.events.map(
+      (event) => (event.properties.$exception_list as { value?: string }[])[0]?.value
+    )
+    expect(values).toEqual(['[unreadable error]', '[unreadable error]'])
+    expect(warn).not.toHaveBeenCalled()
     expect(reportError(new Error('after'), HTTP)).toMatch(UUIDV7)
+  })
+
+  it('a function Proxy whose every access throws is reported, without a warning', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    const hostile = new Proxy(() => 1, {
+      get: leakyTrap,
+      has: leakyTrap,
+      ownKeys: leakyTrap,
+      getPrototypeOf: leakyTrap,
+      getOwnPropertyDescriptor: leakyTrap,
+    })
+    expect(reportError(hostile, HTTP)).toMatch(UUIDV7)
+    expect(queuedErrorReportCount()).toBe(1)
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(inspect(posthog.batches, { depth: Infinity })).not.toContain('Zx9Kq2Lm')
+    expect(warn).not.toHaveBeenCalled()
   })
 
   it('queues nothing for a report made while building another', () => {
@@ -201,6 +289,82 @@ describe('reportError gating and ids', () => {
     })
     expect(reportError(error, HTTP)).toMatch(UUIDV7)
     expect(queuedErrorReportCount()).toBe(1)
+  })
+})
+
+/**
+ * Make `logger.warn` write through a real pino JSON pipeline and return
+ * the lines written.
+ * @returns The written lines, filled as the logger is called.
+ */
+function capturedWarnLines(): string[] {
+  const lines: string[] = []
+  const destination = new Writable({
+    write(chunk, _encoding, done) {
+      lines.push(String(chunk))
+      done()
+    },
+  })
+  const pinoLogger = createPinoLogger({ level: 'warn', format: 'json', destination })
+  vi.spyOn(logger, 'warn').mockImplementation((message: string, meta?: Record<string, unknown>) => {
+    pinoLogger.warn(meta ?? {}, message)
+  })
+  return lines
+}
+
+describe('internal failure log', () => {
+  it('the internal-failure warn line carries no secret from the thrown value', () => {
+    const lines = capturedWarnLines()
+    tracking.thrown = 'connect failed: password=hunter2 user=jane@example.com'
+    reportError(new Error('outer'), HTTP)
+    const output = lines.join('')
+    expect(output).toContain('Error reporter failed')
+    expect(output).not.toContain('hunter2')
+    expect(output).not.toContain('jane@example.com')
+  })
+
+  it('keeps the scrubbed detail in the line, beside the logger message', () => {
+    const lines = capturedWarnLines()
+    tracking.thrown = 'connect failed: password=hunter2'
+    reportError(new Error('outer'), HTTP)
+    const parsed = JSON.parse(lines.join('')) as Record<string, unknown>
+    expect(parsed.message).toBe('Error reporter failed')
+    expect(parsed.errorType).toBe('string')
+    expect(parsed.detail).toBe('connect failed: password=[redacted]')
+  })
+
+  it('never throws when the internal failure is a value whose query getter throws', () => {
+    const lines = capturedWarnLines()
+    tracking.thrown = {
+      get query(): never {
+        throw new Error('query getter exploded')
+      },
+    }
+    expect(reportError(new Error('outer'), HTTP)).toMatch(UUIDV7)
+    const parsed = JSON.parse(lines.join('')) as Record<string, unknown>
+    expect(parsed.message).toBe('Error reporter failed')
+    expect(parsed.errorType).toBe('unknown')
+    expect(parsed.detail).toBe('[unreadable]')
+  })
+
+  it('logs a thrown query error without its bound values', () => {
+    const lines = capturedWarnLines()
+    tracking.thrown = fakeQueryError()
+    reportError(new Error('outer'), HTTP)
+    const output = lines.join('')
+    expect(output).toContain('Error reporter failed')
+    expect(output).not.toContain(LEAKED_PARAM)
+    expect(output).toContain('"detail":"select $1"')
+  })
+
+  it('scrubs a thrown error name', () => {
+    const lines = capturedWarnLines()
+    class NamedError extends Error {
+      override name = `Bearer ${LEAKED_PARAM}`
+    }
+    tracking.thrown = new NamedError('x')
+    reportError(new Error('outer'), HTTP)
+    expect(lines.join('')).not.toContain(LEAKED_PARAM)
   })
 })
 
@@ -226,6 +390,64 @@ describe('throttle', () => {
     await vi.advanceTimersByTimeAsync(0)
     const sent = posthog.batches.reduce((sum, batch) => sum + batch.events.length, 0)
     expect(sent + queuedErrorReportCount()).toBe(100)
+    expect(counted('throttled')).toBe(1)
+  })
+})
+
+describe('throttle before build', () => {
+  it('a report past the 100-per-minute global cap does no build work', () => {
+    const build = vi.spyOn(ErrorPropertiesBuilder.prototype, 'buildFromUnknown')
+    reportDistinct(100)
+    expect(counted('throttled')).toBe(0)
+    const before = build.mock.calls.length
+    reportError('one more past the cap', HTTP)
+    expect(counted('throttled')).toBe(1)
+    expect(build.mock.calls).toHaveLength(before)
+  })
+})
+
+describe('reportErrorWithSpan', () => {
+  it('takes the span stand-in from the built event, scrubbed like the event', () => {
+    const error = fakeQueryError()
+    const build = vi.spyOn(ErrorPropertiesBuilder.prototype, 'buildFromUnknown')
+    const { spanError } = reportErrorWithSpan(error, HTTP)
+    const stand = spanError()
+    expect(queuedErrorReportCount()).toBe(1)
+    expect(build).toHaveBeenCalledTimes(1)
+    expect(inspect(stand, { depth: Infinity })).not.toContain(LEAKED_PARAM)
+    expect(stand).toEqual(scrubbedErrorForSpan(error))
+  })
+
+  it('builds a scrubbed stand-in from the error when the report built none', () => {
+    tracking.isEnabled = false
+    const error = fakeQueryError()
+    const stand = reportErrorWithSpan(error, HTTP).spanError()
+    expect(queuedErrorReportCount()).toBe(0)
+    expect(inspect(stand, { depth: Infinity })).not.toContain(LEAKED_PARAM)
+    expect(stand).toEqual(scrubbedErrorForSpan(error))
+  })
+
+  it('past the global cap, builds the stand-in of a query error once, without its parameters', () => {
+    reportDistinct(100)
+    const build = vi.spyOn(ErrorPropertiesBuilder.prototype, 'buildFromUnknown')
+    const stand = reportErrorWithSpan(fakeQueryError(), HTTP).spanError()
+    expect(counted('throttled')).toBe(1)
+    expect(build).toHaveBeenCalledTimes(1)
+    expect(inspect(stand, { depth: Infinity })).not.toContain(LEAKED_PARAM)
+  })
+
+  it('a getter that reports while the fallback stand-in is built adds no report', () => {
+    reportDistinct(100)
+    const error = new Error('outer')
+    Object.defineProperty(error, 'message', {
+      get: () => {
+        reportError(new Error('re-entrant'), HTTP)
+        return 'outer'
+      },
+    })
+    const { spanError } = reportErrorWithSpan(error, HTTP)
+    expect(counted('throttled')).toBe(1)
+    spanError()
     expect(counted('throttled')).toBe(1)
   })
 })
@@ -280,7 +502,7 @@ describe('queue and flush', () => {
 })
 
 describe('retry, back-off and refusal', () => {
-  it('backs off 5, 10, 20 and 40 s, then drops the batch as retry_exhausted', async () => {
+  it('backs off 5, 10, 20 and 40 s, then drops the event as retry_exhausted', async () => {
     posthog.answer = () => Promise.resolve({ kind: 'retry', status: 503 })
     reportError(new Error('x'), HTTP)
     await vi.advanceTimersByTimeAsync(5000)
@@ -290,6 +512,24 @@ describe('retry, back-off and refusal', () => {
     expect(counted('retry_exhausted')).toBe(1)
     expect(queuedErrorReportCount()).toBe(0)
     expect(recordErrorSendError).toHaveBeenCalledWith(503)
+  })
+
+  it('an event that joins a retried batch late is not dropped after a single send', async () => {
+    posthog.answer = () => Promise.resolve({ kind: 'retry', status: 503 })
+    reportError(new Error('early'), HTTP)
+    // Sends at +5 s, +10 s, +20 s, +40 s fail (4 of the 5 allowed).
+    await vi.advanceTimersByTimeAsync(5000 + 5000 + 10_000 + 20_000)
+    expect(posthog.batches).toHaveLength(4)
+    const lateId = reportError(new Error('late'), HTTP)
+    await vi.advanceTimersByTimeAsync(40_000)
+    expect(posthog.batches).toHaveLength(5)
+    const lateSends = posthog.batches.filter((batch) =>
+      batch.events.some((event) => event.uuid === lateId)
+    ).length
+    expect(lateSends).toBe(1)
+    // The late event has had one try, not ERROR_RETRY_LIMIT; it must still be queued.
+    expect(counted('retry_exhausted')).toBe(1)
+    expect(queuedErrorReportCount()).toBe(1)
   })
 
   it('keeps doubling across batches while PostHog stays down, up to 5 minutes', async () => {
@@ -390,9 +630,102 @@ describe('flushErrorReports', () => {
     expect(queuedErrorReportCount()).toBe(2)
   })
 
+  it('sends a newly queued fatal event even while an earlier send hangs', async () => {
+    // The hanging send never settles; the reset in afterEach fences it off.
+    posthog.answer = () => new Promise<SendResult>(() => {})
+    reportError(new Error('earlier'), HTTP)
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(posthog.batches).toHaveLength(1)
+    posthog.answer = () => Promise.resolve({ kind: 'ack' })
+    const fatalId = reportError(new Error('fatal'), { capturePoint: 'process', handled: false })
+    const flushed = flushErrorReports(2000)
+    await vi.advanceTimersByTimeAsync(2000)
+    await flushed
+    expect(posthog.batches.flatMap((batch) => batch.events.map((event) => event.uuid))).toContain(
+      fatalId
+    )
+  })
+
+  it('waits for a flight that started during the flush, with the fatal event in it', async () => {
+    const { pending, flush } = await flushWhileAFlightStarts()
+    expect(flush.isDone).toBe(false)
+    pending[2]?.({ kind: 'ack' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(flush.isDone).toBe(true)
+    await flush.done
+    expect(counted('sent')).toBe(101)
+    expect(queuedErrorReportCount()).toBe(0)
+  })
+
+  it('resolves at the deadline when a flight that started during the flush hangs', async () => {
+    const { flush } = await flushWhileAFlightStarts()
+    await vi.advanceTimersByTimeAsync(1999)
+    expect(flush.isDone).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(flush.isDone).toBe(true)
+    await flush.done
+  })
+
+  it('stops sending when the reporter is reset during the flush', async () => {
+    const pending = holdSends()
+    reportError(new Error('earlier'), HTTP)
+    await vi.advanceTimersByTimeAsync(5000)
+    reportError(new Error('beside'), HTTP)
+    const flushed = flushErrorReports(2000)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(posthog.batches).toHaveLength(2)
+    resetErrorReporter()
+    reportDistinct(51, 'after')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(posthog.batches).toHaveLength(3)
+    pending[1]?.({ kind: 'ack' })
+    await vi.advanceTimersByTimeAsync(0)
+    // The reset reporter's last event waits for its own flush, not the old one.
+    expect(posthog.batches).toHaveLength(3)
+    expect(queuedErrorReportCount()).toBe(1)
+    await vi.advanceTimersByTimeAsync(2000)
+    await flushed
+  })
+
   it('resolves at once with nothing queued', async () => {
     await expect(flushErrorReports(2000)).resolves.toBeUndefined()
     expect(posthog.batches).toHaveLength(0)
+  })
+})
+
+describe('resetErrorReporter', () => {
+  it('a flight started before reset does not put its batch into the reset reporter', async () => {
+    const pending: ((result: SendResult) => void)[] = []
+    posthog.answer = () =>
+      new Promise((resolve) => {
+        pending.push(resolve)
+      })
+    reportError(new Error('before reset'), HTTP)
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(posthog.batches).toHaveLength(1)
+    resetErrorReporter()
+    posthog.answer = () => Promise.resolve({ kind: 'ack' })
+    reportError(new Error('after reset'), HTTP)
+    pending[0]?.({ kind: 'retry', status: 503 })
+    await vi.advanceTimersByTimeAsync(0)
+    // Only the post-reset event belongs to the fresh reporter.
+    expect(queuedErrorReportCount()).toBe(1)
+  })
+
+  it('a flight started before reset does not end the flight started after it', async () => {
+    const pending = holdSends()
+    reportError(new Error('before reset'), HTTP)
+    await vi.advanceTimersByTimeAsync(5000)
+    resetErrorReporter()
+    reportDistinct(50)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(posthog.batches).toHaveLength(2)
+    pending[0]?.({ kind: 'ack' })
+    await vi.advanceTimersByTimeAsync(0)
+    reportDistinct(50, 'f')
+    await vi.advanceTimersByTimeAsync(0)
+    // The post-reset flight is still out, so the next 50 wait for it.
+    expect(posthog.batches).toHaveLength(2)
   })
 })
 

@@ -9,7 +9,9 @@ import {
   isUniqueViolation,
   isUnstorableTextError,
   isUntranslatableCharacterError,
+  redactedForLog,
 } from '@/errors/postgres-errors'
+import { LEAKED_PARAM } from '../../helpers/query-error'
 
 /**
  * Build a real `postgres.PostgresError`, typed correctly for callers.
@@ -123,5 +125,21 @@ describe('isUntranslatableCharacterError', () => {
       true
     )
     expect(isUntranslatableCharacterError(pgError({ message: 'nul', code: '22021' }))).toBe(false)
+  })
+})
+
+describe('redactedForLog stack frames', () => {
+  it.each([
+    ['an indented `at` line', `\n    at ${LEAKED_PARAM}`],
+    ['a frame-shaped line', `\n    at ${LEAKED_PARAM} (/app/src/x.ts:1:1)`],
+  ])('keeps no bound parameter that forms %s in the message', (_name, parameterText) => {
+    const error = Object.assign(new Error(`Failed query: select $1\nparams: ${parameterText}`), {
+      query: 'select $1',
+      params: [parameterText],
+    })
+    const redacted = redactedForLog(error) as { stack?: string }
+    expect(redacted.stack).toBeDefined()
+    expect(redacted.stack).not.toContain(LEAKED_PARAM)
+    expect(redacted.stack).toMatch(/^ {4}at /)
   })
 })

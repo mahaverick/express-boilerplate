@@ -1,8 +1,9 @@
 /**
  * @file What a Worker's `'failed'` handler does once a job will not be
  * retried: report it to error tracking, replace the stored payload's links,
- * tokens and recipient, mark an email job's message `failed`, then log one error line.
- * Until then the payload keeps them, because a retry has to send them.
+ * tokens and recipient addresses, mark an email job's message `failed`,
+ * then log one error line. Until then the payload keeps them, because a
+ * retry has to send them.
  */
 import { UnrecoverableError, type Job } from 'bullmq'
 import { redactedForLog } from '@/errors/postgres-errors'
@@ -14,10 +15,38 @@ const REDACTED = '[redacted]'
 
 /**
  * Keys whose values are scrubbed: verificationUrl, resetUrl and acceptUrl
- * carry a raw token in their query string, and `to` is the recipient
- * address, which the message's `email_messages` row already keeps.
+ * carry a raw token in their query string.
  */
-const SECRET_KEY_PATTERN = /(?:Url|Token)$|^to$/
+const SECRET_KEY_PATTERN = /(?:Url|Token)$/
+
+/**
+ * Keys whose values hold an address, lowercased: an email job's `to` (also
+ * on a notification job's paired `email`) and any `cc`, `bcc`, `replyTo`
+ * (`reply_to`), `recipient` or `recipients`, matched in any letter case. A
+ * failed job is kept for days; the `email_messages` row already holds the
+ * recipient.
+ */
+const ADDRESS_KEYS: ReadonlySet<string> = new Set([
+  'to',
+  'cc',
+  'bcc',
+  'replyto',
+  'reply_to',
+  'recipient',
+  'recipients',
+])
+
+/**
+ * Whether a key's whole value is replaced: a link, token or address key's
+ * is, whatever its type (a string, a list, an object, nested any depth), so
+ * an address in an unexpected shape fails closed instead of surviving
+ * under a key no rule names.
+ * @param key - The key.
+ * @returns True when the value becomes `'[redacted]'`.
+ */
+function isRedactedEntry(key: string): boolean {
+  return SECRET_KEY_PATTERN.test(key) || ADDRESS_KEYS.has(key.toLowerCase())
+}
 
 /**
  * Whether a value is a non-array object, not null. It matches any such
@@ -31,7 +60,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * A copy of a JSON value with every secret-named key's value replaced.
+ * A copy of a JSON value with every secret-named and address key's value replaced.
  * @param value - Part of a job's data.
  * @returns The scrubbed copy.
  */
@@ -41,7 +70,7 @@ function scrubValue(value: unknown): unknown {
   return Object.fromEntries(
     Object.entries(value).map(([key, child]) => [
       key,
-      SECRET_KEY_PATTERN.test(key) ? REDACTED : scrubValue(child),
+      isRedactedEntry(key) ? REDACTED : scrubValue(child),
     ])
   )
 }
@@ -94,7 +123,8 @@ export function reportFinalJobFailure(
 }
 
 /**
- * A copy of a job's data in which every key ending in `Url` or `Token`, and every `to`, at any depth, is `'[redacted]'`.
+ * A copy of a job's data in which every key ending in `Url` or `Token`, and
+ * every address (`to`, `cc`, `bcc`, `replyTo`, `recipient`), at any depth, is `'[redacted]'`.
  * @param data - The job's data.
  * @returns The scrubbed copy; the argument is not changed.
  */

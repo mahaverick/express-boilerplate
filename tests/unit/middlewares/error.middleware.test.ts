@@ -1,18 +1,38 @@
+import type { Span } from '@opentelemetry/api'
+import { trace } from '@opentelemetry/api'
+import { ErrorPropertiesBuilder } from '@posthog/core/error-tracking'
 import { DrizzleQueryError } from 'drizzle-orm'
-import { type Response } from 'express'
+import { type Request, type Response } from 'express'
 import postgres from 'postgres'
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { HttpError } from '@/errors/http-error'
 import { TimelineUnavailableError } from '@/errors/timeline-errors'
 import { errorHandler } from '@/middlewares/error.middleware'
-import { reportError } from '@/services/errors/error-reporter.service'
+import {
+  queuedErrorReportCount,
+  reportErrorWithSpan,
+  resetErrorReporter,
+} from '@/services/errors/error-reporter.service'
 import { logger } from '@/services/logger.service'
 import { requestContextStore } from '@/services/request-context.service'
 
-vi.mock('@/services/errors/error-reporter.service', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/services/errors/error-reporter.service')>()),
-  reportError: vi.fn(() => 'reported-id'),
+const tracking = vi.hoisted(() => ({ isEnabled: false }))
+
+vi.mock('@/configs/analytics.config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/configs/analytics.config')>()
+  return { ...actual, isErrorTrackingEnabled: () => tracking.isEnabled }
+})
+
+vi.mock('@/services/errors/error-counters.service', () => ({
+  countErrorOutcome: vi.fn(() => Promise.resolve()),
+  recordErrorSendOk: vi.fn(() => Promise.resolve()),
+  recordErrorSendError: vi.fn(() => Promise.resolve()),
 }))
+
+vi.mock('@/services/errors/error-reporter.service', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/services/errors/error-reporter.service')>()
+  return { ...actual, reportErrorWithSpan: vi.fn(actual.reportErrorWithSpan) }
+})
 
 /**
  * Build a minimal mock Express response, enough for errorHandler to call
@@ -49,7 +69,7 @@ describe('errorHandler', () => {
 
   afterEach(() => {
     vi.restoreAllMocks()
-    vi.mocked(reportError).mockClear()
+    vi.mocked(reportErrorWithSpan).mockClear()
   })
 
   it('uses HttpError.statusCode and message for a client error', () => {
@@ -177,7 +197,7 @@ describe('errorHandler', () => {
       expect(body()).toMatchObject({ success: false, message: 'Bad Request', statusCode: 400 })
       expect(JSON.stringify(body())).not.toContain('a\u{0}b')
       expect(loggerError).not.toHaveBeenCalled()
-      expect(reportError).not.toHaveBeenCalled()
+      expect(reportErrorWithSpan).not.toHaveBeenCalled()
       if (warns) {
         expect(loggerWarn).toHaveBeenCalledTimes(1)
         expect(JSON.stringify(loggerWarn.mock.calls)).not.toContain('a\u{0}b')
@@ -453,5 +473,35 @@ describe('errorHandler', () => {
 
       expect(body()).not.toHaveProperty('errors')
     })
+  })
+})
+
+describe('errorHandler with error tracking on', () => {
+  afterEach(() => {
+    tracking.isEnabled = false
+    resetErrorReporter()
+    vi.restoreAllMocks()
+  })
+
+  it('builds once per 5xx', () => {
+    tracking.isEnabled = true
+    vi.spyOn(logger, 'error').mockImplementation(() => {})
+    const span = {
+      recordException: vi.fn(),
+      setStatus: vi.fn(),
+      spanContext: () => ({ traceId: 'a'.repeat(32), spanId: 'b'.repeat(16), traceFlags: 1 }),
+    } as unknown as Span
+    vi.spyOn(trace, 'getActiveSpan').mockReturnValue(span)
+    const build = vi.spyOn(ErrorPropertiesBuilder.prototype, 'buildFromUnknown')
+    const response = {
+      headersSent: false,
+      getHeader: vi.fn().mockReturnValue('req-1'),
+      status: vi.fn().mockReturnThis(),
+      json: vi.fn().mockReturnThis(),
+    } as unknown as Response
+    const request = { method: 'GET', socket: { destroyed: false } } as unknown as Request
+    errorHandler(new Error('boom'), request, response, vi.fn())
+    expect(queuedErrorReportCount()).toBe(1)
+    expect(build).toHaveBeenCalledTimes(1)
   })
 })

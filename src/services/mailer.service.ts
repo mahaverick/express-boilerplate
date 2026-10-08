@@ -8,6 +8,7 @@ import { getEnv } from '@/configs/env.config'
 import { getMailTransporter } from '@/configs/mailer.config'
 import { UNKNOWN_ERROR_CODE, type NewEmailLog } from '@/database/models/email-log.model'
 import { redactedForLog } from '@/errors/postgres-errors'
+import { stackFrameLinesOf } from '@/errors/stack-frames'
 import { EmailLogRepository } from '@/repositories/email-log.repository'
 import { logger } from '@/services/logger.service'
 import {
@@ -189,19 +190,19 @@ export function extractErrorCode(error: unknown): string {
  * message, as `stackFramesOf` (postgres-errors.ts) does: `error.stack` embeds
  * the message, which must not be logged, while the frames locate a real bug.
  *
- * Matches `/^\s+at /`, not a trimmed `startsWith('at ')`: V8 indents every real
- * frame, and the server-controlled, multi-line message could start a line with
- * `at ` to survive a check that drops the indentation.
+ * A frame must have a V8 frame's shape and come after the message
+ * (`stackFrameLinesOf`), not merely start with `at `: the server-controlled,
+ * multi-line message could hold a line that starts with `at `, indented or
+ * not, or one shaped like a whole frame.
  * @param error - The thrown or rejected value, already known to be object-shaped.
  * @returns The call frames, or undefined when there is no usable stack.
  */
 function callFramesOf(error: object): string | undefined {
-  const { stack } = error as { stack?: unknown }
+  const { stack, message } = error as { stack?: unknown; message?: unknown }
   if (typeof stack !== 'string') return undefined
-  const frames = stack
-    .split('\n')
-    .filter((line) => /^\s+at /.test(line))
-    .join('\n')
+  const frames = stackFrameLinesOf(stack, typeof message === 'string' ? message : undefined).join(
+    '\n'
+  )
   return frames === '' ? undefined : frames
 }
 

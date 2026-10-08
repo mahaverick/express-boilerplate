@@ -111,6 +111,75 @@ describe('scrubJobData', () => {
     })
   })
 
+  it("redacts an email job's recipient and a notification's paired email's, keeping the rest", () => {
+    const emailJob = {
+      to: 'jane@example.com',
+      templateKey: 'password_reset',
+      messageId: 'm1',
+      variables: { firstName: 'Ada', resetUrl: 'https://x.test/r?token=secret' },
+    }
+    const notificationJob = {
+      userId: 'u1',
+      type: 'verify_email',
+      email: { to: 'jane@example.com', cc: 'ops@example.com', templateKey: 'email_verification' },
+    }
+
+    expect(scrubJobData(emailJob)).toEqual({
+      to: '[redacted]',
+      templateKey: 'password_reset',
+      messageId: 'm1',
+      variables: { firstName: 'Ada', resetUrl: '[redacted]' },
+    })
+    expect(scrubJobData(notificationJob)).toEqual({
+      userId: 'u1',
+      type: 'verify_email',
+      email: { to: '[redacted]', cc: '[redacted]', templateKey: 'email_verification' },
+    })
+  })
+
+  it('redacts an address key whatever its value: a list, an object, a nested list of objects', () => {
+    const sentinel = 'leak-sentinel@example.com'
+    const data = {
+      to: [sentinel, 'second@example.com'],
+      templateKey: 'password_reset',
+      email: {
+        to: { address: sentinel, name: 'Jane' },
+        cc: [{ name: 'Ops', address: sentinel }],
+        templateKey: 'email_verification',
+      },
+    }
+
+    const scrubbed = scrubJobData(data)
+
+    expect(scrubbed).toEqual({
+      to: '[redacted]',
+      templateKey: 'password_reset',
+      email: { to: '[redacted]', cc: '[redacted]', templateKey: 'email_verification' },
+    })
+    expect(JSON.stringify(scrubbed)).not.toContain(sentinel)
+  })
+
+  it('redacts an address key in any letter case, and a recipients list', () => {
+    const sentinel = 'leak-sentinel@example.com'
+    const data = {
+      To: sentinel,
+      CC: sentinel,
+      ReplyTo: sentinel,
+      reply_to: sentinel,
+      recipients: [sentinel],
+      templateKey: 'password_reset',
+    }
+
+    expect(scrubJobData(data)).toEqual({
+      To: '[redacted]',
+      CC: '[redacted]',
+      ReplyTo: '[redacted]',
+      reply_to: '[redacted]',
+      recipients: '[redacted]',
+      templateKey: 'password_reset',
+    })
+  })
+
   it('returns a copy and leaves its argument untouched', () => {
     const data = { variables: { resetUrl: 'https://x.test/r' } }
     const scrubbed = scrubJobData(data)

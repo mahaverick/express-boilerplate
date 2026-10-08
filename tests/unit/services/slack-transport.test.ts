@@ -5,9 +5,24 @@
  * called with.
  */
 import { Writable } from 'node:stream'
+import { DrizzleQueryError } from 'drizzle-orm'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinoLogger } from '@/services/logger.service'
 import { requestContextStore } from '@/services/request-context.service'
+import { LEAKED_PARAM } from '../../helpers/query-error'
+
+const scrub = vi.hoisted(() => ({ shouldThrow: false }))
+
+vi.mock('@/services/errors/error-scrubber.service', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/services/errors/error-scrubber.service')>()
+  return {
+    ...actual,
+    scrubText: (value: string): string => {
+      if (scrub.shouldThrow) throw new Error('scrub broke')
+      return actual.scrubText(value)
+    },
+  }
+})
 
 /**
  * Narrower than the global RequestInit on purpose: the Slack destination
@@ -305,4 +320,221 @@ describe('Slack transport', () => {
         resolve()
       })
     }))
+})
+
+/**
+ * A logger whose error-level records go to the stubbed Slack webhook.
+ * @returns The logger.
+ */
+function slackLogger(): ReturnType<typeof createPinoLogger> {
+  return createPinoLogger({
+    level: 'info',
+    format: 'json',
+    slackWebhookUrl: 'https://hooks.slack.invalid/services/T/B/x',
+    slackLogLevel: 'error',
+    destination: discardDestination(),
+  })
+}
+
+/**
+ * Let the destination's write and the fetch call run. Assertions go after
+ * `await nextTick()`, so a failed one rejects the test at once.
+ * @returns A promise that settles on the next macrotask.
+ */
+function nextTick(): Promise<void> {
+  return new Promise((resolve) => {
+    setImmediate(resolve)
+  })
+}
+
+describe('Slack transport scrubbing', () => {
+  const mockFetch = vi.fn<FetchProcedure>()
+  // Built at runtime so secret scanners do not flag a fake key in source.
+  const resendKey = ['re', 'zqS09Abc123', 'DEFghi456JKL'].join('_')
+  const bearer = 'zqS09bearerTokenValue77'
+
+  /**
+   * Every webhook body sent so far, joined.
+   * @returns The bodies.
+   */
+  function sentBodies(): string {
+    return mockFetch.mock.calls.map(([, init]) => init.body).join('\n')
+  }
+
+  beforeEach(() => {
+    mockFetch.mockReset()
+    mockFetch.mockResolvedValue({ ok: true })
+    vi.stubGlobal('fetch', mockFetch)
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.useRealTimers()
+  })
+
+  it('does not send a credential in an error message to Slack', async () => {
+    slackLogger().error(
+      {
+        error: new Error(`SMTP auth failed for key ${resendKey}; Authorization: Bearer ${bearer}`),
+      },
+      `Email worker error (Authorization: Bearer ${bearer})`
+    )
+    await nextTick()
+    expect(mockFetch).toHaveBeenCalledOnce()
+    expect(sentBodies()).not.toContain(resendKey)
+    expect(sentBodies()).not.toContain(bearer)
+  })
+
+  it('scrubs the source field', async () => {
+    slackLogger().error({ source: 'auth.ts:1 token=zqS09srcTok' }, 'failed')
+    await nextTick()
+    expect(sentBodies()).toContain('auth.ts:1 token=[redacted]')
+    expect(sentBodies()).not.toContain('zqS09srcTok')
+  })
+
+  it('scrubs the request id', async () => {
+    slackLogger().error({ requestId: `token=${LEAKED_PARAM}` }, 'failed')
+    await nextTick()
+    expect(mockFetch).toHaveBeenCalledOnce()
+    expect(sentBodies()).not.toContain(LEAKED_PARAM)
+  })
+
+  it('never sends a caller-supplied timestamp as it is', async () => {
+    slackLogger().error({ timestamp: `Bearer ${LEAKED_PARAM}` }, 'failed')
+    await nextTick()
+    expect(mockFetch).toHaveBeenCalledOnce()
+    expect(sentBodies()).not.toContain(LEAKED_PARAM)
+    expect(sentBodies()).toMatch(/\*Time:\* \d{4}-\d{2}-\d{2}T[\d:.]+Z/)
+  })
+
+  it('sends a query error redacted, without its bound values', async () => {
+    const error = new DrizzleQueryError(
+      'select * from users where email = $1',
+      ['jane.zqS09@example.com'],
+      new Error('connection reset')
+    )
+    slackLogger().error({ error }, 'query failed')
+    await nextTick()
+    expect(mockFetch).toHaveBeenCalledOnce()
+    expect(sentBodies()).not.toContain('jane.zqS09@example.com')
+  })
+
+  it('keeps stack frame paths readable', async () => {
+    const error = new Error('boom')
+    Object.defineProperty(error, 'stack', {
+      value: 'Error: boom\n    at handle (/app/src/services/auth.service.ts:10:5)',
+    })
+    slackLogger().error({ error }, 'handler failed')
+    await nextTick()
+    expect(sentBodies()).toContain('at handle (/app/src/services/auth.service.ts:10:5)')
+  })
+
+  it.each([
+    ['a Bearer token on the next line', `Authorization: Bearer\n${LEAKED_PARAM}`],
+    ['a password value on the next line', `login failed, password =\n ${LEAKED_PARAM}`],
+    ['an OAuth code on its own line', `oauth exchange failed\n{ code: '${LEAKED_PARAM}' }`],
+  ])('scrubs a credential split over lines in the stack: %s', async (_name, text) => {
+    const error = new Error(text)
+    Object.defineProperty(error, 'stack', {
+      value: `Error: ${text}\n    at handle (/app/src/services/auth.service.ts:10:5)`,
+    })
+    slackLogger().error({ error }, 'handler failed')
+    await nextTick()
+    expect(mockFetch).toHaveBeenCalledOnce()
+    expect(sentBodies()).not.toContain(LEAKED_PARAM)
+    expect(sentBodies()).toContain('at handle (/app/src/services/auth.service.ts:10:5)')
+  })
+
+  it.each([
+    ['an indented `at` line after a key', `login failed password:\n    at ${LEAKED_PARAM}`, '\n'],
+    [
+      'an `at` line in prose before a code',
+      `oauth exchange failed\n  at least one retry\n{ code: '${LEAKED_PARAM}' }`,
+      '\n',
+    ],
+    [
+      'an `at` line in prose before a code, CRLF',
+      `oauth exchange failed\r\n  at least one retry\r\n{ code: '${LEAKED_PARAM}' }`,
+      '\r\n',
+    ],
+    [
+      'a frame-shaped line inside the message',
+      `login failed password:\n    at ${LEAKED_PARAM} (/app/src/x.ts:1:1)`,
+      '\n',
+    ],
+  ])('scrubs a message line that looks like a stack frame: %s', async (_name, text, eol) => {
+    const error = new Error(text)
+    Object.defineProperty(error, 'stack', {
+      value: `Error: ${text}${eol}    at handle (/app/src/services/auth.service.ts:10:5)`,
+    })
+    slackLogger().error({ error }, 'handler failed')
+    await nextTick()
+    expect(mockFetch).toHaveBeenCalledOnce()
+    expect(sentBodies()).not.toContain(LEAKED_PARAM)
+    expect(sentBodies()).toContain('at handle (/app/src/services/auth.service.ts:10:5)')
+  })
+
+  it('does not send a secret from the error’s cause chain', async () => {
+    const error = new Error('request failed', {
+      cause: new Error(`upstream rejected password=${LEAKED_PARAM}`),
+    })
+    slackLogger().error({ error }, 'handler failed')
+    await nextTick()
+    expect(mockFetch).toHaveBeenCalledOnce()
+    expect(sentBodies()).not.toContain(LEAKED_PARAM)
+  })
+
+  it('does not send a URL’s query token', async () => {
+    slackLogger().error(
+      { error: new Error(`GET https://app.example.com/reset?token=${LEAKED_PARAM} failed`) },
+      `fetch https://app.example.com/reset?token=${LEAKED_PARAM} failed`
+    )
+    await nextTick()
+    expect(mockFetch).toHaveBeenCalledOnce()
+    expect(sentBodies()).not.toContain(LEAKED_PARAM)
+    expect(sentBodies()).toContain('https://app.example.com/reset?[query]')
+  })
+
+  it('scrubs the duplicate summary too', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const log = slackLogger()
+    log.error({ source: 'test.ts:1' }, `retry failed, Bearer ${bearer}`)
+    log.error({ source: 'test.ts:1' }, `retry failed, Bearer ${bearer}`)
+    await nextTick()
+    vi.advanceTimersByTime(60_000)
+    await nextTick()
+    expect(mockFetch).toHaveBeenCalledTimes(2)
+    expect(sentBodies()).toContain('Suppressed 1 duplicate occurrence')
+    expect(sentBodies()).not.toContain(bearer)
+  })
+})
+
+describe('Slack transport scrub failure', () => {
+  const mockFetch = vi.fn<FetchProcedure>()
+
+  beforeEach(() => {
+    mockFetch.mockReset()
+    mockFetch.mockResolvedValue({ ok: true })
+    vi.stubGlobal('fetch', mockFetch)
+    scrub.shouldThrow = true
+  })
+
+  afterEach(() => {
+    scrub.shouldThrow = false
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  it('sends fixed text, never the raw record, and does not throw into the caller', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    expect(() => {
+      slackLogger().error({ error: new Error('x') }, `raw ${LEAKED_PARAM}`)
+    }).not.toThrow()
+    await nextTick()
+    expect(mockFetch).toHaveBeenCalledOnce()
+    const body = String(mockFetch.mock.calls[0]?.[1].body)
+    expect(body).toContain('could not be scrubbed')
+    expect(body).not.toContain(LEAKED_PARAM)
+    expect(consoleError).toHaveBeenCalledWith('Slack payload scrub failed', 'Error')
+  })
 })

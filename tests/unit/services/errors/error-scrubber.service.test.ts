@@ -37,6 +37,8 @@ const HARMLESS = [
   'basic validation failed',
   'BASIC settings',
   'value too long for type character varying(255)',
+  'at a-very-long-kebab-identifier-for-the-tenant-switcher-panel (x.js)',
+  'at my_very_long_snake_case_identifier_for_the_module_x_y (x.js)',
 ]
 
 describe('scrubText vectors', () => {
@@ -65,6 +67,9 @@ describe('scrubText vectors', () => {
         'secret',
         'path',
         'cap',
+        'ip',
+        'phone',
+        'path-token',
       ])
     )
   })
@@ -157,5 +162,229 @@ describe('scrubText', () => {
   it('scrubs a secret that appears after replacements shortened the text', () => {
     const jwt = 'eyJhIjoxfQ.eyJiIjoyfQ.c2lnbmF0dXJl'
     expect(scrubText(`${jwt} jane@example.com`)).toBe('[jwt] [email]')
+  })
+})
+
+describe('scrubText on identifiers', () => {
+  it.each([
+    'at a-very-long-kebab-identifier-for-the-tenant-switcher-panel (x.js)',
+    'at my_very_long_snake_case_identifier_for_the_module_x_y (x.js)',
+  ])('keeps the identifier in %s', (input) => {
+    expect(scrubText(input)).toBe(input)
+  })
+})
+
+describe('scrubText on email edge forms', () => {
+  it.each([
+    ['no TLD', 'invite failed for jane@localhost', 'jane'],
+    ['double-encoded %2540', 'invite failed for jane%2540example.com', 'jane'],
+    ['fullwidth at', 'invite failed for jane＠example.com', 'jane'],
+    ['quoted local part', 'invite failed for "jane doe"@example.com', 'jane doe'],
+  ])('%s: the address is scrubbed', (_shape, input, local) => {
+    expect(scrubText(input)).not.toContain(local)
+  })
+})
+
+describe('scrubText on a secret glued to a preceding hex run', () => {
+  const hex = 'a3f9'.repeat(8)
+
+  it.each([
+    ['posthog key', `${hex}phc_abcdef123`, 'phc_abcdef123'],
+    ['jwt', `${hex}eyJhIjoxfQ.eyJiIjoyfQ.c2lnbmF0dXJl`, 'eyJiIjoyfQ.c2lnbmF0dXJl'],
+    ['bearer', `${hex}Bearer abc123secret`, 'abc123secret'],
+  ])('%s: the first pass removes it', (_shape, input, secret) => {
+    expect(scrubText(input)).not.toContain(secret)
+  })
+
+  it('is idempotent on the glued shape', () => {
+    const once = scrubText(`${hex}phc_abcdef123`)
+    expect(scrubText(once)).toBe(once)
+  })
+})
+
+describe('scrubText on fragments', () => {
+  it.each([
+    'webpack://app/src/main.tsx#L5',
+    'https://app.example.com/src/a.ts#L42-L48',
+    'https://app.example.com/src/a.ts#L10C3-L12C8',
+    'https://app.example.com/docs#installation',
+    'https://app.example.com/docs#getting-started',
+    'https://app.example.com/docs#authentication',
+    'https://app.example.com/docs#design',
+    'https://app.example.com/docs#keyboard-shortcuts',
+    'https://app.example.com/docs#spinning',
+  ])('keeps %s', (input) => {
+    expect(scrubText(input)).toBe(input)
+  })
+
+  it.each([
+    'abcdef123456',
+    'piano-tiger-4815',
+    'otp-123456',
+    'pin_4821',
+    'token_abcdefghijklmnop',
+    'step2',
+    'reset-code-words',
+    'token-qyhilody',
+    'tokens',
+    'secrets',
+    'passwords',
+    'pins',
+    'api-key',
+    'session-replay',
+  ])('scrubs the fragment #%s', (fragment) => {
+    expect(scrubText(`https://app.example.com/reset-password#${fragment}`)).toBe(
+      'https://app.example.com/reset-password#[fragment]'
+    )
+  })
+
+  it('scrubs 200 random letters-then-digits fragments', () => {
+    let seed = 12_345
+    const next = (limit: number): number => {
+      seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648
+      return seed % limit
+    }
+    for (let index = 0; index < 200; index += 1) {
+      const letters = Array.from({ length: 4 + next(10) }, () =>
+        String.fromCodePoint(97 + next(26))
+      ).join('')
+      const digits = Array.from({ length: 1 + next(8) }, () => next(10)).join('')
+      expect(scrubText(`https://app.example.com/x#${letters}${digits}`)).toBe(
+        'https://app.example.com/x#[fragment]'
+      )
+    }
+  })
+})
+
+describe('scrubText on an address with no TLD before punctuation, and on package refs', () => {
+  it.each([
+    'invite failed for jane@localhost: smtp down',
+    'invite failed for jane@intranet!',
+    'to=jane@localhost&x=1',
+    'jane@localhost?x=1',
+    'jane@corp/x',
+  ])('scrubs the address in %s', (input) => {
+    expect(scrubText(input)).not.toContain('jane')
+  })
+
+  it.each([
+    'react@canary',
+    'lodash@latest',
+    'vitest@next',
+    'actions/checkout@v4',
+    'actions/setup-node@main',
+    'node@sha256',
+  ])('keeps the package ref %s', (input) => {
+    expect(scrubText(input)).toBe(input)
+  })
+})
+
+describe('scrubText on a package ref with a protocol', () => {
+  it.each([
+    'react@npm:@preact/compat',
+    'pkg@workspace:*',
+    'pkg@file:../local',
+    'pkg@github:org/repo',
+    'pkg@link:../x',
+    'pkg@portal:../x',
+    'pkg@patch:pkg@npm:1.0.0',
+    'pkg@git+https://example.com/a.git',
+  ])('keeps %s', (input) => {
+    expect(scrubText(input)).toBe(input)
+  })
+})
+
+describe('scrubText on quoted bare words and Digest', () => {
+  it('escaped quote after an exempt bare word (JSON, double quote)', () => {
+    expect(scrubText(String.raw`{"token": "null\"hunter2"}`)).not.toContain('hunter2')
+  })
+
+  it('escaped quote after an exempt bare word (single quote)', () => {
+    expect(scrubText(String.raw`{'token': 'null\'hunter2'}`)).not.toContain('hunter2')
+  })
+
+  it('Digest header scrubs the username', () => {
+    const header =
+      'Authorization: Digest username="jane", realm="r", nonce="abc", uri="/x", response="6629fae49393a05397450978507c4ef1"'
+    expect(scrubText(header)).not.toContain('jane')
+  })
+
+  it('Digest header scrubs a short response', () => {
+    expect(scrubText('Authorization: Digest username="jane", response="abc12"')).not.toContain(
+      'abc12'
+    )
+  })
+})
+
+describe('scrubText on the shapes it once let through', () => {
+  it.each([
+    [
+      'unknown-scheme Authorization (header form)',
+      'Authorization: Custom abc123secret',
+      'abc123secret',
+    ],
+    ['unknown-scheme Authorization (kv form)', 'authorization=Custom abc123secret', 'abc123secret'],
+    [
+      'multi-param OAuth consumer key',
+      'Authorization: OAuth oauth_consumer_key="ck123", oauth_token="tok456", oauth_signature="sig789"',
+      'ck123',
+    ],
+    [
+      'multi-param Digest username',
+      'Authorization: Digest username="jane", realm="r", response="abc12"',
+      'jane',
+    ],
+    [
+      'multi-param Digest short response',
+      'Authorization: Digest username="jane", realm="r", response="abc12"',
+      'abc12',
+    ],
+    ['array-valued secret (JSON)', '{"password": ["hunter2", "x"]}', 'hunter2'],
+    ['array-valued secret (plural key)', 'tokens: ["hunter2"]', 'hunter2'],
+    ['short non-hex signature', 'sig=Zx9Kq2Lm', 'Zx9Kq2Lm'],
+    // eslint-disable-next-line sonarjs/no-hardcoded-ip -- a sample address the scrubber must remove
+    ['IPv4 address', 'connect failed from 10.1.2.3', '10.1.2.3'],
+    ['phone number', 'sms to +1 415 555 0100 failed', '415 555 0100'],
+    ['short opaque token in a path', 'GET /reset/abc123XYZ failed', 'abc123XYZ'],
+    [
+      'odd JWT shape (whitespace JSON header)',
+      'token ewogICJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2ln rejected',
+      'eyJzdWIiOiIxIn0',
+    ],
+  ])('%s: the value is scrubbed', (_shape, input, secret) => {
+    expect(scrubText(input)).not.toContain(secret)
+  })
+
+  it('keeps a UUID, an id rather than a secret', () => {
+    const text = 'user 3f2504e0-4f89-11d3-9a0c-0305e82c3301 not found'
+    expect(scrubText(text)).toBe(text)
+  })
+
+  it('Basic Credential= is idempotent', () => {
+    const once = scrubText('Basic Credential=abcdefgh')
+    expect(scrubText(once)).toBe(once)
+  })
+})
+
+describe('scrubText on single-quoted header values (util.inspect)', () => {
+  it.each([
+    [
+      'Digest parameters',
+      `{ authorization: 'Digest username="jane", realm="r", uri="/x", response="abc"' }`,
+      ['jane', 'realm', '/x', 'abc'],
+    ],
+    [
+      'OAuth parameters',
+      `{ authorization: 'OAuth oauth_consumer_key="ck123", oauth_token="tok456"' }`,
+      ['ck123', 'tok456'],
+    ],
+    [
+      'a cookie list with a quoted pair',
+      `{ cookie: 'theme="dark"; sid2=zqS4abc' }`,
+      ['dark', 'zqS4abc'],
+    ],
+  ])('%s: no inner value survives', (_shape, input, secrets) => {
+    const scrubbed = scrubText(input)
+    for (const secret of secrets) expect(scrubbed).not.toContain(secret)
   })
 })

@@ -5,6 +5,7 @@
  */
 import { DrizzleQueryError } from 'drizzle-orm'
 import postgres from 'postgres'
+import { stackFrameLinesOf } from '@/errors/stack-frames'
 
 /**
  * Postgres's SQLSTATE for a unique-constraint violation.
@@ -103,19 +104,19 @@ function driverCodeOf(cause: unknown): string | undefined {
  * The stack of a query error with its message removed: call frames only.
  *
  * `error.stack` embeds the message, which carries the bound parameters, so
- * the whole stack would leak what `redactedForLog` removes. A frame must be
- * indented (`/^\s+at /`, as V8 writes every frame), because the multi-line
- * message can contain an unindented line that starts with `at `.
+ * the whole stack would leak what `redactedForLog` removes. A frame must
+ * have a V8 frame's shape and come after the message (`stackFrameLinesOf`),
+ * because a bound parameter can put a line such as `    at <value>`, or one
+ * shaped like a whole frame, into the multi-line message.
  * @param error - The query error.
  * @returns The `at ...` frames, or undefined when there is no usable stack.
  */
 function stackFramesOf(error: QueryErrorShape): string | undefined {
-  const { stack } = error as { stack?: unknown }
+  const { stack, message } = error as { stack?: unknown; message?: unknown }
   if (typeof stack !== 'string') return undefined
-  const frames = stack
-    .split('\n')
-    .filter((line) => /^\s+at /.test(line))
-    .join('\n')
+  const frames = stackFrameLinesOf(stack, typeof message === 'string' ? message : undefined).join(
+    '\n'
+  )
   return frames === '' ? undefined : frames
 }
 

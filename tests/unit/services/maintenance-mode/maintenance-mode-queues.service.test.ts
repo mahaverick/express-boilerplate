@@ -8,12 +8,29 @@
 import type { Queue } from 'bullmq'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MAINTENANCE_MODE_PAUSE_GRACE_MS } from '@/constants/maintenance-mode.constants'
+import { STATUS_READ_TIMEOUT_MS } from '@/constants/platform.constants'
 import { logger } from '@/services/logger.service'
 import {
   dedupeSchedulerJobs,
+  getQueuePauseStates,
   queuePauseTarget,
 } from '@/services/maintenance-mode/maintenance-mode-queues.service'
 import type { MaintenanceModeSnapshot } from '@/types/maintenance-mode'
+
+const queues = vi.hoisted(() => ({ isHung: false }))
+
+vi.mock('@/services/queue.service', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/services/queue.service')>()
+  return {
+    ...actual,
+    getAllQueues: () =>
+      ['email', 'notification'].map((name) => ({
+        name,
+        isPaused: () => (queues.isHung ? new Promise<never>(() => {}) : Promise.resolve(false)),
+        getActiveCount: () => (queues.isHung ? new Promise<never>(() => {}) : Promise.resolve(2)),
+      })),
+  }
+})
 
 // eslint-disable-next-line unicorn/no-null -- the snapshot's contract uses null for "none"
 const NONE = null
@@ -153,5 +170,45 @@ describe('dedupeSchedulerJobs against a stubbed queue', () => {
 
     expect(removed).toBe(0)
     expect(warn).not.toHaveBeenCalled()
+  })
+})
+
+describe('getQueuePauseStates with a Redis that stalls', () => {
+  afterEach(() => {
+    queues.isHung = false
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  it('resolves at the bound with every queue unanswered and one warning', async () => {
+    vi.useFakeTimers()
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    queues.isHung = true
+    const settled = vi.fn()
+    const pending = (async () => {
+      settled(await getQueuePauseStates())
+    })()
+    await vi.advanceTimersByTimeAsync(STATUS_READ_TIMEOUT_MS - 1)
+    expect(settled).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    await pending
+    expect(settled).toHaveBeenCalledWith([
+      // eslint-disable-next-line unicorn/no-null -- the contract is null for "Redis did not answer"
+      { name: 'email', paused: null, active: null },
+      // eslint-disable-next-line unicorn/no-null -- as above
+      { name: 'notification', paused: null, active: null },
+    ])
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('reads every queue and leaves no timer when Redis answers', async () => {
+    vi.useFakeTimers()
+    queues.isHung = false
+    await expect(getQueuePauseStates()).resolves.toEqual([
+      { name: 'email', paused: false, active: 2 },
+      { name: 'notification', paused: false, active: 2 },
+    ])
+    expect(vi.getTimerCount()).toBe(0)
   })
 })

@@ -16,6 +16,7 @@
  * back from a status a provider event set first.
  */
 import { randomUUID } from 'node:crypto'
+import { inspect } from 'node:util'
 import { Job, type Worker } from 'bullmq'
 import { afterAll, describe, expect, it, vi } from 'vitest'
 import { getMailTransporter } from '@/configs/mailer.config'
@@ -402,6 +403,7 @@ describe('email.worker', () => {
             const stored = await getEmailQueue().getJob(jobId)
             expect(stored?.attemptsMade).toBe(2)
             expect(stored?.data).toMatchObject({
+              to: '[redacted]',
               templateKey: 'password_reset',
               variables: { firstName: 'Ada', resetUrl: '[redacted]', appName: 'Test App' },
             })
@@ -437,6 +439,61 @@ describe('email.worker', () => {
     } finally {
       loggerError.mockRestore()
       loggerWarn.mockRestore()
+    }
+
+    const rows = await emailLogRepository.findByRecipient(recipient)
+    createdLogIds.push(...rows.map((row) => row.id))
+    createdRecipients.push(recipient)
+  }, 20_000)
+
+  it('scrubs every address field of a failed job whatever its shape: a list, an object, a nested list of objects', async () => {
+    const transporter = getMailTransporter()
+    const recipient = uniqueRecipient('scrub-shapes')
+    const sentinel = `leak-sentinel-${randomUUID()}@example.com`
+    const loggerError = vi.spyOn(logger, 'error')
+
+    try {
+      await withMutatedMethod(
+        transporter,
+        'sendMail',
+        rejectWithConnectionError as (typeof transporter)['sendMail'],
+        async () => {
+          // Extra address fields ride along on the job's data; the scrub must not depend on their shape.
+          const message: Parameters<typeof addEmailJob>[0] = Object.assign(
+            passwordResetMessage(recipient),
+            {
+              cc: [{ name: 'Ops', address: sentinel }],
+              bcc: [sentinel],
+              replyTo: { address: sentinel },
+            }
+          )
+          const job = await addEmailJob(message, 'user-scrub-shapes', {
+            attempts: 1,
+          })
+          if (!job.id) throw new Error('expected addEmailJob to assign a job id')
+          const jobId = job.id
+
+          await waitForLoggedCall(
+            loggerError,
+            (logged, meta) => logged === 'job failed permanently' && meta?.jobId === jobId,
+            10_000
+          )
+
+          const stored = await getEmailQueue().getJob(jobId)
+          expect(stored?.data).toMatchObject({
+            to: '[redacted]',
+            cc: '[redacted]',
+            bcc: '[redacted]',
+            replyTo: '[redacted]',
+          })
+          expect(JSON.stringify(stored?.data)).not.toContain(sentinel)
+          expect(JSON.stringify(stored?.data)).not.toContain(recipient)
+          const logged = loggerError.mock.calls.filter(([, meta]) => meta?.jobId === jobId)
+          expect(inspect(logged, { depth: Infinity })).not.toContain(sentinel)
+        }
+      )
+    } finally {
+      loggerError.mockRestore()
     }
 
     const rows = await emailLogRepository.findByRecipient(recipient)

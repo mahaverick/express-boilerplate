@@ -6,10 +6,11 @@
  * throws once boot has installed its listener. What the event carries beyond
  * its capture point is the reporter's. A second child faults while PostHog
  * holds the report: during that fatal flush it is already out of rotation,
- * and a SIGTERM then still exits 1.
+ * and a SIGTERM then still exits 1. Each child binds a port the OS picks
+ * (the preload) and prints it; the test never chooses one, so no other
+ * process can take it between the choice and the bind.
  */
-import { execFile, spawn } from 'node:child_process'
-import net from 'node:net'
+import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { promisify } from 'node:util'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { ERROR_FRAME_LIMIT } from '@/constants/error-tracking.constants'
@@ -19,27 +20,39 @@ const execFileAsync = promisify(execFile)
 const fake: { posthog?: FakePosthog } = {}
 
 /**
- * A port no process is listening on at the moment, chosen by the OS.
- * @returns The port.
+ * The line the preload prints once the child's server listens.
  */
-async function freePort(): Promise<number> {
-  const server = net.createServer()
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-  const { port } = server.address() as net.AddressInfo
-  await new Promise<void>((resolve) => server.close(() => resolve()))
-  return port
+const LISTENING_LINE = /process-fault-preload listening (\d+)/
+
+/**
+ * The port a child's server bound, read from the line the preload prints.
+ * @param child - A child started with stdout piped.
+ * @returns Resolves with the port once the line arrives.
+ */
+async function listeningPort(child: ChildProcess): Promise<number> {
+  return new Promise<number>((resolve, reject) => {
+    let output = ''
+    child.stdout?.on('data', (chunk: Buffer) => {
+      output += chunk.toString()
+      const match = LISTENING_LINE.exec(output)
+      if (match?.[1] !== undefined) resolve(Number(match[1]))
+    })
+    child.once('exit', () => reject(new Error('the child exited before it listened')))
+  })
 }
 
 /**
  * The environment of a child `src/index.ts` that reaches no shared service.
+ * `APP_PORT` is 1, a port the child may not bind: the preload replaces it
+ * with one the OS picks, and a child that ignored the preload would fail
+ * to start rather than race another process for a port.
  * @param posthog - The fake PostHog it reports to.
- * @param port - The port it listens on.
  * @returns The environment.
  */
-function childEnv(posthog: FakePosthog, port: number): NodeJS.ProcessEnv {
+function childEnv(posthog: FakePosthog): NodeJS.ProcessEnv {
   return {
     ...process.env,
-    APP_PORT: String(port),
+    APP_PORT: '1',
     DATABASE_URL: 'postgres://nobody:nobody@127.0.0.1:1/none',
     REDIS_URL: 'redis://127.0.0.1:1',
     WORKER_ENABLED: 'false',
@@ -68,7 +81,7 @@ describe('a process fault', () => {
         process.execPath,
         ['--import', 'tsx', '--import', './tests/helpers/process-fault-preload.ts', 'src/index.ts'],
         {
-          env: childEnv(posthog, await freePort()),
+          env: childEnv(posthog),
           timeout: 20_000,
         }
       )
@@ -91,16 +104,17 @@ describe('a process fault', () => {
     const before = posthog.requests.length
     // Longer than the fatal flush's deadline, so the flush is still waiting when the test acts.
     posthog.hang(10_000)
-    const port = await freePort()
     const child = spawn(
       process.execPath,
       ['--import', 'tsx', '--import', './tests/helpers/process-fault-preload.ts', 'src/index.ts'],
-      { env: childEnv(posthog, port), stdio: 'ignore' }
+      { env: childEnv(posthog), stdio: ['ignore', 'pipe', 'ignore'] }
     )
+    const listening = listeningPort(child)
     const exited = new Promise<number | null>((resolve) => {
       child.once('exit', (code) => resolve(code))
     })
     try {
+      const port = await listening
       await vi.waitFor(() => expect(posthog.requests.length).toBeGreaterThan(before), {
         timeout: 15_000,
         interval: 20,

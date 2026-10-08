@@ -75,3 +75,11 @@ export const ONBOARDING_TENANT_STATE_FILTERS = [
  * One of ONBOARDING_TENANT_STATE_FILTERS.
  */
 export type OnboardingTenantStateFilter = (typeof ONBOARDING_TENANT_STATE_FILTERS)[number]
+
+/**
+ * The longest each section of the staff system status waits for a read from
+ * Redis before it answers with what it reports when Redis fails. node-redis
+ * drops its own command timeout once a command is written, so a stalled
+ * server would otherwise hold the whole status request open.
+ */
+export const STATUS_READ_TIMEOUT_MS = 2000

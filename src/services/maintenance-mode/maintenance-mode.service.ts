@@ -50,6 +50,7 @@ import {
   reloadMaintenanceMode,
 } from '@/services/maintenance-mode/maintenance-mode-store.service'
 import { assertStillPlatformRole, getPlatformMembership } from '@/services/platform.service'
+import { withStatusTimeout } from '@/services/status-read.service'
 import { MAINTENANCE_MODE_CHANGED_TEMPLATE_KEY } from '@/templates/email/maintenance-mode-changed.template'
 import type { Actor } from '@/types/actor'
 import type {
@@ -117,11 +118,14 @@ export function getPublicMaintenanceStatus(): PublicMaintenanceStatus {
  * it: the mode, when it began and when it last changed (also while off),
  * whether it is known, each queue's pause state, whether the last change's
  * notices are still pending, and the last reload failure.
- * @returns The section; never rejects (a Redis failure shows as null queue fields and no pending notices).
+ * @returns The section; never rejects (a Redis failure, or no answer within `STATUS_READ_TIMEOUT_MS`, shows as null queue fields and no pending notices).
  */
 export async function getMaintenanceModeStatus(): Promise<MaintenanceModeStatus> {
   const snapshot = getMaintenanceMode()
-  const [queues, noticesPending] = await Promise.all([getQueuePauseStates(), hasPendingNotices()])
+  const [queues, noticesPending] = await Promise.all([
+    getQueuePauseStates(),
+    withStatusTimeout(hasPendingNotices(), false, 'Maintenance-mode notice state'),
+  ])
   return {
     mode: snapshot.mode,
     since: snapshot.since,

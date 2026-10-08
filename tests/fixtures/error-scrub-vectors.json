@@ -172,7 +172,7 @@
   {
     "rule": "kv",
     "input": "login failed password=hunter2 for user",
-    "expected": "login failed password=[redacted] for user"
+    "expected": "login failed password=[redacted]"
   },
   {
     "rule": "kv",
@@ -182,7 +182,7 @@
   {
     "rule": "kv",
     "input": "api_key: xyz789 rejected",
-    "expected": "api_key: [redacted] rejected"
+    "expected": "api_key: [redacted]"
   },
   {
     "rule": "kv",
@@ -207,12 +207,12 @@
   {
     "rule": "kv",
     "input": "Cookie: session=s%3AAbC123xyzShort.sig; theme=dark",
-    "expected": "Cookie: [redacted]; theme=dark"
+    "expected": "Cookie: [redacted]"
   },
   {
     "rule": "kv",
     "input": "Set-Cookie: refresh_token=r_8sk2Lq; HttpOnly",
-    "expected": "Set-Cookie: [redacted]; HttpOnly"
+    "expected": "Set-Cookie: [redacted]"
   },
   {
     "rule": "basic",
@@ -252,7 +252,7 @@
   {
     "rule": "kv",
     "input": "Invalid URL reset-password?token=AbC123xyz",
-    "expected": "Invalid URL reset-password?token=[redacted]"
+    "expected": "Invalid URL reset-password?[query]"
   },
   {
     "rule": "kv",
@@ -277,7 +277,7 @@
   {
     "rule": "kv",
     "input": "password: [hunter2]",
-    "expected": "password: [redacted]]"
+    "expected": "password: [redacted]"
   },
   {
     "rule": "kv",
@@ -467,7 +467,7 @@
   {
     "rule": "kv",
     "input": "authorization: AWS4-HMAC-SHA256 Credential=AKIA/x, Signature=abcdef",
-    "expected": "authorization: AWS4-HMAC-SHA256 [redacted], Signature=[redacted]"
+    "expected": "authorization: AWS4-HMAC-SHA256 [redacted]"
   },
   {
     "rule": "kv",
@@ -492,22 +492,22 @@
   {
     "rule": "kv",
     "input": "auth: hunter2 rejected",
-    "expected": "auth: [redacted] rejected"
+    "expected": "auth: [redacted]"
   },
   {
     "rule": "kv",
     "input": "Invalid authorization: abc123secret for user 5",
-    "expected": "Invalid authorization: [redacted] for user 5"
+    "expected": "Invalid authorization: [redacted]"
   },
   {
     "rule": "kv",
     "input": "authorization:secretvalue other",
-    "expected": "authorization:[redacted] other"
+    "expected": "authorization:[redacted]"
   },
   {
     "rule": "kv",
     "input": "auth=sk_live_x and more",
-    "expected": "auth=[redacted] and more"
+    "expected": "auth=[redacted]"
   },
   {
     "rule": "kv",
@@ -533,5 +533,1205 @@
     "rule": "postgres",
     "input": "Key (a)=(x) (Key (b)=(y",
     "expected": "Key (a)=([value]) (Key (b)=([value])"
+  },
+  {
+    "rule": "secret",
+    "input": "at a-very-long-kebab-identifier-for-the-tenant-switcher-panel (x.js)",
+    "expected": "at a-very-long-kebab-identifier-for-the-tenant-switcher-panel (x.js)"
+  },
+  {
+    "rule": "secret",
+    "input": "at my_very_long_snake_case_identifier_for_the_module_x_y (x.js)",
+    "expected": "at my_very_long_snake_case_identifier_for_the_module_x_y (x.js)"
+  },
+  {
+    "rule": "secret",
+    "input": "token zqW1abcdefghijklmnopqrstuvwxyzABCDEFGHIJKL rejected",
+    "expected": "token [secret] rejected"
+  },
+  {
+    "rule": "email",
+    "input": "invite failed for jane@localhost",
+    "expected": "invite failed for [email]"
+  },
+  {
+    "rule": "email",
+    "input": "invite failed for jane@localhost.",
+    "expected": "invite failed for [email]."
+  },
+  {
+    "rule": "email",
+    "input": "invite failed for jane%2540example.com",
+    "expected": "invite failed for [email]"
+  },
+  {
+    "rule": "email",
+    "input": "invite failed for jane＠example.com",
+    "expected": "invite failed for [email]"
+  },
+  {
+    "rule": "email",
+    "input": "invite failed for jane﹫example.com",
+    "expected": "invite failed for [email]"
+  },
+  {
+    "rule": "email",
+    "input": "invite failed for \"jane doe\"@example.com",
+    "expected": "invite failed for [email]"
+  },
+  {
+    "rule": "email",
+    "input": "rcpt jane.zqU2@[192.168.0.1] rejected",
+    "expected": "rcpt [email] rejected"
+  },
+  {
+    "rule": "email",
+    "input": "rcpt jane@[IPv6:2001:db8::1] rejected",
+    "expected": "rcpt [email] rejected"
+  },
+  {
+    "rule": "email",
+    "input": "@media (min-width: 640px) failed",
+    "expected": "@media (min-width: 640px) failed"
+  },
+  {
+    "rule": "email",
+    "input": "Cannot find module '@scope/pkg'",
+    "expected": "Cannot find module '@scope/pkg'"
+  },
+  {
+    "rule": "email",
+    "input": "install react-dom@19.0.0 failed",
+    "expected": "install react-dom@19.0.0 failed"
+  },
+  {
+    "rule": "posthog-key",
+    "input": "a3f9a3f9a3f9a3f9a3f9a3f9a3f9a3f9phc_abcdef123",
+    "expected": "[secret][posthog-key]"
+  },
+  {
+    "rule": "posthog-key",
+    "input": "a3faa3faa3faa3faa3faa3faa3faa3faphc_abcdef123",
+    "expected": "[secret][posthog-key]"
+  },
+  {
+    "rule": "jwt",
+    "input": "a3f9a3f9a3f9a3f9a3f9a3f9a3f9a3f9eyJhIjoxfQ.eyJiIjoyfQ.c2lnbmF0dXJl",
+    "expected": "[secret][jwt]"
+  },
+  {
+    "rule": "jwt",
+    "input": "a3faa3faa3faa3faa3faa3faa3faa3faeyJhIjoxfQ.eyJiIjoyfQ.c2lnbmF0dXJl",
+    "expected": "[secret][jwt]"
+  },
+  {
+    "rule": "bearer",
+    "input": "a3f9a3f9a3f9a3f9a3f9a3f9a3f9a3f9Bearer abc123secret",
+    "expected": "[secret]Bearer [token]"
+  },
+  {
+    "rule": "bearer",
+    "input": "a3faa3faa3faa3faa3faa3faa3faa3faBearer abc123secret",
+    "expected": "[secret]Bearer [token]"
+  },
+  {
+    "rule": "basic",
+    "input": "a3f9a3f9a3f9a3f9a3f9a3f9a3f9a3f9Basic dXNlcjpwYXNz",
+    "expected": "[secret]Basic [token]"
+  },
+  {
+    "rule": "basic",
+    "input": "a3faa3faa3faa3faa3faa3faa3faa3fabasic dXNlcjpwYXNz",
+    "expected": "[secret]basic [token]"
+  },
+  {
+    "rule": "fragment",
+    "input": "webpack://app/src/main.tsx#L5",
+    "expected": "webpack://app/src/main.tsx#L5"
+  },
+  {
+    "rule": "fragment",
+    "input": "https://app.example.com/src/a.ts#L10-L12",
+    "expected": "https://app.example.com/src/a.ts#L10-L12"
+  },
+  {
+    "rule": "fragment",
+    "input": "https://app.example.com/reset-password#installation",
+    "expected": "https://app.example.com/reset-password#installation"
+  },
+  {
+    "rule": "fragment",
+    "input": "https://app.example.com/docs#getting-started",
+    "expected": "https://app.example.com/docs#getting-started"
+  },
+  {
+    "rule": "fragment",
+    "input": "https://app.example.com/x#k8Fq2Zx9Lm",
+    "expected": "https://app.example.com/x#[fragment]"
+  },
+  {
+    "rule": "fragment",
+    "input": "https://app.example.com/x#abc123xyz",
+    "expected": "https://app.example.com/x#[fragment]"
+  },
+  {
+    "rule": "email",
+    "input": "invite failed for jane@localhost: smtp down",
+    "expected": "invite failed for [email]: smtp down"
+  },
+  {
+    "rule": "email",
+    "input": "invite failed for jane@intranet!",
+    "expected": "invite failed for [email]!"
+  },
+  {
+    "rule": "email",
+    "input": "to=jane@localhost&x=1",
+    "expected": "to=[email]&x=1"
+  },
+  {
+    "rule": "email",
+    "input": "jane@localhost?x=1",
+    "expected": "[email]?x=1"
+  },
+  {
+    "rule": "email",
+    "input": "jane@corp/x",
+    "expected": "[email]/x"
+  },
+  {
+    "rule": "email",
+    "input": "install react@canary failed",
+    "expected": "install react@canary failed"
+  },
+  {
+    "rule": "email",
+    "input": "uses actions/checkout@v4 and node@sha256",
+    "expected": "uses actions/checkout@v4 and node@sha256"
+  },
+  {
+    "rule": "email",
+    "input": "pin lodash@latest and actions/setup-node@main",
+    "expected": "pin lodash@latest and actions/setup-node@main"
+  },
+  {
+    "rule": "fragment",
+    "input": "https://app.example.com/src/a.ts#L10C3-L12C8",
+    "expected": "https://app.example.com/src/a.ts#L10C3-L12C8"
+  },
+  {
+    "rule": "fragment",
+    "input": "https://app.example.com/x#abcdef123456",
+    "expected": "https://app.example.com/x#[fragment]"
+  },
+  {
+    "rule": "fragment",
+    "input": "https://app.example.com/x#piano-tiger-4815",
+    "expected": "https://app.example.com/x#[fragment]"
+  },
+  {
+    "rule": "fragment",
+    "input": "https://app.example.com/x#otp-123456",
+    "expected": "https://app.example.com/x#[fragment]"
+  },
+  {
+    "rule": "fragment",
+    "input": "https://app.example.com/x#pin_4821",
+    "expected": "https://app.example.com/x#[fragment]"
+  },
+  {
+    "rule": "fragment",
+    "input": "https://app.example.com/x#token_abcdefghijklmnop",
+    "expected": "https://app.example.com/x#[fragment]"
+  },
+  {
+    "rule": "fragment",
+    "input": "https://app.example.com/x#step2",
+    "expected": "https://app.example.com/x#[fragment]"
+  },
+  {
+    "rule": "fragment",
+    "input": "https://app.example.com/docs#authentication",
+    "expected": "https://app.example.com/docs#authentication"
+  },
+  {
+    "rule": "fragment",
+    "input": "https://app.example.com/docs#keyboard-shortcuts",
+    "expected": "https://app.example.com/docs#keyboard-shortcuts"
+  },
+  {
+    "rule": "fragment",
+    "input": "https://app.example.com/docs#design",
+    "expected": "https://app.example.com/docs#design"
+  },
+  {
+    "rule": "fragment",
+    "input": "https://app.example.com/docs#token-qyhilody",
+    "expected": "https://app.example.com/docs#[fragment]"
+  },
+  {
+    "rule": "fragment",
+    "input": "https://app.example.com/docs#passwords",
+    "expected": "https://app.example.com/docs#[fragment]"
+  },
+  {
+    "rule": "email",
+    "input": "install react@npm:@preact/compat and pkg@workspace:* failed",
+    "expected": "install react@npm:@preact/compat and pkg@workspace:* failed"
+  },
+  {
+    "rule": "kv",
+    "input": "{\"token\": \"null\\\"hunter2\"}",
+    "expected": "{\"token\": \"[redacted]\"}"
+  },
+  {
+    "rule": "kv",
+    "input": "{'token': 'null\\'hunter2'}",
+    "expected": "{'token': '[redacted]'}"
+  },
+  {
+    "rule": "kv",
+    "input": "{\\\"token\\\":\\\"null\\\"}",
+    "expected": "{\\\"token\\\":\\\"null\\\"}"
+  },
+  {
+    "rule": "kv",
+    "input": "Authorization: Digest username=\"jane\", realm=\"r\", nonce=\"abc\", uri=\"/x\", response=\"6629fae49393a05397450978507c4ef1\"",
+    "expected": "Authorization: Digest [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "Authorization: Digest username=\"jane\", response=\"abc12\"",
+    "expected": "Authorization: Digest [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "Authorization: OAuth oauth_consumer_key=\"ck123\", oauth_token=\"tok456\", oauth_signature=\"sig789\"",
+    "expected": "Authorization: OAuth [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "Authorization: Custom abc123secret",
+    "expected": "Authorization: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "authorization=Custom abc123secret",
+    "expected": "authorization=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "{\"password\": [\"hunter2\", \"x\"]}",
+    "expected": "{\"password\": [redacted]}"
+  },
+  {
+    "rule": "kv",
+    "input": "tokens: [\"hunter2\"]",
+    "expected": "tokens: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "passwords=hunter2",
+    "expected": "passwords=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "sig=Zx9Kq2Lm",
+    "expected": "sig=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "hmac=Zx9Kq2Lm",
+    "expected": "hmac=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "cnonce=\"0a4f113b\"",
+    "expected": "cnonce=\"[redacted]\""
+  },
+  {
+    "rule": "kv",
+    "input": "nonce: abc",
+    "expected": "nonce: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "response=\"abc12\"",
+    "expected": "response=\"[redacted]\""
+  },
+  {
+    "rule": "kv",
+    "input": "oauth_consumer_key=ck123",
+    "expected": "oauth_consumer_key=[redacted]"
+  },
+  {
+    "rule": "ip",
+    "input": "connect failed from 10.1.2.3",
+    "expected": "connect failed from [ip]"
+  },
+  {
+    "rule": "ip",
+    "input": "connect ECONNREFUSED 10.1.2.3:5432.",
+    "expected": "connect ECONNREFUSED [ip]:5432."
+  },
+  {
+    "rule": "ip",
+    "input": "connect failed from 2001:db8::8a2e:370:7334",
+    "expected": "connect failed from [ip]"
+  },
+  {
+    "rule": "ip",
+    "input": "connect ECONNREFUSED ::1:6379",
+    "expected": "connect ECONNREFUSED [ip]"
+  },
+  {
+    "rule": "ip",
+    "input": "connect failed from fe80:0:0:0:202:b3ff:fe1e:8329",
+    "expected": "connect failed from [ip]"
+  },
+  {
+    "rule": "ip",
+    "input": "timeout at 12:30:45 in v1.2.3",
+    "expected": "timeout at 12:30:45 in v1.2.3"
+  },
+  {
+    "rule": "ip",
+    "input": "std::vector out of range",
+    "expected": "std::vector out of range"
+  },
+  {
+    "rule": "phone",
+    "input": "sms to +1 415 555 0100 failed",
+    "expected": "sms to [phone] failed"
+  },
+  {
+    "rule": "phone",
+    "input": "sms to +14155550100 failed",
+    "expected": "sms to [phone] failed"
+  },
+  {
+    "rule": "phone",
+    "input": "offset +05:30 applied",
+    "expected": "offset +05:30 applied"
+  },
+  {
+    "rule": "secret",
+    "input": "user 3f2504e0-4f89-11d3-9a0c-0305e82c3301 not found",
+    "expected": "user 3f2504e0-4f89-11d3-9a0c-0305e82c3301 not found"
+  },
+  {
+    "rule": "path-token",
+    "input": "GET /reset/abc123XYZ failed",
+    "expected": "GET /reset/[token] failed"
+  },
+  {
+    "rule": "path-token",
+    "input": "GET /api/v1/invite/k8Fq2Zx9/accept failed",
+    "expected": "GET /api/v1/invite/[token]/accept failed"
+  },
+  {
+    "rule": "path-token",
+    "input": "GET /verify/abc123 and /accept/xyz789",
+    "expected": "GET /verify/[token] and /accept/[token]"
+  },
+  {
+    "rule": "path-token",
+    "input": "GET /reset-password failed",
+    "expected": "GET /reset-password failed"
+  },
+  {
+    "rule": "jwt",
+    "input": "token ewogICJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2ln rejected",
+    "expected": "token [jwt] rejected"
+  },
+  {
+    "rule": "jwt",
+    "input": "see ewan.smith.x for details",
+    "expected": "see ewan.smith.x for details"
+  },
+  {
+    "rule": "basic",
+    "input": "Basic Credential=abcdefgh",
+    "expected": "Basic Credential=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "Cookie: theme=dark; app_rt=zqS4Zx9Kq2Lm8",
+    "expected": "Cookie: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "cookie: a=1; b=2; c=zqS4bLm8",
+    "expected": "cookie: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "password: zqS6correct horse zqS6battery staple",
+    "expected": "password: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "secret=zqS6alpha zqS6beta",
+    "expected": "secret=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "{password: zqS6correct horse, id: 5}",
+    "expected": "{password: [redacted], id: 5}"
+  },
+  {
+    "rule": "kv",
+    "input": "password%3Dhunter2 horse",
+    "expected": "password%3D[redacted] horse"
+  },
+  {
+    "rule": "kv",
+    "input": "Map(1) { 'password' => 'zqS1hunter2' }",
+    "expected": "Map(1) { 'password' => '[redacted]' }"
+  },
+  {
+    "rule": "kv",
+    "input": "URLSearchParams { 'token' => 'zqS2tok9Lm' }",
+    "expected": "URLSearchParams { 'token' => '[redacted]' }"
+  },
+  {
+    "rule": "kv",
+    "input": "password => zqS3hunter2",
+    "expected": "password => [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "password: >zqS1secret",
+    "expected": "password: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "Authorization: >zqS2V",
+    "expected": "Authorization: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "password=>>zqS3V",
+    "expected": "password=>[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "{ authorization: 'Digest username=\"jane\", realm=\"r\", uri=\"/x\", response=\"abc\"' }",
+    "expected": "{ authorization: 'Digest [redacted]' }"
+  },
+  {
+    "rule": "kv",
+    "input": "{ cookie: 'theme=\"dark\"; sid2=zqS4abc' }",
+    "expected": "{ cookie: '[redacted]' }"
+  },
+  {
+    "rule": "kv",
+    "input": "Unexpected response: 502 Bad Gateway",
+    "expected": "Unexpected response: 502 Bad Gateway"
+  },
+  {
+    "rule": "kv",
+    "input": "response=\"abc123\"",
+    "expected": "response=\"[redacted]\""
+  },
+  {
+    "rule": "kv",
+    "input": "token: [ip] and sig=[phone]",
+    "expected": "token: [ip] and sig=[phone]"
+  },
+  {
+    "rule": "kv",
+    "input": "SAMLResponse=PHNhbWxwOlJlc3BvbnNl",
+    "expected": "SAMLResponse=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "g-recaptcha-response=03AGdBq25xyz",
+    "expected": "g-recaptcha-response=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "h-captcha-response=P0_eyJ",
+    "expected": "h-captcha-response=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "response=abc123",
+    "expected": "response=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "{\"response\":\"abc123\"}",
+    "expected": "{\"response\":\"[redacted]\"}"
+  },
+  {
+    "rule": "kv",
+    "input": "\"cf-turnstile-response\":\"x\"",
+    "expected": "\"cf-turnstile-response\":\"[redacted]\""
+  },
+  {
+    "rule": "kv",
+    "input": "mfa_response=\"x\"",
+    "expected": "mfa_response=\"[redacted]\""
+  },
+  {
+    "rule": "kv",
+    "input": "challenge-response: \"x\"",
+    "expected": "challenge-response: \"[redacted]\""
+  },
+  {
+    "rule": "kv",
+    "input": "SAMLResponse=PHN",
+    "expected": "SAMLResponse=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "g-recaptcha-response=03AG",
+    "expected": "g-recaptcha-response=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "cf-turnstile-response=0.x",
+    "expected": "cf-turnstile-response=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "response=abc",
+    "expected": "response=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "{\"response\":\"abc\"}",
+    "expected": "{\"response\":\"[redacted]\"}"
+  },
+  {
+    "rule": "kv",
+    "input": "mfa_response: 123456",
+    "expected": "mfa_response: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "challenge-response: abc",
+    "expected": "challenge-response: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "oauth_response: xyz",
+    "expected": "oauth_response: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "x-captcha-response: tok",
+    "expected": "x-captcha-response: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "password%3AzqT9hunter2",
+    "expected": "password%3A[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "data=%7B%22password%22%3A%22zqT8hunter2%22%7D",
+    "expected": "data=%7B%22password%22%3A%22[redacted]%22%7D"
+  },
+  {
+    "rule": "kv",
+    "input": "password&#61;zqV2hunter2",
+    "expected": "password&#61;[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "password&#58; zqV2hunter2",
+    "expected": "password&#58; [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "password\\u003dzqV3hunter2",
+    "expected": "password\\u003d[redacted]"
+  },
+  {
+    "rule": "query",
+    "input": "callback?code=zqU3abc&state=x",
+    "expected": "callback?[query]"
+  },
+  {
+    "rule": "query",
+    "input": "Is it ready? Try again later",
+    "expected": "Is it ready? Try again later"
+  },
+  {
+    "rule": "kv",
+    "input": "state=xyz&code=zqT1abcDEF123",
+    "expected": "state=xyz&code=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "OAuth callback failed: code=zqT1abcDEF123",
+    "expected": "OAuth callback failed: code=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "authorization code: zqT1abcDEF123 expired",
+    "expected": "authorization code: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "authorization_code=zqT1abcDEF123",
+    "expected": "authorization_code=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "key=zqU9abc123",
+    "expected": "key=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "code: 'ECONNREFUSED'",
+    "expected": "code: 'ECONNREFUSED'"
+  },
+  {
+    "rule": "kv",
+    "input": "error code 23505",
+    "expected": "error code 23505"
+  },
+  {
+    "rule": "kv",
+    "input": "key: value missing",
+    "expected": "key: value missing"
+  },
+  {
+    "rule": "kv",
+    "input": "monkey=banana",
+    "expected": "monkey=banana"
+  },
+  {
+    "rule": "kv",
+    "input": "error code 500: the key was missing",
+    "expected": "error code 500: the key was missing"
+  },
+  {
+    "rule": "kv",
+    "input": "passphrase=zqS7hunter2",
+    "expected": "passphrase=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "passcode: zqS8a91b",
+    "expected": "passcode: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "pin=zqS9x4821",
+    "expected": "pin=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "user_pin=4821",
+    "expected": "user_pin=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "pinned to top",
+    "expected": "pinned to top"
+  },
+  {
+    "rule": "kv",
+    "input": "spin=3 failed",
+    "expected": "spin=3 failed"
+  },
+  {
+    "rule": "secret",
+    "input": "InvalidAccessKeyId: AKIAIOSFODNN7EXAMPLE is not valid",
+    "expected": "InvalidAccessKeyId: [secret] is not valid"
+  },
+  {
+    "rule": "secret",
+    "input": "client config GOCSPX-zqT3abcdEFGH1234ijklMNOP567q",
+    "expected": "client config [secret]"
+  },
+  {
+    "rule": "secret",
+    "input": "using re_zqT4Abc123_DEFghi456JKL",
+    "expected": "using [secret]"
+  },
+  {
+    "rule": "secret",
+    "input": "slack xoxb-1234567890-zqT6ABCdef",
+    "expected": "slack [secret]"
+  },
+  {
+    "rule": "secret",
+    "input": "stripe sk_live_zqT7abcDEF1234567",
+    "expected": "stripe [secret]"
+  },
+  {
+    "rule": "secret",
+    "input": "a3f9a3f9a3f9a3f9a3f9a3f9a3f9a3f9sk_live_zqT7abcDEF1234567",
+    "expected": "[secret][secret]"
+  },
+  {
+    "rule": "secret",
+    "input": "re_render failed in re_render_queue_handler",
+    "expected": "re_render failed in re_render_queue_handler"
+  },
+  {
+    "rule": "secret",
+    "input": "maps key AIzaSyZqTfakeEXAMPLEexampleEXAMPLE_ex-0 rejected",
+    "expected": "maps key [secret] rejected"
+  },
+  {
+    "rule": "secret",
+    "input": "webhook whsec_zqTfakeEXAMPLEexampleEXAMPLE+ex/0= mismatch",
+    "expected": "webhook [secret] mismatch"
+  },
+  {
+    "rule": "secret",
+    "input": "secret access key wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY rejected",
+    "expected": "secret access key [secret] rejected"
+  },
+  {
+    "rule": "secret",
+    "input": "secret access key wJalrXUtnFEMI+KxMDENGzbPxRfiCYEXAMPLEKEY rejected",
+    "expected": "secret access key [secret] rejected"
+  },
+  {
+    "rule": "secret",
+    "input": "commit 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b done",
+    "expected": "commit [secret] done"
+  },
+  {
+    "rule": "secret",
+    "input": "id zqTabcdEFGHijkl/MNOPqrstUVWXyzab/CDEFghix here",
+    "expected": "id zqTabcdEFGHijkl/MNOPqrstUVWXyzab/CDEFghix here"
+  },
+  {
+    "rule": "secret",
+    "input": "id zqTabcdEFGHijkl/MNOPqrstUVWXyzab/CDEFgh here",
+    "expected": "id zqTabcdEFGHijkl/MNOPqrstUVWXyzab/CDEFgh here"
+  },
+  {
+    "rule": "secret",
+    "input": "id AIzaSyZqTfakeEXAMPLEexampleEXAMPLE_ex- here",
+    "expected": "id AIzaSyZqTfakeEXAMPLEexampleEXAMPLE_ex- here"
+  },
+  {
+    "rule": "secret",
+    "input": "id whsec_zqTfakeEXAMPLEexample here",
+    "expected": "id whsec_zqTfakeEXAMPLEexample here"
+  },
+  {
+    "rule": "kv",
+    "input": "password=\\u0022zqX1hunter2\\u0022",
+    "expected": "password=\\u0022[redacted]\\u0022"
+  },
+  {
+    "rule": "kv",
+    "input": "{\\u0022password\\u0022:\\u0022zqX2hunter2\\u0022}",
+    "expected": "{\\u0022password\\u0022:\\u0022[redacted]\\u0022}"
+  },
+  {
+    "rule": "kv",
+    "input": "password=\\zqX3hunter2",
+    "expected": "password=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "token=\\u0027zqX4hunter2\\u0027",
+    "expected": "token=\\u0027[redacted]\\u0027"
+  },
+  {
+    "rule": "kv",
+    "input": "code=zqX5abc123&state=x",
+    "expected": "code=[redacted]&state=x"
+  },
+  {
+    "rule": "kv",
+    "input": "code=zqX6abc123&grant_type=authorization_code",
+    "expected": "code=[redacted]&grant_type=authorization_code"
+  },
+  {
+    "rule": "kv",
+    "input": "{\"code\":\"zqX7abc123\",\"grant_type\":\"authorization_code\"}",
+    "expected": "{\"code\":\"[redacted]\",\"grant_type\":\"authorization_code\"}"
+  },
+  {
+    "rule": "kv",
+    "input": "Error exchanging code=zqX8abc123 for OAuth token",
+    "expected": "Error exchanging code=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "Unauthorized: error code=E401",
+    "expected": "Unauthorized: error code=E401"
+  },
+  {
+    "rule": "kv",
+    "input": "403 Not authorized, code: 'ERR_FORBIDDEN'",
+    "expected": "403 Not authorized, code: 'ERR_FORBIDDEN'"
+  },
+  {
+    "rule": "kv",
+    "input": "status code: 404",
+    "expected": "status code: 404"
+  },
+  {
+    "rule": "kv",
+    "input": "{ code: 'ECONNREFUSED', headers: { authorization: 'x' } }",
+    "expected": "{ code: 'ECONNREFUSED', headers: { authorization: '[redacted]' } }"
+  },
+  {
+    "rule": "kv",
+    "input": "SECRET_KEY=zqY1abc123",
+    "expected": "SECRET_KEY=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "signing_key=zqY2abc123",
+    "expected": "signing_key=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "encryption_key=zqY3abc123",
+    "expected": "encryption_key=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "hmac_key=zqY4abc123",
+    "expected": "hmac_key=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "keys=zqY5abc123",
+    "expected": "keys=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "primary_key=5",
+    "expected": "primary_key=5"
+  },
+  {
+    "rule": "kv",
+    "input": "sort_key=created_at",
+    "expected": "sort_key=created_at"
+  },
+  {
+    "rule": "kv",
+    "input": "foreign_key=user_id",
+    "expected": "foreign_key=user_id"
+  },
+  {
+    "rule": "kv",
+    "input": "cache_key=tenant_42",
+    "expected": "cache_key=tenant_42"
+  },
+  {
+    "rule": "kv",
+    "input": "partition_key=tenant_42",
+    "expected": "partition_key=tenant_42"
+  },
+  {
+    "rule": "secret",
+    "input": "ENOENT: no such file or directory, open '/app/data/uploads/tenants/avatars/photo1.png'",
+    "expected": "ENOENT: no such file or directory, open '/app/data/uploads/tenants/avatars/photo1.png'"
+  },
+  {
+    "rule": "secret",
+    "input": "Cannot GET /lib/lib/lib/tenants/tenants/app/srv/app",
+    "expected": "Cannot GET /lib/lib/lib/tenants/tenants/app/srv/app"
+  },
+  {
+    "rule": "secret",
+    "input": "invite failed for wJalrXUtnFEMI+KxMDENGzbPxRfiCYEXAMPLEKEY@example.com",
+    "expected": "invite failed for [email]"
+  },
+  {
+    "rule": "secret",
+    "input": "maps key AIzaSyZqTfakeEXAMPLEexampleEXAMPLE_ex-0abc rejected",
+    "expected": "maps key [secret] rejected"
+  },
+  {
+    "rule": "secret",
+    "input": "calling re_index_2024_migration now",
+    "expected": "calling re_index_2024_migration now"
+  },
+  {
+    "rule": "kv",
+    "input": "Failed to authorize: code=abc123XYZ",
+    "expected": "Failed to authorize: code=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "{\n  \"code\": \"abc123XYZ\",\n  \"grant_type\": \"authorization_code\"\n}",
+    "expected": "{\n  \"code\": \"[redacted]\",\n  \"grant_type\": \"authorization_code\"\n}"
+  },
+  {
+    "rule": "kv",
+    "input": "{ body: { code: 'abc123XYZ' }, grant_type: 'authorization_code' }",
+    "expected": "{ body: { code: '[redacted]' }, grant_type: 'authorization_code' }"
+  },
+  {
+    "rule": "kv",
+    "input": "code=abc123XYZ\nstate=x\ngrant_type=authorization_code",
+    "expected": "code=[redacted]\nstate=x\ngrant_type=authorization_code"
+  },
+  {
+    "rule": "kv",
+    "input": "{\n  code: 'ECONNREFUSED',\n  errno: -111\n}",
+    "expected": "{\n  code: 'ECONNREFUSED',\n  errno: -111\n}"
+  },
+  {
+    "rule": "email",
+    "input": "invite failed for sk_live_zqTabcdEFGHij1234@example.com",
+    "expected": "invite failed for [email]"
+  },
+  {
+    "rule": "email",
+    "input": "invite failed for AKIAIOSFODNN7EXAMPLE%40example.com",
+    "expected": "invite failed for [email]"
+  },
+  {
+    "rule": "email",
+    "input": "invite failed for wJalrXUtnFEMI+KxMDENGzbPxRfiCYEXAMPLEKEY%40example.com",
+    "expected": "invite failed for [email]"
+  },
+  {
+    "rule": "email",
+    "input": "to=xoxb-1234567890-zqT6ABCdef@example-corp.co.uk",
+    "expected": "to=[email]"
+  },
+  {
+    "rule": "kv",
+    "input": "SECRET_KEY: zqS4Zx9Kq2Lm8",
+    "expected": "SECRET_KEY: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "secret_key: zqS4Zx9Kq2Lm8",
+    "expected": "secret_key: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "secret-key: zqS4Zx9Kq2Lm8",
+    "expected": "secret-key: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "stripe_secret_key: zqS4Zx9Kq2Lm8",
+    "expected": "stripe_secret_key: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "{\"secretKey\": \"zqS4Zx9Kq2Lm8\"}",
+    "expected": "{\"secretKey\": \"[redacted]\"}"
+  },
+  {
+    "rule": "kv",
+    "input": "{\"encryptionKey\": \"zqS4Zx9Kq2Lm8\"}",
+    "expected": "{\"encryptionKey\": \"[redacted]\"}"
+  },
+  {
+    "rule": "kv",
+    "input": "config invalid: { secretKey: 'zqS4Zx9Kq2Lm8', region: 'eu' }",
+    "expected": "config invalid: { secretKey: '[redacted]', region: 'eu' }"
+  },
+  {
+    "rule": "kv",
+    "input": "signing_key: zqS4Zx9Kq2Lm8",
+    "expected": "signing_key: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "MASTER-KEY: zqS4Zx9Kq2Lm8",
+    "expected": "MASTER-KEY: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "client_key: zqS4Zx9Kq2Lm8",
+    "expected": "client_key: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "lookup failed for key: 'tenant.settings'",
+    "expected": "lookup failed for key: 'tenant.settings'"
+  },
+  {
+    "rule": "kv",
+    "input": "column primary_key: id",
+    "expected": "column primary_key: id"
+  },
+  {
+    "rule": "kv",
+    "input": "key%3DzqS4Zx9Kq2Lm8",
+    "expected": "key%3D[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "key&#61;zqS4Zx9Kq2Lm8",
+    "expected": "key&#61;[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "key\\u003dzqS4Zx9Kq2Lm8",
+    "expected": "key\\u003d[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "body: grant=1%26code%3DzqS4Zx9Kq2Lm8",
+    "expected": "body: grant=1%26code%3D[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "href=\"/cb?a=1&amp;code=zqS4Zx9Kq2Lm8\"",
+    "expected": "href=\"/cb?[query]\""
+  },
+  {
+    "rule": "kv",
+    "input": "state=x&amp;code=zqS4Zx9Kq2Lm8",
+    "expected": "state=x&amp;code=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "response&#61;zqS4Zx9Kq2Lm8",
+    "expected": "response&#61;[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "response\\u003dzqS4Zx9Kq2Lm8",
+    "expected": "response\\u003d[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "pin_code: zqS4Zx9Kq2Lm8",
+    "expected": "pin_code: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "{ pincode: '4815' }",
+    "expected": "{ pincode: '[redacted]' }"
+  },
+  {
+    "rule": "kv",
+    "input": "pin_number=4815",
+    "expected": "pin_number=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "passkey: zqS4Zx9Kq2Lm8",
+    "expected": "passkey: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "pass_phrase: zqS4Zx9Kq2Lm8",
+    "expected": "pass_phrase: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "pass-code: zqS4Zx9Kq2Lm8",
+    "expected": "pass-code: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "{\"otp_code\":\"481516\"}",
+    "expected": "{\"otp_code\":\"[redacted]\"}"
+  },
+  {
+    "rule": "kv",
+    "input": "mfa_code: 481516",
+    "expected": "mfa_code: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "verification_code=481516",
+    "expected": "verification_code=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "recoveryCode: zqS4-Zx9K",
+    "expected": "recoveryCode: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "backup_code: zqS4-Zx9K",
+    "expected": "backup_code: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "spin_code: 7, error_code: 'E42', status_code: 500",
+    "expected": "spin_code: 7, error_code: 'E42', status_code: 500"
+  },
+  {
+    "rule": "kv",
+    "input": "x-auth-token: Bearer zqS4Zx9Kq2Lm8",
+    "expected": "x-auth-token: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "token: Bearer zqS4Zx9Kq2Lm8 zqS5extra",
+    "expected": "token: [redacted]"
+  },
+  {
+    "rule": "bearer",
+    "input": "Authorization: Bearer zqS4Zx9Kq2Lm8, retrying",
+    "expected": "Authorization: Bearer [token], retrying"
+  },
+  {
+    "rule": "kv",
+    "input": "data=%7B%22password%22%3A%20%22zqS4Zx9Kq2Lm8%22%7D",
+    "expected": "data=%7B%22password%22%3A[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "upload failed: object_key=avatars/0199a1b2.png",
+    "expected": "upload failed: object_key=avatars/0199a1b2.png"
+  },
+  {
+    "rule": "kv",
+    "input": "publish failed: routing_key=orders.created",
+    "expected": "publish failed: routing_key=orders.created"
+  },
+  {
+    "rule": "kv",
+    "input": "shard_key=tenant_id",
+    "expected": "shard_key=tenant_id"
+  },
+  {
+    "rule": "kv",
+    "input": "missing translation_key=errors.not_found, i18n_key=errors.title",
+    "expected": "missing translation_key=errors.not_found, i18n_key=errors.title"
+  },
+  {
+    "rule": "kv",
+    "input": "idempotency_key=zqS4Zx9Kq2Lm8",
+    "expected": "idempotency_key=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "{\"error\":\"invalid_grant\",\"code\":\"zqS4Zx9Kq2Lm8\"}",
+    "expected": "{\"error\":\"invalid_grant\",\"code\":\"[redacted]\"}"
+  },
+  {
+    "rule": "kv",
+    "input": "token request failed: invalid_grant\n{\n  code: 'zqS4Zx9Kq2Lm8'\n}",
+    "expected": "token request failed: invalid_grant\n{\n  code: '[redacted]'\n}"
+  },
+  {
+    "rule": "kv",
+    "input": "code_verifier=zqS4Zx9Kq2Lm8",
+    "expected": "code_verifier=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "{ codeVerifier: 'zqS4Zx9Kq2Lm8', code: 'zqS5Zx9Kq2Lm8' }",
+    "expected": "{ codeVerifier: '[redacted]', code: '[redacted]' }"
+  },
+  {
+    "rule": "email",
+    "input": "invite failed for phc_zqTabcdEFGHij1234@example.com",
+    "expected": "invite failed for [email]"
+  },
+  {
+    "rule": "email",
+    "input": "to=phx_zqTabcdEFGHij1234%40example-corp.co.uk",
+    "expected": "to=[email]"
   }
 ]

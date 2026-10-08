@@ -910,6 +910,12 @@ one capture point per kind of failure, and no logger transport:
 | `process.on('uncaughtException' / 'unhandledRejection')` (`index.ts`)                   | always                                                                                                | `process`       |
 | each Worker's `failed` listener, through `reportFinalJobFailure` (`job-failure.job.ts`) | the attempt BullMQ will not retry (`isTerminalFailure`: attempts used up, or an `UnrecoverableError`) | `job`           |
 
+`errorHandler` reports through `reportErrorWithSpan`, which returns the
+event's id and the active span's stand-in, taken from the exception list
+the report built, so a 5xx is built once and its span never carries what
+the event may not. The process-fault handlers and `reportFinalJobFailure`
+call `reportError`.
+
 **The capture rule** (`shouldCaptureHttpError`): an error that is not an
 `HttpError` and resolves to 500 is always reported. An `HttpError` with a
 status of 500 or more is a deliberate answer, reported only when it wraps a
@@ -965,11 +971,19 @@ or a spent budget is the timelines' 502 `TIMELINE_UNAVAILABLE`. The
 timelines leave out `$exception` and both `*_errors_viewed` events.
 
 **System status.** `GET /platform/system/status` (platform admin and up,
-not audited) answers `{ release, errorTracking, flags }`: the image's
-`APP_VERSION`, the reporter's sent and dropped counts over the last 15
-minutes, summed from Redis across every API and worker process, and the
-flags' status (see [Feature flags](#feature-flags)). It is an open object;
-later sections are added as keys.
+not audited) answers `{ release, errorTracking, flags, maintenance }`: the
+image's `APP_VERSION`, the reporter's sent and dropped counts over the last
+15 minutes, summed from Redis across every API and worker process, the
+flags' status (see [Feature flags](#feature-flags)) and the maintenance
+mode's state (see [Maintenance mode](#maintenance-mode)). It is an open object;
+later sections are added as keys. Each section that reads Redis (error
+tracking, flags, the maintenance queue states and pending-notice check) is bounded by
+`STATUS_READ_TIMEOUT_MS` (2000 ms, `withStatusTimeout` in
+`status-read.service.ts`): a stalled Redis answers the section with what it
+reports when Redis fails, and one `warn`. The bound covers the handler
+only. A request reaches it after `requireAuth`'s session denylist read and
+the route's rate limiter, and those Redis calls have no bound yet, so a
+stalled Redis can still hang an authenticated request, this page included.
 
 What an event may carry, and what it never does, is in
 [SECURITY.md](SECURITY.md#error-tracking-what-reaches-posthog).
@@ -1421,7 +1435,11 @@ to its trace, and a trace to its logs.
 **Slack.** With `SLACK_WEBHOOK_URL` set, records at or above `SLACK_LOG_LEVEL`
 also go to Slack. The destination deduplicates by `${source}:${message}`: the
 first occurrence sends at once, repeats within 60 seconds are counted, and one
-summary is sent when the window closes if any were suppressed.
+summary is sent when the window closes if any were suppressed. The message,
+source, request id and stack it sends are scrubbed with `scrubText`, a
+stack's frame lines one by one so their paths stay readable; the time is
+sent only as an ISO instant; and a record whose scrub fails is replaced by a
+fixed notice.
 
 ## Local infrastructure
 
