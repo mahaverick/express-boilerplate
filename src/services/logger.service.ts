@@ -10,8 +10,8 @@ import pino, { type DestinationStream, type Logger, type StreamEntry } from 'pin
 import type { PrettyOptions } from 'pino-pretty'
 import { getEnv, logFormat, type Env } from '@/configs/env.config'
 import { isQueryError, redactedForLog } from '@/errors/postgres-errors'
+import { frameLineIndexesOf } from '@/errors/stack-frames'
 import { scrubText } from '@/services/errors/error-scrubber.service'
-import { frameLineIndexesOf } from '@/services/errors/stack-frame.service'
 import { requestContextStore } from '@/services/request-context.service'
 
 /**

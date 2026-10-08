@@ -1,9 +1,10 @@
 /**
  * @file Which lines of an error's stack are V8 frames. A stack starts with
  * the error's message, and a message line can start with an indented `at `
- * too; such a line is message text, and is scrubbed with the rest of the
- * message rather than alone as a frame, where it would lose the key in
- * front of it.
+ * too; such a line is message text, never a frame. Where a frame line is
+ * scrubbed on its own (an error event, Slack) it would lose the key in
+ * front of it, and where only frames are kept and the message is dropped
+ * (a redacted query or mail error in a log) it would survive whole.
  */
 
 /**

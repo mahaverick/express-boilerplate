@@ -23,13 +23,13 @@ import {
 import { getEnv } from '@/configs/env.config'
 import { ERROR_CAUSE_DEPTH, ERROR_FRAME_LIMIT } from '@/constants/error-tracking.constants'
 import { isQueryError } from '@/errors/postgres-errors'
+import { frameLineIndexesOf } from '@/errors/stack-frames'
 import { currentAnalyticsContext } from '@/services/analytics/analytics-context.service'
 import {
   toPosthogBatchEvent,
   type PosthogBatchEvent,
 } from '@/services/analytics/posthog-batch.service'
 import { scrubText } from '@/services/errors/error-scrubber.service'
-import { frameLineIndexesOf } from '@/services/errors/stack-frame.service'
 import { requestContextStore } from '@/services/request-context.service'
 
 /**

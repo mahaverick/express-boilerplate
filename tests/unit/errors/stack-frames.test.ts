@@ -4,7 +4,7 @@
  * not, nor does a frame-shaped line inside the message.
  */
 import { describe, expect, it } from 'vitest'
-import { frameLineIndexesOf, isStackFrameLine } from '@/services/errors/stack-frame.service'
+import { frameLineIndexesOf, isStackFrameLine } from '@/errors/stack-frames'
 
 /**
  * Throw from inside `Promise.all`, so the stack has `async` and
