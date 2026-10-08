@@ -290,3 +290,25 @@ describe('scrubText on a package ref with a protocol', () => {
     expect(scrubText(input)).toBe(input)
   })
 })
+
+describe('scrubText on quoted bare words and Digest', () => {
+  it('escaped quote after an exempt bare word (JSON, double quote)', () => {
+    expect(scrubText(String.raw`{"token": "null\"hunter2"}`)).not.toContain('hunter2')
+  })
+
+  it('escaped quote after an exempt bare word (single quote)', () => {
+    expect(scrubText(String.raw`{'token': 'null\'hunter2'}`)).not.toContain('hunter2')
+  })
+
+  it('Digest header scrubs the username', () => {
+    const header =
+      'Authorization: Digest username="jane", realm="r", nonce="abc", uri="/x", response="6629fae49393a05397450978507c4ef1"'
+    expect(scrubText(header)).not.toContain('jane')
+  })
+
+  it('Digest header scrubs a short response', () => {
+    expect(scrubText('Authorization: Digest username="jane", response="abc12"')).not.toContain(
+      'abc12'
+    )
+  })
+})

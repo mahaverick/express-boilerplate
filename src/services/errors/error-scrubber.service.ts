@@ -139,21 +139,82 @@ const BASIC_PATTERN =
   /(?<![G-Zg-z_])([Bb]asic|BASIC)\s+(?=[A-Za-z0-9+/]*[A-Z0-9+/])(?:[A-Za-z0-9+/]{4}){2,}(?:[A-Za-z0-9+/]{2,3}={0,2})?(?![\w+/=])/g
 
 /**
+ * The separator between a secret-named key and its value: `:`, `=` or a
+ * URL-encoded `=`.
+ */
+const KEY_SEPARATOR = '(?:[:=]|%3D)'
+
+/**
+ * The quote that may close a key or open its value: `"` or `'`, possibly
+ * escaped (a JSON string inside a JSON string).
+ */
+const KEY_QUOTE = String.raw`\\?["']`
+
+/**
+ * The Authorization scheme words kept in front of a replaced credential.
+ */
+const AUTH_SCHEMES = String.raw`(?:Bearer|Basic|Token|ApiKey|Digest|Negotiate|NTLM|Hawk|HOBA|DPoP|OAuth|AWS4-HMAC-SHA256|SCRAM-SHA-\d+)`
+
+/**
+ * A value this scrubber already wrote, left as it is.
+ */
+const PLACEHOLDER = String.raw`\[(?:redacted|value|credentials|query|fragment|token|jwt|posthog-key|email|secret)\]`
+
+/**
+ * The bare words a secret-named key may hold and keep: `token: undefined`
+ * reads as a missing value, not a leaked one.
+ */
+const BARE_WORD = '(?:undefined|null|missing|true|false)'
+
+/**
+ * The lookaheads that keep a value: a placeholder, an unquoted bare word
+ * that ends there, or a quoted bare word closed by the same quote that
+ * opened it (`"null"`, `\"null\"`); `"null\"hunter2"` is not one.
+ */
+const KEPT_VALUE = [
+  `(?!${PLACEHOLDER})`,
+  String.raw`(?!(?<![\\"'])${BARE_WORD}(?=[\s,;&})\]]|$))`,
+  String.raw`(?!(?<=(?<!\\)")${BARE_WORD}(?="))`,
+  String.raw`(?!(?<=(?<!\\)')${BARE_WORD}(?='))`,
+  String.raw`(?!(?<=\\")${BARE_WORD}(?=\\"))`,
+  String.raw`(?!(?<=\\')${BARE_WORD}(?=\\'))`,
+].join('')
+
+/**
+ * A quoted value: inside an escaped quote, up to the next escaped quote;
+ * inside a plain quote, up to the closing one, escaped quotes included.
+ */
+const QUOTED_VALUE = String.raw`(?<=\\")(?:(?!\\")[^\n])+|(?<=["'])(?:[^"'\\\n]|\\.)+`
+
+/**
+ * An Authorization-valued key (`authorization`, `auth`, `Proxy-Authorization`)
+ * and its whole value. The key, its separator and a known scheme word are
+ * kept (`Authorization: Digest [redacted]`). A quoted value is replaced to
+ * its closing quote; an unquoted one to the end of the line, so every
+ * parameter of a multi-parameter scheme (Digest, OAuth, AWS) and the whole
+ * credential of an unknown scheme go.
+ */
+const AUTH_HEADER_PATTERN = new RegExp(
+  String.raw`\b([\w-]*?(?:authorization|auth)${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?(?:${AUTH_SCHEMES}[ \t]+)?)` +
+    String.raw`(?!${AUTH_SCHEMES}[ \t]+${PLACEHOLDER})${KEPT_VALUE}` +
+    String.raw`(?:${QUOTED_VALUE}|(?<=["'][ \t]*${AUTH_SCHEMES}[ \t]+)(?=\S)(?:[^"'\\\n]|\\.)+|[^\s"'\\][^\n]*)`,
+  'gi'
+)
+
+/**
  * A secret-named key and its value: `password=...`, `"token":"..."`,
  * `api_key: ...`, `Cookie: ...`, `password%3D...`. The key and its separator
  * are kept. The value is a quoted string (spaces and escaped quotes
  * included, also inside a JSON string) or a run up to a delimiter. A value
  * already replaced by this scrubber (`[redacted]`, `[token]`...) and the
  * bare words `undefined`, `null`, `missing`, `true` and `false` are left as
- * they are, so `token: undefined` stays readable. After `authorization` or
- * `auth` the value may begin with a known scheme word (`Token abc` becomes `Token
- * [redacted]`; `Bearer`, `Basic`, `Token`, `ApiKey`, `Digest`, `Negotiate`,
- * `NTLM`, `Hawk`, `HOBA`, `DPoP`, `OAuth`, `AWS4-HMAC-SHA256`, `SCRAM-SHA-n`), so the credential and not the scheme is replaced; `signature`
- * covers the part of an AWS header after the credential.
+ * they are (`KEPT_VALUE`), so `token: undefined` stays readable.
  */
-const KV_SECRET_PATTERN =
-  // eslint-disable-next-line sonarjs/regex-complexity, sonarjs/super-linear-regex -- one pattern per rule keeps the rule list the spec; scrubText scans at most SCAN_MAX characters
-  /\b([\w-]*?(?:pass(?:word|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|session|sid|cookie|credentials?|signature|authorization|auth|jwt|otp)\\?["']?\s*(?:[:=]|%3D)\s*\\?["']?(?:(?<=(?:authorization|auth)\\?["']?\s*(?:[:=]|%3D)\s*\\?["']?)(?:Bearer|Basic|Token|ApiKey|Digest|Negotiate|NTLM|Hawk|HOBA|DPoP|OAuth|AWS4-HMAC-SHA256|SCRAM-SHA-\d+)[ \t]+)?)(?!(?:(?:Bearer|Basic) )?\[(?:redacted|value|credentials|query|fragment|token|jwt|posthog-key|email|secret)\])(?!(?<=(?:authorization|auth)\\?["']?\s*(?:[:=]|%3D)\s*\\?["']?)(?:Bearer|Basic|Token|ApiKey|Digest|Negotiate|NTLM|Hawk|HOBA|DPoP|OAuth|AWS4-HMAC-SHA256|SCRAM-SHA-\d+)[ \t]+\[(?:redacted|value|credentials|query|fragment|token|jwt|posthog-key|email|secret)\])(?!(?<![\\"'])(?:undefined|null|missing|true|false)(?=[\s,;&})\]]|$))(?!(?<=["'])(?:undefined|null|missing|true|false)(?=\\?["']))(?:(?<=\\")(?:(?!\\")[^\n])+|(?<=["'])(?:[^"'\\\n]|\\.)+|[^\s"'\\,;&})\]]+)/gi
+const KV_SECRET_PATTERN = new RegExp(
+  String.raw`\b([\w-]*?(?:pass(?:word|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|session|sid|cookie|credentials?|signature|jwt|otp)${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?)` +
+    String.raw`${KEPT_VALUE}(?:${QUOTED_VALUE}|[^\s"'\\,;&})\]]+)`,
+  'gi'
+)
 
 /**
  * A JSON Web Token: three dot-separated base64url segments, the first
@@ -265,10 +326,12 @@ function capped(value: string, wasCut: boolean): string {
  * becomes `[credentials]@`; a URL's or path's query string becomes
  * `?[query]` and its fragment, unless a line or heading anchor
  * (`isHarmlessFragment`), `#[fragment]`; `Bearer <credential>` becomes
- * `Bearer [token]`; `Basic <base64>` becomes `Basic [token]`, the scheme's case kept; the value of a
- * secret-named key (`password`, `token`, `secret`, `api_key`, `access_key`,
- * `private_key`, `session`, `sid`, `cookie`, `credentials`, `authorization`, `auth`,
- * `jwt`, `otp`, `signature`) becomes `[redacted]`; a JWT becomes `[jwt]`; a
+ * `Bearer [token]`; `Basic <base64>` becomes `Basic [token]`, the scheme's case kept; an
+ * Authorization-valued key's value (`authorization`, `auth`), after any
+ * known scheme word, to its closing quote or the end of the line, and the
+ * value of a secret-named key (`password`, `token`, `secret`, `api_key`,
+ * `access_key`, `private_key`, `session`, `sid`, `cookie`, `credentials`,
+ * `jwt`, `otp`, `signature`), become `[redacted]`; a JWT becomes `[jwt]`; a
  * PostHog key (`phc_`, `phx_`, `phs_`) becomes `[posthog-key]`; an email
  * address (`EMAIL_PATTERN`: `@` written plainly, encoded or fullwidth, a
  * quoted local part, an IP-literal or single-label domain) becomes
@@ -296,6 +359,7 @@ export function scrubText(value: string): string {
     )
     .replaceAll(BEARER_PATTERN, 'Bearer [token]')
     .replaceAll(BASIC_PATTERN, '$1 [token]')
+    .replaceAll(AUTH_HEADER_PATTERN, '$1[redacted]')
     .replaceAll(KV_SECRET_PATTERN, '$1[redacted]')
     .replaceAll(JWT_PATTERN, '[jwt]')
     .replaceAll(POSTHOG_KEY_PATTERN, '[posthog-key]')

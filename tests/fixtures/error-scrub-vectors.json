@@ -467,7 +467,7 @@
   {
     "rule": "kv",
     "input": "authorization: AWS4-HMAC-SHA256 Credential=AKIA/x, Signature=abcdef",
-    "expected": "authorization: AWS4-HMAC-SHA256 [redacted], Signature=[redacted]"
+    "expected": "authorization: AWS4-HMAC-SHA256 [redacted]"
   },
   {
     "rule": "kv",
@@ -492,22 +492,22 @@
   {
     "rule": "kv",
     "input": "auth: hunter2 rejected",
-    "expected": "auth: [redacted] rejected"
+    "expected": "auth: [redacted]"
   },
   {
     "rule": "kv",
     "input": "Invalid authorization: abc123secret for user 5",
-    "expected": "Invalid authorization: [redacted] for user 5"
+    "expected": "Invalid authorization: [redacted]"
   },
   {
     "rule": "kv",
     "input": "authorization:secretvalue other",
-    "expected": "authorization:[redacted] other"
+    "expected": "authorization:[redacted]"
   },
   {
     "rule": "kv",
     "input": "auth=sk_live_x and more",
-    "expected": "auth=[redacted] and more"
+    "expected": "auth=[redacted]"
   },
   {
     "rule": "kv",
@@ -778,5 +778,35 @@
     "rule": "email",
     "input": "install react@npm:@preact/compat and pkg@workspace:* failed",
     "expected": "install react@npm:@preact/compat and pkg@workspace:* failed"
+  },
+  {
+    "rule": "kv",
+    "input": "{\"token\": \"null\\\"hunter2\"}",
+    "expected": "{\"token\": \"[redacted]\"}"
+  },
+  {
+    "rule": "kv",
+    "input": "{'token': 'null\\'hunter2'}",
+    "expected": "{'token': '[redacted]'}"
+  },
+  {
+    "rule": "kv",
+    "input": "{\\\"token\\\":\\\"null\\\"}",
+    "expected": "{\\\"token\\\":\\\"null\\\"}"
+  },
+  {
+    "rule": "kv",
+    "input": "Authorization: Digest username=\"jane\", realm=\"r\", nonce=\"abc\", uri=\"/x\", response=\"6629fae49393a05397450978507c4ef1\"",
+    "expected": "Authorization: Digest [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "Authorization: Digest username=\"jane\", response=\"abc12\"",
+    "expected": "Authorization: Digest [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "Authorization: OAuth oauth_consumer_key=\"ck123\", oauth_token=\"tok456\", oauth_signature=\"sig789\"",
+    "expected": "Authorization: OAuth [redacted]"
   }
 ]
