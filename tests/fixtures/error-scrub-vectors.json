@@ -998,5 +998,20 @@
     "rule": "kv",
     "input": "password => zqS3hunter2",
     "expected": "password => [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "password: >zqS1secret",
+    "expected": "password: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "Authorization: >zqS2V",
+    "expected": "Authorization: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "password=>>zqS3V",
+    "expected": "password=>[redacted]"
   }
 ]

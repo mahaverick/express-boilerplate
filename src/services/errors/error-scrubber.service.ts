@@ -197,10 +197,11 @@ const ARRAY_VALUE = String.raw`\[[^\]\n]*\]`
  * An unquoted value. After a plain `:`, `=` or `=>` it runs to the next field
  * delimiter (`,` `;` `&` `}` `)` `]`, a quote or the end of the line), so a
  * multi-word passphrase goes whole; trailing spaces are kept. After an
- * encoded separator (`%3D`) it stops at whitespace too. It never starts
- * with `>`, so `=` cannot take half of an `=>`.
+ * encoded separator (`%3D`) it stops at whitespace too. It never
+ * starts with the `>` of an `=>`, so `=` cannot take half of it; a `>` after
+ * any other separator is a value.
  */
-const UNQUOTED_VALUE = String.raw`(?<=[:=>]\s*)[^\s"'\\,;&})\]>](?:[^\n"'\\,;&})\]]*[^\s"'\\,;&})\]])?|[^\s"'\\,;&})\]>][^\s"'\\,;&})\]]*`
+const UNQUOTED_VALUE = String.raw`(?<=[:=>]\s*)(?!(?<==)>)[^\s"'\\,;&})\]](?:[^\n"'\\,;&})\]]*[^\s"'\\,;&})\]])?|(?!(?<==)>)[^\s"'\\,;&})\]][^\s"'\\,;&})\]]*`
 
 /**
  * A quoted value: inside an escaped quote, up to the next escaped quote;
@@ -220,7 +221,7 @@ const QUOTED_VALUE = String.raw`(?<=\\")(?:(?!\\")[^\n])+|(?<=["'])(?:[^"'\\\n]|
 const AUTH_HEADER_PATTERN = new RegExp(
   String.raw`\b([\w-]*?(?:authorization|auth|cookies?)${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?(?:${AUTH_SCHEMES}[ \t]+)?)` +
     String.raw`(?!${AUTH_SCHEMES}[ \t]+${PLACEHOLDER})${KEPT_VALUE}` +
-    String.raw`(?:${QUOTED_VALUE}|(?<=["'][ \t]*${AUTH_SCHEMES}[ \t]+)(?=\S)(?:[^"'\\\n]|\\.)+|[^\s"'\\>][^\n]*)`,
+    String.raw`(?:${QUOTED_VALUE}|(?<=["'][ \t]*${AUTH_SCHEMES}[ \t]+)(?=\S)(?:[^"'\\\n]|\\.)+|(?!(?<==)>)[^\s"'\\][^\n]*)`,
   'gi'
 )
 
