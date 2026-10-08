@@ -1,5 +1,5 @@
 /**
- * @file Exercises `changeRole` and `removeMember` directly, against the
+ * @file Exercises `changeRole`, `removeMember` and `leaveTenant` directly, against the
  * real per-worker Postgres. The HTTP behaviour is covered by
  * `tests/integration/api/tenant.test.ts` and `tenant-actor-race.test.ts`.
  * Pool note: test mode has max 2 connections. The concurrent test's two
@@ -18,7 +18,7 @@ import { UserMembershipRepository } from '@/repositories/user-membership.reposit
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
 import { hashToken } from '@/services/session.service'
-import { changeRole, removeMember } from '@/services/tenant-membership.service'
+import { changeRole, leaveTenant, removeMember } from '@/services/tenant-membership.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { makeStaff, platformTenant } from '../../helpers/platform-staff'
@@ -450,5 +450,51 @@ describe('tenant-membership.service', () => {
       statusCode: 403,
       message: 'Insufficient permissions to remove this member',
     })
+  })
+
+  it('revokes a leaving staff member’s invitations sent on platform authority, each audited in its own tenant', async () => {
+    const owner = await createUser()
+    const leaver = await createUser()
+    const platform = await platformTenant()
+    await makeStaff(leaver.id, 'admin')
+    const customer = await createTenant(owner)
+    const joined = await createTenant(owner)
+    await userMembershipRepository.create({ userId: leaver.id, tenantId: joined.id, role: 'admin' })
+    const viaPlatform = await pendingFrom(customer, leaver, 'manager')
+    const asMember = await pendingFrom(joined, leaver, 'viewer')
+    const inPlatform = await pendingFrom(platform, leaver, 'viewer')
+
+    await leaveTenant({ userId: leaver.id }, platform.id, { isPlatformTenant: true })
+
+    expect(
+      await userMembershipRepository.findByUserAndTenant(leaver.id, platform.id)
+    ).toBeUndefined()
+    expect(await isPending(viaPlatform)).toBe(false)
+    expect(await isPending(inPlatform)).toBe(false)
+    expect(await isPending(asMember)).toBe(true)
+    const rows = await sql<{ targetId: string; tenantId: string; access: string }[]>`
+      select target_id as "targetId", tenant_id as "tenantId", access from audit_logs
+      where action = 'invitation.revoked' and actor_user_id = ${leaver.id}`
+    expect(rows.toSorted((a, b) => a.targetId.localeCompare(b.targetId))).toEqual(
+      [
+        { targetId: viaPlatform, tenantId: customer.id, access: 'platform' },
+        { targetId: inPlatform, tenantId: platform.id, access: 'member' },
+      ].toSorted((a, b) => a.targetId.localeCompare(b.targetId))
+    )
+  })
+
+  it('refuses a leave on platform access alone 404 Tenant not found, and records nothing', async () => {
+    const owner = await createUser()
+    const staff = await createUser()
+    await makeStaff(staff.id, 'owner')
+    const tenant = await createTenant(owner)
+
+    await expect(leaveTenant({ userId: staff.id }, tenant.id)).rejects.toMatchObject({
+      statusCode: 404,
+      message: 'Tenant not found',
+    })
+
+    const rows = await sql`select 1 from audit_logs where action = 'member.left'`
+    expect(rows).toHaveLength(0)
   })
 })

@@ -123,6 +123,8 @@ export const AUDIT_ACTIONS = {
     target: 'membership',
     metadata: z.strictObject({ userId: id, role, self: z.boolean(), reason: staffReason }),
   },
+  // A member left a tenant themselves (`DELETE /tenants/:slug/membership`).
+  'member.left': { target: 'membership', metadata: z.strictObject({ role }) },
   'invitation.created': {
     target: 'invitation',
     metadata: z.strictObject({ role, emailDomain: invitationEmailDomain, reason: staffReason }),

@@ -438,6 +438,29 @@ describe('the staff role is re-read under lock (platform role changed after reso
         expect(rows).toHaveLength(0)
       }
     )
+
+    it('DELETE /membership: answers 404 Tenant not found once only platform access is left, and records no member.left', async () => {
+      const tenant = await ownedTenant()
+      const { user: staff, token } = await staffUser('owner')
+      await userMembershipRepository.create({
+        userId: staff.id,
+        tenantId: tenant.id,
+        role: 'viewer',
+      })
+
+      await withMembershipRemovedAfterResolve(staff, tenant, async () => {
+        const response = await request(app)
+          .delete(`/api/v1/tenants/${tenant.slug}/membership`)
+          .set('Authorization', `Bearer ${token}`)
+          .send({})
+        expect(response.status).toBe(404)
+        expect(response.body).toMatchObject({ statusCode: 404, message: 'Tenant not found' })
+      })
+
+      const rows = await sql`
+        select 1 from audit_logs where tenant_id = ${tenant.id} and action = 'member.left'`
+      expect(rows).toHaveLength(0)
+    })
   })
 
   /**

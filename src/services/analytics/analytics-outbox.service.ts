@@ -51,23 +51,28 @@ const STAFF_STATUS_ACTIONS: ReadonlySet<AuditAction> = new Set<AuditAction>([
 
 /**
  * Audit actions that change a user's staff status when they happen in the
- * platform tenant: a role change or a removal (of `metadata.userId`), and an
- * accepted invitation (which makes the accepting actor staff).
+ * platform tenant: a role change or a removal (of `metadata.userId`), an
+ * accepted invitation (which makes the accepting actor staff) and a member
+ * leaving (which ends the leaving actor's staff role).
  */
 const PLATFORM_TENANT_MEMBER_ACTIONS: ReadonlySet<AuditAction> = new Set<AuditAction>([
   'member.role_changed',
   'member.removed',
+  'member.left',
   'invitation.accepted',
 ])
 
 /**
- * The user whose staff status a staff-status action changes: the accepting
- * actor for `invitation.accepted`, `metadata.userId` for every other action.
+ * The user whose staff status a staff-status action changes: the actor for
+ * `invitation.accepted` and `member.left`, `metadata.userId` for every other
+ * action.
  * @param entry - The inserted audit row.
  * @returns The user's id, or a non-string when the row names none.
  */
 function affectedUserIdOf(entry: AuditLog): unknown {
-  return entry.action === 'invitation.accepted' ? entry.actorUserId : entry.metadata.userId
+  return entry.action === 'invitation.accepted' || entry.action === 'member.left'
+    ? entry.actorUserId
+    : entry.metadata.userId
 }
 
 /**

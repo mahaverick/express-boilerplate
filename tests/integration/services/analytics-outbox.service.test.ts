@@ -430,6 +430,36 @@ describe('staff status rows', () => {
     })
   })
 
+  it("clears the leaver's staff status when they leave the platform tenant", async () => {
+    const platform = await platformTenant()
+    const { user: leaver } = await createTrackedStaff('viewer')
+    const membership = await userMembershipRepository.findByUserAndTenant(leaver.id, platform.id)
+    const membershipId = membership?.id ?? ''
+
+    await withTransaction(async (tx) => {
+      await userMembershipRepository.delete(membershipId, tx)
+      await record(
+        {
+          action: 'member.left',
+          actor: { userId: leaver.id },
+          access: 'member',
+          tenantId: platform.id,
+          targetId: membershipId,
+          metadata: { role: 'viewer' },
+        },
+        tx
+      )
+    })
+
+    const rows = await outboxRows()
+    expect(rows.map((row) => row.event)).toEqual(['member_left', '$set'])
+    expect(rows[1]).toMatchObject({
+      distinctId: leaver.id,
+      // eslint-disable-next-line unicorn/no-null -- the $set row records JSON null for "not staff"
+      properties: { $set: { is_staff: false, platform_role: null } },
+    })
+  })
+
   it('adds no $set row for an invitation accepted into a customer tenant', async () => {
     const { tenantId } = await ownerAndTenant()
     const invitee = await createTrackedUser()

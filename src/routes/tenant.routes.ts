@@ -30,9 +30,9 @@ import {
 /**
  * Build the tenant routes. `requireRole` checks the effective role, so staff
  * admins pass the owner/admin routes (the audit log included) and staff
- * viewers do not. The onboarding writes add `requireMembership`, so no
- * platform role acts on them. On the platform tenant, member role changes, removals,
- * every invitation and every resend also need a recent sign-in
+ * viewers do not. The onboarding writes and leaving add `requireMembership`,
+ * so no platform role acts on them. On the platform tenant, member role changes, removals,
+ * leaving, every invitation and every resend also need a recent sign-in
  * (`requireRecentAuthOnPlatformTenant`): every platform role, viewer included,
  * reads every user, tenant and address.
  * A revoke there needs no recent sign-in: it only removes a pending grant.
@@ -85,6 +85,17 @@ export function createTenantRouter(): Router {
     requireRecentAuthOnPlatformTenant(),
     requireRecentAuthAndReasonOnPlatformAccess(),
     tenantController.removeMember
+  )
+
+  // Leaving is a member's own act: staff reaching the tenant through a platform role get 404.
+  router.delete(
+    '/:slug/membership',
+    requireJsonContentType,
+    writeLimiter,
+    resolveTenant(),
+    requireMembership(),
+    requireRecentAuthOnPlatformTenant(),
+    tenantController.leaveTenant
   )
 
   // Invite and resend share one budget, on Redis (same prefix) and in memory (one instance).

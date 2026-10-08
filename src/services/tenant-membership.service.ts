@@ -235,19 +235,26 @@ async function lockActorAndTarget(
 }
 
 /**
+ * Error code: the change would leave the tenant with no owner.
+ */
+export const LAST_OWNER_CODE = 'LAST_OWNER'
+
+/**
  * Refuse a change that would take away the tenant's last live owner.
  * @param tenantId - The tenant.
  * @param executor - The transaction holding the owner lock.
  * @param message - The 409 message to use.
+ * @param code - The 409's code, if it carries one.
  * @throws {HttpError} 409, when at most one live owner remains.
  */
 async function assertAnotherOwnerRemains(
   tenantId: string,
   executor: DbTransaction,
-  message: string
+  message: string,
+  code?: string
 ): Promise<void> {
   const ownerCount = await userMembershipRepository.countOwners(tenantId, executor)
-  if (ownerCount <= 1) throw new HttpError(message, 409)
+  if (ownerCount <= 1) throw new HttpError(message, 409, code)
 }
 
 /**
@@ -285,16 +292,18 @@ function modifyRuleFor(options: MembershipWriteOptions): typeof canActorModifyTa
  * @param targetUserId - The owner being demoted or removed.
  * @param executor - The transaction holding the owner lock.
  * @param message - The 409 message to use.
+ * @param code - The 409's code, if it carries one.
  * @throws {HttpError} 409 when no other active owner remains.
  */
 async function assertAnotherActiveOwnerRemains(
   tenantId: string,
   targetUserId: string,
   executor: DbTransaction,
-  message: string
+  message: string,
+  code?: string
 ): Promise<void> {
   const others = await userMembershipRepository.countActiveOwners(tenantId, executor, targetUserId)
-  if (others < 1) throw new HttpError(message, 409)
+  if (others < 1) throw new HttpError(message, 409, code)
 }
 
 /**
@@ -306,6 +315,7 @@ async function assertAnotherActiveOwnerRemains(
  * @param options - Whether the tenant is the platform tenant.
  * @param executor - The transaction holding the owner lock.
  * @param message - The 409 message to use.
+ * @param code - The 409's code, if it carries one.
  * @throws {HttpError} 409 when the rule refuses.
  */
 async function assertOwnerRemainsFor(
@@ -313,11 +323,12 @@ async function assertOwnerRemainsFor(
   targetUserId: string,
   options: MembershipWriteOptions,
   executor: DbTransaction,
-  message: string
+  message: string,
+  code?: string
 ): Promise<void> {
   await (options.isPlatformTenant === true
-    ? assertAnotherActiveOwnerRemains(tenantId, targetUserId, executor, message)
-    : assertAnotherOwnerRemains(tenantId, executor, message))
+    ? assertAnotherActiveOwnerRemains(tenantId, targetUserId, executor, message, code)
+    : assertAnotherOwnerRemains(tenantId, executor, message, code))
 }
 
 /**
@@ -454,6 +465,65 @@ export async function removeMember(
           self: targetUserId === actor.userId,
           ...(options.reason !== undefined && { reason: options.reason }),
         },
+      },
+      tx
+    )
+  })
+}
+
+/**
+ * Leave a tenant: the caller removes their own membership. Any role may
+ * leave except the tenant's last live owner (on the platform tenant, its last
+ * active owner). Only a member can leave: the membership is re-read under
+ * lock, and a caller with none (staff reaching the tenant through their
+ * platform role, or a member removed since `resolveTenant`) has nothing to
+ * leave. The leaver's pending invitations there are revoked in the same
+ * transaction; on the platform tenant, so are those they sent in customer
+ * tenants that a membership there cannot grant, as for a removal.
+ * @param actor - The signed-in member leaving.
+ * @param tenantId - The tenant.
+ * @param options - Pass isPlatformTenant for the platform tenant: the active-owner guard and the customer-tenant revoke.
+ * @throws {HttpError} 404 `Tenant not found` when the caller is not a member; 409 `LAST_OWNER` when they are its last owner.
+ */
+export async function leaveTenant(
+  actor: Actor,
+  tenantId: string,
+  options: MembershipWriteOptions = {}
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    // FOR UPDATE: this transaction deletes the leaver's membership row.
+    await userMembershipRepository.lockOwners(tenantId, 'update', tx)
+    const [own] = await userMembershipRepository.lockMemberships(
+      tenantId,
+      [actor.userId],
+      'update',
+      tx
+    )
+    if (!own) throw new HttpError('Tenant not found', 404)
+    if (own.role === 'owner') {
+      await assertOwnerRemainsFor(
+        tenantId,
+        actor.userId,
+        options,
+        tx,
+        'You are the last owner: make someone else an owner before you leave.',
+        LAST_OWNER_CODE
+      )
+    }
+    const wasDeleted = await userMembershipRepository.delete(own.id, tx)
+    if (!wasDeleted) throw new HttpError('Tenant not found', 404)
+    await revokeInvitationsSentIn(actor, 'member', tenantId, actor.userId, undefined, {}, tx)
+    if (options.isPlatformTenant === true) {
+      await revokeInvitationsBeyondAuthorityElsewhere(actor, actor.userId, undefined, tx)
+    }
+    await record(
+      {
+        action: 'member.left',
+        actor,
+        access: 'member',
+        tenantId,
+        targetId: own.id,
+        metadata: { role: own.role },
       },
       tx
     )

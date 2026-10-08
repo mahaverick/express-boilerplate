@@ -14,7 +14,7 @@ import { actorFrom, authenticatedUserId, tenantPrincipal } from '@/controllers/h
 import { HttpError } from '@/errors/http-error'
 import { toPublicTenant, toTenantDetail, toTenantListRow } from '@/presenters/tenant.presenter'
 import { invite, listPending, resend, revoke } from '@/services/tenant-invitation.service'
-import { changeRole, removeMember } from '@/services/tenant-membership.service'
+import { changeRole, leaveTenant, removeMember } from '@/services/tenant-membership.service'
 import {
   createTenant,
   getSettings,
@@ -174,6 +174,19 @@ class TenantController extends BaseController {
       ...staffReasonOf(request),
     })
     messageResponse(response, 'Member removed.')
+  })
+
+  /**
+   * `DELETE /tenants/:slug/membership`: the caller leaves the tenant. Members
+   * only (`requireMembership`, tenant.routes.ts); any role may leave except
+   * the last owner, who gets 409 `LAST_OWNER`. Takes no body (`{}`).
+   */
+  leaveTenant = this.handle(async (request, response) => {
+    const principal = tenantPrincipal(request)
+    await leaveTenant(actorFrom(request), principal.tenantId, {
+      isPlatformTenant: principal.isPlatformTenant,
+    })
+    messageResponse(response, 'You left the tenant.')
   })
 
   /**
