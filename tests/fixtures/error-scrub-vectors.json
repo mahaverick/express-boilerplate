@@ -1038,5 +1038,30 @@
     "rule": "kv",
     "input": "token: [ip] and sig=[phone]",
     "expected": "token: [ip] and sig=[phone]"
+  },
+  {
+    "rule": "kv",
+    "input": "SAMLResponse=PHNhbWxwOlJlc3BvbnNl",
+    "expected": "SAMLResponse=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "g-recaptcha-response=03AGdBq25xyz",
+    "expected": "g-recaptcha-response=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "h-captcha-response=P0_eyJ",
+    "expected": "h-captcha-response=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "response=abc123",
+    "expected": "response=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "{\"response\":\"abc123\"}",
+    "expected": "{\"response\":\"[redacted]\"}"
   }
 ]
