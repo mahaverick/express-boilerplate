@@ -19,8 +19,9 @@ const CURSOR_TIMESTAMP =
 
 /**
  * Whether a cursor timestamp's date is a real calendar day in ClickHouse
- * DateTime64's range (years 1900-2299). Anything else PostHog would reject
- * with a 400, which would surface as a 502 and spend a query budget unit.
+ * DateTime64's range (years 1900-2299). A server-issued cursor always
+ * passes; a forged one is refused here, before it spends a query budget
+ * unit or reaches PostHog.
  * @param t - Text already matching `CURSOR_TIMESTAMP`; kept verbatim.
  * @returns True when the date part is real and in range.
  */
