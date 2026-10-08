@@ -69,6 +69,17 @@ function withoutRequestId(body: unknown): Record<string, unknown> {
   return copy
 }
 
+/**
+ * A cursor as it travels: base64url JSON.
+ * @param value - The decoded cursor.
+ * @returns The cursor.
+ */
+function b64(value: unknown): string {
+  return Buffer.from(JSON.stringify(value)).toString('base64url')
+}
+
+const YEAR_ZERO_CURSOR = b64({ occurredAt: '0000-01-01T00:00:00.000Z', id: randomUUID() })
+
 function readTenantLog(slug: string, token: string, query: Record<string, string> = {}) {
   return request(app)
     .get(`/api/v1/tenants/${slug}/audit-log`)
@@ -342,6 +353,14 @@ describe('audit-log reads', () => {
       expect((response.body as ApiEnvelope<unknown>).errors).toHaveProperty(field)
     })
 
+    it('answers 400 for a cursor in year 0000, which Postgres cannot cast', async () => {
+      const { tenant, ownerToken } = await createTenant()
+
+      const response = await readTenantLog(tenant.slug, ownerToken, { cursor: YEAR_ZERO_CURSOR })
+
+      expect(response.status).toBe(400)
+    })
+
     it("shows the platform tenant's own entries to its members", async () => {
       const { token } = await staff('owner')
       const platform = await platformTenant()
@@ -380,6 +399,14 @@ describe('audit-log reads', () => {
         expect(withoutRequestId(refused.body)).toEqual(withoutRequestId(unknown.body))
       }
     )
+
+    it('answers 400 for a cursor in year 0000, which Postgres cannot cast', async () => {
+      const { token } = await staff('admin')
+
+      const response = await readPlatformLog(token, { cursor: YEAR_ZERO_CURSOR })
+
+      expect(response.status).toBe(400)
+    })
 
     it('answers 404 to a user who is not staff', async () => {
       const { token } = await createUser()

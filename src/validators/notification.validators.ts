@@ -10,7 +10,7 @@ import {
   NOTIFICATION_TYPES,
   STAFF_ONLY_NOTIFICATION_TYPES,
 } from '@/constants/notification.constants'
-import { cursorField } from '@/validators/cursor.validators'
+import { cursorField, isoInstantField } from '@/validators/cursor.validators'
 
 /**
  * The notifications cursor's decoded shape: the last row's `createdAt` (as
@@ -21,9 +21,7 @@ import { cursorField } from '@/validators/cursor.validators'
  */
 export const notificationCursorSchema = z
   .object({
-    createdAt: z.iso
-      .datetime()
-      .refine((value) => !Number.isNaN(Date.parse(value)) && new Date(value).getUTCFullYear() >= 1),
+    createdAt: isoInstantField,
     id: z.uuid(),
   })
   .strict()

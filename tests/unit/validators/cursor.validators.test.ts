@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { sortAtField } from '@/validators/cursor.validators'
+import { isoInstantField, sortAtField } from '@/validators/cursor.validators'
 
 describe('sortAtField', () => {
   it.each([
@@ -21,5 +21,23 @@ describe('sortAtField', () => {
     '2026-10-07 12:34:56.123456Z',
   ])('refuses %s', (value) => {
     expect(sortAtField.safeParse(value).success).toBe(false)
+  })
+})
+
+describe('isoInstantField', () => {
+  it.each(['0001-01-01T00:00:00.000Z', '2026-10-07T12:34:56.123Z', '9999-12-31T23:59:59.999Z'])(
+    'accepts %s',
+    (value) => {
+      expect(isoInstantField.safeParse(value).success).toBe(true)
+    }
+  )
+
+  it.each([
+    '0000-01-01T00:00:00.000Z',
+    '2026-13-01T00:00:00.000Z',
+    '2026-10-07 12:34:56.123Z',
+    'not a date',
+  ])('refuses %s', (value) => {
+    expect(isoInstantField.safeParse(value).success).toBe(false)
   })
 })

@@ -56,3 +56,15 @@ export const sortAtField = z
   .string()
   .regex(SORT_AT_PATTERN)
   .refine(isRealSortAt, 'sortAt is not a real timestamp.')
+
+/**
+ * An ISO 8601 UTC instant that is real and in year 0001 or later. Postgres has
+ * no year 0, so `0000-…` would pass the format check and then fail a
+ * `::timestamptz` cast as a 500.
+ */
+export const isoInstantField = z.iso
+  .datetime()
+  .refine(
+    (value) => !Number.isNaN(Date.parse(value)) && new Date(value).getUTCFullYear() >= 1,
+    'Not a real timestamp.'
+  )
