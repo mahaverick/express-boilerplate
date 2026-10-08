@@ -1,10 +1,12 @@
 /**
  * @file The gate for `/platform` routes, the OPTIONS refusal that keeps
  * Express's automatic `Allow` answer from revealing them, and the log line
- * each successful staff write leaves. The platform role is read once on every
- * request (reusing the maintenance gate's read of the same request, if any),
- * with no cross-request cache, so a revocation takes effect on the next
- * request.
+ * each successful staff write leaves. The platform role is read on every
+ * request, with no cross-request cache, so a revocation takes effect on the
+ * next request. `requirePlatformRole` reads it through `platformRoleOf`,
+ * which reuses only a read the maintenance gate made earlier in the same
+ * request; the gate lets every `/platform` route through without reading
+ * the role, so here that is always a fresh read.
  */
 import type { NextFunction, Request, Response } from 'express'
 import type { MembershipRole } from '@/constants/tenant.constants'

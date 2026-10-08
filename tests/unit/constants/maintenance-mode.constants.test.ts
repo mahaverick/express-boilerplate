@@ -2,7 +2,9 @@
  * @file `maintenanceVerdict` against spec §4.3's tables, mode by mode: the
  * always-let-through set, the auth routes, reads, writes, the read-only
  * allowlist, OPTIONS, an unknown path, and how a path is matched (HEAD as
- * GET, case, trailing slash, a parameter segment).
+ * GET, case, trailing slash, a parameter segment); which routes are
+ * staff-pass; and `maintenanceDecision`, which returns the rule its verdict
+ * was decided by, and no rule when the mode is off or the method is OPTIONS.
  */
 import { describe, expect, it } from 'vitest'
 import {

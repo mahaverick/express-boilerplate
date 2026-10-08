@@ -6,7 +6,8 @@
  * sign-in in `full` (non-staff refused after the credential check, staff
  * admitted, refresh still answered by its own handler), and the public
  * status endpoint (shape, cache header, rate limit), and the staff pass on
- * the customer routes Apex calls.
+ * the customer routes Apex calls (one platform-role read per request, and a
+ * revoked role taking effect on the next request).
  */
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp } from '@/app'
@@ -18,6 +19,7 @@ import { logger } from '@/services/logger.service'
 import { reloadMaintenanceMode } from '@/services/maintenance-mode/maintenance-mode-store.service'
 import { truncateAuditLogs } from '../../helpers/audit-log'
 import { resetMaintenanceMode, storeMaintenanceMode } from '../../helpers/maintenance-mode'
+import { platformTenant } from '../../helpers/platform-staff'
 import {
   createTrackedStaff,
   createTrackedUser,
@@ -62,6 +64,15 @@ async function enter(
 ): Promise<void> {
   await storeMaintenanceMode(mode, { message, changedAt: SINCE })
   await reloadMaintenanceMode()
+}
+
+/**
+ * Revoke a staff member's platform role by deleting their platform-tenant membership.
+ * @param userId - The staff member.
+ */
+async function revokeStaff(userId: string): Promise<void> {
+  const platform = await platformTenant()
+  await sql`delete from user_memberships where user_id = ${userId} and tenant_id = ${platform.id}`
 }
 
 /**
@@ -400,7 +411,7 @@ describe('staff pass on the customer routes Apex calls', () => {
     expect(reads.count).toBe(1)
   })
 
-  it('reads it once on a staff-pass platform route in full too', async () => {
+  it('reads it once on a platform route in full too, where the gate lets the request through', async () => {
     const { token } = await createTrackedStaff('viewer')
     await enter('full')
     reads.count = 0
@@ -423,5 +434,39 @@ describe('staff pass on the customer routes Apex calls', () => {
       expect(response.status).toBe(200)
     }
     expect(reads.count).toBe(2)
+  })
+
+  it('refuses staff on the next request in full once their platform role is revoked', async () => {
+    const { tenant } = await customerTenant()
+    const { user, token } = await createTrackedStaff('viewer')
+    await enter('full', 'Down.')
+
+    const before = await request(app)
+      .get(`/api/v1/tenants/${tenant.slug}`)
+      .set('Authorization', `Bearer ${token}`)
+    await revokeStaff(user.id)
+    const after = await request(app)
+      .get(`/api/v1/tenants/${tenant.slug}`)
+      .set('Authorization', `Bearer ${token}`)
+
+    expect(before.status).toBe(200)
+    expect(after.status).toBe(503)
+    expect((after.body as { code?: string }).code).toBe('MAINTENANCE_MODE')
+  })
+
+  it('answers 404 on the next request with the mode off once a staff role is revoked', async () => {
+    const { tenant } = await customerTenant()
+    const { user, token } = await createTrackedStaff('viewer')
+
+    const before = await request(app)
+      .get(`/api/v1/tenants/${tenant.slug}`)
+      .set('Authorization', `Bearer ${token}`)
+    await revokeStaff(user.id)
+    const after = await request(app)
+      .get(`/api/v1/tenants/${tenant.slug}`)
+      .set('Authorization', `Bearer ${token}`)
+
+    expect(before.status).toBe(200)
+    expect(after.status).toBe(404)
   })
 })
