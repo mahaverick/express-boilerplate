@@ -1321,7 +1321,10 @@ after it has no timer. So `getRedis()` bounds the shared client's whole
 connect at `REDIS_CONNECT_TIMEOUT_MS` (5 s), destroying a client that runs
 out of time, and every Redis command on the request path carries its own
 deadline of `REDIS_REQUEST_DEADLINE_MS` (300 ms), with `getRedis()` inside it,
-so a connect in flight counts too. Reads and counters (the session denylist
+so a connect in flight counts too; a call that misses its deadline while
+that connect is still inside its 5 s bound falls back without opening the
+cooldown described next (a slow connect is not a stall), and a connect that
+runs out of time opens it. Reads and counters (the session denylist
 read, the rate-limit store and its switch to Redis, the staff-visit,
 view-audit and flag-exposure dedupes, the timeline budget and cache, the
 invitation recipient budget, the mail cooldowns, the maintenance-mode notice
@@ -1346,7 +1349,10 @@ by `STATUS_READ_TIMEOUT_MS`) are outside all of this. The deadline is a
 design limit, not a fault detector: a Redis whose latency regularly goes
 over 300 ms trips the cooldown, and then the denylist fails open and the
 limiters count per process much of the time, with a `warn` every few
-seconds.
+seconds. While the denylist read fails open, every session denied within the
+last `ACCESS_TOKEN_TTL` is honoured, and the cooldown can outlast a Redis
+that has already recovered by up to 5 s (see
+[SECURITY.md](SECURITY.md#rate-limiting-one-store-prefix-per-limiter)).
 
 A queue connection that
 gives up before its first `ready` is replaced on next use, and the producer's

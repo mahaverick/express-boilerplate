@@ -502,7 +502,13 @@ fails, and for the next 5 s such calls fail without asking Redis. That is by
 design for latency too: a Redis whose latency regularly goes over 300 ms
 trips the cooldown, and the denylist then fails open and the limiters count
 per process much of the time. Keep Redis close and healthy; one `warn` per
-cooldown shows it happening.
+cooldown shows it happening. While the denylist read fails open — for the whole of a Redis
+outage, or for a stall cooldown of up to 5 s, which can outlast a Redis that
+has already recovered — every session denied within the last
+`ACCESS_TOKEN_TTL` (15 minutes by default), not only one revoked at that
+moment, is honoured on its unexpired access tokens. Each one is denied again
+when the read next reaches Redis or its access token expires, whichever comes
+first. A deny still in flight takes effect only once it lands.
 
 - **Register** keys on the client's **IP alone**, deliberately not the
   composite login uses. Both threats here come from one caller varying the
