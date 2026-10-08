@@ -137,6 +137,28 @@ describe('scrubJobData', () => {
     })
   })
 
+  it('redacts an address key whatever its value: a list, an object, a nested list of objects', () => {
+    const sentinel = 'leak-sentinel@example.com'
+    const data = {
+      to: [sentinel, 'second@example.com'],
+      templateKey: 'password_reset',
+      email: {
+        to: { address: sentinel, name: 'Jane' },
+        cc: [{ name: 'Ops', address: sentinel }],
+        templateKey: 'email_verification',
+      },
+    }
+
+    const scrubbed = scrubJobData(data)
+
+    expect(scrubbed).toEqual({
+      to: '[redacted]',
+      templateKey: 'password_reset',
+      email: { to: '[redacted]', cc: '[redacted]', templateKey: 'email_verification' },
+    })
+    expect(JSON.stringify(scrubbed)).not.toContain(sentinel)
+  })
+
   it('returns a copy and leaves its argument untouched', () => {
     const data = { variables: { resetUrl: 'https://x.test/r' } }
     const scrubbed = scrubJobData(data)

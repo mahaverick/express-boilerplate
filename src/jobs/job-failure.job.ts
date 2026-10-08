@@ -20,7 +20,7 @@ const REDACTED = '[redacted]'
 const SECRET_KEY_PATTERN = /(?:Url|Token)$/
 
 /**
- * Keys whose string values are an address: an email job's `to` (also on a
+ * Keys whose values hold an address: an email job's `to` (also on a
  * notification job's paired `email`) and any `cc`, `bcc`, `replyTo` or
  * `recipient`. A failed job is kept for days; the `email_messages` row
  * already holds the recipient.
@@ -28,19 +28,15 @@ const SECRET_KEY_PATTERN = /(?:Url|Token)$/
 const ADDRESS_KEYS: ReadonlySet<string> = new Set(['to', 'cc', 'bcc', 'replyTo', 'recipient'])
 
 /**
- * Whether a key's value is replaced: a link or token at any type, an
- * address when it is a string or a list of strings.
+ * Whether a key's whole value is replaced: a link, token or address key's
+ * is, whatever its type (a string, a list, an object, nested any depth), so
+ * an address in an unexpected shape fails closed instead of surviving
+ * under a key no rule names.
  * @param key - The key.
- * @param value - Its value.
  * @returns True when the value becomes `'[redacted]'`.
  */
-function isRedactedEntry(key: string, value: unknown): boolean {
-  if (SECRET_KEY_PATTERN.test(key)) return true
-  if (!ADDRESS_KEYS.has(key)) return false
-  return (
-    typeof value === 'string' ||
-    (Array.isArray(value) && value.every((item) => typeof item === 'string'))
-  )
+function isRedactedEntry(key: string): boolean {
+  return SECRET_KEY_PATTERN.test(key) || ADDRESS_KEYS.has(key)
 }
 
 /**
@@ -65,7 +61,7 @@ function scrubValue(value: unknown): unknown {
   return Object.fromEntries(
     Object.entries(value).map(([key, child]) => [
       key,
-      isRedactedEntry(key, child) ? REDACTED : scrubValue(child),
+      isRedactedEntry(key) ? REDACTED : scrubValue(child),
     ])
   )
 }
