@@ -333,6 +333,20 @@ describe('internal failure log', () => {
     expect(parsed.detail).toBe('connect failed: password=[redacted]')
   })
 
+  it('never throws when the internal failure is a value whose query getter throws', () => {
+    const lines = capturedWarnLines()
+    tracking.thrown = {
+      get query(): never {
+        throw new Error('query getter exploded')
+      },
+    }
+    expect(reportError(new Error('outer'), HTTP)).toMatch(UUIDV7)
+    const parsed = JSON.parse(lines.join('')) as Record<string, unknown>
+    expect(parsed.message).toBe('Error reporter failed')
+    expect(parsed.errorType).toBe('unknown')
+    expect(parsed.detail).toBe('[unreadable]')
+  })
+
   it('logs a thrown query error without its bound values', () => {
     const lines = capturedWarnLines()
     tracking.thrown = fakeQueryError()

@@ -149,15 +149,21 @@ function kindOf(value: unknown): string {
  * (`redactedForLog`), as the logger does, so its bound values are never
  * stringified. The text goes under `detail`, not `message`: `message` is the
  * logger's own message key and would be shadowed by the log line's message.
+ * A value that throws when read (a `query` getter) gives `unknown` and
+ * `[unreadable]`, so the caller's `catch` never throws.
  * @param error - What was thrown.
  * @returns `{ errorType, detail }`.
  */
 function failureFields(error: unknown): { errorType: string; detail: string } {
-  if (isQueryError(error)) {
-    const redacted = redactedForLog(error) as { query: string }
-    return { errorType: 'QueryError', detail: scrubText(redacted.query) }
+  try {
+    if (isQueryError(error)) {
+      const redacted = redactedForLog(error) as { query: string }
+      return { errorType: 'QueryError', detail: scrubText(redacted.query) }
+    }
+    return { errorType: scrubText(kindOf(error)), detail: scrubText(textOf(error)) }
+  } catch {
+    return { errorType: 'unknown', detail: '[unreadable]' }
   }
-  return { errorType: scrubText(kindOf(error)), detail: scrubText(textOf(error)) }
 }
 
 /**
