@@ -206,6 +206,10 @@ describe('scrubText on fragments', () => {
     'https://app.example.com/src/a.ts#L10C3-L12C8',
     'https://app.example.com/docs#installation',
     'https://app.example.com/docs#getting-started',
+    'https://app.example.com/docs#authentication',
+    'https://app.example.com/docs#design',
+    'https://app.example.com/docs#keyboard-shortcuts',
+    'https://app.example.com/docs#spinning',
   ])('keeps %s', (input) => {
     expect(scrubText(input)).toBe(input)
   })
@@ -218,6 +222,13 @@ describe('scrubText on fragments', () => {
     'token_abcdefghijklmnop',
     'step2',
     'reset-code-words',
+    'token-qyhilody',
+    'tokens',
+    'secrets',
+    'passwords',
+    'pins',
+    'api-key',
+    'session-replay',
   ])('scrubs the fragment #%s', (fragment) => {
     expect(scrubText(`https://app.example.com/reset-password#${fragment}`)).toBe(
       'https://app.example.com/reset-password#[fragment]'
@@ -261,6 +272,21 @@ describe('scrubText on an address with no TLD before punctuation, and on package
     'actions/setup-node@main',
     'node@sha256',
   ])('keeps the package ref %s', (input) => {
+    expect(scrubText(input)).toBe(input)
+  })
+})
+
+describe('scrubText on a package ref with a protocol', () => {
+  it.each([
+    'react@npm:@preact/compat',
+    'pkg@workspace:*',
+    'pkg@file:../local',
+    'pkg@github:org/repo',
+    'pkg@link:../x',
+    'pkg@portal:../x',
+    'pkg@patch:pkg@npm:1.0.0',
+    'pkg@git+https://example.com/a.git',
+  ])('keeps %s', (input) => {
     expect(scrubText(input)).toBe(input)
   })
 })

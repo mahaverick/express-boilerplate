@@ -86,10 +86,15 @@ const LINE_ANCHOR_PATTERN = /^L\d+(?:C\d+)?(?:-L\d+(?:C\d+)?)?$/
 const HEADING_ANCHOR_PATTERN = /^[a-z]+(?:-[a-z]+)*$/
 
 /**
- * A word that marks a fragment as carrying a credential, wherever it sits
- * in the slug.
+ * A whole word, between `-` or the ends of the slug, that marks a fragment
+ * as carrying a credential: `token`, `otp`, `pin`, `code`, `key`, `secret`,
+ * `state`, `session`, `auth`, `password`, `nonce`, `sig`, `signature`,
+ * `credential`, `jwt` or `bearer`, with plural and long forms. Whole words
+ * only, so `authentication`, `design` and `keyboard-shortcuts` are kept.
  */
-const KEY_LIKE_WORD_PATTERN = /token|otp|pin|code|key|secret|state|session|auth|pass|nonce|sig/
+const KEY_LIKE_WORD_PATTERN =
+  // eslint-disable-next-line sonarjs/regex-complexity -- one list of credential words
+  /(?:^|-)(?:tokens?|otps?|pins?|codes?|keys?|secrets?|states?|sessions?|auth|pass(?:word|code|phrase)?s?|nonces?|sigs?|signatures?|credentials?|jwt|bearer)(?=-|$)/
 
 /**
  * The longest fragment `isHarmlessFragment` keeps as a heading slug.
@@ -99,7 +104,7 @@ const HEADING_ANCHOR_MAX = 64
 /**
  * Whether a URL fragment is a real anchor: a source line anchor, or a
  * heading slug (`installation`, `getting-started`) of at most 64 characters
- * that holds no digit, `_` or key-like word. Anything else, an
+ * that holds no digit, `_` or key-like word (`token-abc`, `api-key`). Anything else, an
  * `access_token=` list, a route (`/reset?token=…`), a code with digits or a
  * mixed-case run, is replaced. A random lowercase fragment of letters only
  * and at most 64 characters is indistinguishable from a slug and survives.
@@ -172,12 +177,13 @@ const POSTHOG_KEY_PATTERN = /\bph[cxs]_\w+/g
  * and ends the word (`jane@localhost`, also before `: ! ? & /`) is an
  * address too; a label that starts with a digit is not, so a package
  * version (`react-dom@19.0.0`) is kept, and neither is a package or action
- * ref (`react@canary`, `actions/checkout@v4`, `node@sha256`). The cost: a
+ * ref (`react@canary`, `actions/checkout@v4`, `node@sha256`,
+ * `pkg@workspace:*`, `react@npm:@preact/compat`). The cost: a
  * host named like one of those refs (`jane@main`) is not scrubbed.
  */
 const EMAIL_PATTERN =
   // eslint-disable-next-line sonarjs/regex-complexity, sonarjs/super-linear-regex -- one pattern per rule keeps the rule list the spec; scrubText scans at most SCAN_MAX characters
-  /(?:"[^"\n]{1,64}"|[\p{L}\p{N}_.%+-]+)(?:(?:@|%40|%2540|＠|﹫)(?:\[(?:\d{1,3}(?:\.\d{1,3}){3}|IPv6:[\dA-Fa-f:.]+)\]|[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.\p{L}{2,})|@(?!(?:latest|next|canary|beta|alpha|rc|main|master|sha\d+|v\d[\w.-]*)(?![\p{L}\p{N}-]))\p{L}[\p{L}\p{N}-]*(?=$|[\s"'<>,;:!?&/)\]}]|\.(?:$|\s)))/gu
+  /(?:"[^"\n]{1,64}"|[\p{L}\p{N}_.%+-]+)(?:(?:@|%40|%2540|＠|﹫)(?:\[(?:\d{1,3}(?:\.\d{1,3}){3}|IPv6:[\dA-Fa-f:.]+)\]|[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.\p{L}{2,})|@(?!(?:npm|workspace|file|github|gitlab|link|portal|patch|git\+[a-z]+):)(?!(?:latest|next|canary|beta|alpha|rc|main|master|sha\d+|v\d[\w.-]*)(?![\p{L}\p{N}-]))\p{L}[\p{L}\p{N}-]*(?=$|[\s"'<>,;:!?&/)\]}]|\.(?:$|\s)))/gu
 
 /**
  * A run of 32 or more hex digits: a hash, a token or a key. It is delimited

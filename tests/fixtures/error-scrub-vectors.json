@@ -748,5 +748,35 @@
     "rule": "fragment",
     "input": "https://app.example.com/x#step2",
     "expected": "https://app.example.com/x#[fragment]"
+  },
+  {
+    "rule": "fragment",
+    "input": "https://app.example.com/docs#authentication",
+    "expected": "https://app.example.com/docs#authentication"
+  },
+  {
+    "rule": "fragment",
+    "input": "https://app.example.com/docs#keyboard-shortcuts",
+    "expected": "https://app.example.com/docs#keyboard-shortcuts"
+  },
+  {
+    "rule": "fragment",
+    "input": "https://app.example.com/docs#design",
+    "expected": "https://app.example.com/docs#design"
+  },
+  {
+    "rule": "fragment",
+    "input": "https://app.example.com/docs#token-qyhilody",
+    "expected": "https://app.example.com/docs#[fragment]"
+  },
+  {
+    "rule": "fragment",
+    "input": "https://app.example.com/docs#passwords",
+    "expected": "https://app.example.com/docs#[fragment]"
+  },
+  {
+    "rule": "email",
+    "input": "install react@npm:@preact/compat and pkg@workspace:* failed",
+    "expected": "install react@npm:@preact/compat and pkg@workspace:* failed"
   }
 ]
