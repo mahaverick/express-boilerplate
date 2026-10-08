@@ -513,7 +513,7 @@ describe('a message line that looks like a stack frame', () => {
     const exceptions = exceptionListOf(error)
     expect(JSON.stringify(exceptions)).not.toContain(LEAKED_PARAM)
     expect(spanErrorOf(exceptions).stack).not.toContain(LEAKED_PARAM)
-    expect(exceptions[0]?.stacktrace?.frames.length).toBeGreaterThan(0)
+    expect(exceptions[0]?.stacktrace?.frames?.length ?? 0).toBeGreaterThan(0)
   })
 })
 
