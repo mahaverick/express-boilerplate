@@ -53,9 +53,11 @@ type FlushOutcome = SendResult['kind'] | 'empty'
  * `retryAt` is the epoch millisecond before which the timer does not send;
  * `batchRetries` counts the current batch's retried sends and `backoffLevel`
  * every consecutive retried send, so the back-off keeps growing across
- * batches while PostHog stays down.
+ * batches while PostHog stays down. `generation` changes on every reset, so
+ * a flight started before one never touches the state after it.
  */
 const state: {
+  generation: number
   queue: PosthogBatchEvent[]
   inFlight: Promise<FlushOutcome> | undefined
   timer: NodeJS.Timeout | undefined
@@ -67,6 +69,7 @@ const state: {
   fingerprintTimes: Map<string, number[]>
   warnedAt: Map<string, number>
 } = {
+  generation: 0,
   queue: [],
   inFlight: undefined,
   timer: undefined,
@@ -205,26 +208,47 @@ function settle(batch: PosthogBatchEvent[], result: SendResult): void {
 }
 
 /**
- * Send the oldest `ERROR_FLUSH_BATCH` queued events and settle the answer.
- * Never rejects: `sendBatch` failing to send at all counts as a retry.
- * @param timeoutMs - How long the request may take.
- * @returns What became of the batch.
+ * One sent batch and PostHog's answer to it.
  */
-async function sendNextBatch(timeoutMs: number): Promise<FlushOutcome> {
+interface SentBatch {
+  batch: PosthogBatchEvent[]
+  result: SendResult
+}
+
+/**
+ * Send the oldest `ERROR_FLUSH_BATCH` queued events. Never rejects:
+ * `sendBatch` failing to send at all counts as a retry.
+ * @param timeoutMs - How long the request may take.
+ * @returns The batch and the answer, or undefined when the queue was empty.
+ */
+async function sendNextBatch(timeoutMs: number): Promise<SentBatch | undefined> {
   const batch = state.queue.splice(0, ERROR_FLUSH_BATCH)
-  if (batch.length === 0) return 'empty'
+  if (batch.length === 0) return undefined
   let result: SendResult
   try {
     result = await sendBatch(batch, { signal: AbortSignal.timeout(timeoutMs) })
   } catch {
     result = { kind: 'retry' }
   }
+  return { batch, result }
+}
+
+/**
+ * Settle a sent batch, unless the reporter was reset since it was sent.
+ * Never throws: a failure is logged at `warn` at most once a minute.
+ * @param sent - The batch and the answer, or undefined for an empty flush.
+ * @param generation - `state.generation` when the batch was sent.
+ * @returns What became of the batch.
+ */
+function settleSent(sent: SentBatch | undefined, generation: number): FlushOutcome {
+  if (sent === undefined) return 'empty'
+  if (generation !== state.generation) return sent.result.kind
   try {
-    settle(batch, result)
+    settle(sent.batch, sent.result)
   } catch (error) {
     warnOncePerMinute('internal', 'Error reporter failed', { error })
   }
-  return result.kind
+  return sent.result.kind
 }
 
 /**
@@ -241,8 +265,10 @@ function startFlush(timeoutMs: number, shouldScheduleNext: boolean): Promise<Flu
     clearTimeout(state.timer)
     state.timer = undefined
   }
+  const { generation } = state
   const flight = (async (): Promise<FlushOutcome> => {
-    const outcome = await sendNextBatch(timeoutMs)
+    const outcome = settleSent(await sendNextBatch(timeoutMs), generation)
+    if (generation !== state.generation) return outcome
     state.inFlight = undefined
     if (shouldScheduleNext) scheduleFlush()
     return outcome
@@ -368,10 +394,12 @@ export function shouldCaptureHttpError(error: unknown, status: number): boolean 
 
 /**
  * Empty the queue, cancel the timer and forget every throttle window,
- * back-off and warning. For tests.
+ * back-off and warning. A flight still in progress is fenced off: its batch
+ * is neither settled nor put back, and it schedules nothing. For tests.
  */
 export function resetErrorReporter(): void {
   if (state.timer !== undefined) clearTimeout(state.timer)
+  state.generation += 1
   state.queue = []
   state.inFlight = undefined
   state.timer = undefined

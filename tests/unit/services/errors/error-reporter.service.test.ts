@@ -396,6 +396,26 @@ describe('flushErrorReports', () => {
   })
 })
 
+describe('resetErrorReporter', () => {
+  it('a flight started before reset does not put its batch into the reset reporter', async () => {
+    const pending: ((result: SendResult) => void)[] = []
+    posthog.answer = () =>
+      new Promise((resolve) => {
+        pending.push(resolve)
+      })
+    reportError(new Error('before reset'), HTTP)
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(posthog.batches).toHaveLength(1)
+    resetErrorReporter()
+    posthog.answer = () => Promise.resolve({ kind: 'ack' })
+    reportError(new Error('after reset'), HTTP)
+    pending[0]?.({ kind: 'retry', status: 503 })
+    await vi.advanceTimersByTimeAsync(0)
+    // Only the post-reset event belongs to the fresh reporter.
+    expect(queuedErrorReportCount()).toBe(1)
+  })
+})
+
 describe('shouldCaptureHttpError', () => {
   it('captures an unexpected error at 500', () => {
     expect(shouldCaptureHttpError(new Error('boom'), 500)).toBe(true)
