@@ -350,6 +350,35 @@ describe('runFlagsSync', () => {
     expect(stdout).toContain('Created 1, present 1, drifted 0.')
   })
 
+  it('creates the missing flag and reports the drifted one on the same run, exiting 2', async () => {
+    posthog().featureFlags = [existing('example_cta_experiment', { groups: [] })]
+
+    const { code, stdout } = await run()
+
+    expect(code).toBe(2)
+    expect(
+      posthog().featureFlagCreates.map((created) => (created as { key?: string }).key)
+    ).toEqual(['example_beta_page'])
+    expect(stdout).toBe(
+      'drift example_cta_experiment: kind\ncreated example_beta_page\nCreated 1, present 0, drifted 1.\n'
+    )
+  })
+
+  it('counts a create that lost a race as present beside a drifted flag', async () => {
+    posthog().featureFlags = [existing('example_cta_experiment', { groups: [] })]
+    posthog().onFeatureFlagCreate(() => ({
+      status: 400,
+      json: { type: 'validation_error', code: 'unique', attr: 'key', detail: 'exists' },
+    }))
+
+    const { code, stdout } = await run()
+
+    expect(code).toBe(2)
+    expect(stdout).toBe(
+      'drift example_cta_experiment: kind\npresent example_beta_page\nCreated 0, present 1, drifted 1.\n'
+    )
+  })
+
   it('exits 1 on any other refused create, naming the status and code only', async () => {
     posthog().onFeatureFlagCreate(() => ({
       status: 400,
