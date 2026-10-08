@@ -140,17 +140,22 @@ function frameLinesOf(error: Error): string[] {
 }
 
 /**
- * The name of a value's class, or undefined when it has none or reading
- * it throws.
+ * The name of a value's class, read from its prototype and never from the
+ * value itself (a parsed body can carry its own `constructor` key). Undefined
+ * when it has none or reading it throws.
  * @param value - An object.
  * @returns The name.
  */
 function constructorNameOf(value: object): string | undefined {
-  const name = readSafely<unknown>(
-    () => (value.constructor as { name?: unknown } | undefined)?.name,
-    undefined
-  )
-  return typeof name === 'string' && name !== '' ? name : undefined
+  try {
+    const prototype: unknown = Object.getPrototypeOf(value)
+    if (typeof prototype !== 'object' || prototype === null) return undefined
+    const constructor: unknown = Object.getOwnPropertyDescriptor(prototype, 'constructor')?.value
+    const name: unknown = typeof constructor === 'function' ? constructor.name : undefined
+    return typeof name === 'string' && name !== '' ? name : undefined
+  } catch {
+    return undefined
+  }
 }
 
 /**
@@ -228,8 +233,14 @@ function errorIn(value: unknown): Error | undefined {
 const NON_ERROR_OBJECT_VALUE = 'Non-Error object thrown'
 
 /**
+ * Class names that say nothing about a thrown value: a plain object's and a
+ * function's. Such a value is named `Error`.
+ */
+const NON_ERROR_CLASS_NAMES: ReadonlySet<string> = new Set(['Object', 'Function'])
+
+/**
  * A copy of a thrown value that holds no `Error`. An object becomes an
- * error named for its class (`Error` for a plain object) with a fixed
+ * error named for its class (`Error` for a plain object or a function) with a fixed
  * value, because its keys can be user input (a parsed body, a map keyed by
  * address) and are never read. An object that throws when asked anything
  * (a hostile Proxy) becomes `[unreadable error]`. A primitive is returned
@@ -238,13 +249,13 @@ const NON_ERROR_OBJECT_VALUE = 'Non-Error object thrown'
  * @returns The value to build from.
  */
 function readableNonError(value: unknown): unknown {
-  if (typeof value !== 'object' || value === null) return value
+  if (value === null || (typeof value !== 'object' && typeof value !== 'function')) return value
   const hasConstructor = readSafely<boolean | undefined>(() => 'constructor' in value, undefined)
   if (hasConstructor === undefined)
     return new ReadableError('Error', UNREADABLE_VALUE, [], undefined)
   const name = constructorNameOf(value)
   return new ReadableError(
-    name === undefined || name === 'Object' ? 'Error' : name,
+    name === undefined || NON_ERROR_CLASS_NAMES.has(name) ? 'Error' : name,
     NON_ERROR_OBJECT_VALUE,
     [],
     undefined

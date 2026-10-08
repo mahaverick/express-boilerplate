@@ -165,6 +165,13 @@ async function flushWhileAFlightStarts(): Promise<{
   return { pending, fatalId, flush }
 }
 
+/**
+ * A Proxy trap that throws a message holding the leak sentinel.
+ */
+function leakyTrap(): never {
+  throw new Error('proxy trap Zx9Kq2Lm')
+}
+
 beforeEach(() => {
   vi.useFakeTimers({ now: new Date('2026-10-04T12:00:00.000Z') })
   tracking.isEnabled = true
@@ -254,6 +261,22 @@ describe('reportError gating and ids', () => {
     expect(values).toEqual(['[unreadable error]', '[unreadable error]'])
     expect(warn).not.toHaveBeenCalled()
     expect(reportError(new Error('after'), HTTP)).toMatch(UUIDV7)
+  })
+
+  it('a function Proxy whose every access throws is reported, without a warning', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    const hostile = new Proxy(() => 1, {
+      get: leakyTrap,
+      has: leakyTrap,
+      ownKeys: leakyTrap,
+      getPrototypeOf: leakyTrap,
+      getOwnPropertyDescriptor: leakyTrap,
+    })
+    expect(reportError(hostile, HTTP)).toMatch(UUIDV7)
+    expect(queuedErrorReportCount()).toBe(1)
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(inspect(posthog.batches, { depth: Infinity })).not.toContain('Zx9Kq2Lm')
+    expect(warn).not.toHaveBeenCalled()
   })
 
   it('queues nothing for a report made while building another', () => {

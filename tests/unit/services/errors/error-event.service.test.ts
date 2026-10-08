@@ -10,7 +10,7 @@ import { trace } from '@opentelemetry/api'
 import postgres from 'postgres'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ANALYTICS_SIGNATURE_PROPERTY } from '@/constants/analytics.constants'
-import { ERROR_CAUSE_DEPTH } from '@/constants/error-tracking.constants'
+import { ERROR_CAUSE_DEPTH, ERROR_VALUE_MAX } from '@/constants/error-tracking.constants'
 import { HttpError } from '@/errors/http-error'
 import {
   isAnalyticsSignatureValid,
@@ -150,6 +150,23 @@ describe('exceptionListOf', () => {
     const [first] = exceptionListOf(thrown)
     expect(first?.value).not.toContain('reset-code-991847')
     expect(first?.value).not.toContain('Zx9Kq2Lm')
+  })
+
+  it.each([
+    ['a string', '{"constructor":"Zx9Kq2Lm"}'],
+    ['an object with a name', '{"constructor":{"name":"Zx9Kq2Lm"}}'],
+  ])('ignores an own `constructor` key holding %s (a parsed body)', (_label, json) => {
+    const thrown: unknown = JSON.parse(json)
+    const list = exceptionListOf(thrown)
+    expect(list[0]).toMatchObject({ type: 'Error', value: 'Non-Error object thrown' })
+    expect(fingerprintOf(list)).not.toContain('Zx9Kq2Lm')
+    expect(inspect(scrubbedErrorForSpan(thrown), { depth: Infinity })).not.toContain('Zx9Kq2Lm')
+  })
+
+  it('ignores an own `constructor` key on an Error with no name', () => {
+    const error = Object.assign(new Error('x'), { constructor: { name: 'Zx9Kq2Lm' } })
+    Object.defineProperty(error, 'name', { value: '' })
+    expect(inspect(exceptionListOf(error), { depth: Infinity })).not.toContain('Zx9Kq2Lm')
   })
 
   it('names a thrown class instance by its class', () => {
@@ -415,6 +432,33 @@ describe('exceptionListOf with hostile values', () => {
     expect(exceptionListOf(error)).toMatchObject([{ type: 'Error', value: '[unreadable error]' }])
   })
 
+  it('reports a thrown function without its source or a throwing toString', () => {
+    const thrown = Object.assign(() => 'Zx9Kq2Lm', { toString: trap })
+    expect(exceptionListOf(thrown)).toMatchObject([
+      { type: 'Error', value: 'Non-Error object thrown' },
+    ])
+    expect(
+      inspect(
+        exceptionListOf(() => 'Zx9Kq2Lm'),
+        { depth: Infinity }
+      )
+    ).not.toContain('Zx9Kq2Lm')
+  })
+
+  it('reads a revoked function Proxy and a function Proxy whose traps all throw', () => {
+    const { proxy, revoke } = Proxy.revocable(() => 1, {})
+    revoke()
+    expect(exceptionListOf(proxy)).toMatchObject([{ type: 'Error', value: '[unreadable error]' }])
+    const hostile = new Proxy(() => 1, {
+      get: trap,
+      has: trap,
+      ownKeys: trap,
+      getPrototypeOf: trap,
+      getOwnPropertyDescriptor: trap,
+    })
+    expect(exceptionListOf(hostile)).toMatchObject([{ type: 'Error', value: '[unreadable error]' }])
+  })
+
   it('reads a revoked Proxy', () => {
     const { proxy, revoke } = Proxy.revocable({}, {})
     revoke()
@@ -424,7 +468,7 @@ describe('exceptionListOf with hostile values', () => {
   it('stops at the depth limit on a circular cause', () => {
     const error = new Error('loop')
     Object.defineProperty(error, 'cause', { get: () => error })
-    expect(exceptionListOf(error).length).toBeLessThanOrEqual(ERROR_CAUSE_DEPTH)
+    expect(exceptionListOf(error)).toHaveLength(ERROR_CAUSE_DEPTH)
   })
 
   it('never calls a throwing toString or Symbol.toPrimitive on a thrown object or message', () => {
@@ -446,8 +490,9 @@ describe('exceptionListOf with hostile values', () => {
   })
 
   it('bounds a huge message and keeps a secret in it out of the value', () => {
-    const [first] = exceptionListOf(new Error(`${'a'.repeat(5_000_000)} jane@example.com`))
+    const [first] = exceptionListOf(new Error(`jane@example.com ${'a'.repeat(5_000_000)}`))
     expect(first?.value).not.toContain('jane@example.com')
+    expect(first?.value?.length).toBeLessThanOrEqual(ERROR_VALUE_MAX + 20)
   })
 })
 
