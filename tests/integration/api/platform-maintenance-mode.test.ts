@@ -131,7 +131,8 @@ describe('PUT /platform/maintenance-mode', () => {
     const { user: actor, token } = await createTrackedStaff('owner', { firstName: 'Grace' })
     const { user: otherOwner } = await createTrackedStaff('owner')
     const { user: admin } = await createTrackedStaff('admin')
-    await createTrackedStaff('manager')
+    const { user: manager } = await createTrackedStaff('manager')
+    const ours = new Set([actor.id, otherOwner.id, admin.id, manager.id])
     const version = await currentVersion(token)
 
     const response = await change(token, {
@@ -165,7 +166,8 @@ describe('PUT /platform/maintenance-mode', () => {
       },
     ])
     const notices = await pendingMaintenanceNotices()
-    const recipients = notices.map((job) => job.data.userId)
+    // Only this test's staff: the worker database may hold other platform staff.
+    const recipients = notices.map((job) => job.data.userId).filter((id) => ours.has(id))
     expect(recipients.toSorted(byText)).toEqual([otherOwner.id, admin.id].toSorted(byText))
   })
 
@@ -273,7 +275,7 @@ describe('PUT /platform/maintenance-mode', () => {
 
   it('names a staff member with no name as "A staff member" in the notices, never by address', async () => {
     const { user: actor, token } = await createTrackedStaff('owner')
-    await createTrackedStaff('admin')
+    const { user: admin } = await createTrackedStaff('admin')
     const version = await currentVersion(token)
 
     const response = await change(token, {
@@ -286,7 +288,11 @@ describe('PUT /platform/maintenance-mode', () => {
 
     expect(response.status).toBe(200)
     expect(viewOf(response).changedBy).toEqual({ id: actor.id, name: 'A staff member' })
-    const notices = await pendingMaintenanceNotices()
+    const pending = await pendingMaintenanceNotices()
+    // Only this test's staff: the worker database may hold other platform staff.
+    const notices = pending.filter(
+      (job) => job.data.userId === actor.id || job.data.userId === admin.id
+    )
     expect(notices).toHaveLength(1)
     const [notice] = notices
     expect(notice?.data.body).toContain('A staff member set maintenance mode')
@@ -407,7 +413,7 @@ describe('PUT /platform/maintenance-mode', () => {
   })
 
   it('switches off with no reason: the message is cleared and every other owner and admin is notified', async () => {
-    const { token } = await createTrackedStaff('owner')
+    const { user: owner, token } = await createTrackedStaff('owner')
     const { user: admin } = await createTrackedStaff('admin')
     await storeMaintenanceMode('read_only')
     const version = await currentVersion(token)
@@ -422,7 +428,9 @@ describe('PUT /platform/maintenance-mode', () => {
       reason: NONE,
     })
     const notices = await pendingMaintenanceNotices()
-    expect(notices.map((job) => job.data.userId)).toEqual([admin.id])
+    // Only this test's staff: the worker database may hold other platform staff.
+    const ours = new Set([owner.id, admin.id])
+    expect(notices.map((job) => job.data.userId).filter((id) => ours.has(id))).toEqual([admin.id])
   })
 
   it('records messageChanged true when switching off a mode that had a message', async () => {
