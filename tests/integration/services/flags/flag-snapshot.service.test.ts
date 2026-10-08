@@ -228,9 +228,13 @@ describe('flag snapshot store', () => {
       const redis = await getRedis()
       await redis.set(flagSnapshotKey(), JSON.stringify({ ...snapshot('bad'), [field]: 'garbage' }))
       await expect(readFlagSnapshot()).rejects.toThrow('The stored flag snapshot is not a snapshot')
-      vi.spyOn(logger, 'warn').mockImplementation(() => {})
+      const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
       await store.reload()
       expect(store.get()?.etag).toBe('W/"good"')
+      expect(warn).toHaveBeenCalledWith('Flag snapshot reload failed; keeping the copy in memory', {
+        reason: 'Error',
+      })
+      warn.mockRestore()
     }
   )
 

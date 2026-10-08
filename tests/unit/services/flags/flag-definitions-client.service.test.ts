@@ -14,6 +14,7 @@ import {
   startFakePosthog,
   type FakePosthog,
 } from '../../../helpers/fake-posthog'
+import { waitUntil } from '../../../helpers/timing'
 
 // eslint-disable-next-line unicorn/no-null -- the stored ETag's contract is null for none
 const NONE = null
@@ -150,6 +151,26 @@ describe('fetchFlagDefinitions', () => {
     controller.abort()
     const result = await fetchFlagDefinitions(NONE, { signal: controller.signal })
     expect(result).toEqual({ kind: 'aborted' })
+  })
+
+  it('reads a caller abort that lands while the request is in flight as aborted, not as a timeout or network failure', async () => {
+    posthog().hang(60_000)
+    const controller = new AbortController()
+    const fetching = fetchFlagDefinitions(NONE, { signal: controller.signal })
+    await waitUntil(() => posthog().requests.length === 1, {
+      message: 'the definitions request reached PostHog',
+    })
+
+    controller.abort(new Error('shutting down'))
+
+    await expect(fetching).resolves.toEqual({ kind: 'aborted' })
+  })
+
+  it('reads a caller signal that aborted with a TimeoutError as a timeout: the timeout check runs first', async () => {
+    const controller = new AbortController()
+    controller.abort(new DOMException('The deadline passed', 'TimeoutError'))
+    const result = await fetchFlagDefinitions(NONE, { signal: controller.signal })
+    expect(result).toEqual({ kind: 'error', code: 'timeout' })
   })
 
   it('classifies an unreachable host as network', async () => {
