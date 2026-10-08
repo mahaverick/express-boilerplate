@@ -57,11 +57,24 @@ export interface ErrorContext {
 }
 
 /**
- * One built event and the key the throttle counts it under.
+ * One built event, its scrubbed exception list and the key the throttle
+ * counts it under.
  */
 export interface BuiltErrorEvent {
   event: PosthogBatchEvent
+  exceptions: Exception[]
   fingerprint: string
+}
+
+/**
+ * A stand-in for an error that `span.recordException` can take: the
+ * scrubbed type as `name`, the scrubbed value as `message`, and, when there
+ * are frames, a stack of the scrubbed frames, innermost first.
+ */
+export interface SpanError {
+  name: string
+  message: string
+  stack?: string
 }
 
 /**
@@ -352,7 +365,7 @@ export function buildErrorEvent(
     properties,
     occurredAt: at,
   })
-  return { event, fingerprint: fingerprintOf(exceptions) }
+  return { event, exceptions, fingerprint: fingerprintOf(exceptions) }
 }
 
 /**
@@ -366,24 +379,31 @@ function frameLine(frame: StackFrame): string {
 }
 
 /**
- * A stand-in for an error that `span.recordException` can take, built from
- * the scrubbed exception only, so a trace never carries what an event may not.
- * @param error - Anything thrown.
- * @returns The scrubbed type as `name`, the scrubbed value as `message`, and,
- *   when there are frames, a stack of the scrubbed frames, innermost first.
+ * The span stand-in for an already scrubbed exception list: its first
+ * exception, so a trace never carries what an event may not.
+ * @param exceptions - A scrubbed exception list, as `exceptionListOf` builds it.
+ * @returns The stand-in.
  */
-export function scrubbedErrorForSpan(error: unknown): {
-  name: string
-  message: string
-  stack?: string
-} {
+export function spanErrorOf(exceptions: Exception[]): SpanError {
+  const [first] = exceptions
+  const name = first?.type ?? 'Error'
+  const message = first?.value ?? ''
+  const frames = (first?.stacktrace?.frames ?? []).toReversed().map((frame) => frameLine(frame))
+  if (frames.length === 0) return { name, message }
+  return { name, message, stack: [`${name}: ${message}`, ...frames].join('\n') }
+}
+
+/**
+ * The span stand-in for a thrown value, built from its scrubbed exception
+ * list (`spanErrorOf`). For a 5xx error tracking does not report; one it
+ * reports takes the stand-in from the event it built
+ * (`reportErrorWithSpan`), so the list is built once.
+ * @param error - Anything thrown.
+ * @returns The stand-in.
+ */
+export function scrubbedErrorForSpan(error: unknown): SpanError {
   try {
-    const [first] = exceptionListOf(error)
-    const name = first?.type ?? 'Error'
-    const message = first?.value ?? ''
-    const frames = (first?.stacktrace?.frames ?? []).toReversed().map((frame) => frameLine(frame))
-    if (frames.length === 0) return { name, message }
-    return { name, message, stack: [`${name}: ${message}`, ...frames].join('\n') }
+    return spanErrorOf(exceptionListOf(error))
   } catch {
     return { name: 'Error', message: 'Unreadable error' }
   }

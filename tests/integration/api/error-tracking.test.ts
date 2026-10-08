@@ -321,7 +321,7 @@ describe('what is never sent', () => {
     ['an HttpError 503 without a cause', 'get', '/api/probe/shutting-down', 503],
   ] as const)('%s', async (_name, method, path, status) => {
     vi.spyOn(logger, 'error').mockImplementation(() => {})
-    const report = vi.spyOn(reporter, 'reportError')
+    const report = vi.spyOn(reporter, 'reportErrorWithSpan')
 
     const pending = request(probeApp())[method](path)
     const response = await (method === 'post'
@@ -334,7 +334,7 @@ describe('what is never sent', () => {
   })
 
   it('a client that aborts its request body: a 400, never reported', async () => {
-    const report = vi.spyOn(reporter, 'reportError')
+    const report = vi.spyOn(reporter, 'reportErrorWithSpan')
     const server = http.createServer(probeApp())
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
     const { port } = server.address() as AddressInfo
@@ -392,7 +392,7 @@ async function failAfterClientLeft(kind: 'reset' | 'plain'): Promise<number> {
 describe('a client that goes away while a 5xx is being produced', () => {
   it('never reports the abort error a 5xx route raises once the client is gone', async () => {
     vi.spyOn(logger, 'error').mockImplementation(() => {})
-    const report = vi.spyOn(reporter, 'reportError')
+    const report = vi.spyOn(reporter, 'reportErrorWithSpan')
 
     expect(await failAfterClientLeft('reset')).toBe(500)
     expect(report).not.toHaveBeenCalled()
@@ -410,7 +410,7 @@ describe('a client that goes away while a 5xx is being produced', () => {
 
   it('still reports any other failure after the client is gone', async () => {
     vi.spyOn(logger, 'error').mockImplementation(() => {})
-    const report = vi.spyOn(reporter, 'reportError')
+    const report = vi.spyOn(reporter, 'reportErrorWithSpan')
 
     expect(await failAfterClientLeft('plain')).toBe(500)
     expect(report).toHaveBeenCalledTimes(1)
@@ -421,7 +421,7 @@ describe('a client that goes away while a 5xx is being produced', () => {
 describe('the /collect proxy', () => {
   it('answers ANALYTICS_UNCONFIGURED 503 itself, never through the reporter', async () => {
     target.projectKey = undefined
-    const report = vi.spyOn(reporter, 'reportError')
+    const report = vi.spyOn(reporter, 'reportErrorWithSpan')
 
     const response = await request(createApp()).post('/api/v1/collect/batch/').send('x')
 
@@ -434,7 +434,7 @@ describe('the /collect proxy', () => {
     await unreachable.close()
     target.host = unreachable.url
     vi.spyOn(logger, 'warn').mockImplementation(() => {})
-    const report = vi.spyOn(reporter, 'reportError')
+    const report = vi.spyOn(reporter, 'reportErrorWithSpan')
 
     const response = await request(createApp()).post('/api/v1/collect/batch/').send('x')
 

@@ -6,6 +6,8 @@
  * capture rule. Error tracking is switched on through a mocked
  * `isErrorTrackingEnabled`; no Redis or PostHog.
  */
+import { inspect } from 'node:util'
+import { ErrorPropertiesBuilder } from '@posthog/core/error-tracking'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { HttpError } from '@/errors/http-error'
 import { TimelineUnavailableError } from '@/errors/timeline-errors'
@@ -15,15 +17,18 @@ import {
   recordErrorSendError,
   recordErrorSendOk,
 } from '@/services/errors/error-counters.service'
+import { scrubbedErrorForSpan } from '@/services/errors/error-event.service'
 import {
   flushErrorReports,
   queuedErrorReportCount,
   reportError,
+  reportErrorWithSpan,
   resetErrorReporter,
   shouldCaptureHttpError,
   type ErrorContext,
 } from '@/services/errors/error-reporter.service'
 import { logger } from '@/services/logger.service'
+import { fakeQueryError, LEAKED_PARAM } from '../../../helpers/query-error'
 
 const tracking = vi.hoisted(() => ({ isEnabled: true, shouldThrow: false }))
 
@@ -275,6 +280,40 @@ describe('throttle', () => {
     const sent = posthog.batches.reduce((sum, batch) => sum + batch.events.length, 0)
     expect(sent + queuedErrorReportCount()).toBe(100)
     expect(counted('throttled')).toBe(1)
+  })
+})
+
+describe('throttle before build', () => {
+  it('a report past the 100-per-minute global cap does no build work', () => {
+    const build = vi.spyOn(ErrorPropertiesBuilder.prototype, 'buildFromUnknown')
+    reportDistinct(100)
+    expect(counted('throttled')).toBe(0)
+    const before = build.mock.calls.length
+    reportError('one more past the cap', HTTP)
+    expect(counted('throttled')).toBe(1)
+    expect(build.mock.calls).toHaveLength(before)
+  })
+})
+
+describe('reportErrorWithSpan', () => {
+  it('takes the span stand-in from the built event, scrubbed like the event', () => {
+    const error = fakeQueryError()
+    const build = vi.spyOn(ErrorPropertiesBuilder.prototype, 'buildFromUnknown')
+    const { spanError } = reportErrorWithSpan(error, HTTP)
+    const stand = spanError()
+    expect(queuedErrorReportCount()).toBe(1)
+    expect(build).toHaveBeenCalledTimes(1)
+    expect(inspect(stand, { depth: Infinity })).not.toContain(LEAKED_PARAM)
+    expect(stand).toEqual(scrubbedErrorForSpan(error))
+  })
+
+  it('builds a scrubbed stand-in from the error when the report built none', () => {
+    tracking.isEnabled = false
+    const error = fakeQueryError()
+    const stand = reportErrorWithSpan(error, HTTP).spanError()
+    expect(queuedErrorReportCount()).toBe(0)
+    expect(inspect(stand, { depth: Infinity })).not.toContain(LEAKED_PARAM)
+    expect(stand).toEqual(scrubbedErrorForSpan(error))
   })
 })
 

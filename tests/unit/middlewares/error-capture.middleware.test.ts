@@ -20,17 +20,18 @@ import { logger } from '@/services/logger.service'
 
 const actualReporter = vi.hoisted(
   (): {
-    reportError?: typeof import('@/services/errors/error-reporter.service').reportError
+    reportErrorWithSpan?: typeof import('@/services/errors/error-reporter.service').reportErrorWithSpan
   } => ({})
 )
 
+const spanError = vi.hoisted(() => vi.fn(() => ({ name: 'Error', message: 'scrubbed' })))
+
 vi.mock('@/services/errors/error-reporter.service', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/services/errors/error-reporter.service')>()
-  actualReporter.reportError = actual.reportError
+  actualReporter.reportErrorWithSpan = actual.reportErrorWithSpan
   return {
     ...actual,
-    reportError: vi.fn(() => 'reported-error-id'),
-    scrubbedErrorForSpan: vi.fn(() => ({ name: 'Error', message: 'scrubbed' })),
+    reportErrorWithSpan: vi.fn(() => ({ errorId: 'reported-error-id', spanError })),
   }
 })
 
@@ -75,9 +76,9 @@ describe('errorHandler and error tracking', () => {
 
   afterEach(() => {
     vi.restoreAllMocks()
-    vi.mocked(reporter.reportError).mockClear()
+    vi.mocked(reporter.reportErrorWithSpan).mockClear()
     vi.mocked(uuidv7).mockClear()
-    vi.mocked(reporter.scrubbedErrorForSpan).mockClear()
+    spanError.mockClear()
   })
 
   it('reports an unexpected throw as http, and puts its id in the body and the log line', () => {
@@ -87,7 +88,7 @@ describe('errorHandler and error tracking', () => {
 
     errorHandler(error, request, response, vi.fn())
 
-    expect(reporter.reportError).toHaveBeenCalledExactlyOnceWith(error, {
+    expect(reporter.reportErrorWithSpan).toHaveBeenCalledExactlyOnceWith(error, {
       capturePoint: 'http',
       handled: true,
       http: { method: 'POST', route: UNMATCHED_ROUTE, status: 500, requestId: 'req-id-1' },
@@ -107,8 +108,8 @@ describe('errorHandler and error tracking', () => {
     // eslint-disable-next-line unicorn/no-null -- the thrown value under test
     errorHandler(null, request, response, vi.fn())
 
-    expect(reporter.reportError).toHaveBeenCalledOnce()
-    expect(vi.mocked(reporter.reportError).mock.calls[0]?.[0]).toBeNull()
+    expect(reporter.reportErrorWithSpan).toHaveBeenCalledOnce()
+    expect(vi.mocked(reporter.reportErrorWithSpan).mock.calls[0]?.[0]).toBeNull()
     expect((response as unknown as { status: Mock }).status).toHaveBeenCalledWith(500)
     expect(body()).toMatchObject({ statusCode: 500, errorId: 'reported-error-id' })
   })
@@ -124,7 +125,7 @@ describe('errorHandler and error tracking', () => {
       vi.fn()
     )
 
-    expect(reporter.reportError).toHaveBeenCalledOnce()
+    expect(reporter.reportErrorWithSpan).toHaveBeenCalledOnce()
   })
 
   it('does not report an HttpError 503 without a cause, but still gives it an errorId', () => {
@@ -133,7 +134,7 @@ describe('errorHandler and error tracking', () => {
 
     errorHandler(new HttpError('Server is shutting down', 503), request, response, vi.fn())
 
-    expect(reporter.reportError).not.toHaveBeenCalled()
+    expect(reporter.reportErrorWithSpan).not.toHaveBeenCalled()
     expect(body()).toMatchObject({ statusCode: 503, errorId: 'fresh-error-id' })
     expect(loggerError).toHaveBeenCalledWith('Unhandled server error', {
       error: expect.any(HttpError) as unknown,
@@ -149,7 +150,7 @@ describe('errorHandler and error tracking', () => {
 
     errorHandler(error, request, response, vi.fn())
 
-    expect(reporter.reportError).not.toHaveBeenCalled()
+    expect(reporter.reportErrorWithSpan).not.toHaveBeenCalled()
     expect(loggerError).not.toHaveBeenCalled()
     expect(body()).toMatchObject({ statusCode: 502, errorId: 'fresh-error-id' })
   })
@@ -164,7 +165,7 @@ describe('errorHandler and error tracking', () => {
 
     errorHandler(error, request, response, vi.fn())
 
-    expect(reporter.reportError).not.toHaveBeenCalled()
+    expect(reporter.reportErrorWithSpan).not.toHaveBeenCalled()
     expect(uuidv7).not.toHaveBeenCalled()
     expect(body()).not.toHaveProperty('errorId')
   })
@@ -183,7 +184,8 @@ describe('errorHandler and error tracking', () => {
       vi.fn()
     )
 
-    expect(reporter.scrubbedErrorForSpan).toHaveBeenCalledExactlyOnceWith(error)
+    expect(reporter.reportErrorWithSpan).toHaveBeenCalledExactlyOnceWith(error, expect.anything())
+    expect(spanError).toHaveBeenCalledOnce()
     expect(span.recordException).toHaveBeenCalledExactlyOnceWith({
       name: 'Error',
       message: 'scrubbed',
@@ -192,9 +194,9 @@ describe('errorHandler and error tracking', () => {
   })
 
   it('still records the span with error tracking off, where the real reporter sends nothing', () => {
-    const report = actualReporter.reportError
-    if (report === undefined) throw new Error('the real reportError was not captured')
-    vi.mocked(reporter.reportError).mockImplementationOnce(report)
+    const report = actualReporter.reportErrorWithSpan
+    if (report === undefined) throw new Error('the real reportErrorWithSpan was not captured')
+    vi.mocked(reporter.reportErrorWithSpan).mockImplementationOnce(report)
     const span = { recordException: vi.fn(), setStatus: vi.fn() }
     vi.spyOn(trace, 'getActiveSpan').mockReturnValue(span as unknown as Span)
     const { response, body } = mockResponse()
@@ -213,7 +215,7 @@ describe('errorHandler and error tracking', () => {
 
     errorHandler(error, request, response, vi.fn())
 
-    expect(reporter.reportError).toHaveBeenCalledExactlyOnceWith(
+    expect(reporter.reportErrorWithSpan).toHaveBeenCalledExactlyOnceWith(
       error,
       expect.objectContaining({
         capturePoint: 'http',
@@ -236,7 +238,7 @@ describe('errorHandler and error tracking', () => {
     errorHandler(error, request, mockResponse(true).response, vi.fn())
     errorHandler(error, request, mockResponse().response, vi.fn())
 
-    expect(reporter.reportError).not.toHaveBeenCalled()
+    expect(reporter.reportErrorWithSpan).not.toHaveBeenCalled()
   })
 
   it('still reports a connection-reset error while the client socket is open', () => {
@@ -245,6 +247,6 @@ describe('errorHandler and error tracking', () => {
 
     errorHandler(error, request, mockResponse().response, vi.fn())
 
-    expect(reporter.reportError).toHaveBeenCalledOnce()
+    expect(reporter.reportErrorWithSpan).toHaveBeenCalledOnce()
   })
 })

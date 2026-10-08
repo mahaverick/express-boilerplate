@@ -9,6 +9,7 @@
  * depends on Redis, which only counts outcomes. Nothing here throws, and
  * nothing here reports its own failures, so the reporter cannot recurse.
  */
+import type { Exception } from '@posthog/core/error-tracking'
 import { uuidv7 } from '@posthog/core/vendor/uuidv7'
 import { isErrorTrackingEnabled } from '@/configs/analytics.config'
 import { ANALYTICS_SEND_TIMEOUT_MS } from '@/constants/analytics.constants'
@@ -35,11 +36,20 @@ import {
   recordErrorSendError,
   recordErrorSendOk,
 } from '@/services/errors/error-counters.service'
-import { buildErrorEvent, type ErrorContext } from '@/services/errors/error-event.service'
+import {
+  buildErrorEvent,
+  scrubbedErrorForSpan,
+  spanErrorOf,
+  type ErrorContext,
+  type SpanError,
+} from '@/services/errors/error-event.service'
 import { logger } from '@/services/logger.service'
 
-export type { ErrorCapturePoint, ErrorContext } from '@/services/errors/error-event.service'
-export { scrubbedErrorForSpan } from '@/services/errors/error-event.service'
+export type {
+  ErrorCapturePoint,
+  ErrorContext,
+  SpanError,
+} from '@/services/errors/error-event.service'
 
 const MINUTE_MS = 60_000
 
@@ -120,6 +130,18 @@ function drop(reason: ErrorDropReason, count: number): void {
  */
 function withinMinute(times: number[], now: number): number[] {
   return times.filter((time) => now - time < MINUTE_MS)
+}
+
+/**
+ * Whether `ERROR_GLOBAL_PER_MINUTE` events were already allowed in the
+ * rolling minute, so the next is throttled whatever its fingerprint. Read
+ * before an event is built, so a flood past the cap costs no build work.
+ * @param now - The current epoch millisecond.
+ * @returns True when the global cap is reached.
+ */
+function isGlobalCapReached(now: number): boolean {
+  state.sentTimes = withinMinute(state.sentTimes, now)
+  return state.sentTimes.length >= ERROR_GLOBAL_PER_MINUTE
 }
 
 /**
@@ -307,11 +329,56 @@ function scheduleFlush(): void {
 }
 
 /**
+ * What one report did: its id, and the scrubbed exception list when it
+ * built one.
+ */
+interface Report {
+  errorId: string
+  exceptions?: Exception[]
+}
+
+/**
+ * Build, scrub, throttle and queue one event (`reportError`), keeping the
+ * exception list it built. Past the global cap nothing is built.
+ * @param error - Anything thrown.
+ * @param context - Where it was caught.
+ * @returns The id, and the exception list when one was built.
+ */
+function report(error: unknown, context: ErrorContext): Report {
+  const errorId = uuidv7()
+  if (state.isReporting) return { errorId }
+  state.isReporting = true
+  try {
+    if (!isErrorTrackingEnabled()) return { errorId }
+    const at = new Date()
+    if (isGlobalCapReached(at.getTime())) {
+      drop('throttled', 1)
+      return { errorId }
+    }
+    const { event, exceptions, fingerprint } = buildErrorEvent(error, context, errorId, at)
+    if (!isWithinThrottle(fingerprint, at.getTime())) {
+      drop('throttled', 1)
+      return { errorId, exceptions }
+    }
+    state.queue.push(event)
+    trimQueue()
+    scheduleFlush()
+    return { errorId, exceptions }
+  } catch (error_) {
+    warnOncePerMinute('internal', 'Error reporter failed', { error: error_ })
+    return { errorId }
+  } finally {
+    state.isReporting = false
+  }
+}
+
+/**
  * Report an unexpected error to PostHog Error Tracking. Synchronous: it
  * builds, scrubs, throttles and queues the event and returns before any
  * I/O. The id is minted first, so it is returned also when error tracking
  * is off, the event is throttled, or building it failed; it then names a
- * log line, not an event. Never throws: a failure inside is logged at `warn`
+ * log line, not an event. Past the global cap the event is not even built.
+ * Never throws: a failure inside is logged at `warn`
  * at most once a minute and never reported. A call made while another is
  * running (a getter on the error that reports) returns an id and queues nothing.
  * @param error - Anything thrown.
@@ -319,26 +386,29 @@ function scheduleFlush(): void {
  * @returns The event uuid (UUIDv7): the `errorId` logs and responses carry.
  */
 export function reportError(error: unknown, context: ErrorContext): string {
-  const errorId = uuidv7()
-  if (state.isReporting) return errorId
-  state.isReporting = true
-  try {
-    if (!isErrorTrackingEnabled()) return errorId
-    const at = new Date()
-    const { event, fingerprint } = buildErrorEvent(error, context, errorId, at)
-    if (!isWithinThrottle(fingerprint, at.getTime())) {
-      drop('throttled', 1)
-      return errorId
-    }
-    state.queue.push(event)
-    trimQueue()
-    scheduleFlush()
-  } catch (error_) {
-    warnOncePerMinute('internal', 'Error reporter failed', { error: error_ })
-  } finally {
-    state.isReporting = false
+  return report(error, context).errorId
+}
+
+/**
+ * `reportError`, and the scrubbed stand-in the active span records, taken
+ * from the exception list the report built, so a 5xx builds it once. When
+ * the report built none (error tracking off, throttled before the build, a
+ * failure inside), the stand-in is built from the error (`scrubbedErrorForSpan`).
+ * Never throws.
+ * @param error - Anything thrown.
+ * @param context - Where it was caught.
+ * @returns The event uuid, and a function giving the span stand-in, called only when there is a span.
+ */
+export function reportErrorWithSpan(
+  error: unknown,
+  context: ErrorContext
+): { errorId: string; spanError: () => SpanError } {
+  const { errorId, exceptions } = report(error, context)
+  return {
+    errorId,
+    spanError: () =>
+      exceptions === undefined ? scrubbedErrorForSpan(error) : spanErrorOf(exceptions),
   }
-  return errorId
 }
 
 /**

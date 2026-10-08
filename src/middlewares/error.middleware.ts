@@ -24,8 +24,7 @@ import { TimelineUnavailableError } from '@/errors/timeline-errors'
 import { REQUEST_ID_HEADER } from '@/middlewares/request-id.middleware'
 import { routeTemplateOf } from '@/middlewares/route-template.middleware'
 import {
-  reportError,
-  scrubbedErrorForSpan,
+  reportErrorWithSpan,
   shouldCaptureHttpError,
 } from '@/services/errors/error-reporter.service'
 import { logger } from '@/services/logger.service'
@@ -115,7 +114,8 @@ function requestIdOf(response: Response): string {
 
 /**
  * Report a server error to error tracking and record it, scrubbed, on the
- * active span, which is marked as an error.
+ * active span, which is marked as an error. The span takes the exception
+ * list the report built, so the error is built once.
  * @param error - The thrown or forwarded error.
  * @param request - The request.
  * @param response - The response.
@@ -128,7 +128,7 @@ function captureHttpError(
   response: Response,
   status: number
 ): string {
-  const errorId = reportError(error, {
+  const { errorId, spanError } = reportErrorWithSpan(error, {
     capturePoint: 'http',
     handled: true,
     http: {
@@ -140,7 +140,7 @@ function captureHttpError(
   })
   const span = trace.getActiveSpan()
   if (span !== undefined) {
-    span.recordException(scrubbedErrorForSpan(error))
+    span.recordException(spanError())
     span.setStatus({ code: SpanStatusCode.ERROR })
   }
   return errorId
