@@ -85,6 +85,25 @@ const tenantDescriptionField = z
   .refine(safeText({ multiline: true }), 'Description contains characters that are not allowed')
 
 /**
+ * A tenant's `logo` or `website`: an absolute `http:` or `https:` URL, trimmed
+ * and capped at the column width, never `javascript:`, `data:` or free
+ * text, so a client that renders it as a link or image source cannot be
+ * made to run or load anything else.
+ * @param label - The field's name in its messages (`Logo`, `Website`).
+ * @param maxLength - The column width.
+ * @returns The field schema; callers add `.nullable()`/`.optional()`.
+ */
+function httpUrlField(label: string, maxLength: number) {
+  return z
+    .string()
+    .trim()
+    .min(1, 'Must not be empty.')
+    .max(maxLength, `${label} must be at most ${maxLength} characters.`)
+    .refine(safeText(), `${label} contains characters that are not allowed`)
+    .pipe(z.url({ protocol: /^https?$/, message: `${label} must be an http or https URL.` }))
+}
+
+/**
  * `POST /api/v1/tenants` request body. The caller becomes the tenant's sole
  * `'owner'` member; the owner comes from `request.user.id`, never from this
  * body, so a caller cannot name a different owner.
@@ -98,23 +117,8 @@ export const newTenantSchema = z.object({
     .refine(safeText(), 'Name contains characters that are not allowed'),
   slug: slugSchema,
   description: z.preprocess(normalizeMultilineText, tenantDescriptionField).optional(),
-  logo: z
-    .string()
-    .trim()
-    .min(1, 'Must not be empty.')
-    .max(MAX_TENANT_LOGO_LENGTH, `Logo must be at most ${MAX_TENANT_LOGO_LENGTH} characters.`)
-    .refine(safeText(), 'Logo contains characters that are not allowed')
-    .optional(),
-  website: z
-    .string()
-    .trim()
-    .min(1, 'Must not be empty.')
-    .max(
-      MAX_TENANT_WEBSITE_LENGTH,
-      `Website must be at most ${MAX_TENANT_WEBSITE_LENGTH} characters.`
-    )
-    .refine(safeText(), 'Website contains characters that are not allowed')
-    .optional(),
+  logo: httpUrlField('Logo', MAX_TENANT_LOGO_LENGTH).optional(),
+  website: httpUrlField('Website', MAX_TENANT_WEBSITE_LENGTH).optional(),
 })
 
 /**
@@ -142,25 +146,8 @@ export const updateTenantSchema = z.object({
     .refine(safeText(), 'Name contains characters that are not allowed')
     .optional(),
   description: z.preprocess(normalizeMultilineText, tenantDescriptionField).nullable().optional(),
-  logo: z
-    .string()
-    .trim()
-    .min(1, 'Must not be empty.')
-    .max(MAX_TENANT_LOGO_LENGTH, `Logo must be at most ${MAX_TENANT_LOGO_LENGTH} characters.`)
-    .refine(safeText(), 'Logo contains characters that are not allowed')
-    .nullable()
-    .optional(),
-  website: z
-    .string()
-    .trim()
-    .min(1, 'Must not be empty.')
-    .max(
-      MAX_TENANT_WEBSITE_LENGTH,
-      `Website must be at most ${MAX_TENANT_WEBSITE_LENGTH} characters.`
-    )
-    .refine(safeText(), 'Website contains characters that are not allowed')
-    .nullable()
-    .optional(),
+  logo: httpUrlField('Logo', MAX_TENANT_LOGO_LENGTH).nullable().optional(),
+  website: httpUrlField('Website', MAX_TENANT_WEBSITE_LENGTH).nullable().optional(),
 })
 
 /**

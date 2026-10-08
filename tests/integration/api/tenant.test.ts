@@ -1514,4 +1514,48 @@ describe('/api/v1/tenants', () => {
       expect(await patchSettings({ metadata: nested(11) })).toBe(400)
     })
   })
+
+  describe('logo and website must be http(s) URLs', () => {
+    it.each([
+      ['website javascript:', { website: 'javascript:alert(document.domain)' }],
+      ['logo javascript:', { logo: 'javascript:alert(1)' }],
+      ['logo data:', { logo: 'data:text/html,<script>alert(1)</script>' }],
+      ['website not a URL', { website: 'call us maybe' }],
+    ])('PATCH refuses %s', async (_label, body) => {
+      const { user, token } = await createAuthenticatedUser()
+      const tenant = await createTenant(user.id)
+      const response = await request(app)
+        .patch(`/api/v1/tenants/${tenant.slug}`)
+        .set('Authorization', `Bearer ${token}`)
+        .send(body)
+      expect(response.status).toBe(400)
+    })
+
+    it('POST refuses a javascript: website and still accepts an https one', async () => {
+      const { token } = await createAuthenticatedUser()
+      const refused = await request(app)
+        .post('/api/v1/tenants')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ name: 'Acme', slug: uniqueSlug(), website: 'javascript:alert(1)' })
+      const leaked = envelopeOf<{ id: string }>(refused).data
+      if (leaked) createdTenantIds.push(leaked.id)
+      expect(refused.status).toBe(400)
+      expect(envelopeOf(refused).errors?.website).toEqual(['Website must be an http or https URL.'])
+
+      const slug = uniqueSlug()
+      const accepted = await request(app)
+        .post('/api/v1/tenants')
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          name: 'Acme',
+          slug,
+          website: ' https://acme.example/ ',
+          logo: 'http://localhost:3000/logo.png',
+        })
+      expect(accepted.status).toBe(201)
+      const created = envelopeOf<{ id: string; website: string }>(accepted).data
+      if (created) createdTenantIds.push(created.id)
+      expect(created?.website).toBe('https://acme.example/')
+    })
+  })
 })
