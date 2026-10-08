@@ -219,7 +219,9 @@ function isOlder(incoming: ParsedSnapshot, current: ParsedSnapshot | null): bool
 /**
  * Close a client; one already closed throws, which is ignored. A client whose
  * TCP connect has not landed yet is not closed by this: node-redis has no
- * socket to destroy until then, and its own connect timeout releases it.
+ * socket to destroy until then. Once the connect lands, the handshake
+ * deadline's destroy releases it against a silent peer; against a healthy
+ * Redis it stays open until the process exits.
  * @param client - The client.
  */
 function destroyQuietly(client: RedisClientType): void {

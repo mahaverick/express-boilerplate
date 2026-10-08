@@ -322,10 +322,12 @@ describe('start() and stop() while the subscriber never finishes its handshake',
       })
       const stopping = Date.now()
       await store.stop()
-      // Measured in milliseconds; the bound is 2x STOP_SUBSCRIBER_WAIT_MS, which a stop() on its fallback hits.
-      expect(Date.now() - stopping).toBeLessThan(2000)
+      // Half of STOP_SUBSCRIBER_WAIT_MS (1 s), so a stop() that fell back to that wait fails; measured ~100 ms.
+      expect(Date.now() - stopping).toBeLessThan(500)
       await waitUntil(() => silent.accepted[0]?.destroyed, {
         message: 'the connected subscriber is closed by stop()',
+        // Well inside the 5 s handshake deadline, which would otherwise close it; measured in ms.
+        timeout: 1000,
       })
     } finally {
       silent.close()
