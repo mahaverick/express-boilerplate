@@ -139,16 +139,23 @@ const BASE64_RUN_PATTERN = /[\w+/-]{40,}={0,2}/g
 const BASE64_UPPERCASE_SHARE = 0.25
 
 /**
- * Whether a long base64-alphabet run is a secret rather than a file path.
- * A run with no `/` always is. One with a `/` is when it holds a digit and
- * at least a quarter of its letters are uppercase: random base64 is half
- * uppercase, and a path such as `/app/src/services/errors/error-scrubber`
- * is almost all lowercase.
+ * A run of lowercase words, each at most 20 letters, joined by `-` or `_`:
+ * a kebab- or snake-case identifier, never random base64.
+ */
+const IDENTIFIER_RUN_PATTERN = /^[a-z]{1,20}(?:[-_][a-z]{1,20})+$/
+
+/**
+ * Whether a long base64-alphabet run is a secret rather than a file path or
+ * an identifier. A run with no `/` is, unless it is lowercase words joined
+ * by `-` or `_` (`a-very-long-kebab-identifier`). One with a `/` is when it
+ * holds a digit and at least a quarter of its letters are uppercase: random
+ * base64 is half uppercase, and a path such as
+ * `/app/src/services/errors/error-scrubber` is almost all lowercase.
  * @param run - The matched run.
  * @returns True when the run should be replaced.
  */
 function isSecretRun(run: string): boolean {
-  if (!run.includes('/')) return true
+  if (!run.includes('/')) return !IDENTIFIER_RUN_PATTERN.test(run)
   const letters = run.replaceAll(/[^A-Za-z]/g, '')
   const uppercase = run.replaceAll(/[^A-Z]/g, '')
   return uppercase.length >= letters.length * BASE64_UPPERCASE_SHARE && /\d/.test(run)

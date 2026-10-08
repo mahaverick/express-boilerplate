@@ -37,6 +37,8 @@ const HARMLESS = [
   'basic validation failed',
   'BASIC settings',
   'value too long for type character varying(255)',
+  'at a-very-long-kebab-identifier-for-the-tenant-switcher-panel (x.js)',
+  'at my_very_long_snake_case_identifier_for_the_module_x_y (x.js)',
 ]
 
 describe('scrubText vectors', () => {
@@ -157,5 +159,14 @@ describe('scrubText', () => {
   it('scrubs a secret that appears after replacements shortened the text', () => {
     const jwt = 'eyJhIjoxfQ.eyJiIjoyfQ.c2lnbmF0dXJl'
     expect(scrubText(`${jwt} jane@example.com`)).toBe('[jwt] [email]')
+  })
+})
+
+describe('scrubText on identifiers', () => {
+  it.each([
+    'at a-very-long-kebab-identifier-for-the-tenant-switcher-panel (x.js)',
+    'at my_very_long_snake_case_identifier_for_the_module_x_y (x.js)',
+  ])('keeps the identifier in %s', (input) => {
+    expect(scrubText(input)).toBe(input)
   })
 })
