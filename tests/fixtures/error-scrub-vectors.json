@@ -1063,5 +1063,45 @@
     "rule": "kv",
     "input": "{\"response\":\"abc123\"}",
     "expected": "{\"response\":\"[redacted]\"}"
+  },
+  {
+    "rule": "kv",
+    "input": "\"cf-turnstile-response\":\"x\"",
+    "expected": "\"cf-turnstile-response\":\"[redacted]\""
+  },
+  {
+    "rule": "kv",
+    "input": "mfa_response=\"x\"",
+    "expected": "mfa_response=\"[redacted]\""
+  },
+  {
+    "rule": "kv",
+    "input": "challenge-response: \"x\"",
+    "expected": "challenge-response: \"[redacted]\""
+  },
+  {
+    "rule": "kv",
+    "input": "SAMLResponse=PHN",
+    "expected": "SAMLResponse=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "g-recaptcha-response=03AG",
+    "expected": "g-recaptcha-response=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "cf-turnstile-response=0.x",
+    "expected": "cf-turnstile-response=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "response=abc",
+    "expected": "response=[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "{\"response\":\"abc\"}",
+    "expected": "{\"response\":\"[redacted]\"}"
   }
 ]
