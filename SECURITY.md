@@ -289,8 +289,11 @@ Two effects are accepted:
   sessions' access tokens then stay valid until they expire
   (`ACCESS_TOKEN_TTL`, 15 minutes by default). That is the same exposure as
   the denylist failing open during a Redis outage. A stalled Redis does not
-  lose the write: the request waits for it at most 300 ms, and a write still
-  in flight then lands when Redis answers.
+  abandon the write: it is sent even during the stall cooldown, the request
+  waits for it at most 300 ms, and a write still in flight then lands when
+  Redis answers on the same connection. If the connection drops first, the
+  write is lost and logged as a failed write, with the same `error` line and
+  the user id.
 
 ### User enumeration: closed on `/login` and `/register`
 
@@ -495,7 +498,11 @@ returns it to Redis. During an outage, then, counting is per process: with N
 replicas, a client can make up to N× the limit. A Redis that is connected but
 does not answer is handled as an outage, with the same cost for the limiters
 and the session denylist: a request-path call that has not answered in 300 ms
-fails, and for the next 5 s such calls fail without asking Redis.
+fails, and for the next 5 s such calls fail without asking Redis. That is by
+design for latency too: a Redis whose latency regularly goes over 300 ms
+trips the cooldown, and the denylist then fails open and the limiters count
+per process much of the time. Keep Redis close and healthy; one `warn` per
+cooldown shows it happening.
 
 - **Register** keys on the client's **IP alone**, deliberately not the
   composite login uses. Both threats here come from one caller varying the

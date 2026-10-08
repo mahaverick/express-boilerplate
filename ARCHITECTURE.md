@@ -1270,7 +1270,10 @@ Two endpoints, deliberately different depths:
   with `"status":"not-ready"` if any is down. It also answers 503 with
   `"status":"shutting-down"` once graceful shutdown has begun. A failing
   readiness probe only removes the instance from load-balancer rotation; it
-  restarts nothing.
+  restarts nothing. The Redis check has its own `REDIS_REQUEST_DEADLINE_MS`
+  (300 ms) bound, connect included, and neither consults nor opens the
+  request-path stall cooldown: a slow PING makes only that probe answer
+  not-ready. A stalled database or queue connection still holds it.
 
 Neither path is traced.
 
@@ -1313,24 +1316,37 @@ false for a queue connection in any post-ready status but `ready`, and
 `closeQueue` disconnects instead of queueing a `QUIT`.
 
 **Through a stalled Redis.** node-redis never times out a command it has
-written, so a Redis that is connected but does not answer would hold every
-request that touches it. Every Redis call on the request path (the session
-denylist read, the rate-limit store and its switch to Redis, the staff-visit
-and view-audit dedupes, the flag exposure dedupe, the timeline budget and
-cache, the invitation recipient budget, the mail cooldowns, the OAuth session
-store and `isRedisReachable()`) runs under `withRedisDeadline`
-(`redis-deadline.service.ts`): a call that has not answered in
-`REDIS_REQUEST_DEADLINE_MS` (300 ms) fails, and for the next
-`REDIS_STALL_COOLDOWN_MS` (5 s) every such call fails at once without asking
-Redis, then the next call tries again. A failure takes the caller's existing
-outage path (fail open, memory, or `next(error)`), so a stall is handled as an
-outage. One `warn` marks each cooldown and one `info` the first success after
-it. Workers, BullMQ, pub/sub and the status reads (bounded by
-`STATUS_READ_TIMEOUT_MS`) are outside it. A session deny (`denySession`) is a
-write whose loss would keep tokens valid, so it goes through
-`waitForRedisWrite` instead: it is always sent, cooldown or not, the request
-waits for it at most the same deadline, and one still in flight then lands
-when Redis answers (a `warn` marks it, and another if it then fails).
+written, and its `connectTimeout` stops at the TCP connect: the handshake
+after it has no timer. So `getRedis()` bounds the shared client's whole
+connect at `REDIS_CONNECT_TIMEOUT_MS` (5 s), destroying a client that runs
+out of time, and every Redis command on the request path carries its own
+deadline of `REDIS_REQUEST_DEADLINE_MS` (300 ms), with `getRedis()` inside it,
+so a connect in flight counts too. Reads and counters (the session denylist
+read, the rate-limit store and its switch to Redis, the staff-visit,
+view-audit and flag-exposure dedupes, the timeline budget and cache, the
+invitation recipient budget, the mail cooldowns, the maintenance-mode notice
+ids and the OAuth session store) run under `withRedisDeadline`
+(`redis-deadline.service.ts`): a call that has not answered by the deadline
+fails, and for the next `REDIS_STALL_COOLDOWN_MS` (5 s) every such call
+fails at once without asking Redis, then the next call tries again. A failure
+takes the caller's existing outage path (fail open, memory, or
+`next(error)`), so a stall is handled as an outage. One `warn` marks each
+cooldown and one `info` the first success after it. The verdict waits one
+turn of the event loop after the timer, so a reply already in the socket
+buffer when a blocked process wakes still wins. A write whose loss would widen
+access (the session deny, the dedupe and audit-throttle key releases, the
+maintenance-mode change publish) goes through `waitForRedisWrite` instead: it
+is always sent, cooldown or not, the request waits for it at most the
+deadline, and one still in flight then lands when Redis answers on the same
+connection (one `warn` marks it; if the connection drops first the write is
+lost and its failure logged). The readiness check has its own bound
+(`waitForRedisProbe`, see [Health checks](#health-checks)). Workers, BullMQ,
+pub/sub, background publishes and counters, and the status reads (bounded
+by `STATUS_READ_TIMEOUT_MS`) are outside all of this. The deadline is a
+design limit, not a fault detector: a Redis whose latency regularly goes
+over 300 ms trips the cooldown, and then the denylist fails open and the
+limiters count per process much of the time, with a `warn` every few
+seconds.
 
 A queue connection that
 gives up before its first `ready` is replaced on next use, and the producer's
