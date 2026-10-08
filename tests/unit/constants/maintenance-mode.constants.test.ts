@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest'
 import {
   classifyMaintenanceRoute,
   MAINTENANCE_MODE_CODE,
+  maintenanceDecision,
   maintenanceVerdict,
   READ_ONLY_MODE_CODE,
 } from '@/constants/maintenance-mode.constants'
@@ -151,5 +152,27 @@ describe('maintenanceVerdict', () => {
     expect(classifyMaintenanceRoute('POST', '/api/v1/invitations/accept')?.staffPass).toBe(true)
     expect(classifyMaintenanceRoute('GET', '/api/v1/notifications')?.staffPass).toBe(false)
     expect(classifyMaintenanceRoute('POST', '/api/v1/auth/register')?.staffPass).toBe(false)
+  })
+})
+
+describe('maintenanceDecision', () => {
+  it('returns the rule it decided by, so the gate never classifies a route twice', () => {
+    const path = '/api/v1/tenants/acme'
+    expect(maintenanceDecision('full', 'GET', path)).toEqual({
+      verdict: MAINTENANCE_MODE_CODE,
+      rule: classifyMaintenanceRoute('GET', path),
+    })
+    expect(maintenanceDecision('full', 'GET', path).rule?.staffPass).toBe(true)
+  })
+
+  it('needs no rule when the mode is off or the method is OPTIONS', () => {
+    expect(maintenanceDecision('off', 'POST', '/api/v1/tenants')).toEqual({
+      verdict: 'allow',
+      rule: undefined,
+    })
+    expect(maintenanceDecision('full', 'OPTIONS', '/api/v1/tenants')).toEqual({
+      verdict: 'allow',
+      rule: undefined,
+    })
   })
 })

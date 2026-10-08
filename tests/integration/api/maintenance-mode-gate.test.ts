@@ -27,6 +27,22 @@ import {
 } from '../../helpers/platform-users'
 import { request } from '../../helpers/request'
 
+/**
+ * How many times a request read a platform membership, for the staff-pass
+ * path's one-read rule.
+ */
+const reads = vi.hoisted(() => ({ count: 0 }))
+vi.mock('@/services/platform.service', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/services/platform.service')>()
+  return {
+    ...actual,
+    getPlatformMembership: (...arguments_: Parameters<typeof actual.getPlatformMembership>) => {
+      reads.count += 1
+      return actual.getPlatformMembership(...arguments_)
+    },
+  }
+})
+
 const app = createApp()
 const tenantRepository = new TenantRepository()
 const tenantIds: string[] = []
@@ -370,5 +386,42 @@ describe('staff pass on the customer routes Apex calls', () => {
       .set('Authorization', `Bearer ${token}`)
 
     expect(response.status).toBe(503)
+  })
+
+  it("reads the staff member's platform membership once for one staff-pass request in full", async () => {
+    const { tenant } = await customerTenant()
+    const { token: staffToken } = await createTrackedStaff('viewer')
+    await enter('full', 'Down.')
+    reads.count = 0
+    const staff = await request(app)
+      .get(`/api/v1/tenants/${tenant.slug}`)
+      .set('Authorization', `Bearer ${staffToken}`)
+    expect(staff.status).toBe(200)
+    expect(reads.count).toBe(1)
+  })
+
+  it('reads it once on a staff-pass platform route in full too', async () => {
+    const { token } = await createTrackedStaff('viewer')
+    await enter('full')
+    reads.count = 0
+    const response = await request(app)
+      .get('/api/v1/platform/stats')
+      .set('Authorization', `Bearer ${token}`)
+    expect(response.status).toBe(200)
+    expect(reads.count).toBe(1)
+  })
+
+  it('still reads it once per request, so a revoked role takes effect on the next one', async () => {
+    const { tenant } = await customerTenant()
+    const { token } = await createTrackedStaff('viewer')
+    await enter('full')
+    reads.count = 0
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const response = await request(app)
+        .get(`/api/v1/tenants/${tenant.slug}`)
+        .set('Authorization', `Bearer ${token}`)
+      expect(response.status).toBe(200)
+    }
+    expect(reads.count).toBe(2)
   })
 })

@@ -1,15 +1,17 @@
 /**
  * @file The gate for `/platform` routes, the OPTIONS refusal that keeps
  * Express's automatic `Allow` answer from revealing them, and the log line
- * each successful staff write leaves. The platform role is read on every
- * request, with no cache, so a revocation takes effect on the next request.
+ * each successful staff write leaves. The platform role is read once on every
+ * request (reusing the maintenance gate's read of the same request, if any),
+ * with no cross-request cache, so a revocation takes effect on the next
+ * request.
  */
 import type { NextFunction, Request, Response } from 'express'
 import type { MembershipRole } from '@/constants/tenant.constants'
 import { HttpError } from '@/errors/http-error'
+import { platformRoleOf } from '@/middlewares/maintenance-mode.middleware'
 import { isRoleAtLeast } from '@/policies/tenant.policy'
 import { logger } from '@/services/logger.service'
-import { getPlatformMembership } from '@/services/platform.service'
 
 /**
  * Set on `response.locals` by `requirePlatformRole` when it admits the
@@ -30,7 +32,9 @@ export function requirePlatformRole(
 ): (request: Request, response: Response, next: NextFunction) => Promise<void> {
   return async (request, response, next) => {
     try {
-      const platformRole = request.user ? await getPlatformMembership(request.user.id) : undefined
+      const platformRole = request.user
+        ? await platformRoleOf(request.user.id, response)
+        : undefined
       if (!platformRole || !isRoleAtLeast(platformRole, minimum)) {
         next(new HttpError('Not found', 404))
         return

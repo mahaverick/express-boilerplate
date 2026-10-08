@@ -16,12 +16,12 @@ import type { Tenant } from '@/database/models/tenant.model'
 import { HttpError } from '@/errors/http-error'
 import { redactedForLog } from '@/errors/postgres-errors'
 import { requireRecentAuth } from '@/middlewares/auth.middleware'
+import { platformRoleOf } from '@/middlewares/maintenance-mode.middleware'
 import { isRoleAtLeast } from '@/policies/tenant.policy'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserMembershipRepository } from '@/repositories/user-membership.repository'
 import { recordPlatformAccess } from '@/services/audit.service'
 import { logger } from '@/services/logger.service'
-import { getPlatformMembership } from '@/services/platform.service'
 import { requestContextStore, type TenantContext } from '@/services/request-context.service'
 import type { RequestPrincipal } from '@/types/actor'
 import { reasonSchema } from '@/validators/platform.validators'
@@ -67,9 +67,14 @@ async function recordStaffVisit(
  * otherwise their platform role, except in the platform tenant itself.
  * @param userId - The authenticated caller.
  * @param tenant - The tenant the route names.
+ * @param response - This request's response, which may already carry the platform role (`platformRoleOf`).
  * @returns The principal, or undefined when the caller has no access.
  */
-async function principalFor(userId: string, tenant: Tenant): Promise<RequestPrincipal | undefined> {
+async function principalFor(
+  userId: string,
+  tenant: Tenant,
+  response: Response
+): Promise<RequestPrincipal | undefined> {
   const scope = {
     tenantId: tenant.id,
     tenantSlug: tenant.slug,
@@ -89,7 +94,7 @@ async function principalFor(userId: string, tenant: Tenant): Promise<RequestPrin
   }
   if (tenant.isPlatform) return undefined
 
-  const platformRole = await getPlatformMembership(userId)
+  const platformRole = await platformRoleOf(userId, response)
   if (platformRole === null) return undefined
   await recordStaffVisit(userId, tenant.id, platformRole)
   // eslint-disable-next-line unicorn/no-null -- staff reach this tenant with no membership
@@ -99,12 +104,12 @@ async function principalFor(userId: string, tenant: Tenant): Promise<RequestPrin
 /**
  * The middleware `resolveTenant` returns — see its JSDoc.
  * @param request - The incoming request.
- * @param _response - Unused.
+ * @param response - Read for a platform role this request already read.
  * @param next - Continues the chain, or forwards the 404.
  */
 async function scopeRequestToTenant(
   request: Request,
-  _response: Response,
+  response: Response,
   next: NextFunction
 ): Promise<void> {
   try {
@@ -113,7 +118,7 @@ async function scopeRequestToTenant(
     // A suspended, archived or deleted tenant must 404 like a nonexistent one.
     const tenant = identifier ? await tenantRepository.findActiveBySlug(identifier) : undefined
     const principal =
-      tenant && request.user ? await principalFor(request.user.id, tenant) : undefined
+      tenant && request.user ? await principalFor(request.user.id, tenant, response) : undefined
 
     // Not 403: that would confirm a guessed slug exists.
     if (!principal) {
