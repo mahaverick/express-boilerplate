@@ -297,6 +297,50 @@ describe('evaluateFlag rules', () => {
     const expected = { value: false, reason: 'out_of_rollout' }
     expect(results).toEqual([expected, expected])
   })
+
+  it('evaluates a $group_key condition the same with and without the group_key_names PostHog injects', async () => {
+    const OTHER_TENANT_ID = '0199b000-0000-7000-8000-00000000b2b2'
+    const entry: FlagEntry = { ...BOOLEAN_ENTRY, scope: 'tenant' }
+    const targeting = (
+      value: string[],
+      names?: Record<string, string>
+    ): Promise<{ value: unknown; reason: string }> =>
+      evaluateFlag(
+        entry,
+        snapshotOf({
+          aggregation_group_type_index: 0,
+          groups: [
+            {
+              aggregation_group_type_index: 0,
+              properties: [
+                {
+                  key: '$group_key',
+                  type: 'group',
+                  group_type_index: 0,
+                  operator: 'exact',
+                  value,
+                  ...(names !== undefined && { group_key_names: names }),
+                },
+              ],
+              rollout_percentage: 100,
+            },
+          ],
+        }),
+        CONTEXT,
+        ON
+      )
+
+    const matched = { value: true, reason: 'condition_match', conditionIndex: 0 }
+    const unmatched = { value: false, reason: 'no_condition_match' }
+    await expect(targeting([TENANT_ID])).resolves.toEqual(matched)
+    await expect(targeting([TENANT_ID], { [OTHER_TENANT_ID]: 'Another tenant' })).resolves.toEqual(
+      matched
+    )
+    await expect(targeting([OTHER_TENANT_ID])).resolves.toEqual(unmatched)
+    await expect(targeting([OTHER_TENANT_ID], { [TENANT_ID]: 'This tenant' })).resolves.toEqual(
+      unmatched
+    )
+  })
 })
 
 describe('isFlagPropertyMatch', () => {

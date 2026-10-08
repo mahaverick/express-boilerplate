@@ -781,7 +781,7 @@ describe('unknown condition and property fields', () => {
     expect(
       detectUnsupported(
         definitionWith({
-          properties: [{ key: 'seg', type: 'cohort', value: 7, cohort_name: 'Beta' }],
+          properties: [{ key: 'id', type: 'cohort', value: 7, cohort_name: 'Beta' }],
         }),
         entry,
         NONE
