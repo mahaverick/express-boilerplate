@@ -17,6 +17,7 @@ interface StackLayer {
   route?: { path: string; stack: { handle: RequestHandler }[] }
   handle: { stack?: StackLayer[] }
   path?: string
+  slash: boolean
   match(path: string): boolean
 }
 
@@ -51,22 +52,46 @@ const noop: RequestHandler = (_request, response) => {
 }
 
 /**
+ * The path a middleware mounted with `use()` covers, relative to its router:
+ * empty for a bare `use()`. Express 5 keeps no pattern on the layer, so it is
+ * found by asking `layer.match()` about each route of the same router and
+ * each known mount, and reading the part that matched (`layer.path`).
+ * @param layer - A non-router `use()` layer.
+ * @param stack - The router's layers, whose routes are the candidates.
+ * @returns The covered path, such as `/:slug/beta`, or undefined when no
+ *   route or known mount sits under it.
+ */
+function useMountOf(layer: StackLayer, stack: StackLayer[]): string | undefined {
+  if (layer.slash) return ''
+  const candidates = [
+    ...stack.flatMap((sibling) => (sibling.route ? [sibling.route.path] : [])),
+    ...KNOWN_MOUNTS,
+  ]
+  return candidates.some((candidate) => layer.match(candidate)) ? layer.path : undefined
+}
+
+/**
  * The flag gates a router stack holds, with each route's full path, recursing
  * into mounted routers. A mount is found by asking `layer.match()` about each
- * known mount and checking the whole mount matched (`layer.path`).
+ * known mount and checking the whole mount matched (`layer.path`). A
+ * `resolveTenant()` mounted with `use()` on a path counts only for gates on
+ * that path.
  * @param stack - A router's layers.
  * @param prefix - The mount path the layers sit under.
  * @param isResolved - Whether `resolveTenant()` already ran on every request that reaches this router.
  * @returns One entry per gate, noting whether `resolveTenant()` ran before it.
- * @throws {Error} When a router is mounted at a path not in `KNOWN_MOUNTS`.
+ * @throws {Error} When a router or a `use()` gate is mounted at an unknown path.
  */
 function gatesIn(stack: StackLayer[], prefix: string, isResolved = false): FoundGate[] {
   const resolver = resolveTenant() as unknown as RequestHandler
   let hasResolvedHere = isResolved
+  const resolvedPaths: string[] = []
+  const isResolvedAt = (path: string): boolean =>
+    hasResolvedHere || resolvedPaths.some((resolved) => path.startsWith(resolved))
   return stack.flatMap((layer) => {
     if (layer.route) {
       const { path, stack: handlers } = layer.route
-      let isRouteResolved = hasResolvedHere
+      let isRouteResolved = isResolvedAt(path)
       return handlers.flatMap(({ handle }) => {
         if (handle === resolver) isRouteResolved = true
         const mark = (handle as unknown as Partial<Record<symbol, FlagGateMark>>)[FLAG_GATE_MARK]
@@ -76,14 +101,22 @@ function gatesIn(stack: StackLayer[], prefix: string, isResolved = false): Found
       })
     }
     if (!Array.isArray(layer.handle.stack)) {
-      if ((layer.handle as unknown) === resolver) hasResolvedHere = true
-      // A gate mounted with `use()` covers every route below its router, so its path is the mount alone.
       const mark = (layer.handle as unknown as Partial<Record<symbol, FlagGateMark>>)[
         FLAG_GATE_MARK
       ]
-      return mark === undefined
-        ? []
-        : [{ path: prefix, mark, isAfterResolveTenant: hasResolvedHere }]
+      const isResolver = (layer.handle as unknown) === resolver
+      if (mark === undefined && !isResolver) return []
+      // A gate mounted with `use()` covers every route under its own path (the router's mount alone for a bare `use()`).
+      const mountPath = useMountOf(layer, stack)
+      if (mark === undefined) {
+        if (mountPath === '') hasResolvedHere = true
+        else if (mountPath !== undefined) resolvedPaths.push(mountPath)
+        return []
+      }
+      if (mountPath === undefined) throw new Error('a gate is mounted at an unknown path')
+      return [
+        { path: `${prefix}${mountPath}`, mark, isAfterResolveTenant: isResolvedAt(mountPath) },
+      ]
     }
     const mount = KNOWN_MOUNTS.find(
       (candidate) => layer.match(candidate) && layer.path === candidate
@@ -201,5 +234,59 @@ describe('requireFlag placement', () => {
     const stack = stackOf(router)
 
     expect(() => gatesIn(stack, '')).toThrow('mounted at an unknown path')
+  })
+})
+
+describe('the walk and a use() layer with its own path', () => {
+  it('accepts a tenant gate mounted with use() on a /:slug/... path after resolveTenant', () => {
+    const router = Router()
+    const inner = Router()
+    inner.use('/:slug/beta', resolveTenant(), requireFlag('example_beta_page'))
+    inner.get('/:slug/beta', noop)
+    router.use('/tenants', inner)
+    const gates = gatesIn(stackOf(router), '')
+    expect(gates).toHaveLength(1)
+    expect(misplaced(gates)).toEqual([])
+  })
+
+  it('reports a tenant gate mounted with use() on a path outside /:slug', () => {
+    const router = Router()
+    const inner = Router()
+    inner.use('/beta', resolveTenant(), requireFlag('example_beta_page'))
+    inner.get('/beta', noop)
+    router.use('/tenants', inner)
+
+    const gates = gatesIn(stackOf(router), '')
+    expect(misplaced(gates)).toEqual([
+      {
+        path: '/tenants/beta',
+        mark: { key: 'example_beta_page', shouldBeOn: true },
+        isAfterResolveTenant: true,
+      },
+    ])
+  })
+
+  it('reports a gate whose resolveTenant was mounted on another path', () => {
+    const router = Router()
+    const inner = Router()
+    inner.use('/:slug/other', resolveTenant())
+    inner.get('/:slug/beta', requireFlag('example_beta_page'), noop)
+    router.use('/tenants', inner)
+
+    const gates = gatesIn(stackOf(router), '')
+    expect(misplaced(gates)).toEqual([
+      {
+        path: '/tenants/:slug/beta',
+        mark: { key: 'example_beta_page', shouldBeOn: true },
+        isAfterResolveTenant: false,
+      },
+    ])
+  })
+
+  it('throws on a gate mounted with use() at a path no route or router sits under', () => {
+    const router = Router()
+    router.use('/nowhere', requireFlag('example_beta_page'))
+
+    expect(() => gatesIn(stackOf(router), '')).toThrow('gate is mounted at an unknown path')
   })
 })
