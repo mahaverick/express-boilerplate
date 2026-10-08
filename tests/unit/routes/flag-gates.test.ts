@@ -54,21 +54,26 @@ const noop: RequestHandler = (_request, response) => {
 /**
  * The paths a middleware mounted with `use()` covers, relative to its router:
  * a single empty path for a bare `use()`. Express 5 keeps no pattern on the
- * layer, so each route of the same router and each known mount is offered to
- * `layer.match()`, and the part that matched (`layer.path`) is kept for every
- * one it matches, so a wildcard or param mount covers all of them whatever
- * the declaration order.
+ * layer, so each route and each sub-router mount of the same router is
+ * offered to `layer.match()`, and the part that matched (`layer.path`) is
+ * kept for every one it matches, so a wildcard or param mount covers all of
+ * them whatever the declaration order. Only this router's own mounts are
+ * offered, never a known mount of another router, which a wildcard could
+ * match by accident.
  * @param layer - A non-router `use()` layer.
- * @param stack - The router's layers, whose routes are the candidates.
+ * @param stack - The router's layers, whose routes and sub-router mounts are the candidates.
  * @returns The covered paths, such as `/:slug/beta`; empty when no route or
- *   known mount sits under the layer.
+ *   sub-router sits under the layer.
  */
 function useMountsOf(layer: StackLayer, stack: StackLayer[]): string[] {
   if (layer.slash) return ['']
-  const candidates = [
-    ...stack.flatMap((sibling) => (sibling.route ? [sibling.route.path] : [])),
-    ...KNOWN_MOUNTS,
-  ]
+  const candidates = stack.flatMap((sibling) => {
+    if (sibling.route) return [sibling.route.path]
+    if (!Array.isArray(sibling.handle.stack)) return []
+    return KNOWN_MOUNTS.filter(
+      (candidate) => sibling.match(candidate) && sibling.path === candidate
+    )
+  })
   const mounts = candidates.flatMap((candidate) =>
     layer.match(candidate) && layer.path !== undefined ? [layer.path] : []
   )
@@ -327,6 +332,35 @@ describe('the walk and a use() layer with its own path', () => {
 
     const paths = gatesIn(stackOf(router), '').map(({ path }) => path)
     expect(paths).toContain('/tenants/:slug')
+  })
+
+  it('accepts a splat use() gate under /:slug in a nested router, which no root mount path can match', () => {
+    const router = Router()
+    const inner = Router()
+    inner.get('/:slug/beta', noop)
+    inner.use('/:slug/{*rest}', resolveTenant(), requireFlag('example_beta_page'))
+    router.use('/tenants', inner)
+
+    const gates = gatesIn(stackOf(router), '')
+    expect(gates.map(({ path }) => path)).toEqual(['/tenants/:slug/beta'])
+    expect(misplaced(gates)).toEqual([])
+  })
+
+  it('records a use() gate in a nested router at the sub-router mount it covers', () => {
+    const router = Router()
+    const platform = Router()
+    platform.use('/users', requireFlag('example_beta_page'))
+    platform.use('/users', Router())
+    router.use('/platform', platform)
+
+    const gates = gatesIn(stackOf(router), '')
+    expect(misplaced(gates)).toEqual([
+      {
+        path: '/platform/users',
+        mark: { key: 'example_beta_page', shouldBeOn: true },
+        isAfterResolveTenant: false,
+      },
+    ])
   })
 
   it('does not count a resolveTenant on /:slug/other for a gate on /:slug/otherwise', () => {
