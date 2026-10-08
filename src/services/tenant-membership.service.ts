@@ -7,6 +7,7 @@
  * owners on the platform tenant); write; revoke the pending invitations the
  * member can no longer stand behind; audit.
  */
+import type { AuditAccess } from '@/constants/audit.constants'
 import {
   MEMBERSHIP_ROLES,
   REASON_REQUIRED_CODE,
@@ -44,7 +45,7 @@ const userMembershipRepository = new UserMembershipRepository()
  * @param role - The member's role.
  * @returns Every role `canActorGrantRole` refuses to `role`.
  */
-function rolesUngrantableBy(role: MembershipRole): MembershipRole[] {
+export function rolesUngrantableBy(role: MembershipRole): MembershipRole[] {
   return MEMBERSHIP_ROLES.filter((offered) => !canActorGrantRole(role, offered))
 }
 
@@ -52,16 +53,16 @@ function rolesUngrantableBy(role: MembershipRole): MembershipRole[] {
  * Record one `invitation.revoked` per revoked invitation, in that
  * invitation's own tenant, under the actor of the change that cost the
  * sender their authority.
- * @param actor - The signed-in user whose change triggered the revoke.
- * @param access - How the actor reached the tenant they changed.
+ * @param actor - The signed-in user whose change triggered the revoke, or `'system'` for a script.
+ * @param access - How the actor reached the tenant they changed; `'system'` for a script.
  * @param revoked - The revoked rows.
  * @param options - The staff reason for the change, recorded on each entry too.
  * @param tx - The change's transaction.
  * @returns Resolves once every entry is written.
  */
 async function auditRevokedInvitations(
-  actor: Actor,
-  access: TenantAccess,
+  actor: Actor | 'system',
+  access: AuditAccess,
   revoked: readonly TenantInvitation[],
   options: StaffReasonOption,
   tx: DbTransaction
@@ -90,8 +91,8 @@ async function auditRevokedInvitations(
  * Revoke the pending invitations `inviterId` sent in this tenant, in the
  * caller's transaction, and record one `invitation.revoked` per invitation
  * under the actor of the change that cost the sender their authority.
- * @param actor - The signed-in user whose change triggers the revoke.
- * @param access - How the actor reached the tenant.
+ * @param actor - The signed-in user whose change triggers the revoke, or `'system'` for a script.
+ * @param access - How the actor reached the tenant; `'system'` for a script.
  * @param tenantId - The tenant.
  * @param inviterId - The member whose invitations go.
  * @param roles - Only offers of these roles; every offer when absent.
@@ -99,9 +100,9 @@ async function auditRevokedInvitations(
  * @param tx - The change's transaction.
  * @returns Resolves once every invitation is revoked and audited.
  */
-async function revokeInvitationsSentIn(
-  actor: Actor,
-  access: TenantAccess,
+export async function revokeInvitationsSentIn(
+  actor: Actor | 'system',
+  access: AuditAccess,
   tenantId: string,
   inviterId: string,
   roles: readonly MembershipRole[] | undefined,
@@ -126,15 +127,16 @@ async function revokeInvitationsSentIn(
  * platform role gives through platform access, or none after a removal; with
  * none, every invitation there goes. Each revoke is audited in its own tenant
  * with `access: 'platform'`: the actor reaches those tenants through
- * platform authority, not membership.
- * @param actor - The signed-in user whose change triggers the revoke.
+ * platform authority, not membership; a script's revokes are audited as
+ * `'system'` with `access: 'system'`.
+ * @param actor - The signed-in user whose change triggers the revoke, or `'system'` for a script.
  * @param inviterId - The staff member whose invitations are checked.
  * @param newPlatformRole - Their platform role after the change; undefined after a removal.
  * @param tx - The change's transaction.
  * @returns Resolves once every invitation is revoked and audited.
  */
-async function revokeInvitationsBeyondAuthorityElsewhere(
-  actor: Actor,
+export async function revokeInvitationsBeyondAuthorityElsewhere(
+  actor: Actor | 'system',
   inviterId: string,
   newPlatformRole: MembershipRole | undefined,
   tx: DbTransaction
@@ -151,7 +153,13 @@ async function revokeInvitationsBeyondAuthorityElsewhere(
       tx
     )
     // No reason: these rows are a side effect of a platform-tenant write, whose caller is a member there.
-    await auditRevokedInvitations(actor, 'platform', revoked, {}, tx)
+    await auditRevokedInvitations(
+      actor,
+      actor === 'system' ? 'system' : 'platform',
+      revoked,
+      {},
+      tx
+    )
   }
 }
 
