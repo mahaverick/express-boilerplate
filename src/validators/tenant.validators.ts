@@ -248,8 +248,10 @@ const LOCALE_PATTERN = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/
 /**
  * Whether `value` names a time zone this runtime knows (an IANA name such as
  * `Europe/Paris`, an alias such as `UTC`, or `Etc/GMT+5`), in the
- * letters-digits-`_+-/` shape. A UTC offset like `+05:30` is refused for its
- * colon: store the zone, not the offset.
+ * letters-digits-`_+-/` shape. Names match case-insensitively, and the
+ * runtime also takes colon-free UTC offsets (`+0530`, `+05`, `-08`), which are
+ * accepted; the colon form `+05:30` is refused by the shape check, though the
+ * runtime would take it.
  * @param value - The trimmed candidate.
  * @returns True when the value is a usable time zone name.
  */

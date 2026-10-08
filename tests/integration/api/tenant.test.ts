@@ -1422,7 +1422,7 @@ describe('/api/v1/tenants', () => {
       ['timezone newline', { timezone: 'UTC\nX' }],
       ['locale bell', { locale: 'en\u{7}' }],
       ['timezone that names no zone', { timezone: 'Not/AZone' }],
-      ['timezone with a colon offset', { timezone: '+05:30' }],
+      ['timezone with a colon offset (shape check)', { timezone: '+05:30' }],
       ['locale with an underscore', { locale: 'en_US' }],
       ['locale that is not a language tag', { locale: 'x-private' }],
     ])('%s', async (_label, body) => {

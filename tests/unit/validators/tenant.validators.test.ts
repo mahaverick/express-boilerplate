@@ -136,16 +136,23 @@ describe('scanJson', () => {
 })
 
 describe('isTimeZoneName', () => {
-  it.each(['UTC', 'Europe/Paris', 'Etc/GMT+5', 'America/Argentina/Buenos_Aires'])(
-    'accepts %s',
+  it.each([
+    'UTC',
+    'Europe/Paris',
+    'Etc/GMT+5',
+    'America/Argentina/Buenos_Aires',
+    'europe/paris',
+    '+0530',
+  ])('accepts %s', (zone) => {
+    expect(isTimeZoneName(zone)).toBe(true)
+  })
+
+  it.each(['Not/AZone', '+05:30', 'Etc/\u{202E}gnp', 'UTC X', '', 'a'.repeat(10_000)])(
+    'refuses %j',
     (zone) => {
-      expect(isTimeZoneName(zone)).toBe(true)
+      expect(isTimeZoneName(zone)).toBe(false)
     }
   )
-
-  it.each(['Not/AZone', '+05:30', 'Etc/\u{202E}gnp', 'UTC X', ''])('refuses %j', (zone) => {
-    expect(isTimeZoneName(zone)).toBe(false)
-  })
 })
 
 describe('isLocaleTag', () => {
