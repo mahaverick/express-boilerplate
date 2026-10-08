@@ -76,6 +76,18 @@ async function revokedAtOf(tokenHash: string): Promise<Date | null | undefined> 
   return row?.revokedAt
 }
 
+/**
+ * Issue a token in `sessionId` and rotate it, so its row carries a `consumed_at`.
+ * @param userId - The owner.
+ * @param sessionId - The session.
+ * @returns The consumed row's token hash.
+ */
+async function consumedHashIn(userId: string, sessionId: string): Promise<string> {
+  const issued = await issueRefreshToken(userId, sessionId)
+  await rotateRefreshToken(issued.raw)
+  return hashToken(issued.raw)
+}
+
 describe('UserTokenRepository', () => {
   const createdUserIds: string[] = []
 
@@ -644,39 +656,50 @@ describe('UserTokenRepository', () => {
   })
 
   describe('isSessionKilled', () => {
-    it('is false for a session holding only a live token', async () => {
+    it('is false for a session holding only a rotated token and its live successor', async () => {
       const userId = await createUser()
       const sessionId = randomUUID()
-      await issueRefreshToken(userId, sessionId)
+      const presented = await consumedHashIn(userId, sessionId)
 
-      expect(await userTokenRepository.isSessionKilled(sessionId)).toBe(false)
-    })
-
-    it('is false after an ordinary rotation: a consumed row is not a kill', async () => {
-      const userId = await createUser()
-      const sessionId = randomUUID()
-      const issued = await issueRefreshToken(userId, sessionId)
-      await rotateRefreshToken(issued.raw)
-
-      expect(await userTokenRepository.isSessionKilled(sessionId)).toBe(false)
+      expect(await userTokenRepository.isSessionKilled(sessionId, presented)).toBe(false)
     })
 
     it('is true once the session is revoked (logout, reuse detection)', async () => {
       const userId = await createUser()
       const sessionId = randomUUID()
-      await issueRefreshToken(userId, sessionId)
+      const presented = await consumedHashIn(userId, sessionId)
       await userTokenRepository.revokeAllForSession(sessionId)
 
-      expect(await userTokenRepository.isSessionKilled(sessionId)).toBe(true)
+      expect(await userTokenRepository.isSessionKilled(sessionId, presented)).toBe(true)
     })
 
     it('is true once every session of the user is revoked (password reset)', async () => {
       const userId = await createUser()
       const sessionId = randomUUID()
-      await issueRefreshToken(userId, sessionId)
+      const presented = await consumedHashIn(userId, sessionId)
       await userTokenRepository.revokeAllForUser(userId)
 
-      expect(await userTokenRepository.isSessionKilled(sessionId)).toBe(true)
+      expect(await userTokenRepository.isSessionKilled(sessionId, presented)).toBe(true)
+    })
+
+    it('ignores a marker revoked before the presented token was consumed: a sibling-only revoke, not a kill of its chain', async () => {
+      const userId = await createUser()
+      const sessionId = randomUUID()
+      const earlier = await issueRefreshToken(userId, sessionId)
+      await sql`update user_tokens set revoked_at = now() where token_hash = ${hashToken(earlier.raw)}`
+      const presented = await consumedHashIn(userId, sessionId)
+
+      expect(await userTokenRepository.isSessionKilled(sessionId, presented)).toBe(false)
+    })
+
+    it('counts a marker revoked after the presented token was consumed', async () => {
+      const userId = await createUser()
+      const sessionId = randomUUID()
+      const presented = await consumedHashIn(userId, sessionId)
+      const later = await issueRefreshToken(userId, sessionId)
+      await sql`update user_tokens set revoked_at = now() where token_hash = ${hashToken(later.raw)}`
+
+      expect(await userTokenRepository.isSessionKilled(sessionId, presented)).toBe(true)
     })
 
     it('ignores another session’s kill marker', async () => {
@@ -684,10 +707,10 @@ describe('UserTokenRepository', () => {
       const killed = randomUUID()
       const untouched = randomUUID()
       await issueRefreshToken(userId, killed)
-      await issueRefreshToken(userId, untouched)
+      const presented = await consumedHashIn(userId, untouched)
       await userTokenRepository.revokeAllForSession(killed)
 
-      expect(await userTokenRepository.isSessionKilled(untouched)).toBe(false)
+      expect(await userTokenRepository.isSessionKilled(untouched, presented)).toBe(false)
     })
   })
 })

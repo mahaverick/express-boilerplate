@@ -331,6 +331,18 @@ describe('POST /api/v1/auth/sessions/revoke-others and a grace sibling', () => {
     expect(await isSessionDenied(caller.head.sessionId)).toBe(true)
   })
 
+  it('keeps the caller’s grace window after ending the sibling: a later two-tab race still gets a sibling', async () => {
+    const user = await createTrackedUser()
+    const caller = await sessionWithSibling(user)
+
+    await revokeOthersWithCookie(caller.bearer, refreshCookieHeader(caller.head.raw))
+
+    expect(await rotatedSessionId(caller.head.raw)).toBe(caller.head.sessionId)
+    // A second tab's racing refresh of the same cookie, inside the grace window.
+    expect(await rotatedSessionId(caller.head.raw)).toBe(caller.head.sessionId)
+    expect(await isSessionDenied(caller.head.sessionId)).toBe(false)
+  })
+
   it('spares the sibling when no refresh cookie is presented', async () => {
     const user = await createTrackedUser()
     const caller = await sessionWithSibling(user)

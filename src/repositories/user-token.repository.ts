@@ -140,19 +140,40 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
   }
 
   /**
-   * Whether a session was explicitly revoked: a row revoked without being consumed (logout, reuse, reset).
+   * Whether the chain of a presented, already-consumed token was killed after
+   * it was consumed: a row of its session revoked without being consumed
+   * (logout, reuse, reset, an account claim, a staff revoke), at or after the
+   * presented row's own `consumed_at`.
+   *
+   * A full kill revokes every live row of the session at once, and a row
+   * revoked then can never be consumed later (`claimOnce` claims only
+   * unrevoked rows), so any kill that reaches the presented chain leaves a
+   * marker no older than its consumption. An older marker is a revoke that
+   * spared this chain: a sibling ended by a password change or sign-out of
+   * other sessions (`revokeAllForUserExceptToken`). Compared on Postgres's
+   * own timestamps, by the presented row's hash, so no client clock or
+   * JavaScript rounding enters.
    * @param sessionId - The session (rotation-chain) id.
+   * @param presentedTokenHash - The hash of the consumed token being replayed; a row without `consumed_at` never matches.
    * @param executor - Where to run the query. Defaults to the pool.
-   * @returns True when any row in the session carries that kill marker.
+   * @returns True when a row in the session carries a kill marker no older than the presented row's consumption.
    */
-  async isSessionKilled(sessionId: string, executor: DbExecutor = db): Promise<boolean> {
+  async isSessionKilled(
+    sessionId: string,
+    presentedTokenHash: string,
+    executor: DbExecutor = db
+  ): Promise<boolean> {
     // claimOnce sets revokedAt AND consumedAt; only explicit revocation sets revokedAt alone.
+    const consumedAt = executor
+      .select({ consumedAt: userTokenModel.consumedAt })
+      .from(userTokenModel)
+      .where(eq(userTokenModel.tokenHash, presentedTokenHash))
     const [row] = await executor
       .select({ id: userTokenModel.id })
       .from(userTokenModel)
       .where(
         this.scope(
-          sql`${userTokenModel.sessionId} = ${sessionId} and ${userTokenModel.revokedAt} is not null and ${userTokenModel.consumedAt} is null`
+          sql`${userTokenModel.sessionId} = ${sessionId} and ${userTokenModel.revokedAt} is not null and ${userTokenModel.consumedAt} is null and ${userTokenModel.revokedAt} >= (${consumedAt})`
         )
       )
       .limit(1)

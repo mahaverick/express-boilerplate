@@ -361,6 +361,8 @@ type RotationOutcome = RotationIssued | RotationRefused
  * Concurrent-refresh grace: a token replayed within REFRESH_REUSE_GRACE_MS of its rotation gets a sibling (accepted trade-off); later reuse revokes the session.
  *
  * A kill that races this check (logout, reuse, a password write, an account claim) takes the user row FOR NO KEY UPDATE, which waits for this rotation's FOR SHARE, so it revokes the sibling this check lets through.
+ *
+ * Only a kill marker at or after the presented row's consumption refuses grace (`isSessionKilled`): an older one is a revoke that spared this chain, such as a sibling a password change or sign-out of other sessions ended, and the session keeps its grace window.
  * @param existing - The already-claimed row the presented token hashes to.
  * @param tx - The rotation's transaction.
  * @returns The session to continue when every grace condition holds and the session was not killed, otherwise undefined.
@@ -381,8 +383,8 @@ async function findGraceSession(
   }
   // claimOnce also consumes expired rows; an expired token must never mint a sibling.
   if (expiresAt.getTime() <= Date.now()) return undefined
-  // Committed kill markers only, so a sibling rotation still in flight can't look like a logout.
-  if (await userTokenRepository.isSessionKilled(sessionId, tx)) return undefined
+  // Committed kill markers since this row's consumption only, so a sibling rotation still in flight can't look like a logout.
+  if (await userTokenRepository.isSessionKilled(sessionId, tokenHash, tx)) return undefined
   return { sessionId, sessionStartedAt, authenticatedAt: existing.authenticatedAt }
 }
 

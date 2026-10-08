@@ -69,9 +69,7 @@ concurrent caller falls into the reuse path below.
 Presenting a token that is **already revoked** (because it was already rotated,
 or already logged out) is reuse. Within `REFRESH_REUSE_GRACE_MS` (10s) of that
 rotation, and only if the session hasn't since been explicitly killed (logout,
-an earlier reuse, a password reset, or a password change or `revoke-others`
-from that session that ended a sibling in it, since any row revoked without
-being consumed marks the session killed), reuse mints a sibling refresh token in the
+an earlier reuse, a password reset), reuse mints a sibling refresh token in the
 same session instead of revoking it — the accepted trade-off that lets two
 legitimate concurrent requests (two tabs refreshing at once) both succeed. Past
 that window, or once the session is killed, reuse revokes every token sharing
@@ -96,7 +94,12 @@ revoked or another session's) spares the caller's whole session, sibling and
 all, as before. The sibling's access tokens carry the caller's session id, so
 they are not denied (that would deny the caller too) and stay valid until they
 expire (`ACCESS_TOKEN_TTL`). The sibling's next refresh is then reuse, which
-ends the whole session, the caller's chain included. With `COOKIE_DOMAIN` set
+ends the whole session, the caller's chain included. Ending the sibling does not
+cost the caller's chain its grace window: only a kill recorded at or after the
+replayed token's rotation refuses grace (`isSessionKilled`), and the sibling's
+revoke is older than any later rotation of the caller's chain. The one
+exception is a replay, within its 10 s window, of a token rotated just before
+that revoke: it is refused as reuse. With `COOKIE_DOMAIN` set
 the cookie is `__Secure-`, which a host under that domain can plant; a planted
 cookie still has to be a live refresh token of the same user and session (in
 practice the thief's own sibling), and then the request spares the thief's
