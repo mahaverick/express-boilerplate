@@ -983,5 +983,20 @@
     "rule": "kv",
     "input": "password%3Dhunter2 horse",
     "expected": "password%3D[redacted] horse"
+  },
+  {
+    "rule": "kv",
+    "input": "Map(1) { 'password' => 'zqS1hunter2' }",
+    "expected": "Map(1) { 'password' => '[redacted]' }"
+  },
+  {
+    "rule": "kv",
+    "input": "URLSearchParams { 'token' => 'zqS2tok9Lm' }",
+    "expected": "URLSearchParams { 'token' => '[redacted]' }"
+  },
+  {
+    "rule": "kv",
+    "input": "password => zqS3hunter2",
+    "expected": "password => [redacted]"
   }
 ]
