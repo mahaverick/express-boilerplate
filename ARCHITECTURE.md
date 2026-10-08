@@ -1189,21 +1189,34 @@ customer write answers 503 `READ_ONLY_MODE`; reads and jobs keep running).
   resume still happens.
 - **Changing it.** `PUT /api/v1/platform/maintenance-mode` (owner, step-up,
   `maintenance-mode-change` limiter). Switching on or escalating needs a
-  reason and `confirm` equal to `APP_ENV`; every change to a mode that stays
-  on, a message edit or a de-escalation included, still needs a message, and
-  switching off needs nothing more. `since` is when the mode last changed, and
-  `changedBy` is who set it: a save that keeps the mode (a message edit) leaves
-  both, and leaves the stored reason too unless the body sends a new one. A
-  change of mode stores the reason sent (none if absent) and the actor. After
-  the commit it publishes, queues a notice (in-app and email, type and template
-  `maintenance_mode_changed`) to every other platform owner and admin for a
-  switch-on, an escalation or a switch-off, and entering `full` waits for them
+  reason (`reason: null` is refused like a missing one) and `confirm` equal to
+  `APP_ENV`; every change to a mode that stays on, a save that keeps the mode
+  or a de-escalation included, still needs a message, and switching off needs
+  nothing more. A save that keeps the mode is a no-op, answered with the
+  current state and nothing written, when it changes nothing: the same
+  message, and no reason sent or the stored one sent again. A save that keeps
+  `off` is always a no-op. Any other save, one that changes only the reason
+  included, increments `version`, writes an audit entry and publishes.
+  `since` is when the mode last changed, and `changedBy` is who set it: a
+  save that keeps the mode leaves both, and leaves the stored reason unless
+  the body sends one; a reason replaces it and `reason: null` clears it. A
+  change of mode stores the reason sent (none if absent or `null`) and the
+  actor. The audit entry (`platform.maintenance_mode_changed`) records `from`,
+  `to`, the `reason` sent (null when none was), `messageChanged` and
+  `reasonChanged`: whether the stored reason after the save differs from the
+  one before, so a clear is told from a keep (entries written before the key
+  existed lack it). After the commit it publishes, queues a notice (in-app and
+  email, type and template `maintenance_mode_changed`) to every other platform
+  owner and admin for a switch-on, an escalation or a switch-off (never for a
+  save that keeps the mode), and entering `full` waits for them
   until `MAINTENANCE_MODE_NOTICE_WAIT_MS` after the commit, then pauses the
   queues unless a later change has superseded this one. The type is staff-only
   (`STAFF_ONLY_NOTIFICATION_TYPES`): a user with no platform membership does not
   see it in `GET /notifications/preferences`. `GET` shows the state, the queues
   and the environment name; `GET /platform/system/status` has a `maintenance`
-  section; `GET /api/v1/status/maintenance` is public (120 a minute per IP,
+  section, whose `since` is null while off and whose `changedAt` is when the
+  mode last changed in every mode, `off` included (null only until the
+  replica first reads the row); `GET /api/v1/status/maintenance` is public (120 a minute per IP,
   cacheable for 5 s).
   Once the row has committed, a failed notice lookup or read-back is logged and
   the request still answers 200 with the committed state (the actor's name then
