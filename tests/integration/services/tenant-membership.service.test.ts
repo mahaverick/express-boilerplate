@@ -95,6 +95,49 @@ async function pendingFrom(tenant: Tenant, inviter: User, role: MembershipRole):
   return invitation.id
 }
 
+/**
+ * Start two service calls whose transactions both reach `lockOwners` before
+ * either takes it, and report how each ended.
+ * @param start - Starts the two calls.
+ * @returns How many calls reached `lockOwners`, and each call's outcome, in call order.
+ */
+async function meetingAtLockOwners(
+  start: () => Promise<unknown>[]
+): Promise<{ arrivals: number; outcomes: (string | number)[] }> {
+  // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
+  const realLockOwners = UserMembershipRepository.prototype.lockOwners
+  let arrivals = 0
+  let releaseBarrier: () => void
+  // eslint-disable-next-line unicorn/prefer-promise-with-resolvers -- tsconfig.json pins `lib: ["ES2023"]`; `Promise.withResolvers` is ES2024 and untyped under it.
+  const barrier = new Promise<void>((resolve) => {
+    releaseBarrier = resolve
+  })
+  const meetingLockOwners: typeof realLockOwners = async function (
+    this: UserMembershipRepository,
+    ...parameters: Parameters<typeof realLockOwners>
+  ) {
+    arrivals += 1
+    if (arrivals >= 2) releaseBarrier()
+    await Promise.race([
+      barrier,
+      settle(1000, 'fallback only: both callers arrive before either takes the owner lock'),
+    ])
+    return realLockOwners.apply(this, parameters)
+  }
+
+  let outcomes: (string | number)[] = []
+  await withMutatedMethod(
+    UserMembershipRepository.prototype,
+    'lockOwners',
+    meetingLockOwners,
+    async () => {
+      const settled = await Promise.allSettled(start())
+      outcomes = settled.map((result) => outcomeOf(result))
+    }
+  )
+  return { arrivals, outcomes }
+}
+
 describe('tenant-membership.service', () => {
   const createdTenantIds: string[] = []
   const createdUserIds: string[] = []
@@ -154,40 +197,10 @@ describe('tenant-membership.service', () => {
       role: 'manager',
     })
 
-    // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
-    const realLockOwners = UserMembershipRepository.prototype.lockOwners
-    let arrivals = 0
-    let releaseBarrier: () => void
-    // eslint-disable-next-line unicorn/prefer-promise-with-resolvers -- tsconfig.json pins `lib: ["ES2023"]`; `Promise.withResolvers` is ES2024 and untyped under it.
-    const barrier = new Promise<void>((resolve) => {
-      releaseBarrier = resolve
-    })
-    const meetingLockOwners: typeof realLockOwners = async function (
-      this: UserMembershipRepository,
-      ...parameters: Parameters<typeof realLockOwners>
-    ) {
-      arrivals += 1
-      if (arrivals >= 2) releaseBarrier()
-      await Promise.race([
-        barrier,
-        settle(1000, 'fallback only: both callers arrive before either takes the owner lock'),
-      ])
-      return realLockOwners.apply(this, parameters)
-    }
-
-    let outcomes: (string | number)[] = []
-    await withMutatedMethod(
-      UserMembershipRepository.prototype,
-      'lockOwners',
-      meetingLockOwners,
-      async () => {
-        const settled = await Promise.allSettled([
-          changeRole({ userId: ownerA.id }, tenant.id, managerB.id, 'owner'),
-          changeRole({ userId: managerB.id }, tenant.id, ownerA.id, 'viewer'),
-        ])
-        outcomes = settled.map((result) => outcomeOf(result))
-      }
-    )
+    const { arrivals, outcomes } = await meetingAtLockOwners(() => [
+      changeRole({ userId: ownerA.id }, tenant.id, managerB.id, 'owner'),
+      changeRole({ userId: managerB.id }, tenant.id, ownerA.id, 'viewer'),
+    ])
 
     expect(arrivals).toBe(2)
     expect(outcomes).toEqual(['fulfilled', 403])
@@ -496,5 +509,62 @@ describe('tenant-membership.service', () => {
 
     const rows = await sql`select 1 from audit_logs where action = 'member.left'`
     expect(rows).toHaveLength(0)
+  })
+
+  it('refuses the platform tenant’s only active owner a leave 409 LAST_OWNER: an inactive co-owner does not count', async () => {
+    const leaver = await createUser()
+    const inactiveOwner = await createUser()
+    const platform = await platformTenant()
+    await makeStaff(leaver.id, 'owner')
+    await makeStaff(inactiveOwner.id, 'owner')
+    await sql`update users set active = false where id = ${inactiveOwner.id}`
+    // Other suites in this worker's database may have left active platform owners; park them.
+    const parked = await sql<{ id: string }[]>`
+      update users set active = false
+      where active and id <> ${leaver.id} and id in (
+        select m.user_id from user_memberships m join tenants t on t.id = m.tenant_id
+        where t.is_platform and m.role = 'owner')
+      returning id`
+
+    try {
+      await expect(
+        leaveTenant({ userId: leaver.id }, platform.id, { isPlatformTenant: true })
+      ).rejects.toMatchObject({ statusCode: 409, code: 'LAST_OWNER' })
+    } finally {
+      await sql`update users set active = true where id = any(${parked.map((row) => row.id)})`
+    }
+
+    const kept = await userMembershipRepository.findByUserAndTenant(leaver.id, platform.id)
+    expect(kept?.role).toBe('owner')
+    expect(await sql`select 1 from audit_logs where action = 'member.left'`).toHaveLength(0)
+  })
+
+  /**
+   * Two co-owners leave at once. Both transactions are open and meet at
+   * `lockOwners` before either takes it; the owner lock serializes them, so
+   * the second sees one owner left and is refused.
+   */
+  it('lets only one of two co-owners leaving together go: the other gets 409 LAST_OWNER and the tenant keeps an owner', async () => {
+    const ownerA = await createUser()
+    const ownerB = await createUser()
+    const tenant = await createTenant(ownerA)
+    await userMembershipRepository.create({ userId: ownerB.id, tenantId: tenant.id, role: 'owner' })
+
+    const { arrivals, outcomes } = await meetingAtLockOwners(() => [
+      leaveTenant({ userId: ownerA.id }, tenant.id),
+      leaveTenant({ userId: ownerB.id }, tenant.id),
+    ])
+
+    expect(arrivals).toBe(2)
+    expect(outcomes.toSorted((a, b) => String(a).localeCompare(String(b)))).toEqual([
+      409,
+      'fulfilled',
+    ])
+    const owners = await sql<{ user_id: string }[]>`
+      select user_id from user_memberships where tenant_id = ${tenant.id} and role = 'owner'`
+    expect(owners).toHaveLength(1)
+    const left =
+      await sql`select 1 from audit_logs where tenant_id = ${tenant.id} and action = 'member.left'`
+    expect(left).toHaveLength(1)
   })
 })
