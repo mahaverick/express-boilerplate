@@ -402,6 +402,7 @@ describe('email.worker', () => {
             const stored = await getEmailQueue().getJob(jobId)
             expect(stored?.attemptsMade).toBe(2)
             expect(stored?.data).toMatchObject({
+              to: '[redacted]',
               templateKey: 'password_reset',
               variables: { firstName: 'Ada', resetUrl: '[redacted]', appName: 'Test App' },
             })

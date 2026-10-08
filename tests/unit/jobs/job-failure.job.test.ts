@@ -111,6 +111,32 @@ describe('scrubJobData', () => {
     })
   })
 
+  it("redacts an email job's recipient and a notification's paired email's, keeping the rest", () => {
+    const emailJob = {
+      to: 'jane@example.com',
+      templateKey: 'password_reset',
+      messageId: 'm1',
+      variables: { firstName: 'Ada', resetUrl: 'https://x.test/r?token=secret' },
+    }
+    const notificationJob = {
+      userId: 'u1',
+      type: 'verify_email',
+      email: { to: 'jane@example.com', cc: 'ops@example.com', templateKey: 'email_verification' },
+    }
+
+    expect(scrubJobData(emailJob)).toEqual({
+      to: '[redacted]',
+      templateKey: 'password_reset',
+      messageId: 'm1',
+      variables: { firstName: 'Ada', resetUrl: '[redacted]' },
+    })
+    expect(scrubJobData(notificationJob)).toEqual({
+      userId: 'u1',
+      type: 'verify_email',
+      email: { to: '[redacted]', cc: '[redacted]', templateKey: 'email_verification' },
+    })
+  })
+
   it('returns a copy and leaves its argument untouched', () => {
     const data = { variables: { resetUrl: 'https://x.test/r' } }
     const scrubbed = scrubJobData(data)

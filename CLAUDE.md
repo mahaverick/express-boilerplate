@@ -79,7 +79,8 @@ rather than repeating them.
 - **A worker's `failed` handler must never reject:** an unhandled rejection
   exits the process. A retryable attempt logs `warn`; the last one calls
   `recordPermanentFailure` (`src/jobs/job-failure.job.ts`), which scrubs every
-  `…Url`/`…Token` key and logs `job failed permanently` once. BullMQ counts
+  `…Url`/`…Token` key and every address (`to`, `cc`, `bcc`, `replyTo`,
+  `recipient`) and logs `job failed permanently` once. BullMQ counts
   the attempt before it emits `failed`, so the terminal test is
   `attemptsMade >= attempts`, not `+ 1`. A test that reads the scrubbed data
   waits for the log line (`waitForLoggedCall`, `tests/helpers/queue-jobs.ts`),
