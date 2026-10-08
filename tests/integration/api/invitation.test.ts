@@ -234,6 +234,21 @@ async function resendVia(slug: string, bearer: string, invitationId: string): Pr
     .set('Authorization', `Bearer ${bearer}`)
 }
 
+/**
+ * Whether an invitation is still pending under its original link: not
+ * revoked, not accepted, and its token hash unchanged (a resend replaces it).
+ * @param invitationId - The invitation.
+ * @param rawToken - The link's raw token when it was seeded.
+ * @returns True when nothing touched it.
+ */
+async function isStillPending(invitationId: string, rawToken: string): Promise<boolean> {
+  const [row] = await sql<{ untouched: boolean }[]>`
+    select revoked_at is null and accepted_at is null and token_hash = ${hashToken(rawToken)}
+      as untouched
+    from tenant_invitations where id = ${invitationId}`
+  return row?.untouched === true
+}
+
 describe('invitations API', () => {
   const createdTenantIds: string[] = []
   const createdUserIds: string[] = []
@@ -292,6 +307,27 @@ describe('invitations API', () => {
     const { user: owner, token: ownerToken } = await createUser()
     const tenant = await createTenant(owner.id)
     return { owner, ownerToken, tenant }
+  }
+
+  /**
+   * A tenant with one pending invitation, and two callers with no
+   * membership in it: a signed-in stranger and another tenant's owner.
+   * @returns The tenant, the invitation id and the two outsiders' tokens.
+   */
+  async function outsiders(): Promise<{
+    tenant: Tenant
+    invitationId: string
+    rawToken: string
+    tokens: [string, string]
+  }> {
+    const { owner, tenant } = await setup()
+    const { invitationId, rawToken } = await seedInvitation(tenant, owner, {
+      email: uniqueEmail(),
+    })
+    const { token: strangerToken } = await createUser()
+    const { user: otherOwner, token: otherOwnerToken } = await createUser()
+    await createTenant(otherOwner.id)
+    return { tenant, invitationId, rawToken, tokens: [strangerToken, otherOwnerToken] }
   }
 
   describe('POST /api/v1/tenants/:slug/invitations', () => {
@@ -895,6 +931,56 @@ describe('invitations API', () => {
         .delete(`/api/v1/tenants/${tenant.slug}/invitations/${invitationId}`)
         .set('Authorization', `Bearer ${ownerToken}`)
       expect(again.status).toBe(404)
+    })
+  })
+
+  describe('a caller outside the tenant', () => {
+    it('404s GET /tenants/:slug/invitations for a non-member and for another tenant’s owner', async () => {
+      const { tenant, tokens } = await outsiders()
+      for (const token of tokens) {
+        const response = await request(app)
+          .get(`/api/v1/tenants/${tenant.slug}/invitations`)
+          .set('Authorization', `Bearer ${token}`)
+        expect(response.status).toBe(404)
+        expect(envelopeOf(response).message).toBe('Tenant not found')
+      }
+    })
+
+    it('404s POST /tenants/:slug/invitations for a non-member and for another tenant’s owner, creating nothing', async () => {
+      const { tenant, tokens } = await outsiders()
+      const email = uniqueEmail()
+      for (const token of tokens) {
+        const response = await inviteVia(tenant.slug, token, { email, role: 'viewer' })
+        expect(response.status).toBe(404)
+        expect(envelopeOf(response).message).toBe('Tenant not found')
+      }
+      expect(
+        await sql`select 1 from tenant_invitations where tenant_id = ${tenant.id} and email = ${email}`
+      ).toHaveLength(0)
+    })
+
+    it('404s POST /tenants/:slug/invitations/:id/resend for a non-member, leaving the invitation alone', async () => {
+      const { tenant, invitationId, rawToken, tokens } = await outsiders()
+      for (const token of tokens) {
+        const response = await request(app)
+          .post(`/api/v1/tenants/${tenant.slug}/invitations/${invitationId}/resend`)
+          .set('Authorization', `Bearer ${token}`)
+        expect(response.status).toBe(404)
+        expect(envelopeOf(response).message).toBe('Tenant not found')
+      }
+      expect(await isStillPending(invitationId, rawToken)).toBe(true)
+    })
+
+    it('404s DELETE /tenants/:slug/invitations/:id for a non-member, leaving the invitation pending', async () => {
+      const { tenant, invitationId, rawToken, tokens } = await outsiders()
+      for (const token of tokens) {
+        const response = await request(app)
+          .delete(`/api/v1/tenants/${tenant.slug}/invitations/${invitationId}`)
+          .set('Authorization', `Bearer ${token}`)
+        expect(response.status).toBe(404)
+        expect(envelopeOf(response).message).toBe('Tenant not found')
+      }
+      expect(await isStillPending(invitationId, rawToken)).toBe(true)
     })
   })
 

@@ -55,6 +55,17 @@ async function ownedTenant(): Promise<{ owner: User; ownerToken: string; tenant:
 }
 
 /**
+ * Two signed-in callers with no membership in a fresh tenant: a stranger and
+ * another tenant's owner.
+ * @returns Their tokens.
+ */
+async function outsiderTokens(): Promise<string[]> {
+  const stranger = await createTrackedUser()
+  const { ownerToken: otherOwnerToken } = await ownedTenant()
+  return [tokenFor(stranger), otherOwnerToken]
+}
+
+/**
  * A new member of `tenant` with `role`, and their token.
  * @param tenant - The tenant.
  * @param role - Their role.
@@ -341,4 +352,38 @@ describe('POST /tenants/:slug/onboarding/dismiss and /undismiss', () => {
 
     expect([response.status, codeOf(response)]).toEqual([409, 'not_tracked'])
   })
+})
+
+describe('a caller outside the tenant', () => {
+  it('answers 404 to GET onboarding for a stranger and for another tenant’s owner', async () => {
+    const { tenant } = await ownedTenant()
+    const tokens = await outsiderTokens()
+    for (const token of tokens) {
+      const response = await readOnboarding(tenant, token)
+      expect(response.status).toBe(404)
+      expect((response.body as { message: string }).message).toBe('Tenant not found')
+    }
+  })
+
+  it.each(['/steps/read_getting_started/complete', '/dismiss', '/undismiss'])(
+    'answers 404 to POST %s, and writes nothing',
+    async (path) => {
+      const { tenant } = await ownedTenant()
+      if (path === '/undismiss') {
+        await sql`update tenants set onboarding_dismissed_at = now() where id = ${tenant.id}`
+      }
+      const tokens = await outsiderTokens()
+      for (const token of tokens) {
+        const response = await postOnboarding(tenant, path, token)
+        expect(response.status).toBe(404)
+        expect((response.body as { message: string }).message).toBe('Tenant not found')
+      }
+      expect(
+        await sql`select 1 from onboarding_completions where tenant_id = ${tenant.id}`
+      ).toHaveLength(0)
+      expect(
+        await sql`select 1 from audit_logs where tenant_id = ${tenant.id} and action like 'onboarding.%'`
+      ).toHaveLength(0)
+    }
+  )
 })
