@@ -79,14 +79,16 @@ once, so a second presentation outside the grace window means someone else has
 it. An expired-but-not-yet-rotated token is simply revoked, not treated as
 reuse — nothing else in that session is implicated by an expiry. A sibling minted
 inside the grace window is a **permanent second chain**. It shares the session,
-and rotates on its own until `SESSION_ABSOLUTE_TTL` or until that session ends:
-a logout from either chain, a password reset, a password change or
-`POST /auth/sessions/revoke-others` made from another session, a Google account
-claim, or a staff sign-out, deactivation or deletion. A password change or
-`revoke-others` made from that session spares it, since each spares the caller's
-whole session. Reuse detection never catches it, unless a token one of the two
-chains already consumed is replayed after the window. The window is 10 s, so a
-thief must replay within 10 s of the real client's rotation to get one.
+and rotates on its own until `SESSION_ABSOLUTE_TTL`, until it goes unused for
+`REFRESH_TOKEN_TTL`, or until that session ends: a logout from either chain, a
+password reset, a password change or `POST /auth/sessions/revoke-others` made
+from another session, a Google account claim, a staff sign-out, deactivation or
+deletion, or a sign-in in a browser that presents either chain's cookie. A
+password change or `revoke-others` made from that session spares it, since each
+spares the caller's whole session. Reuse detection never catches it, unless a
+token one of the two chains already consumed is replayed after the window. The
+window is 10 s, so a thief must replay within 10 s of the real client's rotation
+to get one.
 
 A refresh answered 401 clears the cookie it read, in the same forms the
 logout clear uses for that name, so the browser stops presenting a dead token
@@ -99,12 +101,19 @@ or Google sign-in in another tab that lands while a dead-cookie refresh is in
 flight: the 401 clears by name, so the new cookie goes too, and the user
 signs in again. The limiter's 429 and a 5xx clear nothing.
 
-Signing in again in the same browser ends the session of any refresh cookie
-that browser still presents, current or legacy name (`revokePresentedSessions`,
-run after `login` and the Google callback issue the new session, as logout
-does). Without it the overwritten cookie's session stays refreshable for up to
+Signing in again in the same browser ends the session of any refresh cookie that
+browser still presents, current or legacy name (`revokePresentedSessions`, run
+after `login` and the Google callback issue the new session, as logout does).
+Without it the overwritten cookie's session stays refreshable for up to
 `REFRESH_TOKEN_TTL`, outlives the user's next logout, and can never trip reuse
-detection, so a thief holding it would rotate it alone.
+detection, so a thief holding it would rotate it alone. A Google sign-in sees
+only the cookie its cross-site return carries, a `Lax` one from an earlier
+Google sign-in. A `Strict` cookie from a password login is withheld, so that
+session is not ended, and the new cookie then replaces it in the browser, so the
+user can no longer log out of it there: it stays refreshable until it lapses
+(`REFRESH_TOKEN_TTL` unused, or `SESSION_ABSOLUTE_TTL`) or something ends the
+user's other sessions (a password change or `revoke-others` from the new
+session, a password reset, or a staff sign-out).
 
 ### Session lifetime: a sliding window AND an absolute ceiling
 
@@ -212,7 +221,7 @@ Every path that locks the user row:
 
 | Path                                                                                            | User row lock       | Why                                                                                                                                                                                                                        |
 | ----------------------------------------------------------------------------------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Password change, password reset, sign out other sessions                                        | `FOR NO KEY UPDATE` | Writes the hash and revokes sessions atomically                                                                                                                                                                            |
+| Password change, password reset, sign out other sessions                                        | `FOR NO KEY UPDATE` | Writes the hash (a password change or reset) and revokes sessions atomically                                                                                                                                               |
 | Google account claim, logout, reuse kill, lifetime kill                                         | `FOR NO KEY UPDATE` | Revokes sessions so no rotation in flight survives                                                                                                                                                                         |
 | Step-up (`markSessionReauthenticated`, `POST /auth/reauthenticate`)                             | `FOR NO KEY UPDATE` | Re-checks the account is active and moves the session's `authenticated_at`                                                                                                                                                 |
 | Login (after the password compare), Google sign-in (after the account lookup), refresh rotation | `FOR SHARE`         | Issues a token only against the hash, account state and session state it checked: login and Google sign-in re-check `active` under the lock, so a deactivation or deletion that committed since the first read answers 401 |
@@ -389,38 +398,38 @@ are under `/api/v1`; a `user` key is the authenticated user's id, and an
 `email (HMAC)` key is a keyed digest of the submitted `email`, trimmed and
 lowercased (below).
 
-| Route                                                                                                                                                                                                                                                                                                                                                               | Limiter (`rl:` prefix)                           | Limit                                             | Key                         |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ | ------------------------------------------------- | --------------------------- |
-| `POST /auth/register`                                                                                                                                                                                                                                                                                                                                               | `register`                                       | 100 per hour                                      | IP                          |
-| `POST /auth/login`, in this order                                                                                                                                                                                                                                                                                                                                   | `login`                                          | 5 per 15 minutes                                  | IP + submitted email (HMAC) |
-|                                                                                                                                                                                                                                                                                                                                                                     | `login-ip`                                       | 100 per 15 minutes                                | IP                          |
-|                                                                                                                                                                                                                                                                                                                                                                     | `login-account`                                  | 100 per hour (refused, well-formed attempts only) | email (HMAC)                |
-| `POST /auth/refresh`                                                                                                                                                                                                                                                                                                                                                | `refresh`                                        | 300 per 5 minutes                                 | IP                          |
-| `POST /auth/logout`                                                                                                                                                                                                                                                                                                                                                 | `logout`                                         | 300 per 5 minutes                                 | IP                          |
-| `POST /auth/verify-email`                                                                                                                                                                                                                                                                                                                                           | `verify-email`                                   | 30 per 15 minutes                                 | IP                          |
-| `POST /auth/resend-verification`                                                                                                                                                                                                                                                                                                                                    | `resend-verification-ip`                         | 5 per hour                                        | IP                          |
-|                                                                                                                                                                                                                                                                                                                                                                     | `resend-verification-email`                      | 20 per hour                                       | email (HMAC)                |
-| `POST /auth/forgot-password`                                                                                                                                                                                                                                                                                                                                        | `forgot-password-ip`                             | 5 per hour                                        | IP                          |
-| `POST /auth/reset-password`                                                                                                                                                                                                                                                                                                                                         | `reset-password`                                 | 10 per 15 minutes                                 | IP                          |
-| `POST /auth/change-password`                                                                                                                                                                                                                                                                                                                                        | `change-password`                                | 5 per 15 minutes                                  | user                        |
-| `POST /auth/sessions/revoke-others`                                                                                                                                                                                                                                                                                                                                 | `revoke-other-sessions`                          | 10 per hour                                       | user                        |
-| `GET /auth/google` (when Google sign-in is on)                                                                                                                                                                                                                                                                                                                      | `google-oauth`                                   | 300 per 5 minutes                                 | IP                          |
-| `GET /auth/google/callback` (same)                                                                                                                                                                                                                                                                                                                                  | `google-oauth-callback`                          | 300 per 5 minutes                                 | IP                          |
-| `POST /tenants`                                                                                                                                                                                                                                                                                                                                                     | `create-tenant`                                  | 20 per hour                                       | user                        |
-| `POST /tenants/:slug/invitations`, `POST …/invitations/:id/resend`                                                                                                                                                                                                                                                                                                  | `invite-tenant-member`, one shared budget        | 30 per hour                                       | user                        |
-| `POST /invitations/preview`                                                                                                                                                                                                                                                                                                                                         | `invitation-preview`                             | 60 per 15 minutes                                 | IP                          |
-| `POST /invitations/accept` (after `requireAuth`)                                                                                                                                                                                                                                                                                                                    | `invitation-accept`                              | 20 per 15 minutes                                 | user                        |
-| `POST /auth/reauthenticate` (after the staff check)                                                                                                                                                                                                                                                                                                                 | `reauthenticate`                                 | 5 per 15 minutes                                  | user                        |
-| `GET /platform/tenants`, `GET /platform/tenants/:id`, `GET /platform/users`, `GET /platform/users/:id`, `GET /platform/stats`, `GET /platform/flags`, the `/platform/emails*`, `/platform/email-suppressions`, `/platform/onboarding/*` and `/platform/tenants/:id/onboarding` reads (after the staff check), and `GET /platform/audit-log` (after the admin check) | `platform-search`, one shared budget             | 60 per minute                                     | user                        |
-| `GET /platform/users/:id/timeline`, `GET /platform/tenants/:id/timeline`, their Errors views and `GET /platform/flags/evaluate` (after the admin check)                                                                                                                                                                                                             | `platform-timeline`, one shared budget           | 20 per minute                                     | user                        |
-| Every `/platform` write (after the staff check)                                                                                                                                                                                                                                                                                                                     | `platform-write`, one shared budget              | 30 per minute                                     | user                        |
-| `POST /webhooks/email/:provider`, in this order (public; the provider is checked first)                                                                                                                                                                                                                                                                             | `email-webhook-rejected` (failed responses only) | 60 per minute                                     | IP                          |
-|                                                                                                                                                                                                                                                                                                                                                                     | `email-webhook` (accepted requests only)         | 3000 per minute                                   | provider                    |
-| `POST /flags/exposures`, `POST /tenants/:slug/flags/exposures`, `POST /platform/me/flags/exposures`                                                                                                                                                                                                                                                                 | `flag-exposure`, one budget on Redis             | 60 per minute                                     | session (`sid`), else user  |
-| `GET /status/maintenance` (public)                                                                                                                                                                                                                                                                                                                                  | `maintenance-status`                             | 120 per minute                                    | IP                          |
-| `PUT /platform/maintenance-mode` (after the owner and step-up checks)                                                                                                                                                                                                                                                                                               | `maintenance-mode-change`                        | 10 per minute                                     | user                        |
-| `/collect/*`, every method (public; the PostHog proxy)                                                                                                                                                                                                                                                                                                              | `analytics-proxy`                                | 3000 per minute                                   | IP                          |
-| Every other authenticated write (below)                                                                                                                                                                                                                                                                                                                             | `authenticated-write`                            | 60 per minute                                     | user                        |
+| Route                                                                                                                                                                                                                                                                                                                                                                                                                                      | Limiter (`rl:` prefix)                           | Limit                                             | Key                         |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------ | ------------------------------------------------- | --------------------------- |
+| `POST /auth/register`                                                                                                                                                                                                                                                                                                                                                                                                                      | `register`                                       | 100 per hour                                      | IP                          |
+| `POST /auth/login`, in this order                                                                                                                                                                                                                                                                                                                                                                                                          | `login`                                          | 5 per 15 minutes                                  | IP + submitted email (HMAC) |
+|                                                                                                                                                                                                                                                                                                                                                                                                                                            | `login-ip`                                       | 100 per 15 minutes                                | IP                          |
+|                                                                                                                                                                                                                                                                                                                                                                                                                                            | `login-account`                                  | 100 per hour (refused, well-formed attempts only) | email (HMAC)                |
+| `POST /auth/refresh`                                                                                                                                                                                                                                                                                                                                                                                                                       | `refresh`                                        | 300 per 5 minutes                                 | IP                          |
+| `POST /auth/logout`                                                                                                                                                                                                                                                                                                                                                                                                                        | `logout`                                         | 300 per 5 minutes                                 | IP                          |
+| `POST /auth/verify-email`                                                                                                                                                                                                                                                                                                                                                                                                                  | `verify-email`                                   | 30 per 15 minutes                                 | IP                          |
+| `POST /auth/resend-verification`                                                                                                                                                                                                                                                                                                                                                                                                           | `resend-verification-ip`                         | 5 per hour                                        | IP                          |
+|                                                                                                                                                                                                                                                                                                                                                                                                                                            | `resend-verification-email`                      | 20 per hour                                       | email (HMAC)                |
+| `POST /auth/forgot-password`                                                                                                                                                                                                                                                                                                                                                                                                               | `forgot-password-ip`                             | 5 per hour                                        | IP                          |
+| `POST /auth/reset-password`                                                                                                                                                                                                                                                                                                                                                                                                                | `reset-password`                                 | 10 per 15 minutes                                 | IP                          |
+| `POST /auth/change-password`                                                                                                                                                                                                                                                                                                                                                                                                               | `change-password`                                | 5 per 15 minutes                                  | user                        |
+| `POST /auth/sessions/revoke-others`                                                                                                                                                                                                                                                                                                                                                                                                        | `revoke-other-sessions`                          | 10 per hour                                       | user                        |
+| `GET /auth/google` (when Google sign-in is on)                                                                                                                                                                                                                                                                                                                                                                                             | `google-oauth`                                   | 300 per 5 minutes                                 | IP                          |
+| `GET /auth/google/callback` (same)                                                                                                                                                                                                                                                                                                                                                                                                         | `google-oauth-callback`                          | 300 per 5 minutes                                 | IP                          |
+| `POST /tenants`                                                                                                                                                                                                                                                                                                                                                                                                                            | `create-tenant`                                  | 20 per hour                                       | user                        |
+| `POST /tenants/:slug/invitations`, `POST …/invitations/:id/resend`                                                                                                                                                                                                                                                                                                                                                                         | `invite-tenant-member`, one shared budget        | 30 per hour                                       | user                        |
+| `POST /invitations/preview`                                                                                                                                                                                                                                                                                                                                                                                                                | `invitation-preview`                             | 60 per 15 minutes                                 | IP                          |
+| `POST /invitations/accept` (after `requireAuth`)                                                                                                                                                                                                                                                                                                                                                                                           | `invitation-accept`                              | 20 per 15 minutes                                 | user                        |
+| `POST /auth/reauthenticate` (after the staff check)                                                                                                                                                                                                                                                                                                                                                                                        | `reauthenticate`                                 | 5 per 15 minutes                                  | user                        |
+| `GET /platform/tenants`, `GET /platform/tenants/:id`, `GET /platform/users`, `GET /platform/users/:id`, `GET /platform/stats`, `GET /platform/flags`, the `/platform/emails*`, `/platform/email-suppressions`, `/platform/onboarding/*` and `/platform/tenants/:id/onboarding` reads and `GET /platform/maintenance-mode` (after the staff check), and `GET /platform/system/status` and `GET /platform/audit-log` (after the admin check) | `platform-search`, one shared budget             | 60 per minute                                     | user                        |
+| `GET /platform/users/:id/timeline`, `GET /platform/tenants/:id/timeline`, their Errors views and `GET /platform/flags/evaluate` (after the admin check)                                                                                                                                                                                                                                                                                    | `platform-timeline`, one shared budget           | 20 per minute                                     | user                        |
+| Every `/platform` write (after the staff check)                                                                                                                                                                                                                                                                                                                                                                                            | `platform-write`, one shared budget              | 30 per minute                                     | user                        |
+| `POST /webhooks/email/:provider`, in this order (public; the provider is checked first)                                                                                                                                                                                                                                                                                                                                                    | `email-webhook-rejected` (failed responses only) | 60 per minute                                     | IP                          |
+|                                                                                                                                                                                                                                                                                                                                                                                                                                            | `email-webhook` (accepted requests only)         | 3000 per minute                                   | provider                    |
+| `POST /flags/exposures`, `POST /tenants/:slug/flags/exposures`, `POST /platform/me/flags/exposures`                                                                                                                                                                                                                                                                                                                                        | `flag-exposure`, one budget on Redis             | 60 per minute                                     | session (`sid`), else user  |
+| `GET /status/maintenance` (public)                                                                                                                                                                                                                                                                                                                                                                                                         | `maintenance-status`                             | 120 per minute                                    | IP                          |
+| `PUT /platform/maintenance-mode` (after the owner and step-up checks)                                                                                                                                                                                                                                                                                                                                                                      | `maintenance-mode-change`                        | 10 per minute                                     | user                        |
+| `/collect/*`, every method (public; the PostHog proxy)                                                                                                                                                                                                                                                                                                                                                                                     | `analytics-proxy`                                | 3000 per minute                                   | IP                          |
+| Every other authenticated write (below)                                                                                                                                                                                                                                                                                                                                                                                                    | `authenticated-write`                            | 60 per minute                                     | user                        |
 
 `platform-timeline`'s limit is `TIMELINE_REQUESTS_PER_MINUTE` (20 unless set).
 
@@ -507,20 +516,19 @@ replicas, a client can make up to N× the limit.
   per user. An IP key ahead of `requireAuth` would let anonymous requests from
   a shared address lock a signed-in invitee out, and in maintenance a refused
   customer would get a 415 or 429 before the 503.
-- **Every other authenticated write** — the tenant `PATCH`, the member
-  `PATCH` and `DELETE`, leaving a tenant (`DELETE /tenants/:slug/membership`),
-  the invitation `DELETE`, the settings `PATCH`, the
-  four notification writes, and `PATCH /api/v1/profile` — carries
-  `authenticatedWrite`, after `requireAuth`, answering `429` with
-  `Too many requests, please slow down`. A route with its own limiter keeps
-  only that one. Each of the three routers (tenant, notification, profile)
-  builds one instance and mounts it on each of its write routes. With Redis
-  up, every instance counts under the same prefix and user key, so a client
-  gets 60 such writes a minute in total, not 60 per route; during a Redis
-  outage each instance counts in its own memory, so the budget is per router
-  and per process. `tests/unit/routes/route-limiters.test.ts` walks the app's
-  router and fails on any write route with no limiter that is not on its
-  allowlist (empty), and on any `GET` route carrying `authenticatedWrite`.
+- **Every other authenticated write** — the tenant `PATCH`, the member `PATCH`
+  and `DELETE`, leaving a tenant (`DELETE /tenants/:slug/membership`), the
+  invitation `DELETE`, the settings `PATCH`, the four notification writes, and
+  `PATCH /api/v1/profile` — carries `authenticatedWrite`, after `requireAuth`,
+  answering `429` with `Too many requests, please slow down`. A route with its
+  own limiter keeps only that one. Each of the three routers (tenant,
+  notification, profile) builds one instance and mounts it on each of its write
+  routes. With Redis up, every instance counts under the same prefix and user
+  key, so a client gets 60 such writes a minute in total, not 60 per route;
+  during a Redis outage each instance counts in its own memory, so the budget is
+  per router and per process. `tests/unit/routes/route-limiters.test.ts` walks
+  the app's router and fails on any write route with no limiter that is not on
+  its allowlist (empty), and on any `GET` route carrying `authenticatedWrite`.
 
 There is no global limiter: a read is limited only where a route mounts one,
 and most reads mount none.
@@ -578,9 +586,8 @@ rather than quietly disabling the limiters.
 **`TRUST_PROXY` also decides whether the OAuth session cookie is sent.**
 express-session only emits a `Secure` cookie when `req.secure` is true, and
 behind TLS termination that needs `TRUST_PROXY` plus the proxy's
-`X-Forwarded-Proto: https`. Otherwise the OAuth session cookie is silently
-never set, and
-the Google OAuth `state` check fails. Boot logs a warning when
+`X-Forwarded-Proto: https`. Otherwise the OAuth session cookie is silently never
+set, and the Google OAuth `state` check fails. Boot logs a warning when
 `COOKIE_SECURE` resolves to `true` and `GOOGLE_CLIENT_ID` is set while
 `TRUST_PROXY=false`. The refresh cookie has no such dependency.
 
@@ -611,24 +618,26 @@ OAuth callback), so no script reads it and no cross-site `POST` carries it. A
 deployment that wants it scoped to the auth routes sets `COOKIE_DOMAIN`, which
 selects the `__Secure-` row.
 
-**The unprefixed name is revoked, never redeemed.** With `COOKIE_SECURE` on,
-a cookie named `refreshToken` (`LEGACY_REFRESH_TOKEN_COOKIE_NAME`) is one a
+**The unprefixed name is revoked, never redeemed.** With `COOKIE_SECURE` on, a
+cookie named `refreshToken` (`LEGACY_REFRESH_TOKEN_COOKIE_NAME`) is one a
 sibling subdomain or an on-path attacker on plain http can plant (cookie
 tossing). Redeeming it would sign a signed-out browser into the planter's
-session, which is login CSRF. So refresh reads only the current, prefixed
-name. A refresh that carries only `refreshToken` revokes that cookie's
-session, clears the cookie and answers 401. Logout, and a login or Google
-sign-in once it has issued the new session, revoke the session of every
-distinct token the request carries under either name. Within one name the API
-takes the most recently created value. When a login, a successful refresh, a
-Google sign-in or a logout carried a `refreshToken` cookie, the response
-clears it at `/api/v1/auth`: the host-only form, and the `COOKIE_DOMAIN` form
-when that is set, skipping whichever form is the current cookie itself. A
-browser that held only the pre-prefix cookie when the prefixes shipped signs
-in once more. The revoke-and-clear read is removed at the next major release.
-The OAuth session cookie takes the same prefix: `__Host-oauth.sid`
-(`__Secure-oauth.sid` with `COOKIE_DOMAIN`), because a planted `oauth.sid`
-would bind the victim's Google callback to the planter's `state`.
+session, which is login CSRF. So refresh reads only the current, prefixed name.
+A refresh that carries only `refreshToken` revokes that cookie's session, clears
+the cookie and answers 401. Logout, and a login or Google sign-in once it has
+issued the new session, revoke the session of every distinct token the request
+carries under either name (a Google callback, reached cross-site, carries no
+`Strict` cookie; see "Refresh rotation and reuse detection"). Within one name
+the API takes the most recently created value. When a login, a successful
+refresh, a Google sign-in or a logout carried a `refreshToken` cookie, the
+response clears it at `/api/v1/auth`: the host-only form, and the
+`COOKIE_DOMAIN` form when that is set, skipping whichever form is the current
+cookie itself. A browser that held only the pre-prefix cookie when the prefixes
+shipped signs in once more. The revoke-and-clear read is removed at the next
+major release. The OAuth session cookie takes the same prefix:
+`__Host-oauth.sid` (`__Secure-oauth.sid` with `COOKIE_DOMAIN`), because a
+planted `oauth.sid` would bind the victim's Google callback to the planter's
+`state`.
 
 Every form is set with:
 
@@ -685,32 +694,32 @@ drift from the first.
 
 `safeText` (`src/validators/safe-text.validators.ts`) refines every free-text
 field: the tenant `name`, `logo`, `website` and `description`, the settings
-`timezone` and `locale`, `firstName` and `lastName` on register and profile,
-the maintenance message and reason, and every staff `reason`. It rejects
-Unicode control characters (`Cc`: U+0000–U+001F and U+007F–U+009F), every
-format character (`Cf`: the bidirectional marks, embeddings, overrides and
-isolates, zero-width spaces, the word joiner, the byte order mark, the soft
-hyphen, emoji tag characters, and the zero-width joiner and non-joiner outside
-the places real text needs them) and the line and paragraph separators
-(U+2028, U+2029). The joiners are allowed only where a script or an emoji
-sequence needs them: a non-joiner (U+200C) between two letters or marks; a
+`timezone` and `locale`, `firstName` and `lastName` on register, profile and the
+staff user create and edit, the maintenance message and reason, and every staff
+`reason`. It rejects Unicode control characters (`Cc`: U+0000–U+001F and
+U+007F–U+009F), every format character (`Cf`: the bidirectional marks,
+embeddings, overrides and isolates, zero-width spaces, the word joiner, the byte
+order mark, the soft hyphen, emoji tag characters, and the zero-width joiner and
+non-joiner outside the places real text needs them) and the line and paragraph
+separators (U+2028, U+2029). The joiners are allowed only where a script or an
+emoji sequence needs them: a non-joiner (U+200C) between two letters or marks; a
 joiner (U+200D) after a letter, mark, pictograph or skin-tone modifier and
 before a letter, mark or pictograph, or after a Malayalam virama that follows a
-letter. Each rejected character can make a stored name render as something
-else, or as a lookalike of another, in an email, a log line or the UI; the
-cost is that a direction mark inside a name is refused, and that a joiner or
-non-joiner between two letters is allowed (`Ad\u200Dmin` and `Ad\u200Cmin`
-render as `Admin`). Names are not unique-looking identifiers: they already
-accept cross-script homoglyphs (a Cyrillic `а` in `Admin`), so an in-word
-joiner adds no new kind of lookalike; identify an account by its id or
-verified address, never by its display name. **Known limit:** invisible
-characters outside `Cf` still pass, such as U+3164 (Hangul filler), U+034F
-(combining grapheme joiner) and U+2800 (braille blank). `description`, the
-maintenance message and reason, and a staff `reason` are multiline. They accept
-`\n` and `\t`, store `\r\n` as `\n`, and reject a lone `\r`. A rejected field
-answers `400` in the usual validation envelope, with a message naming the
-field (`<Field> contains characters that are not allowed`; on the profile
-route, which shares one rule for both names,
+letter. Each rejected character can make a stored name render as something else,
+or as a lookalike of another, in an email, a log line or the UI; the cost is
+that a direction mark inside a name is refused, and that a joiner or non-joiner
+between two letters is allowed (`Ad\u200Dmin` and `Ad\u200Cmin` render as
+`Admin`). Names are not unique-looking identifiers: they already accept
+cross-script homoglyphs (a Cyrillic `а` in `Admin`), so an in-word joiner adds
+no new kind of lookalike; identify an account by its id or verified address,
+never by its display name. **Known limit:** invisible characters outside `Cf`
+still pass, such as U+3164 (Hangul filler), U+034F (combining grapheme joiner)
+and U+2800 (braille blank). `description`, the maintenance message and reason,
+and a staff `reason` are multiline. They accept `\n` and `\t`, store `\r\n` as
+`\n`, and reject a lone `\r`. A rejected field answers `400` in the usual
+validation envelope, with a message naming the field
+(`<Field> contains characters that are not allowed`; on the profile route, which
+shares one rule for both names,
 `This field contains characters that are not allowed`).
 
 Fields with a known shape are checked against it too: `logo` and `website`
@@ -836,15 +845,13 @@ per-membership permission blob.
   so an invitation a staff member sends to their own address is visible in
   the log.
 
-- **Staff roles live on the platform tenant.** Its members are the staff,
-  and its member routes are how staff roles change. There an owner may
-  demote or remove another owner (and, under `/platform/users`, deactivate
-  or delete one); the last-owner guard counts active owners only; and a
-  role change, a removal and a resend need a recent sign-in. On the platform
-  tenant every invitation, whatever role it offers, needs one too, as do a
-  resend, a role change, a removal and leaving there: every platform role,
-  viewer included, reads every user, tenant and email address, so a viewer
-  invitation mints staff.
+- **Staff roles live on the platform tenant.** Its members are the staff, and
+  its member routes are how staff roles change. There an owner may demote or
+  remove another owner (and, under `/platform/users`, deactivate or delete one);
+  the last-owner guard counts active owners only; and every invitation, whatever
+  role it offers, a resend, a role change, a removal and leaving need a recent
+  sign-in there: every platform role, viewer included, reads every user, tenant
+  and email address, so a viewer invitation mints staff.
 - **Membership wins.** Where a staff user is also a member, only the
   membership role counts.
 - **The platform tenant is members-only.** Anyone who isn't a member of the
@@ -1136,9 +1143,9 @@ query`: the SQL text is never sent. A thrown object that is not an `Error`
   `passphrase` and the one-time code names, and compound key names such as
   `secret_key` before `:` too; only the bare values `undefined`, `null`,
   `missing`, `true` and `false`, and already-scrubbed placeholders, are kept);
-  `code` only where it reads as an authorization code: after `?` or `&`, first
-  in a form body (`code=…&`), with `oauth`, `authorization` or `authorize`
-  earlier on its line or later on it with no brace in between, or anywhere in
+  `code` only where it reads as an authorization code: after `?` or `&`,
+  before a further `&` field (`code=…&`), with `oauth`, `authorization` or
+  `authorize` earlier on its line or later on it with no brace in between, or anywhere in
   a text that names an OAuth exchange (`grant_type`, `redirect_uri`,
   `client_id`, `authorization_code`, `code_verifier`, `invalid_grant` or
   `oauth`); `key` only before `=`; JWTs, PostHog keys, Google, Resend, AWS,
@@ -1152,43 +1159,43 @@ query`: the SQL text is never sent. A thrown object that is not an `Error`
   the same rules, tested against one shared vector file. The reporter's own
   failure warning logs the thrown value's kind and its scrubbed text, never
   the value.
-- **Slack gets the same scrubbing.** When `SLACK_WEBHOOK_URL` is set, every
-  log record at or above `SLACK_LOG_LEVEL` (default `error`) is forwarded, and
-  its message, source, request id and stack pass through the same `scrubText`
-  before the webhook call: each frame line on its own, so frame paths stay
-  readable, and the other lines, the message among them, as one text. So does
-  the duplicate summary. The time is validated, not scrubbed: only an ISO 8601
-  instant is sent, else the current time. A record whose scrub throws is
-  replaced by a fixed notice that carries nothing from it. Duplicates are
-  keyed on the raw source and message, which never leave the process.
+- **Slack gets the same scrubbing.** When `SLACK_WEBHOOK_URL` is set, every log
+  record at or above `SLACK_LOG_LEVEL` (default `error`) is forwarded, and its
+  message, source, request id and stack pass through the same `scrubText` before
+  the webhook call: each frame line on its own, so frame paths stay readable,
+  and each run of other lines as one text. So does the duplicate summary. The
+  time is validated, not scrubbed: only an ISO 8601 instant is sent, else the
+  current time. A record whose scrub throws is replaced by a fixed notice that
+  carries nothing from it. Duplicates are keyed on the raw source and message,
+  which never leave the process.
 - **What the scrubber does not catch:** names and other free text; ids, UUIDs
   included, which are identifiers rather than secrets and are kept on purpose
-  because they help debugging; national-format phone numbers without a
-  leading `+`; a bare opaque word with no key in front of it; a `code` value
-  outside the contexts above, and a `key` value written with `:`, both kept so
+  because they help debugging; national-format phone numbers without a leading
+  `+`; a bare opaque word with no key in front of it; a `code` value outside the
+  contexts above, and a `key` value written with `:`, both kept so
   `code: 'ECONNREFUSED'` and `key: 'user_id'` stay readable (an `oauth` inside
-  any word, `myoauthlib` included, counts as OAuth context, so every `code`
-  key in that text is redacted); a bare `response:` followed by unquoted prose
+  any word, `myoauthlib` included, counts as OAuth context, so every `code` key
+  in that text is redacted); a bare `response:` followed by unquoted prose
   (`Unexpected response: 502`); an Authorization header on its own, which does
   not make a `code` on another line an authorization code; the text after a
   Bearer or Basic credential on an Authorization line (`Bearer [token] extra`
   keeps `extra`); a nested array value past its first `]`; a camelCase `pin`
   (`userPin`); a key behind a double-encoded quote or separator (`%2522`,
   `%253D`) or a hex HTML entity (`&#x3D;`), and a `key` after an encoded `&`
-  (`%26key%3D`); a
-  lowercase, letters-only URL fragment under 40 characters, or of
-  hyphen-joined words of up to 20 letters each and up to 64 characters, which
-  reads as a heading; a lowercase kebab- or snake-case run of 40 or more
-  characters, which reads as an identifier; vendor tokens with no rule
-  (`ya29.`, `glpat-`, `hf_`, Google `1//` refresh tokens); a host named like a
-  package ref after `@` (`jane@main`, `jane@npm:`, `jane@workspace:`); the
-  domain of an email whose local part is a JWT (`[jwt]@example.com`); and the
-  part before the last `/` of a secret glued to an email address
-  (`abc/def/ghi@example.com` keeps `abc/def/`). Scrubbing a scrubbed text
-  again changes nothing, except a URL fragment the base64 rule replaced
-  (`#[secret]` becomes `#[fragment]`) and contrived inputs that glue a phone
-  number, address or hex run to one another. Regex scrubbing is best-effort:
-  keep secrets out of error messages.
+  (`%26key%3D`); a URL fragment of lowercase letters and hyphens with no
+  key-like word (`#api-key` and `#token-abc` are replaced): under 40 characters,
+  or up to 64 when each hyphen-joined word has at most 20 letters, which reads
+  as a heading; a kebab- or snake-case run of lowercase words of up to 20
+  letters each, 40 or more characters in all, which reads as an identifier;
+  vendor tokens with no rule (`ya29.`, `glpat-`, `hf_`, Google `1//` refresh
+  tokens); a host named like a package ref after `@` (`jane@main`, `jane@npm:`,
+  `jane@workspace:`); the domain of an email whose local part is a JWT
+  (`[jwt]@example.com`); and the part before the last `/` of a secret glued to
+  an email address (`abc/def/ghi@example.com` keeps `abc/def/`). Scrubbing a
+  scrubbed text again changes nothing, except a URL fragment the base64 rule
+  replaced (`#[secret]` becomes `#[fragment]`) and contrived inputs that glue a
+  phone number, address or hex run to one another. Regex scrubbing is
+  best-effort: keep secrets out of error messages.
 - **Never attached:** request bodies, headers, query strings or cookies;
   a database error's `detail`, `parameters`, `query` or `where`, or the
   bound values a failed query's message embeds; a job's data; an
@@ -1242,17 +1249,16 @@ The schema's required secrets and public URLs are all read. `JWT_ACCESS_SECRET`
 signs and verifies access tokens (`signAccessToken`/`verifyAccessToken`).
 `SESSION_SECRET` signs the session cookie of the Google OAuth round-trip
 (`src/configs/passport.config.ts`; `__Host-oauth.sid` with `COOKIE_SECURE`,
-`__Secure-oauth.sid` when `COOKIE_DOMAIN` is also set, plain `oauth.sid`
-without `COOKIE_SECURE`). It also keys, through HKDF-SHA256 with the label
-`rate-limit-identity-v1`, the HMAC that turns an email address into a
-rate-limit key (`src/utilities/rate-limit-key.utilities.ts`), so no rate-limit
-key carries a submitted address. `APP_URL` builds the Google
-callback URL (same file), and boot refuses a `COOKIE_DOMAIN` that `APP_URL`'s
-host is not within (`src/configs/env-consistency.config.ts`). `WEB_URL` builds
-the mailed links and the OAuth redirects, and `origin.utilities.ts` (see
-"CORS" below) decides from it, `APEX_URL` and `CORS_ALLOWED_ORIGINS` whether a
-browser's `Origin` gets a grant. There
-is no `JWT_REFRESH_SECRET` at all (see "Authentication" above).
+`__Secure-oauth.sid` when `COOKIE_DOMAIN` is also set, plain `oauth.sid` without
+`COOKIE_SECURE`). It also keys, through HKDF-SHA256 with the label
+`rate-limit-identity-v1`, the HMAC that turns an email address into a rate-limit
+key (`src/utilities/rate-limit-key.utilities.ts`), so no rate-limit key carries
+a submitted address. `APP_URL` builds the Google callback URL (same file), and
+boot refuses a `COOKIE_DOMAIN` that `APP_URL`'s host is not within
+(`src/configs/env-consistency.config.ts`). `WEB_URL` builds the mailed links and
+the OAuth redirects, and `origin.utilities.ts` (see "CORS" below) decides from
+it, `APEX_URL` and `CORS_ALLOWED_ORIGINS` whether a browser's `Origin` gets a
+grant. There is no `JWT_REFRESH_SECRET` at all (see "Authentication" above).
 
 **Frontend choice is an enum.** A request may say which frontend a link or
 OAuth redirect is for (`app: 'web' | 'apex'`), never where it goes; the
@@ -1333,20 +1339,19 @@ helmet's own `X-Powered-By` removal — harmless, and explicit about intent.
 
 ## No CSRF middleware — reasoning about the shipped design
 
-CSRF relies on a browser automatically attaching ambient credentials (a
-session cookie) to a cross-site request. This API's credentials are not
-purely ambient: an `Authorization: Bearer <token>` header is never attached
-automatically by a browser, so the access token can't be used cross-site
-without the frontend's own code choosing to send it. The one credential that
-_is_ a cookie — the refresh token — is `sameSite: 'strict'` (or `'lax'` when
-set by the Google OAuth callback), and neither lets the browser attach it to
-a cross-site `POST`, which every route that reads it is (see "Cookies" above,
-including the eTLD+1 assumption). The OAuth session cookie (`oauth.sid`,
-prefixed under `COOKIE_SECURE`) exists
-only on `GET /api/v1/auth/google` and its callback, for five minutes, and
-carries the OAuth `state` check. If a project relaxes `sameSite` further, or
-mounts a browser session on other routes, this conclusion no longer holds and
-CSRF protection must be revisited explicitly.
+CSRF relies on a browser automatically attaching ambient credentials (a session
+cookie) to a cross-site request. This API's credentials are not purely ambient:
+an `Authorization: Bearer <token>` header is never attached automatically by a
+browser, so the access token can't be used cross-site without the frontend's own
+code choosing to send it. The one credential that _is_ a cookie — the refresh
+token — is `sameSite: 'strict'` (or `'lax'` when set by the Google OAuth
+callback), and neither lets the browser attach it to a cross-site `POST`, which
+every route that reads it is (see "Cookies" above, including the eTLD+1
+assumption). The OAuth session cookie (`oauth.sid`, prefixed under
+`COOKIE_SECURE`) exists only on `GET /api/v1/auth/google` and its callback, for
+five minutes, and carries the OAuth `state` check. If a project relaxes
+`sameSite` further, or mounts a browser session on other routes, this conclusion
+no longer holds and CSRF protection must be revisited explicitly.
 
 **Same-site is not same-origin.** `SameSite=Strict` withholds the refresh
 cookie only from a cross-_site_ request. A page on a sibling subdomain (a
