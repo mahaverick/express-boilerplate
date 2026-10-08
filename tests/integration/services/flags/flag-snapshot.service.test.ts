@@ -7,11 +7,15 @@
  * serves null, and a stopped store stops reloading. A 304 touch rewrites
  * `checkedAt` only while the stored value is still the exact string its run
  * read: a snapshot another replica stored meanwhile survives it unchanged,
- * and a deleted one is not recreated.
+ * and a deleted one is not recreated. `stop()` closes the subscriber, a
+ * reconnect reloads, and neither `start()` nor `stop()` waits on a
+ * subscriber whose handshake never completes (a hung Redis or proxy).
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import net from 'node:net'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   createFlagSnapshotStore,
+  flagSnapshotChannel,
   flagSnapshotKey,
   readFlagSnapshot,
   readStoredFlagSnapshot,
@@ -22,10 +26,38 @@ import {
 import { logger } from '@/services/logger.service'
 import { getRedis } from '@/services/redis.service'
 import type { ParsedSnapshot } from '@/validators/flag-definition.validators'
+import { waitUntil } from '../../../helpers/timing'
+
+/**
+ * Where the next client `createClient` builds is pointed: `redirectNext` marks
+ * the snapshot subscriber (the shared client already exists by then), which
+ * goes to `url` when set and is otherwise named so `CLIENT LIST` finds it.
+ */
+const subscriber = vi.hoisted(() => ({
+  url: undefined as string | undefined,
+  redirectNext: false,
+}))
+
+vi.mock('redis', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('redis')>()
+  return {
+    ...actual,
+    createClient: (options: Parameters<typeof actual.createClient>[0]) => {
+      const isSubscriber = subscriber.redirectNext
+      subscriber.redirectNext = false
+      return actual.createClient({
+        ...options,
+        ...(isSubscriber && subscriber.url !== undefined && { url: subscriber.url }),
+        ...(isSubscriber && subscriber.url === undefined && { name: 'flag-snapshot-subscriber' }),
+      })
+    },
+  }
+})
 
 // eslint-disable-next-line unicorn/no-null -- the snapshot's contract uses null
 const NONE = null
 const stores: FlagSnapshotStore[] = []
+const silentServers: net.Server[] = []
 
 /**
  * A snapshot with one marker in its ETag.
@@ -55,7 +87,19 @@ async function startedStore(backstopMs = 60_000): Promise<FlagSnapshotStore> {
   return store
 }
 
+/**
+ * How many clients are subscribed to the reload channel.
+ * @returns The `PUBSUB NUMSUB` count.
+ */
+async function subscriberCount(): Promise<number> {
+  const redis = await getRedis()
+  const reply: unknown = await redis.sendCommand(['PUBSUB', 'NUMSUB', flagSnapshotChannel()])
+  return Array.isArray(reply) ? Number(reply[1]) : 0
+}
+
 beforeEach(async () => {
+  subscriber.url = undefined
+  subscriber.redirectNext = false
   // Another file in this worker may have left a snapshot under the shared prefix.
   const redis = await getRedis()
   await redis.del(flagSnapshotKey())
@@ -66,6 +110,10 @@ afterEach(async () => {
   stores.length = 0
   const redis = await getRedis()
   await redis.del(flagSnapshotKey())
+})
+
+afterAll(() => {
+  for (const server of silentServers) server.close()
 })
 
 describe('flag snapshot store', () => {
@@ -193,12 +241,15 @@ describe('flag snapshot store', () => {
 
   it('leaves no backstop timer when stopped while starting', async () => {
     const interval = vi.spyOn(globalThis, 'setInterval')
-    const store = createFlagSnapshotStore({ backstopMs: 50 })
-    const starting = store.start()
-    await store.stop()
-    await starting
-    expect(interval).not.toHaveBeenCalled()
-    interval.mockRestore()
+    try {
+      const store = createFlagSnapshotStore({ backstopMs: 50 })
+      const starting = store.start()
+      await store.stop()
+      await starting
+      expect(interval).not.toHaveBeenCalled()
+    } finally {
+      interval.mockRestore()
+    }
   })
 
   it('stops reloading once stopped', async () => {
@@ -208,6 +259,73 @@ describe('flag snapshot store', () => {
     await store.reload()
     expect(store.get()).toBe(NONE)
   })
+})
+
+describe('the subscriber: stop() and reconnect', () => {
+  it('stop() closes the subscriber connection', async () => {
+    const store = createFlagSnapshotStore({ backstopMs: 600_000 })
+    stores.push(store)
+    subscriber.redirectNext = true
+    await store.start()
+    await vi.waitFor(async () => expect(await subscriberCount()).toBe(1), { timeout: 5000 })
+    await store.stop()
+    await vi.waitFor(async () => expect(await subscriberCount()).toBe(0), { timeout: 5000 })
+  })
+
+  it('reloads after the subscriber reconnects (a publish during the gap is lost)', async () => {
+    const store = createFlagSnapshotStore({ backstopMs: 600_000 })
+    stores.push(store)
+    subscriber.redirectNext = true
+    await store.start()
+    await vi.waitFor(async () => expect(await subscriberCount()).toBe(1), { timeout: 5000 })
+    const redis = await getRedis()
+    // Written without a publish, as if the publish fell in the reconnect gap.
+    await redis.set(flagSnapshotKey(), JSON.stringify(snapshot('during-gap')))
+    const reply: unknown = await redis.sendCommand(['CLIENT', 'LIST'])
+    const list = typeof reply === 'string' ? reply : ''
+    const id = /id=(\d+)/.exec(
+      list.split('\n').find((line) => line.includes('name=flag-snapshot-subscriber')) ?? ''
+    )?.[1]
+    expect(id).toBeDefined()
+    await redis.sendCommand(['CLIENT', 'KILL', 'ID', id ?? ''])
+    await vi.waitFor(() => expect(store.get()?.etag).toBe('W/"during-gap"'), { timeout: 5000 })
+  })
+})
+
+describe('start() and stop() while the subscriber is still connecting', () => {
+  it(
+    'start() resolves, and stop() resolves, while the subscriber never finishes connecting',
+    { timeout: 10_000 },
+    async () => {
+      const accepted: net.Socket[] = []
+      const server = net.createServer((socket) => {
+        // Accepts and never answers, but reads so the peer's close is seen.
+        accepted.push(socket)
+        socket.resume()
+      })
+      silentServers.push(server)
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+      subscriber.url = `redis://127.0.0.1:${String((server.address() as net.AddressInfo).port)}`
+      const redis = await getRedis()
+      await redis.set(flagSnapshotKey(), JSON.stringify(snapshot('boot')))
+      const store = createFlagSnapshotStore({ backstopMs: 600_000 })
+      stores.push(store)
+      const started = Date.now()
+      subscriber.redirectNext = true
+      await store.start()
+      // start() must not wait out the subscriber's handshake deadline (REDIS_CONNECT_TIMEOUT_MS, 5 s).
+      expect(Date.now() - started).toBeLessThan(2000)
+      expect(store.get()?.etag).toBe('W/"boot"')
+      const stopping = Date.now()
+      await store.stop()
+      // stop() returns at STOP_SUBSCRIBER_WAIT_MS (1 s), well before that 5 s handshake deadline.
+      expect(Date.now() - stopping).toBeLessThan(2000)
+      // The connecting subscriber was destroyed, not left holding its socket.
+      await waitUntil(() => accepted.length === 1 && accepted[0]?.destroyed, {
+        message: 'the hung subscriber connection is closed after stop()',
+      })
+    }
+  )
 })
 
 describe('touchFlagSnapshot', () => {
