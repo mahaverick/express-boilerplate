@@ -495,13 +495,13 @@ function capped(value: string, wasCut: boolean): string {
  * `credential`, `jwt`, `otp`, `signature`, `sig`, `hmac`, `nonce`,
  * `response`; `code` after `?` or `&` or on an OAuth or authorization line;
  * `key` before `=`; and every `code` in a text that names an OAuth exchange
- * (`OAUTH_CONTEXT_PATTERN`)), become `[redacted]`; a JWT becomes `[jwt]`; a PostHog
- * key (`phc_`, `phx_`, `phs_`) becomes `[posthog-key]`; an email address
- * (`EMAIL_PATTERN`: `@` written plainly, encoded or fullwidth, a quoted
- * local part, an IP-literal or single-label domain) becomes `[email]`, before
- * the vendor rules run, so an address whose local part looks like a key goes
- * whole, domain included; a vendor credential (`VENDOR_KEY_PATTERN`, or an
- * AWS secret access key) becomes `[secret]`; an
+ * (`OAUTH_CONTEXT_PATTERN`)), become `[redacted]`; a JWT becomes `[jwt]`; an
+ * email address (`EMAIL_PATTERN`: `@` written plainly, encoded or fullwidth,
+ * a quoted local part, an IP-literal or single-label domain) becomes
+ * `[email]`, before the key rules run, so an address whose local part looks
+ * like a key goes whole, domain included; a PostHog key (`phc_`, `phx_`,
+ * `phs_`) becomes `[posthog-key]` and a vendor credential
+ * (`VENDOR_KEY_PATTERN`, or an AWS secret access key) `[secret]`; an
  * IPv4 or IPv6 address becomes `[ip]` and an international phone number
  * `[phone]` (a UUID is an id and is kept); a run of 32 or more hex digits
  * becomes `[secret]`, and a PostHog key or vendor credential glued to it is
@@ -538,8 +538,8 @@ export function scrubText(value: string): string {
       hasOauthContext ? `${key}[redacted]` : match
     )
     .replaceAll(JWT_PATTERN, '[jwt]')
-    .replaceAll(POSTHOG_KEY_PATTERN, '[posthog-key]')
     .replaceAll(EMAIL_PATTERN, '[email]')
+    .replaceAll(POSTHOG_KEY_PATTERN, '[posthog-key]')
     .replaceAll(VENDOR_KEY_PATTERN, '[secret]')
     .replaceAll(AWS_SECRET_KEY_PATTERN, (run) => (isAwsSecretKey(run) ? '[secret]' : run))
     .replaceAll(IPV4_PATTERN, '[ip]')

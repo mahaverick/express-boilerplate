@@ -1723,5 +1723,15 @@
     "rule": "kv",
     "input": "{ codeVerifier: 'zqS4Zx9Kq2Lm8', code: 'zqS5Zx9Kq2Lm8' }",
     "expected": "{ codeVerifier: '[redacted]', code: '[redacted]' }"
+  },
+  {
+    "rule": "email",
+    "input": "invite failed for phc_zqTabcdEFGHij1234@example.com",
+    "expected": "invite failed for [email]"
+  },
+  {
+    "rule": "email",
+    "input": "to=phx_zqTabcdEFGHij1234%40acme-corp.co.uk",
+    "expected": "to=[email]"
   }
 ]
