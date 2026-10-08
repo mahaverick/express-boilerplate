@@ -150,7 +150,7 @@ describe('scrubText', () => {
     expect(text.length).toBeGreaterThan(4 * ERROR_VALUE_MAX - 30)
     const started = performance.now()
     scrubText(text)
-    // Proves the rules stay linear on the three worst shapes at the scan cap; each measured 29-56 ms (five runs each), so 2 s keeps at least 35x headroom.
+    // Proves no catastrophic backtracking on the three worst shapes at the scan cap; each measured 29-56 ms (five runs each), so 2 s keeps at least 35x headroom.
     expect(performance.now() - started).toBeLessThan(2000)
   })
 
