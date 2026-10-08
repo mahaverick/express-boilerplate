@@ -25,6 +25,7 @@ import {
   type ErrorDropReason,
 } from '@/constants/error-tracking.constants'
 import { HttpError } from '@/errors/http-error'
+import { isQueryError, redactedForLog } from '@/errors/postgres-errors'
 import { TimelineUnavailableError } from '@/errors/timeline-errors'
 import {
   sendBatch,
@@ -144,12 +145,19 @@ function kindOf(value: unknown): string {
  * The log fields for a failure inside the reporter: the thrown value's kind
  * and its text, scrubbed like an event (`scrubText`). The value itself is
  * never logged: a non-Error would reach the log, and through it Slack, as
- * it is.
+ * it is. A database query error is reduced to its query first
+ * (`redactedForLog`), as the logger does, so its bound values are never
+ * stringified. The text goes under `detail`, not `message`: `message` is the
+ * logger's own message key and would be shadowed by the log line's message.
  * @param error - What was thrown.
- * @returns `{ errorType, message }`.
+ * @returns `{ errorType, detail }`.
  */
-function failureFields(error: unknown): { errorType: string; message: string } {
-  return { errorType: kindOf(error), message: scrubText(textOf(error)) }
+function failureFields(error: unknown): { errorType: string; detail: string } {
+  if (isQueryError(error)) {
+    const redacted = redactedForLog(error) as { query: string }
+    return { errorType: 'QueryError', detail: scrubText(redacted.query) }
+  }
+  return { errorType: scrubText(kindOf(error)), detail: scrubText(textOf(error)) }
 }
 
 /**

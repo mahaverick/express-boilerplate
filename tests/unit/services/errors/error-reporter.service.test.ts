@@ -265,27 +265,65 @@ describe('reportError gating and ids', () => {
   })
 })
 
+/**
+ * Make `logger.warn` write through a real pino JSON pipeline and return
+ * the lines written.
+ * @returns The written lines, filled as the logger is called.
+ */
+function capturedWarnLines(): string[] {
+  const lines: string[] = []
+  const destination = new Writable({
+    write(chunk, _encoding, done) {
+      lines.push(String(chunk))
+      done()
+    },
+  })
+  const pinoLogger = createPinoLogger({ level: 'warn', format: 'json', destination })
+  vi.spyOn(logger, 'warn').mockImplementation((message: string, meta?: Record<string, unknown>) => {
+    pinoLogger.warn(meta ?? {}, message)
+  })
+  return lines
+}
+
 describe('internal failure log', () => {
   it('the internal-failure warn line carries no secret from the thrown value', () => {
-    const lines: string[] = []
-    const destination = new Writable({
-      write(chunk, _encoding, done) {
-        lines.push(String(chunk))
-        done()
-      },
-    })
-    const pinoLogger = createPinoLogger({ level: 'warn', format: 'json', destination })
-    vi.spyOn(logger, 'warn').mockImplementation(
-      (message: string, meta?: Record<string, unknown>) => {
-        pinoLogger.warn(meta ?? {}, message)
-      }
-    )
+    const lines = capturedWarnLines()
     tracking.thrown = 'connect failed: password=hunter2 user=jane@example.com'
     reportError(new Error('outer'), HTTP)
     const output = lines.join('')
     expect(output).toContain('Error reporter failed')
     expect(output).not.toContain('hunter2')
     expect(output).not.toContain('jane@example.com')
+  })
+
+  it('keeps the scrubbed detail in the line, beside the logger message', () => {
+    const lines = capturedWarnLines()
+    tracking.thrown = 'connect failed: password=hunter2'
+    reportError(new Error('outer'), HTTP)
+    const parsed = JSON.parse(lines.join('')) as Record<string, unknown>
+    expect(parsed.message).toBe('Error reporter failed')
+    expect(parsed.errorType).toBe('string')
+    expect(parsed.detail).toBe('connect failed: password=[redacted]')
+  })
+
+  it('logs a thrown query error without its bound values', () => {
+    const lines = capturedWarnLines()
+    tracking.thrown = fakeQueryError()
+    reportError(new Error('outer'), HTTP)
+    const output = lines.join('')
+    expect(output).toContain('Error reporter failed')
+    expect(output).not.toContain(LEAKED_PARAM)
+    expect(output).toContain('"detail":"select $1"')
+  })
+
+  it('scrubs a thrown error name', () => {
+    const lines = capturedWarnLines()
+    class NamedError extends Error {
+      override name = `Bearer ${LEAKED_PARAM}`
+    }
+    tracking.thrown = new NamedError('x')
+    reportError(new Error('outer'), HTTP)
+    expect(lines.join('')).not.toContain(LEAKED_PARAM)
   })
 })
 
