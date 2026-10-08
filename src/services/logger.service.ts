@@ -10,6 +10,7 @@ import pino, { type DestinationStream, type Logger, type StreamEntry } from 'pin
 import type { PrettyOptions } from 'pino-pretty'
 import { getEnv, logFormat, type Env } from '@/configs/env.config'
 import { isQueryError, redactedForLog } from '@/errors/postgres-errors'
+import { scrubText } from '@/services/errors/error-scrubber.service'
 import { requestContextStore } from '@/services/request-context.service'
 
 /**
@@ -211,21 +212,38 @@ async function sendToSlack(webhookUrl: string, payload: Record<string, unknown>)
 }
 
 /**
- * Build the Slack Block Kit payload for one log record.
+ * A stack as Slack may receive it: each line scrubbed on its own
+ * (`scrubText`), so the message lines lose their secrets and the frame
+ * lines keep their paths.
+ * @param stack - The serialised error's stack.
+ * @returns The scrubbed stack.
+ */
+function scrubbedStack(stack: string): string {
+  return stack
+    .split('\n')
+    .map((line) => scrubText(line))
+    .join('\n')
+}
+
+/**
+ * Build the Slack Block Kit payload for one log record. Every text taken
+ * from the record (message, source, request id, stack) is scrubbed with
+ * the error tracker's `scrubText` first: the channel is a third party, as
+ * PostHog is.
  * @param info - The parsed JSON log record.
  * @returns The webhook body.
  */
 function buildSlackPayload(info: Record<string, unknown>): Record<string, unknown> {
   const level = typeof info.level === 'string' ? info.level : 'error'
-  const message = typeof info.message === 'string' ? info.message : ''
-  const source = typeof info.source === 'string' ? info.source : 'unknown'
-  const requestId = typeof info.requestId === 'string' ? info.requestId : undefined
+  const message = typeof info.message === 'string' ? scrubText(info.message) : ''
+  const source = typeof info.source === 'string' ? scrubText(info.source) : 'unknown'
+  const requestId = typeof info.requestId === 'string' ? scrubText(info.requestId) : undefined
   const timestamp = typeof info.timestamp === 'string' ? info.timestamp : new Date().toISOString()
   const errorStack =
     info.error && typeof info.error === 'object' && 'stack' in info.error
       ? info.error.stack
       : undefined
-  const stack = typeof errorStack === 'string' ? errorStack : undefined
+  const stack = typeof errorStack === 'string' ? scrubbedStack(errorStack) : undefined
 
   const fields = [
     { type: 'mrkdwn', text: `*Source:* \`${source}\`` },
@@ -253,7 +271,8 @@ function buildSlackPayload(info: Record<string, unknown>): Record<string, unknow
 }
 
 /**
- * Build the "suppressed N duplicates" summary sent when a dedup window closes.
+ * Build the "suppressed N duplicates" summary sent when a dedup window
+ * closes, its source and message scrubbed as `buildSlackPayload` scrubs them.
  * @param source - The record's source field.
  * @param message - The record's message.
  * @param suppressedCount - How many repeats were swallowed.
@@ -265,13 +284,39 @@ function buildSlackSummaryPayload(
   suppressedCount: number
 ): Record<string, unknown> {
   return {
-    text: `⚠️ Suppressed ${suppressedCount} duplicate occurrence${suppressedCount === 1 ? '' : 's'} of "${message}" from \`${source}\` in the last 60s`,
+    text: `⚠️ Suppressed ${suppressedCount} duplicate occurrence${suppressedCount === 1 ? '' : 's'} of "${scrubText(message)}" from \`${scrubText(source)}\` in the last 60s`,
+  }
+}
+
+/**
+ * The body sent in place of a record whose scrub threw: fixed text, nothing
+ * from the record.
+ */
+const SLACK_SCRUB_FAILED_PAYLOAD = {
+  text: 'A log record could not be scrubbed and was not forwarded; see the application logs.',
+}
+
+/**
+ * Build a Slack body, or the fixed `SLACK_SCRUB_FAILED_PAYLOAD` if building
+ * (the scrub) throws. Reports through `console.error`, never the logger:
+ * this destination is part of the logger, and a logger call here would
+ * re-enter it. The unscrubbed record is never sent.
+ * @param build - Builds the scrubbed body.
+ * @returns The body to send.
+ */
+function safeSlackPayload(build: () => Record<string, unknown>): Record<string, unknown> {
+  try {
+    return build()
+  } catch (error: unknown) {
+    console.error('Slack payload scrub failed', error instanceof Error ? error.name : typeof error)
+    return SLACK_SCRUB_FAILED_PAYLOAD
   }
 }
 
 /**
  * A pino destination that forwards records to Slack, deduplicating by
- * `${source}:${message}` within a 60 s window: the first occurrence sends at
+ * `${source}:${message}` (the raw text, kept in this process only) within a
+ * 60 s window: the first occurrence sends at
  * once, repeats are counted, and one summary is sent when the window closes
  * if there were any. Level filtering is done by pino.multistream, not here.
  * @param options - The webhook settings.
@@ -304,14 +349,17 @@ export function createSlackDestination(options: { webhookUrl: string }): Destina
         if (entry && entry.count > 1) {
           void sendToSlack(
             options.webhookUrl,
-            buildSlackSummaryPayload(source, message, entry.count - 1)
+            safeSlackPayload(() => buildSlackSummaryPayload(source, message, entry.count - 1))
           )
         }
       }, DEDUP_WINDOW_MS)
       timer.unref()
 
       dedup.set(key, { count: 1, firstSeen: Date.now(), timer })
-      void sendToSlack(options.webhookUrl, buildSlackPayload(info))
+      void sendToSlack(
+        options.webhookUrl,
+        safeSlackPayload(() => buildSlackPayload(info))
+      )
     },
   }
 }

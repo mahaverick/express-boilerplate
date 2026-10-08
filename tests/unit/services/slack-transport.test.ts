@@ -5,9 +5,24 @@
  * called with.
  */
 import { Writable } from 'node:stream'
+import { DrizzleQueryError } from 'drizzle-orm'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinoLogger } from '@/services/logger.service'
 import { requestContextStore } from '@/services/request-context.service'
+import { LEAKED_PARAM } from '../../helpers/query-error'
+
+const scrub = vi.hoisted(() => ({ shouldThrow: false }))
+
+vi.mock('@/services/errors/error-scrubber.service', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/services/errors/error-scrubber.service')>()
+  return {
+    ...actual,
+    scrubText: (value: string): string => {
+      if (scrub.shouldThrow) throw new Error('scrub broke')
+      return actual.scrubText(value)
+    },
+  }
+})
 
 /**
  * Narrower than the global RequestInit on purpose: the Slack destination
@@ -302,6 +317,159 @@ describe('Slack transport', () => {
 
       setImmediate(() => {
         expect(mockFetch).not.toHaveBeenCalled()
+        resolve()
+      })
+    }))
+})
+
+/**
+ * A logger whose error-level records go to the stubbed Slack webhook.
+ * @returns The logger.
+ */
+function slackLogger(): ReturnType<typeof createPinoLogger> {
+  return createPinoLogger({
+    level: 'info',
+    format: 'json',
+    slackWebhookUrl: 'https://hooks.slack.invalid/services/T/B/x',
+    slackLogLevel: 'error',
+    destination: discardDestination(),
+  })
+}
+
+describe('Slack transport scrubbing', () => {
+  const mockFetch = vi.fn<FetchProcedure>()
+  // Built at runtime so secret scanners do not flag a fake key in source.
+  const resendKey = ['re', 'zqS09Abc123', 'DEFghi456JKL'].join('_')
+  const bearer = 'zqS09bearerTokenValue77'
+
+  /**
+   * Every webhook body sent so far, joined.
+   * @returns The bodies.
+   */
+  function sentBodies(): string {
+    return mockFetch.mock.calls.map(([, init]) => init.body).join('\n')
+  }
+
+  beforeEach(() => {
+    mockFetch.mockReset()
+    mockFetch.mockResolvedValue({ ok: true })
+    vi.stubGlobal('fetch', mockFetch)
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.useRealTimers()
+  })
+
+  it('does not send a credential in an error message to Slack', () =>
+    new Promise<void>((resolve) => {
+      slackLogger().error(
+        {
+          error: new Error(
+            `SMTP auth failed for key ${resendKey}; Authorization: Bearer ${bearer}`
+          ),
+        },
+        `Email worker error (Authorization: Bearer ${bearer})`
+      )
+
+      setImmediate(() => {
+        expect(mockFetch).toHaveBeenCalledOnce()
+        expect(sentBodies()).not.toContain(resendKey)
+        expect(sentBodies()).not.toContain(bearer)
+        resolve()
+      })
+    }))
+
+  it('scrubs the source field', () =>
+    new Promise<void>((resolve) => {
+      slackLogger().error({ source: 'auth.ts:1 token=zqS09srcTok' }, 'failed')
+
+      setImmediate(() => {
+        expect(sentBodies()).toContain('auth.ts:1 token=[redacted]')
+        expect(sentBodies()).not.toContain('zqS09srcTok')
+        resolve()
+      })
+    }))
+
+  it('sends a query error redacted, without its bound values', () =>
+    new Promise<void>((resolve) => {
+      const error = new DrizzleQueryError(
+        'select * from users where email = $1',
+        ['jane.zqS09@example.com'],
+        new Error('connection reset')
+      )
+      slackLogger().error({ error }, 'query failed')
+
+      setImmediate(() => {
+        expect(mockFetch).toHaveBeenCalledOnce()
+        expect(sentBodies()).not.toContain('jane.zqS09@example.com')
+        resolve()
+      })
+    }))
+
+  it('keeps stack frame paths readable', () =>
+    new Promise<void>((resolve) => {
+      const error = new Error('boom')
+      Object.defineProperty(error, 'stack', {
+        value: 'Error: boom\n    at handle (/app/src/services/auth.service.ts:10:5)',
+      })
+      slackLogger().error({ error }, 'handler failed')
+
+      setImmediate(() => {
+        expect(sentBodies()).toContain('at handle (/app/src/services/auth.service.ts:10:5)')
+        resolve()
+      })
+    }))
+
+  it('scrubs the duplicate summary too', () =>
+    new Promise<void>((resolve) => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      const log = slackLogger()
+      log.error({ source: 'test.ts:1' }, `retry failed, Bearer ${bearer}`)
+      log.error({ source: 'test.ts:1' }, `retry failed, Bearer ${bearer}`)
+
+      setImmediate(() => {
+        vi.advanceTimersByTime(60_000)
+
+        setImmediate(() => {
+          expect(mockFetch).toHaveBeenCalledTimes(2)
+          expect(sentBodies()).toContain('Suppressed 1 duplicate occurrence')
+          expect(sentBodies()).not.toContain(bearer)
+          resolve()
+        })
+      })
+    }))
+})
+
+describe('Slack transport scrub failure', () => {
+  const mockFetch = vi.fn<FetchProcedure>()
+
+  beforeEach(() => {
+    mockFetch.mockReset()
+    mockFetch.mockResolvedValue({ ok: true })
+    vi.stubGlobal('fetch', mockFetch)
+    scrub.shouldThrow = true
+  })
+
+  afterEach(() => {
+    scrub.shouldThrow = false
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  it('sends fixed text, never the raw record, and does not throw into the caller', () =>
+    new Promise<void>((resolve) => {
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+      expect(() => {
+        slackLogger().error({ error: new Error('x') }, `raw ${LEAKED_PARAM}`)
+      }).not.toThrow()
+
+      setImmediate(() => {
+        expect(mockFetch).toHaveBeenCalledOnce()
+        const body = String(mockFetch.mock.calls[0]?.[1].body)
+        expect(body).toContain('could not be scrubbed')
+        expect(body).not.toContain(LEAKED_PARAM)
+        expect(consoleError).toHaveBeenCalledWith('Slack payload scrub failed', 'Error')
         resolve()
       })
     }))
