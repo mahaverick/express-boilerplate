@@ -11,6 +11,7 @@ import { STATUS_READ_TIMEOUT_MS } from '@/constants/platform.constants'
 import { sql } from '@/services/database.service'
 import * as counters from '@/services/errors/error-counters.service'
 import * as flagCounters from '@/services/flags/flag-counters.service'
+import { noticeIdsKey } from '@/services/maintenance-mode/maintenance-mode-notices.service'
 import * as maintenanceMode from '@/services/maintenance-mode/maintenance-mode.service'
 import type { FlagsStatus } from '@/types/flags'
 import type { MaintenanceModeStatus } from '@/types/maintenance-mode'
@@ -19,6 +20,14 @@ import { createTrackedStaff, deleteTrackedUsers } from '../../helpers/platform-u
 import { request } from '../../helpers/request'
 
 const app = createApp()
+
+/**
+ * A Redis read that never settles.
+ * @returns A promise that stays pending.
+ */
+function never(): Promise<never> {
+  return new Promise<never>(() => {})
+}
 
 /**
  * A status as the counters service could answer it.
@@ -110,19 +119,27 @@ describe('GET /platform/system/status', () => {
     expect(row?.count).toBe(0)
   })
 
-  it('answers within the bound when a section’s Redis read never settles', async () => {
+  it('answers within the bound when every section’s Redis read never settles', async () => {
     const redis = await import('@/services/redis.service')
+    const queueService = await import('@/services/queue.service')
     const real = await redis.getRedis()
     const stalled = new Proxy(real, {
-      get: (target, property, receiver) =>
-        property === 'mGet'
-          ? () => new Promise<never>(() => {})
-          : (Reflect.get(target, property, receiver) as unknown),
+      get: (target, property, receiver) => {
+        if (property === 'mGet') return never
+        // The notices key is the only single-key GET the status reads.
+        if (property === 'get') {
+          return (key: string, ...rest: unknown[]) =>
+            key === noticeIdsKey()
+              ? never()
+              : (target.get as (...parameters: unknown[]) => unknown)(key, ...rest)
+        }
+        return Reflect.get(target, property, receiver) as unknown
+      },
     })
     vi.spyOn(redis, 'getRedis').mockResolvedValue(stalled)
-    vi.spyOn(maintenanceMode, 'getMaintenanceModeStatus').mockResolvedValue(
-      sampleMaintenanceStatus()
-    )
+    vi.spyOn(queueService, 'getAllQueues').mockReturnValue([
+      { name: 'email', isPaused: never, getActiveCount: never },
+    ] as never)
     const { token } = await createTrackedStaff('admin')
     const startedAt = Date.now()
 
@@ -132,8 +149,17 @@ describe('GET /platform/system/status', () => {
 
     expect(response.status).toBe(200)
     expect(Date.now() - startedAt).toBeLessThan(STATUS_READ_TIMEOUT_MS + 2000)
-    const data = (response.body as { data: { errorTracking: { sent: number } } }).data
+    const data = (
+      response.body as {
+        data: {
+          errorTracking: { sent: number }
+          maintenance: { noticesPending: boolean; queues: { paused: unknown }[] }
+        }
+      }
+    ).data
     expect(data.errorTracking.sent).toBe(0)
+    expect(data.maintenance.noticesPending).toBe(false)
+    expect(data.maintenance.queues[0]?.paused).toBeNull()
   })
 
   it('refuses a viewer with 404 without reading the counters', async () => {
