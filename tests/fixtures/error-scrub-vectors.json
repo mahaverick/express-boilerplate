@@ -1478,5 +1478,25 @@
     "rule": "kv",
     "input": "{\n  code: 'ECONNREFUSED',\n  errno: -111\n}",
     "expected": "{\n  code: 'ECONNREFUSED',\n  errno: -111\n}"
+  },
+  {
+    "rule": "email",
+    "input": "invite failed for sk_live_zqTabcdEFGHij1234@example.com",
+    "expected": "invite failed for [email]"
+  },
+  {
+    "rule": "email",
+    "input": "invite failed for AKIAIOSFODNN7EXAMPLE%40example.com",
+    "expected": "invite failed for [email]"
+  },
+  {
+    "rule": "email",
+    "input": "invite failed for wJalrXUtnFEMI+KxMDENGzbPxRfiCYEXAMPLEKEY%40example.com",
+    "expected": "invite failed for [email]"
+  },
+  {
+    "rule": "email",
+    "input": "to=xoxb-1234567890-zqT6ABCdef@acme-corp.co.uk",
+    "expected": "to=[email]"
   }
 ]
