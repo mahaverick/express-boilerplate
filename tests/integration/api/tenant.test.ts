@@ -546,6 +546,35 @@ describe('/api/v1/tenants', () => {
       expect(JSON.stringify(response.body)).not.toMatch(/password/i)
     })
 
+    it('says whether each member is active, and returns exactly the safe user fields', async () => {
+      const { user: ownerUser, token } = await createAuthenticatedUser()
+      const { user: deactivatedUser } = await createAuthenticatedUser()
+      const tenant = await createTenant(ownerUser.id)
+      await addMembership(deactivatedUser.id, tenant.id, 'owner')
+      await userRepository.update(deactivatedUser.id, { active: false })
+
+      const response = await request(app)
+        .get(`/api/v1/tenants/${tenant.slug}/members`)
+        .set('Authorization', `Bearer ${token}`)
+
+      expect(response.status).toBe(200)
+      const members =
+        envelopeOf<{ membership: { role: MembershipRole }; user: Record<string, unknown> }[]>(
+          response
+        ).data ?? []
+      const activeRow = members.find((member) => member.user.id === ownerUser.id)
+      const inactiveRow = members.find((member) => member.user.id === deactivatedUser.id)
+      expect(activeRow?.user).toStrictEqual({
+        id: ownerUser.id,
+        email: ownerUser.email,
+        firstName: ownerUser.firstName,
+        lastName: ownerUser.lastName,
+        active: true,
+      })
+      expect(inactiveRow?.membership.role).toBe('owner')
+      expect(inactiveRow?.user.active).toBe(false)
+    })
+
     it('404s for a non-member', async () => {
       const { user: ownerUser } = await createAuthenticatedUser()
       const { token: outsiderToken } = await createAuthenticatedUser()

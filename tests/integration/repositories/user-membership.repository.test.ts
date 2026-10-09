@@ -191,6 +191,18 @@ describe('UserMembershipRepository', () => {
       expect(memberRow?.membership.role).toBe('viewer')
     })
 
+    it('says whether each listed member is active, the flag the platform last-owner guard reads', async () => {
+      const owner = await createUser()
+      const tenant = await createTenant(owner.id)
+      const deactivated = await createUser()
+      await userMembershipRepository.create({ userId: deactivated.id, tenantId: tenant.id })
+      await userRepository.update(deactivated.id, { active: false })
+
+      const rows = await userMembershipRepository.listByTenant(tenant.id)
+      expect(rows.find((row) => row.user.id === owner.id)?.user.active).toBe(true)
+      expect(rows.find((row) => row.user.id === deactivated.id)?.user.active).toBe(false)
+    })
+
     it('excludes a member whose own user account is soft-deleted', async () => {
       const owner = await createUser()
       const tenant = await createTenant(owner.id)

@@ -128,7 +128,16 @@ class TenantController extends BaseController {
   /**
    * `GET /tenants/:slug/members`: a tenant's members, each with their safe
    * user info (`UserMembershipRepository.listByTenant` never selects
-   * `passwordHash`). Anyone `resolveTenant` admits may call this.
+   * `passwordHash`). Anyone `resolveTenant` admits may call this. Each row is
+   * `{ membership, user: { id, email, firstName, lastName, active } }`; a
+   * soft-deleted user is not listed, and `user.active` is false for a
+   * deactivated one.
+   *
+   * The rows are enough to reproduce the last-owner rule, the 409 on
+   * demoting, removing or leaving as an owner: it refuses unless another
+   * listed owner remains. On a customer tenant any listed owner counts,
+   * active or not (`countOwners`); on the platform tenant only one whose
+   * `user.active` is true (`countActiveOwners`).
    */
   listMembers = this.handle(async (request, response) => {
     const members = await listMembers(tenantPrincipal(request).tenantId)

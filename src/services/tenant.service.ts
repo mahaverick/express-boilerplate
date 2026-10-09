@@ -209,7 +209,7 @@ export async function updateTenant(
 }
 
 /**
- * A tenant's members, each with safe user fields only.
+ * A tenant's members, each with safe user fields only, `active` among them.
  * @param tenantId - The tenant.
  * @returns One entry per live member.
  */
