@@ -150,7 +150,7 @@ describe('scrubText', () => {
     ],
     ['a dotted local part before one @', `${'a.'.repeat(2 * ERROR_VALUE_MAX - 10)}@b`],
     [
-      'a path token of repeated keys',
+      'a reset path of repeated key=null fields',
       `/reset/${'token=null,'.repeat(4 * ERROR_VALUE_MAX)}`.slice(0, 4 * ERROR_VALUE_MAX - 1),
     ],
     [
@@ -162,7 +162,7 @@ describe('scrubText', () => {
       `token: ${'a = [x '.repeat(4 * ERROR_VALUE_MAX)}`.slice(0, 4 * ERROR_VALUE_MAX - 1),
     ],
     [
-      'a value enclosing repeated path tokens with a key after &',
+      'a value over repeated reset paths with an &code field',
       `password=${'/reset/a&code="x y" '.repeat(4 * ERROR_VALUE_MAX)}`.slice(
         0,
         4 * ERROR_VALUE_MAX - 1

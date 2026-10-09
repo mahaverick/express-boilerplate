@@ -453,6 +453,14 @@ const AUTH_HEADER_AT = new RegExp(AUTH_HEADER_PATTERN.source, 'iy')
 const CODE_KEY_AT = new RegExp(CODE_KEY_PATTERN.source, 'iy')
 
 /**
+ * A scheme word and the placeholder an earlier rule wrote for its credential
+ * (`SCHEMED_PLACEHOLDER_VALUE`), only at `lastIndex`: a value the OAuth
+ * `code` rule runs through, since that rule's own value grammar has no such
+ * form and would stop at the scheme word.
+ */
+const SCHEMED_VALUE_AT = new RegExp(SCHEMED_PLACEHOLDER_VALUE, 'iy')
+
+/**
  * What may follow the end of a value a later key took over: its closing
  * quote and any text glued to it up to the next field delimiter, only at
  * `lastIndex`.
@@ -877,7 +885,9 @@ export function scrubText(value: string): string {
     KV_SECRET_PATTERN,
     innerKeys
   )
-  const coded = hasOauthContext ? redactedRunningThrough(keyed, CODE_KEY_PATTERN, innerKeys) : keyed
+  const coded = hasOauthContext
+    ? redactedRunningThrough(keyed, CODE_KEY_PATTERN, [...innerKeys, SCHEMED_VALUE_AT])
+    : keyed
   const scrubbed = rejoinedQueries(coded)
     .replaceAll(JWT_PATTERN, '[jwt]')
     .replaceAll(SLASHED_SECRET_EMAIL_PATTERN, (match: string, run: string, local: string) =>

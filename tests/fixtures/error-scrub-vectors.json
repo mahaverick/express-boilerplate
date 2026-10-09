@@ -2193,5 +2193,10 @@
     "rule": "path-token",
     "input": "\"otp_code=>\\\", /app/invite/password%3D\\\"[token] &b=zqS7lz zqS7htf\"",
     "expected": "\"otp_code=>\\\"[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "code_verifier=x \"cookie\" = [zqS7a zqS7b, zqS7c]/\\\"code=\n OAuth username=\"zqS7d\", nonce=\"zqS7e\"/\"CODE'&#61;Bearer [token] zqS7f zqS7g tail",
+    "expected": "code_verifier=[redacted] \"cookie\" = [redacted], nonce=\"[redacted]\"/\"CODE'&#61;[redacted]"
   }
 ]
