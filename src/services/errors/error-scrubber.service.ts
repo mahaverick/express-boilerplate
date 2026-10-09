@@ -148,12 +148,6 @@ function isHarmlessFragment(fragment: string): boolean {
 }
 
 /**
- * The path segment after `/reset/`, `/verify/`, `/invite/` or `/accept/`:
- * a token however short (`/reset/abc123XYZ`). The prefix is kept.
- */
-const PATH_TOKEN_PATTERN = /(\/(?:reset|verify|invite|accept)\/)(?!\[)[^\s/?#"'<>]+/g
-
-/**
  * `Bearer` and the credential after it, in any letter case. Besides a word
  * boundary it may follow a digit or a hex letter (the case-insensitive
  * `[G-Z_]` refuses every other letter and `_`), so one glued to a long hex
@@ -192,6 +186,77 @@ const KEY_QUOTE = String.raw`(?:\\?["']|%22|\\u00(?:22|27))`
  * The Authorization scheme words kept in front of a replaced credential.
  */
 const AUTH_SCHEMES = String.raw`(?:Bearer|Basic|Token|ApiKey|Digest|Negotiate|NTLM|Hawk|HOBA|DPoP|OAuth|AWS4-HMAC-SHA256|SCRAM-SHA-\d+)`
+
+/**
+ * A secret-named key word, the names `KV_SECRET_PATTERN` describes other than
+ * a `code` that reads as an authorization code. In that pattern it may follow
+ * any run of word characters and `-` (`refresh_token`) and take a plural `s`.
+ */
+const SECRET_KEY_WORD = String.raw`(?:pass(?:[_-]?(?:word|phrase|code|key)|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|(?:secret|private|consumer|signing|encryption|master|client)[_-]?key|auth(?:orization)?[_-]code|code[_-]?verifier|session|sid|credential|signature|sig|hmac|nonce|(?<=[\w-])response|response(?=s?${KEY_QUOTE}?\s*(?:=|%3D|&#61;|\\u003d|:\s*${KEY_QUOTE}))|(?<![A-Za-z\d])pin(?:[_-]?(?:code|number))?|(?:otp|mfa|verification|recovery|backup)[_-]?code|(?<![A-Za-z\d])(?<!(?:primary|foreign|sort|partition|cache|unique|index|s3|object|routing|shard|translation|i18n)[_-])key(?=s?\s*(?:=(?!>)|%3D|&#61;|\\u003d))|jwt|otp)`
+
+/**
+ * A `code` key where it reads as an authorization code: after `?` or `&`, on
+ * a line that names OAuth or authorization before it, first in a form body
+ * (`code=…&`), or with that word later on its line outside a brace.
+ */
+const CONTEXT_CODE_KEY = String.raw`(?:code(?<=(?:[?&]|&amp;|%26|%3F)code)|code(?<=(?:oauth|authoriz(?:ation|e)(?![a-z]))[^\n]*code)|code(?=\s*=[^\s&]*&)|code(?=[^\n{}]*(?:oauth|authoriz(?:ation|e)(?![a-z]))))`
+
+/**
+ * The replacement for a URL's or path's fragment (`FRAGMENT_PATTERN`):
+ * `#[fragment]`, unless `isHarmlessFragment` keeps it.
+ * @param match - The base, `#` and the fragment.
+ * @param base - The URL or path before `#`.
+ * @param fragment - The text after `#`.
+ * @returns The match, or the base with the fragment replaced.
+ */
+function fragmentReplacement(match: string, base: string, fragment: string): string {
+  return isHarmlessFragment(fragment) ? match : `${base}#[fragment]`
+}
+
+/**
+ * A run of characters no query, fragment or path takes, which splits a text
+ * into the words `rejoinedQueries` looks at.
+ */
+const WORD_BREAK_PATTERN = /([\s"'<>]+)/
+
+/**
+ * A placeholder the path-token or key rules wrote, followed in the same word
+ * by a `?` or `#`.
+ */
+const REDACTED_BEFORE_QUERY_PATTERN = /\[(?:redacted|token)\][^\s"'<>]*[?#]/
+
+/**
+ * Apply the query and fragment rules again to each word in which a value the
+ * path-token or key rules replaced now stands before a `?` or `#`
+ * (`/x/pwd=[a b]?q=1` became `/x/pwd=[redacted]?q=1`): a space or quote
+ * inside the value had kept the path apart from its query, so the first pass
+ * left the query, and a second scrub would take it. Only such words are
+ * scanned again.
+ * @param text - The text after the key rules.
+ * @returns The text with those queries and fragments replaced.
+ */
+function rejoinedQueries(text: string): string {
+  if (!REDACTED_BEFORE_QUERY_PATTERN.test(text)) return text
+  return text
+    .split(WORD_BREAK_PATTERN)
+    .map((word) =>
+      REDACTED_BEFORE_QUERY_PATTERN.test(word)
+        ? word
+            .replaceAll(QUERY_PATTERN, '$1?[query]')
+            .replaceAll(FRAGMENT_PATTERN, (match: string, base: string, fragment: string) =>
+              fragmentReplacement(match, base, fragment)
+            )
+        : word
+    )
+    .join('')
+}
+
+/**
+ * The path segment after `/reset/`, `/verify/`, `/invite/` or `/accept/`:
+ * a token however short (`/reset/abc123XYZ`). The prefix is kept;
+ * `pathTokenReplacement` replaces the segment.
+ */
+const PATH_TOKEN_PATTERN = /(\/(?:reset|verify|invite|accept)\/)(?!\[)([^\s/?#"'<>]+)/g
 
 /**
  * The bare words a secret-named key may hold and keep: `token: undefined`
@@ -241,31 +306,53 @@ const VALUE_BRACKETED = `(?:${PLACEHOLDER}|${EMAIL_IP_LITERAL})`
 const VALUE_END_UNIT = String.raw`(?:${VALUE_BRACKETED}|(?!${VALUE_BRACKETED})[^\s"'\\,;&})\]])`
 
 /**
- * A quoted string straight after a `:`, `=` or `=>` inside an unquoted value
- * (`token: a session="…"`), to its closing quote or the end of the line, so
- * a key written inside the value never leaves its quoted value behind.
+ * An HTML- or JSON-encoded `:` or `=` inside an unquoted value (`&#58;`,
+ * `&#61;`, `\u003a`, `\u003d`), taken whole, so its `&` or backslash does
+ * not end the value.
  */
-const VALUE_NESTED_QUOTED = String.raw`(?<=(?:[:=]|=>)\s*)(?:"(?:[^"\\\n]|\\.)*(?:"|(?=\n|$))|'(?:[^'\\\n]|\\.)*(?:'|(?=\n|$)))`
+const VALUE_ENCODED_SEPARATOR = String.raw`(?:&#(?:58|61);|\\u003[ad])`
+
+/**
+ * A separator inside an unquoted value, plain or encoded (`%3D`, `&#61;`,
+ * `\u003d`), and the whitespace after it: what a nested quoted string or
+ * array follows.
+ */
+const VALUE_NESTED_SEPARATOR = String.raw`(?:[:=]|=>|%3[AD]|${VALUE_ENCODED_SEPARATOR})\s*`
+
+/**
+ * A quoted string or an array straight after a separator inside an unquoted
+ * value (`token: a session="…"`, `token: a pwd = \"…\"`, `token: a pwd =
+ * [x, y]`): a quote as `QUOTED_VALUE` takes it (plain, escaped or
+ * JSON-escaped, `\u0022` or `\u0027`), to its closing quote or the end of
+ * the line; a URL-encoded one (`%22`) to its closing `%22` or the next
+ * whitespace; or an array to its first `]`. So a key written inside the value
+ * never leaves its value behind.
+ */
+const VALUE_NESTED_QUOTED = String.raw`(?=["'\\%[])(?<=${VALUE_NESTED_SEPARATOR})(?:"(?:[^"\\\n]|\\.)*(?:"|(?=\n|$))|'(?:[^'\\\n]|\\.)*(?:'|(?=\n|$))|\\"(?:(?!\\")[^\n])*(?:\\"|(?=\n|$))|\\'(?:(?!\\')[^\n])*(?:\\'|(?=\n|$))|\\u0022(?:(?!\\u0022)[^\n])*(?:\\u0022|(?=\n|$))|\\u0027(?:(?!\\u0027)[^\n])*(?:\\u0027|(?=\n|$))|%22(?:(?!%22)[^\s"'\\&])*(?:%22)?|${ARRAY_VALUE})`
 
 /**
  * One character inside an unquoted value after a plain separator, a space
- * included, a bracketed token, or a nested quoted string.
+ * included, a bracketed token, a nested quoted string or array, or an
+ * encoded separator. A nested array's `[` is never taken as a lone
+ * character, so the value cannot stop inside the array.
  */
-const VALUE_INNER_UNIT = String.raw`(?:${VALUE_BRACKETED}|${VALUE_NESTED_QUOTED}|(?!${VALUE_BRACKETED})[^\n"'\\,;&})\]])`
+const VALUE_INNER_UNIT = String.raw`(?:${VALUE_BRACKETED}|${VALUE_NESTED_QUOTED}|${VALUE_ENCODED_SEPARATOR}|(?!${VALUE_BRACKETED})(?!\[(?<=${VALUE_NESTED_SEPARATOR}\[)[^\]\n]*\])[^\n"'\\,;&})\]])`
 
 /**
  * The last unit of an unquoted value after a plain separator, or any unit of
- * one after an encoded separator: one that may end it, or a nested quoted
- * string.
+ * one after an encoded separator: one that may end it, a nested quoted string
+ * or array, or an encoded separator.
  */
-const VALUE_LAST_UNIT = `(?:${VALUE_NESTED_QUOTED}|${VALUE_END_UNIT})`
+const VALUE_LAST_UNIT = `(?:${VALUE_NESTED_QUOTED}|${VALUE_ENCODED_SEPARATOR}|${VALUE_END_UNIT})`
 
 /**
  * An unquoted value. After a plain `:`, `=` or `=>` it runs to the next field
  * delimiter (`,` `;` `&` `}` `)` `]`, a quote or the end of the line), so a
  * space-separated multi-word value goes whole, and one holding a delimiter
- * stops there; trailing spaces are kept. A quoted string after a `:` or `=`
- * inside it goes with it (`VALUE_NESTED_QUOTED`). After an
+ * stops there; trailing spaces are kept. A quoted string or array after a
+ * plain or encoded separator inside it goes with it (`VALUE_NESTED_QUOTED`),
+ * and so does an HTML- or JSON-encoded separator (`&#61;`, `\u003d`), so a
+ * key written inside the value never keeps its value. After an
  * encoded separator (`%3D`) it stops at whitespace too, outside such a
  * quoted string. A placeholder an
  * earlier rule wrote inside the value (a URL's `#[fragment]` or `?[query]`)
@@ -336,7 +423,7 @@ const AUTH_HEADER_PATTERN = new RegExp(
  * they are (`KEPT_VALUE`), so `token: undefined` stays readable.
  */
 const KV_SECRET_PATTERN = new RegExp(
-  String.raw`(?:\b|(?<=%26|%3F)|(?<=#)(?=\[fragment\]))((?:(?<=#)\[fragment\]|[\w-]*?(?:pass(?:[_-]?(?:word|phrase|code|key)|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|(?:secret|private|consumer|signing|encryption|master|client)[_-]?key|auth(?:orization)?[_-]code|code[_-]?verifier|session|sid|credential|signature|sig|hmac|nonce|(?<=[\w-])response|response(?=s?${KEY_QUOTE}?\s*(?:=|%3D|&#61;|\\u003d|:\s*${KEY_QUOTE}))|(?<![A-Za-z\d])pin(?:[_-]?(?:code|number))?|(?:otp|mfa|verification|recovery|backup)[_-]?code|(?<![A-Za-z\d])(?<!(?:primary|foreign|sort|partition|cache|unique|index|s3|object|routing|shard|translation|i18n)[_-])key(?=s?\s*(?:=(?!>)|%3D|&#61;|\\u003d))|jwt|otp)s?|code(?<=(?:[?&]|&amp;|%26|%3F)code)|code(?<=(?:oauth|authoriz(?:ation|e)(?![a-z]))[^\n]*code)|code(?=\s*=[^\s&]*&)|code(?=[^\n{}]*(?:oauth|authoriz(?:ation|e)(?![a-z]))))${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?)` +
+  String.raw`(?:\b|(?<=%26|%3F)|(?<=#)(?=\[fragment\]))((?:(?<=#)\[fragment\]|[\w-]*?${SECRET_KEY_WORD}s?|${CONTEXT_CODE_KEY})${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?)` +
     `${KEPT_VALUE}(?:${QUOTED_VALUE}|${ARRAY_VALUE}|${SCHEMED_PLACEHOLDER_VALUE}|${UNQUOTED_VALUE})`,
   'gi'
 )
@@ -364,6 +451,188 @@ const CODE_KEY_PATTERN = new RegExp(
     `${KEPT_VALUE}(?:${QUOTED_VALUE}|${ARRAY_VALUE}|${UNQUOTED_VALUE})`,
   'gi'
 )
+
+/**
+ * A secret-named key, its separator and any opening quote, starting exactly
+ * at `lastIndex`, in any letter case: where `KV_SECRET_PATTERN` could find a
+ * key word, without the run of word characters it may take before it.
+ */
+const SECRET_KEY_AT = new RegExp(
+  String.raw`(?:${SECRET_KEY_WORD}s?|(?:\b|(?<=%26|%3F))${CONTEXT_CODE_KEY})${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?`,
+  'iy'
+)
+
+/**
+ * `KV_SECRET_PATTERN`, matching only at `lastIndex`.
+ */
+const KV_SECRET_AT = new RegExp(KV_SECRET_PATTERN.source, 'iy')
+
+/**
+ * The key and separator `KV_SECRET_PATTERN` matches, whatever the value,
+ * only at `lastIndex`.
+ */
+const KV_KEY_AT = new RegExp(
+  String.raw`(?:\b|(?<=%26|%3F))(?:[\w-]*?${SECRET_KEY_WORD}s?|${CONTEXT_CODE_KEY})${KEY_QUOTE}?\s*${KEY_SEPARATOR}`,
+  'iy'
+)
+
+/**
+ * A placeholder an earlier scrub wrote as a key's value, after any opening
+ * quote, only at `lastIndex`.
+ */
+const KEPT_PLACEHOLDER_AT = new RegExp(String.raw`\s*${KEY_QUOTE}?${PLACEHOLDER}`, 'iy')
+
+/**
+ * How far before a key word a path token's cut may fall, so the key rule
+ * still sees the characters its lookbehinds need (`&` before `code`, `_`
+ * before `response`, `&amp;`).
+ */
+const KEY_CONTEXT_MAX = 5
+
+/**
+ * A secret-named key the key rule would find inside a path token, once the
+ * part of the segment before `cut` is replaced.
+ */
+interface KeyInPathToken {
+  /**
+   * Where the kept part of the segment starts, as an index into it.
+   */
+  cut: number
+  /**
+   * What replaces the segment before the cut: `[token]`, or nothing at its start.
+   */
+  before: string
+  /**
+   * Where the key rule's match starts, as an index into the original text.
+   */
+  keyStart: number
+  /**
+   * The length of the key and its separator.
+   */
+  keyLength: number
+  /**
+   * The length of the key rule's whole match, or undefined when it keeps the value.
+   */
+  pairLength: number | undefined
+  /**
+   * Whether the value the key rule keeps is a placeholder (`[redacted]`).
+   */
+  isPlaceholderKept: boolean
+  /**
+   * The length of that placeholder and any opening quote before it.
+   */
+  placeholderLength: number
+}
+
+/**
+ * Find where to cut a path token before a key word at `keyAt`, so that the
+ * key rule still matches the key once the part before the cut is `[token]`:
+ * at the key word itself, or up to `KEY_CONTEXT_MAX` characters before it
+ * when the rule needs them (`mfa_response`, `&code`).
+ * @param text - The text being scrubbed.
+ * @param start - Where the segment starts in it.
+ * @param keyAt - Where the key word starts, as an index into the segment.
+ * @returns The cut and what the key rule matches there, or undefined when no cut lets it match.
+ */
+function findKeyCut(text: string, start: number, keyAt: number): KeyInPathToken | undefined {
+  for (let cut = keyAt; cut >= Math.max(0, keyAt - KEY_CONTEXT_MAX); cut -= 1) {
+    const before = cut === 0 ? '' : '[token]'
+    const rewritten = `${text.slice(0, start)}${before}${text.slice(start + cut)}`
+    // Index `start + shift + i` of the rewritten text is index `start + i` of the original.
+    const shift = before.length - cut
+    for (let at = start + cut; at <= start + keyAt; at += 1) {
+      KV_KEY_AT.lastIndex = at + shift
+      const key = KV_KEY_AT.exec(rewritten)
+      if (key) {
+        KV_SECRET_AT.lastIndex = at + shift
+        const pair = KV_SECRET_AT.exec(rewritten)
+        KEPT_PLACEHOLDER_AT.lastIndex = at + shift + key[0].length
+        const placeholder = KEPT_PLACEHOLDER_AT.exec(rewritten)
+        return {
+          cut,
+          before,
+          keyStart: at,
+          keyLength: key[0].length,
+          pairLength: pair?.[0].length,
+          isPlaceholderKept: placeholder !== null,
+          placeholderLength: placeholder?.[0].length ?? 0,
+        }
+      }
+    }
+  }
+  return undefined
+}
+
+/**
+ * The replacement for a path token (`PATH_TOKEN_PATTERN`): `[token]` for the
+ * whole segment, unless it holds a secret-named key whose value runs on past
+ * the segment's end (`/reset/x.tsrefresh_token = …`, `/reset/abcpassword="…"`).
+ * The keys are taken from the left, as the key rule takes them, and one
+ * whose value ends inside the segment, or that holds a bare word the key rule
+ * keeps (`null`), goes with the segment. For the first key whose value runs
+ * past the end, only the part before it becomes `[token]` (`findKeyCut`), and
+ * the key, its separator and the rest are left for the key rule to replace
+ * the value. A key whose value is already a placeholder is kept with it and
+ * the rest of the segment becomes `[token]`; at the start of the segment the
+ * segment is left as it is, which is what a second scrub of a key this rule
+ * left in view finds.
+ * @param _match - The prefix and the segment.
+ * @param prefix - The `/reset/` or other prefix.
+ * @param token - The segment.
+ * @param offset - Where the match starts in the text.
+ * @param text - The text being scrubbed.
+ * @returns The prefix with the segment, or the part of it before a key, replaced.
+ */
+function pathTokenReplacement(
+  _match: string,
+  prefix: string,
+  token: string,
+  offset: number,
+  text: string
+): string {
+  const start = offset + prefix.length
+  let keyAt = 0
+  while (keyAt < token.length) {
+    SECRET_KEY_AT.lastIndex = start + keyAt
+    const found = SECRET_KEY_AT.test(text) ? findKeyCut(text, start, keyAt) : undefined
+    if (found === undefined) {
+      keyAt += 1
+      continue
+    }
+    const replaced = replacedBeforeKey(prefix, token, start, found)
+    if (replaced !== undefined) return replaced
+    const skipTo = found.keyStart + (found.pairLength ?? found.keyLength) - start
+    keyAt = Math.max(keyAt + 1, skipTo)
+  }
+  return `${prefix}[token]`
+}
+
+/**
+ * The path token with the part before a key found in it replaced, when that
+ * key's value runs past the segment or is already a placeholder; see
+ * `pathTokenReplacement`.
+ * @param prefix - The `/reset/` or other prefix.
+ * @param token - The segment.
+ * @param start - Where the segment starts in the text.
+ * @param found - The key and its cut (`findKeyCut`).
+ * @returns The replacement, or undefined when the key goes with the segment.
+ */
+function replacedBeforeKey(
+  prefix: string,
+  token: string,
+  start: number,
+  found: KeyInPathToken
+): string | undefined {
+  if (found.pairLength !== undefined) {
+    const pairEnd = found.keyStart + found.pairLength - start
+    return pairEnd > token.length ? `${prefix}${found.before}${token.slice(found.cut)}` : undefined
+  }
+  if (!found.isPlaceholderKept) return undefined
+  if (found.cut === 0) return `${prefix}${token}`
+  const keptEnd = found.keyStart + found.keyLength + found.placeholderLength - start
+  const rest = keptEnd < token.length ? '[token]' : ''
+  return `${prefix}${found.before}${token.slice(found.cut, keptEnd)}${rest}`
+}
 
 /**
  * A JSON Web Token: three dot-separated base64url segments, the first a
@@ -610,7 +879,8 @@ function capped(value: string, wasCut: boolean): string {
  * URL's, path's or bare word's query string becomes `?[query]`; a fragment,
  * unless a line or heading anchor or a placeholder (`isHarmlessFragment`),
  * becomes `#[fragment]`; the segment after `/reset/`, `/verify/`, `/invite/` or
- * `/accept/` becomes `[token]`; `Bearer <credential>` becomes
+ * `/accept/` becomes `[token]`, up to a secret-named key in it whose value
+ * runs past it (`pathTokenReplacement`); `Bearer <credential>` becomes
  * `Bearer [token]`; `Basic <base64>` becomes `Basic [token]`, the scheme's
  * case kept; an Authorization- or Cookie-valued key's value
  * (`authorization`, `auth`, `cookie`, `set-cookie`), after any known scheme
@@ -622,7 +892,9 @@ function capped(value: string, wasCut: boolean): string {
  * `credential`, `jwt`, `otp`, `signature`, `sig`, `hmac`, `nonce`,
  * `response`; `code` after `?` or `&` or on an OAuth or authorization line;
  * `key` before `=`; and every `code` in a text that names an OAuth exchange
- * (`OAUTH_CONTEXT_PATTERN`)), become `[redacted]`; a JWT becomes `[jwt]`; an
+ * (`OAUTH_CONTEXT_PATTERN`)), become `[redacted]`; a query or fragment that
+ * a replaced value now joins to its path is replaced as above
+ * (`rejoinedQueries`); a JWT becomes `[jwt]`; an
  * email address (`EMAIL_PATTERN`: `@` written plainly, encoded or fullwidth,
  * a quoted local part, an IP-literal or single-label domain) becomes
  * `[email]`, together with a secret-looking base64 run joined to its local
@@ -653,7 +925,7 @@ function capped(value: string, wasCut: boolean): string {
 export function scrubText(value: string): string {
   const input = scanned(value)
   const hasOauthContext = OAUTH_CONTEXT_PATTERN.test(input)
-  const scrubbed = input
+  const keyed = input
     .replaceAll(KEY_DETAIL_PATTERN, 'Key ($1)=([value])')
     .replaceAll(PG_INPUT_PATTERN, '$1"[value]"')
     .replaceAll(PG_RANGE_PATTERN, '$1"[value]"')
@@ -661,9 +933,13 @@ export function scrubText(value: string): string {
     .replaceAll(USERINFO_PATTERN, '$1[credentials]@')
     .replaceAll(QUERY_PATTERN, '$1?[query]')
     .replaceAll(FRAGMENT_PATTERN, (match: string, base: string, fragment: string) =>
-      isHarmlessFragment(fragment) ? match : `${base}#[fragment]`
+      fragmentReplacement(match, base, fragment)
     )
-    .replaceAll(PATH_TOKEN_PATTERN, '$1[token]')
+    .replaceAll(
+      PATH_TOKEN_PATTERN,
+      (match: string, prefix: string, token: string, offset: number, text: string) =>
+        pathTokenReplacement(match, prefix, token, offset, text)
+    )
     .replaceAll(BEARER_PATTERN, 'Bearer [token]')
     .replaceAll(BASIC_PATTERN, '$1 [token]')
     .replaceAll(AUTH_HEADER_PATTERN, '$1[redacted]')
@@ -671,6 +947,7 @@ export function scrubText(value: string): string {
     .replaceAll(CODE_KEY_PATTERN, (match: string, key: string) =>
       hasOauthContext ? `${key}[redacted]` : match
     )
+  const scrubbed = rejoinedQueries(keyed)
     .replaceAll(JWT_PATTERN, '[jwt]')
     .replaceAll(SLASHED_SECRET_EMAIL_PATTERN, (match: string, run: string, local: string) =>
       isSlashedSecret(`${run}${LEADING_BASE64_PATTERN.exec(local)?.[0] ?? ''}`) ? '[email]' : match

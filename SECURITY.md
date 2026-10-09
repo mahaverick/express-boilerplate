@@ -1197,9 +1197,10 @@ query`: the SQL text is never sent. A thrown object that is not an `Error`
   scheme, Digest and OAuth included) and of a Cookie line, to the end of the
   line; `key=value` secrets (plural keys, array values, `=>` and URL-, HTML- or
   JSON-encoded separators; an unquoted value runs over a placeholder an
-  earlier rule wrote inside it, an address's IP literal and a quoted string
-  after a `:` or `=` inside it, so a redacted URL or nested key never ends it
-  early; a value after a replaced URL fragment, `#[fragment] = …`, too; `sig`, `hmac`, `nonce`, `response`, `pin`,
+  earlier rule wrote inside it, an address's IP literal, an HTML- or
+  JSON-encoded separator, and a quoted string (plain, escaped, JSON-escaped
+  or URL-encoded) or array after a plain or encoded separator inside it, so a
+  redacted URL or nested key never ends it early; a value after a replaced URL fragment, `#[fragment] = …`, too; `sig`, `hmac`, `nonce`, `response`, `pin`,
   `passphrase` and the one-time code names, and compound key names such as
   `secret_key` before `:` too; only the bare values `undefined`, `null`,
   `missing`, `true` and `false`, and already-scrubbed placeholders, are kept);
@@ -1213,7 +1214,10 @@ query`: the SQL text is never sent. A thrown object that is not an `Error`
   `%2540`, fullwidth `＠`, quoted local parts, IP-literal and single-label
   domains, and a secret-looking base64 run joined to the local part by `/`,
   which goes with the address), IP addresses, `+`-prefixed phone numbers, the token segment after
-  `/reset/`, `/verify/`, `/invite/` or `/accept/`, and long hex and base64
+  `/reset/`, `/verify/`, `/invite/` or `/accept/` (up to a secret-named key
+  in it whose value runs past it, which the key rule then takes:
+  `/reset/x.tsrefresh_token = …` becomes `/reset/[token]token = [redacted]`),
+  and long hex and base64
   runs. Each value is then capped at 1024 characters. The span that records
   the exception (`span.recordException`) gets the same scrubbed name, message
   and stack, so Tempo never holds the raw message either. The frontends port
@@ -1259,9 +1263,19 @@ query`: the SQL text is never sent. A thrown object that is not an `Error`
   base64 (the base64 run rule's test), counting stopped by a `%2F`
   (`abc/def%2Fghi@example.com` keeps `abc/`), or when it follows an address
   character directly (a letter, digit, `.`, `%`, `+`, `-`, `_`, `/` or `@`:
-  `jane@example.com/<secret>@…`, `u.<secret>@…`); and a quoted value whose key
+  `jane@example.com/<secret>@…`, `u.<secret>@…`); a quoted value whose key
   sits inside a URL query that an encoded key's value runs into
-  (`secret%3Dhttps://…?a=1/api_key="…"` keeps the quoted value). Scrubbing a
+  (`secret%3Dhttps://…?a=1/api_key="…"` keeps the quoted value); quotes
+  that do not pair up inside an unquoted value, which can take a later key's
+  name into a nested quoted string and leave that key's value in view
+  (`token: a pwd=\"x \"sid\": "…"`); a value opened by an escaped single
+  quote (`\'`), which runs past its closing `\'` to the next plain `'` and
+  leaves the value that quote opens in view (`pwd = \'…\', sid = '…'`); up to
+  five characters glued in front of a key word in a path token, kept when the
+  key rule needs them to see the key (`/verify/lresponse\u003a…` keeps
+  `lresponse`); and, at the start of a path token, a key whose value is
+  already a placeholder, which keeps the rest of the segment in view
+  (`/reset/sid%3A[redacted])…`). Scrubbing a
   scrubbed text
   again changes nothing, except contrived inputs that glue a phone number, IP
   address or hex run to one another, put an address with a quoted local part
