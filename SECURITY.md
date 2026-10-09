@@ -1197,9 +1197,14 @@ query`: the SQL text is never sent. A thrown object that is not an `Error`
   scheme, Digest and OAuth included) and of a Cookie line, to the end of the
   line; `key=value` secrets (plural keys, array values, `=>` and URL-, HTML- or
   JSON-encoded separators; an unquoted value runs over a placeholder an
-  earlier rule wrote inside it, an address's IP literal and a quoted string
-  after a `:` or `=` inside it, so a redacted URL or nested key never ends it
-  early; a value after a replaced URL fragment, `#[fragment] = …`, too; `sig`, `hmac`, `nonce`, `response`, `pin`,
+  earlier rule wrote inside it, an address's IP literal, an HTML- or
+  JSON-encoded separator, and a quoted string (plain, escaped, JSON-escaped
+  or URL-encoded) or array after a plain or encoded separator inside it, so a
+  redacted URL never ends it early; a value of this rule, the
+  Authorization rule or the OAuth `code` rule that takes a later secret-named key's or Authorization
+  or Cookie key's name, separator or opening quote runs on to the end of that key's value, and over a closing
+  quote and text glued to it, so the later key's value is never left in
+  view; a value after a replaced URL fragment, `#[fragment] = …`, too; `sig`, `hmac`, `nonce`, `response`, `pin`,
   `passphrase` and the one-time code names, and compound key names such as
   `secret_key` before `:` too; only the bare values `undefined`, `null`,
   `missing`, `true` and `false`, and already-scrubbed placeholders, are kept);
@@ -1212,7 +1217,8 @@ query`: the SQL text is never sent. A thrown object that is not an `Error`
   Slack and Stripe-style keys, email addresses (including unicode, `%40`,
   `%2540`, fullwidth `＠`, quoted local parts, IP-literal and single-label
   domains, and a secret-looking base64 run joined to the local part by `/`,
-  which goes with the address), IP addresses, `+`-prefixed phone numbers, the token segment after
+  which goes with the address, as does one that starts at a single-label
+  domain, `x@wJalr…/K7MDENG/…`), IP addresses, `+`-prefixed phone numbers, the token segment after
   `/reset/`, `/verify/`, `/invite/` or `/accept/`, and long hex and base64
   runs. Each value is then capped at 1024 characters. The span that records
   the exception (`span.recordException`) gets the same scrubbed name, message
@@ -1259,9 +1265,19 @@ query`: the SQL text is never sent. A thrown object that is not an `Error`
   base64 (the base64 run rule's test), counting stopped by a `%2F`
   (`abc/def%2Fghi@example.com` keeps `abc/`), or when it follows an address
   character directly (a letter, digit, `.`, `%`, `+`, `-`, `_`, `/` or `@`:
-  `jane@example.com/<secret>@…`, `u.<secret>@…`); and a quoted value whose key
+  `jane@example.com/<secret>@…`, `u.<secret>@…`); a quoted value whose key
   sits inside a URL query that an encoded key's value runs into
-  (`secret%3Dhttps://…?a=1/api_key="…"` keeps the quoted value). Scrubbing a
+  (`secret%3Dhttps://…?a=1/api_key="…"` keeps the quoted value); a key name
+  glued to the end of the segment after `/reset/`, `/verify/`, `/invite/` or
+  `/accept/`, which goes into `[token]` with the segment and leaves the value
+  after it in view (`/app/reset/x.tsrefresh_token = …` becomes
+  `/app/reset/[token] = …`); the parameters other than
+  secret-named ones of an Authorization or Cookie value opened by an escaped
+  quote and a scheme (`\"OAuth username="…", realm="…"` keeps `username`
+  and `realm`; `oauth_signature`, `oauth_token`, `nonce`, `cnonce` and
+  `response` are still redacted); and the rest of a base64 run that is the
+  domain of an address whose local part follows a `/`
+  (`dir/x@wJalr…/K7MDENG/…` keeps `/K7MDENG/…`). Scrubbing a
   scrubbed text
   again changes nothing, except contrived inputs that glue a phone number, IP
   address or hex run to one another, put an address with a quoted local part

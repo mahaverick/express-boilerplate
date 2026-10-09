@@ -194,6 +194,56 @@ const KEY_QUOTE = String.raw`(?:\\?["']|%22|\\u00(?:22|27))`
 const AUTH_SCHEMES = String.raw`(?:Bearer|Basic|Token|ApiKey|Digest|Negotiate|NTLM|Hawk|HOBA|DPoP|OAuth|AWS4-HMAC-SHA256|SCRAM-SHA-\d+)`
 
 /**
+ * The replacement for a URL's or path's fragment (`FRAGMENT_PATTERN`):
+ * `#[fragment]`, unless `isHarmlessFragment` keeps it.
+ * @param match - The base, `#` and the fragment.
+ * @param base - The URL or path before `#`.
+ * @param fragment - The text after `#`.
+ * @returns The match, or the base with the fragment replaced.
+ */
+function fragmentReplacement(match: string, base: string, fragment: string): string {
+  return isHarmlessFragment(fragment) ? match : `${base}#[fragment]`
+}
+
+/**
+ * A run of characters no query, fragment or path takes, which splits a text
+ * into the words `rejoinedQueries` looks at.
+ */
+const WORD_BREAK_PATTERN = /([\s"'<>]+)/
+
+/**
+ * A placeholder the path-token or key rules wrote, followed in the same word
+ * by a `?` or `#`.
+ */
+const REDACTED_BEFORE_QUERY_PATTERN = /\[(?:redacted|token)\][^\s"'<>]*[?#]/
+
+/**
+ * Apply the query and fragment rules again to each word in which a value the
+ * path-token or key rules replaced now stands before a `?` or `#`
+ * (`/x/pwd=[a b]?q=1` became `/x/pwd=[redacted]?q=1`): a space or quote
+ * inside the value had kept the path apart from its query, so the first pass
+ * left the query, and a second scrub would take it. Only such words are
+ * scanned again.
+ * @param text - The text after the key rules.
+ * @returns The text with those queries and fragments replaced.
+ */
+function rejoinedQueries(text: string): string {
+  if (!REDACTED_BEFORE_QUERY_PATTERN.test(text)) return text
+  return text
+    .split(WORD_BREAK_PATTERN)
+    .map((word) =>
+      REDACTED_BEFORE_QUERY_PATTERN.test(word)
+        ? word
+            .replaceAll(QUERY_PATTERN, '$1?[query]')
+            .replaceAll(FRAGMENT_PATTERN, (match: string, base: string, fragment: string) =>
+              fragmentReplacement(match, base, fragment)
+            )
+        : word
+    )
+    .join('')
+}
+
+/**
  * The bare words a secret-named key may hold and keep: `token: undefined`
  * reads as a missing value, not a leaked one.
  */
@@ -241,31 +291,53 @@ const VALUE_BRACKETED = `(?:${PLACEHOLDER}|${EMAIL_IP_LITERAL})`
 const VALUE_END_UNIT = String.raw`(?:${VALUE_BRACKETED}|(?!${VALUE_BRACKETED})[^\s"'\\,;&})\]])`
 
 /**
- * A quoted string straight after a `:`, `=` or `=>` inside an unquoted value
- * (`token: a session="…"`), to its closing quote or the end of the line, so
- * a key written inside the value never leaves its quoted value behind.
+ * An HTML- or JSON-encoded `:` or `=` inside an unquoted value (`&#58;`,
+ * `&#61;`, `\u003a`, `\u003d`), taken whole, so its `&` or backslash does
+ * not end the value.
  */
-const VALUE_NESTED_QUOTED = String.raw`(?<=(?:[:=]|=>)\s*)(?:"(?:[^"\\\n]|\\.)*(?:"|(?=\n|$))|'(?:[^'\\\n]|\\.)*(?:'|(?=\n|$)))`
+const VALUE_ENCODED_SEPARATOR = String.raw`(?:&#(?:58|61);|\\u003[ad])`
+
+/**
+ * A separator inside an unquoted value, plain or encoded (`%3D`, `&#61;`,
+ * `\u003d`), and the whitespace after it: what a nested quoted string or
+ * array follows.
+ */
+const VALUE_NESTED_SEPARATOR = String.raw`(?:[:=]|=>|%3[AD]|${VALUE_ENCODED_SEPARATOR})\s*`
+
+/**
+ * A quoted string or an array straight after a separator inside an unquoted
+ * value (`token: a session="…"`, `token: a pwd = \"…\"`, `token: a pwd =
+ * [x, y]`): a quote as `QUOTED_VALUE` takes it (plain, escaped or
+ * JSON-escaped, `\u0022` or `\u0027`), to its closing quote or the end of
+ * the line; a URL-encoded one (`%22`) to its closing `%22` or the next
+ * whitespace; or an array to its first `]`. So a key written inside the value
+ * never leaves its value behind.
+ */
+const VALUE_NESTED_QUOTED = String.raw`(?=["'\\%[])(?<=${VALUE_NESTED_SEPARATOR})(?:"(?:[^"\\\n]|\\.)*(?:"|(?=\n|$))|'(?:[^'\\\n]|\\.)*(?:'|(?=\n|$))|\\"(?:(?!\\")[^\n])*(?:\\"|(?=\n|$))|\\'(?:(?!\\')[^\n])*(?:\\'|(?=\n|$))|\\u0022(?:(?!\\u0022)[^\n])*(?:\\u0022|(?=\n|$))|\\u0027(?:(?!\\u0027)[^\n])*(?:\\u0027|(?=\n|$))|%22(?:(?!%22)[^\s"'\\&])*(?:%22)?|${ARRAY_VALUE})`
 
 /**
  * One character inside an unquoted value after a plain separator, a space
- * included, a bracketed token, or a nested quoted string.
+ * included, a bracketed token, a nested quoted string or array, or an
+ * encoded separator. A nested array's `[` is never taken as a lone
+ * character, so the value cannot stop inside the array.
  */
-const VALUE_INNER_UNIT = String.raw`(?:${VALUE_BRACKETED}|${VALUE_NESTED_QUOTED}|(?!${VALUE_BRACKETED})[^\n"'\\,;&})\]])`
+const VALUE_INNER_UNIT = String.raw`(?:${VALUE_BRACKETED}|${VALUE_NESTED_QUOTED}|${VALUE_ENCODED_SEPARATOR}|(?!${VALUE_BRACKETED})(?!\[(?<=${VALUE_NESTED_SEPARATOR}\[)[^\]\n]*\])[^\n"'\\,;&})\]])`
 
 /**
  * The last unit of an unquoted value after a plain separator, or any unit of
- * one after an encoded separator: one that may end it, or a nested quoted
- * string.
+ * one after an encoded separator: one that may end it, a nested quoted string
+ * or array, or an encoded separator.
  */
-const VALUE_LAST_UNIT = `(?:${VALUE_NESTED_QUOTED}|${VALUE_END_UNIT})`
+const VALUE_LAST_UNIT = `(?:${VALUE_NESTED_QUOTED}|${VALUE_ENCODED_SEPARATOR}|${VALUE_END_UNIT})`
 
 /**
  * An unquoted value. After a plain `:`, `=` or `=>` it runs to the next field
  * delimiter (`,` `;` `&` `}` `)` `]`, a quote or the end of the line), so a
  * space-separated multi-word value goes whole, and one holding a delimiter
- * stops there; trailing spaces are kept. A quoted string after a `:` or `=`
- * inside it goes with it (`VALUE_NESTED_QUOTED`). After an
+ * stops there; trailing spaces are kept. A quoted string or array after a
+ * plain or encoded separator inside it goes with it (`VALUE_NESTED_QUOTED`),
+ * and so does an HTML- or JSON-encoded separator (`&#61;`, `\u003d`), so a
+ * key written inside the value never keeps its value. After an
  * encoded separator (`%3D`) it stops at whitespace too, outside such a
  * quoted string. A placeholder an
  * earlier rule wrote inside the value (a URL's `#[fragment]` or `?[query]`)
@@ -366,6 +438,118 @@ const CODE_KEY_PATTERN = new RegExp(
 )
 
 /**
+ * `KV_SECRET_PATTERN`, matching only at `lastIndex`.
+ */
+const KV_SECRET_AT = new RegExp(KV_SECRET_PATTERN.source, 'iy')
+
+/**
+ * `AUTH_HEADER_PATTERN`, matching only at `lastIndex`.
+ */
+const AUTH_HEADER_AT = new RegExp(AUTH_HEADER_PATTERN.source, 'iy')
+
+/**
+ * `CODE_KEY_PATTERN`, matching only at `lastIndex`.
+ */
+const CODE_KEY_AT = new RegExp(CODE_KEY_PATTERN.source, 'iy')
+
+/**
+ * A scheme word and the placeholder an earlier rule wrote for its credential
+ * (`SCHEMED_PLACEHOLDER_VALUE`), only at `lastIndex`: a value the OAuth
+ * `code` rule runs through, since that rule's own value grammar has no such
+ * form and would stop at the scheme word.
+ */
+const SCHEMED_VALUE_AT = new RegExp(SCHEMED_PLACEHOLDER_VALUE, 'iy')
+
+/**
+ * What may follow the end of a value a later key took over: its closing
+ * quote and any text glued to it up to the next field delimiter, only at
+ * `lastIndex`.
+ */
+const GLUED_TAIL_AT = new RegExp(String.raw`${KEY_QUOTE}?[^\s"'\\,;&})\]]*`, 'y')
+
+/**
+ * Where a key rule's value ends once it runs through later keys: a value
+ * that took a later secret-named key's name, separator or opening quote
+ * runs on to the end of that key's value as one of `innerKeys` matches it
+ * there, then over a closing quote and any text glued to it
+ * (`GLUED_TAIL_AT`), and is checked again, so the later key's value is
+ * never left in view.
+ * @param text - The text being scrubbed.
+ * @param valueStart - Where the value starts.
+ * @param matchEnd - Where the key rule's own match ends.
+ * @param innerKeys - Sticky key rules a later key is looked for with:
+ *   `KV_SECRET_AT` and `AUTH_HEADER_AT`, and `CODE_KEY_AT` in a text that
+ *   names an OAuth exchange.
+ * @returns The end of the value, at or after `matchEnd`.
+ */
+function runThroughEnd(
+  text: string,
+  valueStart: number,
+  matchEnd: number,
+  innerKeys: readonly RegExp[]
+): number {
+  let end = matchEnd
+  let at = valueStart
+  for (;;) {
+    for (; at < end && end < text.length; at += 1) {
+      for (const sticky of innerKeys) end = Math.max(end, pairEndAt(sticky, text, at))
+    }
+    if (end === matchEnd) return end
+    GLUED_TAIL_AT.lastIndex = end
+    const glued = GLUED_TAIL_AT.exec(text)?.[0].length ?? 0
+    if (glued === 0) return end
+    end += glued
+  }
+}
+
+/**
+ * Where a key rule's match starting exactly at `at` ends, or `at` when it
+ * does not match there.
+ * @param sticky - A key rule with the `y` flag.
+ * @param text - The text being scrubbed.
+ * @param at - The position to try.
+ * @returns The end of the match, or `at`.
+ */
+function pairEndAt(sticky: RegExp, text: string, at: number): number {
+  sticky.lastIndex = at
+  const pair = sticky.exec(text)
+  return pair === null ? at : at + pair[0].length
+}
+
+/**
+ * Apply a key rule (`AUTH_HEADER_PATTERN`, `KV_SECRET_PATTERN` or
+ * `CODE_KEY_PATTERN`, whose group 1 is the kept key, separator and scheme)
+ * left to right, replacing
+ * each value with `[redacted]` up to `runThroughEnd`.
+ * @param text - The text being scrubbed.
+ * @param pattern - The key rule, with the `g` flag.
+ * @param innerKeys - The sticky key rules `runThroughEnd` looks for later keys with.
+ * @returns The text with every matched value replaced.
+ */
+function redactedRunningThrough(
+  text: string,
+  pattern: RegExp,
+  innerKeys: readonly RegExp[]
+): string {
+  pattern.lastIndex = 0
+  let out = ''
+  let last = 0
+  for (let match = pattern.exec(text); match !== null; match = pattern.exec(text)) {
+    const key = match[1] ?? ''
+    const end = runThroughEnd(
+      text,
+      match.index + key.length,
+      match.index + match[0].length,
+      innerKeys
+    )
+    out += `${text.slice(last, match.index)}${key}[redacted]`
+    last = end
+    pattern.lastIndex = end
+  }
+  return out + text.slice(last)
+}
+
+/**
  * A JSON Web Token: three dot-separated base64url segments, the first a
  * base64 JSON object: `eyJ` (`{"`), or, at nine or more characters, `eyA`
  * (`{ `) or `ew` (`{` and a line break or tab). The signature may be empty
@@ -418,13 +602,19 @@ const STANDARD_BASE64_PATTERN = /^[A-Za-z\d+/]+$/
 const EMAIL_LOCAL_PART = String.raw`[\p{L}\p{N}_.%+-]+`
 
 /**
+ * Not a package or action ref after `@` (`npm:…`, `workspace:…`, `canary`,
+ * `v4`, `sha256`), which a single-label domain must not be.
+ */
+const NOT_PACKAGE_REF = String.raw`(?!(?:npm|workspace|file|github|gitlab|link|portal|patch|git\+[a-z]+):)(?!(?:latest|next|canary|beta|alpha|rc|main|master|sha\d+|v\d[\w.-]*)(?![\p{L}\p{N}-]))`
+
+/**
  * An email address after its local part: the `@`, written plainly, as `%40`
  * or `%2540`, or as a fullwidth `＠` or small `﹫`, and the domain, a dotted
  * name ending in a letter label or an IP literal (`[192.168.0.1]`,
  * `[IPv6:…]`), or after a plain `@` a single label that starts with a letter
  * and is not a package or action ref. `EMAIL_PATTERN` describes each form.
  */
-const EMAIL_AT_AND_DOMAIN = String.raw`(?:(?:@|%40|%2540|＠|﹫)(?:${EMAIL_IP_LITERAL}|[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.\p{L}{2,})|@(?!(?:npm|workspace|file|github|gitlab|link|portal|patch|git\+[a-z]+):)(?!(?:latest|next|canary|beta|alpha|rc|main|master|sha\d+|v\d[\w.-]*)(?![\p{L}\p{N}-]))\p{L}[\p{L}\p{N}-]*(?=$|[\s"'<>,;:!?&/)\]}]|\.(?:$|\s)))`
+const EMAIL_AT_AND_DOMAIN = String.raw`(?:(?:@|%40|%2540|＠|﹫)(?:${EMAIL_IP_LITERAL}|[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.\p{L}{2,})|@${NOT_PACKAGE_REF}\p{L}[\p{L}\p{N}-]*(?=$|[\s"'<>,;:!?&/)\]}]|\.(?:$|\s)))`
 
 /**
  * An email address, in any script. The local part is a run of address
@@ -465,6 +655,21 @@ const SLASHED_SECRET_EMAIL_PATTERN = new RegExp(
  * The base64 characters a local part starts with.
  */
 const LEADING_BASE64_PATTERN = /^[\w+-]*/
+
+/**
+ * An address whose domain is a run of base64 characters with a `/` in it
+ * (`x@wJalr…/K7MDENG/…`): `EMAIL_PATTERN` would take only the run's first
+ * segment as a single-label domain and leave the rest of a secret in view.
+ * Group 1 is the run; the match is replaced whole when `isSlashedSecret`
+ * calls the run a secret. The local part starts only where one can start
+ * and not straight after a `/` or `@` (`SLASHED_SECRET_EMAIL_PATTERN`'s
+ * case), so a long local part is scanned once, and a package ref
+ * (`x@canary/…`) is not a domain.
+ */
+const ADDRESS_SECRET_DOMAIN_PATTERN = new RegExp(
+  String.raw`(?:"[^"\n]{1,64}"|(?<![\p{L}\p{N}_.%+/@＠﹫-])${EMAIL_LOCAL_PART})@${NOT_PACKAGE_REF}([A-Za-z][A-Za-z\d+/-]*\/[A-Za-z\d+/-]*={0,2})(?![\w+/=@-])`,
+  'gu'
+)
 
 /**
  * One IPv4 octet, 0 to 255.
@@ -622,11 +827,17 @@ function capped(value: string, wasCut: boolean): string {
  * `credential`, `jwt`, `otp`, `signature`, `sig`, `hmac`, `nonce`,
  * `response`; `code` after `?` or `&` or on an OAuth or authorization line;
  * `key` before `=`; and every `code` in a text that names an OAuth exchange
- * (`OAUTH_CONTEXT_PATTERN`)), become `[redacted]`; a JWT becomes `[jwt]`; an
+ * (`OAUTH_CONTEXT_PATTERN`)), become `[redacted]`, each of these values (the
+ * OAuth `code` one included) that takes a later
+ * secret-named, Authorization or Cookie key running on to the end of that
+ * key's value (`redactedRunningThrough`); a query or fragment that
+ * a replaced value now joins to its path is replaced as above
+ * (`rejoinedQueries`); a JWT becomes `[jwt]`; an
  * email address (`EMAIL_PATTERN`: `@` written plainly, encoded or fullwidth,
  * a quoted local part, an IP-literal or single-label domain) becomes
  * `[email]`, together with a secret-looking base64 run joined to its local
- * part by `/` (`SLASHED_SECRET_EMAIL_PATTERN`), before the PostHog-key and
+ * part by `/` (`SLASHED_SECRET_EMAIL_PATTERN`) or starting at a single-label
+ * domain (`ADDRESS_SECRET_DOMAIN_PATTERN`), before the PostHog-key and
  * vendor-credential rules run, so an address whose local part looks like one
  * of those keys goes whole, domain included; a PostHog key (`phc_`, `phx_`,
  * `phs_`) becomes `[posthog-key]` and a vendor credential
@@ -653,7 +864,7 @@ function capped(value: string, wasCut: boolean): string {
 export function scrubText(value: string): string {
   const input = scanned(value)
   const hasOauthContext = OAUTH_CONTEXT_PATTERN.test(input)
-  const scrubbed = input
+  const located = input
     .replaceAll(KEY_DETAIL_PATTERN, 'Key ($1)=([value])')
     .replaceAll(PG_INPUT_PATTERN, '$1"[value]"')
     .replaceAll(PG_RANGE_PATTERN, '$1"[value]"')
@@ -661,19 +872,29 @@ export function scrubText(value: string): string {
     .replaceAll(USERINFO_PATTERN, '$1[credentials]@')
     .replaceAll(QUERY_PATTERN, '$1?[query]')
     .replaceAll(FRAGMENT_PATTERN, (match: string, base: string, fragment: string) =>
-      isHarmlessFragment(fragment) ? match : `${base}#[fragment]`
+      fragmentReplacement(match, base, fragment)
     )
     .replaceAll(PATH_TOKEN_PATTERN, '$1[token]')
     .replaceAll(BEARER_PATTERN, 'Bearer [token]')
     .replaceAll(BASIC_PATTERN, '$1 [token]')
-    .replaceAll(AUTH_HEADER_PATTERN, '$1[redacted]')
-    .replaceAll(KV_SECRET_PATTERN, '$1[redacted]')
-    .replaceAll(CODE_KEY_PATTERN, (match: string, key: string) =>
-      hasOauthContext ? `${key}[redacted]` : match
-    )
+  const innerKeys = hasOauthContext
+    ? [KV_SECRET_AT, AUTH_HEADER_AT, CODE_KEY_AT]
+    : [KV_SECRET_AT, AUTH_HEADER_AT]
+  const keyed = redactedRunningThrough(
+    redactedRunningThrough(located, AUTH_HEADER_PATTERN, innerKeys),
+    KV_SECRET_PATTERN,
+    innerKeys
+  )
+  const coded = hasOauthContext
+    ? redactedRunningThrough(keyed, CODE_KEY_PATTERN, [...innerKeys, SCHEMED_VALUE_AT])
+    : keyed
+  const scrubbed = rejoinedQueries(coded)
     .replaceAll(JWT_PATTERN, '[jwt]')
     .replaceAll(SLASHED_SECRET_EMAIL_PATTERN, (match: string, run: string, local: string) =>
       isSlashedSecret(`${run}${LEADING_BASE64_PATTERN.exec(local)?.[0] ?? ''}`) ? '[email]' : match
+    )
+    .replaceAll(ADDRESS_SECRET_DOMAIN_PATTERN, (match: string, run: string) =>
+      isSlashedSecret(run) ? '[email]' : match
     )
     .replaceAll(EMAIL_PATTERN, '[email]')
     .replaceAll(POSTHOG_KEY_PATTERN, '[posthog-key]')

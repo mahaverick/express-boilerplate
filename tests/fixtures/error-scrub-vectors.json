@@ -1878,5 +1878,325 @@
     "rule": "kv",
     "input": "token: zqS7a zqS7b session=\"zqS7leak\"",
     "expected": "token: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "token: a pwd = \"zqS7hunter\"",
+    "expected": "token: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "token: a pwd = \\\"zqS7hunter\\\"",
+    "expected": "token: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "token: a pwd = \\'zqS7hunter\\'",
+    "expected": "token: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "token: a pwd = \\u0022zqS7hunter\\u0022",
+    "expected": "token: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "token: a pwd => \\\"zqS7hunter\\\"",
+    "expected": "token: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "token: a pwd = [zqS7a, zqS7b]",
+    "expected": "token: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "token: a pwd&#61;zqS7hunter rest",
+    "expected": "token: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "token: a pwd\\u003dzqS7hunter rest",
+    "expected": "token: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "token: a x-pwd = \\\"zqS7hunter\\\"",
+    "expected": "token: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "token: a/pwd = \\\"zqS7hunter\\\"",
+    "expected": "token: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "#[fragment] = a/pwd = \\\"zqS7hunter; x\\\" failed",
+    "expected": "#[fragment] = [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "token: a https://app.example.com/x#[fragment] = \\\"zqS7hunter\\\"",
+    "expected": "token: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "token: a b = \\\"zqS7x\\\" tail words",
+    "expected": "token: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "token: a pwd = \\\"zqS7x\\\", next=1",
+    "expected": "token: [redacted], next=1"
+  },
+  {
+    "rule": "kv",
+    "input": "token%3Dabc/pwd%3D\\\"zqS7x\\\"",
+    "expected": "token%3D[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "token: zqS7a pwd here zqS7b",
+    "expected": "token: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "token: zqS7a the session expired",
+    "expected": "token: [redacted]"
+  },
+  {
+    "rule": "path-token",
+    "input": "/app/reset/x.tsrefresh_token = zqS7hunter2",
+    "expected": "/app/reset/[token] = zqS7hunter2"
+  },
+  {
+    "rule": "path-token",
+    "input": "/reset/abcpassword=zqS7hunter2",
+    "expected": "/reset/[token]"
+  },
+  {
+    "rule": "path-token",
+    "input": "/reset/abcpassword=\"zqS7hunter2\"",
+    "expected": "/reset/[token]\"zqS7hunter2\""
+  },
+  {
+    "rule": "path-token",
+    "input": "/reset/x-token: zqS7hunter2 more",
+    "expected": "/reset/[token] zqS7hunter2 more"
+  },
+  {
+    "rule": "path-token",
+    "input": "GET /verify/x.REFRESH_TOKEN = zqS7hunter2",
+    "expected": "GET /verify/[token] = zqS7hunter2"
+  },
+  {
+    "rule": "path-token",
+    "input": "https://app.example.com/invite/token=zqS7hunter2",
+    "expected": "https://app.example.com/invite/[token]"
+  },
+  {
+    "rule": "path-token",
+    "input": "GET /reset/abctoken failed",
+    "expected": "GET /reset/[token] failed"
+  },
+  {
+    "rule": "path-token",
+    "input": "GET /verify/abc: expired",
+    "expected": "GET /verify/[token] expired"
+  },
+  {
+    "rule": "path-token",
+    "input": "at /app/invite/x.ts.map:10",
+    "expected": "at /app/invite/[token]"
+  },
+  {
+    "rule": "path-token",
+    "input": "nonce = zqS7a x/verify/h_c,zqS7more }",
+    "expected": "nonce = [redacted] }"
+  },
+  {
+    "rule": "path-token",
+    "input": "/reset/ab-mfa_response\\u003a\\\"zqS7x y\\\"",
+    "expected": "/reset/[token]\"zqS7x y\\\""
+  },
+  {
+    "rule": "path-token",
+    "input": "GET /reset/a&code=\"zqS7x y\"",
+    "expected": "GET /reset/[token]\"zqS7x y\""
+  },
+  {
+    "rule": "path-token",
+    "input": "/reset/abc.token = null",
+    "expected": "/reset/[token] = null"
+  },
+  {
+    "rule": "query",
+    "input": "GET /x/pwd=[zqS7a zqS7b]?q=1",
+    "expected": "GET /x/pwd=[redacted]?[query]"
+  },
+  {
+    "rule": "fragment",
+    "input": "GET /x/pwd=[zqS7a zqS7b]#zqS7c,",
+    "expected": "GET /x/pwd=[redacted]#[fragment]"
+  },
+  {
+    "rule": "kv",
+    "input": "token: a pwd=\\\"x \\\"sid\\\": \"zqS7a zqS7b\"",
+    "expected": "token: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "pwd = \\'zqS7a\\', sid = 'zqS7b'",
+    "expected": "pwd = \\'[redacted]"
+  },
+  {
+    "rule": "path-token",
+    "input": "/reset/x.token = \\'zqS7a\\' then pwd = 'zqS7b'",
+    "expected": "/reset/[token] = \\'zqS7a\\' then pwd = '[redacted]'"
+  },
+  {
+    "rule": "path-token",
+    "input": "at /Reset/cookie: \\\"zqS7a/x and GET /invite/8AwREFRESH_TOKEN=\\\"zqS7b\\\"?a=1",
+    "expected": "at /Reset/cookie: \\\"[redacted]\\\"?a=1"
+  },
+  {
+    "rule": "path-token",
+    "input": "GET /app/reset/sid=\"zqS7a failed token: /app/reset/kjfn-name = \"zqS7b",
+    "expected": "GET /app/reset/[token]\"zqS7a failed token: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "api_key=\\\"zqS7a session=\\\"zqS7b\\\"",
+    "expected": "api_key=\\\"[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "token: a pwd =\n\"zqS7hunter\"",
+    "expected": "token: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "key=a/#[fragment]\"=\"jane doe\"@mail.example.com",
+    "expected": "key=[redacted]"
+  },
+  {
+    "rule": "path-token",
+    "input": "/reset/sid=[redacted]zqS7secret",
+    "expected": "/reset/[token]"
+  },
+  {
+    "rule": "path-token",
+    "input": "/reset/sid=[redacted]) failed",
+    "expected": "/reset/[token] failed"
+  },
+  {
+    "rule": "email",
+    "input": "invite failed for jane@wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY: smtp down",
+    "expected": "invite failed for [email]: smtp down"
+  },
+  {
+    "rule": "email",
+    "input": "jane@localhost/x failed",
+    "expected": "[email]/x failed"
+  },
+  {
+    "rule": "kv",
+    "input": "{ authorization:abc.a/b-\"sid\":\n[zqS7a, zqS7b]\"authorization\": [zqS7c, zqS7d] tail",
+    "expected": "{ authorization:[redacted]"
+  },
+  {
+    "rule": "path-token",
+    "input": "GET /reset/sid=[redacted]*zqS7secret",
+    "expected": "GET /reset/[token]"
+  },
+  {
+    "rule": "path-token",
+    "input": "/accept/token%3D%22[credentials].zqS7x/x",
+    "expected": "/accept/[token]/x"
+  },
+  {
+    "rule": "path-token",
+    "input": "/invite/password:[ip]%22zqS7vw zqS7pduvc",
+    "expected": "/invite/[token] zqS7pduvc"
+  },
+  {
+    "rule": "path-token",
+    "input": "/reset/sid%3A[redacted])zqS7x",
+    "expected": "/reset/[token]"
+  },
+  {
+    "rule": "path-token",
+    "input": "/reset/pwd:[token],zqS7kaalz",
+    "expected": "/reset/[token]"
+  },
+  {
+    "rule": "path-token",
+    "input": "token: /reset/a&code = %22[email]_zqS7tohsl zqS7ze",
+    "expected": "token: [redacted]"
+  },
+  {
+    "rule": "path-token",
+    "input": "token: /invite/a&code => %22[token]! zqS7txsboh",
+    "expected": "token: [redacted]"
+  },
+  {
+    "rule": "path-token",
+    "input": "authorization /verify/code=>\"zqS7c&b=1",
+    "expected": "authorization /verify/[token]>\"zqS7c&b=1"
+  },
+  {
+    "rule": "path-token",
+    "input": "password=/verify/a&code => [email] //zqS7sm",
+    "expected": "password=[redacted]"
+  },
+  {
+    "rule": "path-token",
+    "input": "password=/verify/a&otp_code=[credentials]\\\" zqS7xnm zqS7qexxz failed",
+    "expected": "password=[redacted]\" zqS7xnm zqS7qexxz failed"
+  },
+  {
+    "rule": "path-token",
+    "input": "pwd => /app/reset/mfa_response:[secret]\\\" zqS7rwp\\\"",
+    "expected": "pwd => [redacted]\" zqS7rwp\\\""
+  },
+  {
+    "rule": "path-token",
+    "input": "password=/app/invite/a&amp;signature=[secret]\\ zqS7lec zqS7rxbzfe\"",
+    "expected": "password=[redacted]\""
+  },
+  {
+    "rule": "path-token",
+    "input": "token: /verify/a&code => %22zqS7at zqS7wdwuj failed",
+    "expected": "token: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "{ \"pin\":zqS7p pin:\nBearer [token] zqS7ounlb/kajonj'code'=\n OAuth username=\"zqS7jpo zqS7wigqp\", nonce=\"zqS7n\"",
+    "expected": "{ \"pin\":[redacted], nonce=\"[redacted]\""
+  },
+  {
+    "rule": "kv",
+    "input": "invalid_grant \"Code\\\"=null/{ secret\\u003d\\u0027zqS7snt\\u0027/{ Code'\\u003aAKIAIOSFODNN7EXAMPLE tail",
+    "expected": "invalid_grant \"Code\\\"=[redacted] tail"
+  },
+  {
+    "rule": "path-token",
+    "input": "\"api_key'%3DBearer a/b//app/verify/password\\u003a[zqS7a;zqS7b, zqS7c]",
+    "expected": "\"api_key'%3D[redacted]]"
+  },
+  {
+    "rule": "path-token",
+    "input": "/app/invite/%26code=[zqS7la, AKIAIOSFODNN7EXAMPLE]', /x https://app.example.com/reset/x.authorization => %22[jwt]%22 zqS7e",
+    "expected": "/app/invite/[token] [secret]]', /x https://app.example.com/reset/[token] => %22[jwt]%22 zqS7e"
+  },
+  {
+    "rule": "path-token",
+    "input": "\"otp_code=>\\\", /app/invite/password%3D\\\"[token] &b=zqS7lz zqS7htf\"",
+    "expected": "\"otp_code=>\\\"[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "code_verifier=x \"cookie\" = [zqS7a zqS7b, zqS7c]/\\\"code=\n OAuth username=\"zqS7d\", nonce=\"zqS7e\"/\"CODE'&#61;Bearer [token] zqS7f zqS7g tail",
+    "expected": "code_verifier=[redacted] \"cookie\" = [redacted], nonce=\"[redacted]\"/\"CODE'&#61;[redacted]"
   }
 ]
