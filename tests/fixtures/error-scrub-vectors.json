@@ -2143,5 +2143,35 @@
     "rule": "path-token",
     "input": "authorization /verify/code=>\"zqS7c&b=1",
     "expected": "authorization /verify/[token]>\"zqS7c&b=1"
+  },
+  {
+    "rule": "path-token",
+    "input": "password=/verify/a&code => [email] //zqS7sm",
+    "expected": "password=[redacted]"
+  },
+  {
+    "rule": "path-token",
+    "input": "password=/verify/a&otp_code=[credentials]\" zqS7xnm zqS7qexxz failed",
+    "expected": "password=[redacted]\" zqS7xnm zqS7qexxz failed"
+  },
+  {
+    "rule": "path-token",
+    "input": "pwd => /app/reset/mfa_response:[secret]\" zqS7rwp\"",
+    "expected": "pwd => [redacted]\" zqS7rwp\""
+  },
+  {
+    "rule": "path-token",
+    "input": "password=/app/invite/a&amp;signature=[secret]\\ zqS7lec zqS7rxbzfe\"",
+    "expected": "password=[redacted]\""
+  },
+  {
+    "rule": "path-token",
+    "input": "token: /verify/a&code => %22zqS7at zqS7wdwuj failed",
+    "expected": "token: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "{ \"pin\":zqS7p pin:\nBearer [token] zqS7ounlb/kajonj'code'=\n OAuth username=\"zqS7jpo zqS7wigqp\", nonce=\"zqS7n\"",
+    "expected": "{ \"pin\":[redacted], nonce=\"[redacted]\""
   }
 ]

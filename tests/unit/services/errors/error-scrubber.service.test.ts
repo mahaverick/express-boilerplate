@@ -162,6 +162,13 @@ describe('scrubText', () => {
       `token: ${'a = [x '.repeat(4 * ERROR_VALUE_MAX)}`.slice(0, 4 * ERROR_VALUE_MAX - 1),
     ],
     [
+      'a value enclosing repeated path tokens with a key after &',
+      `password=${'/reset/a&code="x y" '.repeat(4 * ERROR_VALUE_MAX)}`.slice(
+        0,
+        4 * ERROR_VALUE_MAX - 1
+      ),
+    ],
+    [
       'a value running through repeated keys',
       `token: ${'a pwd: '.repeat(4 * ERROR_VALUE_MAX)}`.slice(0, 4 * ERROR_VALUE_MAX - 1),
     ],

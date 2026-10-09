@@ -1222,8 +1222,11 @@ query`: the SQL text is never sent. A thrown object that is not an `Error`
   `/reset/`, `/verify/`, `/invite/` or `/accept/` (up to a secret-named key
   in it whose value runs past it, which the key rule then takes:
   `/reset/x.tsrefresh_token = …` becomes `/reset/[token]token = [redacted]`;
-  a key whose value is already a placeholder is kept only when nothing but a
-  closing quote follows the placeholder, otherwise the segment goes whole),
+  a key whose value is already a placeholder is kept only when nothing
+  follows the placeholder but the quote that opened it, and never after an
+  `&`; a key after an `&` is not cut out either when a value that starts
+  earlier on the line would run over the path token; otherwise the segment
+  goes whole),
   and long hex and base64
   runs. Each value is then capped at 1024 characters. The span that records
   the exception (`span.recordException`) gets the same scrubbed name, message
