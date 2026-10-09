@@ -5,6 +5,7 @@
 import { MemoryStore, type IncrementResponse, type Options, type Store } from 'express-rate-limit'
 import { RedisStore } from 'rate-limit-redis'
 import { logger } from '@/services/logger.service'
+import { withRedisDeadline } from '@/services/redis-deadline.service'
 import { getRedis } from '@/services/redis.service'
 
 /**
@@ -20,7 +21,10 @@ import { getRedis } from '@/services/redis.service'
  * commands fail instead of reopening a socket. A failed command falls back
  * to memory for that call, logged once per outage: an outage neither 500s
  * limited routes nor turns limiting off (`passOnStoreError` stays unset),
- * at the cost of per-process counting while Redis is down.
+ * at the cost of per-process counting while Redis is down. Every Redis step,
+ * the switch included, runs under `withRedisDeadline`, so a stalled Redis
+ * is an outage too, and during its cooldown the store counts in memory
+ * without asking Redis.
  */
 export class SharedRateLimitStore implements Store {
   private readonly memory = new MemoryStore()
@@ -50,7 +54,7 @@ export class SharedRateLimitStore implements Store {
    */
   private async tryLatch(): Promise<void> {
     try {
-      await getRedis()
+      await withRedisDeadline(() => getRedis(), 'rate limit store switch')
     } catch {
       if (!this.loggedFallback) {
         logger.warn('Redis is not reachable yet; falling back to an in-memory rate-limit store')
@@ -70,7 +74,9 @@ export class SharedRateLimitStore implements Store {
     })
     try {
       // Loads the scripts: fails while the client reconnects, and must not stay latched as a failure.
-      if (this.options) await redisStore.init(this.options)
+      const { options } = this
+      if (options)
+        await withRedisDeadline(() => redisStore.init(options), 'rate limit store switch')
     } catch (error) {
       this.enterOutage(error)
       this.latching = undefined
@@ -115,7 +121,8 @@ export class SharedRateLimitStore implements Store {
   ): Promise<T> {
     if (!this.redis) return onMemory()
     try {
-      const result = await onRedis(this.redis)
+      const store = this.redis
+      const result = await withRedisDeadline(() => onRedis(store), 'rate limit store')
       this.leaveOutage()
       return result
     } catch (error) {

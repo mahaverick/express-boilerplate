@@ -6,10 +6,12 @@
  * by real Redis is covered separately, against the real thing, in
  * tests/integration/.
  */
-import { describe, expect, it, vi, type Mock } from 'vitest'
+import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { SharedRateLimitStore } from '@/configs/rate-limit-store.config'
 import { logger } from '@/services/logger.service'
+import { resetRedisDeadlineForTests } from '@/services/redis-deadline.service'
 import { getRedis } from '@/services/redis.service'
+import { answerWithinBound, stalledCommand } from '../../helpers/redis-stall'
 
 vi.mock('@/services/redis.service', () => ({ getRedis: vi.fn() }))
 
@@ -28,20 +30,23 @@ const testOptions = { windowMs: 60_000 } as unknown as Parameters<SharedRateLimi
  * `RedisStore.init()` issues and the `EVALSHA` each `increment()` issues,
  * without a real connection. Tracks a real per-key count (`command[3]` is
  * the key) so a test can assert on `totalHits`. `outage.isDown` makes every
- * command reject, the way node-redis does with `disableOfflineQueue` while reconnecting.
- * @returns The fake client, the raw commands it was sent, and its outage switch.
+ * command reject, the way node-redis does with `disableOfflineQueue` while
+ * reconnecting; `outage.isStalled` makes every command never settle, the way
+ * it does on a server that is connected and does not answer.
+ * @returns The fake client, the raw commands it was sent, and its outage switches.
  */
 function fakeRedisClient(): {
   client: { sendCommand: Mock }
   commands: string[][]
-  outage: { isDown: boolean }
+  outage: { isDown: boolean; isStalled: boolean }
 } {
   const commands: string[][] = []
   const hits = new Map<string, number>()
-  const outage = { isDown: false }
+  const outage = { isDown: false, isStalled: false }
   const client = {
     sendCommand: vi.fn((command: string[]) => {
       commands.push(command)
+      if (outage.isStalled) return stalledCommand()
       if (outage.isDown) return Promise.reject(new Error('The client is offline'))
       if (command[0] === 'SCRIPT' && command[1] === 'LOAD') return Promise.resolve('fake-sha')
       if (command[0] === 'EVALSHA') {
@@ -68,6 +73,10 @@ async function hitsAfterIncrement(store: SharedRateLimitStore, key: string): Pro
 }
 
 describe('SharedRateLimitStore', () => {
+  beforeEach(() => {
+    resetRedisDeadlineForTests()
+  })
+
   it('starts on memory, counts hits normally while Redis is unreachable, and warns only once', async () => {
     vi.mocked(getRedis).mockRejectedValue(new Error('Redis unreachable'))
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
@@ -219,5 +228,39 @@ describe('SharedRateLimitStore', () => {
 
     const afterClose = await store.increment('client-a')
     expect(afterClose.totalHits).toBe(1)
+  })
+
+  it('answers from memory within the deadline when Redis stalls after the switch, and skips Redis while the stall cooldown lasts', async () => {
+    const { client, commands, outage } = fakeRedisClient()
+    vi.mocked(getRedis).mockResolvedValue(client as never)
+    vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    const store = new SharedRateLimitStore('rl:test:')
+    store.init(testOptions)
+    expect(await hitsAfterIncrement(store, 'client-a')).toBe(1)
+
+    outage.isStalled = true
+    const stalled = await answerWithinBound(store.increment('client-a'))
+    // Counted in memory from zero, as during an outage, instead of holding the request.
+    expect(stalled).not.toBe('hung')
+    expect(stalled).toMatchObject({ totalHits: 1 })
+
+    commands.length = 0
+    const duringCooldown = await answerWithinBound(store.increment('client-a'))
+    expect(duringCooldown).toMatchObject({ totalHits: 2 })
+    expect(commands).toEqual([])
+  })
+
+  it('does not let a stalled switch hold later requests', async () => {
+    vi.mocked(getRedis).mockClear().mockImplementation(stalledCommand)
+    vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    const store = new SharedRateLimitStore('rl:test:')
+    store.init(testOptions)
+
+    const first = await answerWithinBound(store.increment('client-a'))
+    expect(first).toMatchObject({ totalHits: 1 })
+    const second = await answerWithinBound(store.increment('client-a'))
+    expect(second).toMatchObject({ totalHits: 2 })
+    // The second request did not wait on, or start, another switch attempt.
+    expect(getRedis).toHaveBeenCalledTimes(1)
   })
 })

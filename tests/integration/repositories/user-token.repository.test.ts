@@ -50,6 +50,44 @@ function byId(left: string, right: string): number {
   return left.localeCompare(right)
 }
 
+/**
+ * A live refresh row for `userId` in `sessionId`.
+ * @param userId - The owner.
+ * @param sessionId - The session.
+ * @returns The created row.
+ */
+function refreshRow(userId: string, sessionId: string) {
+  return userTokenRepository.create({
+    userId,
+    purpose: 'refresh',
+    sessionId,
+    tokenHash: uniqueHash(),
+    expiresAt: new Date(Date.now() + 60_000),
+  })
+}
+
+/**
+ * A row's `revokedAt`, read by its hash.
+ * @param tokenHash - The row's token hash.
+ * @returns Its `revokedAt`, or undefined when there is no such row.
+ */
+async function revokedAtOf(tokenHash: string): Promise<Date | null | undefined> {
+  const row = await userTokenRepository.findByHash(tokenHash)
+  return row?.revokedAt
+}
+
+/**
+ * Issue a token in `sessionId` and rotate it, so its row carries a `consumed_at`.
+ * @param userId - The owner.
+ * @param sessionId - The session.
+ * @returns The consumed row's token hash.
+ */
+async function consumedHashIn(userId: string, sessionId: string): Promise<string> {
+  const issued = await issueRefreshToken(userId, sessionId)
+  await rotateRefreshToken(issued.raw)
+  return hashToken(issued.raw)
+}
+
 describe('UserTokenRepository', () => {
   const createdUserIds: string[] = []
 
@@ -359,6 +397,14 @@ describe('UserTokenRepository', () => {
       'revokeAllForUserExceptSession',
       (userId: string) => userTokenRepository.revokeAllForUserExceptSession(userId, randomUUID()),
     ],
+    [
+      'revokeAllForUserExceptToken',
+      (userId: string) =>
+        userTokenRepository.revokeAllForUserExceptToken(userId, {
+          id: randomUUID(),
+          sessionId: randomUUID(),
+        }),
+    ],
   ] as const)('%s revokes the row but never writes the denylist', async (_name, revoke) => {
     const userId = await createUser()
     const sessionId = randomUUID()
@@ -535,6 +581,56 @@ describe('UserTokenRepository', () => {
     expect(rows).toHaveLength(0)
   })
 
+  describe('revokeAllForUserExceptToken', () => {
+    it('spares only the one row: its session’s other live rows, other sessions and sessionless rows are revoked', async () => {
+      const userId = await createUser()
+      const callerSessionId = randomUUID()
+      const otherSessionId = randomUUID()
+      const spared = await refreshRow(userId, callerSessionId)
+      const sibling = await refreshRow(userId, callerSessionId)
+      const other = await refreshRow(userId, otherSessionId)
+      const reset = await userTokenRepository.create({
+        userId,
+        purpose: 'password_reset',
+        tokenHash: uniqueHash(),
+        expiresAt: new Date(Date.now() + 60_000),
+      })
+
+      const revoked = await userTokenRepository.revokeAllForUserExceptToken(userId, {
+        id: spared.id,
+        sessionId: callerSessionId,
+      })
+
+      expect(await revokedAtOf(spared.tokenHash)).toBeNull()
+      for (const row of [sibling, other, reset]) {
+        expect(await revokedAtOf(row.tokenHash)).toBeInstanceOf(Date)
+      }
+      // The caller's own session is never reported: denying it would end the caller's access token.
+      expect(revoked).toEqual([otherSessionId])
+    })
+
+    it('does not touch another user’s rows, nor rewrite an already-revoked row', async () => {
+      const userId = await createUser()
+      const otherUserId = await createUser()
+      const callerSessionId = randomUUID()
+      const spared = await refreshRow(userId, callerSessionId)
+      const theirs = await refreshRow(otherUserId, randomUUID())
+      const alreadyRevoked = await refreshRow(userId, randomUUID())
+      await sql`update user_tokens set revoked_at = now() - interval '1 day' where id = ${alreadyRevoked.id}`
+      const before = await revokedAtOf(alreadyRevoked.tokenHash)
+
+      const revoked = await userTokenRepository.revokeAllForUserExceptToken(userId, {
+        id: spared.id,
+        sessionId: callerSessionId,
+      })
+
+      expect(revoked).toEqual([])
+      expect(await revokedAtOf(theirs.tokenHash)).toBeNull()
+      expect(before).toBeInstanceOf(Date)
+      expect(await revokedAtOf(alreadyRevoked.tokenHash)).toEqual(before)
+    })
+  })
+
   describe('revokeAllForUserAndPurpose', () => {
     it('revokes the named purpose and leaves a live refresh token alone', async () => {
       const userId = await createUser()
@@ -560,39 +656,50 @@ describe('UserTokenRepository', () => {
   })
 
   describe('isSessionKilled', () => {
-    it('is false for a session holding only a live token', async () => {
+    it('is false for a session holding only a rotated token and its live successor', async () => {
       const userId = await createUser()
       const sessionId = randomUUID()
-      await issueRefreshToken(userId, sessionId)
+      const presented = await consumedHashIn(userId, sessionId)
 
-      expect(await userTokenRepository.isSessionKilled(sessionId)).toBe(false)
-    })
-
-    it('is false after an ordinary rotation: a consumed row is not a kill', async () => {
-      const userId = await createUser()
-      const sessionId = randomUUID()
-      const issued = await issueRefreshToken(userId, sessionId)
-      await rotateRefreshToken(issued.raw)
-
-      expect(await userTokenRepository.isSessionKilled(sessionId)).toBe(false)
+      expect(await userTokenRepository.isSessionKilled(sessionId, presented)).toBe(false)
     })
 
     it('is true once the session is revoked (logout, reuse detection)', async () => {
       const userId = await createUser()
       const sessionId = randomUUID()
-      await issueRefreshToken(userId, sessionId)
+      const presented = await consumedHashIn(userId, sessionId)
       await userTokenRepository.revokeAllForSession(sessionId)
 
-      expect(await userTokenRepository.isSessionKilled(sessionId)).toBe(true)
+      expect(await userTokenRepository.isSessionKilled(sessionId, presented)).toBe(true)
     })
 
     it('is true once every session of the user is revoked (password reset)', async () => {
       const userId = await createUser()
       const sessionId = randomUUID()
-      await issueRefreshToken(userId, sessionId)
+      const presented = await consumedHashIn(userId, sessionId)
       await userTokenRepository.revokeAllForUser(userId)
 
-      expect(await userTokenRepository.isSessionKilled(sessionId)).toBe(true)
+      expect(await userTokenRepository.isSessionKilled(sessionId, presented)).toBe(true)
+    })
+
+    it('ignores a marker revoked before the presented token was consumed: a sibling-only revoke, not a kill of its chain', async () => {
+      const userId = await createUser()
+      const sessionId = randomUUID()
+      const earlier = await issueRefreshToken(userId, sessionId)
+      await sql`update user_tokens set revoked_at = now() where token_hash = ${hashToken(earlier.raw)}`
+      const presented = await consumedHashIn(userId, sessionId)
+
+      expect(await userTokenRepository.isSessionKilled(sessionId, presented)).toBe(false)
+    })
+
+    it('counts a marker revoked after the presented token was consumed', async () => {
+      const userId = await createUser()
+      const sessionId = randomUUID()
+      const presented = await consumedHashIn(userId, sessionId)
+      const later = await issueRefreshToken(userId, sessionId)
+      await sql`update user_tokens set revoked_at = now() where token_hash = ${hashToken(later.raw)}`
+
+      expect(await userTokenRepository.isSessionKilled(sessionId, presented)).toBe(true)
     })
 
     it('ignores another session’s kill marker', async () => {
@@ -600,10 +707,10 @@ describe('UserTokenRepository', () => {
       const killed = randomUUID()
       const untouched = randomUUID()
       await issueRefreshToken(userId, killed)
-      await issueRefreshToken(userId, untouched)
+      const presented = await consumedHashIn(userId, untouched)
       await userTokenRepository.revokeAllForSession(killed)
 
-      expect(await userTokenRepository.isSessionKilled(untouched)).toBe(false)
+      expect(await userTokenRepository.isSessionKilled(untouched, presented)).toBe(false)
     })
   })
 })

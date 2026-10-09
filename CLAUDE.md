@@ -96,6 +96,18 @@ rather than repeating them.
   under its own prefix, `test-w<pool id>` (`tests/helpers/redis-prefix.ts`).
   Two concurrent `pnpm test` runs on one compose stack are unsupported: they
   share those prefixes and the worker databases.
+- **Wrap a Redis call a request waits on in `withRedisDeadline`**
+  (`redis-deadline.service.ts`), with `getRedis()` inside the operation and
+  the call inside the caller's existing `try`/`catch`: node-redis never times
+  out a written command, so a stalled Redis would hold the request. The
+  helper rejects after 300 ms and fails such calls at once for 5 s (not
+  while the first connect is still in flight: `trackRedisConnect`), so the
+  stall takes the caller's outage path. **A write whose loss would widen
+  access** (a session deny, a throttle or dedupe key's release, a
+  maintenance-mode publish) **uses `waitForRedisWrite` instead:** it is never
+  skipped for the cooldown, and one still in flight at the deadline is left
+  to land. `tests/helpers/setup-global.ts` resets the cooldown before every
+  test.
 - **`sendMail()` never rejects.** It returns `'sent' | 'failed'`, which the
   worker uses to decide whether BullMQ retries.
 - **An integration test that asserts mail delivery runs its own

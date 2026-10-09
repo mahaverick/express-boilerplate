@@ -6,6 +6,11 @@
 import { createClient, type RedisClientType } from 'redis'
 import { getEnv } from '@/configs/env.config'
 import { logger } from '@/services/logger.service'
+import {
+  openRedisStallCooldown,
+  trackRedisConnect,
+  waitForRedisProbe,
+} from '@/services/redis-deadline.service'
 
 /**
  * Module state in one object, so no function reassigns a top-level binding.
@@ -26,7 +31,9 @@ const state: {
 const CLOSED_MESSAGE = 'Redis client is closed; the process is shutting down'
 
 /**
- * How long each Redis client here waits for one connection attempt to establish.
+ * How long each Redis client here waits for one connection attempt to
+ * establish, and how long `getRedis()` waits for the shared client's whole
+ * connect, handshake included.
  */
 export const REDIS_CONNECT_TIMEOUT_MS = 5000
 
@@ -72,13 +79,33 @@ export function createRedisClient(): RedisClientType {
 }
 
 /**
- * Create and connect one client.
+ * Create and connect one client, giving up after `REDIS_CONNECT_TIMEOUT_MS`.
+ * node-redis's `connectTimeout` stops at the TCP connect; the handshake after
+ * it (HELLO, CLIENT SETINFO) has no timer and raises no error, so a server
+ * that accepts and never answers would leave `connect()` pending forever. A
+ * client that runs out of time is destroyed, closing its socket.
  * @returns The connected client.
+ * @throws {Error} When the connect fails or runs out of time.
  */
 async function connectRedis(): Promise<RedisClientType> {
   const client = createRedisClient()
-  await client.connect()
-  return client
+  let timer: NodeJS.Timeout | undefined
+  const timeout = new Promise<'timed-out'>((resolve) => {
+    timer = setTimeout(() => resolve('timed-out'), REDIS_CONNECT_TIMEOUT_MS)
+    timer.unref()
+  })
+  try {
+    // Promise.race subscribes to connect(), so its rejection after a destroy is handled.
+    const outcome = await Promise.race([client.connect(), timeout])
+    if (outcome === 'timed-out') {
+      client.destroy()
+      openRedisStallCooldown('connect')
+      throw new Error(`Redis did not finish connecting in ${String(REDIS_CONNECT_TIMEOUT_MS)} ms`)
+    }
+    return client
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 /**
@@ -111,20 +138,24 @@ export async function getRedis(): Promise<RedisClientType> {
     throw new Error(CLOSED_MESSAGE)
   }
   if (state.client) return state.client
-  state.connecting ??= connectShared()
+  state.connecting ??= trackRedisConnect(connectShared())
   return state.connecting
 }
 
 /**
  * Check that Redis answers.
  * @returns True when PING succeeds; false once the client has been closed,
- *   without attempting to reconnect.
+ *   without attempting to reconnect, and false when the connect and PING
+ *   together miss `REDIS_REQUEST_DEADLINE_MS` (`waitForRedisProbe`, which
+ *   neither consults nor opens the request-path stall cooldown).
  */
 export async function isRedisReachable(): Promise<boolean> {
   if (state.closed) return false
   try {
-    const client = await getRedis()
-    const reply = await client.ping()
+    const reply = await waitForRedisProbe(async () => {
+      const client = await getRedis()
+      return client.ping()
+    })
     return reply === 'PONG'
   } catch {
     return false

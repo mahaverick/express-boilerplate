@@ -1,6 +1,6 @@
 /**
  * @file Query access to `user_tokens`, on `BaseRepository`. The bulk writers
- * (the four revokers and `markSessionAuthenticated`) lock the rows they write
+ * (the five revokers and `markSessionAuthenticated`) lock the rows they write
  * in id order through `lockedIds`, so two sharing rows queue instead of
  * deadlocking; a new bulk writer must lock the same way and join `WRITERS` in
  * user-token-lock-order.test.ts.
@@ -19,6 +19,22 @@ import {
   type Touched,
 } from '@/repositories/base.repository'
 import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
+
+/**
+ * The `revoked_at` every bulk revoker stamps: `clock_timestamp()`, the moment
+ * each row is written, never `now()`, the start of the revoking transaction.
+ * A kill can begin its transaction before a rotation claims (`consumed_at`,
+ * the rotation's own transaction start) and still revoke the row that
+ * rotation committed. Stamped at the moment of the write, a marker is never
+ * earlier than a claim that committed before it, whether the revoker holds
+ * the user-row lock or not: `isSessionKilled` counts only markers at or
+ * after the replayed row's consumption, and a `now()` stamp would hide such
+ * a kill and let the grace window revive the session it ended.
+ * @returns The SQL expression for the stamp.
+ */
+function killStamp(): SQL {
+  return sql`clock_timestamp()`
+}
 
 /**
  * Query access to the `user_tokens` table: token issuance, lookup by hash,
@@ -105,6 +121,7 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
   ): Promise<UserToken | undefined> {
     const [row] = await executor
       .update(userTokenModel)
+      // now() (transaction start) errs early for consumed_at, which keeps isSessionKilled's comparison safe.
       .set(this.touched({ revokedAt: sql`now()`, consumedAt: sql`now()` }))
       .where(
         this.scope(
@@ -140,19 +157,41 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
   }
 
   /**
-   * Whether a session was explicitly revoked: a row revoked without being consumed (logout, reuse, reset).
+   * Whether the chain of a presented, already-consumed token was killed after
+   * it was consumed: a row of its session revoked without being consumed
+   * (logout, reuse, reset, an account claim, a staff revoke) at or after the
+   * presented row's own `consumed_at`.
+   *
+   * The bulk revokers stamp `killStamp()`, the moment each row is written.
+   * A kill that reaches the presented chain revokes a row the chain's claim
+   * committed, so its stamp is never earlier than that claim's
+   * `consumed_at`, however early the kill's transaction began. A marker
+   * older than the consumption is a revoke that spared this chain: a sibling
+   * ended by a password change or sign-out of other sessions
+   * (`revokeAllForUserExceptToken`). Compared on Postgres's own timestamps,
+   * by the presented row's hash, so no client clock or JavaScript rounding
+   * enters.
    * @param sessionId - The session (rotation-chain) id.
+   * @param presentedTokenHash - The hash of the consumed token being replayed; a row without `consumed_at`, or a soft-deleted one, never matches.
    * @param executor - Where to run the query. Defaults to the pool.
-   * @returns True when any row in the session carries that kill marker.
+   * @returns True when a row in the session carries a kill marker no older than the presented row's consumption.
    */
-  async isSessionKilled(sessionId: string, executor: DbExecutor = db): Promise<boolean> {
+  async isSessionKilled(
+    sessionId: string,
+    presentedTokenHash: string,
+    executor: DbExecutor = db
+  ): Promise<boolean> {
     // claimOnce sets revokedAt AND consumedAt; only explicit revocation sets revokedAt alone.
+    const consumedAt = executor
+      .select({ consumedAt: userTokenModel.consumedAt })
+      .from(userTokenModel)
+      .where(this.scope(eq(userTokenModel.tokenHash, presentedTokenHash)))
     const [row] = await executor
       .select({ id: userTokenModel.id })
       .from(userTokenModel)
       .where(
         this.scope(
-          sql`${userTokenModel.sessionId} = ${sessionId} and ${userTokenModel.revokedAt} is not null and ${userTokenModel.consumedAt} is null`
+          sql`${userTokenModel.sessionId} = ${sessionId} and ${userTokenModel.revokedAt} is not null and ${userTokenModel.consumedAt} is null and ${userTokenModel.revokedAt} >= (${consumedAt})`
         )
       )
       .limit(1)
@@ -180,7 +219,8 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
     )
     const revoked = await executor
       .update(userTokenModel)
-      .set(this.touched({ revokedAt: sql`now()` }))
+      // Stamped at the moment of the write, never now(): see killStamp.
+      .set(this.touched({ revokedAt: killStamp() }))
       .where(inArray(userTokenModel.id, locked))
       .returning({ id: userTokenModel.id })
     return revoked.length
@@ -224,7 +264,8 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
     )
     const revoked = await executor
       .update(userTokenModel)
-      .set(this.touched({ revokedAt: sql`now()` }))
+      // Stamped at the moment of the write, never now(): see killStamp.
+      .set(this.touched({ revokedAt: killStamp() }))
       .where(inArray(userTokenModel.id, locked))
       .returning({ sessionId: userTokenModel.sessionId })
 
@@ -270,7 +311,8 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
     )
     const revoked = await executor
       .update(userTokenModel)
-      .set(this.touched({ revokedAt: sql`now()` }))
+      // Stamped at the moment of the write, never now(): see killStamp.
+      .set(this.touched({ revokedAt: killStamp() }))
       .where(inArray(userTokenModel.id, locked))
       .returning({ sessionId: userTokenModel.sessionId })
 
@@ -283,12 +325,65 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
   }
 
   /**
+   * Revoke every still-live token belonging to a user EXCEPT one row: the
+   * caller's own refresh token, identified by the cookie it presented. Every
+   * other row goes, every purpose, including any other live row in the
+   * caller's own session (a sibling a grace-window replay minted). Used by a
+   * password change and by signing out other sessions when the caller's
+   * chain is known; `revokeAllForUserExceptSession` is the fallback when it
+   * is not.
+   *
+   * The returned ids leave out the spared row's session even when a sibling
+   * in it was revoked: denying that session would also deny the caller's own
+   * access token.
+   *
+   * The same mid-rotation caveat as `revokeAllForUser`, closed the same way:
+   * lock the user row first. Locks its rows in id order (`lockedIds`),
+   * whatever the plan or the physical row layout.
+   * @param userId - The user whose tokens should all be revoked, except one row.
+   * @param spared - The one row to leave untouched, and its session.
+   * @param spared.id - The spared row's id.
+   * @param spared.sessionId - The spared row's session, never among the returned ids.
+   * @param executor - Where to run the query. Defaults to the pool.
+   * @returns The distinct session ids of the rows it revoked, never the spared row's session.
+   */
+  async revokeAllForUserExceptToken(
+    userId: string,
+    spared: { id: string; sessionId: string },
+    executor: DbExecutor = db
+  ): Promise<string[]> {
+    const locked = this.lockedIds(
+      this.scope(
+        sql`${userTokenModel.userId} = ${userId} and ${userTokenModel.id} <> ${spared.id} and ${userTokenModel.revokedAt} is null`
+      ),
+      executor
+    )
+    const revoked = await executor
+      .update(userTokenModel)
+      // Stamped at the moment of the write, never now(): see killStamp.
+      .set(this.touched({ revokedAt: killStamp() }))
+      .where(inArray(userTokenModel.id, locked))
+      .returning({ sessionId: userTokenModel.sessionId })
+
+    const sessionIds = new Set(
+      revoked
+        .map((row) => row.sessionId)
+        .filter(
+          (revokedSessionId): revokedSessionId is string =>
+            revokedSessionId !== null && revokedSessionId !== spared.sessionId
+        )
+    )
+    return [...sessionIds]
+  }
+
+  /**
    * The sessions of a user, other than one, that hold a live refresh token:
    * unrevoked (a rotation's claim revokes the row it spends), unexpired, and
    * started after `startedAfter`, the absolute lifetime rotation enforces.
    * Read under the user row lock, it is the set a following
-   * `revokeAllForUserExceptSession` ends that a person would call signed in;
-   * a lapsed session it also revokes is not among them.
+   * `revokeAllForUserExceptSession` or `revokeAllForUserExceptToken` ends
+   * that a person would call signed in; a lapsed session either also revokes
+   * is not among them, and neither is a sibling in the excluded session.
    * @param userId - The user whose sessions are read.
    * @param sessionId - The one session id to leave out.
    * @param startedAfter - A live session must have started after this, by the application clock: the caller's `SESSION_ABSOLUTE_TTL` bound.
@@ -338,7 +433,8 @@ export class UserTokenRepository extends BaseRepository<(typeof userTokenModel)[
     )
     await executor
       .update(userTokenModel)
-      .set(this.touched({ revokedAt: sql`now()` }))
+      // Stamped at the moment of the write, never now(): see killStamp.
+      .set(this.touched({ revokedAt: killStamp() }))
       .where(inArray(userTokenModel.id, locked))
   }
 

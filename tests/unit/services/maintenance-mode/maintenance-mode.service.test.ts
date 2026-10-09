@@ -6,9 +6,17 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { STATUS_READ_TIMEOUT_MS } from '@/constants/platform.constants'
 import { logger } from '@/services/logger.service'
+import { rememberNoticeJobs } from '@/services/maintenance-mode/maintenance-mode-notices.service'
+import { publishMaintenanceModeChange } from '@/services/maintenance-mode/maintenance-mode-store.service'
 import { getMaintenanceModeStatus } from '@/services/maintenance-mode/maintenance-mode.service'
+import { resetRedisDeadlineForTests, withRedisDeadline } from '@/services/redis-deadline.service'
+import { answerWithinBound, stalledCommand } from '../../../helpers/redis-stall'
 
-const redis = vi.hoisted(() => ({ isHung: false }))
+const redis = vi.hoisted(() => ({
+  isHung: false,
+  publish: vi.fn<() => Promise<number>>(),
+  set: vi.fn<() => Promise<string>>(),
+}))
 
 vi.mock('@/services/redis.service', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/services/redis.service')>()
@@ -21,6 +29,8 @@ vi.mock('@/services/redis.service', async (importOriginal) => {
             ? new Promise<never>(() => {})
             : // eslint-disable-next-line unicorn/no-null -- Redis answers null for a missing key
               Promise.resolve(null),
+        publish: redis.publish,
+        set: redis.set,
       }),
   }
 })
@@ -32,6 +42,9 @@ vi.mock('@/services/queue.service', async (importOriginal) => {
 
 afterEach(() => {
   redis.isHung = false
+  redis.publish.mockReset()
+  redis.set.mockReset()
+  resetRedisDeadlineForTests()
   vi.useRealTimers()
   vi.restoreAllMocks()
 })
@@ -58,5 +71,25 @@ describe('getMaintenanceModeStatus', () => {
     vi.useFakeTimers()
     await getMaintenanceModeStatus()
     expect(vi.getTimerCount()).toBe(0)
+  })
+})
+
+describe('the maintenance-mode change route through a stalled Redis', () => {
+  it('publishes the change even while a stall cooldown is open, and waits for it at most the deadline', async () => {
+    vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    await expect(withRedisDeadline(stalledCommand, 'stall')).rejects.toThrow()
+    redis.publish.mockImplementation(stalledCommand)
+
+    expect(await answerWithinBound(publishMaintenanceModeChange())).toBeUndefined()
+    expect(redis.publish).toHaveBeenCalledTimes(1)
+  })
+
+  it('gives up recording the notice ids within the deadline', async () => {
+    vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    redis.set.mockImplementation(stalledCommand)
+
+    expect(
+      await answerWithinBound(rememberNoticeJobs({ notification: [], email: [] }))
+    ).toBeUndefined()
   })
 })

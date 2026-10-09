@@ -11,6 +11,7 @@
  */
 import { getEnv } from '@/configs/env.config'
 import { logger } from '@/services/logger.service'
+import { withRedisDeadline } from '@/services/redis-deadline.service'
 import { getRedis, redisKey } from '@/services/redis.service'
 import { hashRateLimitIdentity } from '@/utilities/rate-limit-key.utilities'
 
@@ -69,13 +70,15 @@ export async function spendInvitationRecipientBudget(
 ): Promise<InvitationRecipientBudget> {
   const key = recipientKey(email)
   try {
-    const redis = await getRedis()
-    if (
-      (await incrementInWindow(redis, `${key}:${tenantId}`)) > INVITATION_RECIPIENT_TENANT_SHARE
-    ) {
-      return 'exhausted'
-    }
-    const count = await incrementInWindow(redis, key)
+    const tenantCount = await withRedisDeadline(
+      async () => incrementInWindow(await getRedis(), `${key}:${tenantId}`),
+      'invitation recipient budget'
+    )
+    if (tenantCount > INVITATION_RECIPIENT_TENANT_SHARE) return 'exhausted'
+    const count = await withRedisDeadline(
+      async () => incrementInWindow(await getRedis(), key),
+      'invitation recipient budget'
+    )
     return count <= getEnv().INVITATION_RECIPIENT_DAILY_LIMIT ? 'spent' : 'exhausted'
   } catch (error) {
     logger.warn('Invitation recipient budget unavailable; allowing the invitation', { error })

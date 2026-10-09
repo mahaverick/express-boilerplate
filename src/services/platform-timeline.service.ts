@@ -38,6 +38,7 @@ import { recordTimelineView } from '@/services/audit.service'
 import { logger } from '@/services/logger.service'
 import { platformTenantOrThrow } from '@/services/platform-user.service'
 import { auditThrottledView } from '@/services/platform-view-audit.service'
+import { withRedisDeadline } from '@/services/redis-deadline.service'
 import { getRedis, redisKey } from '@/services/redis.service'
 import type { Actor } from '@/types/actor'
 import type {
@@ -120,8 +121,10 @@ async function auditTimelineView(
  */
 async function readCachedPage(key: string): Promise<TimelinePage | undefined> {
   try {
-    const redis = await getRedis()
-    const cached = await redis.get(key)
+    const cached = await withRedisDeadline(async () => {
+      const redis = await getRedis()
+      return redis.get(key)
+    }, 'timeline cache read')
     return cached === null ? undefined : (JSON.parse(cached) as TimelinePage)
   } catch (error) {
     logger.warn('Timeline cache read failed; asking PostHog', { error })
@@ -137,10 +140,12 @@ async function readCachedPage(key: string): Promise<TimelinePage | undefined> {
  */
 async function writeCachedPage(key: string, page: TimelinePage): Promise<void> {
   try {
-    const redis = await getRedis()
-    await redis.set(key, JSON.stringify(page), {
-      expiration: { type: 'EX', value: TIMELINE_CACHE_TTL_SECONDS },
-    })
+    await withRedisDeadline(async () => {
+      const redis = await getRedis()
+      return redis.set(key, JSON.stringify(page), {
+        expiration: { type: 'EX', value: TIMELINE_CACHE_TTL_SECONDS },
+      })
+    }, 'timeline cache write')
   } catch (error) {
     logger.warn('Timeline cache write failed', { error })
   }

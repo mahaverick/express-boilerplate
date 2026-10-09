@@ -6,14 +6,16 @@
  * The counting itself is proven against Redis in
  * tests/integration/api/invitation.test.ts.
  */
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   INVITATION_RECIPIENT_TENANT_SHARE,
   spendInvitationRecipientBudget,
 } from '@/services/invitation-recipient-limit.service'
 import { logger } from '@/services/logger.service'
+import { resetRedisDeadlineForTests } from '@/services/redis-deadline.service'
 import { getRedis, redisKey } from '@/services/redis.service'
 import { hashRateLimitIdentity } from '@/utilities/rate-limit-key.utilities'
+import { answerWithinBound, stalledCommand } from '../../helpers/redis-stall'
 
 vi.mock('@/services/redis.service', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/services/redis.service')>()),
@@ -43,11 +45,18 @@ function spentKeys(counts: number[]): string[] {
     }
     return transaction
   }
-  vi.mocked(getRedis).mockResolvedValueOnce({ multi } as never)
+  // Each count asks getRedis() for the client.
+  vi.mocked(getRedis).mockResolvedValue({ multi } as never)
   return keys
 }
 
 describe('spendInvitationRecipientBudget', () => {
+  beforeEach(() => {
+    resetRedisDeadlineForTests()
+    // Back to the factory's rejecting getRedis: spentKeys' answer must not reach the next test.
+    vi.mocked(getRedis).mockReset()
+  })
+
   it('lets the invitation through and warns when Redis is unreachable', async () => {
     const warn = vi.spyOn(logger, 'warn')
     try {
@@ -82,5 +91,22 @@ describe('spendInvitationRecipientBudget', () => {
     )
     expect(keys).toHaveLength(1)
     expect(keys[0]?.endsWith(`:${TENANT_ID}`)).toBe(true)
+  })
+
+  it('lets the invitation through within the deadline when Redis does not answer', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    try {
+      const transaction = {
+        incr: () => transaction,
+        pExpire: () => transaction,
+        exec: stalledCommand,
+      }
+      vi.mocked(getRedis).mockResolvedValueOnce({ multi: () => transaction } as never)
+      expect(
+        await answerWithinBound(spendInvitationRecipientBudget('someone@example.test', TENANT_ID))
+      ).toBe('spent')
+    } finally {
+      warn.mockRestore()
+    }
   })
 })

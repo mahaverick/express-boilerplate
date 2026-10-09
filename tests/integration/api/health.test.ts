@@ -4,15 +4,23 @@
  */
 
 import express from 'express'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { createApp } from '@/app'
 import { HttpError } from '@/errors/http-error'
 import { errorHandler } from '@/middlewares/error.middleware'
+import { resetRedisDeadlineForTests, withRedisDeadline } from '@/services/redis-deadline.service'
+import { getRedis } from '@/services/redis.service'
+import { withMutatedMethod } from '../../helpers/mutate'
+import { answerWithinBound, stalledCommand } from '../../helpers/redis-stall'
 import { request } from '../../helpers/request'
 
 const app = createApp()
 
 describe('health probes', () => {
+  afterEach(() => {
+    resetRedisDeadlineForTests()
+  })
+
   it('GET /health is shallow and does not touch the database', async () => {
     const response = await request(app).get('/health')
     expect(response.status).toBe(200)
@@ -30,6 +38,22 @@ describe('health probes', () => {
     expect(response.body).toHaveProperty('checks.database')
     expect(response.body).toHaveProperty('checks.redis')
     expect(response.body).toHaveProperty('checks.queue')
+  })
+
+  it('GET /health/ready answers not-ready, within the deadline, when Redis is connected but does not answer', async () => {
+    const client = await getRedis()
+    await withMutatedMethod(client, 'ping', stalledCommand as never, async () => {
+      const response = await answerWithinBound((async () => request(app).get('/health/ready'))())
+      if (response === 'hung') throw new Error('GET /health/ready waited on the stalled ping')
+      expect(response.status).toBe(503)
+      expect(response.body).toMatchObject({ status: 'not-ready', checks: { redis: false } })
+    })
+    // The probe has its own bound: a slow PING opens no cooldown, so request-path calls still ask Redis.
+    await expect(withRedisDeadline(async () => client.ping(), 'after the probe')).resolves.toBe(
+      'PONG'
+    )
+    const after = await request(app).get('/health/ready')
+    expect(after.body).toMatchObject({ checks: { redis: true } })
   })
 
   it('stamps a request id on every response', async () => {

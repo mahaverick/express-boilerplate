@@ -504,12 +504,19 @@ class AuthController extends BaseController {
   /**
    * `POST /auth/change-password`: change the authenticated caller's own
    * password, behind `requireAuth`. The session presenting this request is
-   * spared (`request.sessionId`); see auth.service.ts's `changePassword` for
-   * the order and the failure design.
+   * spared (`request.sessionId`): only the chain its refresh cookie names,
+   * when the browser sent a live one (`readRefreshTokenCookie`, current name
+   * only), or else the whole session. See auth.service.ts's `changePassword`
+   * for the order and the failure design.
    */
   changePassword = this.handle(async (request, response) => {
     const input = parseBody(changePasswordSchema, request.body)
-    await authService.changePassword(authenticatedUserId(request), request.sessionId, input)
+    await authService.changePassword(
+      authenticatedUserId(request),
+      request.sessionId,
+      input,
+      readRefreshTokenCookie(request)
+    )
 
     messageResponse(response, 'Password has been changed.')
   })
@@ -536,13 +543,19 @@ class AuthController extends BaseController {
   /**
    * `POST /auth/sessions/revoke-others`: sign the caller out of every other
    * session, behind `requireAuth`, keeping the one this request came from
-   * (`request.sessionId`). Takes `{}` or no body; answers how many
-   * signed-in sessions ended.
+   * (`request.sessionId`): only the chain its refresh cookie names, when the
+   * browser sent a live one (`readRefreshTokenCookie`, current name only),
+   * or else the whole session. Takes `{}` or no body; answers how many
+   * signed-in other sessions ended.
    */
   revokeOtherSessions = this.handle(async (request, response) => {
     // A body-less POST leaves request.body undefined; it means the same as `{}`.
     parseBody(revokeOtherSessionsSchema, request.body ?? {})
-    const revoked = await revokeOtherSessions(authenticatedUserId(request), request.sessionId)
+    const revoked = await revokeOtherSessions(
+      authenticatedUserId(request),
+      request.sessionId,
+      readRefreshTokenCookie(request)
+    )
 
     successResponse(response, { revoked }, 'Other sessions signed out.')
   })

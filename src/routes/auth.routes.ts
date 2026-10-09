@@ -29,9 +29,13 @@ import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
  * `requireJsonContentType` is mounted router-wide, ahead of every route, as a
  * CSRF control (see content-type.middleware.ts). A GET carries no content
  * type, which it allows, so the Google routes pass it too. `/refresh` and
- * `/logout`, which read the refresh cookie and take no body, also refuse a
- * disallowed `Origin` (origin.middleware.ts): a same-site sibling page could
- * otherwise send them a body-less POST with the cookie attached.
+ * `/logout`, which the refresh cookie authenticates and which take no body,
+ * also refuse a disallowed `Origin` (origin.middleware.ts): a same-site
+ * sibling page could otherwise send them a body-less POST with the cookie
+ * attached. `/change-password` and `/sessions/revoke-others` read the cookie
+ * too, but only to narrow what they spare; they authenticate with the bearer
+ * token, which a browser never attaches cross-site, so they need no Origin
+ * check.
  *
  * Google OAuth routes are mounted only when `isGoogleOAuthEnabled()`.
  * `configurePassport()` runs here, before either route can handle a request;
@@ -54,7 +58,7 @@ export function createAuthRouter(): Router {
     createRateLimiter(RATE_LIMITS.loginAccount),
     authController.login
   )
-  // The two routes that read the refresh cookie: the Origin check runs before the limiter, so a refused page spends no budget.
+  // The two routes the refresh cookie authenticates: the Origin check runs before the limiter, so a refused page spends no budget.
   router.post(
     '/refresh',
     requireAllowedOriginWhenPresent,

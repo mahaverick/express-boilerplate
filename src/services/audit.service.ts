@@ -20,6 +20,7 @@ import {
 import { enqueueAuditAnalytics } from '@/services/analytics/analytics-outbox.service'
 import { db, type DbExecutor, type DbTransaction } from '@/services/database.service'
 import { logger } from '@/services/logger.service'
+import { waitForRedisWrite, withRedisDeadline } from '@/services/redis-deadline.service'
 import { getRedis, redisKey } from '@/services/redis.service'
 import { requestContextStore } from '@/services/request-context.service'
 import type { Actor } from '@/types/actor'
@@ -122,11 +123,13 @@ export async function recordPlatformAccess(
   const key = redisKey('audit', 'platform-access', actor.userId, tenantId)
   let hasClaimedKey = false
   try {
-    const redis = await getRedis()
-    const reply = await redis.set(key, '1', {
-      condition: 'NX',
-      expiration: { type: 'EX', value: PLATFORM_ACCESS_DEDUPE_SECONDS },
-    })
+    const reply = await withRedisDeadline(async () => {
+      const redis = await getRedis()
+      return redis.set(key, '1', {
+        condition: 'NX',
+        expiration: { type: 'EX', value: PLATFORM_ACCESS_DEDUPE_SECONDS },
+      })
+    }, 'platform access dedupe')
     if (reply === null) return undefined
     hasClaimedKey = true
   } catch (error) {
@@ -254,16 +257,30 @@ export async function recordFlagsEvaluateView(
 }
 
 /**
+ * Log a failed release.
+ * @param error - The failure.
+ */
+function logUnreleasedDedupeKey(error: unknown): void {
+  logger.warn('Could not release the platform access dedupe key', { error })
+}
+
+/**
  * Delete a dedupe key, logging rather than throwing on failure.
  * @param key - The key to delete.
  * @returns Resolves once deleted or logged.
  */
 async function releaseDedupeKey(key: string): Promise<void> {
   try {
-    const redis = await getRedis()
-    await redis.del(key)
+    await waitForRedisWrite(
+      async () => {
+        const redis = await getRedis()
+        return redis.del(key)
+      },
+      'platform access dedupe release',
+      logUnreleasedDedupeKey
+    )
   } catch (error) {
-    logger.warn('Could not release the platform access dedupe key', { error })
+    logUnreleasedDedupeKey(error)
   }
 }
 

@@ -226,7 +226,10 @@ verified flag to an address nobody verified.
   control, and deletes any federated sign-in linked to it.
 - `POST /api/v1/auth/change-password` (behind `requireAuth`) checks the current
   password and revokes every other session, or every session when the access
-  token carries no session id.
+  token carries no session id. When the browser presents its live refresh
+  cookie, it spares only that chain, so a grace-window sibling in the caller's
+  session ends too (SECURITY.md, "Refresh rotation and reuse detection");
+  `POST /auth/sessions/revoke-others` spares the same way.
 - A Google sign-in marks the address verified too (`google-auth.service.ts`).
 
 Each route carries its own rate limiters; SECURITY.md, "Rate limiting", lists
@@ -984,8 +987,10 @@ tracking, flags, the maintenance queue states and pending-notice check) is bound
 `status-read.service.ts`): a stalled Redis answers the section with what it
 reports when Redis fails, and one `warn`. The bound covers the handler
 only. A request reaches it after `requireAuth`'s session denylist read and
-the route's rate limiter, and those Redis calls have no bound yet, so a
-stalled Redis can still hang an authenticated request, this page included.
+the route's rate limiter, which have the shorter request-path deadline
+(see [Data layer](#data-layer)), so a stalled Redis costs this page about
+one 300 ms deadline before the handler runs (one per Redis call while the
+first connect is still in flight).
 
 What an event may carry, and what it never does, is in
 [SECURITY.md](SECURITY.md#error-tracking-what-reaches-posthog).
@@ -1266,7 +1271,10 @@ Two endpoints, deliberately different depths:
   with `"status":"not-ready"` if any is down. It also answers 503 with
   `"status":"shutting-down"` once graceful shutdown has begun. A failing
   readiness probe only removes the instance from load-balancer rotation; it
-  restarts nothing.
+  restarts nothing. The Redis check has its own `REDIS_REQUEST_DEADLINE_MS`
+  (300 ms) bound, connect included, and neither consults nor opens the
+  request-path stall cooldown: a slow PING makes only that probe answer
+  not-ready. A stalled database or queue connection still holds it.
 
 Neither path is traced.
 
@@ -1306,7 +1314,51 @@ hanging at boot. After `ready`, every client retries forever with backoff
 reconnects nothing waits for Redis: node-redis runs with
 `disableOfflineQueue`, a producer enqueue rejects, `isQueueReachable` reports
 false for a queue connection in any post-ready status but `ready`, and
-`closeQueue` disconnects instead of queueing a `QUIT`. A queue connection that
+`closeQueue` disconnects instead of queueing a `QUIT`.
+
+**Through a stalled Redis.** node-redis never times out a command it has
+written, and its `connectTimeout` stops at the TCP connect: the handshake
+after it has no timer. So `getRedis()` bounds the shared client's whole
+connect at `REDIS_CONNECT_TIMEOUT_MS` (5 s), destroying a client that runs
+out of time, and every Redis command on the request path carries its own
+deadline of `REDIS_REQUEST_DEADLINE_MS` (300 ms), with `getRedis()` inside it,
+so a connect in flight counts too; a call that misses its deadline while
+that connect is still inside its 5 s bound falls back without opening the
+cooldown described next (a slow connect is not a stall), and a connect that
+runs out of time opens it. Reads and counters (the session denylist
+read, the rate-limit store and its switch to Redis, the staff-visit,
+view-audit and flag-exposure dedupes, the timeline budget and cache, the
+invitation recipient budget, the mail cooldowns, the maintenance-mode notice
+ids and the OAuth session store) run under `withRedisDeadline`
+(`redis-deadline.service.ts`): a call that has not answered by the deadline
+fails, and for the next `REDIS_STALL_COOLDOWN_MS` (5 s) every such call
+fails at once without asking Redis, then the next call tries again. A failure
+takes the caller's existing outage path (fail open, memory, or
+`next(error)`), so a stall is handled as an outage. One `warn` marks each
+cooldown (`Redis did not answer in 300 ms; request-path Redis calls fail at
+once for 5000 ms`) and one `info` the first success after it; a connect that
+runs out of time throws `Redis did not finish connecting in 5000 ms`. The verdict waits one
+turn of the event loop after the timer, so a reply already in the socket
+buffer when a blocked process wakes still wins. A write whose loss would widen
+access (the session deny, the dedupe and audit-throttle key releases, the
+maintenance-mode change publish) goes through `waitForRedisWrite` instead: it
+is always sent, cooldown or not, the request waits for it at most the
+deadline, and one still in flight then lands when Redis answers on the same
+connection (one `warn`, `Redis write not answered in time; it lands when
+Redis answers`, marks it; if the connection drops first the write is
+lost and its failure logged). The readiness check has its own bound
+(`waitForRedisProbe`, see [Health checks](#health-checks)). Workers, BullMQ,
+pub/sub, background publishes and counters, and the status reads (bounded
+by `STATUS_READ_TIMEOUT_MS`) are outside all of this. The deadline is a
+design limit, not a fault detector: a Redis whose latency regularly goes
+over 300 ms trips the cooldown, and then the denylist fails open and the
+limiters count per process much of the time, with a `warn` every few
+seconds. While the denylist read fails open, every session denied within the
+last `ACCESS_TOKEN_TTL` is honoured, and the cooldown can outlast a Redis
+that has already recovered by up to 5 s (see
+[SECURITY.md](SECURITY.md#rate-limiting-one-store-prefix-per-limiter)).
+
+A queue connection that
 gives up before its first `ready` is replaced on next use, and the producer's
 queues with it. Workers on it never recover by themselves: BullMQ does not
 re-initialise a connection whose init failed, and when that failure is not one

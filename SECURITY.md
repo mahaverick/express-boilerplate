@@ -35,7 +35,11 @@ deliberately opposite on every axis:
   accepted after a Redis flush can be identified in logs). They are
   stateless — verification never touches the database — and are sent as
   `Authorization: Bearer <token>`, checked by `requireAuth`
-  (`src/middlewares/auth.middleware.ts`) on every protected route.
+  (`src/middlewares/auth.middleware.ts`) on every protected route. A
+  revoked session's tokens are refused through the Redis session denylist,
+  whose read fails open on a Redis outage or stall; see
+  [Rate limiting](#rate-limiting-one-store-prefix-per-limiter) for the exact
+  cost.
   `requireAuth` also reloads the user by id on every request rather than
   trusting the token's claims alone, so disabling or soft-deleting an account
   invalidates every access token already issued to it, immediately, instead
@@ -84,11 +88,41 @@ and rotates on its own until `SESSION_ABSOLUTE_TTL`, until it goes unused for
 password reset, a password change or `POST /auth/sessions/revoke-others` made
 from another session, a Google account claim, a staff sign-out, deactivation or
 deletion, or a sign-in in a browser that presents either chain's cookie. A
-password change or `revoke-others` made from that session spares it, since each
-spares the caller's whole session. Reuse detection never catches it, unless a
-token one of the two chains already consumed is replayed after the window. The
-window is 10 s, so a thief must replay within 10 s of the real client's rotation
-to get one.
+password change or `revoke-others` made from that session ends it too when the
+browser presents its refresh cookie, which it does on both routes (they sit
+under the cookie's path). The cookie spares only its own row, and only when it
+is the caller's live refresh token: same user, the access token's session, not
+revoked. Every other row of the user goes, the sibling included. A client that
+presents no such cookie (a non-browser client, or a cookie that is unknown,
+revoked or another session's) spares the caller's whole session, sibling and
+all, as before. The sibling's access tokens carry the caller's session id, so
+they are not denied (that would deny the caller too) and stay valid until they
+expire (`ACCESS_TOKEN_TTL`). The sibling's next refresh is then reuse, which
+ends the whole session, the caller's chain included. Ending the sibling does not
+cost the caller's chain its grace window: only a kill recorded at or after the
+replayed token's rotation refuses grace (`isSessionKilled`), and the sibling's
+revoke is older than any later rotation of the caller's chain. A kill's
+`revoked_at` is stamped at the moment of the write (`clock_timestamp()`, never
+the transaction's `now()`), so it is never earlier than a claim that committed
+before it: a kill that began before a racing rotation's claim still reads as
+later than it and still refuses grace. The one exception is a replay, within its 10 s window, of a
+token rotated just before that revoke: it is refused as reuse. The caller can
+also be the thief: whoever holds the sibling and its access token is a caller of
+the same session, and a `revoke-others` with the sibling's cookie spares the
+thief's chain and ends the victim's, until the victim's next refresh is reuse
+and ends both. That adds nothing: a logout with the sibling's cookie already
+ends the session, and `revoke-others` already ended every other session. Under
+`COOKIE_SECURE` with `COOKIE_DOMAIN` set the cookie is `__Secure-`, which a host
+under that domain can plant; a planted cookie still has to be a live refresh
+token of the same user and session (in practice the thief's own sibling), and
+then the request spares the thief's chain and ends the victim's in the same
+way. Under `COOKIE_SECURE` without `COOKIE_DOMAIN` the cookie is `__Host-` and
+cannot be planted. Without `COOKIE_SECURE` it is the unprefixed `refreshToken`,
+which a sibling host or an on-path attacker over plain http can plant.
+Otherwise reuse detection never catches a sibling, unless a token
+one of the two chains already consumed is replayed after the window. The window
+is 10 s, so a thief must replay within 10 s of the real client's rotation to
+get one.
 
 A refresh answered 401 clears the cookie it read, in the same forms the
 logout clear uses for that name, so the browser stops presenting a dead token
@@ -214,8 +248,11 @@ password write either has its new token revoked or gets 401.
 `POST /auth/sessions/revoke-others` revokes every refresh token of the caller
 except the calling session's, plus reset and verification links, under the user
 row lock, then denies the revoked sessions' access tokens at once (best-effort,
-as every revocation). A token without a session id is refused 401. 10 an hour
-per user.
+as every revocation). When the request presents the caller's live refresh
+cookie, only that one token is spared, so a grace-window sibling in the calling
+session ends too; it is not counted in the reply's `revoked`, which counts other
+sessions. A password change spares the same way. A token without a session id
+is refused 401. 10 an hour per user.
 
 Every path that locks the user row:
 
@@ -251,11 +288,17 @@ Two effects are accepted:
   that write fails, the request still succeeds: the password is changed and
   the refresh tokens are revoked. One `error` line
   (`session denylist write failed after revocation`, for a reset too, for
-  `revoke-others`, and for a staff deactivation, sign-out or deletion)
+  a Google account claim, for `revoke-others`, and for a staff deactivation,
+  sign-out or deletion)
   records the user id and the number of sessions not denied. The revoked
   sessions' access tokens then stay valid until they expire
   (`ACCESS_TOKEN_TTL`, 15 minutes by default). That is the same exposure as
-  the denylist failing open during a Redis outage.
+  the denylist failing open during a Redis outage. A stalled Redis does not
+  abandon the write: it is sent even during the stall cooldown, the request
+  waits for it at most 300 ms, and a write still in flight then lands when
+  Redis answers on the same connection. If the connection drops first, the
+  write is lost and logged as a failed write, with the same `error` line and
+  the user id.
 
 ### User enumeration: closed on `/login` and `/register`
 
@@ -457,7 +500,20 @@ The store starts in memory and switches to Redis once Redis answers, so the
 limit is shared across replicas. Whenever a Redis command fails, that request
 is counted in the store's own memory instead, and the next successful command
 returns it to Redis. During an outage, then, counting is per process: with N
-replicas, a client can make up to N× the limit.
+replicas, a client can make up to N× the limit. A Redis that is connected but
+does not answer is handled as an outage, with the same cost for the limiters
+and the session denylist: a request-path call that has not answered in 300 ms
+fails, and for the next 5 s such calls fail without asking Redis. That is by
+design for latency too: a Redis whose latency regularly goes over 300 ms
+trips the cooldown, and the denylist then fails open and the limiters count
+per process much of the time. Keep Redis close and healthy; one `warn` per
+cooldown shows it happening. While the denylist read fails open — for the whole of a Redis
+outage, or for a stall cooldown of up to 5 s, which can outlast a Redis that
+has already recovered — every session denied within the last
+`ACCESS_TOKEN_TTL` (15 minutes by default), not only one revoked at that
+moment, is honoured on its unexpired access tokens. Each one is denied again
+when the read next reaches Redis or its access token expires, whichever comes
+first. A deny still in flight takes effect only once it lands.
 
 - **Register** keys on the client's **IP alone**, deliberately not the
   composite login uses. Both threats here come from one caller varying the
@@ -494,8 +550,9 @@ replicas, a client can make up to N× the limit.
   window revokes the whole session. Within the grace window each replay of a
   stolen, already-rotated token mints a sibling, and this limiter caps how
   many an attacker can mint before the window closes. Each sibling is a second
-  chain that lives until `SESSION_ABSOLUTE_TTL` or its session ends (see
-  "Refresh rotation and reuse detection"). The limit is generous
+  chain that lives until `SESSION_ABSOLUTE_TTL`, its session ends, or a
+  password change or sign-out of other sessions from the real client's browser
+  ends it (see "Refresh rotation and reuse detection"). The limit is generous
   because tightening it only costs real users retrying a flaky connection.
 - **Logout** is unauthenticated by design (a user whose access token has just
   expired must still be able to end their session), so this limiter bounds
@@ -1139,7 +1196,10 @@ query`: the SQL text is never sent. A thrown object that is not an `Error`
   Authorization credentials, every parameter of an Authorization header (any
   scheme, Digest and OAuth included) and of a Cookie line, to the end of the
   line; `key=value` secrets (plural keys, array values, `=>` and URL-, HTML- or
-  JSON-encoded separators, `sig`, `hmac`, `nonce`, `response`, `pin`,
+  JSON-encoded separators; an unquoted value runs over a placeholder an
+  earlier rule wrote inside it, an address's IP literal and a quoted string
+  after a `:` or `=` inside it, so a redacted URL or nested key never ends it
+  early; a value after a replaced URL fragment, `#[fragment] = …`, too; `sig`, `hmac`, `nonce`, `response`, `pin`,
   `passphrase` and the one-time code names, and compound key names such as
   `secret_key` before `:` too; only the bare values `undefined`, `null`,
   `missing`, `true` and `false`, and already-scrubbed placeholders, are kept);
@@ -1151,7 +1211,8 @@ query`: the SQL text is never sent. A thrown object that is not an `Error`
   `oauth`); `key` only before `=`; JWTs, PostHog keys, Google, Resend, AWS,
   Slack and Stripe-style keys, email addresses (including unicode, `%40`,
   `%2540`, fullwidth `＠`, quoted local parts, IP-literal and single-label
-  domains), IP addresses, `+`-prefixed phone numbers, the token segment after
+  domains, and a secret-looking base64 run joined to the local part by `/`,
+  which goes with the address), IP addresses, `+`-prefixed phone numbers, the token segment after
   `/reset/`, `/verify/`, `/invite/` or `/accept/`, and long hex and base64
   runs. Each value is then capped at 1024 characters. The span that records
   the exception (`span.recordException`) gets the same scrubbed name, message
@@ -1185,16 +1246,28 @@ query`: the SQL text is never sent. A thrown object that is not an `Error`
   (`%26key%3D`); a URL fragment of lowercase letters and hyphens with no
   key-like word (`#api-key` and `#token-abc` are replaced): under 40 characters,
   or up to 64 when each hyphen-joined word has at most 20 letters, which reads
-  as a heading; a kebab- or snake-case run of lowercase words of up to 20
+  as a heading, unless another rule would replace part of it (32 or more of
+  the letters `a` to `f`, a Slack-style `xoxb-` prefix), when it is replaced
+  whole; a kebab- or snake-case run of lowercase words of up to 20
   letters each, 40 or more characters in all, which reads as an identifier;
   vendor tokens with no rule (`ya29.`, `glpat-`, `hf_`, Google `1//` refresh
   tokens); a host named like a package ref after `@` (`jane@main`, `jane@npm:`,
   `jane@workspace:`); the domain of an email whose local part is a JWT
-  (`[jwt]@example.com`); and the part before the last `/` of a secret glued to
-  an email address (`abc/def/ghi@example.com` keeps `abc/def/`). Scrubbing a
-  scrubbed text again changes nothing, except a URL fragment the base64 rule
-  replaced (`#[secret]` becomes `#[fragment]`) and contrived inputs that glue a
-  phone number, address or hex run to one another. Regex scrubbing is
+  (`[jwt]@example.com`); the part before the last `/` of a run joined to
+  an email address's local part when the run, with the local part's leading
+  base64 characters, is under 40 characters or reads as a path rather than
+  base64 (the base64 run rule's test), counting stopped by a `%2F`
+  (`abc/def%2Fghi@example.com` keeps `abc/`), or when it follows an address
+  character directly (a letter, digit, `.`, `%`, `+`, `-`, `_`, `/` or `@`:
+  `jane@example.com/<secret>@…`, `u.<secret>@…`); and a quoted value whose key
+  sits inside a URL query that an encoded key's value runs into
+  (`secret%3Dhttps://…?a=1/api_key="…"` keeps the quoted value). Scrubbing a
+  scrubbed text
+  again changes nothing, except contrived inputs that glue a phone number, IP
+  address or hex run to one another, put an address with a quoted local part
+  (`"jane doe"@…`) straight against a URL's or path's query or fragment, end
+  an address with a `.` straight before a query (`jane@example.com.?a=1`), or
+  leave a placeholder in quotes straight before an `@`. Regex scrubbing is
   best-effort: keep secrets out of error messages.
 - **Never attached:** request bodies, headers, query strings or cookies;
   a database error's `detail`, `parameters`, `query` or `where`, or the

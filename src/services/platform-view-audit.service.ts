@@ -7,6 +7,7 @@
  */
 import { TIMELINE_AUDIT_THROTTLE_SECONDS } from '@/constants/timeline.constants'
 import { logger } from '@/services/logger.service'
+import { waitForRedisWrite, withRedisDeadline } from '@/services/redis-deadline.service'
 import { getRedis } from '@/services/redis.service'
 import type { TimelineKind } from '@/types/timeline'
 
@@ -46,19 +47,36 @@ export interface ThrottledViewAudit {
  */
 async function releaseThrottleKey(audit: ThrottledViewAudit): Promise<void> {
   try {
-    const redis = await getRedis()
-    await redis.del(audit.key)
-  } catch (error) {
-    logger.error(
-      `Could not release the ${audit.label.toLowerCase()} audit throttle key after a failed audit write; reads of this target may go unaudited until it expires`,
-      {
-        error,
-        kind: audit.kind,
-        targetId: audit.targetId,
-        unauditedSeconds: TIMELINE_AUDIT_THROTTLE_SECONDS,
+    await waitForRedisWrite(
+      async () => {
+        const redis = await getRedis()
+        return redis.del(audit.key)
+      },
+      'view audit throttle release',
+      (error) => {
+        logUnreleasedThrottleKey(audit, error)
       }
     )
+  } catch (error) {
+    logUnreleasedThrottleKey(audit, error)
   }
+}
+
+/**
+ * Log a throttle key that could not be released, at `error`.
+ * @param audit - The audit whose write failed.
+ * @param error - Why the release failed.
+ */
+function logUnreleasedThrottleKey(audit: ThrottledViewAudit, error: unknown): void {
+  logger.error(
+    `Could not release the ${audit.label.toLowerCase()} audit throttle key after a failed audit write; reads of this target may go unaudited until it expires`,
+    {
+      error,
+      kind: audit.kind,
+      targetId: audit.targetId,
+      unauditedSeconds: TIMELINE_AUDIT_THROTTLE_SECONDS,
+    }
+  )
 }
 
 /**
@@ -73,11 +91,13 @@ async function releaseThrottleKey(audit: ThrottledViewAudit): Promise<void> {
 export async function auditThrottledView(audit: ThrottledViewAudit): Promise<void> {
   let hasClaimedKey = false
   try {
-    const redis = await getRedis()
-    const reply = await redis.set(audit.key, '1', {
-      condition: 'NX',
-      expiration: { type: 'EX', value: TIMELINE_AUDIT_THROTTLE_SECONDS },
-    })
+    const reply = await withRedisDeadline(async () => {
+      const redis = await getRedis()
+      return redis.set(audit.key, '1', {
+        condition: 'NX',
+        expiration: { type: 'EX', value: TIMELINE_AUDIT_THROTTLE_SECONDS },
+      })
+    }, 'view audit throttle')
     if (reply === null) return
     hasClaimedKey = true
   } catch (error) {

@@ -19,6 +19,7 @@ import type { MaintenanceModeStateRow } from '@/database/models/maintenance-mode
 import { redactedForLog } from '@/errors/postgres-errors'
 import { readMaintenanceModeState } from '@/repositories/maintenance-mode.repository'
 import { logger } from '@/services/logger.service'
+import { waitForRedisWrite } from '@/services/redis-deadline.service'
 import { createRedisClient, getRedis, redisKey } from '@/services/redis.service'
 import type { MaintenanceModeSnapshot } from '@/types/maintenance-mode'
 
@@ -323,17 +324,34 @@ export function getMaintenanceModeReloadError(): string | null {
 }
 
 /**
+ * Log a failed publish.
+ * @param error - The failure.
+ */
+function logUnpublishedChange(error: unknown): void {
+  logger.warn('Maintenance-mode change could not be published; replicas reload on the backstop', {
+    error,
+  })
+}
+
+/**
  * Tell every replica to reread the row. A failure is logged and swallowed:
  * the backstop delivers the change within `MAINTENANCE_MODE_RELOAD_INTERVAL_MS`.
- * @returns Resolves once published or logged; never rejects.
+ * The change can close routes, so the publish goes through `waitForRedisWrite`:
+ * it is always sent, even during a stall cooldown, and the staff request waits
+ * for it at most `REDIS_REQUEST_DEADLINE_MS`.
+ * @returns Resolves once published, left in flight past the deadline, or logged; never rejects.
  */
 export async function publishMaintenanceModeChange(): Promise<void> {
   try {
-    const redis = await getRedis()
-    await redis.publish(maintenanceModeChannel(), RELOAD_MESSAGE)
+    await waitForRedisWrite(
+      async () => {
+        const redis = await getRedis()
+        return redis.publish(maintenanceModeChannel(), RELOAD_MESSAGE)
+      },
+      'maintenance-mode change',
+      logUnpublishedChange
+    )
   } catch (error) {
-    logger.warn('Maintenance-mode change could not be published; replicas reload on the backstop', {
-      error,
-    })
+    logUnpublishedChange(error)
   }
 }
