@@ -355,7 +355,7 @@ async function assertOwnerRemainsFor(
  * @param role - The new role.
  * @param options - Pass isPlatformTenant for the platform tenant: owner-on-owner and the active-owner guard; `reason` for a staff change.
  * @returns The updated membership.
- * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access; 403 when the actor is no longer an owner or the matrix refuses; 404 `member_not_found` when the target is not a member; 409 when the target is the last live (on the platform tenant, active) owner and `role` is not owner; 400 `REASON_REQUIRED` when the actor now reaches the tenant through platform access and gave no reason.
+ * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access; 403 when the actor is no longer an owner or the matrix refuses; 404 `member_not_found` (message `Member not found`) when the target is not a member; 409 when the target is the last live (on the platform tenant, active) owner and `role` is not owner; 400 `REASON_REQUIRED` when the actor now reaches the tenant through platform access and gave no reason.
  */
 export async function changeRole(
   actor: Actor,
@@ -425,7 +425,7 @@ export async function changeRole(
  * @param tenantId - The tenant.
  * @param targetUserId - The member to remove.
  * @param options - Pass isPlatformTenant for the platform tenant: owner-on-owner and the active-owner guard; `reason` for a staff removal.
- * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access; 403 when the actor is now below admin or the matrix refuses; 404 `member_not_found` when the target is not a member; 409 when the target is the last live (on the platform tenant, active) owner; 400 `REASON_REQUIRED` when the actor now reaches the tenant through platform access and gave no reason.
+ * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access; 403 when the actor is now below admin or the matrix refuses; 404 `member_not_found` (message `Member not found`) when the target is not a member; 409 when the target is the last live (on the platform tenant, active) owner; 400 `REASON_REQUIRED` when the actor now reaches the tenant through platform access and gave no reason.
  */
 export async function removeMember(
   actor: Actor,
