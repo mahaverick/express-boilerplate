@@ -1200,8 +1200,8 @@ query`: the SQL text is never sent. A thrown object that is not an `Error`
   earlier rule wrote inside it, an address's IP literal, an HTML- or
   JSON-encoded separator, and a quoted string (plain, escaped, JSON-escaped
   or URL-encoded) or array after a plain or encoded separator inside it, so a
-  redacted URL never ends it early; a value of this rule or the
-  Authorization rule that takes a later secret-named key's or Authorization
+  redacted URL never ends it early; a value of this rule, the
+  Authorization rule or the OAuth `code` rule that takes a later secret-named key's or Authorization
   or Cookie key's name, separator or opening quote runs on to the end of that key's value, and over a closing
   quote and text glued to it, so the later key's value is never left in
   view; a value after a replaced URL fragment, `#[fragment] = …`, too; `sig`, `hmac`, `nonce`, `response`, `pin`,
@@ -1219,15 +1219,7 @@ query`: the SQL text is never sent. A thrown object that is not an `Error`
   domains, and a secret-looking base64 run joined to the local part by `/`,
   which goes with the address, as does one that starts at a single-label
   domain, `x@wJalr…/K7MDENG/…`), IP addresses, `+`-prefixed phone numbers, the token segment after
-  `/reset/`, `/verify/`, `/invite/` or `/accept/` (up to a secret-named key
-  in it whose value runs past it, which the key rule then takes:
-  `/reset/x.tsrefresh_token = …` becomes `/reset/[token]token = [redacted]`;
-  a key whose value is already a placeholder is kept only when nothing
-  follows the placeholder but the quote that opened it, and never after an
-  `&`; a key after an `&` is not cut out either when a value that starts
-  earlier on the line would run over the path token; otherwise the segment
-  goes whole),
-  and long hex and base64
+  `/reset/`, `/verify/`, `/invite/` or `/accept/`, and long hex and base64
   runs. Each value is then capped at 1024 characters. The span that records
   the exception (`span.recordException`) gets the same scrubbed name, message
   and stack, so Tempo never holds the raw message either. The frontends port
@@ -1275,12 +1267,11 @@ query`: the SQL text is never sent. A thrown object that is not an `Error`
   character directly (a letter, digit, `.`, `%`, `+`, `-`, `_`, `/` or `@`:
   `jane@example.com/<secret>@…`, `u.<secret>@…`); a quoted value whose key
   sits inside a URL query that an encoded key's value runs into
-  (`secret%3Dhttps://…?a=1/api_key="…"` keeps the quoted value); the one
-  token character before `response`, or the `&` or `?` before `code`, kept
-  in front of a key glued to a path token so the key rule still sees the key
-  (`/verify/lresponse\u003a…` keeps `lresponse`); a `code` key glued to a
-  path token other than right after `?` or `&`, whose segment is replaced
-  whole and whose value after it is kept (`authorization … /reset/code=>"…"`); the parameters other than
+  (`secret%3Dhttps://…?a=1/api_key="…"` keeps the quoted value); a key name
+  glued to the end of the segment after `/reset/`, `/verify/`, `/invite/` or
+  `/accept/`, which goes into `[token]` with the segment and leaves the value
+  after it in view (`/app/reset/x.tsrefresh_token = …` becomes
+  `/app/reset/[token] = …`); the parameters other than
   secret-named ones of an Authorization or Cookie value opened by an escaped
   quote and a scheme (`\"OAuth username="…", realm="…"` keeps `username`
   and `realm`; `oauth_signature`, `oauth_token`, `nonce`, `cnonce` and
@@ -1291,12 +1282,8 @@ query`: the SQL text is never sent. A thrown object that is not an `Error`
   again changes nothing, except contrived inputs that glue a phone number, IP
   address or hex run to one another, put an address with a quoted local part
   (`"jane doe"@…`) straight against a URL's or path's query or fragment, end
-  an address with a `.` straight before a query (`jane@example.com.?a=1`),
-  leave a placeholder in quotes straight before an `@`, or put a scheme
-  word's placeholder value inside a reset/verify/invite/accept path straight
-  before an HTML-encoded separator (`&#58;`); and a placeholder written as a
-  key's value inside a reset/verify/invite/accept path is scrubbed again on a
-  second pass (over-redaction). Regex scrubbing is
+  an address with a `.` straight before a query (`jane@example.com.?a=1`), or
+  leave a placeholder in quotes straight before an `@`. Regex scrubbing is
   best-effort: keep secrets out of error messages.
 - **Never attached:** request bodies, headers, query strings or cookies;
   a database error's `detail`, `parameters`, `query` or `where`, or the
