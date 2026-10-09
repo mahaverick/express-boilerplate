@@ -594,6 +594,20 @@ describe('/api/v1/tenants', () => {
         firstName: deactivatedUser.firstName,
         lastName: deactivatedUser.lastName,
       })
+
+      // Staff reading through platform access get the customer shape too: the tenant decides, not the caller.
+      const { user: staffUser, token: staffToken } = await createAuthenticatedUser()
+      await makeStaff(staffUser.id, 'viewer')
+      const staffResponse = await request(app)
+        .get(`/api/v1/tenants/${tenant.slug}/members`)
+        .set('Authorization', `Bearer ${staffToken}`)
+      expect(staffResponse.status).toBe(200)
+      const staffRows = envelopeOf<MemberRow[]>(staffResponse).data ?? []
+      expect(staffRows).toHaveLength(2)
+      for (const member of staffRows) {
+        const memberRow = members.find((row) => row.user.id === member.user.id)
+        expect(member.user).toStrictEqual(memberRow?.user)
+      }
     })
 
     it('says whether each member is active on the platform tenant, the flag its last-owner rule reads', async () => {
@@ -1266,6 +1280,22 @@ describe('/api/v1/tenants', () => {
       expect(
         await userMembershipRepository.findByUserAndTenant(owner.id, tenant.id)
       ).toBeUndefined()
+    })
+
+    it('answers 404 Tenant not found, with no code, when the membership vanishes before the delete itself', async () => {
+      const { user: owner } = await createAuthenticatedUser()
+      const tenant = await createTenant(owner.id)
+      const { user, token } = await createAuthenticatedUser()
+      await addMembership(user.id, tenant.id, 'viewer')
+
+      await withMutatedMethod(
+        UserMembershipRepository.prototype,
+        'delete',
+        () => Promise.resolve(false),
+        async () => {
+          expectTenantNotFound(await leave(tenant.slug, token))
+        }
+      )
     })
 
     it('answers 401 without a bearer token', async () => {
