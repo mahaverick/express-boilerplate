@@ -2082,12 +2082,12 @@
   {
     "rule": "path-token",
     "input": "/reset/sid=[redacted]zqS7secret",
-    "expected": "/reset/sid=[redacted][token]"
+    "expected": "/reset/[token]"
   },
   {
     "rule": "path-token",
     "input": "/reset/sid=[redacted]) failed",
-    "expected": "/reset/sid=[redacted]) failed"
+    "expected": "/reset/[token] failed"
   },
   {
     "rule": "email",
@@ -2098,5 +2098,50 @@
     "rule": "email",
     "input": "jane@localhost/x failed",
     "expected": "[email]/x failed"
+  },
+  {
+    "rule": "kv",
+    "input": "{ authorization:abc.a/b-\"sid\":\n[zqS7a, zqS7b]\"authorization\": [zqS7c, zqS7d] tail",
+    "expected": "{ authorization:[redacted]"
+  },
+  {
+    "rule": "path-token",
+    "input": "GET /reset/sid=[redacted]*zqS7secret",
+    "expected": "GET /reset/[token]"
+  },
+  {
+    "rule": "path-token",
+    "input": "/accept/token%3D%22[credentials].zqS7x/x",
+    "expected": "/accept/[token]/x"
+  },
+  {
+    "rule": "path-token",
+    "input": "/invite/password:[ip]%22zqS7vw zqS7pduvc",
+    "expected": "/invite/[token] zqS7pduvc"
+  },
+  {
+    "rule": "path-token",
+    "input": "/reset/sid%3A[redacted])zqS7x",
+    "expected": "/reset/[token]"
+  },
+  {
+    "rule": "path-token",
+    "input": "/reset/pwd:[token],zqS7kaalz",
+    "expected": "/reset/[token]"
+  },
+  {
+    "rule": "path-token",
+    "input": "token: /reset/a&code = %22[email]_zqS7tohsl zqS7ze",
+    "expected": "token: [redacted]"
+  },
+  {
+    "rule": "path-token",
+    "input": "token: /invite/a&code => %22[token]! zqS7txsboh",
+    "expected": "token: [redacted]"
+  },
+  {
+    "rule": "path-token",
+    "input": "authorization /verify/code=>\"zqS7c&b=1",
+    "expected": "authorization /verify/[token]>\"zqS7c&b=1"
   }
 ]

@@ -200,11 +200,17 @@ const SECRET_KEY_WORD = String.raw`(?:pass(?:[_-]?(?:word|phrase|code|key)|wd)?|
 const CODE_AFTER_AUTH_WORD = String.raw`code(?<=(?:oauth|authoriz(?:ation|e)(?![a-z]))[^\n]*code)`
 
 /**
+ * A `code` key right after `?` or `&`, written plainly, as `&amp;` or
+ * encoded (`%26`, `%3F`).
+ */
+const CODE_AFTER_QUERY_MARK = '(?:code(?<=(?:[?&]|&amp;|%26|%3F)code))'
+
+/**
  * A `code` key that reads as an authorization code from what stands right
  * around it: after `?` or `&`, first in a form body (`code=…&`), or with
  * OAuth or authorization later on its line outside a brace.
  */
-const CODE_IN_PLACE = String.raw`code(?<=(?:[?&]|&amp;|%26|%3F)code)|code(?=\s*=[^\s&]*&)|code(?=[^\n{}]*(?:oauth|authoriz(?:ation|e)(?![a-z])))`
+const CODE_IN_PLACE = String.raw`${CODE_AFTER_QUERY_MARK}|code(?=\s*=[^\s&]*&)|code(?=[^\n{}]*(?:oauth|authoriz(?:ation|e)(?![a-z])))`
 
 /**
  * A `code` key where it reads as an authorization code: after `?` or `&`, on
@@ -468,12 +474,13 @@ const CODE_KEY_PATTERN = new RegExp(
  * A secret-named key, its separator and any opening quote, starting exactly
  * at `lastIndex`, in any letter case: where `KV_SECRET_PATTERN` could find a
  * key word, without the run of word characters it may take before it. A
- * `code` that is a key only because OAuth or authorization stands earlier on
- * its line is left out: an earlier key's value can take that word before the
- * key rule reaches the `code`, so a path token keeps it whole.
+ * `code` counts only right after `?` or `&` (`CODE_AFTER_QUERY_MARK`): one
+ * that is a key because of other text (OAuth or authorization on its line, a
+ * later `&` field) can lose that text to an earlier or its own value before
+ * the key rule reaches it, so a path token keeps it whole.
  */
 const SECRET_KEY_AT = new RegExp(
-  String.raw`(?:${SECRET_KEY_WORD}s?|(?:\b|(?<=%26|%3F))(?:${CODE_IN_PLACE}))${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?`,
+  String.raw`(?:${SECRET_KEY_WORD}s?|(?:\b|(?<=%26|%3F))${CODE_AFTER_QUERY_MARK})${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?`,
   'iy'
 )
 
@@ -481,6 +488,11 @@ const SECRET_KEY_AT = new RegExp(
  * `KV_SECRET_PATTERN`, matching only at `lastIndex`.
  */
 const KV_SECRET_AT = new RegExp(KV_SECRET_PATTERN.source, 'iy')
+
+/**
+ * `AUTH_HEADER_PATTERN`, matching only at `lastIndex`.
+ */
+const AUTH_HEADER_AT = new RegExp(AUTH_HEADER_PATTERN.source, 'iy')
 
 /**
  * The key and separator `KV_SECRET_PATTERN` matches, whatever the value,
@@ -587,10 +599,14 @@ function findKeyCut(text: string, start: number, keyAt: number): KeyInPathToken 
  * keeps (`null`), goes with the segment. For the first key whose value runs
  * past the end, only the part before it becomes `[token]` (`findKeyCut`), and
  * the key, its separator and the rest are left for the key rule to replace
- * the value. A key whose value is already a placeholder is kept with it and
- * the rest of the segment becomes `[token]`; at the start of the segment the
- * segment is left as it is, which is what a second scrub of a key this rule
- * left in view finds.
+ * the value. A key whose value is already a placeholder is kept with it,
+ * cut the same way, only when nothing but its closing quote follows the
+ * placeholder, neither in the rest of the segment nor glued to it past the
+ * segment up to the next whitespace (`GLUED_TO_PLACEHOLDER_AT`); otherwise
+ * the segment is replaced whole, so text after a placeholder in the input is
+ * never shown and never ends an enclosing value early. A second scrub of such a kept key then sees the
+ * same thing, except where the first scrub's own output glues text to the
+ * placeholder, which it replaces again.
  * @param _match - The prefix and the segment.
  * @param prefix - The `/reset/` or other prefix.
  * @param token - The segment.
@@ -614,7 +630,7 @@ function pathTokenReplacement(
       keyAt += 1
       continue
     }
-    const replaced = replacedBeforeKey(prefix, token, start, found)
+    const replaced = replacedBeforeKey(prefix, token, start, found, text)
     if (replaced !== undefined) return replaced
     const skipTo = found.keyStart + (found.pairLength ?? found.keyLength) - start
     keyAt = Math.max(keyAt + 1, skipTo)
@@ -630,32 +646,58 @@ function pathTokenReplacement(
  * @param token - The segment.
  * @param start - Where the segment starts in the text.
  * @param found - The key and its cut (`findKeyCut`).
+ * @param text - The text being scrubbed.
  * @returns The replacement, or undefined when the key goes with the segment.
  */
 function replacedBeforeKey(
   prefix: string,
   token: string,
   start: number,
-  found: KeyInPathToken
+  found: KeyInPathToken,
+  text: string
 ): string | undefined {
   if (found.pairLength !== undefined) {
     const pairEnd = found.keyStart + found.pairLength - start
     return pairEnd > token.length ? `${prefix}${found.before}${token.slice(found.cut)}` : undefined
   }
   if (!found.isPlaceholderKept) return undefined
-  const keptEnd = found.keyStart + found.keyLength + found.placeholderLength - start
-  // Text glued to the placeholder may be the rest of a secret; a delimiter after it is not.
-  if (found.cut === 0 && !LETTER_OR_DIGIT_START_PATTERN.test(token.slice(keptEnd))) {
-    return `${prefix}${token}`
-  }
-  const rest = keptEnd < token.length ? '[token]' : ''
-  return `${prefix}${found.before}${token.slice(found.cut, keptEnd)}${rest}`
+  // Text after the placeholder may be the rest of a secret, or a delimiter ending an enclosing value.
+  const after = found.keyStart + found.keyLength + found.placeholderLength
+  const end = start + token.length
+  const inSegment = after < end ? text.slice(after, end).replace(LEADING_QUOTE_PATTERN, '') : ''
+  GLUED_TO_PLACEHOLDER_AT.lastIndex = Math.max(after, end)
+  const glued = GLUED_TO_PLACEHOLDER_AT.exec(text)?.[1] ?? ''
+  // A kept `&` before the key ends an enclosing value there, so then nothing may follow at all.
+  const isGluedShown = DELIMITER_START_PATTERN.test(token.slice(found.cut))
+    ? glued !== ''
+    : LETTER_OR_DIGIT_PATTERN.test(glued)
+  if (inSegment !== '' || isGluedShown) return `${prefix}[token]`
+  return `${prefix}${found.before}${token.slice(found.cut)}`
 }
 
 /**
- * A text that starts with a letter or digit, in any script.
+ * Text glued to a placeholder kept as a key's value, or to the end of the
+ * path token holding it, after any closing quote, up to whitespace, only at
+ * `lastIndex`. Group 1 is that text.
  */
-const LETTER_OR_DIGIT_START_PATTERN = /^[\p{L}\p{N}]/u
+const GLUED_TO_PLACEHOLDER_AT = new RegExp(String.raw`${KEY_QUOTE}?([^\s/?#]*)`, 'y')
+
+/**
+ * A path token's kept part that starts with an `&`, plain or encoded, which
+ * ends an enclosing unquoted value.
+ */
+const DELIMITER_START_PATTERN = /^(?:&|%26)/i
+
+/**
+ * A letter or digit, in any script.
+ */
+const LETTER_OR_DIGIT_PATTERN = /[\p{L}\p{N}]/u
+
+/**
+ * A closing quote at the start of a text, or a lone backslash, the escape of
+ * a quote that ends a path token.
+ */
+const LEADING_QUOTE_PATTERN = new RegExp(String.raw`^(?:${KEY_QUOTE}|\\$)`)
 
 /**
  * What may follow the end of a value a later key took over: its closing
@@ -667,8 +709,8 @@ const GLUED_TAIL_AT = new RegExp(String.raw`${KEY_QUOTE}?[^\s"'\\,;&})\]]*`, 'y'
 /**
  * Where a key rule's value ends once it runs through later keys: a value
  * that took a later secret-named key's name, separator or opening quote
- * runs on to the end of that key's value as `KV_SECRET_PATTERN` matches it
- * there, then over a closing quote and any text glued to it
+ * runs on to the end of that key's value as `KV_SECRET_PATTERN` or
+ * `AUTH_HEADER_PATTERN` matches it there, then over a closing quote and any text glued to it
  * (`GLUED_TAIL_AT`), and is checked again, so the later key's value is
  * never left in view.
  * @param text - The text being scrubbed.
@@ -681,9 +723,7 @@ function runThroughEnd(text: string, valueStart: number, matchEnd: number): numb
   let at = valueStart
   for (;;) {
     for (; at < end && end < text.length; at += 1) {
-      KV_SECRET_AT.lastIndex = at
-      const inner = KV_SECRET_AT.exec(text)
-      if (inner !== null && at + inner[0].length > end) end = at + inner[0].length
+      end = Math.max(end, pairEndAt(KV_SECRET_AT, text, at), pairEndAt(AUTH_HEADER_AT, text, at))
     }
     if (end === matchEnd) return end
     GLUED_TAIL_AT.lastIndex = end
@@ -691,6 +731,20 @@ function runThroughEnd(text: string, valueStart: number, matchEnd: number): numb
     if (glued === 0) return end
     end += glued
   }
+}
+
+/**
+ * Where a key rule's match starting exactly at `at` ends, or `at` when it
+ * does not match there.
+ * @param sticky - A key rule with the `y` flag.
+ * @param text - The text being scrubbed.
+ * @param at - The position to try.
+ * @returns The end of the match, or `at`.
+ */
+function pairEndAt(sticky: RegExp, text: string, at: number): number {
+  sticky.lastIndex = at
+  const pair = sticky.exec(text)
+  return pair === null ? at : at + pair[0].length
 }
 
 /**
@@ -995,8 +1049,8 @@ function capped(value: string, wasCut: boolean): string {
  * `response`; `code` after `?` or `&` or on an OAuth or authorization line;
  * `key` before `=`; and every `code` in a text that names an OAuth exchange
  * (`OAUTH_CONTEXT_PATTERN`)), become `[redacted]`, a value that takes a later
- * secret-named key running on to the end of that key's value
- * (`redactedRunningThrough`); a query or fragment that
+ * secret-named, Authorization or Cookie key running on to the end of that
+ * key's value (`redactedRunningThrough`); a query or fragment that
  * a replaced value now joins to its path is replaced as above
  * (`rejoinedQueries`); a JWT becomes `[jwt]`; an
  * email address (`EMAIL_PATTERN`: `@` written plainly, encoded or fullwidth,
@@ -1021,9 +1075,13 @@ function capped(value: string, wasCut: boolean): string {
  * glue a phone number, IP address or hex run to one another, put an address
  * with a quoted local part (`"jane doe"@…`) straight against a URL's or
  * path's query or fragment, end an address with a `.` straight before a
- * query (`jane@example.com.?a=1`), or leave a placeholder in quotes straight
- * before an `@` (a placeholder written by the first pass can open a match for the
- * second, and a replaced quoted address no longer stops a path).
+ * query (`jane@example.com.?a=1`), leave a placeholder in quotes straight
+ * before an `@`, or put a scheme word's placeholder value inside a
+ * reset/verify/invite/accept path straight before an HTML-encoded separator
+ * (`&#58;`) (a placeholder written by the first pass can open a match for the
+ * second, and a replaced quoted address no longer stops a path); and a
+ * placeholder written as a key's value inside such a path is scrubbed again
+ * on a second pass (`pathTokenReplacement`), which only over-redacts.
  * @param value - The text: an exception's type or value, or a frame's filename or function.
  * @returns The scrubbed text.
  */

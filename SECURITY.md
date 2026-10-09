@@ -1201,8 +1201,8 @@ query`: the SQL text is never sent. A thrown object that is not an `Error`
   JSON-encoded separator, and a quoted string (plain, escaped, JSON-escaped
   or URL-encoded) or array after a plain or encoded separator inside it, so a
   redacted URL never ends it early; a value of this rule or the
-  Authorization rule that takes a later secret-named key's name, separator or
-  opening quote runs on to the end of that key's value, and over a closing
+  Authorization rule that takes a later secret-named key's or Authorization
+  or Cookie key's name, separator or opening quote runs on to the end of that key's value, and over a closing
   quote and text glued to it, so the later key's value is never left in
   view; a value after a replaced URL fragment, `#[fragment] = …`, too; `sig`, `hmac`, `nonce`, `response`, `pin`,
   `passphrase` and the one-time code names, and compound key names such as
@@ -1221,7 +1221,9 @@ query`: the SQL text is never sent. A thrown object that is not an `Error`
   domain, `x@wJalr…/K7MDENG/…`), IP addresses, `+`-prefixed phone numbers, the token segment after
   `/reset/`, `/verify/`, `/invite/` or `/accept/` (up to a secret-named key
   in it whose value runs past it, which the key rule then takes:
-  `/reset/x.tsrefresh_token = …` becomes `/reset/[token]token = [redacted]`),
+  `/reset/x.tsrefresh_token = …` becomes `/reset/[token]token = [redacted]`;
+  a key whose value is already a placeholder is kept only when nothing but a
+  closing quote follows the placeholder, otherwise the segment goes whole),
   and long hex and base64
   runs. Each value is then capped at 1024 characters. The span that records
   the exception (`span.recordException`) gets the same scrubbed name, message
@@ -1273,12 +1275,9 @@ query`: the SQL text is never sent. A thrown object that is not an `Error`
   (`secret%3Dhttps://…?a=1/api_key="…"` keeps the quoted value); the one
   token character before `response`, or the `&` or `?` before `code`, kept
   in front of a key glued to a path token so the key rule still sees the key
-  (`/verify/lresponse\u003a…` keeps `lresponse`); text after a delimiter in
-  a path token whose input already holds a placeholder as a key's value at
-  its start (`/reset/sid%3A[redacted])…` keeps `)…`); a `code` key glued to a
-  path token that is a key only because OAuth or authorization stands
-  earlier on its line, whose segment is replaced whole and whose value after
-  it is kept (`authorization … /reset/code=>"…"`); the parameters other than
+  (`/verify/lresponse\u003a…` keeps `lresponse`); a `code` key glued to a
+  path token other than right after `?` or `&`, whose segment is replaced
+  whole and whose value after it is kept (`authorization … /reset/code=>"…"`); the parameters other than
   secret-named ones of an Authorization or Cookie value opened by an escaped
   quote and a scheme (`\"OAuth username="…", realm="…"` keeps `username`
   and `realm`; `oauth_signature`, `oauth_token`, `nonce`, `cnonce` and
@@ -1289,8 +1288,12 @@ query`: the SQL text is never sent. A thrown object that is not an `Error`
   again changes nothing, except contrived inputs that glue a phone number, IP
   address or hex run to one another, put an address with a quoted local part
   (`"jane doe"@…`) straight against a URL's or path's query or fragment, end
-  an address with a `.` straight before a query (`jane@example.com.?a=1`), or
-  leave a placeholder in quotes straight before an `@`. Regex scrubbing is
+  an address with a `.` straight before a query (`jane@example.com.?a=1`),
+  leave a placeholder in quotes straight before an `@`, or put a scheme
+  word's placeholder value inside a reset/verify/invite/accept path straight
+  before an HTML-encoded separator (`&#58;`); and a placeholder written as a
+  key's value inside a reset/verify/invite/accept path is scrubbed again on a
+  second pass (over-redaction). Regex scrubbing is
   best-effort: keep secrets out of error messages.
 - **Never attached:** request bodies, headers, query strings or cookies;
   a database error's `detail`, `parameters`, `query` or `where`, or the
