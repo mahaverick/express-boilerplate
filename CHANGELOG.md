@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.3](https://github.com/mahaverick/express-boilerplate/compare/v2.0.2...v2.0.3) (2026-10-09)
+
+
+### Bug Fixes
+
+* end grace sibling chains on revoke, bound stalled Redis calls, close two scrubber gaps ([#96](https://github.com/mahaverick/express-boilerplate/issues/96)) ([9d27819](https://github.com/mahaverick/express-boilerplate/commit/9d27819a9d2cc8d9ed62274cf4b0b73e561a08c5))
+
 ## [2.0.2](https://github.com/mahaverick/express-boilerplate/compare/v2.0.1...v2.0.2) (2026-10-08)
 
 
