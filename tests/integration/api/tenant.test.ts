@@ -40,6 +40,14 @@ const userMembershipRepository = new UserMembershipRepository()
 const userRepository = new UserRepository()
 
 /**
+ * One row of `GET /tenants/:slug/members`, as these tests read it.
+ */
+interface MemberRow {
+  membership: { role: MembershipRole }
+  user: Record<string, unknown>
+}
+
+/**
  * The envelope every controller response is wrapped in
  * (response.utilities.ts), narrowed to the fields these tests read. Same
  * pattern as `tests/integration/api/profile.test.ts`'s own `ApiEnvelope`.
@@ -558,7 +566,7 @@ describe('/api/v1/tenants', () => {
       expect(JSON.stringify(response.body)).not.toMatch(/password/i)
     })
 
-    it('says whether each member is active, and returns exactly the safe user fields', async () => {
+    it('omits active on a customer tenant, even for a deactivated member', async () => {
       const { user: ownerUser, token } = await createAuthenticatedUser()
       const { user: deactivatedUser } = await createAuthenticatedUser()
       const tenant = await createTenant(ownerUser.id)
@@ -570,10 +578,7 @@ describe('/api/v1/tenants', () => {
         .set('Authorization', `Bearer ${token}`)
 
       expect(response.status).toBe(200)
-      const members =
-        envelopeOf<{ membership: { role: MembershipRole }; user: Record<string, unknown> }[]>(
-          response
-        ).data ?? []
+      const members = envelopeOf<MemberRow[]>(response).data ?? []
       const activeRow = members.find((member) => member.user.id === ownerUser.id)
       const inactiveRow = members.find((member) => member.user.id === deactivatedUser.id)
       expect(activeRow?.user).toStrictEqual({
@@ -581,6 +586,37 @@ describe('/api/v1/tenants', () => {
         email: ownerUser.email,
         firstName: ownerUser.firstName,
         lastName: ownerUser.lastName,
+      })
+      expect(inactiveRow?.membership.role).toBe('owner')
+      expect(inactiveRow?.user).toStrictEqual({
+        id: deactivatedUser.id,
+        email: deactivatedUser.email,
+        firstName: deactivatedUser.firstName,
+        lastName: deactivatedUser.lastName,
+      })
+    })
+
+    it('says whether each member is active on the platform tenant, the flag its last-owner rule reads', async () => {
+      const { user: staffUser, token } = await createAuthenticatedUser()
+      const { user: deactivatedStaff } = await createAuthenticatedUser()
+      await makeStaff(staffUser.id, 'viewer')
+      await makeStaff(deactivatedStaff.id, 'owner')
+      await userRepository.update(deactivatedStaff.id, { active: false })
+      const platform = await platformTenant()
+
+      const response = await request(app)
+        .get(`/api/v1/tenants/${platform.slug}/members`)
+        .set('Authorization', `Bearer ${token}`)
+
+      expect(response.status).toBe(200)
+      const members = envelopeOf<MemberRow[]>(response).data ?? []
+      const activeRow = members.find((member) => member.user.id === staffUser.id)
+      const inactiveRow = members.find((member) => member.user.id === deactivatedStaff.id)
+      expect(activeRow?.user).toStrictEqual({
+        id: staffUser.id,
+        email: staffUser.email,
+        firstName: staffUser.firstName,
+        lastName: staffUser.lastName,
         active: true,
       })
       expect(inactiveRow?.membership.role).toBe('owner')

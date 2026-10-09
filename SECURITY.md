@@ -908,11 +908,18 @@ per-membership permission blob.
 - **Staff roles live on the platform tenant.** Its members are the staff, and
   its member routes are how staff roles change. There an owner may demote or
   remove another owner (and, under `/platform/users`, deactivate or delete one);
-  the last-owner guard counts active owners only (`user.active` on
-  `GET /tenants/:slug/members`, so a client can apply the same rule); and
-  every invitation, whatever role it offers, a resend, a role change, a
-  removal and leaving need a recent sign-in there: every platform role, viewer included, reads every user, tenant
-  and email address, so a viewer invitation mints staff.
+  the last-owner guard counts active owners only; and every invitation,
+  whatever role it offers, a resend, a role change, a removal and leaving need
+  a recent sign-in there: every platform role, viewer included, reads every
+  user, tenant and email address, so a viewer invitation mints staff.
+- **Only the platform tenant's member list says who is deactivated.**
+  `GET /tenants/:slug/members` carries `user.active` on the platform tenant
+  alone, so a client can apply its active-owners-only last-owner rule; staff
+  read every account's status under `/platform/users` anyway. On a customer
+  tenant the field is absent: the last-owner rule there counts every listed
+  owner, and a member, viewers included, must not learn that a co-member's
+  account was deactivated (a staff action, often over another tenant). A
+  client treats a missing `active` as active.
 - **Membership wins.** Where a staff user is also a member, only the
   membership role counts.
 - **The platform tenant is members-only.** Anyone who isn't a member of the

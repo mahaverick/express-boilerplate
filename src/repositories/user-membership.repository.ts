@@ -29,6 +29,7 @@ export interface MembershipWithUser {
    * The member's public identity — never `passwordHash` — and `active`:
    * false for a deactivated account, which cannot sign in and which the
    * platform tenant's last-owner guard does not count (`countActiveOwners`).
+   * `listMembers` (tenant.service.ts) drops `active` on a customer tenant.
    */
   user: Pick<User, 'id' | 'email' | 'firstName' | 'lastName' | 'active'>
 }

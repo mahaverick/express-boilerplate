@@ -209,12 +209,37 @@ export async function updateTenant(
 }
 
 /**
- * A tenant's members, each with safe user fields only, `active` among them.
+ * One row of `GET /tenants/:slug/members`. `user.active` is present on the
+ * platform tenant only, where the last-owner rule reads it.
+ */
+export interface TenantMemberRow {
+  /**
+   * The membership row itself (role, timestamps, ids).
+   */
+  membership: MembershipWithUser['membership']
+  /**
+   * The member's safe user fields, with `active` on the platform tenant only.
+   */
+  user: Omit<MembershipWithUser['user'], 'active'> & { active?: boolean }
+}
+
+/**
+ * A tenant's members, each with safe user fields only. `user.active` is
+ * returned on the platform tenant alone: its last-owner rule counts active
+ * owners only, and staff already read every account's status. A customer
+ * tenant's rule ignores it, so its members never learn that a co-member's
+ * account was deactivated.
  * @param tenantId - The tenant.
+ * @param isPlatformTenant - The tenant is the platform tenant (`request.principal.isPlatformTenant`).
  * @returns One entry per live member.
  */
-export async function listMembers(tenantId: string): Promise<MembershipWithUser[]> {
-  return userMembershipRepository.listByTenant(tenantId)
+export async function listMembers(
+  tenantId: string,
+  isPlatformTenant: boolean
+): Promise<TenantMemberRow[]> {
+  const rows = await userMembershipRepository.listByTenant(tenantId)
+  if (isPlatformTenant) return rows
+  return rows.map(({ membership, user: { active: _active, ...user } }) => ({ membership, user }))
 }
 
 /**
