@@ -77,6 +77,18 @@ function expectMemberNotFound(response: Response): void {
 }
 
 /**
+ * Assert the unknown-tenant answer a caller without access gets: 404
+ * `Tenant not found` with no code, so a client never reads it as a vanished
+ * member.
+ * @param response - The supertest response.
+ */
+function expectTenantNotFound(response: Response): void {
+  expect(response.status).toBe(404)
+  expect(envelopeOf(response).message).toBe('Tenant not found')
+  expect(response.body).not.toHaveProperty('code')
+}
+
+/**
  * A disposable email, unique to one test run.
  * @returns An email guaranteed unique to this call.
  */
@@ -741,7 +753,7 @@ describe('/api/v1/tenants', () => {
         .set('Authorization', `Bearer ${outsiderToken}`)
         .send({ role: 'admin' })
 
-      expect(response.status).toBe(404)
+      expectTenantNotFound(response)
     })
 
     // The second "Member not found" — a real race, not the "target user was never a member" 404 two tests above: permission/last-owner checks already pass, and the row vanishes only in the gap before updateRole's own write.
@@ -946,7 +958,7 @@ describe('/api/v1/tenants', () => {
         .delete(`/api/v1/tenants/${tenant.slug}/members/${targetUser.id}`)
         .set('Authorization', `Bearer ${outsiderToken}`)
 
-      expect(response.status).toBe(404)
+      expectTenantNotFound(response)
     })
 
     // The second "Member not found" — same race as updateMemberRole's own version above: the permission and last-owner checks already pass, and the row vanishes only in the gap before the delete itself.
@@ -1236,8 +1248,7 @@ describe('/api/v1/tenants', () => {
 
       const response = await leave(tenant.slug, token)
 
-      expect(response.status).toBe(404)
-      expect(response.body).toMatchObject({ message: 'Tenant not found' })
+      expectTenantNotFound(response)
     })
 
     it('answers 404 to staff who reach the tenant only through their platform role', async () => {
@@ -1248,7 +1259,7 @@ describe('/api/v1/tenants', () => {
 
       const response = await leave(tenant.slug, token)
 
-      expect(response.status).toBe(404)
+      expectTenantNotFound(response)
       expect(await sql`select id from audit_logs where action = 'member.left'`).toHaveLength(0)
     })
 

@@ -90,6 +90,22 @@ describe('the platform tenant member routes', () => {
     expect(response2.status).toBe(200)
   })
 
+  it('answer 404 member_not_found for a role change or removal of a user who is not staff', async () => {
+    const owner = await createTrackedStaff('owner')
+    const outsider = await createTrackedUser()
+
+    for (const response of [
+      await changeRole(owner.token, 'platform', outsider.id, 'admin'),
+      await removeMember(owner.token, 'platform', outsider.id),
+    ]) {
+      expect(response.status).toBe(404)
+      expect(response.body).toMatchObject({
+        message: 'Member not found',
+        code: 'member_not_found',
+      })
+    }
+  })
+
   it('refuse to leave the platform without an active owner', async () => {
     const owner = await createTrackedStaff('owner')
     const inactiveOwner = await createTrackedStaff('owner', { active: false })

@@ -455,6 +455,7 @@ describe('the staff role is re-read under lock (platform role changed after reso
           .send({})
         expect(response.status).toBe(404)
         expect(response.body).toMatchObject({ statusCode: 404, message: 'Tenant not found' })
+        expect(response.body).not.toHaveProperty('code')
       })
 
       const rows = await sql`
