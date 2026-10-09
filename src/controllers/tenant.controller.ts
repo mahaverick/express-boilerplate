@@ -9,6 +9,7 @@
  * entry.
  */
 import type { Request } from 'express'
+import { MEMBER_NOT_FOUND_CODE, MEMBER_NOT_FOUND_MESSAGE } from '@/constants/tenant.constants'
 import { BaseController } from '@/controllers/base.controller'
 import { actorFrom, authenticatedUserId, tenantPrincipal } from '@/controllers/helpers.controller'
 import { HttpError } from '@/errors/http-error'
@@ -45,10 +46,10 @@ const INVITATION_SENT_MESSAGE = 'If that address can be invited, an invitation h
  * the database (a NUL would answer 500 there).
  * @param request - The incoming request.
  * @returns The `:userId` param.
- * @throws {HttpError} 404 `Member not found`, when `:userId` is not a UUID.
+ * @throws {HttpError} 404 `member_not_found` (message `Member not found`), when `:userId` is not a UUID.
  */
 function targetUserIdParameter(request: Request): string {
-  return parseIdParameter(request.params.userId, 'Member not found')
+  return parseIdParameter(request.params.userId, MEMBER_NOT_FOUND_MESSAGE, MEMBER_NOT_FOUND_CODE)
 }
 
 /**
@@ -138,6 +139,8 @@ class TenantController extends BaseController {
    * `PATCH /tenants/:slug/members/:userId`: change an existing member's role.
    * Owner only: `requireRole('owner')` (tenant.routes.ts), then `changeRole`
    * re-checks the actor's current role and the actor→target matrix under lock.
+   * A `:userId` that is not a member (or not a UUID) answers 404
+   * `member_not_found`, message `Member not found`.
    */
   updateMemberRole = this.handle(async (request, response) => {
     const principal = tenantPrincipal(request)
@@ -157,7 +160,8 @@ class TenantController extends BaseController {
    * Owner/admin only: `requireRole('owner', 'admin')` (tenant.routes.ts),
    * then `removeMember` re-checks the actor's current role and the matrix
    * under lock. Under the matrix an admin can never remove another admin or
-   * any owner, themselves included.
+   * any owner, themselves included. A `:userId` that is not a member (or not
+   * a UUID) answers 404 `member_not_found`, message `Member not found`.
    */
   removeMember = this.handle(async (request, response) => {
     const principal = tenantPrincipal(request)

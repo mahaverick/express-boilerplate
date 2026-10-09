@@ -788,7 +788,10 @@ as another; each refusal says `<Field> must be an http or https URL.`
 tag; settings `metadata` is at most 16 384 characters as JSON and 10 levels
 deep. A `:slug` or member `:userId` that no stored row could match answers
 `404` before any query, and a character Postgres cannot store that still
-reaches it (SQLSTATE 22021/22P05) answers `400`, not `500`.
+reaches it (SQLSTATE 22021/22P05) answers `400`, not `500`. For a member
+`:userId` that `404` is the one a user who is not a member gets, code
+`member_not_found` and message `Member not found`, so the id's format
+reveals nothing.
 
 ### Tenant invitations: consent, and no address enumeration
 

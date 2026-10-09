@@ -47,6 +47,7 @@ const userRepository = new UserRepository()
 interface ApiEnvelope<TData> {
   success: boolean
   message: string
+  code?: string
   data?: TData
   errors?: Record<string, string[]>
 }
@@ -60,6 +61,19 @@ interface ApiEnvelope<TData> {
  */
 function envelopeOf<TData>(response: Response): ApiEnvelope<TData> {
   return response.body as ApiEnvelope<TData>
+}
+
+/**
+ * Assert the member routes' unknown-member answer: 404 with the message and
+ * the `member_not_found` code a client branches on.
+ * @param response - The supertest response.
+ */
+function expectMemberNotFound(response: Response): void {
+  expect(response.status).toBe(404)
+  expect(envelopeOf(response)).toMatchObject({
+    message: 'Member not found',
+    code: 'member_not_found',
+  })
 }
 
 /**
@@ -683,7 +697,7 @@ describe('/api/v1/tenants', () => {
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ role: 'admin' })
 
-      expect(response.status).toBe(404)
+      expectMemberNotFound(response)
     })
 
     it('404s for a non-member actor', async () => {
@@ -718,7 +732,7 @@ describe('/api/v1/tenants', () => {
             .set('Authorization', `Bearer ${ownerToken}`)
             .send({ role: 'manager' })
 
-          expect(response.status).toBe(404)
+          expectMemberNotFound(response)
         }
       )
     })
@@ -889,7 +903,7 @@ describe('/api/v1/tenants', () => {
         .delete(`/api/v1/tenants/${tenant.slug}/members/${outsiderUser.id}`)
         .set('Authorization', `Bearer ${ownerToken}`)
 
-      expect(response.status).toBe(404)
+      expectMemberNotFound(response)
     })
 
     it('404s for a non-member actor', async () => {
@@ -922,7 +936,7 @@ describe('/api/v1/tenants', () => {
             .delete(`/api/v1/tenants/${tenant.slug}/members/${targetUser.id}`)
             .set('Authorization', `Bearer ${ownerToken}`)
 
-          expect(response.status).toBe(404)
+          expectMemberNotFound(response)
         }
       )
     })
@@ -1405,7 +1419,7 @@ describe('/api/v1/tenants', () => {
       const response = await request(app)
         .delete(`/api/v1/tenants/${tenant.slug}/members/a%00b`)
         .set('Authorization', `Bearer ${token}`)
-      expect(response.status).toBe(404)
+      expectMemberNotFound(response)
     })
 
     it.each([
@@ -1442,8 +1456,7 @@ describe('/api/v1/tenants', () => {
         .patch(`/api/v1/tenants/${tenant.slug}/members/not-a-uuid`)
         .set('Authorization', `Bearer ${token}`)
         .send({ role: 'viewer' })
-      expect(response.status).toBe(404)
-      expect(envelopeOf(response).message).toBe('Member not found')
+      expectMemberNotFound(response)
     })
   })
 
