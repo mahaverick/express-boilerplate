@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.4](https://github.com/mahaverick/express-boilerplate/compare/v2.0.3...v2.0.4) (2026-10-09)
+
+
+### Bug Fixes
+
+* **errors:** run scrubbed values through later keys and keep split secrets whole ([#98](https://github.com/mahaverick/express-boilerplate/issues/98)) ([83bd6b7](https://github.com/mahaverick/express-boilerplate/commit/83bd6b771f4f0d25180ca60ea547f09f734aeb83))
+
 ## [2.0.3](https://github.com/mahaverick/express-boilerplate/compare/v2.0.2...v2.0.3) (2026-10-09)
 
 
