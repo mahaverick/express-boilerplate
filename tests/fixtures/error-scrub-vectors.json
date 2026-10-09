@@ -2038,5 +2038,65 @@
     "rule": "fragment",
     "input": "GET /x/pwd=[zqS7a zqS7b]#zqS7c,",
     "expected": "GET /x/pwd=[redacted]#[fragment]"
+  },
+  {
+    "rule": "kv",
+    "input": "token: a pwd=\\\"x \\\"sid\\\": \"zqS7a zqS7b\"",
+    "expected": "token: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "pwd = \\'zqS7a\\', sid = 'zqS7b'",
+    "expected": "pwd = \\'[redacted]"
+  },
+  {
+    "rule": "path-token",
+    "input": "/reset/x.token = \\'zqS7a\\' then pwd = 'zqS7b'",
+    "expected": "/reset/[token]token = \\'[redacted]"
+  },
+  {
+    "rule": "path-token",
+    "input": "at /Reset/cookie: \\\"zqS7a/x and GET /invite/8AwREFRESH_TOKEN=\\\"zqS7b\\\"?a=1",
+    "expected": "at /Reset/cookie: \\\"[redacted]"
+  },
+  {
+    "rule": "path-token",
+    "input": "GET /app/reset/sid=\"zqS7a failed token: /app/reset/kjfn-name = \"zqS7b",
+    "expected": "GET /app/reset/sid=\"[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "api_key=\\\"zqS7a session=\\\"zqS7b\\\"",
+    "expected": "api_key=\\\"[redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "token: a pwd =\n\"zqS7hunter\"",
+    "expected": "token: [redacted]"
+  },
+  {
+    "rule": "kv",
+    "input": "key=a/#[fragment]\"=\"jane doe\"@mail.example.com",
+    "expected": "key=[redacted]"
+  },
+  {
+    "rule": "path-token",
+    "input": "/reset/sid=[redacted]zqS7secret",
+    "expected": "/reset/sid=[redacted][token]"
+  },
+  {
+    "rule": "path-token",
+    "input": "/reset/sid=[redacted]) failed",
+    "expected": "/reset/sid=[redacted]) failed"
+  },
+  {
+    "rule": "email",
+    "input": "invite failed for jane@wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY: smtp down",
+    "expected": "invite failed for [email]: smtp down"
+  },
+  {
+    "rule": "email",
+    "input": "jane@localhost/x failed",
+    "expected": "[email]/x failed"
   }
 ]

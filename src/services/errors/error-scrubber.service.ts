@@ -195,11 +195,23 @@ const AUTH_SCHEMES = String.raw`(?:Bearer|Basic|Token|ApiKey|Digest|Negotiate|NT
 const SECRET_KEY_WORD = String.raw`(?:pass(?:[_-]?(?:word|phrase|code|key)|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|(?:secret|private|consumer|signing|encryption|master|client)[_-]?key|auth(?:orization)?[_-]code|code[_-]?verifier|session|sid|credential|signature|sig|hmac|nonce|(?<=[\w-])response|response(?=s?${KEY_QUOTE}?\s*(?:=|%3D|&#61;|\\u003d|:\s*${KEY_QUOTE}))|(?<![A-Za-z\d])pin(?:[_-]?(?:code|number))?|(?:otp|mfa|verification|recovery|backup)[_-]?code|(?<![A-Za-z\d])(?<!(?:primary|foreign|sort|partition|cache|unique|index|s3|object|routing|shard|translation|i18n)[_-])key(?=s?\s*(?:=(?!>)|%3D|&#61;|\\u003d))|jwt|otp)`
 
 /**
+ * A `code` key on a line that names OAuth or authorization before it.
+ */
+const CODE_AFTER_AUTH_WORD = String.raw`code(?<=(?:oauth|authoriz(?:ation|e)(?![a-z]))[^\n]*code)`
+
+/**
+ * A `code` key that reads as an authorization code from what stands right
+ * around it: after `?` or `&`, first in a form body (`code=…&`), or with
+ * OAuth or authorization later on its line outside a brace.
+ */
+const CODE_IN_PLACE = String.raw`code(?<=(?:[?&]|&amp;|%26|%3F)code)|code(?=\s*=[^\s&]*&)|code(?=[^\n{}]*(?:oauth|authoriz(?:ation|e)(?![a-z])))`
+
+/**
  * A `code` key where it reads as an authorization code: after `?` or `&`, on
  * a line that names OAuth or authorization before it, first in a form body
  * (`code=…&`), or with that word later on its line outside a brace.
  */
-const CONTEXT_CODE_KEY = String.raw`(?:code(?<=(?:[?&]|&amp;|%26|%3F)code)|code(?<=(?:oauth|authoriz(?:ation|e)(?![a-z]))[^\n]*code)|code(?=\s*=[^\s&]*&)|code(?=[^\n{}]*(?:oauth|authoriz(?:ation|e)(?![a-z]))))`
+const CONTEXT_CODE_KEY = `(?:${CODE_AFTER_AUTH_WORD}|${CODE_IN_PLACE})`
 
 /**
  * The replacement for a URL's or path's fragment (`FRAGMENT_PATTERN`):
@@ -455,10 +467,13 @@ const CODE_KEY_PATTERN = new RegExp(
 /**
  * A secret-named key, its separator and any opening quote, starting exactly
  * at `lastIndex`, in any letter case: where `KV_SECRET_PATTERN` could find a
- * key word, without the run of word characters it may take before it.
+ * key word, without the run of word characters it may take before it. A
+ * `code` that is a key only because OAuth or authorization stands earlier on
+ * its line is left out: an earlier key's value can take that word before the
+ * key rule reaches the `code`, so a path token keeps it whole.
  */
 const SECRET_KEY_AT = new RegExp(
-  String.raw`(?:${SECRET_KEY_WORD}s?|(?:\b|(?<=%26|%3F))${CONTEXT_CODE_KEY})${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?`,
+  String.raw`(?:${SECRET_KEY_WORD}s?|(?:\b|(?<=%26|%3F))(?:${CODE_IN_PLACE}))${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?`,
   'iy'
 )
 
@@ -628,10 +643,76 @@ function replacedBeforeKey(
     return pairEnd > token.length ? `${prefix}${found.before}${token.slice(found.cut)}` : undefined
   }
   if (!found.isPlaceholderKept) return undefined
-  if (found.cut === 0) return `${prefix}${token}`
   const keptEnd = found.keyStart + found.keyLength + found.placeholderLength - start
+  // Text glued to the placeholder may be the rest of a secret; a delimiter after it is not.
+  if (found.cut === 0 && !LETTER_OR_DIGIT_START_PATTERN.test(token.slice(keptEnd))) {
+    return `${prefix}${token}`
+  }
   const rest = keptEnd < token.length ? '[token]' : ''
   return `${prefix}${found.before}${token.slice(found.cut, keptEnd)}${rest}`
+}
+
+/**
+ * A text that starts with a letter or digit, in any script.
+ */
+const LETTER_OR_DIGIT_START_PATTERN = /^[\p{L}\p{N}]/u
+
+/**
+ * What may follow the end of a value a later key took over: its closing
+ * quote and any text glued to it up to the next field delimiter, only at
+ * `lastIndex`.
+ */
+const GLUED_TAIL_AT = new RegExp(String.raw`${KEY_QUOTE}?[^\s"'\\,;&})\]]*`, 'y')
+
+/**
+ * Where a key rule's value ends once it runs through later keys: a value
+ * that took a later secret-named key's name, separator or opening quote
+ * runs on to the end of that key's value as `KV_SECRET_PATTERN` matches it
+ * there, then over a closing quote and any text glued to it
+ * (`GLUED_TAIL_AT`), and is checked again, so the later key's value is
+ * never left in view.
+ * @param text - The text being scrubbed.
+ * @param valueStart - Where the value starts.
+ * @param matchEnd - Where the key rule's own match ends.
+ * @returns The end of the value, at or after `matchEnd`.
+ */
+function runThroughEnd(text: string, valueStart: number, matchEnd: number): number {
+  let end = matchEnd
+  let at = valueStart
+  for (;;) {
+    for (; at < end && end < text.length; at += 1) {
+      KV_SECRET_AT.lastIndex = at
+      const inner = KV_SECRET_AT.exec(text)
+      if (inner !== null && at + inner[0].length > end) end = at + inner[0].length
+    }
+    if (end === matchEnd) return end
+    GLUED_TAIL_AT.lastIndex = end
+    const glued = GLUED_TAIL_AT.exec(text)?.[0].length ?? 0
+    if (glued === 0) return end
+    end += glued
+  }
+}
+
+/**
+ * Apply a key rule (`AUTH_HEADER_PATTERN` or `KV_SECRET_PATTERN`, whose
+ * group 1 is the kept key, separator and scheme) left to right, replacing
+ * each value with `[redacted]` up to `runThroughEnd`.
+ * @param text - The text being scrubbed.
+ * @param pattern - The key rule, with the `g` flag.
+ * @returns The text with every matched value replaced.
+ */
+function redactedRunningThrough(text: string, pattern: RegExp): string {
+  pattern.lastIndex = 0
+  let out = ''
+  let last = 0
+  for (let match = pattern.exec(text); match !== null; match = pattern.exec(text)) {
+    const key = match[1] ?? ''
+    const end = runThroughEnd(text, match.index + key.length, match.index + match[0].length)
+    out += `${text.slice(last, match.index)}${key}[redacted]`
+    last = end
+    pattern.lastIndex = end
+  }
+  return out + text.slice(last)
 }
 
 /**
@@ -687,13 +768,19 @@ const STANDARD_BASE64_PATTERN = /^[A-Za-z\d+/]+$/
 const EMAIL_LOCAL_PART = String.raw`[\p{L}\p{N}_.%+-]+`
 
 /**
+ * Not a package or action ref after `@` (`npm:…`, `workspace:…`, `canary`,
+ * `v4`, `sha256`), which a single-label domain must not be.
+ */
+const NOT_PACKAGE_REF = String.raw`(?!(?:npm|workspace|file|github|gitlab|link|portal|patch|git\+[a-z]+):)(?!(?:latest|next|canary|beta|alpha|rc|main|master|sha\d+|v\d[\w.-]*)(?![\p{L}\p{N}-]))`
+
+/**
  * An email address after its local part: the `@`, written plainly, as `%40`
  * or `%2540`, or as a fullwidth `＠` or small `﹫`, and the domain, a dotted
  * name ending in a letter label or an IP literal (`[192.168.0.1]`,
  * `[IPv6:…]`), or after a plain `@` a single label that starts with a letter
  * and is not a package or action ref. `EMAIL_PATTERN` describes each form.
  */
-const EMAIL_AT_AND_DOMAIN = String.raw`(?:(?:@|%40|%2540|＠|﹫)(?:${EMAIL_IP_LITERAL}|[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.\p{L}{2,})|@(?!(?:npm|workspace|file|github|gitlab|link|portal|patch|git\+[a-z]+):)(?!(?:latest|next|canary|beta|alpha|rc|main|master|sha\d+|v\d[\w.-]*)(?![\p{L}\p{N}-]))\p{L}[\p{L}\p{N}-]*(?=$|[\s"'<>,;:!?&/)\]}]|\.(?:$|\s)))`
+const EMAIL_AT_AND_DOMAIN = String.raw`(?:(?:@|%40|%2540|＠|﹫)(?:${EMAIL_IP_LITERAL}|[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.\p{L}{2,})|@${NOT_PACKAGE_REF}\p{L}[\p{L}\p{N}-]*(?=$|[\s"'<>,;:!?&/)\]}]|\.(?:$|\s)))`
 
 /**
  * An email address, in any script. The local part is a run of address
@@ -734,6 +821,21 @@ const SLASHED_SECRET_EMAIL_PATTERN = new RegExp(
  * The base64 characters a local part starts with.
  */
 const LEADING_BASE64_PATTERN = /^[\w+-]*/
+
+/**
+ * An address whose domain is a run of base64 characters with a `/` in it
+ * (`x@wJalr…/K7MDENG/…`): `EMAIL_PATTERN` would take only the run's first
+ * segment as a single-label domain and leave the rest of a secret in view.
+ * Group 1 is the run; the match is replaced whole when `isSlashedSecret`
+ * calls the run a secret. The local part starts only where one can start
+ * and not straight after a `/` or `@` (`SLASHED_SECRET_EMAIL_PATTERN`'s
+ * case), so a long local part is scanned once, and a package ref
+ * (`x@canary/…`) is not a domain.
+ */
+const ADDRESS_SECRET_DOMAIN_PATTERN = new RegExp(
+  String.raw`(?:"[^"\n]{1,64}"|(?<![\p{L}\p{N}_.%+/@＠﹫-])${EMAIL_LOCAL_PART})@${NOT_PACKAGE_REF}([A-Za-z][A-Za-z\d+/-]*\/[A-Za-z\d+/-]*={0,2})(?![\w+/=@-])`,
+  'gu'
+)
 
 /**
  * One IPv4 octet, 0 to 255.
@@ -892,13 +994,16 @@ function capped(value: string, wasCut: boolean): string {
  * `credential`, `jwt`, `otp`, `signature`, `sig`, `hmac`, `nonce`,
  * `response`; `code` after `?` or `&` or on an OAuth or authorization line;
  * `key` before `=`; and every `code` in a text that names an OAuth exchange
- * (`OAUTH_CONTEXT_PATTERN`)), become `[redacted]`; a query or fragment that
+ * (`OAUTH_CONTEXT_PATTERN`)), become `[redacted]`, a value that takes a later
+ * secret-named key running on to the end of that key's value
+ * (`redactedRunningThrough`); a query or fragment that
  * a replaced value now joins to its path is replaced as above
  * (`rejoinedQueries`); a JWT becomes `[jwt]`; an
  * email address (`EMAIL_PATTERN`: `@` written plainly, encoded or fullwidth,
  * a quoted local part, an IP-literal or single-label domain) becomes
  * `[email]`, together with a secret-looking base64 run joined to its local
- * part by `/` (`SLASHED_SECRET_EMAIL_PATTERN`), before the PostHog-key and
+ * part by `/` (`SLASHED_SECRET_EMAIL_PATTERN`) or starting at a single-label
+ * domain (`ADDRESS_SECRET_DOMAIN_PATTERN`), before the PostHog-key and
  * vendor-credential rules run, so an address whose local part looks like one
  * of those keys goes whole, domain included; a PostHog key (`phc_`, `phx_`,
  * `phs_`) becomes `[posthog-key]` and a vendor credential
@@ -925,7 +1030,7 @@ function capped(value: string, wasCut: boolean): string {
 export function scrubText(value: string): string {
   const input = scanned(value)
   const hasOauthContext = OAUTH_CONTEXT_PATTERN.test(input)
-  const keyed = input
+  const located = input
     .replaceAll(KEY_DETAIL_PATTERN, 'Key ($1)=([value])')
     .replaceAll(PG_INPUT_PATTERN, '$1"[value]"')
     .replaceAll(PG_RANGE_PATTERN, '$1"[value]"')
@@ -942,15 +1047,19 @@ export function scrubText(value: string): string {
     )
     .replaceAll(BEARER_PATTERN, 'Bearer [token]')
     .replaceAll(BASIC_PATTERN, '$1 [token]')
-    .replaceAll(AUTH_HEADER_PATTERN, '$1[redacted]')
-    .replaceAll(KV_SECRET_PATTERN, '$1[redacted]')
-    .replaceAll(CODE_KEY_PATTERN, (match: string, key: string) =>
-      hasOauthContext ? `${key}[redacted]` : match
-    )
+  const keyed = redactedRunningThrough(
+    redactedRunningThrough(located, AUTH_HEADER_PATTERN),
+    KV_SECRET_PATTERN
+  ).replaceAll(CODE_KEY_PATTERN, (match: string, key: string) =>
+    hasOauthContext ? `${key}[redacted]` : match
+  )
   const scrubbed = rejoinedQueries(keyed)
     .replaceAll(JWT_PATTERN, '[jwt]')
     .replaceAll(SLASHED_SECRET_EMAIL_PATTERN, (match: string, run: string, local: string) =>
       isSlashedSecret(`${run}${LEADING_BASE64_PATTERN.exec(local)?.[0] ?? ''}`) ? '[email]' : match
+    )
+    .replaceAll(ADDRESS_SECRET_DOMAIN_PATTERN, (match: string, run: string) =>
+      isSlashedSecret(run) ? '[email]' : match
     )
     .replaceAll(EMAIL_PATTERN, '[email]')
     .replaceAll(POSTHOG_KEY_PATTERN, '[posthog-key]')

@@ -157,13 +157,21 @@ describe('scrubText', () => {
       'a replaced value joined to a fragment of path segments',
       `/x/pwd=[a b]#${'a/'.repeat(4 * ERROR_VALUE_MAX)}`.slice(0, 4 * ERROR_VALUE_MAX - 1),
     ],
+    [
+      'nested open arrays',
+      `token: ${'a = [x '.repeat(4 * ERROR_VALUE_MAX)}`.slice(0, 4 * ERROR_VALUE_MAX - 1),
+    ],
+    [
+      'a value running through repeated keys',
+      `token: ${'a pwd: '.repeat(4 * ERROR_VALUE_MAX)}`.slice(0, 4 * ERROR_VALUE_MAX - 1),
+    ],
   ])('worst-case 4 KB shapes the timing test does not cover: %s', (_label, shape) => {
     // A trailing space keeps the whole shape inside the scan cap's cut.
     const text = `${shape} `
     expect(text.length).toBeGreaterThan(4 * ERROR_VALUE_MAX - 30)
     const started = performance.now()
     scrubText(text)
-    // Proves no catastrophic backtracking on the worst shapes at the scan cap; each measured at most 60 ms (five runs each), so 2 s keeps at least 33x headroom.
+    // Proves the worst shapes stay bounded at the scan cap: several are quadratic, and only SCAN_MAX keeps them cheap; each measured at most 60 ms (median of seven runs), so 2 s keeps at least 33x headroom.
     expect(performance.now() - started).toBeLessThan(2000)
   })
 

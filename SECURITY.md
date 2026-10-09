@@ -1200,7 +1200,11 @@ query`: the SQL text is never sent. A thrown object that is not an `Error`
   earlier rule wrote inside it, an address's IP literal, an HTML- or
   JSON-encoded separator, and a quoted string (plain, escaped, JSON-escaped
   or URL-encoded) or array after a plain or encoded separator inside it, so a
-  redacted URL or nested key never ends it early; a value after a replaced URL fragment, `#[fragment] = …`, too; `sig`, `hmac`, `nonce`, `response`, `pin`,
+  redacted URL never ends it early; a value of this rule or the
+  Authorization rule that takes a later secret-named key's name, separator or
+  opening quote runs on to the end of that key's value, and over a closing
+  quote and text glued to it, so the later key's value is never left in
+  view; a value after a replaced URL fragment, `#[fragment] = …`, too; `sig`, `hmac`, `nonce`, `response`, `pin`,
   `passphrase` and the one-time code names, and compound key names such as
   `secret_key` before `:` too; only the bare values `undefined`, `null`,
   `missing`, `true` and `false`, and already-scrubbed placeholders, are kept);
@@ -1213,7 +1217,8 @@ query`: the SQL text is never sent. A thrown object that is not an `Error`
   Slack and Stripe-style keys, email addresses (including unicode, `%40`,
   `%2540`, fullwidth `＠`, quoted local parts, IP-literal and single-label
   domains, and a secret-looking base64 run joined to the local part by `/`,
-  which goes with the address), IP addresses, `+`-prefixed phone numbers, the token segment after
+  which goes with the address, as does one that starts at a single-label
+  domain, `x@wJalr…/K7MDENG/…`), IP addresses, `+`-prefixed phone numbers, the token segment after
   `/reset/`, `/verify/`, `/invite/` or `/accept/` (up to a secret-named key
   in it whose value runs past it, which the key rule then takes:
   `/reset/x.tsrefresh_token = …` becomes `/reset/[token]token = [redacted]`),
@@ -1265,17 +1270,21 @@ query`: the SQL text is never sent. A thrown object that is not an `Error`
   character directly (a letter, digit, `.`, `%`, `+`, `-`, `_`, `/` or `@`:
   `jane@example.com/<secret>@…`, `u.<secret>@…`); a quoted value whose key
   sits inside a URL query that an encoded key's value runs into
-  (`secret%3Dhttps://…?a=1/api_key="…"` keeps the quoted value); quotes
-  that do not pair up inside an unquoted value, which can take a later key's
-  name into a nested quoted string and leave that key's value in view
-  (`token: a pwd=\"x \"sid\": "…"`); a value opened by an escaped single
-  quote (`\'`), which runs past its closing `\'` to the next plain `'` and
-  leaves the value that quote opens in view (`pwd = \'…\', sid = '…'`); up to
-  five characters glued in front of a key word in a path token, kept when the
-  key rule needs them to see the key (`/verify/lresponse\u003a…` keeps
-  `lresponse`); and, at the start of a path token, a key whose value is
-  already a placeholder, which keeps the rest of the segment in view
-  (`/reset/sid%3A[redacted])…`). Scrubbing a
+  (`secret%3Dhttps://…?a=1/api_key="…"` keeps the quoted value); the one
+  token character before `response`, or the `&` or `?` before `code`, kept
+  in front of a key glued to a path token so the key rule still sees the key
+  (`/verify/lresponse\u003a…` keeps `lresponse`); text after a delimiter in
+  a path token whose input already holds a placeholder as a key's value at
+  its start (`/reset/sid%3A[redacted])…` keeps `)…`); a `code` key glued to a
+  path token that is a key only because OAuth or authorization stands
+  earlier on its line, whose segment is replaced whole and whose value after
+  it is kept (`authorization … /reset/code=>"…"`); the parameters other than
+  secret-named ones of an Authorization or Cookie value opened by an escaped
+  quote and a scheme (`\"OAuth username="…", realm="…"` keeps `username`
+  and `realm`; `oauth_signature`, `oauth_token`, `nonce`, `cnonce` and
+  `response` are still redacted); and the rest of a base64 run that is the
+  domain of an address whose local part follows a `/`
+  (`dir/x@wJalr…/K7MDENG/…` keeps `/K7MDENG/…`). Scrubbing a
   scrubbed text
   again changes nothing, except contrived inputs that glue a phone number, IP
   address or hex run to one another, put an address with a quoted local part
