@@ -56,11 +56,12 @@ function runOnce(slot: CheckSlot): Promise<boolean> {
       return await slot.check()
     } catch {
       return false
-    } finally {
-      slot.pending = undefined
     }
   })()
   slot.pending = run
+  void run.finally(() => {
+    if (slot.pending === run) slot.pending = undefined
+  })
   return run
 }
 
@@ -104,7 +105,7 @@ function noteTimeout(name: CheckName, slot: CheckSlot, hasTimedOut: boolean): vo
       { check: name, timeoutMs: READINESS_CHECK_DEADLINE_MS }
     )
   } else {
-    logger.info(`Readiness check ${name} answers in time again`, { check: name })
+    logger.info(`Readiness check ${name} answers before its deadline again`, { check: name })
   }
 }
 

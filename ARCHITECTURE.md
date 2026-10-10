@@ -536,7 +536,7 @@ deployment. Environment-dependent defaults such as `COOKIE_SECURE`,
 `LOG_FORMAT` and SMTP's TLS requirement derive from it through helpers in
 that file. Before anything starts, `index.ts` runs `assertEnvConsistent`
 ([`src/configs/env-consistency.config.ts`](src/configs/env-consistency.config.ts)),
-which refuses stale names and unsafe combinations. No other application
+which refuses unsafe or inconsistent combinations. No other application
 module reads `process.env`; the exceptions are listed in CLAUDE.md.
 `tracing.ts` is the notable one, since it loads before validation. Every
 Redis key and channel is namespaced by `REDIS_KEY_PREFIX` through
@@ -1581,7 +1581,7 @@ docker run --rm -p 4040:4040 --env-file .env \
 The `-e` overrides matter: `.env` says `localhost`, which inside the container
 is the container itself. `host.docker.internal` reaches the host's published
 compose ports. Without the overrides, `/health` still answers 200 (it touches
-no dependency) and `/health/ready` answers 503 within its 500 ms deadline
+no dependency) and `/health/ready` answers 503 at its 500 ms deadline
 (see [Health checks](#health-checks)).
 
 ## Deploying

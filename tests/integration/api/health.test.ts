@@ -119,9 +119,18 @@ describe('health probes', () => {
   it('GET /health/ready answers not-ready at its deadline, naming the database, while no pool connection is free', async () => {
     await waitForReady('every dependency is up')
     // Every pool connection held: `select 1` queues, the way it waits on a stalled or exhausted database.
-    const held = await Promise.all(
+    const reservations = await Promise.allSettled(
       Array.from({ length: getEnv().DB_POOL_MAX }, async () => sql.reserve())
     )
+    const held = reservations.flatMap((result) =>
+      result.status === 'fulfilled' ? [result.value] : []
+    )
+    const failed = reservations.find((result) => result.status === 'rejected')
+    if (failed) {
+      // A reservation that failed leaves the others held; free them before failing.
+      for (const connection of held) connection.release()
+      throw failed.reason
+    }
     try {
       const startedAt = Date.now()
       const responses = await Promise.all([

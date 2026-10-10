@@ -414,10 +414,13 @@ describe('refresh token issuance, rotation, and revocation', () => {
     const sessionId = randomUUID()
     const otherSessionId = randomUUID()
     const issued = await issueRefreshToken(userId, sessionId)
+    const rotated = await rotateRefreshToken(issued.raw)
     const other = await issueRefreshToken(userId, otherSessionId)
 
-    await revokeRefreshToken(issued.raw)
+    await revokeRefreshToken(rotated.raw)
 
+    // The new token first: refusing the old token's replay revokes the session by itself.
+    await expect(rotateRefreshToken(rotated.raw)).rejects.toMatchObject({ statusCode: 401 })
     await expect(rotateRefreshToken(issued.raw)).rejects.toMatchObject({ statusCode: 401 })
     const rotatedOther = await rotateRefreshToken(other.raw)
     expect(rotatedOther.sessionId).toBe(otherSessionId)

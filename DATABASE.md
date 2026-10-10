@@ -374,11 +374,10 @@ second time under the lock, then run `pnpm db:migrate`.
   commits, and on `audit_logs` while its target-type CHECK is swapped.**
   `ALTER TABLE email_logs ADD COLUMN` takes an `ACCESS EXCLUSIVE` lock that
   the migration's transaction holds to the end, so mail recording, the
-  retention purge, a user purge and stats on `email_logs` all wait for the
-  whole backfill (the copy into `email_messages`, the update, the foreign
-  key's validation and the index build). The CHECK swap at the end takes the
-  same lock on `audit_logs` and validates every audit row. Apply it in a
-  quiet window. `email_logs` is bounded by `RETENTION_EMAIL_LOGS_DAYS`, so
+  retention purge and a user purge all wait for the whole backfill (the copy
+  into `email_messages`, the update, the foreign key's validation and the
+  index build). The CHECK swap at the end takes the same lock on
+  `audit_logs` and validates every audit row. Apply it in a quiet window. `email_logs` is bounded by `RETENTION_EMAIL_LOGS_DAYS`, so
   letting retention prune first shortens the backfill.
 
 - **`0021` holds `tenants` briefly.** Its four `ADD COLUMN`s are

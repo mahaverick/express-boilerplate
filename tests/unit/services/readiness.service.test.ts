@@ -56,6 +56,14 @@ function answersAtOnce(): Promise<boolean> {
 }
 
 /**
+ * A check that throws before it returns a promise.
+ * @throws {Error} Always, synchronously.
+ */
+function throwsAtOnce(): Promise<boolean> {
+  throw new Error('sync')
+}
+
+/**
  * Start a probe and note its report once it settles, without awaiting it.
  * @param probe - The probe under test.
  * @returns A record filled in once the probe settles.
@@ -159,6 +167,26 @@ describe('createReadinessProbe', () => {
     })
   })
 
+  it('runs a check again after it throws synchronously', async () => {
+    let databaseCheck: () => Promise<boolean> = throwsAtOnce
+    const probe = createReadinessProbe({
+      database: () => databaseCheck(),
+      redis: answersAtOnce,
+      queue: answersAtOnce,
+    })
+    await expect(probe()).resolves.toEqual({
+      isReady: false,
+      checks: { database: false, redis: true, queue: true },
+      timedOut: [],
+    })
+    databaseCheck = answersAtOnce
+    await expect(probe()).resolves.toEqual({
+      isReady: true,
+      checks: { database: true, redis: true, queue: true },
+      timedOut: [],
+    })
+  })
+
   it('leaves no unhandled rejection when an abandoned check fails later', async () => {
     vi.spyOn(logger, 'warn').mockImplementation(() => {})
     const database = heldCheck()
@@ -182,7 +210,7 @@ describe('createReadinessProbe', () => {
     expect(after.report).toMatchObject({ isReady: true })
   })
 
-  it('logs one warn when a check starts timing out and one info when it answers in time again', async () => {
+  it('logs one warn when a check starts timing out and one info when it answers before its deadline again', async () => {
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
     const info = vi.spyOn(logger, 'info').mockImplementation(() => {})
     const database = heldCheck()
@@ -210,9 +238,12 @@ describe('createReadinessProbe', () => {
     await vi.advanceTimersByTimeAsync(0)
     expect(after.report).toMatchObject({ isReady: true })
     expect(info).toHaveBeenCalledTimes(1)
-    expect(info).toHaveBeenCalledWith('Readiness check database answers in time again', {
-      check: 'database',
-    })
+    expect(info).toHaveBeenCalledWith(
+      'Readiness check database answers before its deadline again',
+      {
+        check: 'database',
+      }
+    )
     expect(warn).toHaveBeenCalledTimes(1)
   })
 })
