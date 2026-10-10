@@ -42,13 +42,6 @@ export interface PlatformStats {
   range: StatsRange
   totals: PlatformTotals & { stuckTenants: number }
   signups: { date: string; users: number; tenants: number }[]
-  /**
-   * `email_logs` rows, which are one per delivery attempt: a mail retried
-   * after a failure and then sent adds a failed row and a sent row, so
-   * `failed` is failed attempts, not failed mails.
-   * @deprecated Use `emailMessages`, which counts each email once.
-   */
-  emails: { date: string; sent: number; failed: number }[]
   emailMessages: EmailMessageDay[]
 }
 
@@ -120,24 +113,21 @@ function byDay(rows: readonly DayCount[]): Map<string, number> {
  * The Overview for one range.
  * @param range - The window.
  * @param now - The current instant; injectable for tests.
- * @returns Totals (the stuck-tenant count included), and one zero-filled entry per day for sign-ups, email attempts and email messages.
+ * @returns Totals (the stuck-tenant count included), and one zero-filled entry per day for sign-ups and email messages.
  */
 export async function getPlatformStats(
   range: StatsRange,
   now: Date = new Date()
 ): Promise<PlatformStats> {
   const { from, to, days } = utcDays(range, now)
-  const [totals, stuckTenants, signups, emails, messages] = await Promise.all([
+  const [totals, stuckTenants, signups, messages] = await Promise.all([
     platformStatsRepository.totals(),
     countStuckTenants(now),
     platformStatsRepository.signupsByDay(from, to),
-    platformStatsRepository.emailsByDay(from, to),
     platformStatsRepository.emailMessagesByDay(from, to),
   ])
   const users = byDay(signups.users)
   const tenants = byDay(signups.tenants)
-  const sent = byDay(emails.filter((row) => row.status === 'sent'))
-  const failed = byDay(emails.filter((row) => row.status === 'failed'))
   return {
     range,
     totals: { ...totals, stuckTenants },
@@ -145,11 +135,6 @@ export async function getPlatformStats(
       date,
       users: users.get(date) ?? 0,
       tenants: tenants.get(date) ?? 0,
-    })),
-    emails: days.map((date) => ({
-      date,
-      sent: sent.get(date) ?? 0,
-      failed: failed.get(date) ?? 0,
     })),
     emailMessages: emailMessageDays(days, messages),
   }

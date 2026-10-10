@@ -7,29 +7,22 @@
 import { randomUUID } from 'node:crypto'
 import { sql as drizzleSql } from 'drizzle-orm'
 import { afterEach, describe, expect, it } from 'vitest'
-import { EmailLogRepository } from '@/repositories/email-log.repository'
 import { PlatformStatsRepository } from '@/repositories/platform-stats.repository'
 import { TenantRepository } from '@/repositories/tenant.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { db, sql } from '@/services/database.service'
-import { EMAIL_VERIFICATION_TEMPLATE_KEY } from '@/templates/email/email-verification.template'
 import { deleteTrackingRows, insertTestMessage } from '../../helpers/email-tracking'
 import { makeStaff, platformTenant } from '../../helpers/platform-staff'
 
 const repository = new PlatformStatsRepository()
 const userRepository = new UserRepository()
 const tenantRepository = new TenantRepository()
-const emailLogRepository = new EmailLogRepository()
 
 function pick(
   totals: { tenants: number; users: number; staff: number },
   key: 'tenants' | 'users' | 'staff'
 ): number {
   return totals[key]
-}
-
-function countOf(rows: { day: string; status: string; count: number }[], status: string): number {
-  return rows.find((row) => row.day === '2001-05-02' && row.status === status)?.count ?? 0
 }
 
 function messageCountOf(
@@ -97,31 +90,6 @@ describe('PlatformStatsRepository', () => {
       new Date('2001-04-08T00:00:00.000Z')
     )
     expect(result.users).toEqual([])
-  })
-
-  it('counts emails by UTC day and status', async () => {
-    const from = new Date('2001-05-01T00:00:00.000Z')
-    const to = new Date('2001-05-08T00:00:00.000Z')
-    // email_logs is append-only, so earlier runs' rows stay; assert the delta.
-    const before = await repository.emailsByDay(from, to)
-    const recipient = `stats-mail-${randomUUID()}@example.test`
-    await emailLogRepository.record({
-      recipient,
-      templateKey: EMAIL_VERIFICATION_TEMPLATE_KEY,
-      status: 'sent',
-      createdAt: new Date('2001-05-02T08:00:00.000Z'),
-    })
-    await emailLogRepository.record({
-      recipient,
-      templateKey: EMAIL_VERIFICATION_TEMPLATE_KEY,
-      status: 'failed',
-      errorCode: 'SMTP_TIMEOUT',
-      createdAt: new Date('2001-05-02T09:00:00.000Z'),
-    })
-
-    const after = await repository.emailsByDay(from, to)
-    expect(countOf(after, 'sent') - countOf(before, 'sent')).toBe(1)
-    expect(countOf(after, 'failed') - countOf(before, 'failed')).toBe(1)
   })
 
   it('counts email messages by UTC day and current status, leaving queued out', async () => {
