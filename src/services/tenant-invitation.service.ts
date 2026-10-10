@@ -105,18 +105,18 @@ export const INVITATION_NOT_FOUND_CODE = 'invitation_not_found'
 /**
  * Error code: a resend inside `INVITATION_RESEND_COOLDOWN` of the invitation's last send.
  */
-export const INVITATION_RESEND_COOLDOWN_CODE = 'invitation_resend_cooldown'
+const INVITATION_RESEND_COOLDOWN_CODE = 'invitation_resend_cooldown'
 
 /**
  * Message for `INVITATION_RESEND_COOLDOWN_CODE`.
  */
-export const INVITATION_RESEND_COOLDOWN_MESSAGE =
+const INVITATION_RESEND_COOLDOWN_MESSAGE =
   'This invitation was just sent. Try again in a few minutes.'
 
 /**
  * The 429 message when an address has had its day's share of invitation mail.
  */
-export const INVITATION_RECIPIENT_LIMITED_MESSAGE =
+const INVITATION_RECIPIENT_LIMITED_MESSAGE =
   'This address has received too many invitations today. Try again tomorrow.'
 
 const INVITATION_NOT_FOUND_MESSAGE = 'Invitation not found'

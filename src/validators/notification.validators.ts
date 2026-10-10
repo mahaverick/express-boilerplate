@@ -19,7 +19,7 @@ import { cursorField, isoInstantField } from '@/validators/cursor.validators'
  * later: Postgres has no year 0, so `0000-…` would pass the format check and
  * then fail the `::timestamptz` cast as a 500.
  */
-export const notificationCursorSchema = z
+const notificationCursorSchema = z
   .object({
     createdAt: isoInstantField,
     id: z.uuid(),

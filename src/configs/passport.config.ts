@@ -109,7 +109,7 @@ const OAUTH_SESSION_MAX_AGE_MS = 5 * 60 * 1000
  * @param env.COOKIE_DOMAIN - The configured COOKIE_DOMAIN, if any.
  * @returns The cookie name express-session sets and reads.
  */
-export function oauthSessionCookieName(env: {
+function oauthSessionCookieName(env: {
   COOKIE_SECURE: boolean
   COOKIE_DOMAIN?: string | undefined
 }): string {
