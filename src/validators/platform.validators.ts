@@ -218,12 +218,17 @@ const idParameterSchema = z.uuid()
  * answers like an unknown one, so ids can't be probed by format.
  * @param raw - `request.params.id` as Express supplies it.
  * @param notFoundMessage - The 404's message, e.g. 'Tenant not found'.
+ * @param notFoundCode - The 404's code, when the unknown-id answer carries one, so the malformed id answers with it too.
  * @returns The id.
  * @throws {HttpError} 404 when `raw` is not a uuid.
  */
-export function parseIdParameter(raw: unknown, notFoundMessage: string): string {
+export function parseIdParameter(
+  raw: unknown,
+  notFoundMessage: string,
+  notFoundCode?: string
+): string {
   const parsed = idParameterSchema.safeParse(raw)
-  if (!parsed.success) throw new HttpError(notFoundMessage, 404)
+  if (!parsed.success) throw new HttpError(notFoundMessage, 404, notFoundCode)
   return parsed.data
 }
 

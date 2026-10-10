@@ -40,6 +40,14 @@ const userMembershipRepository = new UserMembershipRepository()
 const userRepository = new UserRepository()
 
 /**
+ * One row of `GET /tenants/:slug/members`, as these tests read it.
+ */
+interface MemberRow {
+  membership: { role: MembershipRole }
+  user: Record<string, unknown>
+}
+
+/**
  * The envelope every controller response is wrapped in
  * (response.utilities.ts), narrowed to the fields these tests read. Same
  * pattern as `tests/integration/api/profile.test.ts`'s own `ApiEnvelope`.
@@ -47,6 +55,7 @@ const userRepository = new UserRepository()
 interface ApiEnvelope<TData> {
   success: boolean
   message: string
+  code?: string
   data?: TData
   errors?: Record<string, string[]>
 }
@@ -60,6 +69,31 @@ interface ApiEnvelope<TData> {
  */
 function envelopeOf<TData>(response: Response): ApiEnvelope<TData> {
   return response.body as ApiEnvelope<TData>
+}
+
+/**
+ * Assert the member routes' unknown-member answer: 404 with the message and
+ * the `member_not_found` code a client branches on.
+ * @param response - The supertest response.
+ */
+function expectMemberNotFound(response: Response): void {
+  expect(response.status).toBe(404)
+  expect(envelopeOf(response)).toMatchObject({
+    message: 'Member not found',
+    code: 'member_not_found',
+  })
+}
+
+/**
+ * Assert the unknown-tenant answer a caller without access gets: 404
+ * `Tenant not found` with no code, so a client never reads it as a vanished
+ * member.
+ * @param response - The supertest response.
+ */
+function expectTenantNotFound(response: Response): void {
+  expect(response.status).toBe(404)
+  expect(envelopeOf(response).message).toBe('Tenant not found')
+  expect(response.body).not.toHaveProperty('code')
 }
 
 /**
@@ -532,6 +566,77 @@ describe('/api/v1/tenants', () => {
       expect(JSON.stringify(response.body)).not.toMatch(/password/i)
     })
 
+    it('omits active on a customer tenant, even for a deactivated member', async () => {
+      const { user: ownerUser, token } = await createAuthenticatedUser()
+      const { user: deactivatedUser } = await createAuthenticatedUser()
+      const tenant = await createTenant(ownerUser.id)
+      await addMembership(deactivatedUser.id, tenant.id, 'owner')
+      await userRepository.update(deactivatedUser.id, { active: false })
+
+      const response = await request(app)
+        .get(`/api/v1/tenants/${tenant.slug}/members`)
+        .set('Authorization', `Bearer ${token}`)
+
+      expect(response.status).toBe(200)
+      const members = envelopeOf<MemberRow[]>(response).data ?? []
+      const activeRow = members.find((member) => member.user.id === ownerUser.id)
+      const inactiveRow = members.find((member) => member.user.id === deactivatedUser.id)
+      expect(activeRow?.user).toStrictEqual({
+        id: ownerUser.id,
+        email: ownerUser.email,
+        firstName: ownerUser.firstName,
+        lastName: ownerUser.lastName,
+      })
+      expect(inactiveRow?.membership.role).toBe('owner')
+      expect(inactiveRow?.user).toStrictEqual({
+        id: deactivatedUser.id,
+        email: deactivatedUser.email,
+        firstName: deactivatedUser.firstName,
+        lastName: deactivatedUser.lastName,
+      })
+
+      // Staff reading through platform access get the customer shape too: the tenant decides, not the caller.
+      const { user: staffUser, token: staffToken } = await createAuthenticatedUser()
+      await makeStaff(staffUser.id, 'viewer')
+      const staffResponse = await request(app)
+        .get(`/api/v1/tenants/${tenant.slug}/members`)
+        .set('Authorization', `Bearer ${staffToken}`)
+      expect(staffResponse.status).toBe(200)
+      const staffRows = envelopeOf<MemberRow[]>(staffResponse).data ?? []
+      expect(staffRows).toHaveLength(2)
+      for (const member of staffRows) {
+        const memberRow = members.find((row) => row.user.id === member.user.id)
+        expect(member.user).toStrictEqual(memberRow?.user)
+      }
+    })
+
+    it('says whether each member is active on the platform tenant, the flag its last-owner rule reads', async () => {
+      const { user: staffUser, token } = await createAuthenticatedUser()
+      const { user: deactivatedStaff } = await createAuthenticatedUser()
+      await makeStaff(staffUser.id, 'viewer')
+      await makeStaff(deactivatedStaff.id, 'owner')
+      await userRepository.update(deactivatedStaff.id, { active: false })
+      const platform = await platformTenant()
+
+      const response = await request(app)
+        .get(`/api/v1/tenants/${platform.slug}/members`)
+        .set('Authorization', `Bearer ${token}`)
+
+      expect(response.status).toBe(200)
+      const members = envelopeOf<MemberRow[]>(response).data ?? []
+      const activeRow = members.find((member) => member.user.id === staffUser.id)
+      const inactiveRow = members.find((member) => member.user.id === deactivatedStaff.id)
+      expect(activeRow?.user).toStrictEqual({
+        id: staffUser.id,
+        email: staffUser.email,
+        firstName: staffUser.firstName,
+        lastName: staffUser.lastName,
+        active: true,
+      })
+      expect(inactiveRow?.membership.role).toBe('owner')
+      expect(inactiveRow?.user.active).toBe(false)
+    })
+
     it('404s for a non-member', async () => {
       const { user: ownerUser } = await createAuthenticatedUser()
       const { token: outsiderToken } = await createAuthenticatedUser()
@@ -683,7 +788,7 @@ describe('/api/v1/tenants', () => {
         .set('Authorization', `Bearer ${ownerToken}`)
         .send({ role: 'admin' })
 
-      expect(response.status).toBe(404)
+      expectMemberNotFound(response)
     })
 
     it('404s for a non-member actor', async () => {
@@ -698,7 +803,7 @@ describe('/api/v1/tenants', () => {
         .set('Authorization', `Bearer ${outsiderToken}`)
         .send({ role: 'admin' })
 
-      expect(response.status).toBe(404)
+      expectTenantNotFound(response)
     })
 
     // The second "Member not found" — a real race, not the "target user was never a member" 404 two tests above: permission/last-owner checks already pass, and the row vanishes only in the gap before updateRole's own write.
@@ -718,7 +823,7 @@ describe('/api/v1/tenants', () => {
             .set('Authorization', `Bearer ${ownerToken}`)
             .send({ role: 'manager' })
 
-          expect(response.status).toBe(404)
+          expectMemberNotFound(response)
         }
       )
     })
@@ -889,7 +994,7 @@ describe('/api/v1/tenants', () => {
         .delete(`/api/v1/tenants/${tenant.slug}/members/${outsiderUser.id}`)
         .set('Authorization', `Bearer ${ownerToken}`)
 
-      expect(response.status).toBe(404)
+      expectMemberNotFound(response)
     })
 
     it('404s for a non-member actor', async () => {
@@ -903,7 +1008,7 @@ describe('/api/v1/tenants', () => {
         .delete(`/api/v1/tenants/${tenant.slug}/members/${targetUser.id}`)
         .set('Authorization', `Bearer ${outsiderToken}`)
 
-      expect(response.status).toBe(404)
+      expectTenantNotFound(response)
     })
 
     // The second "Member not found" — same race as updateMemberRole's own version above: the permission and last-owner checks already pass, and the row vanishes only in the gap before the delete itself.
@@ -922,7 +1027,7 @@ describe('/api/v1/tenants', () => {
             .delete(`/api/v1/tenants/${tenant.slug}/members/${targetUser.id}`)
             .set('Authorization', `Bearer ${ownerToken}`)
 
-          expect(response.status).toBe(404)
+          expectMemberNotFound(response)
         }
       )
     })
@@ -1177,6 +1282,22 @@ describe('/api/v1/tenants', () => {
       ).toBeUndefined()
     })
 
+    it('answers 404 Tenant not found, with no code, when the membership vanishes before the delete itself', async () => {
+      const { user: owner } = await createAuthenticatedUser()
+      const tenant = await createTenant(owner.id)
+      const { user, token } = await createAuthenticatedUser()
+      await addMembership(user.id, tenant.id, 'viewer')
+
+      await withMutatedMethod(
+        UserMembershipRepository.prototype,
+        'delete',
+        () => Promise.resolve(false),
+        async () => {
+          expectTenantNotFound(await leave(tenant.slug, token))
+        }
+      )
+    })
+
     it('answers 401 without a bearer token', async () => {
       const { user: owner } = await createAuthenticatedUser()
       const tenant = await createTenant(owner.id)
@@ -1193,8 +1314,7 @@ describe('/api/v1/tenants', () => {
 
       const response = await leave(tenant.slug, token)
 
-      expect(response.status).toBe(404)
-      expect(response.body).toMatchObject({ message: 'Tenant not found' })
+      expectTenantNotFound(response)
     })
 
     it('answers 404 to staff who reach the tenant only through their platform role', async () => {
@@ -1205,7 +1325,7 @@ describe('/api/v1/tenants', () => {
 
       const response = await leave(tenant.slug, token)
 
-      expect(response.status).toBe(404)
+      expectTenantNotFound(response)
       expect(await sql`select id from audit_logs where action = 'member.left'`).toHaveLength(0)
     })
 
@@ -1405,7 +1525,7 @@ describe('/api/v1/tenants', () => {
       const response = await request(app)
         .delete(`/api/v1/tenants/${tenant.slug}/members/a%00b`)
         .set('Authorization', `Bearer ${token}`)
-      expect(response.status).toBe(404)
+      expectMemberNotFound(response)
     })
 
     it.each([
@@ -1442,8 +1562,7 @@ describe('/api/v1/tenants', () => {
         .patch(`/api/v1/tenants/${tenant.slug}/members/not-a-uuid`)
         .set('Authorization', `Bearer ${token}`)
         .send({ role: 'viewer' })
-      expect(response.status).toBe(404)
-      expect(envelopeOf(response).message).toBe('Member not found')
+      expectMemberNotFound(response)
     })
   })
 

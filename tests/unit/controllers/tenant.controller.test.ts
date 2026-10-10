@@ -91,5 +91,6 @@ describe('targetUserIdParameter (via updateMemberRole)', () => {
     expect(error).toBeInstanceOf(HttpError)
     expect((error as HttpError).statusCode).toBe(404)
     expect((error as HttpError).message).toBe('Member not found')
+    expect((error as HttpError).code).toBe('member_not_found')
   })
 })

@@ -134,3 +134,16 @@ export const REASON_REQUIRED_CODE = 'REASON_REQUIRED'
  * locked re-check alike.
  */
 export const REASON_REQUIRED_MESSAGE = 'Give a reason of 1 to 500 characters for this change.'
+
+/**
+ * `code` on the 404 for a member route whose `:userId` is not a member of
+ * the tenant (or is not a UUID), so a client can branch on it rather than on
+ * the message.
+ */
+export const MEMBER_NOT_FOUND_CODE = 'member_not_found'
+
+/**
+ * The message on that 404, from the controller's id check and from the
+ * services' locked re-reads alike.
+ */
+export const MEMBER_NOT_FOUND_MESSAGE = 'Member not found'

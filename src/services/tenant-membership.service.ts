@@ -9,6 +9,8 @@
  */
 import type { AuditAccess } from '@/constants/audit.constants'
 import {
+  MEMBER_NOT_FOUND_CODE,
+  MEMBER_NOT_FOUND_MESSAGE,
   MEMBERSHIP_ROLES,
   REASON_REQUIRED_CODE,
   REASON_REQUIRED_MESSAGE,
@@ -225,7 +227,7 @@ export async function lockActorRole(
  * @param mode - `'update'` when the caller deletes the target's membership.
  * @param executor - The transaction to hold the locks in.
  * @returns The actor's current effective role, how they reached the tenant, and the target's membership.
- * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access; 403 `Insufficient permissions` when their role is now below `minimum`; 404 `Member not found` when the target is not a member.
+ * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access; 403 `Insufficient permissions` when their role is now below `minimum`; 404 `member_not_found` (message `Member not found`) when the target is not a member.
  */
 async function lockActorAndTarget(
   actor: Actor,
@@ -238,7 +240,7 @@ async function lockActorAndTarget(
   const locked = await lockTenantAccess(actor, tenantId, [targetUserId], mode, executor)
   assertRoleAtLeast(locked.actor, minimum)
   const target = locked.memberships.find((membership) => membership.userId === targetUserId)
-  if (!target) throw new HttpError('Member not found', 404)
+  if (!target) throw new HttpError(MEMBER_NOT_FOUND_MESSAGE, 404, MEMBER_NOT_FOUND_CODE)
   return { actorRole: locked.actor.role, access: locked.actor.access, target }
 }
 
@@ -353,7 +355,7 @@ async function assertOwnerRemainsFor(
  * @param role - The new role.
  * @param options - Pass isPlatformTenant for the platform tenant: owner-on-owner and the active-owner guard; `reason` for a staff change.
  * @returns The updated membership.
- * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access; 403 when the actor is no longer an owner or the matrix refuses; 404 `Member not found` when the target is not a member; 409 when the target is the last live (on the platform tenant, active) owner and `role` is not owner; 400 `REASON_REQUIRED` when the actor now reaches the tenant through platform access and gave no reason.
+ * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access; 403 when the actor is no longer an owner or the matrix refuses; 404 `member_not_found` (message `Member not found`) when the target is not a member; 409 when the target is the last live (on the platform tenant, active) owner and `role` is not owner; 400 `REASON_REQUIRED` when the actor now reaches the tenant through platform access and gave no reason.
  */
 export async function changeRole(
   actor: Actor,
@@ -385,7 +387,7 @@ export async function changeRole(
       )
     }
     const updated = await userMembershipRepository.updateRole(target.id, role, tx)
-    if (!updated) throw new HttpError('Member not found', 404)
+    if (!updated) throw new HttpError(MEMBER_NOT_FOUND_MESSAGE, 404, MEMBER_NOT_FOUND_CODE)
     // Offers the new role could not make itself stop admitting people.
     const ungrantable = rolesUngrantableBy(role)
     await revokeInvitationsSentIn(actor, access, tenantId, targetUserId, ungrantable, options, tx)
@@ -423,7 +425,7 @@ export async function changeRole(
  * @param tenantId - The tenant.
  * @param targetUserId - The member to remove.
  * @param options - Pass isPlatformTenant for the platform tenant: owner-on-owner and the active-owner guard; `reason` for a staff removal.
- * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access; 403 when the actor is now below admin or the matrix refuses; 404 `Member not found` when the target is not a member; 409 when the target is the last live (on the platform tenant, active) owner; 400 `REASON_REQUIRED` when the actor now reaches the tenant through platform access and gave no reason.
+ * @throws {HttpError} 404 `Tenant not found` when the actor no longer has access; 403 when the actor is now below admin or the matrix refuses; 404 `member_not_found` (message `Member not found`) when the target is not a member; 409 when the target is the last live (on the platform tenant, active) owner; 400 `REASON_REQUIRED` when the actor now reaches the tenant through platform access and gave no reason.
  */
 export async function removeMember(
   actor: Actor,
@@ -455,7 +457,7 @@ export async function removeMember(
       )
     }
     const wasDeleted = await userMembershipRepository.delete(target.id, tx)
-    if (!wasDeleted) throw new HttpError('Member not found', 404)
+    if (!wasDeleted) throw new HttpError(MEMBER_NOT_FOUND_MESSAGE, 404, MEMBER_NOT_FOUND_CODE)
     await revokeInvitationsSentIn(actor, access, tenantId, targetUserId, undefined, options, tx)
     if (options.isPlatformTenant === true) {
       await revokeInvitationsBeyondAuthorityElsewhere(actor, targetUserId, undefined, tx)

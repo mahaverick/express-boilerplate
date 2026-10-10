@@ -79,9 +79,20 @@ describe('parseIdParameter', () => {
       } catch (error) {
         expect((error as HttpError).statusCode).toBe(404)
         expect((error as HttpError).message).toBe('Tenant not found')
+        expect((error as HttpError).code).toBeUndefined()
       }
     }
   )
+
+  it('puts the given code on the 404, and leaves the message as given', () => {
+    expect(() => parseIdParameter('not-a-uuid', 'Member not found', 'member_not_found')).toThrow(
+      expect.objectContaining({
+        statusCode: 404,
+        message: 'Member not found',
+        code: 'member_not_found',
+      })
+    )
+  })
 })
 
 describe('searchQueryField and pageLimitField', () => {

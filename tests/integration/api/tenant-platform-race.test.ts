@@ -278,6 +278,7 @@ describe('the staff role is re-read under lock (platform role changed after reso
       const response = await rename(tenant, token)
       expect(response.status).toBe(404)
       expect(response.body).toMatchObject({ statusCode: 404, message: 'Tenant not found' })
+      expect(response.body).not.toHaveProperty('code')
     })
 
     expect(await storedName(tenant)).toBe('Acme Inc')
@@ -455,6 +456,7 @@ describe('the staff role is re-read under lock (platform role changed after reso
           .send({})
         expect(response.status).toBe(404)
         expect(response.body).toMatchObject({ statusCode: 404, message: 'Tenant not found' })
+        expect(response.body).not.toHaveProperty('code')
       })
 
       const rows = await sql`

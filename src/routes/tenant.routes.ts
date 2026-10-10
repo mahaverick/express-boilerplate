@@ -65,6 +65,7 @@ export function createTenantRouter(): Router {
     tenantController.updateTenant
   )
 
+  // Rows carry `user.active` on the platform tenant only (TenantController.listMembers).
   router.get('/:slug/members', resolveTenant(), tenantController.listMembers)
   router.patch(
     '/:slug/members/:userId',
