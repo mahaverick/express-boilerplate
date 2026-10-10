@@ -24,7 +24,7 @@ import type { PosthogBatchEvent } from '@/services/analytics/posthog-batch.servi
 /**
  * One request as the fake received it.
  */
-export interface FakePosthogRequest {
+interface FakePosthogRequest {
   method: string
   /**
    * The path with its query string, as sent.
@@ -38,12 +38,12 @@ export interface FakePosthogRequest {
  * Decides the status for one `/batch/` request from its events; `undefined`
  * falls back to the status `respondWith` set.
  */
-export type BatchResponder = (events: PosthogBatchEvent[]) => number | undefined
+type BatchResponder = (events: PosthogBatchEvent[]) => number | undefined
 
 /**
  * The `query` object of one `POST /api/projects/<id>/query/` body.
  */
-export interface FakePosthogQuery {
+interface FakePosthogQuery {
   query: string
   values: Record<string, unknown>
 }
@@ -51,14 +51,14 @@ export interface FakePosthogQuery {
 /**
  * Decides the answer to one HogQL query; `json` defaults to an empty result.
  */
-export type QueryResponder = (
+type QueryResponder = (
   body: FakePosthogQuery
 ) => Promise<{ status: number; json?: unknown }> | { status: number; json?: unknown }
 
 /**
  * One `persons/bulk_delete/` body as the fake received it.
  */
-export interface FakePosthogBulkDelete {
+interface FakePosthogBulkDelete {
   distinct_ids: string[]
   delete_events: boolean
   delete_recordings: boolean
@@ -67,7 +67,7 @@ export interface FakePosthogBulkDelete {
 /**
  * One entry of the `groups_types/` answer.
  */
-export interface FakePosthogGroupType {
+interface FakePosthogGroupType {
   group_type: string
   group_type_index: number
 }
@@ -92,7 +92,7 @@ export interface FakePosthogFeatureFlag {
  * Overrides the answer to one `POST feature_flags/` body; undefined falls
  * back to the fake's own checks.
  */
-export type FeatureFlagCreateResponder = (
+type FeatureFlagCreateResponder = (
   body: Record<string, unknown>
 ) => { status: number; json: unknown } | undefined
 
