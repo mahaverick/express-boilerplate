@@ -135,9 +135,9 @@ or Google sign-in in another tab that lands while a dead-cookie refresh is in
 flight: the 401 clears by name, so the new cookie goes too, and the user
 signs in again. The limiter's 429 and a 5xx clear nothing.
 
-Signing in again in the same browser ends the session of any refresh cookie that
-browser still presents, current or legacy name (`revokePresentedSessions`, run
-after `login` and the Google callback issue the new session, as logout does).
+Signing in again in the same browser ends the session of the refresh cookie that
+browser still presents (`revokePresentedSession`, run after `login` and the
+Google callback issue the new session, as logout does).
 Without it the overwritten cookie's session stays refreshable for up to
 `REFRESH_TOKEN_TTL`, outlives the user's next logout, and can never trip reuse
 detection, so a thief holding it would rotate it alone. A Google sign-in sees
@@ -668,31 +668,29 @@ one unless it is `Secure`. So neither can be planted over plain HTTP, and a
 `__Secure-` cookie can be: a page on any host under `COOKIE_DOMAIN` can set
 one over HTTPS, since `COOKIE_DOMAIN` already trusts its subdomains. A plain
 `refreshToken` can be planted both ways, so under `COOKIE_SECURE` the API
-never redeems one (below). The cost of `__Host-` is `Path=/`: the browser sends
+never reads one (below). The cost of `__Host-` is `Path=/`: the browser sends
 the cookie on every request to the origin, not only to `/api/v1/auth`. It is
 still `HttpOnly`, `Secure` and `SameSite=Strict` (`Lax` when set by the Google
 OAuth callback), so no script reads it and no cross-site `POST` carries it. A
 deployment that wants it scoped to the auth routes sets `COOKIE_DOMAIN`, which
 selects the `__Secure-` row.
 
-**The unprefixed name is revoked, never redeemed.** With `COOKIE_SECURE` on, a
-cookie named `refreshToken` (`LEGACY_REFRESH_TOKEN_COOKIE_NAME`) is one a
-sibling subdomain or an on-path attacker on plain http can plant (cookie
-tossing). Redeeming it would sign a signed-out browser into the planter's
-session, which is login CSRF. So refresh reads only the current, prefixed name.
-A refresh that carries only `refreshToken` revokes that cookie's session, clears
-the cookie and answers 401. Logout, and a login or Google sign-in once it has
-issued the new session, revoke the session of every distinct token the request
-carries under either name (a Google callback, reached cross-site, carries no
-`Strict` cookie; see "Refresh rotation and reuse detection"). Within one name
-the API takes the most recently created value. When a login, a successful
-refresh, a Google sign-in or a logout carried a `refreshToken` cookie, the
-response clears it at `/api/v1/auth`: the host-only form, and the
-`COOKIE_DOMAIN` form when that is set, skipping whichever form is the current
-cookie itself. A browser that held only the pre-prefix cookie when the prefixes
-shipped signs in once more. The revoke-and-clear read is removed at the next
-major release. The OAuth session cookie takes the same prefix:
-`__Host-oauth.sid` (`__Secure-oauth.sid` with `COOKIE_DOMAIN`), because a
+**The unprefixed name is never read under `COOKIE_SECURE`.** With
+`COOKIE_SECURE` on, a cookie named `refreshToken` is one a sibling subdomain or
+an on-path attacker on plain http can plant (cookie tossing). Redeeming it
+would sign a signed-out browser into the planter's session, which is login
+CSRF. So every auth route reads only the current, prefixed name: a refresh that
+carries only `refreshToken` answers 401, and no response revokes its session or
+clears it. Logout, and a login or Google sign-in once it has issued the new
+session, revoke the session of the current cookie the request carries (a
+Google callback, reached cross-site, carries no `Strict` cookie; see "Refresh
+rotation and reuse detection"). Within one name the API takes the most
+recently created value. Without `COOKIE_SECURE` and with `COOKIE_DOMAIN` set,
+a response that sets or clears the refresh cookie for a request that carried
+`refreshToken` also clears that name's host-only form at `/api/v1/auth`, since
+the browser may hold that scope beside the current one
+(`clearHostOnlyPlainRefreshCookie`). The OAuth session cookie takes the same
+prefix: `__Host-oauth.sid` (`__Secure-oauth.sid` with `COOKIE_DOMAIN`), because a
 planted `oauth.sid` would bind the victim's Google callback to the planter's
 `state`.
 
@@ -712,8 +710,8 @@ Every form is set with:
   different domain leaves the old cookie in the browser), and the OAuth
   session cookie. On a secure deployment, turning `COOKIE_DOMAIN` on or off
   switches the cookie between `__Host-` and `__Secure-`, which signs every
-  user in once. A leftover `refreshToken` is cleared by the next login,
-  successful refresh, Google sign-in or logout that presents it. Changing it
+  user in once; the other prefix's cookie stays in the browser, unread, until
+  it expires. Changing it
   from one domain to another (or, on local http, unsetting it) leaves the old
   domain's cookie in the browser, which then sends two values under the same
   name, oldest first (RFC 6265 §5.4). The API reads the last, most recently

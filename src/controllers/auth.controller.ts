@@ -9,8 +9,6 @@ import type { Profile as GoogleProfile } from 'passport-google-oauth20'
 import { getEnv, isCookieSecure, type Env } from '@/configs/env.config'
 import {
   GOOGLE_STRATEGY_NAME,
-  // eslint-disable-next-line sonarjs/deprecation -- the plain-http cookie name, revoked and cleared under COOKIE_SECURE
-  LEGACY_REFRESH_TOKEN_COOKIE_NAME,
   refreshCookieSpec,
   type RefreshCookieSpec,
 } from '@/constants/auth.constants'
@@ -58,17 +56,6 @@ function withoutTrailingSlashes(url: string): string {
  */
 function currentRefreshCookie(env: Env): RefreshCookieSpec {
   return refreshCookieSpec({ COOKIE_SECURE: isCookieSecure(env), COOKIE_DOMAIN: env.COOKIE_DOMAIN })
-}
-
-/**
- * Whether two specs name the same browser cookie, which the browser keys on
- * name, domain and path.
- * @param a - One spec.
- * @param b - The other.
- * @returns True when a Set-Cookie for one replaces the other.
- */
-function isSameCookie(a: RefreshCookieSpec, b: RefreshCookieSpec): boolean {
-  return a.name === b.name && a.path === b.path && a.domain === b.domain
 }
 
 /**
@@ -136,7 +123,7 @@ function readCookie(request: Request, name: string): string | undefined {
 /**
  * The refresh token to redeem: the current cookie's only, by the
  * newest-cookie rule (`readCookie`). Under COOKIE_SECURE the unprefixed
- * `refreshToken` is never redeemed: a sibling subdomain or an on-path
+ * `refreshToken` is never read: a sibling subdomain or an on-path
  * attacker on plain http can plant it. `__Host-` stops both; `__Secure-`
  * (used with COOKIE_DOMAIN) stops only the plain-http planter, since
  * COOKIE_DOMAIN already trusts its subdomains.
@@ -149,70 +136,46 @@ function readRefreshTokenCookie(request: Request): string | undefined {
 }
 
 /**
- * Every distinct refresh token the request carries, current and legacy.
- * @param request - The incoming request.
- * @returns The raw tokens, without duplicates.
- */
-function presentedRefreshTokens(request: Request): string[] {
-  const current = currentRefreshCookie(getEnv())
-  const tokens = [
-    readCookie(request, current.name),
-    // eslint-disable-next-line sonarjs/deprecation -- reads the old cookie name until the next major
-    readCookie(request, LEGACY_REFRESH_TOKEN_COOKIE_NAME),
-  ].filter((token): token is string => token !== undefined)
-  return [...new Set(tokens)]
-}
-
-/**
- * Revoke the session of every refresh token the request carries, current
- * and legacy, one at a time (each revoke locks the user row). Logout's
- * revoke, and also run after a sign-in: a session the browser's cookie
- * pointed at would otherwise stay refreshable after the new cookie replaces
- * it, outlive the next logout, and never trip reuse detection. The new
- * session's token is never among them: it is only in the response.
- * @param request - The request whose cookies name the sessions.
+ * Revoke the session of the refresh token the request carries, if any.
+ * Logout's revoke, and also run after a sign-in: a session the browser's
+ * cookie pointed at would otherwise stay refreshable after the new cookie
+ * replaces it, outlive the next logout, and never trip reuse detection. The
+ * new session's token is never the one revoked: it is only in the response.
+ * @param request - The request whose cookie names the session.
  * @param options - `emitSignedOut: false` for a sign-in, which is not the user signing out.
- * @param options.emitSignedOut - Whether each live revoke emits `user_signed_out`; default true.
- * @returns Resolves once each presented token's session, if any, is revoked.
+ * @param options.emitSignedOut - Whether a live revoke emits `user_signed_out`; default true.
+ * @returns Resolves once the presented token's session, if any, is revoked.
  */
-async function revokePresentedSessions(
+async function revokePresentedSession(
   request: Request,
   options: { emitSignedOut?: boolean } = {}
 ): Promise<void> {
-  for (const rawToken of presentedRefreshTokens(request)) {
-    await revokeRefreshToken(rawToken, options)
-  }
+  const rawToken = readRefreshTokenCookie(request)
+  if (rawToken === undefined) return
+  await revokeRefreshToken(rawToken, options)
 }
 
 /**
- * When the request carried the legacy `refreshToken` cookie, clear it: the
- * host-only form, and the COOKIE_DOMAIN form when one is set. A form that is
- * the current cookie is skipped, so this never clears the cookie being set.
+ * Without COOKIE_SECURE but with COOKIE_DOMAIN, when the request carried a
+ * `refreshToken` cookie, clear its host-only form too: the browser may hold
+ * that scope beside the current one, and either may be the one it sent.
  * Added before any new cookie, so a browser that treats two scopes as one
- * cookie keeps the new one.
+ * cookie keeps the new one. Under COOKIE_SECURE it clears nothing.
  * @param request - The incoming request.
- * @param response - The response to add the clearing Set-Cookie lines to.
+ * @param response - The response to add the clearing Set-Cookie line to.
  * @param env - The validated environment.
  */
-function clearLegacyRefreshCookies(request: Request, response: Response, env: Env): void {
-  // eslint-disable-next-line sonarjs/deprecation -- reads the old cookie name until the next major
-  if (readCookie(request, LEGACY_REFRESH_TOKEN_COOKIE_NAME) === undefined) return
-  const current = currentRefreshCookie(env)
-  const forms = [refreshCookieSpec({ COOKIE_SECURE: false })]
-  if (env.COOKIE_DOMAIN !== undefined) {
-    forms.push(refreshCookieSpec({ COOKIE_SECURE: false, COOKIE_DOMAIN: env.COOKIE_DOMAIN }))
-  }
-  for (const form of forms) {
-    if (!isSameCookie(form, current)) {
-      response.clearCookie(form.name, refreshCookieOptions(form, env, 'strict'))
-    }
-  }
+function clearHostOnlyPlainRefreshCookie(request: Request, response: Response, env: Env): void {
+  if (isCookieSecure(env) || env.COOKIE_DOMAIN === undefined) return
+  const hostOnly = refreshCookieSpec({ COOKIE_SECURE: false })
+  if (readCookie(request, hostOnly.name) === undefined) return
+  response.clearCookie(hostOnly.name, refreshCookieOptions(hostOnly, env, 'strict'))
 }
 
 /**
  * Attach a freshly issued refresh token to the response as an httpOnly
- * cookie, named and scoped by `refreshCookieSpec`, and clear a legacy
- * cookie the request carried.
+ * cookie, named and scoped by `refreshCookieSpec`, after
+ * `clearHostOnlyPlainRefreshCookie`.
  *
  * `sameSite: 'strict'` is the cookie half of this API's stated CSRF
  * position (SECURITY.md: Bearer access tokens plus `SameSite` cookies, no
@@ -221,7 +184,7 @@ function clearLegacyRefreshCookies(request: Request, response: Response, env: En
  * different top-level domains would need `'lax'` or a real CSRF token
  * instead, since `'strict'` would then never send this cookie back at all.
  * `setOAuthRefreshTokenCookie` below is the one caller that passes `'lax'`.
- * @param request - The request, checked for a legacy cookie to clear.
+ * @param request - The request, checked for a host-only plain cookie to clear.
  * @param response - The response to set the cookie on.
  * @param rawToken - The raw refresh token.
  * @param expiresAt - When the token expires.
@@ -235,7 +198,7 @@ function setRefreshTokenCookie(
   sameSite: 'strict' | 'lax' = 'strict'
 ): void {
   const env = getEnv()
-  clearLegacyRefreshCookies(request, response, env)
+  clearHostOnlyPlainRefreshCookie(request, response, env)
   const spec = currentRefreshCookie(env)
   response.cookie(spec.name, rawToken, {
     ...refreshCookieOptions(spec, env, sameSite),
@@ -259,9 +222,6 @@ function setRefreshTokenCookie(
  * cookie on cross-site subresource requests and cross-site unsafe (non-GET)
  * requests — the actual CSRF surface `'strict'` exists to close for every
  * other endpoint — while allowing it on this top-level GET redirect chain.
- * A legacy `refreshToken` cookie set by the OAuth callback is `'lax'`, so
- * this cross-site navigation can carry it here; `setRefreshTokenCookie`
- * clears it like any other set.
  * @param request - The callback request.
  * @param response - The response to set the cookie on.
  * @param rawToken - The raw refresh token.
@@ -278,22 +238,23 @@ function setOAuthRefreshTokenCookie(
 
 /**
  * Clear the refresh cookie on logout, with the same name, path and domain
- * it was set with, and any legacy cookie the request carried.
- * @param request - The request, checked for a legacy cookie to clear.
+ * it was set with, and its host-only plain form when
+ * `clearHostOnlyPlainRefreshCookie` applies.
+ * @param request - The request, checked for a host-only plain cookie to clear.
  * @param response - The response to clear the cookie on.
  */
 function clearRefreshTokenCookie(request: Request, response: Response): void {
   const env = getEnv()
   const spec = currentRefreshCookie(env)
   response.clearCookie(spec.name, refreshCookieOptions(spec, env, 'strict'))
-  clearLegacyRefreshCookies(request, response, env)
+  clearHostOnlyPlainRefreshCookie(request, response, env)
 }
 
 /**
  * Clear the refresh cookie a failed refresh read, in every form the clear
  * helpers use for that name. `readRefreshTokenCookie` reads only the current
- * name. When it is the unprefixed one (plain http), the legacy forms are
- * other scopes of the one name that was read, and are cleared too.
+ * name. Without COOKIE_SECURE that is the unprefixed one, and its host-only
+ * form is another scope of the one name that was read, so it is cleared too.
  * @param request - The refresh request.
  * @param response - The response to add the clearing Set-Cookie lines to.
  */
@@ -301,28 +262,7 @@ function clearPresentedRefreshCookie(request: Request, response: Response): void
   const env = getEnv()
   const current = currentRefreshCookie(env)
   response.clearCookie(current.name, refreshCookieOptions(current, env, 'strict'))
-  // eslint-disable-next-line sonarjs/deprecation -- detects plain http, where the current name is the unprefixed one
-  if (current.name === LEGACY_REFRESH_TOKEN_COOKIE_NAME) {
-    clearLegacyRefreshCookies(request, response, env)
-  }
-}
-
-/**
- * Revoke and clear a legacy `refreshToken` cookie that a refresh carried
- * with no current cookie: under COOKIE_SECURE it is never redeemed, so a
- * planted one signs no one in and a pre-prefix one ends here. Logout's
- * primitive, so it resolves quietly for a dead or forged token. It is a
- * security revoke, not the user signing out, so it emits no `user_signed_out`.
- * @param request - The refresh request.
- * @param response - The response to add the clearing Set-Cookie lines to.
- * @returns Resolves once the token's session, if any, is revoked.
- */
-async function revokeUnredeemedLegacyCookie(request: Request, response: Response): Promise<void> {
-  // eslint-disable-next-line sonarjs/deprecation -- the unprefixed name is revoked and cleared, never redeemed
-  const legacy = readCookie(request, LEGACY_REFRESH_TOKEN_COOKIE_NAME)
-  if (legacy === undefined) return
-  await revokeRefreshToken(legacy, { emitSignedOut: false })
-  clearLegacyRefreshCookies(request, response, getEnv())
+  clearHostOnlyPlainRefreshCookie(request, response, env)
 }
 
 /**
@@ -384,7 +324,7 @@ class AuthController extends BaseController {
     response.set('Cache-Control', 'no-store')
     const input = parseBody(loginSchema, request.body)
     const session = await authService.login(input)
-    await revokePresentedSessions(request, { emitSignedOut: false })
+    await revokePresentedSession(request, { emitSignedOut: false })
 
     setRefreshTokenCookie(
       request,
@@ -428,17 +368,14 @@ class AuthController extends BaseController {
    * while a dead-cookie refresh is in flight loses its own fresh cookie too,
    * since the clear is by name — that user just signs in again.
    * The limiter's 429 and a 5xx never clear. Under COOKIE_SECURE a request
-   * carrying only the legacy `refreshToken` cookie answers 401 after that
-   * cookie's session is revoked and the cookie cleared: it is never redeemed.
+   * carrying only an unprefixed `refreshToken` cookie answers 401 and leaves
+   * that cookie and its session alone: it is never read.
    * `no-store`, as every token response (RFC 6749 §5.1).
    */
   refresh = this.handle(async (request, response) => {
     response.set('Cache-Control', 'no-store')
     const rawToken = readRefreshTokenCookie(request)
-    if (!rawToken) {
-      await revokeUnredeemedLegacyCookie(request, response)
-      throw new HttpError('Missing refresh token', 401)
-    }
+    if (!rawToken) throw new HttpError('Missing refresh token', 401)
 
     const refreshed = await refreshOrClearCookie(request, response, rawToken)
 
@@ -452,20 +389,19 @@ class AuthController extends BaseController {
   })
 
   /**
-   * `POST /auth/logout`: revoke the session each presented refresh token
-   * belongs to, and clear the cookies either way.
+   * `POST /auth/logout`: revoke the session the presented refresh token
+   * belongs to, and clear the cookie either way.
    *
-   * Reads the current and the legacy cookie, never the body (see `refresh`
-   * above for why). Deliberately does not require a valid access token: a
-   * user wanting to log out has often just watched their access token
-   * expire, and revocation only ever needs the refresh cookie. When the
-   * browser holds both the current and the legacy cookie, both sessions end.
+   * Reads the current cookie only, never the body (see `refresh` above for
+   * why). Deliberately does not require a valid access token: a user wanting
+   * to log out has often just watched their access token expire, and
+   * revocation only ever needs the refresh cookie.
    * A missing, forged, or already-revoked token is treated identically to a
    * live one — see `revokeRefreshToken`'s JSDoc for why logout must never let
    * a caller learn which raw value was actually live.
    */
   logout = this.handle(async (request, response) => {
-    await revokePresentedSessions(request)
+    await revokePresentedSession(request)
     clearRefreshTokenCookie(request, response)
     messageResponse(response, 'Logged out.')
   })
@@ -619,7 +555,7 @@ class AuthController extends BaseController {
 
           try {
             const refreshToken = await completeGoogleSignIn(profile)
-            await revokePresentedSessions(request, { emitSignedOut: false })
+            await revokePresentedSession(request, { emitSignedOut: false })
             setOAuthRefreshTokenCookie(request, response, refreshToken.raw, refreshToken.expiresAt)
 
             response.redirect(`${frontend}/auth/callback`)

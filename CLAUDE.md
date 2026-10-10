@@ -297,12 +297,10 @@ uuid))` on every column,** as `errors-query.service.ts` does: per-column
   `refreshCookieSpec`** (`auth.constants.ts`); don't write them anywhere else.
   A browser silently drops a `__Host-` cookie with a `Domain` or a path other
   than `/`, which looks like a logout. The controller reads the current cookie
-  only through `currentRefreshCookie(env)`. Under `COOKIE_SECURE` the legacy
-  `refreshToken` cookie (`LEGACY_REFRESH_TOKEN_COOKIE_NAME`) is never
-  redeemed: a sibling subdomain or a plain-http attacker can plant it. Logout
-  revokes it, a refresh that carried no current cookie revokes it and answers
-  401, and a login, a successful refresh, a Google sign-in or a logout clears it when presented;
-  a refresh answered 401 clears only the cookie name it read.
+  only through `currentRefreshCookie(env)`. Under `COOKIE_SECURE` an
+  unprefixed `refreshToken` cookie is never read, revoked or cleared: a
+  sibling subdomain or a plain-http attacker can plant it, so don't add a
+  fallback to it. A refresh answered 401 clears only the cookie name it read.
 - **`COOKIE_DOMAIN` goes on the refresh-cookie set, its clear, and the OAuth
   session cookie.** A clear with a different domain leaves the cookie behind.
   After a domain change the browser sends two cookies of one name, oldest
