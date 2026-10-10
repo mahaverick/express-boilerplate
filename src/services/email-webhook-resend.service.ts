@@ -29,7 +29,7 @@ import {
 /**
  * The Resend adapter's `:provider` segment.
  */
-export const RESEND_EMAIL_WEBHOOK_PROVIDER = 'resend'
+const RESEND_EMAIL_WEBHOOK_PROVIDER = 'resend'
 
 /**
  * How far `svix-timestamp` may be from now, in either direction.
@@ -39,13 +39,13 @@ export const RESEND_SIGNATURE_TOLERANCE_MS = 5 * 60 * 1000
 /**
  * The prefix Resend's signing secrets carry; the rest is base64.
  */
-export const RESEND_SECRET_PREFIX = 'whsec_'
+const RESEND_SECRET_PREFIX = 'whsec_'
 
 /**
  * The detail stored for `email.suppressed`: Resend refused the send itself,
  * because the address is on Resend's own suppression list.
  */
-export const PROVIDER_SUPPRESSED_DETAIL = 'PROVIDER_SUPPRESSED'
+const PROVIDER_SUPPRESSED_DETAIL = 'PROVIDER_SUPPRESSED'
 
 // The width of email_events.provider_event_id; Svix ids are `msg_` and base62.
 const SVIX_ID_PATTERN = /^[\w-]{1,128}$/

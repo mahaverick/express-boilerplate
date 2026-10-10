@@ -33,7 +33,7 @@ function hasNoNul(value: string): boolean {
 /**
  * The search cursor's decoded shape: the last row's `lower(name)` and id.
  */
-export const platformTenantCursorSchema = z
+const platformTenantCursorSchema = z
   .object({ sortName: z.string().refine(hasNoNul), id: z.uuid() })
   .strict()
 
@@ -163,7 +163,7 @@ const booleanQueryField = z.enum(['true', 'false']).transform((value) => value =
 /**
  * The user search cursor's decoded shape: the last row's `lower(email)` and id.
  */
-export const platformUserCursorSchema = z
+const platformUserCursorSchema = z
   .object({ sortEmail: z.string().refine(hasNoNul), id: z.uuid() })
   .strict()
 

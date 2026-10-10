@@ -14,7 +14,7 @@ import { directionField, pageLimitField, searchQueryField } from '@/validators/p
  * The email and suppression cursors' decoded shape: the last row's
  * `created_at` (microsecond text) and id.
  */
-export const emailCursorSchema = z.strictObject({
+const emailCursorSchema = z.strictObject({
   sortAt: sortAtField,
   id: z.uuid(),
 })

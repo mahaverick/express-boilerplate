@@ -59,17 +59,17 @@ export const MEMBER_STEP_CODE = 'member_step'
 /**
  * Error code: a tenant step was asked to complete for one member.
  */
-export const SCOPE_MISMATCH_CODE = 'scope_mismatch'
+const SCOPE_MISMATCH_CODE = 'scope_mismatch'
 
 /**
  * Error code: a customer tried to tick a step that completes on its own.
  */
-export const NOT_MANUAL_CODE = 'not_manual'
+const NOT_MANUAL_CODE = 'not_manual'
 
 /**
  * Error code: dismissing a dismissed checklist, or restoring one that is not dismissed.
  */
-export const DISMISS_STATE_CODE = 'dismiss_state'
+const DISMISS_STATE_CODE = 'dismiss_state'
 
 /**
  * What `completeOnboardingStep` records.

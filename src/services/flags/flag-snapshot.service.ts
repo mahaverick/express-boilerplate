@@ -24,7 +24,7 @@ import type { ParsedSnapshot } from '@/validators/flag-definition.validators'
  * How often each replica reloads the stored snapshot whether or not a
  * message arrived.
  */
-export const FLAG_SNAPSHOT_BACKSTOP_MS = 60_000
+const FLAG_SNAPSHOT_BACKSTOP_MS = 60_000
 
 const RELOAD_MESSAGE = 'reload'
 

@@ -14,7 +14,7 @@ import { parseBody } from '@/validators/parse.validators'
 /**
  * The most keys one exposure report may carry.
  */
-export const MAX_EXPOSURE_KEYS = 10
+const MAX_EXPOSURE_KEYS = 10
 
 /**
  * The message every key outside the allowlist gets.
@@ -27,7 +27,7 @@ export const EXPOSURE_KEY_MESSAGE = 'keys must name experiment flags this app re
  * object is strict, so a client can't send a value: the server evaluates
  * every key itself.
  */
-export const exposureBodySchema = z.strictObject({
+const exposureBodySchema = z.strictObject({
   keys: z
     .array(z.string().max(FLAG_KEY_MAX))
     .min(1)

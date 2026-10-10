@@ -72,7 +72,7 @@ export interface NotificationJobData {
  * Redis only while retries are pending (`recordPermanentFailure`,
  * job-failure.job.ts).
  */
-export const notificationJobDefaults: JobsOptions = {
+const notificationJobDefaults: JobsOptions = {
   priority: JobPriority.normal,
   attempts: 3,
   backoff: {

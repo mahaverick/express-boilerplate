@@ -12,7 +12,7 @@ import type { FlagApp, FlagReason, FlagScope } from '@/types/flags'
 /**
  * A flag key: snake_case, starting with a letter.
  */
-export const FLAG_KEY_PATTERN = /^[a-z][a-z0-9_]*$/
+const FLAG_KEY_PATTERN = /^[a-z][a-z0-9_]*$/
 
 /**
  * The longest flag key, in characters.

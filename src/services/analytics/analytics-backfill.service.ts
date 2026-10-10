@@ -16,7 +16,7 @@ import { enqueueAnalyticsOrThrow } from '@/services/analytics/analytics-outbox.s
 /**
  * Tenants per outbox insert.
  */
-export const BACKFILL_PAGE_SIZE = 100
+const BACKFILL_PAGE_SIZE = 100
 
 /**
  * What a completed backfill queued.

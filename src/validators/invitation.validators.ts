@@ -10,7 +10,7 @@ import { INVITATION_TOKEN_LENGTH } from '@/constants/tenant.constants'
  * A raw invitation token: unpadded base64url, exactly
  * `INVITATION_TOKEN_LENGTH` characters.
  */
-export const invitationTokenSchema = z
+const invitationTokenSchema = z
   .string()
   .length(INVITATION_TOKEN_LENGTH)
   .regex(/^[\w-]+$/)

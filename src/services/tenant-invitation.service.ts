@@ -51,7 +51,7 @@ const userRepository = new UserRepository()
 /**
  * Error code: the invited address already belongs to a member.
  */
-export const ALREADY_MEMBER_CODE = 'already_member'
+const ALREADY_MEMBER_CODE = 'already_member'
 
 /**
  * The 409 for an owner invitation to the platform tenant, whose staff are invited from Staff.
@@ -62,7 +62,7 @@ export const PLATFORM_OWNER_INVITATION_MESSAGE =
 /**
  * Message for `ALREADY_MEMBER_CODE`.
  */
-export const ALREADY_MEMBER_MESSAGE = 'That person is already a member.'
+const ALREADY_MEMBER_MESSAGE = 'That person is already a member.'
 
 /**
  * Error code: the token is unknown, expired, revoked, already used, or for
@@ -78,29 +78,28 @@ export const INVITATION_INVALID_MESSAGE = 'This invitation is invalid or has exp
 /**
  * Error code: the signed-in user's address is not the invited one.
  */
-export const INVITATION_EMAIL_MISMATCH_CODE = 'invitation_email_mismatch'
+const INVITATION_EMAIL_MISMATCH_CODE = 'invitation_email_mismatch'
 
 /**
  * Message for `INVITATION_EMAIL_MISMATCH_CODE`.
  */
-export const INVITATION_EMAIL_MISMATCH_MESSAGE =
-  'This invitation was sent to a different email address.'
+const INVITATION_EMAIL_MISMATCH_MESSAGE = 'This invitation was sent to a different email address.'
 
 /**
  * Error code: the signed-in user's address is the invited one, but unverified.
  */
-export const INVITATION_EMAIL_UNVERIFIED_CODE = 'invitation_email_unverified'
+const INVITATION_EMAIL_UNVERIFIED_CODE = 'invitation_email_unverified'
 
 /**
  * Message for `INVITATION_EMAIL_UNVERIFIED_CODE`.
  */
-export const INVITATION_EMAIL_UNVERIFIED_MESSAGE =
+const INVITATION_EMAIL_UNVERIFIED_MESSAGE =
   'Verify your email address before accepting this invitation.'
 
 /**
  * Error code: no pending invitation with that id in this tenant.
  */
-export const INVITATION_NOT_FOUND_CODE = 'invitation_not_found'
+const INVITATION_NOT_FOUND_CODE = 'invitation_not_found'
 
 /**
  * Error code: a resend inside `INVITATION_RESEND_COOLDOWN` of the invitation's last send.

@@ -24,7 +24,7 @@ export const ANALYTICS_PROXY_PATH = '/api/v1/collect'
 /**
  * The message and code of the answer when analytics is not configured.
  */
-export const ANALYTICS_UNCONFIGURED = {
+const ANALYTICS_UNCONFIGURED = {
   message: 'Analytics is not configured',
   code: 'service_unavailable',
 } as const

@@ -73,7 +73,7 @@ const NON_DISABLEABLE_NOTIFICATION_TYPES: ReadonlySet<string> = new Set([
  * accepts. Every type is non-disableable, so the list is empty and that route
  * answers 400 for every entry; `preferenceEntrySchema` is its only reader.
  */
-export const CONFIGURABLE_NOTIFICATION_TYPES = NOTIFICATION_TYPES.filter(
+const CONFIGURABLE_NOTIFICATION_TYPES = NOTIFICATION_TYPES.filter(
   (type) => !NON_DISABLEABLE_NOTIFICATION_TYPES.has(type)
 )
 

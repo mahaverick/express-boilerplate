@@ -25,7 +25,7 @@ export const STEP_NOT_FOUND_CODE = 'onboarding_step_not_found'
  * The onboarding list cursor's decoded shape: the last row's sort
  * timestamp (microsecond text) and id.
  */
-export const onboardingCursorSchema = z.strictObject({
+const onboardingCursorSchema = z.strictObject({
   sortAt: sortAtField,
   id: z.uuid(),
 })

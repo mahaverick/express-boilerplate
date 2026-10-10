@@ -96,7 +96,7 @@ export function flagRegistryFingerprint(
  * The property operators `@posthog/core`'s `matchFeatureFlagProperty`
  * implements. A missing operator means `exact`.
  */
-export const FLAG_OPERATORS: readonly string[] = [
+const FLAG_OPERATORS: readonly string[] = [
   'exact',
   'is_not',
   'is_set',
@@ -181,7 +181,7 @@ const KNOWN_PROPERTY_KEYS: ReadonlySet<string> = new Set([
  * unknown one parses and `detectUnsupported` names it; an unknown key is kept
  * for it to name too.
  */
-export const flagPropertySchema = z
+const flagPropertySchema = z
   .object({
     key: z.string(),
     type: z.string().optional(),
