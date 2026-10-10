@@ -25,6 +25,7 @@ import { isDatabaseReachable } from '@/services/database.service'
 import { isShuttingDown } from '@/services/lifecycle.service'
 import { registerOnboardingSubscribers } from '@/services/onboarding.service'
 import { isQueueReachable } from '@/services/queue.service'
+import { createReadinessProbe } from '@/services/readiness.service'
 import { isRedisReachable } from '@/services/redis.service'
 
 /**
@@ -35,8 +36,9 @@ import { isRedisReachable } from '@/services/redis.service'
  * shares one bucket; on where no proxy strips X-Forwarded-For, each request
  * can name its own IP and escape the limiters. A malformed value throws here,
  * at boot. `/health` stays shallow so a database blip never restarts a
- * healthy process; `/health/ready` checks every dependency, since failing it
- * only removes the pod from rotation. It also registers the domain-event
+ * healthy process; `/health/ready` checks every dependency, each within
+ * `READINESS_CHECK_DEADLINE_MS`, since failing it only removes the pod from
+ * rotation. It also registers the domain-event
  * subscribers (`registerOnboardingSubscribers`, `registerAnalyticsSubscribers`),
  * which is idempotent.
  * @returns A configured app with no listening socket.
@@ -81,21 +83,23 @@ export function createApp(): Express {
     response.json({ status: 'ok', uptime: process.uptime(), release: getEnv().APP_VERSION })
   })
 
+  const probeReadiness = createReadinessProbe({
+    database: isDatabaseReachable,
+    redis: isRedisReachable,
+    queue: isQueueReachable,
+  })
   app.get('/health/ready', async (_request, response) => {
     // A draining pod leaves rotation before its dependencies close.
     if (isShuttingDown()) {
       response.status(503).json({ status: 'shutting-down' })
       return
     }
-    const [database, redis, queue] = await Promise.all([
-      isDatabaseReachable(),
-      isRedisReachable(),
-      isQueueReachable(),
-    ])
-    const isReady = database && redis && queue
+    const { isReady, checks, timedOut } = await probeReadiness()
+    // Names only the dependency, never a host or driver error: the route is public.
     response.status(isReady ? 200 : 503).json({
       status: isReady ? 'ready' : 'not-ready',
-      checks: { database, redis, queue },
+      checks,
+      ...(timedOut.length > 0 && { timedOut }),
     })
   })
 

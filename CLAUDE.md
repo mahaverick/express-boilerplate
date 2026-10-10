@@ -26,7 +26,9 @@ rather than repeating them.
   rules go in `assertEnvConsistent` (`env-consistency.config.ts`), not in the
   schema: an object-level `.refine()` breaks `getDatabaseUrl()`'s `.pick()`.
 - **Don't add a dependency check to `/health`.** It is liveness; the deep check
-  is `/health/ready`. See [ARCHITECTURE.md](ARCHITECTURE.md#health-checks).
+  is `/health/ready`, and a check added there goes through
+  `createReadinessProbe` (`readiness.service.ts`), which bounds it. See
+  [ARCHITECTURE.md](ARCHITECTURE.md#health-checks).
 - **The compose ports 5433/6380 are deliberate.**
   `tests/unit/connection-target.test.ts` guards them by reading the committed
   `docker-compose.yml` and `.env.test`, never by asserting on `getEnv()` at

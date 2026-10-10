@@ -1325,6 +1325,12 @@ query`: the SQL text is never sent. A thrown object that is not an `Error`
   sha (`APP_VERSION`). That is harmless for this public boilerplate; a
   private fork that treats its sha as sensitive drops the field in
   `src/app.ts`.
+- **`/health/ready` is public and names a failing dependency.** A 503 says
+  which of `database`, `redis` and `queue` failed and which timed out
+  (`timedOut`), never a host, an error message or driver text. Every check
+  is bounded (500 ms), and a check still running is shared by the probes that
+  arrive meanwhile, so a flood of probes against a stalled database holds
+  one pool connection, not the pool.
 
 ## What this boilerplate does NOT implement
 

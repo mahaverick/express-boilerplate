@@ -69,7 +69,7 @@ sign-in links open there instead of at `WEB_URL`. See
 [A second frontend: Apex](ARCHITECTURE.md#a-second-frontend-apex).
 
 ```bash
-curl http://localhost:4040/health/ready   # {"status":"ready","checks":{...}}
+curl http://localhost:4040/health/ready   # {"status":"ready","checks":{...}}; 503 within 500 ms if a dependency is down
 ```
 
 ### Register and log in

@@ -1269,10 +1269,22 @@ Two endpoints, deliberately different depths:
   with `"status":"not-ready"` if any is down. It also answers 503 with
   `"status":"shutting-down"` once graceful shutdown has begun. A failing
   readiness probe only removes the instance from load-balancer rotation; it
-  restarts nothing. The Redis check has its own `REDIS_REQUEST_DEADLINE_MS`
-  (300 ms) bound, connect included, and neither consults nor opens the
-  request-path stall cooldown: a slow PING makes only that probe answer
-  not-ready. A stalled database or queue connection still holds it.
+  restarts nothing. Every check is bounded by `READINESS_CHECK_DEADLINE_MS`
+  (500 ms, `createReadinessProbe` in `readiness.service.ts`), so a stalled
+  database or queue connection makes the probe answer 503 at the deadline,
+  with the check `false` and its name in a `timedOut` array
+  (`"timedOut":["database"]`); a 200 has no `timedOut`. Set the
+  orchestrator's probe timeout above 500 ms. A check still running at the
+  deadline is left to finish and is not started again until it does: a
+  probe that arrives meanwhile waits on it, so a stalled database holds one
+  pool connection, not one per probe, and the first probe after the stall
+  ends answers 200. The Redis check has its own, shorter
+  `REDIS_REQUEST_DEADLINE_MS` (300 ms) bound, connect included, so a stalled
+  Redis reports `redis: false` rather than a timeout; it neither consults
+  nor opens the request-path stall cooldown, and a slow PING makes only
+  that probe answer not-ready. Before a queue connection's first `ready`,
+  the probe answers 503 at the deadline while that connection is still
+  connecting.
 
 Neither path is traced.
 
@@ -1569,8 +1581,8 @@ docker run --rm -p 4040:4040 --env-file .env \
 The `-e` overrides matter: `.env` says `localhost`, which inside the container
 is the container itself. `host.docker.internal` reaches the host's published
 compose ports. Without the overrides, `/health` still answers 200 (it touches
-no dependency) and `/health/ready` answers 503 within a few seconds, since
-every Redis client gives up quickly before its first `ready`.
+no dependency) and `/health/ready` answers 503 within its 500 ms deadline
+(see [Health checks](#health-checks)).
 
 ## Deploying
 
