@@ -7,7 +7,11 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { ERROR_VALUE_MAX } from '@/constants/error-tracking.constants'
-import { scrubText } from '@/services/errors/error-scrubber.service'
+import {
+  SCRUB_VALUE_MAX,
+  scrubText,
+  TRUNCATION_MARKER,
+} from '@/services/errors/error-scrubber.service'
 
 interface ScrubVector {
   rule: string
@@ -83,10 +87,15 @@ describe('scrubText vectors', () => {
 })
 
 describe('scrubText', () => {
+  it('caps a text at the error value cap the reporter uses', () => {
+    // The scrubber is shared byte for byte with the clients, so it holds its own cap; this keeps the two equal.
+    expect(SCRUB_VALUE_MAX).toBe(ERROR_VALUE_MAX)
+  })
+
   it('cuts a long text to the cap, marker included', () => {
     const scrubbed = scrubText('word '.repeat(400))
     expect(scrubbed).toHaveLength(ERROR_VALUE_MAX)
-    expect(scrubbed.endsWith('…[truncated]')).toBe(true)
+    expect(scrubbed.endsWith(TRUNCATION_MARKER)).toBe(true)
   })
 
   it('keeps a text of exactly the cap whole', () => {
@@ -102,7 +111,7 @@ describe('scrubText', () => {
     const scrubbed = scrubText(text)
     expect(scrubbed.startsWith('[secret] x x')).toBe(true)
     expect(scrubbed).not.toContain('abab')
-    expect(scrubbed.endsWith('…[truncated]')).toBe(true)
+    expect(scrubbed.endsWith(TRUNCATION_MARKER)).toBe(true)
   })
 
   it('keeps harmless strings unchanged', () => {

@@ -230,6 +230,11 @@ export default tseslint.config(
     },
   },
   {
+    // The scrubber is byte-identical with the react and apex copies, whose ESLint has no sonarjs, so it cannot carry sonarjs disable comments; its regexes scan at most SCAN_MAX characters.
+    files: ['src/services/errors/error-scrubber.service.ts'],
+    rules: { 'sonarjs/regex-complexity': 'off', 'sonarjs/super-linear-regex': 'off' },
+  },
+  {
     // tracing.ts is a fixed-name entrypoint loaded by path with --import, not a module type.
     files: ['src/observability/**/*.ts'],
     rules: { 'check-file/filename-naming-convention': 'off' },
