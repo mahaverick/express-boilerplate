@@ -10,14 +10,14 @@
  * runtime flow: the lookahead lets exactly those three phrases through, across
  * a JSDoc line break's `*`.
  */
-export const HISTORY_WORDS =
+const HISTORY_WORDS =
   /\b(?:task|stream|lane|wave)[ -]\d+[a-z]?\b|\btask-\d+-[\w-]+\.md\b|\bbefore this fix\b|\ba later (?:task|stream|wave|pr)\b|\bpreviously\b(?![\s*]+(?:passed[\s*]+to|registered[\s*]+under|issued[\s*]+to)\b)/i
 
 /**
  * Audit and ledger ids: prefixes H, M, E, X, R or NF directly followed by
  * digits, or P/C followed by a hyphen and digits (case-sensitive).
  */
-export const HISTORY_IDS = /\b(?:NF|H|M|E|X|R)\d{1,2}[a-z]?\b|\b[PC]-\d{1,2}\b|\bE-[TW]\b/
+const HISTORY_IDS = /\b(?:NF|H|M|E|X|R)\d{1,2}[a-z]?\b|\b[PC]-\d{1,2}\b|\bE-[TW]\b/
 
 /**
  * Find the first history phrase in a piece of prose.
