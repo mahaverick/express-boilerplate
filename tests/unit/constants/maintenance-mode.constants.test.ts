@@ -11,9 +11,25 @@ import {
   classifyMaintenanceRoute,
   MAINTENANCE_MODE_CODE,
   maintenanceDecision,
-  maintenanceVerdict,
   READ_ONLY_MODE_CODE,
+  type MaintenanceDecision,
+  type MaintenanceMode,
 } from '@/constants/maintenance-mode.constants'
+
+/**
+ * What the gate does with one request in one mode, without the rule.
+ * @param mode - The replica's mode.
+ * @param method - The request method.
+ * @param path - The request path, without the query string.
+ * @returns `'allow'`, `MAINTENANCE_MODE_CODE` or `READ_ONLY_MODE_CODE`.
+ */
+function maintenanceVerdict(
+  mode: MaintenanceMode,
+  method: string,
+  path: string
+): MaintenanceDecision['verdict'] {
+  return maintenanceDecision(mode, method, path).verdict
+}
 
 const ALWAYS: [string, string][] = [
   ['GET', '/health'],

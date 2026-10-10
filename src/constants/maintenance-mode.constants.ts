@@ -355,19 +355,3 @@ export function maintenanceDecision(
   }
   return { verdict: rule?.full === 'allow' ? 'allow' : MAINTENANCE_MODE_CODE, rule }
 }
-
-/**
- * What the gate does with one request in one mode (`maintenanceDecision`
- * without the rule).
- * @param mode - This replica's mode.
- * @param method - The request method.
- * @param path - The request path, without the query string.
- * @returns `'allow'`, `MAINTENANCE_MODE_CODE` or `READ_ONLY_MODE_CODE`.
- */
-export function maintenanceVerdict(
-  mode: MaintenanceMode,
-  method: string,
-  path: string
-): MaintenanceDecision['verdict'] {
-  return maintenanceDecision(mode, method, path).verdict
-}
