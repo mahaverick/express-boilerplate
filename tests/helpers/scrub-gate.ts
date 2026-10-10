@@ -14,9 +14,10 @@
  *
  * Options: `--seed n`, `--count n`, `--seconds n`, `--baseline <sha>`,
  * `--candidate-sha <sha>` (compare two commits instead of the working
- * tree), `--samples n`. The exit code is 1 when a planted value or a letter
- * or digit is newly exposed, or a text the baseline scrubbed stably changes
- * on a second pass.
+ * tree), `--samples n` (tests/helpers/scrub-gate-options.ts). The exit code
+ * is 1 when a planted value or a letter or digit is newly exposed, a text the
+ * baseline scrubbed stably changes on a second pass, no case ran, or an
+ * option is malformed.
  */
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -26,17 +27,7 @@ import { pathToFileURL } from 'node:url'
 import { format, resolveConfig } from 'prettier'
 import { corpusCase, huntCase, type GateCase } from './scrub-gate-generators'
 import { compareCase, visibleWindows } from './scrub-gate-metric'
-
-/**
- * The commit whose scrubber is the baseline, and the one the slice file was
- * written from, unless `--baseline` names another.
- */
-const DEFAULT_BASELINE = '713112c'
-
-/**
- * The fixed corpus seed, also the slice's.
- */
-const CORPUS_SEED = 20_261_010
+import { CORPUS_SEED, parseOptions, type Options } from './scrub-gate-options'
 
 /**
  * The scrubber's path in the repository.
@@ -71,11 +62,14 @@ async function scrubberAt(sha: string): Promise<Scrub> {
   if (/^import /m.test(standalone))
     throw new Error(`the scrubber at ${sha} has an import the loader does not replace`)
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'scrub-gate-'))
-  const file = path.join(directory, `scrubber-${sha}.ts`)
-  fs.writeFileSync(file, standalone)
-  const loaded = (await import(pathToFileURL(file).href)) as { scrubText: Scrub }
-  fs.rmSync(directory, { recursive: true })
-  return loaded.scrubText
+  try {
+    const file = path.join(directory, `scrubber-${sha}.ts`)
+    fs.writeFileSync(file, standalone)
+    const loaded = (await import(pathToFileURL(file).href)) as { scrubText: Scrub }
+    return loaded.scrubText
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
 }
 
 /**
@@ -87,42 +81,6 @@ async function workingScrubber(): Promise<Scrub> {
     scrubText: Scrub
   }
   return loaded.scrubText
-}
-
-/**
- * Parsed command-line options.
- */
-interface Options {
-  mode: string
-  seed: number
-  count: number
-  seconds: number
-  baseline: string
-  candidateSha: string | undefined
-  samples: number
-  replay: string | undefined
-}
-
-/**
- * Read the options.
- * @param argv - The arguments after the script name.
- * @returns The options.
- */
-function parseOptions(argv: readonly string[]): Options {
-  const value = (name: string): string | undefined => {
-    const at = argv.indexOf(`--${name}`)
-    return at === -1 ? undefined : argv[at + 1]
-  }
-  return {
-    mode: argv[0] ?? 'corpus',
-    seed: Number(value('seed') ?? CORPUS_SEED),
-    count: Number(value('count') ?? 1_000_000),
-    seconds: Number(value('seconds') ?? 0),
-    baseline: value('baseline') ?? DEFAULT_BASELINE,
-    candidateSha: value('candidate-sha'),
-    samples: Number(value('samples') ?? 20),
-    replay: value('replay'),
-  }
 }
 
 /**
@@ -348,6 +306,9 @@ function runCases(pair: Pair, options: Options): void {
   console.log(`samples: ${samplesFile}`)
   if (totals.valueExposures + totals.alnumExposures + totals.idempotenceNewOnly > 0)
     process.exitCode = 1
+  if (totals.cases > 0) return
+  console.error('no case ran, so nothing was measured')
+  process.exitCode = 1
 }
 
 /**
@@ -392,4 +353,9 @@ async function main(): Promise<void> {
   else runCases(pair, options)
 }
 
-await main()
+try {
+  await main()
+} catch (error) {
+  console.error(`scrub:gate: ${error instanceof Error ? error.message : String(error)}`)
+  process.exitCode = 1
+}
