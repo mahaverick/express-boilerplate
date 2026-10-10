@@ -1213,7 +1213,7 @@ query`: the SQL text is never sent. A thrown object that is not an `Error`
   or Cookie key's name, separator or opening quote runs on to the end of that key's value, and over a closing
   quote and text glued to it, so the later key's value is never left in
   view; a value after a replaced URL fragment, `#[fragment] = …`, too; a
-  secret-named key that the path-token, query or fragment rule took into its
+  secret-named key that an earlier rule took into its
   placeholder, with or without its separator, read again from the original
   text, so its value after the placeholder goes too (`/reset/x.tspwd = …`
   becomes `/reset/[token] = [redacted]`); `sig`, `hmac`, `nonce`, `response`, `pin`,
@@ -1279,7 +1279,7 @@ query`: the SQL text is never sent. A thrown object that is not an `Error`
   (`abc/def%2Fghi@example.com` keeps `abc/`), or when it follows an address
   character directly (a letter, digit, `.`, `%`, `+`, `-`, `_`, `/` or `@`:
   `jane@example.com/<secret>@…`, `u.<secret>@…`); a secret-named key
-  that the path-token, query or fragment rule took into its placeholder when
+  that an earlier rule took into its placeholder when
   the key's word starts more than 80 characters before the placeholder ends,
   and an Authorization or Cookie key taken in the same way
   (`/reset/x.tscookie = …` keeps its value); the

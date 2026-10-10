@@ -26,6 +26,7 @@ export const SCRUB_VALUE_MAX = 1024
  * What ends a text cut to `SCRUB_VALUE_MAX` characters.
  */
 export const TRUNCATION_MARKER = '…[truncated]'
+
 /**
  * The most characters the rules scan: four times what is kept, so a text
  * the rules shorten still fills the cap, while a pathological input never
@@ -1006,7 +1007,8 @@ const TOKEN_KEY_REACH = 80
  * swallowed into a placeholder: a key that starts inside a replacement's original text and
  * ends at or after its end (`/reset/x.tsrefresh_token = …`,
  * `?a=1/api_key="…"`), read on the original text, with its value read on the
- * view right after the placeholder and run through later keys.
+ * view right after the placeholder and run through later keys. The key's
+ * tail past the placeholder must be original text no rule replaced.
  * @param scrub - The scrub, after the key rules.
  * @param innerKeys - The sticky key rules `runThroughEnd` looks for later keys with.
  * @returns The original spans to redact once every other rule has run.
@@ -1029,7 +1031,9 @@ function tokenKeyRanges(scrub: Scrub, innerKeys: readonly RegExp[]): [number, nu
 }
 
 /**
- * The original span of the value of a key that runs out of one replacement.
+ * The original span of the value of a key that runs out of one replacement;
+ * the key's tail past the placeholder must be original text no rule replaced
+ * (it ends at or before `keptUntil`, the next replacement's start).
  * @param scrub - The scrub.
  * @param tokenStart - Where the replacement starts in the view.
  * @param tokenEnd - Where it ends in the view.
@@ -1223,11 +1227,11 @@ const PASSES_MAX = 3
  * becomes `[secret]`, and a PostHog key or vendor credential glued to it is
  * replaced after it; a secret-looking run of 40 or more base64 characters
  * (`isSecretRun`) becomes `[secret]`; the value of a secret-named key that
- * the path-token, query or fragment rule took into its placeholder, read
- * again from the original text, becomes `[redacted]` (`tokenKeyRanges`),
- * and when one does, the rules run again over the result, at most
- * `PASSES_MAX` times in all, until it stops changing; and the result is cut
- * to 1024 characters, ending in `…[truncated]`. A key-named word is replaced even in
+ * an earlier rule took into its placeholder, read again from the original
+ * text, becomes `[redacted]` (`tokenKeyRanges`), and when one does, the rules
+ * run again over the result, at most `PASSES_MAX` times in all, until it
+ * stops changing; and the result is cut to `SCRUB_VALUE_MAX` characters,
+ * ending in `…[truncated]`. A key-named word is replaced even in
  * prose (`Missing token: please log in` becomes `Missing token: [redacted]`):
  * the rule trades some readable text for never leaking a value. Applying it
  * twice gives the same text as applying it once, a placeholder in a URL
