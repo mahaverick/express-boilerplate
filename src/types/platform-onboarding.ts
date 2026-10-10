@@ -32,7 +32,7 @@ export interface OnboardingStepSummary {
  * done (a member step counts once any active owner has done it), and how
  * many of those were completed by staff.
  */
-export interface OnboardingFunnelStep {
+interface OnboardingFunnelStep {
   key: string
   title: string
   scope: OnboardingScope

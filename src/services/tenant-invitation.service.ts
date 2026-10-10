@@ -157,7 +157,7 @@ interface AcceptOutcome {
 /**
  * Everything the invitation email and notification are built from.
  */
-export interface InvitationMessageContext {
+interface InvitationMessageContext {
   invitation: TenantInvitation
   rawToken: string
   tenant: { name: string; slug: string; isPlatform: boolean }

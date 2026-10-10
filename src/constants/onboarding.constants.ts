@@ -87,7 +87,7 @@ export const ONBOARDING_REASON_MAX_LENGTH = 500
 /**
  * How a step completes: on a domain-event trigger, or when someone ticks it.
  */
-export type OnboardingStepCompletion = { kind: 'auto'; on: OnboardingTrigger } | { kind: 'manual' }
+type OnboardingStepCompletion = { kind: 'auto'; on: OnboardingTrigger } | { kind: 'manual' }
 
 /**
  * One registry entry.

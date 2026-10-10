@@ -80,12 +80,12 @@ export const CONFIRMATION_MISMATCH_CODE = 'CONFIRMATION_MISMATCH'
 /**
  * What one maintenance mode does to a classified route.
  */
-export type MaintenanceRouteAccess = 'allow' | 'block'
+type MaintenanceRouteAccess = 'allow' | 'block'
 
 /**
  * An HTTP method a rule names; `*` is any method.
  */
-export type MaintenanceRuleMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | '*'
+type MaintenanceRuleMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | '*'
 
 /**
  * One route's classification. `path` is the full Express path template

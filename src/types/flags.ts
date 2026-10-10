@@ -208,7 +208,7 @@ export interface UnregisteredRow {
 /**
  * One targeting trait, for the inspector's Traits reference panel.
  */
-export interface TraitRow {
+interface TraitRow {
   name: string
   where: 'person' | 'group'
   description: string

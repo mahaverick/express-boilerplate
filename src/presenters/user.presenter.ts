@@ -38,7 +38,7 @@ export function toAuthenticatedUser(user: User): AuthenticatedUser {
  *
  * `AuthenticatedUser` plus `createdAt`.
  */
-export interface PublicUser extends AuthenticatedUser {
+interface PublicUser extends AuthenticatedUser {
   createdAt: Date
 }
 

@@ -8,7 +8,7 @@
  * `app: 'api'`, `browser` otherwise. Whether that claim is the server's own
  * is `verified`.
  */
-export type ErrorIssueSource = 'server' | 'browser'
+type ErrorIssueSource = 'server' | 'browser'
 
 /**
  * One PostHog error issue a user or tenant hit in the window, described by

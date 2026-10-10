@@ -47,7 +47,7 @@ interface FlagEntryBase {
 /**
  * An on/off flag. It falls back to false.
  */
-export interface BooleanFlagEntry extends FlagEntryBase {
+interface BooleanFlagEntry extends FlagEntryBase {
   kind: 'boolean'
   fallback: false
 }
@@ -55,7 +55,7 @@ export interface BooleanFlagEntry extends FlagEntryBase {
 /**
  * A flag with named variants. It falls back to `variants[0]`.
  */
-export interface MultivariateFlagEntry extends FlagEntryBase {
+interface MultivariateFlagEntry extends FlagEntryBase {
   kind: 'multivariate'
   variants: readonly [string, ...string[]]
   fallback: string
@@ -234,7 +234,7 @@ export function clientFlagsFor(app: FlagApp): readonly FlagEntry[] {
 /**
  * A trait a flag condition may target.
  */
-export type TraitName =
+type TraitName =
   'platform_role' | 'tenant_role' | 'app_env' | 'account_created_days' | 'tenant_created_days'
 
 /**

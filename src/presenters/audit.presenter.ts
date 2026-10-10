@@ -16,7 +16,7 @@ export interface JoinedAuditRow {
 /**
  * Who acted, as a client sees it.
  */
-export interface AuditActorResponse {
+interface AuditActorResponse {
   id: string
   name: string
   email: string

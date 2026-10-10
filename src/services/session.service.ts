@@ -57,7 +57,7 @@ async function revokeSessionUnderUserLock(userId: string, sessionId: string): Pr
  * The claims this module signs into, and expects back out of, an access
  * token.
  */
-export interface AccessTokenPayload {
+interface AccessTokenPayload {
   sub: string
   /**
    * The session this token belongs to. Optional: a token without it still

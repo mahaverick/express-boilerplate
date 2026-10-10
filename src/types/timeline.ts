@@ -106,7 +106,7 @@ export type TenantTimelineRow = TimelineRow & { actor: TimelineActor | null }
  * The PostHog deep links of a page; `replay` holds `{sessionId}` for the
  * client to fill in.
  */
-export interface TimelinePageLinks {
+interface TimelinePageLinks {
   person: string | null
   group: string | null
   replay: string
