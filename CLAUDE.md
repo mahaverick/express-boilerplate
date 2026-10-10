@@ -449,7 +449,7 @@ otel-collector`.** It is bind-mounted, and `docker compose up -d` doesn't
 ## Git hooks and CI
 
 - **A change is done when `pnpm lint`, `pnpm lint:docs`, `pnpm format:check`,
-  `pnpm test:coverage` and `pnpm build` all exit 0.** See
+  `pnpm knip`, `pnpm test:coverage` and `pnpm build` all exit 0.** See
   [CONTRIBUTING.md](CONTRIBUTING.md#before-you-open-a-pr).
 - **Pre-commit's ~4.6 s is deliberate.** Don't drop type-aware lint to speed
   it up; `eslint --cache` doesn't help, since lint-staged passes only changed
@@ -472,6 +472,22 @@ otel-collector`.** It is bind-mounted, and `docker compose up -d` doesn't
 - **If the release App key is revoked, fix it; don't switch `release.yml` to
   `GITHUB_TOKEN`,** whose PRs and tags start no workflow. See
   [CONTRIBUTING.md](CONTRIBUTING.md#releases).
+
+## Unused code (knip)
+
+- **`pnpm knip` must exit 0; CI runs it beside lint.** It reads its entry
+  points from `knip.jsonc`, package.json scripts, `eslint.config.mjs` and the
+  vitest configs. Answer a finding by deleting the symbol, or by dropping its
+  `export` when its own file still uses it. An export only a test imports
+  counts as used: leave it exported.
+- **Silence a false positive only in `knip.jsonc`, with a `//` comment above
+  the entry naming what knip can't see** (a path string, a `--import`
+  preload, a tool that reads the file). Use the narrowest key: `entry` for a
+  file loaded by path, `ignoreFiles` for a file nothing imports by design.
+  The file is JSONC because knip's schema rejects a `"//"` key.
+- **`pnpm knip --production` is an audit, not a gate.** It drops the tests,
+  so every test seam shows up. The `!` entries in `knip.jsonc` are its roots;
+  the default run's two "Remove redundant entry pattern" hints are expected.
 
 ## Testing
 

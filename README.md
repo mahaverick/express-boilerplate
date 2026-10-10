@@ -110,6 +110,7 @@ refuses a non-JSON body with 415. See
 | `pnpm lint`                         | `eslint .`, then `tsc` over `src/` and `tests/` (`tsconfig.typecheck.json`).                |
 | `pnpm lint:fix`                     | `eslint . --fix`.                                                                           |
 | `pnpm lint:docs`                    | History phrasing and broken links in docs; code citing a missing doc.                       |
+| `pnpm knip`                         | Unused files, exports, types and dependencies (`knip.jsonc`).                               |
 | `pnpm format` / `pnpm format:check` | Prettier over the whole repo.                                                               |
 | `pnpm test`                         | `vitest run`. Needs the compose stack.                                                      |
 | `pnpm test:watch`                   | `vitest watch`.                                                                             |

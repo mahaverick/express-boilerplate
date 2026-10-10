@@ -39,6 +39,9 @@ jobs:
         run: pnpm format:check
       - name: Docs check
         run: pnpm lint:docs
+      - name: Unused code check
+        # Unused files, exports, types and dependencies; config in knip.jsonc.
+        run: pnpm knip
       - name: Reject domain leakage
         # Fails on any term from .github/domain-terms.txt (one extended regex
         # per line) in any tracked file except that one. Scanning `git ls-files`
