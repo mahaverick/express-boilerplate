@@ -191,11 +191,6 @@ type VariantsOf<E, K> = E extends { key: K; variants: readonly (infer V)[] } ? V
  */
 export type VariantOf<K extends MultivariateFlagKey> = VariantsOf<RegisteredFlag, K>
 
-/**
- * The value type of one flag: its variant union, or boolean.
- */
-export type FlagValue<K extends FlagKey> = K extends MultivariateFlagKey ? VariantOf<K> : boolean
-
 const ENTRIES_BY_KEY: ReadonlyMap<string, FlagEntry> = new Map(
   FLAGS.map((entry): [string, FlagEntry] => [entry.key, entry])
 )
