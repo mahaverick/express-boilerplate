@@ -43,7 +43,7 @@ import { denySession, isSessionDenied } from '@/services/session-denylist.servic
 import {
   issueRefreshToken,
   revokeOtherSessions,
-  revokeSession,
+  revokeRefreshToken,
   signAccessToken,
 } from '@/services/session.service'
 import { startNotificationWorker } from '@/workers/notification.worker'
@@ -441,26 +441,26 @@ describe('GET /api/v1/notifications/stream', () => {
   }
 
   /**
-   * Open an authenticated SSE stream for a brand-new user, capturing the
-   * session id its token was minted with — unlike `createAuthenticatedUser`,
-   * whose `signAccessToken(user, randomUUID())` throws its session id away,
-   * a caller here can revoke this exact session afterward.
-   * @returns The opened connection, its user id, and its session id.
+   * Open an authenticated SSE stream for a brand-new user's new session,
+   * keeping that session's refresh token — unlike `createAuthenticatedUser`,
+   * whose `signAccessToken(user, randomUUID())` has no refresh row, a caller
+   * here can revoke this exact session afterward, as logout does.
+   * @returns The opened connection, its user id, and its session's raw refresh token.
    */
   async function openStreamForNewSession(): Promise<{
     stream: SseConnection
     userId: string
-    sessionId: string
+    refreshToken: string
   }> {
     const user = await userRepository.create({ email: uniqueEmail() })
     createdUserIds.push(user.id)
-    const sessionId = randomUUID()
-    const token = signAccessToken(user, sessionId)
+    const issued = await issueRefreshToken(user.id, randomUUID())
+    const token = signAccessToken(user, issued.sessionId)
 
     const stream = openStream({ header: `Bearer ${token}` })
     await stream.waitForResponse()
 
-    return { stream, userId: user.id, sessionId }
+    return { stream, userId: user.id, refreshToken: issued.raw }
   }
 
   it('delivers a tenant invitation, via the notification worker, to the invitee’s open stream', async () => {
@@ -889,12 +889,12 @@ describe('GET /api/v1/notifications/stream', () => {
    * connect.
    */
   it('closes an open stream once its session is revoked', async () => {
-    const { stream, userId, sessionId } = await openStreamForNewSession()
+    const { stream, userId, refreshToken } = await openStreamForNewSession()
 
     // Alive first, or the assertion below proves nothing: the first frame to arrive is always a heartbeat.
     await expect(stream.nextFrame()).resolves.toBeDefined()
 
-    await revokeSession(sessionId)
+    await revokeRefreshToken(refreshToken)
 
     // Within one heartbeat, not immediately: the check rides the existing interval rather than adding a second timer.
     await expect(stream.closed(getEnv().SSE_HEARTBEAT_INTERVAL_MS * 2)).resolves.toBe(true)
@@ -945,7 +945,7 @@ describe('GET /api/v1/notifications/stream', () => {
     const sessionId = randomUUID()
     const token = signAccessToken(user, sessionId)
 
-    // denySession directly, not revokeSession: this test is about requireAuth's own denylist read, not about revocation writing that entry.
+    // denySession directly, not revokeRefreshToken: this test is about requireAuth's own denylist read, not about revocation writing that entry.
     await denySession(sessionId)
 
     const connection = openStream({ header: `Bearer ${token}` })

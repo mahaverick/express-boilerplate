@@ -492,10 +492,9 @@ async function rotateUnderUserLock(
  * revoke in between. A session killed by reuse or by its absolute lifetime
  * is revoked after that commit, under the user row lock, then denied.
  * Logout, those kills, the Google account claim and password writes lock the
- * row FOR NO KEY UPDATE before their in-transaction revoke (`revokeSession`
- * and `revokeAllSessions`' first pass take no lock), so a rotation either
- * commits first and its new token is revoked, or waits and finds the
- * presented token revoked.
+ * row FOR NO KEY UPDATE before their in-transaction revoke (`revokeAllSessions`'
+ * first pass takes no lock), so a rotation either commits first and its new
+ * token is revoked, or waits and finds the presented token revoked.
  * @param raw - The raw refresh token presented by the client.
  * @returns The new raw token to hand to the client, and its metadata.
  * @throws {HttpError} 401, when the token is unknown, already used outside the grace window, expired, or belongs to a session past its absolute lifetime.
@@ -514,20 +513,6 @@ export async function rotateRefreshToken(raw: string): Promise<IssuedRefreshToke
     await revokeSessionUnderUserLock(presented.userId, outcome.killSessionId)
   }
   throw new HttpError(outcome.message, 401)
-}
-
-/**
- * Revoke every live refresh token in one session and deny its access
- * tokens (best-effort — see `denySession`), given only the session id.
- * It takes no user row lock, so a rotation of that session in flight can
- * outlive it. The application's own paths (logout, reuse and the absolute
- * lifetime) go through the locked `revokeSessionUnderUserLock`.
- * @param sessionId - The session (rotation-chain) id to revoke.
- * @returns Resolves once every token in the session is revoked and its access tokens are denied, best-effort.
- */
-export async function revokeSession(sessionId: string): Promise<void> {
-  await userTokenRepository.revokeAllForSession(sessionId)
-  await denySession(sessionId)
 }
 
 /**

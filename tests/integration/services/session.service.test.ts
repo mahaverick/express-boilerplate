@@ -21,7 +21,7 @@ import {
   issueRefreshToken,
   issueToken,
   revokeAllSessions,
-  revokeSession,
+  revokeRefreshToken,
   rotateRefreshToken,
   signAccessToken,
   verifyAccessToken,
@@ -409,14 +409,14 @@ describe('refresh token issuance, rotation, and revocation', () => {
     expect(String(rows[0]?.session_started_at)).toBe(String(before?.session_started_at))
   })
 
-  it('revokeSession revokes every token in that session, and none in another', async () => {
+  it('revokeRefreshToken revokes every token in that session, and none in another', async () => {
     const userId = await createUser()
     const sessionId = randomUUID()
     const otherSessionId = randomUUID()
     const issued = await issueRefreshToken(userId, sessionId)
     const other = await issueRefreshToken(userId, otherSessionId)
 
-    await revokeSession(sessionId)
+    await revokeRefreshToken(issued.raw)
 
     await expect(rotateRefreshToken(issued.raw)).rejects.toMatchObject({ statusCode: 401 })
     const rotatedOther = await rotateRefreshToken(other.raw)
@@ -620,14 +620,14 @@ describe('revocation denies the revoked sessions (session.service owns the denyl
     return user.id
   }
 
-  it('revokeSession denies that session, and no other', async () => {
+  it('revokeRefreshToken denies that session, and no other', async () => {
     const userId = await createUser()
     const revoked = randomUUID()
     const untouched = randomUUID()
-    await issueRefreshToken(userId, revoked)
+    const issued = await issueRefreshToken(userId, revoked)
     await issueRefreshToken(userId, untouched)
 
-    await revokeSession(revoked)
+    await revokeRefreshToken(issued.raw)
 
     expect(await isSessionDenied(revoked)).toBe(true)
     expect(await isSessionDenied(untouched)).toBe(false)
@@ -687,14 +687,14 @@ describe('revocation denies the revoked sessions (session.service owns the denyl
   it('denies only after the database revocation: a failed revoke denies nothing', async () => {
     const userId = await createUser()
     const sessionId = randomUUID()
-    await issueRefreshToken(userId, sessionId)
+    const issued = await issueRefreshToken(userId, sessionId)
 
     await withMutatedMethod(
       UserTokenRepository.prototype,
       'revokeAllForSession',
       () => Promise.reject(new Error('database down')),
       async () => {
-        await expect(revokeSession(sessionId)).rejects.toThrow('database down')
+        await expect(revokeRefreshToken(issued.raw)).rejects.toThrow('database down')
       }
     )
 
