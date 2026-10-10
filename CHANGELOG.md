@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.0](https://github.com/mahaverick/express-boilerplate/compare/v2.0.4...v2.1.0) (2026-10-10)
+
+
+### Features
+
+* **tenants:** member_not_found code and the platform members' active flag ([#100](https://github.com/mahaverick/express-boilerplate/issues/100)) ([6276f89](https://github.com/mahaverick/express-boilerplate/commit/6276f89b809e1530747c2207ce66c52e59078c8e))
+
 ## [2.0.4](https://github.com/mahaverick/express-boilerplate/compare/v2.0.3...v2.0.4) (2026-10-09)
 
 
