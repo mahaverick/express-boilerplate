@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.0.1](https://github.com/mahaverick/express-boilerplate/compare/v3.0.0...v3.0.1) (2026-10-10)
+
+
+### Bug Fixes
+
+* **errors:** redact a key's value after a path, query or fragment placeholder ([#104](https://github.com/mahaverick/express-boilerplate/issues/104)) ([ac72837](https://github.com/mahaverick/express-boilerplate/commit/ac728374c0f8ec8ae0736e53f51a9a499d72ea6e))
+
 ## [3.0.0](https://github.com/mahaverick/express-boilerplate/compare/v2.1.0...v3.0.0) (2026-10-10)
 
 
