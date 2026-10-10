@@ -22,7 +22,7 @@ import type { EmailJobData } from '@/jobs/email.job'
 import { AuthProviderRepository } from '@/repositories/auth-provider.repository'
 import { UserRepository } from '@/repositories/user.repository'
 import { sql } from '@/services/database.service'
-import { findOrCreateByGoogle } from '@/services/google-auth.service'
+import { completeGoogleSignIn } from '@/services/google-auth.service'
 import { closeQueue, getEmailQueue, getNotificationQueue } from '@/services/queue.service'
 import { getRedis, redisKey } from '@/services/redis.service'
 import { issueToken } from '@/services/session.service'
@@ -49,7 +49,7 @@ const REFRESH_TOKEN_COOKIE_NAME = testRefreshCookie().name
  * A Google profile claiming an address Google has not verified: the squatter's identity.
  * @param id - Google's stable profile id.
  * @param email - The address the squatter claims.
- * @returns A fixture shaped like what `passthroughGoogleProfile` hands `findOrCreateByGoogle`.
+ * @returns A fixture shaped like what `passthroughGoogleProfile` hands `completeGoogleSignIn`.
  */
 function unverifiedGoogleProfile(id: string, email: string): GoogleProfile {
   const nowSeconds = Math.floor(Date.now() / 1000)
@@ -570,7 +570,7 @@ describe('POST /api/v1/auth/reset-password', () => {
   })
 
   /**
-   * Seeded directly: findOrCreateByGoogle rejects an unverified
+   * Seeded directly: a Google sign-in rejects an unverified
    * Google email outright (403 email_not_verified), so seedUser plus
    * direct repository calls are what construct this state for the
    * test.
@@ -600,7 +600,7 @@ describe('POST /api/v1/auth/reset-password', () => {
     const providers = await authProviderRepository.findByUser(user.id)
     expect(providers.map((row) => row.provider)).toEqual(['email'])
     await expect(
-      findOrCreateByGoogle(unverifiedGoogleProfile(squatterGoogleId, email))
+      completeGoogleSignIn(unverifiedGoogleProfile(squatterGoogleId, email))
     ).rejects.toMatchObject({ statusCode: 403, code: 'email_not_verified' })
   })
 

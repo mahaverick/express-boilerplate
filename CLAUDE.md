@@ -274,7 +274,7 @@ uuid))` on every column,** as `errors-query.service.ts` does: per-column
   `'email'` row; Google users get `'email'` and `'google'` rows. A user with
   `passwordHash: null` is federated-only.
 - **An email match needs Google's verification, and a never-verified local
-  account is taken over** (`findOrCreateByGoogle`, `google-auth.service.ts`).
+  account is taken over** (`resolveGoogleUser`, `google-auth.service.ts`).
   A Google identity is first looked up by `(google, profile.id)`. Failing
   that, an address Google has not verified never links to an existing account
   and never creates one (403 `email_not_verified`). A Google-verified address

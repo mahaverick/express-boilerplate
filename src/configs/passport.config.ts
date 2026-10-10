@@ -36,7 +36,7 @@ export function isGoogleOAuthEnabled(): boolean {
  * The Google strategy's verify function: a deliberate pass-through.
  *
  * No database lookup: the callback route's account-linking policy
- * (`findOrCreateByGoogle`, google-auth.service.ts) needs the raw profile,
+ * (`resolveGoogleUser`, google-auth.service.ts) needs the raw profile,
  * which reaches that route's custom `passport.authenticate` callback. The
  * profile never becomes `request.user`: the callback authenticates with
  * `session: false`, so Passport never calls `req.login()` with it.

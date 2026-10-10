@@ -23,7 +23,7 @@ import { db, type DbExecutor } from '@/services/database.service'
 export class AuthProviderRepository {
   /**
    * Find the row for one external identity within one provider's
-   * namespace — the lookup google-auth.service's findOrCreateByGoogle makes
+   * namespace — the lookup google-auth.service's resolveGoogleUser makes
    * first, before deciding whether to create a new link or a new user.
    * @param provider - Which auth method to look up.
    * @param providerId - The external identity within that provider's namespace (an email address for `'email'`, Google's profile id for `'google'`).
