@@ -11,7 +11,7 @@ import { settle } from './timing'
  * How long a caller of a stalled Redis may take: well past
  * `REDIS_REQUEST_DEADLINE_MS`, well short of anything that hangs.
  */
-export const STALL_ANSWER_BOUND_MS = REDIS_REQUEST_DEADLINE_MS * 5
+const STALL_ANSWER_BOUND_MS = REDIS_REQUEST_DEADLINE_MS * 5
 
 /**
  * A Redis command on a stalled server.

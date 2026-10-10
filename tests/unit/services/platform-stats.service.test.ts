@@ -1,5 +1,16 @@
-import { describe, expect, it } from 'vitest'
-import { emailMessageDays, utcDays } from '@/services/platform-stats.service'
+import { describe, expect, it, vi } from 'vitest'
+import { emailMessageDays, getPlatformStats, utcDays } from '@/services/platform-stats.service'
+
+vi.mock('@/repositories/platform-stats.repository', () => ({
+  PlatformStatsRepository: class {
+    totals = () => Promise.resolve({ tenants: 2, users: 3, staff: 1 })
+    signupsByDay = () => Promise.resolve({ users: [], tenants: [] })
+    emailMessagesByDay = () => Promise.resolve([])
+  },
+}))
+vi.mock('@/services/platform-onboarding.service', () => ({
+  countStuckTenants: () => Promise.resolve(0),
+}))
 
 describe('utcDays', () => {
   it('covers the last 7 UTC days, today included, oldest first', () => {
@@ -75,5 +86,18 @@ describe('emailMessageDays', () => {
         (day) => day.delivered
       )
     ).toEqual([0, 0])
+  })
+})
+
+describe('getPlatformStats', () => {
+  it('answers exactly range, totals, signups and emailMessages', async () => {
+    const stats = await getPlatformStats('7d', new Date('2026-09-29T12:00:00.000Z'))
+    expect(Object.keys(stats).toSorted((a, b) => a.localeCompare(b))).toEqual([
+      'emailMessages',
+      'range',
+      'signups',
+      'totals',
+    ])
+    expect(stats.totals).toEqual({ tenants: 2, users: 3, staff: 1, stuckTenants: 0 })
   })
 })

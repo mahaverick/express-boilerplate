@@ -13,10 +13,11 @@ import type { Profile as GoogleProfile } from 'passport-google-oauth20'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { createApp as CreateApp } from '@/app'
 import { GOOGLE_STRATEGY_NAME } from '@/constants/auth.constants'
+import type { User } from '@/database/models/user.model'
 import type { AuthProviderRepository as AuthProviderRepositoryClass } from '@/repositories/auth-provider.repository'
 import type { UserRepository as UserRepositoryClass } from '@/repositories/user.repository'
 import type { sql as SqlType } from '@/services/database.service'
-import type { findOrCreateByGoogle as FindOrCreateByGoogleType } from '@/services/google-auth.service'
+import type { completeGoogleSignIn as CompleteGoogleSignInType } from '@/services/google-auth.service'
 import type { issueRefreshToken as IssueRefreshTokenType } from '@/services/session.service'
 import { withMutatedMethod } from '../../helpers/mutate'
 import { fakeQueryError, LEAKED_PARAM, loggedText } from '../../helpers/query-error'
@@ -49,9 +50,9 @@ function uniqueEmail(): string {
 /**
  * Build a fixture Google profile shaped exactly like what
  * `passthroughGoogleProfile` (passport.config.ts) hands `done()` — the raw
- * value `findOrCreateByGoogle` (google-auth.service.ts) receives, with none of
+ * value `completeGoogleSignIn` (google-auth.service.ts) receives, with none of
  * this repo's own account-linking logic run yet. Every field
- * `findOrCreateByGoogle` actually reads (`id`, `emails[0].value`,
+ * `resolveGoogleUser` actually reads (`id`, `emails[0].value`,
  * `emails[0].verified`, `_json.email_verified`) is controllable via
  * `overrides`; every other field is a plausible constant, since nothing
  * under test reads it.
@@ -112,7 +113,7 @@ function googleProfile(
  * `passport-google-oauth20` itself.
  *
  * Exists specifically to drive `handleGoogleCallback`'s success path
- * over real HTTP, which neither the `findOrCreateByGoogle` suite (calls
+ * over real HTTP, which neither the account-linking suite (calls
  * the function directly, never touches the route, the cookie, or
  * `passport.authenticate`'s own plumbing) nor the "no live OAuth
  * attempt" tests above (deliberately drive the failure path) can reach
@@ -168,7 +169,7 @@ class FakeGoogleSuccessStrategy implements passport.Strategy {
  */
 describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
   let app: ReturnType<typeof CreateApp>
-  let findOrCreateByGoogle: typeof FindOrCreateByGoogleType
+  let completeGoogleSignIn: typeof CompleteGoogleSignInType
   let userRepository: InstanceType<typeof UserRepositoryClass>
   let authProviderRepository: InstanceType<typeof AuthProviderRepositoryClass>
   let sql: typeof SqlType
@@ -204,7 +205,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
     app = createApp()
 
     const googleAuthService = await import('@/services/google-auth.service')
-    findOrCreateByGoogle = googleAuthService.findOrCreateByGoogle
+    completeGoogleSignIn = googleAuthService.completeGoogleSignIn
 
     const { UserRepository } = await import('@/repositories/user.repository')
     userRepository = new UserRepository()
@@ -229,7 +230,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
   })
 
   /**
-   * Every user `findOrCreateByGoogle` creates or seeds below is torn
+   * Every user `completeGoogleSignIn` creates or seeds below is torn
    * down here. Deleting the user cascades to its `auth_providers` rows
    * (`onDelete: 'cascade'`, auth-provider.model.ts), so nothing
    * separately deletes those.
@@ -241,6 +242,20 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
     await sql`delete from users where id = any(${createdIds})`
     createdIds.length = 0
   })
+
+  /**
+   * Sign in through `completeGoogleSignIn`, the callback's own entry point,
+   * and read back the user it resolved, as committed.
+   * @param profile - The Google profile the callback would receive.
+   * @returns The resolved user, tracked for cleanup.
+   */
+  async function signInWithGoogle(profile: GoogleProfile): Promise<User> {
+    const issued = await completeGoogleSignIn(profile)
+    createdIds.push(issued.userId)
+    const user = await userRepository.findById(issued.userId)
+    if (!user) throw new Error('completeGoogleSignIn issued a session for no live user')
+    return user
+  }
 
   it('responds with a 302 redirect', async () => {
     const response = await request(app).get('/api/v1/auth/google')
@@ -301,7 +316,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
    * `passport.initialize()`, `handleGoogleCallback`) is wired correctly
    * end to end; the account-linking policy behind a successful callback
    * is exercised directly, against the real database, by the
-   * `findOrCreateByGoogle` suite below.
+   * account-linking suite below.
    */
   describe('GET /api/v1/auth/google/callback', () => {
     it('redirects to Google when hit with no query parameters at all (indistinguishable from a fresh /google request)', async () => {
@@ -453,13 +468,12 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
     })
   })
 
-  describe('findOrCreateByGoogle (google-auth.service.ts)', () => {
+  describe('Google account linking (completeGoogleSignIn, google-auth.service.ts)', () => {
     it('creates a new user, an email provider, and a google provider, with emailVerifiedAt set, when Google verified the email', async () => {
       const email = uniqueEmail()
       const profile = googleProfile({ email, emailVerified: true })
 
-      const user = await findOrCreateByGoogle(profile)
-      createdIds.push(user.id)
+      const user = await signInWithGoogle(profile)
 
       expect(user.email.toLowerCase()).toBe(email.toLowerCase())
       expect(user.passwordHash).toBeNull()
@@ -482,9 +496,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
 
       let outcome: unknown
       try {
-        const user = await findOrCreateByGoogle(profile)
-        createdIds.push(user.id)
-        outcome = user
+        outcome = await signInWithGoogle(profile)
       } catch (error) {
         outcome = error
       }
@@ -496,8 +508,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
     it('treats the email as verified when only _json.email_verified says so (the two fields disagreeing)', async () => {
       const profile = googleProfile({ emailVerified: false, jsonEmailVerified: true })
 
-      const user = await findOrCreateByGoogle(profile)
-      createdIds.push(user.id)
+      const user = await signInWithGoogle(profile)
 
       expect(user.emailVerifiedAt).not.toBeNull()
     })
@@ -508,7 +519,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
       createdIds.push(existing.id)
 
       const profile = googleProfile({ email, emailVerified: true })
-      const user = await findOrCreateByGoogle(profile)
+      const user = await signInWithGoogle(profile)
 
       expect(user.id).toBe(existing.id)
       const link = await authProviderRepository.findByProviderAndId('google', profile.id)
@@ -526,7 +537,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
       const squatterSession = await issueRefreshToken(existing.id, randomUUID())
 
       const profile = googleProfile({ email, emailVerified: true })
-      const user = await findOrCreateByGoogle(profile)
+      const user = await signInWithGoogle(profile)
 
       expect(user.id).toBe(existing.id)
       expect(user.passwordHash).toBeNull()
@@ -556,7 +567,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
       })
 
       const profile = googleProfile({ email, emailVerified: true })
-      const user = await findOrCreateByGoogle(profile)
+      const user = await signInWithGoogle(profile)
 
       expect(user.id).toBe(existing.id)
       // The squatter's identity no longer resolves to this account at all.
@@ -581,7 +592,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
       expect(alreadyVerified?.emailVerifiedAt).toBeInstanceOf(Date)
 
       const profile = googleProfile({ email, emailVerified: true })
-      const user = await findOrCreateByGoogle(profile)
+      const user = await signInWithGoogle(profile)
 
       expect(user.emailVerifiedAt?.getTime()).toBe(alreadyVerified?.emailVerifiedAt?.getTime())
     })
@@ -593,7 +604,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
 
       const profile = googleProfile({ email, emailVerified: false })
 
-      await expect(findOrCreateByGoogle(profile)).rejects.toMatchObject({
+      await expect(completeGoogleSignIn(profile)).rejects.toMatchObject({
         statusCode: 403,
         code: 'email_not_verified',
       })
@@ -606,10 +617,9 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
 
     it('returns the linked user directly on a returning Google sign-in, creating nothing new', async () => {
       const profile = googleProfile({ emailVerified: true })
-      const first = await findOrCreateByGoogle(profile)
-      createdIds.push(first.id)
+      const first = await signInWithGoogle(profile)
 
-      const second = await findOrCreateByGoogle(profile)
+      const second = await signInWithGoogle(profile)
 
       expect(second.id).toBe(first.id)
       const providers = await authProviderRepository.findByUser(first.id)
@@ -619,11 +629,10 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
     it('rejects (with a 4xx, not a 500) a returning Google sign-in whose linked user was soft-deleted', async () => {
       // Reachable, not theoretical: auth_providers rows survive a soft delete (only a hard delete cascades), so this is exactly the row findByProviderAndId still finds after softDelete runs.
       const profile = googleProfile({ emailVerified: true })
-      const user = await findOrCreateByGoogle(profile)
-      createdIds.push(user.id)
+      const user = await signInWithGoogle(profile)
       await userRepository.softDelete(user.id)
 
-      await expect(findOrCreateByGoogle(profile)).rejects.toMatchObject({
+      await expect(completeGoogleSignIn(profile)).rejects.toMatchObject({
         statusCode: 401,
         code: 'google_auth_failed',
       })
@@ -631,12 +640,10 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
 
     it("creates a fresh account for a soft-deleted user's email under a different Google identity", async () => {
       const email = uniqueEmail()
-      const deleted = await findOrCreateByGoogle(googleProfile({ email, emailVerified: true }))
-      createdIds.push(deleted.id)
+      const deleted = await signInWithGoogle(googleProfile({ email, emailVerified: true }))
       await userRepository.softDelete(deleted.id)
 
-      const fresh = await findOrCreateByGoogle(googleProfile({ email, emailVerified: true }))
-      createdIds.push(fresh.id)
+      const fresh = await signInWithGoogle(googleProfile({ email, emailVerified: true }))
 
       expect(fresh.id).not.toBe(deleted.id)
       const providers = await authProviderRepository.findByUser(fresh.id)
@@ -648,8 +655,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
     it("keeps a deleted user's Google identity off the account that re-registers the address", async () => {
       const email = uniqueEmail()
       const profile = googleProfile({ email, emailVerified: true })
-      const deleted = await findOrCreateByGoogle(profile)
-      createdIds.push(deleted.id)
+      const deleted = await signInWithGoogle(profile)
       await userRepository.softDelete(deleted.id)
 
       const registration = await request(app)
@@ -661,7 +667,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
       expect(registration.status).toBe(202)
       expect(fresh?.id).toBeDefined()
       expect(fresh?.id).not.toBe(deleted.id)
-      await expect(findOrCreateByGoogle(profile)).rejects.toMatchObject({
+      await expect(completeGoogleSignIn(profile)).rejects.toMatchObject({
         statusCode: 401,
         code: 'google_auth_failed',
       })
@@ -672,7 +678,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
     it('rejects a Google profile that carries no email at all', async () => {
       const profile = googleProfile({ includeEmails: false })
 
-      await expect(findOrCreateByGoogle(profile)).rejects.toMatchObject({
+      await expect(completeGoogleSignIn(profile)).rejects.toMatchObject({
         statusCode: 400,
         code: 'google_email_missing',
       })
@@ -684,7 +690,7 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
       createdIds.push(existing.id)
 
       const profile = googleProfile({ email: email.toUpperCase(), emailVerified: true })
-      const user = await findOrCreateByGoogle(profile)
+      const user = await signInWithGoogle(profile)
 
       expect(user.id).toBe(existing.id)
     })
@@ -692,7 +698,6 @@ describe('GET /api/v1/auth/google (Google OAuth configured)', () => {
 
   it('issues no session when the account is deactivated between lookup and issue', async () => {
     // completeGoogleSignIn re-reads the user under its row lock before issuing.
-    const { completeGoogleSignIn } = await import('@/services/google-auth.service')
     const { UserRepository: Users } = await import('@/repositories/user.repository')
     // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
     const realUpdate = Users.prototype.update

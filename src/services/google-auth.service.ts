@@ -79,7 +79,7 @@ export async function claimUnverifiedAccount(userId: string, googleId: string): 
   const { claimed, revokedSessionIds } = await withTransaction(async (tx) => {
     await userRepository.lockById(userId, 'no key update', tx)
 
-    // Cleared first, or findOrCreateByGoogle's first lookup would still resolve that other Google id here.
+    // Cleared first, or resolveGoogleUser's first lookup would still resolve that other Google id here.
     await authProviderRepository.deleteGoogleLinksExcept(userId, googleId, tx)
     await authProviderRepository.createIfAbsent(
       { userId, provider: 'google', providerId: googleId },
@@ -192,18 +192,6 @@ async function resolveGoogleUser(profile: GoogleProfile): Promise<ResolvedGoogle
 }
 
 /**
- * Resolve the user a Google Sign-In resolves to, linking or creating one
- * when needed (`resolveGoogleUser`).
- * @param profile - The raw Google profile.
- * @returns The existing, newly linked, or newly created user.
- * @throws {HttpError} 400 `google_email_missing`, 401 `google_auth_failed` (linked user deleted), 403 `email_not_verified`, or a database error.
- */
-export async function findOrCreateByGoogle(profile: GoogleProfile): Promise<User> {
-  const { user } = await resolveGoogleUser(profile)
-  return user
-}
-
-/**
  * Complete a Google Sign-In: resolve the user, refuse an inactive one, stamp
  * `lastLoggedInAt`, and issue a refresh token for a fresh session.
  * An address on PLATFORM_EMAIL_DOMAINS joins the platform tenant as viewer if it has not already.
@@ -219,7 +207,7 @@ export async function findOrCreateByGoogle(profile: GoogleProfile): Promise<User
  * active check (`assertSignInAllowed`); the controller redirects with
  * `error=MAINTENANCE_MODE`. A new account is still created first, as the
  * lookup does before any refusal.
- * @throws {HttpError} Any `findOrCreateByGoogle` error, 401 `google_auth_failed` for an inactive or deleted account, or 503 `MAINTENANCE_MODE`.
+ * @throws {HttpError} Any `resolveGoogleUser` error, 401 `google_auth_failed` for an inactive or deleted account, or 503 `MAINTENANCE_MODE`.
  */
 export async function completeGoogleSignIn(profile: GoogleProfile): Promise<IssuedRefreshToken> {
   const { user, isNew } = await resolveGoogleUser(profile)

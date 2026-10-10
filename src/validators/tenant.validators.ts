@@ -179,11 +179,6 @@ export const inviteMemberSchema = z.object({
 })
 
 /**
- * The validated shape of a `POST /api/v1/tenants/:slug/invitations` body.
- */
-export type InviteMemberInput = z.infer<typeof inviteMemberSchema>
-
-/**
  * The `:id` path parameter of `/tenants/:slug/invitations/:id` routes.
  */
 export const invitationIdSchema = z.object({
@@ -199,12 +194,6 @@ export const invitationIdSchema = z.object({
 export const updateMemberRoleSchema = z.object({
   role: z.enum(MEMBERSHIP_ROLES),
 })
-
-/**
- * The validated shape of a `PATCH /api/v1/tenants/:slug/members/:userId`
- * request body.
- */
-export type UpdateMemberRoleInput = z.infer<typeof updateMemberRoleSchema>
 
 /**
  * What one walk over a parsed JSON value finds.

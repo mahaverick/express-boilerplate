@@ -500,7 +500,7 @@ describe('POST /api/v1/auth/register and /login', () => {
     })
 
     it('creates an email auth_providers row at registration, keyed on the lowercased address', async () => {
-      // register's row must use the lowercased address as providerId, matching findOrCreateByGoogle's own 'email' row: auth_providers_provider_provider_id_unique has no case-folding of its own, so a raw-cased row here could let the same address collide inconsistently between the two creation paths.
+      // register's row must use the lowercased address as providerId, matching resolveGoogleUser's own 'email' row: auth_providers_provider_provider_id_unique has no case-folding of its own, so a raw-cased row here could let the same address collide inconsistently between the two creation paths.
       const email = uniqueEmail()
       const mixedCase = `${email.slice(0, 1).toUpperCase()}${email.slice(1)}`.replace(
         '@example.test',

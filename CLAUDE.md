@@ -26,7 +26,9 @@ rather than repeating them.
   rules go in `assertEnvConsistent` (`env-consistency.config.ts`), not in the
   schema: an object-level `.refine()` breaks `getDatabaseUrl()`'s `.pick()`.
 - **Don't add a dependency check to `/health`.** It is liveness; the deep check
-  is `/health/ready`. See [ARCHITECTURE.md](ARCHITECTURE.md#health-checks).
+  is `/health/ready`, and a check added there goes through
+  `createReadinessProbe` (`readiness.service.ts`), which bounds it. See
+  [ARCHITECTURE.md](ARCHITECTURE.md#health-checks).
 - **The compose ports 5433/6380 are deliberate.**
   `tests/unit/connection-target.test.ts` guards them by reading the committed
   `docker-compose.yml` and `.env.test`, never by asserting on `getEnv()` at
@@ -272,7 +274,7 @@ uuid))` on every column,** as `errors-query.service.ts` does: per-column
   `'email'` row; Google users get `'email'` and `'google'` rows. A user with
   `passwordHash: null` is federated-only.
 - **An email match needs Google's verification, and a never-verified local
-  account is taken over** (`findOrCreateByGoogle`, `google-auth.service.ts`).
+  account is taken over** (`resolveGoogleUser`, `google-auth.service.ts`).
   A Google identity is first looked up by `(google, profile.id)`. Failing
   that, an address Google has not verified never links to an existing account
   and never creates one (403 `email_not_verified`). A Google-verified address
@@ -297,12 +299,10 @@ uuid))` on every column,** as `errors-query.service.ts` does: per-column
   `refreshCookieSpec`** (`auth.constants.ts`); don't write them anywhere else.
   A browser silently drops a `__Host-` cookie with a `Domain` or a path other
   than `/`, which looks like a logout. The controller reads the current cookie
-  only through `currentRefreshCookie(env)`. Under `COOKIE_SECURE` the legacy
-  `refreshToken` cookie (`LEGACY_REFRESH_TOKEN_COOKIE_NAME`) is never
-  redeemed: a sibling subdomain or a plain-http attacker can plant it. Logout
-  revokes it, a refresh that carried no current cookie revokes it and answers
-  401, and a login, a successful refresh, a Google sign-in or a logout clears it when presented;
-  a refresh answered 401 clears only the cookie name it read.
+  only through `currentRefreshCookie(env)`. Under `COOKIE_SECURE` an
+  unprefixed `refreshToken` cookie is never read, revoked or cleared: a
+  sibling subdomain or a plain-http attacker can plant it, so don't add a
+  fallback to it. A refresh answered 401 clears only the cookie name it read.
 - **`COOKIE_DOMAIN` goes on the refresh-cookie set, its clear, and the OAuth
   session cookie.** A clear with a different domain leaves the cookie behind.
   After a domain change the browser sends two cookies of one name, oldest
@@ -449,7 +449,7 @@ otel-collector`.** It is bind-mounted, and `docker compose up -d` doesn't
 ## Git hooks and CI
 
 - **A change is done when `pnpm lint`, `pnpm lint:docs`, `pnpm format:check`,
-  `pnpm test:coverage` and `pnpm build` all exit 0.** See
+  `pnpm knip`, `pnpm test:coverage` and `pnpm build` all exit 0.** See
   [CONTRIBUTING.md](CONTRIBUTING.md#before-you-open-a-pr).
 - **Pre-commit's ~4.6 s is deliberate.** Don't drop type-aware lint to speed
   it up; `eslint --cache` doesn't help, since lint-staged passes only changed
@@ -472,6 +472,22 @@ otel-collector`.** It is bind-mounted, and `docker compose up -d` doesn't
 - **If the release App key is revoked, fix it; don't switch `release.yml` to
   `GITHUB_TOKEN`,** whose PRs and tags start no workflow. See
   [CONTRIBUTING.md](CONTRIBUTING.md#releases).
+
+## Unused code (knip)
+
+- **`pnpm knip` must exit 0; CI runs it beside lint.** It reads its entry
+  points from `knip.jsonc`, package.json scripts, `eslint.config.mjs` and the
+  vitest configs. Answer a finding by deleting the symbol, or by dropping its
+  `export` when its own file still uses it. An export only a test imports
+  counts as used: leave it exported.
+- **Silence a false positive only in `knip.jsonc`, with a `//` comment above
+  the entry naming what knip can't see** (a path string, a `--import`
+  preload, a tool that reads the file). Use the narrowest key: `entry` for a
+  file loaded by path, `ignoreFiles` for a file nothing imports by design.
+  The file is JSONC because knip's schema rejects a `"//"` key.
+- **`pnpm knip --production` is an audit, not a gate.** It drops the tests,
+  so every test seam shows up. The `!` entries in `knip.jsonc` are its roots;
+  the default run's two "Remove redundant entry pattern" hints are expected.
 
 ## Testing
 

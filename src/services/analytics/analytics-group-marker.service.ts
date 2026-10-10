@@ -22,7 +22,7 @@ const tenantRepository = new TenantRepository()
  * time, or for a purged tenant a null name (which clears the property in
  * PostHog) and the status `purged`.
  */
-export type TenantGroupSet =
+type TenantGroupSet =
   { name: string; status: string; created_at: string } | { name: null; status: 'purged' }
 
 /**

@@ -37,23 +37,10 @@ export const PRODUCT_EVENTS = [
 ] as const
 
 /**
- * One of `PRODUCT_EVENTS`.
- */
-export type ProductEventName = (typeof PRODUCT_EVENTS)[number]
-
-/**
  * The prefix of every email tracking event: `email_` then the
  * `email_events.type`.
  */
 export const EMAIL_EVENT_PREFIX = 'email_'
-
-/**
- * Event names both a product (or email) event and a mapped audit action may
- * use. `onboarding_step_completed` is deliberate: a staff completion is
- * audited and forwards from the audit log, every other completion is a
- * product event, and both carry the same properties.
- */
-export const ALLOWED_EVENT_NAME_OVERLAPS = ['onboarding_step_completed'] as const
 
 /**
  * Property keys never sent to PostHog, whatever their value: a backstop

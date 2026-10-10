@@ -22,7 +22,7 @@ import { userModel } from '@/database/models/user.model'
  * `user_tokens_purpose_check` constraint are both built from it, so the
  * type and the constraint that stops a raw SQL insert cannot drift.
  */
-export const TOKEN_PURPOSES = ['refresh', 'email_verification', 'password_reset'] as const
+const TOKEN_PURPOSES = ['refresh', 'email_verification', 'password_reset'] as const
 
 /**
  * `TOKEN_PURPOSES` as a literal SQL value list, outside the CHECK's template

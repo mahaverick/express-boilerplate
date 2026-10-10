@@ -6,8 +6,6 @@
 import { and, count, eq, gte, isNull, lt, ne, sql, type SQL } from 'drizzle-orm'
 import type { AnyPgColumn } from 'drizzle-orm/pg-core'
 import type { EmailMessageStatus } from '@/constants/email.constants'
-import type { EmailLogStatus } from '@/database/models/email-log.model'
-import { emailLogModel } from '@/database/models/email-log.model'
 import { emailMessageModel } from '@/database/models/email-message.model'
 import { tenantModel } from '@/database/models/tenant.model'
 import { userMembershipModel } from '@/database/models/user-membership.model'
@@ -115,29 +113,6 @@ export class PlatformStatsRepository {
       .groupBy(tenantDay)
       .orderBy(tenantDay)
     return { users, tenants }
-  }
-
-  /**
-   * Email delivery attempts logged per UTC day and status in `[from, to)`.
-   * `email_logs` holds one row per attempt (up to five per mail), so a mail
-   * retried after a failure and then sent counts once as failed and once as sent.
-   * @param from - Inclusive start, a UTC midnight.
-   * @param to - Exclusive end, a UTC midnight.
-   * @param executor - Where to run the query. Defaults to the pool.
-   * @returns One row per day and status that has any.
-   */
-  async emailsByDay(
-    from: Date,
-    to: Date,
-    executor: DbExecutor = db
-  ): Promise<{ day: string; status: EmailLogStatus; count: number }[]> {
-    const day = utcDay(emailLogModel.createdAt)
-    return executor
-      .select({ day, status: emailLogModel.status, count: count() })
-      .from(emailLogModel)
-      .where(and(gte(emailLogModel.createdAt, from), lt(emailLogModel.createdAt, to)))
-      .groupBy(day, emailLogModel.status)
-      .orderBy(day)
   }
 
   /**

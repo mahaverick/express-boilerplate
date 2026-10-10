@@ -12,7 +12,7 @@ const MAX_AUDIT_PAGE_SIZE = 100
 /**
  * The audit cursor's decoded shape: the last entry's time and id.
  */
-export const auditCursorSchema = z.object({ occurredAt: isoInstantField, id: z.uuid() }).strict()
+const auditCursorSchema = z.object({ occurredAt: isoInstantField, id: z.uuid() }).strict()
 
 const pageFields = {
   cursor: cursorField(auditCursorSchema).optional(),

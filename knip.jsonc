@@ -1,0 +1,29 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema-jsonc.json",
+  // knip's drizzle plugin executes drizzle.config.ts, which calls
+  // getDatabaseUrl() and fails without DATABASE_URL; the config is an entry below.
+  "drizzle": false,
+  // knip finds the rest from package.json scripts, eslint.config.mjs, the
+  // vitest configs and the dynamic imports in src/index.ts.
+  "entry": [
+    // Read by drizzle-kit, which the disabled plugin would have declared.
+    "drizzle.config.ts",
+    // A `--import` preload, named only as a string argument to the child
+    // process that tests/integration/process-fault.test.ts spawns.
+    "tests/helpers/process-fault-preload.ts",
+    // Production roots for `knip --production` (`!`); the default run reports
+    // the first two as redundant, since package.json scripts name them too.
+    "src/index.ts!",
+    "src/database/migrate.ts!",
+    "src/scripts/*.ts!",
+  ],
+  "project": ["src/**/*.ts!", "scripts/**", "tests/**/*.ts", "*.ts"],
+  "ignoreFiles": [
+    // Type declarations for the sibling .mjs: tsc reads them when a .ts file
+    // imports scripts/*.mjs, and nothing imports a .d.mts by name.
+    "scripts/*.d.mts",
+    // Committed lint violations: tests/unit/lint-gates.test.ts lints them by
+    // path to prove the cycle and layer-zone rules fire; nothing imports them.
+    "tests/fixtures/lint-*/**",
+  ],
+}

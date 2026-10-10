@@ -94,24 +94,24 @@ export const MAINTENANCE_REASON_PLACEHOLDER = '(See the audit log.)'
 /**
  * Error code: the message's template is not in this build's registry.
  */
-export const TEMPLATE_UNAVAILABLE_CODE = 'template_unavailable'
+const TEMPLATE_UNAVAILABLE_CODE = 'template_unavailable'
 
 /**
  * Error code: the message cannot be resent (a template with no resend
  * action, such as a security notice or an onboarding reminder, or a row
  * without the ids its action needs).
  */
-export const NOT_RESENDABLE_CODE = 'not_resendable'
+const NOT_RESENDABLE_CODE = 'not_resendable'
 
 /**
  * Error code: the recipient's address is suppressed.
  */
-export const RECIPIENT_SUPPRESSED_CODE = 'recipient_suppressed'
+const RECIPIENT_SUPPRESSED_CODE = 'recipient_suppressed'
 
 /**
  * Error code: the suppression was lifted already.
  */
-export const ALREADY_LIFTED_CODE = 'already_lifted'
+const ALREADY_LIFTED_CODE = 'already_lifted'
 
 const EMAIL_NOT_FOUND = 'Email not found'
 const SUPPRESSION_NOT_FOUND = 'Suppression not found'
@@ -136,7 +136,7 @@ const GROUP_OF_STATUS: ReadonlyMap<EmailMessageStatus, EmailMessageGroup> = new 
  * @param key - The stored `template_key`.
  * @returns True for one of EMAIL_TEMPLATE_KEYS.
  */
-export function isKnownTemplateKey(key: string): key is EmailTemplateKey {
+function isKnownTemplateKey(key: string): key is EmailTemplateKey {
   return (EMAIL_TEMPLATE_KEYS as readonly string[]).includes(key)
 }
 
@@ -260,7 +260,7 @@ export function canResendFor(
  * @param messages - The messages.
  * @returns The context.
  */
-export async function loadResendContext(
+async function loadResendContext(
   actor: Actor,
   messages: readonly PlatformEmailRecord[]
 ): Promise<ResendContext> {

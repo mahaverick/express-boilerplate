@@ -5,8 +5,7 @@
  * applies to it.
  */
 import { describe, expect, it } from 'vitest'
-// eslint-disable-next-line sonarjs/deprecation -- reads the old cookie name until the next major
-import { LEGACY_REFRESH_TOKEN_COOKIE_NAME, refreshCookieSpec } from '@/constants/auth.constants'
+import { refreshCookieSpec } from '@/constants/auth.constants'
 
 describe('refreshCookieSpec', () => {
   it('uses the plain name on the auth path when COOKIE_SECURE is false', () => {
@@ -39,10 +38,5 @@ describe('refreshCookieSpec', () => {
       path: '/api/v1/auth',
       domain: 'example.com',
     })
-  })
-
-  it('keeps the legacy name', () => {
-    // eslint-disable-next-line sonarjs/deprecation -- reads the old cookie name until the next major
-    expect(LEGACY_REFRESH_TOKEN_COOKIE_NAME).toBe('refreshToken')
   })
 })

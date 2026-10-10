@@ -69,7 +69,7 @@ sign-in links open there instead of at `WEB_URL`. See
 [A second frontend: Apex](ARCHITECTURE.md#a-second-frontend-apex).
 
 ```bash
-curl http://localhost:4040/health/ready   # {"status":"ready","checks":{...}}
+curl http://localhost:4040/health/ready   # {"status":"ready","checks":{...}}; 503 at its 500 ms deadline if a dependency is down or stalled
 ```
 
 ### Register and log in
@@ -110,6 +110,7 @@ refuses a non-JSON body with 415. See
 | `pnpm lint`                         | `eslint .`, then `tsc` over `src/` and `tests/` (`tsconfig.typecheck.json`).                |
 | `pnpm lint:fix`                     | `eslint . --fix`.                                                                           |
 | `pnpm lint:docs`                    | History phrasing and broken links in docs; code citing a missing doc.                       |
+| `pnpm knip`                         | Unused files, exports, types and dependencies (`knip.jsonc`).                               |
 | `pnpm format` / `pnpm format:check` | Prettier over the whole repo.                                                               |
 | `pnpm test`                         | `vitest run`. Needs the compose stack.                                                      |
 | `pnpm test:watch`                   | `vitest watch`.                                                                             |

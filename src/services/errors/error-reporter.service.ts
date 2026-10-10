@@ -48,11 +48,7 @@ import {
 import { scrubText } from '@/services/errors/error-scrubber.service'
 import { logger } from '@/services/logger.service'
 
-export type {
-  ErrorCapturePoint,
-  ErrorContext,
-  SpanError,
-} from '@/services/errors/error-event.service'
+export type { ErrorContext, SpanError } from '@/services/errors/error-event.service'
 
 const MINUTE_MS = 60_000
 

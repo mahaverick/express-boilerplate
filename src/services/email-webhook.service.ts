@@ -40,12 +40,12 @@ import type {
 /**
  * The error code of a request whose signature does not verify.
  */
-export const INVALID_SIGNATURE_CODE = 'INVALID_SIGNATURE'
+const INVALID_SIGNATURE_CODE = 'INVALID_SIGNATURE'
 
 /**
  * The error code of a verified request whose body is not JSON.
  */
-export const INVALID_PAYLOAD_CODE = 'INVALID_PAYLOAD'
+const INVALID_PAYLOAD_CODE = 'INVALID_PAYLOAD'
 
 const emailEventRepository = new EmailEventRepository()
 const emailMessageRepository = new EmailMessageRepository()

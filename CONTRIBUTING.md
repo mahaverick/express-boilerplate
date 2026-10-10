@@ -16,11 +16,12 @@ Run what CI runs:
 pnpm lint            # eslint + tsc --noEmit against tsconfig.typecheck.json
 pnpm lint:docs       # history phrasing, broken links and anchors in the docs
 pnpm format:check    # prettier over the repo, minus .prettierignore
+pnpm knip            # unused files, exports, types and dependencies
 pnpm test:coverage   # vitest, gated at 80% lines/functions/branches/statements
 pnpm build           # tsc + tsc-alias
 ```
 
-All five must exit 0; run `pnpm format` if `format:check` doesn't.
+All six must exit 0; run `pnpm format` if `format:check` doesn't.
 `pnpm lint` type-checks once, against `tsconfig.typecheck.json`, which extends
 `tsconfig.json` and widens its `include` to `tests/` and `drizzle.config.ts`.
 The two configs must stay separate: see [CLAUDE.md](CLAUDE.md#code-conventions).
@@ -80,9 +81,10 @@ These move together, or a gate below catches the one you missed:
    `Test with coverage gate`. CI compares keys and values in both directions;
    the only difference allowed is the port in `DATABASE_URL` and `REDIS_URL`,
    because CI's services publish the container-default ports.
-6. Renaming or removing a variable: add the old name to `REMOVED_ENV_NAMES`
-   (`src/configs/env-consistency.config.ts`), so that setting it refuses boot
-   with a message naming the new one.
+6. Renaming or removing a variable is a breaking change: the schema ignores a
+   name it does not declare, so an environment that still sets the old name
+   boots without it. Mark the commit `feat!:` and name the old and new
+   variables in its `BREAKING CHANGE:` footer.
 
 ## What CI checks, beyond `pnpm lint`/`test:coverage`/`build`
 
@@ -92,6 +94,8 @@ These move together, or a gate below catches the one you missed:
 - `pnpm lint:docs`: no history phrasing in the markdown or in `#` comments of
   config files, no broken relative link or anchor, and no code citing a doc
   that doesn't exist.
+- `pnpm knip`: no unused file, export, type or dependency. See
+  [CLAUDE.md](CLAUDE.md#unused-code-knip) for answering a finding.
 - `pnpm audit --prod --audit-level moderate`: fails on moderate, high or
   critical advisories in production dependencies.
 - `pnpm audit --audit-level critical` over every dependency, dev tooling

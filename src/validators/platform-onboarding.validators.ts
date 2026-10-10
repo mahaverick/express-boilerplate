@@ -25,7 +25,7 @@ export const STEP_NOT_FOUND_CODE = 'onboarding_step_not_found'
  * The onboarding list cursor's decoded shape: the last row's sort
  * timestamp (microsecond text) and id.
  */
-export const onboardingCursorSchema = z.strictObject({
+const onboardingCursorSchema = z.strictObject({
   sortAt: sortAtField,
   id: z.uuid(),
 })
@@ -36,11 +36,6 @@ export const onboardingCursorSchema = z.strictObject({
 export const onboardingFunnelQuerySchema = z.object({
   range: z.enum(ONBOARDING_RANGES).default('30d'),
 })
-
-/**
- * The validated funnel query.
- */
-export type OnboardingFunnelQuery = z.infer<typeof onboardingFunnelQuerySchema>
 
 /**
  * `GET /platform/onboarding/tenants` query string: one state (stuck unless

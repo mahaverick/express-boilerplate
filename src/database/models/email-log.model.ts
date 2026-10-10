@@ -15,7 +15,7 @@ import { emailMessageModel } from '@/database/models/email-message.model'
  * `email_logs_status_check` constraint are both built from it, so the type
  * and the constraint that stops a raw SQL insert cannot drift.
  */
-export const EMAIL_LOG_STATUSES = ['sent', 'failed'] as const
+const EMAIL_LOG_STATUSES = ['sent', 'failed'] as const
 
 /**
  * `EMAIL_LOG_STATUSES` as a literal SQL value list, outside the CHECK's

@@ -12,8 +12,3 @@ export const JobPriority = {
   normal: 5,
   low: 10,
 } as const
-
-/**
- * The set of valid `JobPriority` keys, e.g. `'critical' | 'high' | 'normal' | 'low'`.
- */
-export type JobPriorityName = keyof typeof JobPriority

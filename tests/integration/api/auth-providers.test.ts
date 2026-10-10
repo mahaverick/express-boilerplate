@@ -146,7 +146,7 @@ describe('GET /api/v1/auth/providers', () => {
 
   /**
    * A Google signup writes both an 'email' row and a 'google' row in
-   * one transaction (google-auth.service.ts's `findOrCreateByGoogle`),
+   * one transaction (google-auth.service.ts's `resolveGoogleUser`),
    * so the presence of an 'email' provider says nothing about whether
    * a password exists — an implementation that inferred `hasPassword`
    * from the provider list would report `true` for an account that

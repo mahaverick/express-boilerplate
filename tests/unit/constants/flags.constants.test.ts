@@ -17,7 +17,6 @@ import {
   type BooleanFlagKey,
   type FlagEntry,
   type FlagKey,
-  type FlagValue,
   type MultivariateFlagKey,
   type VariantOf,
 } from '@/constants/flags.constants'
@@ -166,15 +165,13 @@ describe('FLAGS', () => {
     expect(clientFlagsFor('apex')).toEqual([])
   })
 
-  it('derives the key, variant and value types from the entries', () => {
+  it('derives the key and variant types from the entries', () => {
     expectTypeOf<FlagKey>().toEqualTypeOf<'example_beta_page' | 'example_cta_experiment'>()
     expectTypeOf<BooleanFlagKey>().toEqualTypeOf<'example_beta_page'>()
     expectTypeOf<MultivariateFlagKey>().toEqualTypeOf<'example_cta_experiment'>()
     expectTypeOf<VariantOf<'example_cta_experiment'>>().toEqualTypeOf<'control' | 'bold'>()
-    expectTypeOf<FlagValue<'example_beta_page'>>().toEqualTypeOf<boolean>()
-    expectTypeOf<FlagValue<'example_cta_experiment'>>().toEqualTypeOf<'control' | 'bold'>()
     // @ts-expect-error an unregistered key is not a FlagKey
-    expectTypeOf<FlagValue<'not_registered'>>().toBeNever()
+    expectTypeOf<VariantOf<'not_registered'>>().toBeNever()
   })
 })
 

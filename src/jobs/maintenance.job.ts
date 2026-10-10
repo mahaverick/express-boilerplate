@@ -15,7 +15,7 @@ export const RETENTION_PURGE_JOB = 'retention-purge'
  * Options for every retention purge job. A run with a failed rule throws, and
  * the retries run it again: each rule is idempotent.
  */
-export const maintenanceJobDefaults: JobSchedulerTemplateOptions = {
+const maintenanceJobDefaults: JobSchedulerTemplateOptions = {
   attempts: 3,
   backoff: { type: 'exponential', delay: 60_000 },
   removeOnComplete: true,

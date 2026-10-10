@@ -247,7 +247,7 @@ async function lockActorAndTarget(
 /**
  * Error code: the change would leave the tenant with no owner.
  */
-export const LAST_OWNER_CODE = 'LAST_OWNER'
+const LAST_OWNER_CODE = 'LAST_OWNER'
 
 /**
  * Refuse a change that would take away the tenant's last live owner.

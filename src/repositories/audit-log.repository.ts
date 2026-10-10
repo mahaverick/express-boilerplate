@@ -25,7 +25,7 @@ export interface AuditLogCursor {
 /**
  * The actor's public identity, never `passwordHash`.
  */
-export interface AuditActorRow {
+interface AuditActorRow {
   id: string
   email: string
   firstName: string | null

@@ -38,7 +38,7 @@ export function toAuthenticatedUser(user: User): AuthenticatedUser {
  *
  * `AuthenticatedUser` plus `createdAt`.
  */
-export interface PublicUser extends AuthenticatedUser {
+interface PublicUser extends AuthenticatedUser {
   createdAt: Date
 }
 
@@ -47,7 +47,7 @@ export interface PublicUser extends AuthenticatedUser {
  * @param user - The full row read from or written to the database.
  * @returns The public projection of that row.
  */
-export function toPublicUser(user: User): PublicUser {
+function toPublicUser(user: User): PublicUser {
   return { ...toAuthenticatedUser(user), createdAt: user.createdAt }
 }
 

@@ -80,12 +80,12 @@ export const CONFIRMATION_MISMATCH_CODE = 'CONFIRMATION_MISMATCH'
 /**
  * What one maintenance mode does to a classified route.
  */
-export type MaintenanceRouteAccess = 'allow' | 'block'
+type MaintenanceRouteAccess = 'allow' | 'block'
 
 /**
  * An HTTP method a rule names; `*` is any method.
  */
-export type MaintenanceRuleMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | '*'
+type MaintenanceRuleMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | '*'
 
 /**
  * One route's classification. `path` is the full Express path template
@@ -354,20 +354,4 @@ export function maintenanceDecision(
     return { verdict: access === 'allow' ? 'allow' : READ_ONLY_MODE_CODE, rule }
   }
   return { verdict: rule?.full === 'allow' ? 'allow' : MAINTENANCE_MODE_CODE, rule }
-}
-
-/**
- * What the gate does with one request in one mode (`maintenanceDecision`
- * without the rule).
- * @param mode - This replica's mode.
- * @param method - The request method.
- * @param path - The request path, without the query string.
- * @returns `'allow'`, `MAINTENANCE_MODE_CODE` or `READ_ONLY_MODE_CODE`.
- */
-export function maintenanceVerdict(
-  mode: MaintenanceMode,
-  method: string,
-  path: string
-): MaintenanceDecision['verdict'] {
-  return maintenanceDecision(mode, method, path).verdict
 }

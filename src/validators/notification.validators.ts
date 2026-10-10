@@ -19,7 +19,7 @@ import { cursorField, isoInstantField } from '@/validators/cursor.validators'
  * later: Postgres has no year 0, so `0000-…` would pass the format check and
  * then fail the `::timestamptz` cast as a 500.
  */
-export const notificationCursorSchema = z
+const notificationCursorSchema = z
   .object({
     createdAt: isoInstantField,
     id: z.uuid(),
@@ -41,21 +41,11 @@ export const listNotificationsSchema = z.object({
 })
 
 /**
- * The validated shape of a `GET /api/v1/notifications` query string.
- */
-export type ListNotificationsQuery = z.infer<typeof listNotificationsSchema>
-
-/**
  * A notification id path parameter (`PATCH /:id/read`, `DELETE /:id`).
  */
 export const notificationIdSchema = z.object({
   id: z.uuid('id must be a valid UUID.'),
 })
-
-/**
- * The validated shape of a notification id path parameter.
- */
-export type NotificationIdParameters = z.infer<typeof notificationIdSchema>
 
 /**
  * Notification types no preference may be written for: the write-side mirror
@@ -83,7 +73,7 @@ const NON_DISABLEABLE_NOTIFICATION_TYPES: ReadonlySet<string> = new Set([
  * accepts. Every type is non-disableable, so the list is empty and that route
  * answers 400 for every entry; `preferenceEntrySchema` is its only reader.
  */
-export const CONFIGURABLE_NOTIFICATION_TYPES = NOTIFICATION_TYPES.filter(
+const CONFIGURABLE_NOTIFICATION_TYPES = NOTIFICATION_TYPES.filter(
   (type) => !NON_DISABLEABLE_NOTIFICATION_TYPES.has(type)
 )
 

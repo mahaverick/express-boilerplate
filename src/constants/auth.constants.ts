@@ -67,13 +67,11 @@ export const MAX_EMAIL_LENGTH = 320
 export const MAX_NAME_LENGTH = 100
 
 /**
- * The refresh cookie's unprefixed name: the current name without
- * COOKIE_SECURE. With it, a cookie of this name is revoked and cleared
- * (logout, a refresh that carried no current cookie) but never redeemed,
- * since a sibling subdomain or a plain-http attacker can plant it.
- * @deprecated as the COOKIE_SECURE revoke-and-clear read, removed in the next major version; plain http keeps this name
+ * The refresh cookie's name without COOKIE_SECURE. With it, the API never
+ * reads a cookie of this name: a sibling subdomain or a plain-http attacker
+ * can plant one.
  */
-export const LEGACY_REFRESH_TOKEN_COOKIE_NAME = 'refreshToken'
+const PLAIN_REFRESH_TOKEN_COOKIE_NAME = 'refreshToken'
 
 /**
  * The auth routes, so no other endpoint receives the cookie. `__Host-`
@@ -107,10 +105,8 @@ export function refreshCookieSpec(env: {
   const domain = env.COOKIE_DOMAIN
   if (!env.COOKIE_SECURE) {
     return domain === undefined
-      ? // eslint-disable-next-line sonarjs/deprecation -- the plain-http cookie name
-        { name: LEGACY_REFRESH_TOKEN_COOKIE_NAME, path: REFRESH_TOKEN_COOKIE_PATH }
-      : // eslint-disable-next-line sonarjs/deprecation -- the plain-http cookie name
-        { name: LEGACY_REFRESH_TOKEN_COOKIE_NAME, path: REFRESH_TOKEN_COOKIE_PATH, domain }
+      ? { name: PLAIN_REFRESH_TOKEN_COOKIE_NAME, path: REFRESH_TOKEN_COOKIE_PATH }
+      : { name: PLAIN_REFRESH_TOKEN_COOKIE_NAME, path: REFRESH_TOKEN_COOKIE_PATH, domain }
   }
   if (domain === undefined) return { name: '__Host-refreshToken', path: '/' }
   return { name: '__Secure-refreshToken', path: REFRESH_TOKEN_COOKIE_PATH, domain }

@@ -30,7 +30,7 @@ export const FLAG_DEFINITIONS_JOB = 'flag-definitions'
 /**
  * How often the definitions are fetched.
  */
-export const FLAG_DEFINITIONS_INTERVAL_MS = 30_000
+const FLAG_DEFINITIONS_INTERVAL_MS = 30_000
 
 /**
  * Register the repeating fetch. Idempotent: every call upserts the same

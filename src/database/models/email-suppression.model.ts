@@ -3,7 +3,7 @@
  * complained, which no email may be sent to. A row is never deleted by
  * retention; lifting one keeps the row as history.
  */
-import { sql, type InferInsertModel, type InferSelectModel } from 'drizzle-orm'
+import { sql, type InferSelectModel } from 'drizzle-orm'
 import { check, pgTable, timestamp, uniqueIndex, varchar } from 'drizzle-orm/pg-core'
 import { MAX_EMAIL_LENGTH } from '@/constants/auth.constants'
 import {
@@ -70,8 +70,3 @@ export const emailSuppressionModel = pgTable(
  * An email_suppressions row as read from the database.
  */
 export type EmailSuppression = InferSelectModel<typeof emailSuppressionModel>
-
-/**
- * An email_suppressions row as written to the database.
- */
-export type NewEmailSuppression = InferInsertModel<typeof emailSuppressionModel>

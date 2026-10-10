@@ -27,7 +27,7 @@ export interface EmailPerson {
 /**
  * The tenant a message belongs to.
  */
-export interface EmailTenant {
+interface EmailTenant {
   id: string
   name: string
   slug: string
@@ -64,7 +64,7 @@ export interface EmailMessagePage {
 /**
  * One send attempt (an `email_logs` row).
  */
-export interface EmailAttemptView {
+interface EmailAttemptView {
   id: string
   status: EmailLogStatus
   errorCode: string | null
@@ -74,7 +74,7 @@ export interface EmailAttemptView {
 /**
  * One provider event. Never a raw payload or a clicked URL.
  */
-export interface EmailEventView {
+interface EmailEventView {
   id: string
   provider: string
   type: EmailEventType
@@ -128,7 +128,7 @@ export interface EmailRate {
 /**
  * One row of the by-template or by-domain table.
  */
-export interface EmailBreakdownRow {
+interface EmailBreakdownRow {
   key: string
   messages: number
   undelivered: number

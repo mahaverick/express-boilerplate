@@ -45,13 +45,13 @@ export const MESSAGE_TEMPLATE_KEY_MAX_LENGTH = 32
  * The widest a `message_id_header` value may be: `<`, a 36-character id,
  * `@`, the sender's domain and `>` fit with room to spare.
  */
-export const MESSAGE_ID_HEADER_MAX_LENGTH = 255
+const MESSAGE_ID_HEADER_MAX_LENGTH = 255
 
 /**
  * The widest a `job_key` value may be: the notification path's
  * `notification-email-<job id>-<timestamp>` fits.
  */
-export const JOB_KEY_MAX_LENGTH = 128
+const JOB_KEY_MAX_LENGTH = 128
 
 /**
  * The `email_messages` table.

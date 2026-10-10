@@ -20,7 +20,7 @@ import { parseExposureKeys } from '@/validators/flags.validators'
 /**
  * What a flag read answers.
  */
-export interface ClientFlagsPayload {
+interface ClientFlagsPayload {
   /**
    * Every client flag of the app, by key.
    */

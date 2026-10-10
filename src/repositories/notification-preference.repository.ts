@@ -26,7 +26,7 @@ export type NotificationChannel = 'email' | 'in_app'
  * `NotificationPreferenceRepository.getFullMatrix` returns one of, per
  * type.
  */
-export interface NotificationPreferenceMatrixEntry {
+interface NotificationPreferenceMatrixEntry {
   /**
    * The notification type this entry describes.
    */

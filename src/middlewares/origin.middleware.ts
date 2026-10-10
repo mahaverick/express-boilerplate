@@ -10,7 +10,7 @@ import { isAllowedOrigin } from '@/utilities/origin.utilities'
  * Machine-readable code identifying a request refused for its `Origin`,
  * carried in the error envelope's `code` field.
  */
-export const ORIGIN_NOT_ALLOWED_CODE = 'ORIGIN_NOT_ALLOWED'
+const ORIGIN_NOT_ALLOWED_CODE = 'ORIGIN_NOT_ALLOWED'
 
 /**
  * Refuse a request whose `Origin` is present and not one this API serves.

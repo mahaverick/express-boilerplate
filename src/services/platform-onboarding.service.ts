@@ -89,12 +89,12 @@ export const REMINDER_INTERVAL_MS = DAY_MS
 /**
  * How many reminders the tenant tab lists, newest first.
  */
-export const REMINDER_HISTORY_LIMIT = 50
+const REMINDER_HISTORY_LIMIT = 50
 
 /**
  * The days each funnel range covers, back from the moment of the read.
  */
-export const ONBOARDING_RANGE_DAYS: Readonly<Record<OnboardingRange, number>> = {
+const ONBOARDING_RANGE_DAYS: Readonly<Record<OnboardingRange, number>> = {
   '7d': 7,
   '30d': 30,
   '90d': 90,
@@ -581,23 +581,23 @@ export async function getTenantOnboardingDetail(
 /**
  * Error code: the step is complete already.
  */
-export const ALREADY_COMPLETE_CODE = 'already_complete'
+const ALREADY_COMPLETE_CODE = 'already_complete'
 
 /**
  * Error code: a reminder goes only while onboarding is in progress or stuck.
  */
-export const NOT_IN_PROGRESS_CODE = 'not_in_progress'
+const NOT_IN_PROGRESS_CODE = 'not_in_progress'
 
 /**
  * Error code: the tenant has no active owner to remind.
  */
-export const NO_OWNER_CODE = 'no_owner'
+const NO_OWNER_CODE = 'no_owner'
 
 /**
  * Error code: a reminder went less than 24 hours ago. The 409 carries
  * `errors.retryAfter`, the ISO time the next one may go.
  */
-export const REMINDED_RECENTLY_CODE = 'reminded_recently'
+const REMINDED_RECENTLY_CODE = 'reminded_recently'
 
 /**
  * The customer app's overview page of a tenant: the reminder's one link.
@@ -606,7 +606,7 @@ export const REMINDED_RECENTLY_CODE = 'reminded_recently'
  * @param webUrl - The customer app's origin; defaults to the configured `WEB_URL`.
  * @returns The absolute URL.
  */
-export function buildTenantOverviewLink(slug: string, webUrl: string = getEnv().WEB_URL): string {
+function buildTenantOverviewLink(slug: string, webUrl: string = getEnv().WEB_URL): string {
   const base = webUrl.endsWith('/') ? webUrl : `${webUrl}/`
   return new URL(`tenants/${encodeURIComponent(slug)}`, base).href
 }

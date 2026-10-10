@@ -21,7 +21,7 @@ export type CustomerOnboardingState = Extract<
 /**
  * One registry step, with its completion as the viewer sees it.
  */
-export interface TenantOnboardingStepView {
+interface TenantOnboardingStepView {
   key: string
   title: string
   description: string

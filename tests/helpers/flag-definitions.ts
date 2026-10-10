@@ -16,7 +16,7 @@ import { waitUntil } from './timing'
 /**
  * The `tenant` group type's index in every test project.
  */
-export const TEST_TENANT_GROUP_INDEX = 0
+const TEST_TENANT_GROUP_INDEX = 0
 
 const ids = { next: 9000 }
 

@@ -10,7 +10,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { z } from 'zod'
 import {
-  ALLOWED_EVENT_NAME_OVERLAPS,
   AUDIT_EVENT_RENAMES,
   EMAIL_EVENT_PREFIX,
   PII_PROPERTY_KEYS,
@@ -56,6 +55,15 @@ const PII_NAME = 'Pii Probe'
 const PII_EMAIL = 'pii-probe@example.test'
 const SNAKE_KEY = /^\$?[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/
 const PII_KEYS: ReadonlySet<string> = new Set(PII_PROPERTY_KEYS)
+
+/**
+ * Event names both a product (or email) event and a mapped audit action may
+ * use. `onboarding_step_completed` is deliberate: a staff completion is
+ * audited and forwards from the audit log, every other completion is a
+ * product event, and both carry the same properties.
+ */
+const ALLOWED_EVENT_NAME_OVERLAPS = ['onboarding_step_completed'] as const
+
 /**
  * Text only a banned field (`name`, `reason`, …) is ever given, so finding it
  * in an event can only mean that field leaked.

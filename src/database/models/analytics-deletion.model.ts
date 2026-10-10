@@ -6,7 +6,7 @@
  * an id and no PII, and has no foreign key: the user row is gone by the
  * time the purge commits. Rows are never pruned.
  */
-import { type InferInsertModel, type InferSelectModel } from 'drizzle-orm'
+import { type InferSelectModel } from 'drizzle-orm'
 import { index, pgTable, smallint, timestamp, varchar } from 'drizzle-orm/pg-core'
 
 /**
@@ -43,8 +43,3 @@ export const analyticsDeletionModel = pgTable(
  * An analytics_deletions row as read from the database.
  */
 export type AnalyticsDeletionRow = InferSelectModel<typeof analyticsDeletionModel>
-
-/**
- * An analytics_deletions row as written to the database.
- */
-export type NewAnalyticsDeletionRow = InferInsertModel<typeof analyticsDeletionModel>

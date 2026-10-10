@@ -16,7 +16,7 @@ import { createRateLimiter } from '@/middlewares/rate-limit.middleware'
  * The largest webhook body read. A provider event is a few kilobytes; the
  * global JSON parser's 1mb never applies to this route.
  */
-export const EMAIL_WEBHOOK_BODY_LIMIT = '256kb'
+const EMAIL_WEBHOOK_BODY_LIMIT = '256kb'
 
 /**
  * Build the email webhook routes.

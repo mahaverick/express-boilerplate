@@ -4,7 +4,7 @@
  * invitation ends by being accepted or revoked, so
  * `TenantInvitationRepository` does not extend `BaseRepository`.
  */
-import { sql, type InferInsertModel, type InferSelectModel } from 'drizzle-orm'
+import { sql, type InferSelectModel } from 'drizzle-orm'
 import { check, pgTable, timestamp, uniqueIndex, varchar } from 'drizzle-orm/pg-core'
 import { MAX_EMAIL_LENGTH } from '@/constants/auth.constants'
 import { MEMBERSHIP_ROLES, type MembershipRole } from '@/constants/tenant.constants'
@@ -78,8 +78,3 @@ export const tenantInvitationModel = pgTable(
  * A tenant_invitations row as read from the database.
  */
 export type TenantInvitation = InferSelectModel<typeof tenantInvitationModel>
-
-/**
- * A tenant_invitations row as written to the database.
- */
-export type NewTenantInvitation = InferInsertModel<typeof tenantInvitationModel>
