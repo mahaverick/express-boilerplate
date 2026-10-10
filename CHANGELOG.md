@@ -1,5 +1,16 @@
 # Changelog
 
+## [3.0.0](https://github.com/mahaverick/express-boilerplate/compare/v2.1.0...v3.0.0) (2026-10-10)
+
+
+### ⚠ BREAKING CHANGES
+
+* prune compat shims and dead code ([#102](https://github.com/mahaverick/express-boilerplate/issues/102))
+
+### Features
+
+* prune compat shims and dead code ([#102](https://github.com/mahaverick/express-boilerplate/issues/102)) ([fca2c1d](https://github.com/mahaverick/express-boilerplate/commit/fca2c1dd6a02f2fad09789ce14ee2a4637a01c01))
+
 ## [2.1.0](https://github.com/mahaverick/express-boilerplate/compare/v2.0.4...v2.1.0) (2026-10-10)
 
 
