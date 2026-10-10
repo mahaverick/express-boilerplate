@@ -41,21 +41,11 @@ export const listNotificationsSchema = z.object({
 })
 
 /**
- * The validated shape of a `GET /api/v1/notifications` query string.
- */
-export type ListNotificationsQuery = z.infer<typeof listNotificationsSchema>
-
-/**
  * A notification id path parameter (`PATCH /:id/read`, `DELETE /:id`).
  */
 export const notificationIdSchema = z.object({
   id: z.uuid('id must be a valid UUID.'),
 })
-
-/**
- * The validated shape of a notification id path parameter.
- */
-export type NotificationIdParameters = z.infer<typeof notificationIdSchema>
 
 /**
  * Notification types no preference may be written for: the write-side mirror

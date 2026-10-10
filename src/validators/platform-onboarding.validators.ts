@@ -38,11 +38,6 @@ export const onboardingFunnelQuerySchema = z.object({
 })
 
 /**
- * The validated funnel query.
- */
-export type OnboardingFunnelQuery = z.infer<typeof onboardingFunnelQuerySchema>
-
-/**
  * `GET /platform/onboarding/tenants` query string: one state (stuck unless
  * asked otherwise) and SP2 keyset paging. `direction=prev` needs a cursor.
  */

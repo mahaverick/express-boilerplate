@@ -98,11 +98,6 @@ export const platformStatsQuerySchema = z.object({
 })
 
 /**
- * The validated stats query.
- */
-export type PlatformStatsQuery = z.infer<typeof platformStatsQuerySchema>
-
-/**
  * Room for any timeline cursor the server issues (about 110 characters).
  */
 const MAX_TIMELINE_CURSOR_LENGTH = 512
@@ -118,11 +113,6 @@ export const platformTimelineQuerySchema = z.object({
   view: z.enum(TIMELINE_VIEWS).default(TIMELINE_DEFAULT_VIEW),
   before: z.string().min(1).max(MAX_TIMELINE_CURSOR_LENGTH).optional(),
 })
-
-/**
- * The validated timeline query, with the cursor still encoded.
- */
-export type PlatformTimelineQuery = z.infer<typeof platformTimelineQuerySchema>
 
 /**
  * `GET /platform/flags/evaluate` query: the user, an optional tenant the
@@ -164,11 +154,6 @@ export const reasonSchema = z.preprocess(
  * (a state, a role) can ride along.
  */
 export const reasonBodySchema = z.strictObject({ reason: reasonSchema })
-
-/**
- * The validated `{ reason }` body.
- */
-export type ReasonBody = z.infer<typeof reasonBodySchema>
 
 /**
  * A query-string boolean: exactly `true` or `false`.

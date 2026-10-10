@@ -118,8 +118,3 @@ export const notificationPreferenceModel = pgTable(
  * A notification_preferences row as read from the database.
  */
 export type NotificationPreference = InferSelectModel<typeof notificationPreferenceModel>
-
-/**
- * A notification_preferences row as written to the database.
- */
-export type NewNotificationPreference = InferInsertModel<typeof notificationPreferenceModel>

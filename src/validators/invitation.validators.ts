@@ -21,8 +21,3 @@ export const invitationTokenSchema = z
 export const invitationTokenInputSchema = z.object({
   token: invitationTokenSchema,
 })
-
-/**
- * The validated shape of `invitationTokenInputSchema`.
- */
-export type InvitationTokenInput = z.infer<typeof invitationTokenInputSchema>

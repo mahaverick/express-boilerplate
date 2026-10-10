@@ -106,11 +106,6 @@ export const forgotPasswordSchema = z.object({
 })
 
 /**
- * The validated shape of a forgot-password request body.
- */
-export type ForgotPasswordInput = z.infer<typeof forgotPasswordSchema>
-
-/**
  * Reset-password request body: the raw token from the mailed link, and a new
  * password, which goes through `registrationPasswordSchema`.
  */

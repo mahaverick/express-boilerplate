@@ -125,12 +125,7 @@ export function requireEmailVariables<T extends object>(
  * The SP2 flows a staff resend can re-run. Each issues a fresh token; a
  * token email is never replayed.
  */
-export const RESEND_ACTIONS = ['verification', 'password_setup', 'invitation'] as const
-
-/**
- * One of `RESEND_ACTIONS`.
- */
-export type ResendAction = (typeof RESEND_ACTIONS)[number]
+export type ResendAction = 'verification' | 'password_setup' | 'invitation'
 
 /**
  * The keys of a template's variables that carry a secret: every name ending

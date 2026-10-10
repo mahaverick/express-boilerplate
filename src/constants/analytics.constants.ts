@@ -37,11 +37,6 @@ export const PRODUCT_EVENTS = [
 ] as const
 
 /**
- * One of `PRODUCT_EVENTS`.
- */
-export type ProductEventName = (typeof PRODUCT_EVENTS)[number]
-
-/**
  * The prefix of every email tracking event: `email_` then the
  * `email_events.type`.
  */
