@@ -43,14 +43,6 @@ export const PRODUCT_EVENTS = [
 export const EMAIL_EVENT_PREFIX = 'email_'
 
 /**
- * Event names both a product (or email) event and a mapped audit action may
- * use. `onboarding_step_completed` is deliberate: a staff completion is
- * audited and forwards from the audit log, every other completion is a
- * product event, and both carry the same properties.
- */
-export const ALLOWED_EVENT_NAME_OVERLAPS = ['onboarding_step_completed'] as const
-
-/**
  * Property keys never sent to PostHog, whatever their value: a backstop
  * behind the builder's typed mappings.
  */
