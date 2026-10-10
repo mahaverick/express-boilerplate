@@ -98,3 +98,11 @@ export const REDIS_REQUEST_DEADLINE_MS = 300
  * then costs each request nothing instead of the whole deadline.
  */
 export const REDIS_STALL_COOLDOWN_MS = 5000
+
+/**
+ * The longest `GET /health/ready` waits for each dependency check before it
+ * reports that check as timed out. Under a typical orchestrator probe
+ * timeout (1 s in Kubernetes), so the probe answers 503 itself rather than
+ * being cut off; the Redis check's own `REDIS_REQUEST_DEADLINE_MS` is shorter.
+ */
+export const READINESS_CHECK_DEADLINE_MS = 500
