@@ -1,24 +1,38 @@
 /**
  * @file The one rule set that removes personal data and secrets from the
  * text of an error before it leaves the process: an exception's type and
- * value, and each stack frame's filename and function. The frontends port
- * it, and all three are tested against one vector file
- * (tests/fixtures/error-scrub-vectors.json), so a rule changes here, in
- * that file and in both ports together.
+ * value, and each stack frame's filename and function. express-boilerplate
+ * (src/services/errors/error-scrubber.service.ts) and the react and apex
+ * clients (src/observability/errors/scrub.ts) hold this file byte for byte,
+ * and all three test it against one vector file
+ * (tests/fixtures/error-scrub-vectors.json), so a rule changes in all three
+ * and in that file together.
+ *
+ * The rules run in a fixed order over a view of the text. Each rule's
+ * matches are applied to the view at once, as `String.replaceAll` would, and
+ * every character of the view remembers the span of the original text it
+ * stands for (`View`). A secret-named key that an earlier rule swallowed
+ * into a placeholder is found again in the original text, and its value is
+ * redacted last (`tokenKeyRanges`), so that redaction can never hide the
+ * context a rule reads.
  */
-import { ERROR_VALUE_MAX } from '@/constants/error-tracking.constants'
 
 /**
- * What ends a text cut to `ERROR_VALUE_MAX` characters.
+ * The longest text kept, the marker included.
  */
-const TRUNCATION_MARKER = '…[truncated]'
+export const SCRUB_VALUE_MAX = 1024
+
+/**
+ * What ends a text cut to `SCRUB_VALUE_MAX` characters.
+ */
+export const TRUNCATION_MARKER = '…[truncated]'
 
 /**
  * The most characters the rules scan: four times what is kept, so a text
  * the rules shorten still fills the cap, while a pathological input never
  * costs more than a bounded scan.
  */
-const SCAN_MAX = 4 * ERROR_VALUE_MAX
+const SCAN_MAX = 4 * SCRUB_VALUE_MAX
 
 /**
  * Postgres's `Key (col)=(value)` detail. The value runs to the line's last
@@ -68,7 +82,6 @@ const USERINFO_PATTERN = /\b([a-z][a-z0-9+.-]*:\/\/)(?:[^\s/?#<>"']|["'](?![,:;}
  * a domain, which the email rule handles.
  */
 const QUERY_PATTERN =
-  // eslint-disable-next-line sonarjs/super-linear-regex, sonarjs/regex-complexity -- scrubText scans at most SCAN_MAX characters; one pattern per rule keeps the rule list the spec
   /((?:https?:\/\/|\/)[^\s?"'<>]*|(?<![@\w.-])[\w.-]+(?=\?[^\s"'<>]*=))\?[^\s"'<>]+/g
 
 /**
@@ -85,7 +98,6 @@ const EMAIL_IP_LITERAL = String.raw`\[(?:\d{1,3}(?:\.\d{1,3}){3}|IPv6:[\dA-Fa-f:
  * A URL's or path's fragment: the part before `#` is kept, and so is a
  * fragment `isHarmlessFragment` accepts.
  */
-// eslint-disable-next-line sonarjs/super-linear-regex -- scrubText scans at most SCAN_MAX characters
 const FRAGMENT_PATTERN = /((?:https?:\/\/|\/)[^\s#"'<>]*)#([^\s"'<>]+)/g
 
 /**
@@ -107,7 +119,6 @@ const HEADING_ANCHOR_PATTERN = /^[a-z]+(?:-[a-z]+)*$/
  * only, so `authentication`, `design` and `keyboard-shortcuts` are kept.
  */
 const KEY_LIKE_WORD_PATTERN =
-  // eslint-disable-next-line sonarjs/regex-complexity -- one list of credential words
   /(?:^|-)(?:tokens?|otps?|pins?|codes?|keys?|secrets?|states?|sessions?|auth|pass(?:word|code|phrase)?s?|nonces?|sigs?|signatures?|credentials?|jwt|bearer)(?=-|$)/
 
 /**
@@ -169,7 +180,6 @@ const BEARER_PATTERN = /(?<![G-Z_])Bearer\s+[^\s"',;]+/gi
  * by `=` or `[` is a key (`Basic Credential=[redacted]`), not a credential.
  */
 const BASIC_PATTERN =
-  // eslint-disable-next-line sonarjs/regex-complexity -- one pattern per rule keeps the rule list the spec
   /(?<![G-Zg-z_])([Bb]asic|BASIC)\s+(?=[A-Za-z0-9+/]*[A-Z0-9+/])(?:[A-Za-z0-9+/]{4}){2,}(?:[A-Za-z0-9+/]{2,3}={0,2})?(?![\w+/=[])/g
 
 /**
@@ -192,56 +202,6 @@ const KEY_QUOTE = String.raw`(?:\\?["']|%22|\\u00(?:22|27))`
  * The Authorization scheme words kept in front of a replaced credential.
  */
 const AUTH_SCHEMES = String.raw`(?:Bearer|Basic|Token|ApiKey|Digest|Negotiate|NTLM|Hawk|HOBA|DPoP|OAuth|AWS4-HMAC-SHA256|SCRAM-SHA-\d+)`
-
-/**
- * The replacement for a URL's or path's fragment (`FRAGMENT_PATTERN`):
- * `#[fragment]`, unless `isHarmlessFragment` keeps it.
- * @param match - The base, `#` and the fragment.
- * @param base - The URL or path before `#`.
- * @param fragment - The text after `#`.
- * @returns The match, or the base with the fragment replaced.
- */
-function fragmentReplacement(match: string, base: string, fragment: string): string {
-  return isHarmlessFragment(fragment) ? match : `${base}#[fragment]`
-}
-
-/**
- * A run of characters no query, fragment or path takes, which splits a text
- * into the words `rejoinedQueries` looks at.
- */
-const WORD_BREAK_PATTERN = /([\s"'<>]+)/
-
-/**
- * A placeholder the path-token or key rules wrote, followed in the same word
- * by a `?` or `#`.
- */
-const REDACTED_BEFORE_QUERY_PATTERN = /\[(?:redacted|token)\][^\s"'<>]*[?#]/
-
-/**
- * Apply the query and fragment rules again to each word in which a value the
- * path-token or key rules replaced now stands before a `?` or `#`
- * (`/x/pwd=[a b]?q=1` became `/x/pwd=[redacted]?q=1`): a space or quote
- * inside the value had kept the path apart from its query, so the first pass
- * left the query, and a second scrub would take it. Only such words are
- * scanned again.
- * @param text - The text after the key rules.
- * @returns The text with those queries and fragments replaced.
- */
-function rejoinedQueries(text: string): string {
-  if (!REDACTED_BEFORE_QUERY_PATTERN.test(text)) return text
-  return text
-    .split(WORD_BREAK_PATTERN)
-    .map((word) =>
-      REDACTED_BEFORE_QUERY_PATTERN.test(word)
-        ? word
-            .replaceAll(QUERY_PATTERN, '$1?[query]')
-            .replaceAll(FRAGMENT_PATTERN, (match: string, base: string, fragment: string) =>
-              fragmentReplacement(match, base, fragment)
-            )
-        : word
-    )
-    .join('')
-}
 
 /**
  * The bare words a secret-named key may hold and keep: `token: undefined`
@@ -376,7 +336,8 @@ const AUTH_HEADER_PATTERN = new RegExp(
 )
 
 /**
- * A secret-named key, singular or plural, and its value: `password=...`,
+ * The key part of `KV_SECRET_PATTERN`, group 1, which is kept. That rule:
+ * a secret-named key, singular or plural, and its value: `password=...`,
  * `"tokens":"..."`, `api_key: ...`, `sig=...`, `nonce=...`,
  * `response="..."`, `SAMLResponse=...`, `password%3D...`, `pass_phrase`,
  * `passkey`, `otp_code`, `mfa_code`, `verification_code`, `recovery_code`,
@@ -407,11 +368,18 @@ const AUTH_HEADER_PATTERN = new RegExp(
  * bare words `undefined`, `null`, `missing`, `true` and `false` are left as
  * they are (`KEPT_VALUE`), so `token: undefined` stays readable.
  */
-const KV_SECRET_PATTERN = new RegExp(
-  String.raw`(?:\b|(?<=%26|%3F)|(?<=#)(?=\[fragment\]))((?:(?<=#)\[fragment\]|[\w-]*?(?:pass(?:[_-]?(?:word|phrase|code|key)|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|(?:secret|private|consumer|signing|encryption|master|client)[_-]?key|auth(?:orization)?[_-]code|code[_-]?verifier|session|sid|credential|signature|sig|hmac|nonce|(?<=[\w-])response|response(?=s?${KEY_QUOTE}?\s*(?:=|%3D|&#61;|\\u003d|:\s*${KEY_QUOTE}))|(?<![A-Za-z\d])pin(?:[_-]?(?:code|number))?|(?:otp|mfa|verification|recovery|backup)[_-]?code|(?<![A-Za-z\d])(?<!(?:primary|foreign|sort|partition|cache|unique|index|s3|object|routing|shard|translation|i18n)[_-])key(?=s?\s*(?:=(?!>)|%3D|&#61;|\\u003d))|jwt|otp)s?|code(?<=(?:[?&]|&amp;|%26|%3F)code)|code(?<=(?:oauth|authoriz(?:ation|e)(?![a-z]))[^\n]*code)|code(?=\s*=[^\s&]*&)|code(?=[^\n{}]*(?:oauth|authoriz(?:ation|e)(?![a-z]))))${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?)` +
-    `${KEPT_VALUE}(?:${QUOTED_VALUE}|${ARRAY_VALUE}|${SCHEMED_PLACEHOLDER_VALUE}|${UNQUOTED_VALUE})`,
-  'gi'
-)
+const KV_SECRET_KEY = String.raw`(?:\b|(?<=%26|%3F)|(?<=#)(?=\[fragment\]))((?:(?<=#)\[fragment\]|[\w-]*?(?:pass(?:[_-]?(?:word|phrase|code|key)|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|(?:secret|private|consumer|signing|encryption|master|client)[_-]?key|auth(?:orization)?[_-]code|code[_-]?verifier|session|sid|credential|signature|sig|hmac|nonce|(?<=[\w-])response|response(?=s?${KEY_QUOTE}?\s*(?:=|%3D|&#61;|\\u003d|:\s*${KEY_QUOTE}))|(?<![A-Za-z\d])pin(?:[_-]?(?:code|number))?|(?:otp|mfa|verification|recovery|backup)[_-]?code|(?<![A-Za-z\d])(?<!(?:primary|foreign|sort|partition|cache|unique|index|s3|object|routing|shard|translation|i18n)[_-])key(?=s?\s*(?:=(?!>)|%3D|&#61;|\\u003d))|jwt|otp)s?|code(?<=(?:[?&]|&amp;|%26|%3F)code)|code(?<=(?:oauth|authoriz(?:ation|e)(?![a-z]))[^\n]*code)|code(?=\s*=[^\s&]*&)|code(?=[^\n{}]*(?:oauth|authoriz(?:ation|e)(?![a-z]))))${KEY_QUOTE}?\s*${KEY_SEPARATOR}\s*${KEY_QUOTE}?)`
+
+/**
+ * The value grammar of `KV_SECRET_PATTERN`: a kept value fails it; then a
+ * quoted value, an array, a scheme with its placeholder, or an unquoted run.
+ */
+const KV_SECRET_VALUE = `${KEPT_VALUE}(?:${QUOTED_VALUE}|${ARRAY_VALUE}|${SCHEMED_PLACEHOLDER_VALUE}|${UNQUOTED_VALUE})`
+
+/**
+ * `KV_SECRET_KEY` and `KV_SECRET_VALUE`: a secret-named key and its value.
+ */
+const KV_SECRET_PATTERN = new RegExp(KV_SECRET_KEY + KV_SECRET_VALUE, 'gi')
 
 /**
  * The words that mark a text as an OAuth exchange: a token request's field
@@ -517,39 +485,6 @@ function pairEndAt(sticky: RegExp, text: string, at: number): number {
 }
 
 /**
- * Apply a key rule (`AUTH_HEADER_PATTERN`, `KV_SECRET_PATTERN` or
- * `CODE_KEY_PATTERN`, whose group 1 is the kept key, separator and scheme)
- * left to right, replacing
- * each value with `[redacted]` up to `runThroughEnd`.
- * @param text - The text being scrubbed.
- * @param pattern - The key rule, with the `g` flag.
- * @param innerKeys - The sticky key rules `runThroughEnd` looks for later keys with.
- * @returns The text with every matched value replaced.
- */
-function redactedRunningThrough(
-  text: string,
-  pattern: RegExp,
-  innerKeys: readonly RegExp[]
-): string {
-  pattern.lastIndex = 0
-  let out = ''
-  let last = 0
-  for (let match = pattern.exec(text); match !== null; match = pattern.exec(text)) {
-    const key = match[1] ?? ''
-    const end = runThroughEnd(
-      text,
-      match.index + key.length,
-      match.index + match[0].length,
-      innerKeys
-    )
-    out += `${text.slice(last, match.index)}${key}[redacted]`
-    last = end
-    pattern.lastIndex = end
-  }
-  return out + text.slice(last)
-}
-
-/**
  * A JSON Web Token: three dot-separated base64url segments, the first a
  * base64 JSON object: `eyJ` (`{"`), or, at nine or more characters, `eyA`
  * (`{ `) or `ew` (`{` and a line break or tab). The signature may be empty
@@ -574,7 +509,6 @@ const POSTHOG_KEY_PATTERN = /\bph[cxs]_\w+/g
  * (`whsec_`). Applied again after the hex rule, like the PostHog key rule.
  */
 const VENDOR_KEY_PATTERN =
-  // eslint-disable-next-line sonarjs/regex-complexity -- one pattern per rule keeps the rule list the spec
   /\b(?:GOCSPX-[\w-]{20,}|re_(?=\w*[A-Z])(?=[A-Za-z_]*\d)\w{16,}|(?:AKIA|ASIA)[\dA-Z]{16}\b|xox[abprs]-[\w-]{10,}|[rs]k_(?:live|test)_\w{10,}|AIza[\w-]{35}(?![\w-])|whsec_[A-Za-z\d+/=]{32,})/g
 
 /**
@@ -691,7 +625,6 @@ const IPV4_PATTERN = new RegExp(
  * `::` form (`::1:6379`) reads as one more group and goes with it.
  */
 const IPV6_PATTERN =
-  // eslint-disable-next-line sonarjs/regex-complexity -- one pattern per rule keeps the rule list the spec
   /(?<![\w:])(?:(?:[\dA-Fa-f]{1,4}:){7}[\dA-Fa-f]{1,4}|(?:[\dA-Fa-f]{1,4}(?::[\dA-Fa-f]{1,4}){0,6})?::[\dA-Fa-f]{1,4}(?::[\dA-Fa-f]{1,4}){0,6}|[\dA-Fa-f]{1,4}(?::[\dA-Fa-f]{1,4}){0,6}::)(?![\w:])/g
 
 /**
@@ -793,16 +726,464 @@ function scanned(value: string): string {
 }
 
 /**
- * Cut a text to `ERROR_VALUE_MAX` characters, the marker included.
+ * Cut a text to `SCRUB_VALUE_MAX` characters, the marker included.
  * @param value - The scrubbed text.
  * @param wasCut - Whether `scanned` already dropped part of the input.
  * @returns The text, ending in `…[truncated]` when anything was dropped.
  */
 function capped(value: string, wasCut: boolean): string {
-  if (!wasCut && value.length <= ERROR_VALUE_MAX) return value
-  const kept = value.slice(0, ERROR_VALUE_MAX - TRUNCATION_MARKER.length)
+  if (!wasCut && value.length <= SCRUB_VALUE_MAX) return value
+  const kept = value.slice(0, SCRUB_VALUE_MAX - TRUNCATION_MARKER.length)
   return `${kept}${TRUNCATION_MARKER}`
 }
+
+/**
+ * The text being scrubbed, with the original span each character stands for.
+ */
+interface View {
+  /**
+   * The text, placeholders included.
+   */
+  text: string
+  /**
+   * For each character, where in the original text its span starts.
+   */
+  from: number[]
+  /**
+   * For each character, where in the original text its span ends.
+   */
+  to: number[]
+  /**
+   * For each character, the replacement it belongs to, or -1 for an original character.
+   */
+  token: number[]
+}
+
+/**
+ * One replacement in a view: the characters from `start` to `end` become `text`.
+ */
+interface Edit {
+  start: number
+  end: number
+  text: string
+}
+
+/**
+ * The view of an original text, every character standing for itself.
+ * @param input - The original text.
+ * @returns The view.
+ */
+function originalView(input: string): View {
+  const view: View = { text: input, from: [], to: [], token: [] }
+  for (let at = 0; at < input.length; at += 1) {
+    view.from.push(at)
+    view.to.push(at + 1)
+    view.token.push(-1)
+  }
+  return view
+}
+
+/**
+ * Apply edits that do not overlap, in order, as `String.replaceAll` would.
+ * The characters of an edit's text stand for the whole original span of the
+ * characters it replaced; an empty edit stands for an empty span.
+ * @param view - The view.
+ * @param edits - The edits, sorted by start.
+ * @param firstToken - The id the first edit's characters get.
+ * @returns The new view.
+ */
+function applyEdits(view: View, edits: readonly Edit[], firstToken: number): View {
+  const next: View = { text: '', from: [], to: [], token: [] }
+  const keep = (at: number): void => {
+    next.text += view.text.charAt(at)
+    next.from.push(view.from[at] ?? 0)
+    next.to.push(view.to[at] ?? 0)
+    next.token.push(view.token[at] ?? -1)
+  }
+  let at = 0
+  for (const [index, edit] of edits.entries()) {
+    for (; at < edit.start; at += 1) keep(at)
+    const start =
+      edit.end > edit.start
+        ? (view.from[edit.start] ?? 0)
+        : (view.from[edit.start] ?? view.to.at(-1) ?? 0)
+    let end = start
+    for (let inner = edit.start; inner < edit.end; inner += 1)
+      end = Math.max(end, view.to[inner] ?? 0)
+    next.text += edit.text
+    for (let character = 0; character < edit.text.length; character += 1) {
+      next.from.push(start)
+      next.to.push(end)
+      next.token.push(firstToken + index)
+    }
+    at = edit.end
+  }
+  for (; at < view.text.length; at += 1) keep(at)
+  return next
+}
+
+/**
+ * The state of one scrub: the original text, its current view and the
+ * next replacement id.
+ */
+interface Scrub {
+  input: string
+  view: View
+  nextToken: number
+}
+
+/**
+ * Apply edits found on the current view.
+ * @param scrub - The scrub.
+ * @param edits - The edits, in any order, none overlapping.
+ */
+function commit(scrub: Scrub, edits: Edit[]): void {
+  if (edits.length === 0) return
+  edits.sort((first, second) => first.start - second.start)
+  scrub.view = applyEdits(scrub.view, edits, scrub.nextToken)
+  scrub.nextToken += edits.length
+}
+
+/**
+ * The part of a match a rule replaces: from `offset` into the match to its
+ * end, with `text`; or nothing when the rule keeps the match.
+ */
+type Replacement = { offset: number; text: string } | undefined
+
+/**
+ * Apply one rule to the view: every match found on the same view, left to
+ * right, replaced at once.
+ * @param scrub - The scrub.
+ * @param pattern - The rule, with the `g` flag.
+ * @param replace - The part of a match to replace and its text.
+ */
+function apply(
+  scrub: Scrub,
+  pattern: RegExp,
+  replace: (match: RegExpExecArray) => Replacement
+): void {
+  const edits: Edit[] = []
+  for (const match of scrub.view.text.matchAll(pattern)) {
+    const replacement = replace(match)
+    if (replacement !== undefined) {
+      edits.push({
+        start: match.index + replacement.offset,
+        end: match.index + match[0].length,
+        text: replacement.text,
+      })
+    }
+  }
+  commit(scrub, edits)
+}
+
+/**
+ * A rule that replaces the whole match.
+ * @param text - The replacement.
+ * @returns The replacer.
+ */
+function whole(text: string): () => Replacement {
+  return () => ({ offset: 0, text })
+}
+
+/**
+ * A rule that keeps its first group and replaces the rest of the match.
+ * @param text - The replacement.
+ * @returns The replacer.
+ */
+function afterGroup(text: string): (match: RegExpExecArray) => Replacement {
+  return (match) => ({ offset: (match[1] ?? '').length, text })
+}
+
+/**
+ * Apply a key rule (`AUTH_HEADER_PATTERN`, `KV_SECRET_PATTERN` or
+ * `CODE_KEY_PATTERN`, whose group 1 is the kept key, separator and scheme)
+ * left to right, replacing each value with `[redacted]` up to `runThroughEnd`.
+ * @param scrub - The scrub.
+ * @param pattern - The key rule, with the `g` flag.
+ * @param innerKeys - The sticky key rules `runThroughEnd` looks for later keys with.
+ */
+function redactRunningThrough(scrub: Scrub, pattern: RegExp, innerKeys: readonly RegExp[]): void {
+  const { text } = scrub.view
+  const edits: Edit[] = []
+  pattern.lastIndex = 0
+  for (let match = pattern.exec(text); match !== null; match = pattern.exec(text)) {
+    const keyEnd = match.index + (match[1] ?? '').length
+    const end = runThroughEnd(text, keyEnd, match.index + match[0].length, innerKeys)
+    edits.push({ start: keyEnd, end, text: '[redacted]' })
+    pattern.lastIndex = end
+  }
+  commit(scrub, edits)
+}
+
+/**
+ * A character no query, fragment or path takes, which splits a text into
+ * the words `rejoinQueries` looks at.
+ */
+const WORD_BREAK_PATTERN = /[\s"'<>]/
+
+/**
+ * A placeholder the path-token or key rules wrote, followed in the same word
+ * by a `?` or `#`.
+ */
+const REDACTED_BEFORE_QUERY_PATTERN = /\[(?:redacted|token)\][^\s"'<>]*[?#]/
+
+/**
+ * The runs of characters between word breaks (`WORD_BREAK_PATTERN`).
+ * @param text - The text.
+ * @returns Each word's start and end.
+ */
+function words(text: string): [number, number][] {
+  const found: [number, number][] = []
+  let start = 0
+  while (start < text.length) {
+    while (start < text.length && WORD_BREAK_PATTERN.test(text.charAt(start))) start += 1
+    let end = start
+    while (end < text.length && !WORD_BREAK_PATTERN.test(text.charAt(end))) end += 1
+    if (end > start) found.push([start, end])
+    start = end
+  }
+  return found
+}
+
+/**
+ * Apply the query and then the fragment rule again to each word in which a
+ * value the path-token or key rules replaced now stands before a `?` or `#`
+ * (`/x/pwd=[a b]?q=1` became `/x/pwd=[redacted]?q=1`): a space or quote
+ * inside the value had kept the path apart from its query, so the first pass
+ * left the query, and a second scrub would take it. A replaced query holds no
+ * word break, so each such word is the same word for both rules.
+ * @param scrub - The scrub.
+ */
+function rejoinQueries(scrub: Scrub): void {
+  if (!REDACTED_BEFORE_QUERY_PATTERN.test(scrub.view.text)) return
+  const targets = new Set<number>()
+  const queries: Edit[] = []
+  for (const [index, [start, end]] of words(scrub.view.text).entries()) {
+    const word = scrub.view.text.slice(start, end)
+    if (!REDACTED_BEFORE_QUERY_PATTERN.test(word)) continue
+    targets.add(index)
+    for (const match of word.matchAll(QUERY_PATTERN)) {
+      queries.push({
+        start: start + match.index + (match[1] ?? '').length,
+        end: start + match.index + match[0].length,
+        text: '?[query]',
+      })
+    }
+  }
+  commit(scrub, queries)
+  const fragments: Edit[] = []
+  for (const [index, [start, end]] of words(scrub.view.text).entries()) {
+    if (!targets.has(index)) continue
+    for (const match of scrub.view.text.slice(start, end).matchAll(FRAGMENT_PATTERN)) {
+      if (isHarmlessFragment(match[2] ?? '')) continue
+      fragments.push({
+        start: start + match.index + (match[1] ?? '').length,
+        end: start + match.index + match[0].length,
+        text: '#[fragment]',
+      })
+    }
+  }
+  commit(scrub, fragments)
+}
+
+/**
+ * A secret-named key and its separator only, at `lastIndex`.
+ */
+const KV_SECRET_KEY_AT = new RegExp(KV_SECRET_KEY, 'iy')
+
+/**
+ * `KV_SECRET_VALUE`, at `lastIndex`.
+ */
+const KV_SECRET_VALUE_AT = new RegExp(KV_SECRET_VALUE, 'iy')
+
+/**
+ * How far back from a replacement's end a key that runs out of it may start,
+ * which bounds the search; a key whose word starts further back is not found.
+ */
+const TOKEN_KEY_REACH = 80
+
+/**
+ * The original spans of values whose secret-named key an earlier rule
+ * swallowed into a placeholder: a key that starts inside a replacement's original text and
+ * ends at or after its end (`/reset/x.tsrefresh_token = …`,
+ * `?a=1/api_key="…"`), read on the original text, with its value read on the
+ * view right after the placeholder and run through later keys. The key's
+ * tail past the placeholder must be original text no rule replaced.
+ * @param scrub - The scrub, after the key rules.
+ * @param innerKeys - The sticky key rules `runThroughEnd` looks for later keys with.
+ * @returns The original spans to redact once every other rule has run.
+ */
+function tokenKeyRanges(scrub: Scrub, innerKeys: readonly RegExp[]): [number, number][] {
+  const { view } = scrub
+  const ranges: [number, number][] = []
+  let at = 0
+  while (at < view.token.length) {
+    const id = view.token[at] ?? -1
+    let end = at + 1
+    while (end < view.token.length && view.token[end] === id) end += 1
+    if (id !== -1) {
+      const range = tokenKeyRange(scrub, at, end, innerKeys)
+      if (range !== undefined) ranges.push(range)
+    }
+    at = end
+  }
+  return ranges
+}
+
+/**
+ * The original span of the value of a key that runs out of one replacement;
+ * the key's tail past the placeholder must be original text no rule replaced
+ * (it ends at or before `keptUntil`: the next replacement's start, or the
+ * input's end when there is none).
+ * @param scrub - The scrub.
+ * @param tokenStart - Where the replacement starts in the view.
+ * @param tokenEnd - Where it ends in the view.
+ * @param innerKeys - The sticky key rules `runThroughEnd` looks for later keys with.
+ * @returns The span, or undefined when no key runs out of it.
+ */
+function tokenKeyRange(
+  scrub: Scrub,
+  tokenStart: number,
+  tokenEnd: number,
+  innerKeys: readonly RegExp[]
+): [number, number] | undefined {
+  const { input, view } = scrub
+  const originalStart = view.from[tokenStart] ?? 0
+  const originalEnd = view.to[tokenStart] ?? 0
+  let keptUntil = input.length
+  for (let at = tokenEnd; at < view.token.length; at += 1) {
+    if (view.token[at] !== -1) {
+      keptUntil = view.from[at] ?? input.length
+      break
+    }
+  }
+  for (let at = Math.max(originalStart, originalEnd - TOKEN_KEY_REACH); at < originalEnd; at += 1) {
+    KV_SECRET_KEY_AT.lastIndex = at
+    const key = KV_SECRET_KEY_AT.exec(input)
+    if (key === null) continue
+    const keyEnd = at + key[0].length
+    if (keyEnd < originalEnd || keyEnd > keptUntil) continue
+    const valueAt = tokenEnd + (keyEnd - originalEnd)
+    KV_SECRET_VALUE_AT.lastIndex = valueAt
+    const value = KV_SECRET_VALUE_AT.exec(view.text)
+    if (value === null || value[0].length === 0) continue
+    const end = runThroughEnd(view.text, valueAt, valueAt + value[0].length, innerKeys)
+    return [view.from[valueAt] ?? 0, view.to[end - 1] ?? 0]
+  }
+  return undefined
+}
+
+/**
+ * A placeholder and nothing else.
+ */
+const LONE_PLACEHOLDER_PATTERN = new RegExp(`^${PLACEHOLDER}$`)
+
+/**
+ * Replace every run of view characters that stands for part of one of
+ * `ranges` with `[redacted]`, except a run that is one placeholder a rule
+ * already wrote, which stays.
+ * @param scrub - The scrub.
+ * @param ranges - Original spans.
+ */
+function redactRanges(scrub: Scrub, ranges: readonly [number, number][]): void {
+  const { view } = scrub
+  const isCovered = (at: number): boolean =>
+    ranges.some(([start, end]) => (view.from[at] ?? 0) < end && (view.to[at] ?? 0) > start)
+  const edits: Edit[] = []
+  let at = 0
+  while (at < view.text.length) {
+    if (!isCovered(at)) {
+      at += 1
+      continue
+    }
+    let end = at
+    while (end < view.text.length && isCovered(end)) end += 1
+    const run = view.text.slice(at, end)
+    const isOneToken = view.token[at] !== -1 && view.token[at] === view.token[end - 1]
+    if (!(isOneToken && LONE_PLACEHOLDER_PATTERN.test(run)))
+      edits.push({ start: at, end, text: '[redacted]' })
+    at = end
+  }
+  commit(scrub, edits)
+}
+
+/**
+ * Every rule once, in order, then the values of keys found inside
+ * replacements.
+ * @param input - The text, already cut to `SCAN_MAX`.
+ * @returns The scrubbed text, and whether a key inside a replacement was found.
+ */
+function scrubOnce(input: string): { text: string; keyInToken: boolean } {
+  const scrub: Scrub = { input, view: originalView(input), nextToken: 0 }
+  apply(scrub, KEY_DETAIL_PATTERN, (match) => ({
+    offset: `Key (${match[1] ?? ''})=(`.length,
+    text: '[value])',
+  }))
+  apply(scrub, PG_INPUT_PATTERN, afterGroup('"[value]"'))
+  apply(scrub, PG_RANGE_PATTERN, afterGroup('"[value]"'))
+  apply(scrub, JSON_SNIPPET_PATTERN, afterGroup('"[value]" is not valid JSON'))
+  apply(scrub, USERINFO_PATTERN, afterGroup('[credentials]@'))
+  apply(scrub, QUERY_PATTERN, afterGroup('?[query]'))
+  apply(scrub, FRAGMENT_PATTERN, (match) =>
+    isHarmlessFragment(match[2] ?? '')
+      ? undefined
+      : { offset: (match[1] ?? '').length, text: '#[fragment]' }
+  )
+  apply(scrub, PATH_TOKEN_PATTERN, afterGroup('[token]'))
+  apply(scrub, BEARER_PATTERN, whole('Bearer [token]'))
+  apply(scrub, BASIC_PATTERN, afterGroup(' [token]'))
+  const hasOauthContext = OAUTH_CONTEXT_PATTERN.test(input)
+  const innerKeys = hasOauthContext
+    ? [KV_SECRET_AT, AUTH_HEADER_AT, CODE_KEY_AT]
+    : [KV_SECRET_AT, AUTH_HEADER_AT]
+  redactRunningThrough(scrub, AUTH_HEADER_PATTERN, innerKeys)
+  redactRunningThrough(scrub, KV_SECRET_PATTERN, innerKeys)
+  if (hasOauthContext)
+    redactRunningThrough(scrub, CODE_KEY_PATTERN, [...innerKeys, SCHEMED_VALUE_AT])
+  const keyRanges = tokenKeyRanges(scrub, innerKeys)
+  rejoinQueries(scrub)
+  apply(scrub, JWT_PATTERN, whole('[jwt]'))
+  apply(scrub, SLASHED_SECRET_EMAIL_PATTERN, (match) =>
+    isSlashedSecret(`${match[1] ?? ''}${LEADING_BASE64_PATTERN.exec(match[2] ?? '')?.[0] ?? ''}`)
+      ? { offset: 0, text: '[email]' }
+      : undefined
+  )
+  apply(scrub, ADDRESS_SECRET_DOMAIN_PATTERN, (match) =>
+    isSlashedSecret(match[1] ?? '') ? { offset: 0, text: '[email]' } : undefined
+  )
+  apply(scrub, EMAIL_PATTERN, whole('[email]'))
+  applyKeyShapes(scrub)
+  apply(scrub, IPV4_PATTERN, whole('[ip]'))
+  apply(scrub, IPV6_PATTERN, whole('[ip]'))
+  apply(scrub, PHONE_PATTERN, whole('[phone]'))
+  apply(scrub, HEX_RUN_PATTERN, whole('[secret]'))
+  applyKeyShapes(scrub)
+  apply(scrub, BASE64_RUN_PATTERN, (match) =>
+    isSecretRun(match[0]) ? { offset: 0, text: '[secret]' } : undefined
+  )
+  redactRanges(scrub, keyRanges)
+  return { text: scrub.view.text, keyInToken: keyRanges.length > 0 }
+}
+
+/**
+ * The PostHog-key, vendor-credential and AWS secret access key rules, which
+ * run once before the hex rule and once after it.
+ * @param scrub - The scrub.
+ */
+function applyKeyShapes(scrub: Scrub): void {
+  apply(scrub, POSTHOG_KEY_PATTERN, whole('[posthog-key]'))
+  apply(scrub, VENDOR_KEY_PATTERN, whole('[secret]'))
+  apply(scrub, AWS_SECRET_KEY_PATTERN, (match) =>
+    isAwsSecretKey(match[0]) ? { offset: 0, text: '[secret]' } : undefined
+  )
+}
+
+/**
+ * The most times the rules run over a text in which a key inside a
+ * replacement was found; each run after the first scrubs the text the last
+ * one wrote, and they stop once it no longer changes.
+ */
+const PASSES_MAX = 3
 
 /**
  * Remove personal data and secrets from one text, by these rules applied in
@@ -830,9 +1211,9 @@ function capped(value: string, wasCut: boolean): string {
  * (`OAUTH_CONTEXT_PATTERN`)), become `[redacted]`, each of these values (the
  * OAuth `code` one included) that takes a later
  * secret-named, Authorization or Cookie key running on to the end of that
- * key's value (`redactedRunningThrough`); a query or fragment that
+ * key's value (`redactRunningThrough`); a query or fragment that
  * a replaced value now joins to its path is replaced as above
- * (`rejoinedQueries`); a JWT becomes `[jwt]`; an
+ * (`rejoinQueries`); a JWT becomes `[jwt]`; an
  * email address (`EMAIL_PATTERN`: `@` written plainly, encoded or fullwidth,
  * a quoted local part, an IP-literal or single-label domain) becomes
  * `[email]`, together with a secret-looking base64 run joined to its local
@@ -846,8 +1227,12 @@ function capped(value: string, wasCut: boolean): string {
  * `[phone]` (a UUID is an id and is kept); a run of 32 or more hex digits
  * becomes `[secret]`, and a PostHog key or vendor credential glued to it is
  * replaced after it; a secret-looking run of 40 or more base64 characters
- * (`isSecretRun`) becomes `[secret]`; and the result is cut to 1024
- * characters, ending in `…[truncated]`. A key-named word is replaced even in
+ * (`isSecretRun`) becomes `[secret]`; the value of a secret-named key that
+ * an earlier rule took into its placeholder, read again from the original
+ * text, becomes `[redacted]` (`tokenKeyRanges`), and when one does, the rules
+ * run again over the result, at most `PASSES_MAX` times in all, until it
+ * stops changing; and the result is cut to `SCRUB_VALUE_MAX` characters,
+ * ending in `…[truncated]`. A key-named word is replaced even in
  * prose (`Missing token: please log in` becomes `Missing token: [redacted]`):
  * the rule trades some readable text for never leaking a value. Applying it
  * twice gives the same text as applying it once, a placeholder in a URL
@@ -863,50 +1248,13 @@ function capped(value: string, wasCut: boolean): string {
  */
 export function scrubText(value: string): string {
   const input = scanned(value)
-  const hasOauthContext = OAUTH_CONTEXT_PATTERN.test(input)
-  const located = input
-    .replaceAll(KEY_DETAIL_PATTERN, 'Key ($1)=([value])')
-    .replaceAll(PG_INPUT_PATTERN, '$1"[value]"')
-    .replaceAll(PG_RANGE_PATTERN, '$1"[value]"')
-    .replaceAll(JSON_SNIPPET_PATTERN, '$1"[value]" is not valid JSON')
-    .replaceAll(USERINFO_PATTERN, '$1[credentials]@')
-    .replaceAll(QUERY_PATTERN, '$1?[query]')
-    .replaceAll(FRAGMENT_PATTERN, (match: string, base: string, fragment: string) =>
-      fragmentReplacement(match, base, fragment)
-    )
-    .replaceAll(PATH_TOKEN_PATTERN, '$1[token]')
-    .replaceAll(BEARER_PATTERN, 'Bearer [token]')
-    .replaceAll(BASIC_PATTERN, '$1 [token]')
-  const innerKeys = hasOauthContext
-    ? [KV_SECRET_AT, AUTH_HEADER_AT, CODE_KEY_AT]
-    : [KV_SECRET_AT, AUTH_HEADER_AT]
-  const keyed = redactedRunningThrough(
-    redactedRunningThrough(located, AUTH_HEADER_PATTERN, innerKeys),
-    KV_SECRET_PATTERN,
-    innerKeys
-  )
-  const coded = hasOauthContext
-    ? redactedRunningThrough(keyed, CODE_KEY_PATTERN, [...innerKeys, SCHEMED_VALUE_AT])
-    : keyed
-  const scrubbed = rejoinedQueries(coded)
-    .replaceAll(JWT_PATTERN, '[jwt]')
-    .replaceAll(SLASHED_SECRET_EMAIL_PATTERN, (match: string, run: string, local: string) =>
-      isSlashedSecret(`${run}${LEADING_BASE64_PATTERN.exec(local)?.[0] ?? ''}`) ? '[email]' : match
-    )
-    .replaceAll(ADDRESS_SECRET_DOMAIN_PATTERN, (match: string, run: string) =>
-      isSlashedSecret(run) ? '[email]' : match
-    )
-    .replaceAll(EMAIL_PATTERN, '[email]')
-    .replaceAll(POSTHOG_KEY_PATTERN, '[posthog-key]')
-    .replaceAll(VENDOR_KEY_PATTERN, '[secret]')
-    .replaceAll(AWS_SECRET_KEY_PATTERN, (run) => (isAwsSecretKey(run) ? '[secret]' : run))
-    .replaceAll(IPV4_PATTERN, '[ip]')
-    .replaceAll(IPV6_PATTERN, '[ip]')
-    .replaceAll(PHONE_PATTERN, '[phone]')
-    .replaceAll(HEX_RUN_PATTERN, '[secret]')
-    .replaceAll(POSTHOG_KEY_PATTERN, '[posthog-key]')
-    .replaceAll(VENDOR_KEY_PATTERN, '[secret]')
-    .replaceAll(AWS_SECRET_KEY_PATTERN, (run) => (isAwsSecretKey(run) ? '[secret]' : run))
-    .replaceAll(BASE64_RUN_PATTERN, (run) => (isSecretRun(run) ? '[secret]' : run))
-  return capped(scrubbed, input.length < value.length)
+  let pass = scrubOnce(input)
+  if (pass.keyInToken) {
+    for (let count = 1; count < PASSES_MAX; count += 1) {
+      const next = scrubOnce(pass.text)
+      if (next.text === pass.text) break
+      pass = next
+    }
+  }
+  return capped(pass.text, input.length < value.length)
 }

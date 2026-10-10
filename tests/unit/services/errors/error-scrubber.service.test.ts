@@ -7,7 +7,11 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { ERROR_VALUE_MAX } from '@/constants/error-tracking.constants'
-import { scrubText } from '@/services/errors/error-scrubber.service'
+import {
+  SCRUB_VALUE_MAX,
+  scrubText,
+  TRUNCATION_MARKER,
+} from '@/services/errors/error-scrubber.service'
 
 interface ScrubVector {
   rule: string
@@ -83,10 +87,15 @@ describe('scrubText vectors', () => {
 })
 
 describe('scrubText', () => {
+  it("keeps the scrubber's own cap equal to ERROR_VALUE_MAX", () => {
+    // The scrubber is shared byte for byte with the clients, so it holds its own cap; this keeps the two equal.
+    expect(SCRUB_VALUE_MAX).toBe(ERROR_VALUE_MAX)
+  })
+
   it('cuts a long text to the cap, marker included', () => {
     const scrubbed = scrubText('word '.repeat(400))
     expect(scrubbed).toHaveLength(ERROR_VALUE_MAX)
-    expect(scrubbed.endsWith('…[truncated]')).toBe(true)
+    expect(scrubbed.endsWith(TRUNCATION_MARKER)).toBe(true)
   })
 
   it('keeps a text of exactly the cap whole', () => {
@@ -102,7 +111,7 @@ describe('scrubText', () => {
     const scrubbed = scrubText(text)
     expect(scrubbed.startsWith('[secret] x x')).toBe(true)
     expect(scrubbed).not.toContain('abab')
-    expect(scrubbed.endsWith('…[truncated]')).toBe(true)
+    expect(scrubbed.endsWith(TRUNCATION_MARKER)).toBe(true)
   })
 
   it('keeps harmless strings unchanged', () => {
@@ -185,6 +194,56 @@ describe('scrubText', () => {
   it('scrubs a secret that appears after replacements shortened the text', () => {
     const jwt = 'eyJhIjoxfQ.eyJiIjoyfQ.c2lnbmF0dXJl'
     expect(scrubText(`${jwt} jane@example.com`)).toBe('[jwt] [email]')
+  })
+})
+
+// The view's spans are private to the file, so they are checked through scrubText: only the search for a key a placeholder swallowed, and that key's redaction, read them.
+describe('scrubText on a key a placeholder swallowed, read through earlier replacements', () => {
+  it.each([
+    [
+      'a replacement that took an earlier one whole',
+      '/x#frag?api_key=>"zqS7hunter2"',
+      '/x#[fragment]>"[redacted]"',
+    ],
+    [
+      'a replacement whose first character is an earlier one',
+      'secret=Bearer x.tspwd:"zqS7hunter2"',
+      'secret=[redacted]"[redacted]"',
+    ],
+    [
+      'two replacements side by side',
+      '/reset/abc#frag?api_key=>"zqS7hunter2"',
+      '/reset/[token]#[fragment]>"[redacted]"',
+    ],
+    [
+      'text after an earlier, shorter replacement',
+      'Bearer zqS7abcdef /reset/x.tspwd = zqS7hunter2',
+      'Bearer [token] /reset/[token] = [redacted]',
+    ],
+    [
+      'a placeholder inserted at the end of the text',
+      '/reset/x.tspwd = "zqS7hunter2" Key (id)=(',
+      '/reset/[token] = "[redacted]" Key (id)=([value])',
+    ],
+    [
+      'a placeholder inserted inside the value',
+      '/reset/x.tspwd="zz Key (a)=(Key (b)=(x) yy"',
+      '/reset/[token]"[redacted]"',
+    ],
+  ])('maps %s back to the original text', (_shape, input, expected) => {
+    const once = scrubText(input)
+    expect(once).toBe(expected)
+    expect(scrubText(once)).toBe(once)
+  })
+
+  it('finds a swallowed key whose word starts 80 characters before the placeholder ends, and no further', () => {
+    // The search reaches TOKEN_KEY_REACH (80) characters back; a key word one longer keeps its value, the documented residual.
+    expect(scrubText(`/reset/${'a'.repeat(75)}token = zqS7hunter2`)).toBe(
+      '/reset/[token] = [redacted]'
+    )
+    expect(scrubText(`/reset/${'a'.repeat(76)}token = zqS7hunter2`)).toBe(
+      '/reset/[token] = zqS7hunter2'
+    )
   })
 })
 

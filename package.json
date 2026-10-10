@@ -42,6 +42,7 @@
     "flags:sync": "tsx --env-file-if-exists=.env src/scripts/flags-sync.ts",
     "test": "vitest run",
     "test:unit": "vitest run --config vitest.unit.config.ts",
+    "scrub:gate": "tsx tests/helpers/scrub-gate.ts",
     "test:watch": "vitest watch",
     "test:coverage": "vitest run --coverage",
     "commit": "cz",
