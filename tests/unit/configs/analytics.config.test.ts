@@ -207,6 +207,18 @@ describe('isFlagsEnabled', () => {
   it('is off under the test environment, which sets neither', () => {
     expect(isFlagsEnabled()).toBe(false)
   })
+
+  it.each([
+    { POSTHOG_PROJECT_KEY: undefined, POSTHOG_FEATURE_FLAGS_KEY: undefined },
+    { POSTHOG_PROJECT_KEY: 'phc_test_key_not_real', POSTHOG_FEATURE_FLAGS_KEY: undefined },
+    { POSTHOG_PROJECT_KEY: undefined, POSTHOG_FEATURE_FLAGS_KEY: 'phs_test_key_not_real' },
+    {
+      POSTHOG_PROJECT_KEY: 'phc_test_key_not_real',
+      POSTHOG_FEATURE_FLAGS_KEY: 'phs_test_key_not_real',
+    },
+  ])('implies isAnalyticsEnabled, which the analytics Worker gate relies on (%o)', (env) => {
+    expect(!isFlagsEnabled(env) || isAnalyticsEnabled(env)).toBe(true)
+  })
 })
 
 describe('posthogFlagUrl', () => {

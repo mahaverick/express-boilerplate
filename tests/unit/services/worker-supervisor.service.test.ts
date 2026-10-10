@@ -119,7 +119,12 @@ describe('startWorkers', () => {
     vi.mocked(isFlagsEnabled).mockReturnValue(false)
   })
 
+  /**
+   * Flags need the project key, so `isFlagsEnabled()` implies
+   * `isAnalyticsEnabled()` (tests/unit/configs/analytics.config.test.ts).
+   */
   it('starts the analytics Worker and registers the flag definitions schedule once per generation when flags are enabled', () => {
+    vi.mocked(isAnalyticsEnabled).mockReturnValue(true)
     vi.mocked(isFlagsEnabled).mockReturnValue(true)
     const mocks = wireMocks()
     startWorkers()
@@ -127,7 +132,6 @@ describe('startWorkers', () => {
     expect(mocks.workers).toHaveLength(4)
     expect(startAnalyticsWorker).toHaveBeenCalledOnce()
     expect(ensureFlagDefinitionsSchedule).toHaveBeenCalledOnce()
-    expect(ensureAnalyticsDrainSchedule).not.toHaveBeenCalled()
 
     mocks.lose(mocks.connections[0] as IORedis)
     expect(mocks.workers).toHaveLength(8)
@@ -135,6 +139,7 @@ describe('startWorkers', () => {
   })
 
   it('logs a failed flag definitions schedule registration at warn, and keeps the Workers running', async () => {
+    vi.mocked(isAnalyticsEnabled).mockReturnValue(true)
     vi.mocked(isFlagsEnabled).mockReturnValue(true)
     const mocks = wireMocks()
     const failure = new Error('Redis unreachable')

@@ -1,7 +1,7 @@
 /**
  * @file Starts the email, notification and maintenance Workers, and the
- * analytics Worker when analytics, the PostHog personal API key or feature
- * flags are enabled, and keeps them on a live
+ * analytics Worker when analytics or the PostHog personal API key is
+ * enabled, and keeps them on a live
  * connection, replacing them whenever their connection gives up before its
  * first 'ready' (see `startWorkers`).
  */
@@ -55,12 +55,13 @@ async function closeLostWorkers(workers: Worker[]): Promise<void> {
 
 /**
  * Start the email, notification and maintenance Workers, and the analytics
- * Worker when `isAnalyticsEnabled()`, `isTimelineEnabled()` or
- * `isFlagsEnabled()`, replacing them whenever their connection gives up
- * before its first ready. Each generation registers the retention schedule,
- * the analytics drain schedule when `isAnalyticsEnabled()`, the PostHog
- * deletion schedule when `isTimelineEnabled()`, and the flag definitions
- * schedule when `isFlagsEnabled()`.
+ * Worker when `isAnalyticsEnabled()` or `isTimelineEnabled()` (feature flags
+ * need the project key, so `isFlagsEnabled()` implies the first), replacing
+ * them whenever their connection gives up before its first ready. Each
+ * generation registers the retention schedule, the analytics drain schedule
+ * when `isAnalyticsEnabled()`, the PostHog deletion schedule when
+ * `isTimelineEnabled()`, and the flag definitions schedule when
+ * `isFlagsEnabled()`.
  *
  * A Worker on such a connection never recovers: BullMQ's init has rejected for
  * good, and unless the error is one BullMQ counts as a connection error
@@ -95,7 +96,7 @@ export function startWorkers(): SupervisedWorkers {
     try {
       generation.connection = getQueueConnection()
       const starters = [startEmailWorker, startNotificationWorker, startMaintenanceWorker]
-      if (isAnalyticsEnabled() || isTimelineEnabled() || isFlagsEnabled()) {
+      if (isAnalyticsEnabled() || isTimelineEnabled()) {
         starters.push(startAnalyticsWorker)
       }
       // One at a time, so a throw leaves the ones already started in `workers`.

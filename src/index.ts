@@ -111,7 +111,7 @@ async function boot(): Promise<void> {
   // Throws if a Worker fails to start: boot() rejects, and the unhandledRejection handler exits 1.
   workers.supervised = startWorkers()
   logger.info(
-    isAnalyticsEnabled() || isTimelineEnabled() || isFlagsEnabled()
+    isAnalyticsEnabled() || isTimelineEnabled()
       ? 'Workers started (email, notification, maintenance, analytics)'
       : 'Workers started (email, notification, maintenance)'
   )
