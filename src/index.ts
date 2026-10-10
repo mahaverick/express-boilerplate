@@ -111,7 +111,7 @@ async function boot(): Promise<void> {
   // Throws if a Worker fails to start: boot() rejects, and the unhandledRejection handler exits 1.
   workers.supervised = startWorkers()
   logger.info(
-    isAnalyticsEnabled() || isTimelineEnabled() || isFlagsEnabled()
+    isAnalyticsEnabled() || isTimelineEnabled()
       ? 'Workers started (email, notification, maintenance, analytics)'
       : 'Workers started (email, notification, maintenance)'
   )
@@ -126,7 +126,7 @@ function main(): void {
   // eslint-disable-next-line unicorn/no-nonstandard-builtin-properties -- V8's stack depth; Node runs only on V8
   Error.stackTraceLimit = ERROR_FRAME_LIMIT
   try {
-    assertEnvConsistent(getEnv(), process.env, (message) => {
+    assertEnvConsistent(getEnv(), (message) => {
       logger.warn(message)
     })
   } catch (error) {

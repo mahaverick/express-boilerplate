@@ -8,20 +8,6 @@ import { SERVER_DRAIN_TIMEOUT_MS } from '@/constants/global.constants'
 import { senderDomain, senderFor } from '@/utilities/email-sender.utilities'
 
 /**
- * Retired variable names, mapped to their replacements. Setting a retired
- * name refuses boot: the schema does not read it, so it would otherwise be
- * ignored in silence.
- */
-export const REMOVED_ENV_NAMES: Readonly<Record<string, string>> = Object.freeze({
-  SMTP_USER: 'SMTP_USERNAME',
-  SMTP_PASS: 'SMTP_PASSWORD',
-  SMTP_CONNECTION_TIMEOUT: 'SMTP_CONNECTION_TIMEOUT_MS',
-  SMTP_GREETING_TIMEOUT: 'SMTP_GREETING_TIMEOUT_MS',
-  SMTP_SOCKET_TIMEOUT: 'SMTP_SOCKET_TIMEOUT_MS',
-  QUEUE_PREFIX: 'REDIS_KEY_PREFIX',
-})
-
-/**
  * Time left after a hung send gives up, for the database, Redis, queue and
  * OTel closes that run after the workers close. The error-report flush
  * (`ERROR_SHUTDOWN_FLUSH_MS`, 3 s) runs there too, so with SMTP and PostHog
@@ -32,21 +18,6 @@ const SHUTDOWN_HEADROOM_MS = 5000
 const LOCAL_SMTP_HOSTS = new Set(['localhost', '127.0.0.1'])
 const MAILPIT_SMTP_PORT = 1025
 const PLACEHOLDER_MAIL_FROM = 'no-reply@example.com'
-
-/**
- * Old variable names still present in the raw environment.
- * @param raw - The unparsed environment, normally `process.env`.
- * @returns One message per old name that is set to a non-empty value.
- */
-function renamedVariableProblems(raw: Record<string, string | undefined>): string[] {
-  // An empty value counts as unset, the same rule parseEnv applies.
-  return Object.entries(REMOVED_ENV_NAMES)
-    .filter(([oldName]) => (raw[oldName] ?? '') !== '')
-    .map(
-      ([oldName, newName]) =>
-        `${oldName} was renamed to ${newName}. Rename it where this environment is set.`
-    )
-}
 
 /**
  * SMTP settings that only make sense against the local Mailpit.
@@ -199,7 +170,7 @@ function flagsKeyProblems(env: Env): string[] {
 }
 
 /**
- * Refuses unsafe or stale configuration at boot; throws Error with one actionable message.
+ * Refuses unsafe or inconsistent configuration at boot; throws Error with one actionable message.
  *
  * Every problem found goes into that one message, so an operator fixes them
  * all in one pass. Warnings go to `warn` and never stop boot. The SMTP
@@ -207,16 +178,11 @@ function flagsKeyProblems(env: Env): string[] {
  * and the headroom, since `gracefulShutdown` drains HTTP before it waits for
  * the in-flight send; on local that is a warning.
  * @param env - The validated environment from `getEnv()`.
- * @param raw - The unparsed environment, normally `process.env`; only read for renamed names.
  * @param warn - Receives each warning message.
  * @throws {Error} Listing every problem, when there is at least one.
  */
-export function assertEnvConsistent(
-  env: Env,
-  raw: Record<string, string | undefined>,
-  warn: (message: string) => void
-): void {
-  const problems = renamedVariableProblems(raw)
+export function assertEnvConsistent(env: Env, warn: (message: string) => void): void {
+  const problems: string[] = []
   const isLocal = env.APP_ENV === 'local'
 
   if (!isLocal && env.NODE_ENV !== 'production') {

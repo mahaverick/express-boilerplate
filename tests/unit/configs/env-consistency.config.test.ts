@@ -1,10 +1,9 @@
 /**
- * @file assertEnvConsistent takes the env, the raw source and the warn
- * sink as arguments, so every case here is a crafted env, never the
- * memoised getEnv().
+ * @file assertEnvConsistent takes the env and the warn sink as arguments,
+ * so every case here is a crafted env, never the memoised getEnv().
  */
 import { describe, expect, it, vi } from 'vitest'
-import { assertEnvConsistent, REMOVED_ENV_NAMES } from '@/configs/env-consistency.config'
+import { assertEnvConsistent } from '@/configs/env-consistency.config'
 import { parseEnv } from '@/configs/env.config'
 
 const local: Record<string, string> = {
@@ -33,17 +32,16 @@ const deployed: Record<string, string> = {
 /**
  * Run the boot checks against a crafted environment.
  * @param source - Raw variables, parsed with parseEnv first.
- * @param raw - The raw source the renamed-name check reads; defaults to `source`.
  * @returns The thrown message, if any, and every warning.
  */
-function runChecks(
-  source: Record<string, string>,
-  raw: Record<string, string> = source
-): { error: string | undefined; warnings: string[] } {
+function runChecks(source: Record<string, string>): {
+  error: string | undefined
+  warnings: string[]
+} {
   const warn = vi.fn<(message: string) => void>()
   let message: string | undefined
   try {
-    assertEnvConsistent(parseEnv(source), raw, warn)
+    assertEnvConsistent(parseEnv(source), warn)
   } catch (error) {
     message = (error as Error).message
   }
@@ -157,25 +155,10 @@ describe('assertEnvConsistent', () => {
     expect(runChecks({ ...deployed, APP_ENV: appEnv })).toEqual({ error: undefined, warnings: [] })
   })
 
-  describe('renamed variables', () => {
-    it.each(Object.entries(REMOVED_ENV_NAMES))('refuses %s, naming %s', (oldName, newName) => {
-      const { error } = runChecks(local, { ...local, [oldName]: '1' })
-      expect(error).toContain(`${oldName} was renamed to ${newName}`)
-    })
-
-    it('maps exactly the six renames of this release', () => {
-      expect(REMOVED_ENV_NAMES).toEqual({
-        SMTP_USER: 'SMTP_USERNAME',
-        SMTP_PASS: 'SMTP_PASSWORD',
-        SMTP_CONNECTION_TIMEOUT: 'SMTP_CONNECTION_TIMEOUT_MS',
-        SMTP_GREETING_TIMEOUT: 'SMTP_GREETING_TIMEOUT_MS',
-        SMTP_SOCKET_TIMEOUT: 'SMTP_SOCKET_TIMEOUT_MS',
-        QUEUE_PREFIX: 'REDIS_KEY_PREFIX',
-      })
-    })
-
-    it('ignores an old name set to an empty value, as parseEnv does', () => {
-      expect(runChecks(local, { ...local, QUEUE_PREFIX: '' }).error).toBeUndefined()
+  it('passes a local environment that also sets a name the schema does not read', () => {
+    expect(runChecks({ ...local, QUEUE_PREFIX: 'bull' })).toEqual({
+      error: undefined,
+      warnings: [],
     })
   })
 
@@ -427,12 +410,13 @@ describe('assertEnvConsistent', () => {
   })
 
   it('lists every problem in one message', () => {
-    const { error } = runChecks(
-      { ...deployed, NODE_ENV: 'development', SMTP_HOST: 'localhost', SMTP_USERNAME: 'apikey' },
-      { ...deployed, SMTP_PASS: 'old' }
-    )
+    const { error } = runChecks({
+      ...deployed,
+      NODE_ENV: 'development',
+      SMTP_HOST: 'localhost',
+      SMTP_USERNAME: 'apikey',
+    })
     expect(error).toMatch(/^Inconsistent environment:\n/)
-    expect(error).toContain('SMTP_PASS was renamed to SMTP_PASSWORD')
     expect(error).toContain('NODE_ENV is development')
     expect(error).toContain('SMTP_HOST is localhost')
     expect(error).toContain('Only SMTP_USERNAME is set')

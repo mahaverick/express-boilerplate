@@ -684,8 +684,6 @@ Everywhere:
 - a `COOKIE_DOMAIN` that `APP_URL`'s host is neither equal to nor a
   subdomain of is refused, because browsers reject every auth cookie it
   would set;
-- a renamed variable's old name is refused, with a message naming the new
-  one;
 - `COOKIE_SECURE` resolving to `true` while `GOOGLE_CLIENT_ID` is set and
   `TRUST_PROXY=false` logs a warning (see SECURITY.md).
 

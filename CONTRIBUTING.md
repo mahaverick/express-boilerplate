@@ -80,9 +80,10 @@ These move together, or a gate below catches the one you missed:
    `Test with coverage gate`. CI compares keys and values in both directions;
    the only difference allowed is the port in `DATABASE_URL` and `REDIS_URL`,
    because CI's services publish the container-default ports.
-6. Renaming or removing a variable: add the old name to `REMOVED_ENV_NAMES`
-   (`src/configs/env-consistency.config.ts`), so that setting it refuses boot
-   with a message naming the new one.
+6. Renaming or removing a variable is a breaking change: the schema ignores a
+   name it does not declare, so an environment that still sets the old name
+   boots without it. Mark the commit `feat!:` and name the old and new
+   variables in its `BREAKING CHANGE:` footer.
 
 ## What CI checks, beyond `pnpm lint`/`test:coverage`/`build`
 

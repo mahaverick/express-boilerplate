@@ -297,8 +297,7 @@ export default tseslint.config(
   /**
    * logger.service.ts reports a Slack failure with console.error, so it never
    * re-enters the logger. index.ts prints a failed boot check with
-   * console.error and hands process.env to `assertEnvConsistent`, which checks
-   * retired names the schema does not declare.
+   * console.error.
    */
   {
     files: ['src/services/logger.service.ts', 'src/index.ts'],
