@@ -1212,7 +1212,11 @@ query`: the SQL text is never sent. A thrown object that is not an `Error`
   Authorization rule or the OAuth `code` rule that takes a later secret-named key's or Authorization
   or Cookie key's name, separator or opening quote runs on to the end of that key's value, and over a closing
   quote and text glued to it, so the later key's value is never left in
-  view; a value after a replaced URL fragment, `#[fragment] = …`, too; `sig`, `hmac`, `nonce`, `response`, `pin`,
+  view; a value after a replaced URL fragment, `#[fragment] = …`, too; a
+  secret-named key that the path-token, query or fragment rule took into its
+  placeholder, with or without its separator, read again from the original
+  text, so its value after the placeholder goes too (`/reset/x.tspwd = …`
+  becomes `/reset/[token] = [redacted]`); `sig`, `hmac`, `nonce`, `response`, `pin`,
   `passphrase` and the one-time code names, and compound key names such as
   `secret_key` before `:` too; only the bare values `undefined`, `null`,
   `missing`, `true` and `false`, and already-scrubbed placeholders, are kept);
@@ -1230,8 +1234,9 @@ query`: the SQL text is never sent. A thrown object that is not an `Error`
   `/reset/`, `/verify/`, `/invite/` or `/accept/`, and long hex and base64
   runs. Each value is then capped at 1024 characters. The span that records
   the exception (`span.recordException`) gets the same scrubbed name, message
-  and stack, so Tempo never holds the raw message either. The frontends port
-  the same rules, tested against one shared vector file. The reporter's own
+  and stack, so Tempo never holds the raw message either. The react and apex
+  frontends hold `error-scrubber.service.ts` byte for byte, as
+  `src/observability/errors/scrub.ts`, tested against one shared vector file. The reporter's own
   failure warning logs the thrown value's kind and its scrubbed text, never
   the value.
 - **Slack gets the same scrubbing.** When `SLACK_WEBHOOK_URL` is set, every log
@@ -1273,13 +1278,12 @@ query`: the SQL text is never sent. A thrown object that is not an `Error`
   base64 (the base64 run rule's test), counting stopped by a `%2F`
   (`abc/def%2Fghi@example.com` keeps `abc/`), or when it follows an address
   character directly (a letter, digit, `.`, `%`, `+`, `-`, `_`, `/` or `@`:
-  `jane@example.com/<secret>@…`, `u.<secret>@…`); a quoted value whose key
-  sits inside a URL query that an encoded key's value runs into
-  (`secret%3Dhttps://…?a=1/api_key="…"` keeps the quoted value); a key name
-  glued to the end of the segment after `/reset/`, `/verify/`, `/invite/` or
-  `/accept/`, which goes into `[token]` with the segment and leaves the value
-  after it in view (`/app/reset/x.tsrefresh_token = …` becomes
-  `/app/reset/[token] = …`); the parameters other than
+  `jane@example.com/<secret>@…`, `u.<secret>@…`); a secret-named key
+  that the path-token, query or fragment rule took into its placeholder when
+  the key's word starts more than 80 characters before the placeholder ends,
+  and an Authorization or Cookie key taken in the same way
+  (`/reset/x.tscookie = …` keeps its value); the
+  parameters other than
   secret-named ones of an Authorization or Cookie value opened by an escaped
   quote and a scheme (`\"OAuth username="…", realm="…"` keeps `username`
   and `realm`; `oauth_signature`, `oauth_token`, `nonce`, `cnonce` and

@@ -1967,7 +1967,7 @@
   {
     "rule": "path-token",
     "input": "/app/reset/x.tsrefresh_token = zqS7hunter2",
-    "expected": "/app/reset/[token] = zqS7hunter2"
+    "expected": "/app/reset/[token] = [redacted]"
   },
   {
     "rule": "path-token",
@@ -1977,17 +1977,17 @@
   {
     "rule": "path-token",
     "input": "/reset/abcpassword=\"zqS7hunter2\"",
-    "expected": "/reset/[token]\"zqS7hunter2\""
+    "expected": "/reset/[token]\"[redacted]\""
   },
   {
     "rule": "path-token",
     "input": "/reset/x-token: zqS7hunter2 more",
-    "expected": "/reset/[token] zqS7hunter2 more"
+    "expected": "/reset/[token] [redacted] more"
   },
   {
     "rule": "path-token",
     "input": "GET /verify/x.REFRESH_TOKEN = zqS7hunter2",
-    "expected": "GET /verify/[token] = zqS7hunter2"
+    "expected": "GET /verify/[token] = [redacted]"
   },
   {
     "rule": "path-token",
@@ -2017,12 +2017,12 @@
   {
     "rule": "path-token",
     "input": "/reset/ab-mfa_response\\u003a\\\"zqS7x y\\\"",
-    "expected": "/reset/[token]\"zqS7x y\\\""
+    "expected": "/reset/[token]\"[redacted]"
   },
   {
     "rule": "path-token",
     "input": "GET /reset/a&code=\"zqS7x y\"",
-    "expected": "GET /reset/[token]\"zqS7x y\""
+    "expected": "GET /reset/[token]\"[redacted]\""
   },
   {
     "rule": "path-token",
@@ -2052,7 +2052,7 @@
   {
     "rule": "path-token",
     "input": "/reset/x.token = \\'zqS7a\\' then pwd = 'zqS7b'",
-    "expected": "/reset/[token] = \\'zqS7a\\' then pwd = '[redacted]'"
+    "expected": "/reset/[token] = \\'[redacted]'[redacted]'"
   },
   {
     "rule": "path-token",
@@ -2062,7 +2062,7 @@
   {
     "rule": "path-token",
     "input": "GET /app/reset/sid=\"zqS7a failed token: /app/reset/kjfn-name = \"zqS7b",
-    "expected": "GET /app/reset/[token]\"zqS7a failed token: [redacted]"
+    "expected": "GET /app/reset/[token]\"[redacted]"
   },
   {
     "rule": "kv",
@@ -2142,7 +2142,7 @@
   {
     "rule": "path-token",
     "input": "authorization /verify/code=>\"zqS7c&b=1",
-    "expected": "authorization /verify/[token]>\"zqS7c&b=1"
+    "expected": "authorization /verify/[token]>\"[redacted]"
   },
   {
     "rule": "path-token",

@@ -197,6 +197,46 @@ describe('scrubText', () => {
   })
 })
 
+// The view's spans are private to the file, so they are checked through scrubText: only the search for a key a placeholder swallowed, and that key's redaction, read them.
+describe('scrubText on a key a placeholder swallowed, read through earlier replacements', () => {
+  it.each([
+    [
+      'a replacement that took an earlier one whole',
+      '/x#frag?api_key=>"zqS7hunter2"',
+      '/x#[fragment]>"[redacted]"',
+    ],
+    [
+      'a replacement whose first character is an earlier one',
+      'secret=Bearer x.tspwd:"zqS7hunter2"',
+      'secret=[redacted]"[redacted]"',
+    ],
+    [
+      'two replacements side by side',
+      '/reset/abc#frag?api_key=>"zqS7hunter2"',
+      '/reset/[token]#[fragment]>"[redacted]"',
+    ],
+    [
+      'text after an earlier, shorter replacement',
+      'Bearer zqS7abcdef /reset/x.tspwd = zqS7hunter2',
+      'Bearer [token] /reset/[token] = [redacted]',
+    ],
+    [
+      'a placeholder inserted at the end of the text',
+      '/reset/x.tspwd = "zqS7hunter2" Key (id)=(',
+      '/reset/[token] = "[redacted]" Key (id)=([value])',
+    ],
+    [
+      'a placeholder inserted inside the value',
+      '/reset/x.tspwd="zz Key (a)=(Key (b)=(x) yy"',
+      '/reset/[token]"[redacted]"',
+    ],
+  ])('maps %s back to the original text', (_shape, input, expected) => {
+    const once = scrubText(input)
+    expect(once).toBe(expected)
+    expect(scrubText(once)).toBe(once)
+  })
+})
+
 describe('scrubText on identifiers', () => {
   it.each([
     'at a-very-long-kebab-identifier-for-the-tenant-switcher-panel (x.js)',

@@ -11,7 +11,10 @@
  * The rules run in a fixed order over a view of the text. Each rule's
  * matches are applied to the view at once, as `String.replaceAll` would, and
  * every character of the view remembers the span of the original text it
- * stands for (`View`).
+ * stands for (`View`). A secret-named key that an earlier rule swallowed
+ * into a placeholder is found again in the original text, and its value is
+ * redacted last (`tokenKeyRanges`), so that redaction can never hide the
+ * context a rule reads.
  */
 
 /**
@@ -983,11 +986,129 @@ function rejoinQueries(scrub: Scrub): void {
 }
 
 /**
- * Every rule once, in order.
- * @param input - The text, already cut to `SCAN_MAX`.
- * @returns The scrubbed text.
+ * A secret-named key and its separator only, at `lastIndex`.
  */
-function scrubOnce(input: string): string {
+const KV_SECRET_KEY_AT = new RegExp(KV_SECRET_KEY, 'iy')
+
+/**
+ * `KV_SECRET_VALUE`, at `lastIndex`.
+ */
+const KV_SECRET_VALUE_AT = new RegExp(KV_SECRET_VALUE, 'iy')
+
+/**
+ * How far back from a replacement's end a key that runs out of it may start,
+ * which bounds the search; a key whose word starts further back is not found.
+ */
+const TOKEN_KEY_REACH = 80
+
+/**
+ * The original spans of values whose secret-named key an earlier rule
+ * swallowed into a placeholder: a key that starts inside a replacement's original text and
+ * ends at or after its end (`/reset/x.tsrefresh_token = …`,
+ * `?a=1/api_key="…"`), read on the original text, with its value read on the
+ * view right after the placeholder and run through later keys.
+ * @param scrub - The scrub, after the key rules.
+ * @param innerKeys - The sticky key rules `runThroughEnd` looks for later keys with.
+ * @returns The original spans to redact once every other rule has run.
+ */
+function tokenKeyRanges(scrub: Scrub, innerKeys: readonly RegExp[]): [number, number][] {
+  const { view } = scrub
+  const ranges: [number, number][] = []
+  let at = 0
+  while (at < view.token.length) {
+    const id = view.token[at] ?? -1
+    let end = at + 1
+    while (end < view.token.length && view.token[end] === id) end += 1
+    if (id !== -1) {
+      const range = tokenKeyRange(scrub, at, end, innerKeys)
+      if (range !== undefined) ranges.push(range)
+    }
+    at = end
+  }
+  return ranges
+}
+
+/**
+ * The original span of the value of a key that runs out of one replacement.
+ * @param scrub - The scrub.
+ * @param tokenStart - Where the replacement starts in the view.
+ * @param tokenEnd - Where it ends in the view.
+ * @param innerKeys - The sticky key rules `runThroughEnd` looks for later keys with.
+ * @returns The span, or undefined when no key runs out of it.
+ */
+function tokenKeyRange(
+  scrub: Scrub,
+  tokenStart: number,
+  tokenEnd: number,
+  innerKeys: readonly RegExp[]
+): [number, number] | undefined {
+  const { input, view } = scrub
+  const originalStart = view.from[tokenStart] ?? 0
+  const originalEnd = view.to[tokenStart] ?? 0
+  let keptUntil = input.length
+  for (let at = tokenEnd; at < view.token.length; at += 1) {
+    if (view.token[at] !== -1) {
+      keptUntil = view.from[at] ?? input.length
+      break
+    }
+  }
+  for (let at = Math.max(originalStart, originalEnd - TOKEN_KEY_REACH); at < originalEnd; at += 1) {
+    KV_SECRET_KEY_AT.lastIndex = at
+    const key = KV_SECRET_KEY_AT.exec(input)
+    if (key === null) continue
+    const keyEnd = at + key[0].length
+    if (keyEnd < originalEnd || keyEnd > keptUntil) continue
+    const valueAt = tokenEnd + (keyEnd - originalEnd)
+    KV_SECRET_VALUE_AT.lastIndex = valueAt
+    const value = KV_SECRET_VALUE_AT.exec(view.text)
+    if (value === null || value[0].length === 0) continue
+    const end = runThroughEnd(view.text, valueAt, valueAt + value[0].length, innerKeys)
+    return [view.from[valueAt] ?? 0, view.to[end - 1] ?? 0]
+  }
+  return undefined
+}
+
+/**
+ * A placeholder and nothing else.
+ */
+const LONE_PLACEHOLDER_PATTERN = new RegExp(`^${PLACEHOLDER}$`)
+
+/**
+ * Replace every run of view characters that stands for part of one of
+ * `ranges` with `[redacted]`, except a run that is one placeholder a rule
+ * already wrote, which stays.
+ * @param scrub - The scrub.
+ * @param ranges - Original spans.
+ */
+function redactRanges(scrub: Scrub, ranges: readonly [number, number][]): void {
+  const { view } = scrub
+  const isCovered = (at: number): boolean =>
+    ranges.some(([start, end]) => (view.from[at] ?? 0) < end && (view.to[at] ?? 0) > start)
+  const edits: Edit[] = []
+  let at = 0
+  while (at < view.text.length) {
+    if (!isCovered(at)) {
+      at += 1
+      continue
+    }
+    let end = at
+    while (end < view.text.length && isCovered(end)) end += 1
+    const run = view.text.slice(at, end)
+    const isOneToken = view.token[at] !== -1 && view.token[at] === view.token[end - 1]
+    if (!(isOneToken && LONE_PLACEHOLDER_PATTERN.test(run)))
+      edits.push({ start: at, end, text: '[redacted]' })
+    at = end
+  }
+  commit(scrub, edits)
+}
+
+/**
+ * Every rule once, in order, then the values of keys found inside
+ * replacements.
+ * @param input - The text, already cut to `SCAN_MAX`.
+ * @returns The scrubbed text, and whether a key inside a replacement was found.
+ */
+function scrubOnce(input: string): { text: string; keyInToken: boolean } {
   const scrub: Scrub = { input, view: originalView(input), nextToken: 0 }
   apply(scrub, KEY_DETAIL_PATTERN, (match) => ({
     offset: `Key (${match[1] ?? ''})=(`.length,
@@ -1014,6 +1135,7 @@ function scrubOnce(input: string): string {
   redactRunningThrough(scrub, KV_SECRET_PATTERN, innerKeys)
   if (hasOauthContext)
     redactRunningThrough(scrub, CODE_KEY_PATTERN, [...innerKeys, SCHEMED_VALUE_AT])
+  const keyRanges = tokenKeyRanges(scrub, innerKeys)
   rejoinQueries(scrub)
   apply(scrub, JWT_PATTERN, whole('[jwt]'))
   apply(scrub, SLASHED_SECRET_EMAIL_PATTERN, (match) =>
@@ -1034,7 +1156,8 @@ function scrubOnce(input: string): string {
   apply(scrub, BASE64_RUN_PATTERN, (match) =>
     isSecretRun(match[0]) ? { offset: 0, text: '[secret]' } : undefined
   )
-  return scrub.view.text
+  redactRanges(scrub, keyRanges)
+  return { text: scrub.view.text, keyInToken: keyRanges.length > 0 }
 }
 
 /**
@@ -1049,6 +1172,13 @@ function applyKeyShapes(scrub: Scrub): void {
     isAwsSecretKey(match[0]) ? { offset: 0, text: '[secret]' } : undefined
   )
 }
+
+/**
+ * The most times the rules run over a text in which a key inside a
+ * replacement was found; each run after the first scrubs the text the last
+ * one wrote, and they stop once it no longer changes.
+ */
+const PASSES_MAX = 3
 
 /**
  * Remove personal data and secrets from one text, by these rules applied in
@@ -1092,7 +1222,11 @@ function applyKeyShapes(scrub: Scrub): void {
  * `[phone]` (a UUID is an id and is kept); a run of 32 or more hex digits
  * becomes `[secret]`, and a PostHog key or vendor credential glued to it is
  * replaced after it; a secret-looking run of 40 or more base64 characters
- * (`isSecretRun`) becomes `[secret]`; and the result is cut
+ * (`isSecretRun`) becomes `[secret]`; the value of a secret-named key that
+ * the path-token, query or fragment rule took into its placeholder, read
+ * again from the original text, becomes `[redacted]` (`tokenKeyRanges`),
+ * and when one does, the rules run again over the result, at most
+ * `PASSES_MAX` times in all, until it stops changing; and the result is cut
  * to 1024 characters, ending in `…[truncated]`. A key-named word is replaced even in
  * prose (`Missing token: please log in` becomes `Missing token: [redacted]`):
  * the rule trades some readable text for never leaking a value. Applying it
@@ -1109,5 +1243,13 @@ function applyKeyShapes(scrub: Scrub): void {
  */
 export function scrubText(value: string): string {
   const input = scanned(value)
-  return capped(scrubOnce(input), input.length < value.length)
+  let pass = scrubOnce(input)
+  if (pass.keyInToken) {
+    for (let count = 1; count < PASSES_MAX; count += 1) {
+      const next = scrubOnce(pass.text)
+      if (next.text === pass.text) break
+      pass = next
+    }
+  }
+  return capped(pass.text, input.length < value.length)
 }
