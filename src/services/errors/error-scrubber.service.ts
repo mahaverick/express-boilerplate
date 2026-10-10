@@ -1033,7 +1033,8 @@ function tokenKeyRanges(scrub: Scrub, innerKeys: readonly RegExp[]): [number, nu
 /**
  * The original span of the value of a key that runs out of one replacement;
  * the key's tail past the placeholder must be original text no rule replaced
- * (it ends at or before `keptUntil`, the next replacement's start).
+ * (it ends at or before `keptUntil`: the next replacement's start, or the
+ * input's end when there is none).
  * @param scrub - The scrub.
  * @param tokenStart - Where the replacement starts in the view.
  * @param tokenEnd - Where it ends in the view.
