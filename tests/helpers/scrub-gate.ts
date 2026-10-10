@@ -16,8 +16,9 @@
  * `--candidate-sha <sha>` (compare two commits instead of the working
  * tree), `--samples n` (tests/helpers/scrub-gate-options.ts). The exit code
  * is 1 when a planted value or a letter or digit is newly exposed, a text the
- * baseline scrubbed stably changes on a second pass, no case ran, or an
- * option is malformed.
+ * baseline scrubbed stably changes on a second pass, no case ran, a fixture
+ * row's output differs from its expectation or changes on a second pass, or
+ * an option is malformed or not read by the mode.
  */
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -211,12 +212,24 @@ interface Vector {
 }
 
 /**
+ * The counts of a fixture check, and the rows that differ.
+ */
+interface VectorReport {
+  rows: number
+  same: number
+  redactsMore: number
+  exposes: number
+  unstable: number
+  differing: unknown[]
+}
+
+/**
  * Check every fixture row: unchanged, redacts more than its expectation, or
  * exposes something the expectation hid; and whether a second pass changes it.
  * @param candidate - The scrubber under test.
  * @returns The counts and the rows that differ.
  */
-function checkVectors(candidate: Scrub): Record<string, unknown> {
+function checkVectors(candidate: Scrub): VectorReport {
   const vectors = JSON.parse(
     fs.readFileSync('tests/fixtures/error-scrub-vectors.json', 'utf8')
   ) as Vector[]
@@ -247,10 +260,11 @@ function checkVectors(candidate: Scrub): Record<string, unknown> {
  * @param options - The options.
  */
 async function writeSlice(baseline: Scrub, options: Options): Promise<void> {
+  const seed = options.seed ?? CORPUS_SEED
   const allowed: Record<string, number[]> = {}
   const unstable: number[] = []
   for (let index = 0; index < options.count; index += 1) {
-    const testCase = corpusCase(options.seed, index)
+    const testCase = corpusCase(seed, index)
     const output = baseline(testCase.input)
     const shown = testCase.planted.flatMap((value, at) =>
       visibleWindows(output, value).length > 0 ? [at] : []
@@ -259,7 +273,7 @@ async function writeSlice(baseline: Scrub, options: Options): Promise<void> {
     if (baseline(output) !== output) unstable.push(index)
   }
   const slice = {
-    seed: options.seed,
+    seed,
     count: options.count,
     baseline: options.baseline,
     allowed,
@@ -282,7 +296,7 @@ async function writeSlice(baseline: Scrub, options: Options): Promise<void> {
 function runCases(pair: Pair, options: Options): void {
   const started = Date.now()
   const isHunt = options.mode === 'hunt'
-  const seed = isHunt && options.seed === CORPUS_SEED ? started % 2_147_483_647 : options.seed
+  const seed = options.seed ?? started % 2_147_483_647
   const make = isHunt ? huntCase : corpusCase
   const totals = emptyTotals()
   for (let index = 0; index < options.count; index += 1) {
@@ -337,6 +351,8 @@ async function main(): Promise<void> {
   if (options.mode === 'vectors') {
     const report = checkVectors(await workingScrubber())
     console.log(JSON.stringify(report, undefined, 2))
+    if (report.same !== report.rows || report.unstable > 0 || report.exposes > 0)
+      process.exitCode = 1
     return
   }
   const baseline = await scrubberAt(options.baseline)

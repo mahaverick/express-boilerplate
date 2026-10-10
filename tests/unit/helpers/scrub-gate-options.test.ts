@@ -19,6 +19,32 @@ describe('scrub gate options', () => {
     })
   })
 
+  it('gives hunt no seed unless one is given, so it picks a time seed only then', () => {
+    expect(parseOptions(['hunt']).seed).toBeUndefined()
+    expect(parseOptions(['hunt', '--seed', '20261010']).seed).toBe(20_261_010)
+  })
+
+  it('reads the fixed seed for corpus and slice, and 2000 cases for slice', () => {
+    expect(parseOptions(['corpus']).seed).toBe(20_261_010)
+    expect(parseOptions(['slice'])).toMatchObject({ seed: 20_261_010, count: 2000 })
+    expect(parseOptions(['slice', '--count', '500']).count).toBe(500)
+  })
+
+  it.each(['--candidate-sha', '--baseline', '--seed', '--count', '--seconds', '--samples'])(
+    'refuses %s in vectors mode',
+    (flag) => {
+      expect(() => parseOptions(['vectors', flag, '7'])).toThrow(
+        `${flag} is not read in vectors mode`
+      )
+    }
+  )
+
+  it.each(['--seed', '--count'])('refuses %s in replay mode', (flag) => {
+    expect(() => parseOptions(['replay', '--replay', 'hunt:7:11', flag, '7'])).toThrow(
+      `${flag} is not read in replay mode`
+    )
+  })
+
   it('reads every option it is given', () => {
     expect(
       parseOptions([

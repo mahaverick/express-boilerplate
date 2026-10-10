@@ -32,19 +32,29 @@ function weakened(value: string): string {
   return scrubText(value.replaceAll(/token/gi, 'toke_'))
 }
 
+/**
+ * The slice's cases in which a scrubber leaves in view a planted value the
+ * baseline hid.
+ * @param scrub - The scrubber checked.
+ * @returns Each such case's index and output, once per value in view.
+ */
+function sliceExposures(scrub: (value: string) => string): string[] {
+  const exposed: string[] = []
+  for (let index = 0; index < slice.count; index += 1) {
+    const testCase = corpusCase(slice.seed, index)
+    const allowed = new Set(slice.allowed[index])
+    const output = scrub(testCase.input)
+    for (const [at, value] of testCase.planted.entries()) {
+      if (!allowed.has(at) && visibleWindows(output, value).length > 0)
+        exposed.push(`${index}: ${output}`)
+    }
+  }
+  return exposed
+}
+
 describe('scrubber gate slice', () => {
   it('keeps every planted secret the baseline hid out of view', () => {
-    const exposed: string[] = []
-    for (let index = 0; index < slice.count; index += 1) {
-      const testCase = corpusCase(slice.seed, index)
-      const allowed = new Set(slice.allowed[index])
-      const output = scrubText(testCase.input)
-      for (const [at, value] of testCase.planted.entries()) {
-        if (!allowed.has(at) && visibleWindows(output, value).length > 0)
-          exposed.push(`${index}: ${output}`)
-      }
-    }
-    expect(exposed).toEqual([])
+    expect(sliceExposures(scrubText)).toEqual([])
   })
 
   it('gives the same text twice wherever the baseline did', () => {
@@ -77,21 +87,30 @@ describe('scrubber gate measures', () => {
     expect(comparison.exposedAlnum + comparison.exposedOther).toBe(0)
   })
 
+  it('counts no exposure when the candidate writes Bearer [token] where the baseline kept a lowercase bearer', () => {
+    expect(compareCase([], 'x bearer [redacted]', 'x Bearer [token]').exposedAlnum).toBe(0)
+  })
+
+  it('counts a lowercase bearer the candidate keeps where the baseline wrote Bearer [token]', () => {
+    expect(compareCase([], 'x Bearer [token]', 'x bearer [token]').exposedAlnum).toBeGreaterThan(0)
+  })
+
+  it('counts a planted value next to Bearer [token] as exposed', () => {
+    const comparison = compareCase(
+      ['zqS7abcdef12'],
+      'x Bearer [token][redacted]',
+      'x Bearer [token]zqS7abcdef12'
+    )
+    expect(comparison.exposedWindows.length).toBeGreaterThan(0)
+    expect(comparison.exposedAlnum).toBe(12)
+  })
+
   it('counts the text a candidate removes that the baseline kept as over-redaction', () => {
     expect(compareCase([], 'GET /a failed', 'GET [redacted] failed').overRedacted).toBe(2)
   })
 
   it('sees a scrubber that misses the token key on the slice', () => {
-    // Proves the gate is not vacuous: the same scrubber fed `toke_` for every `token` must leak.
-    let exposures = 0
-    for (let index = 0; index < 500; index += 1) {
-      const testCase = corpusCase(slice.seed, index)
-      exposures += compareCase(
-        testCase.planted,
-        scrubText(testCase.input),
-        weakened(testCase.input)
-      ).exposedWindows.length
-    }
-    expect(exposures).toBeGreaterThan(0)
+    // Proves the slice check is not vacuous: the same scrubber fed `toke_` for every `token` must leak.
+    expect(sliceExposures(weakened)).not.toEqual([])
   })
 })

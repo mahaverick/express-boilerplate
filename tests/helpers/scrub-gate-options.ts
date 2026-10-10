@@ -12,7 +12,7 @@
 const DEFAULT_BASELINE = '713112c'
 
 /**
- * The fixed corpus seed, also the slice's.
+ * The fixed seed of the corpus and the slice, when `--seed` is not given.
  */
 export const CORPUS_SEED = 20_261_010
 
@@ -40,6 +40,14 @@ const FLAGS = new Set([
 ])
 
 /**
+ * The options each mode does not read, which it refuses rather than ignores.
+ */
+const UNREAD_FLAGS: Partial<Record<Mode, readonly string[]>> = {
+  vectors: ['candidate-sha', 'baseline', 'seed', 'count', 'seconds', 'samples'],
+  replay: ['seed', 'count'],
+}
+
+/**
  * A replay id: `corpus:<seed>:<index>` or `hunt:<seed>:<index>`.
  */
 const REPLAY_ID = /^(?:corpus|hunt):\d+:\d+$/
@@ -49,7 +57,11 @@ const REPLAY_ID = /^(?:corpus|hunt):\d+:\d+$/
  */
 export interface Options {
   mode: Mode
-  seed: number
+  /**
+   * The seed given; for corpus and slice the fixed seed when none is. Hunt
+   * picks a time seed when this is undefined.
+   */
+  seed: number | undefined
   count: number
   seconds: number
   baseline: string
@@ -76,12 +88,12 @@ function isMode(word: string): word is Mode {
  * @param minimum - The smallest value accepted.
  * @returns The number.
  */
-function wholeNumber(
+function wholeNumber<Fallback extends number | undefined>(
   given: ReadonlyMap<string, string>,
   name: string,
-  fallback: number,
+  fallback: Fallback,
   minimum: number
-): number {
+): number | Fallback {
   const text = given.get(name)
   if (text === undefined) return fallback
   const parsed = Number(text)
@@ -91,15 +103,12 @@ function wholeNumber(
 }
 
 /**
- * Read the options: the mode, then `--name value` pairs.
- * @param argv - The arguments after the script name.
- * @returns The options.
- * @throws {Error} On an unknown mode or option, an option given twice or with
- * no value, a malformed number or replay id, or `--replay` outside replay mode.
+ * Read the `--name value` pairs.
+ * @param rest - The arguments after the mode.
+ * @returns The options given, by name.
+ * @throws {Error} On an unknown option, or one given twice or with no value.
  */
-export function parseOptions(argv: readonly string[]): Options {
-  const [mode = 'corpus', ...rest] = argv
-  if (!isMode(mode)) throw new Error(`unknown mode "${mode}"; expected one of ${MODES.join(', ')}`)
+function readFlags(rest: readonly string[]): Map<string, string> {
   const given = new Map<string, string>()
   for (let at = 0; at < rest.length; at += 2) {
     const flag = rest[at] ?? ''
@@ -110,19 +119,51 @@ export function parseOptions(argv: readonly string[]): Options {
     if (value === undefined || value.startsWith('--')) throw new Error(`--${name} needs a value`)
     given.set(name, value)
   }
+  return given
+}
+
+/**
+ * Refuse a malformed or misplaced `--replay`, and any option the mode does
+ * not read.
+ * @param mode - The mode.
+ * @param given - The options given, by name.
+ * @throws {Error} On replay mode without a well-formed `--replay`, `--replay`
+ * in another mode, or an option in the mode's `UNREAD_FLAGS`.
+ */
+function refuseMisplaced(mode: Mode, given: ReadonlyMap<string, string>): void {
   const replay = given.get('replay')
   if (mode === 'replay' && (replay === undefined || !REPLAY_ID.test(replay)))
     throw new Error('replay needs --replay corpus:<seed>:<index> or hunt:<seed>:<index>')
   if (mode !== 'replay' && replay !== undefined)
     throw new Error('--replay is read only in replay mode')
+  const unread = UNREAD_FLAGS[mode] ?? []
+  for (const name of unread) {
+    if (given.has(name)) throw new Error(`--${name} is not read in ${mode} mode`)
+  }
+}
+
+/**
+ * Read the options: the mode, then `--name value` pairs.
+ * @param argv - The arguments after the script name.
+ * @returns The options.
+ * @throws {Error} On an unknown mode or option, an option given twice or with
+ * no value, a malformed number or replay id, `--replay` outside replay mode,
+ * or an option the mode does not read (`UNREAD_FLAGS`).
+ */
+export function parseOptions(argv: readonly string[]): Options {
+  const [mode = 'corpus', ...rest] = argv
+  if (!isMode(mode)) throw new Error(`unknown mode "${mode}"; expected one of ${MODES.join(', ')}`)
+  const given = readFlags(rest)
+  refuseMisplaced(mode, given)
+  const isFixedSeed = mode === 'corpus' || mode === 'slice'
   return {
     mode,
-    seed: wholeNumber(given, 'seed', CORPUS_SEED, 1),
-    count: wholeNumber(given, 'count', 1_000_000, 1),
+    seed: wholeNumber(given, 'seed', isFixedSeed ? CORPUS_SEED : undefined, 1),
+    count: wholeNumber(given, 'count', mode === 'slice' ? 2000 : 1_000_000, 1),
     seconds: wholeNumber(given, 'seconds', 0, 1),
     baseline: given.get('baseline') ?? DEFAULT_BASELINE,
     candidateSha: given.get('candidate-sha'),
     samples: wholeNumber(given, 'samples', 20, 0),
-    replay,
+    replay: given.get('replay'),
   }
 }

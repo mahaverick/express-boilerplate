@@ -14,10 +14,13 @@ const WINDOW = 6
 
 /**
  * Every placeholder a scrubber writes, the truncation marker, and URL
- * escapes (`%22`), whose digits are encoding, not content.
+ * escapes (`%22`), whose digits are encoding, not content. First the exact,
+ * case-sensitive `Bearer [token]`: the scrubber writes that literal itself,
+ * whatever the input's case (`bearer abc` becomes `Bearer [token]`), so its
+ * `Bearer` is not text kept from the input.
  */
 const PLACEHOLDER_PATTERN =
-  /\[(?:redacted|value|credentials|query|fragment|token|jwt|posthog-key|email|secret|ip|phone)\]|…\[truncated\]|%[\dA-Fa-f]{2}/g
+  /Bearer \[token\]|\[(?:redacted|value|credentials|query|fragment|token|jwt|posthog-key|email|secret|ip|phone)\]|…\[truncated\]|%[\dA-Fa-f]{2}/g
 
 /**
  * The windows of a planted value present in a text.

@@ -87,7 +87,7 @@ describe('scrubText vectors', () => {
 })
 
 describe('scrubText', () => {
-  it('caps a text at the error value cap the reporter uses', () => {
+  it("keeps the scrubber's own cap equal to ERROR_VALUE_MAX", () => {
     // The scrubber is shared byte for byte with the clients, so it holds its own cap; this keeps the two equal.
     expect(SCRUB_VALUE_MAX).toBe(ERROR_VALUE_MAX)
   })
@@ -234,6 +234,16 @@ describe('scrubText on a key a placeholder swallowed, read through earlier repla
     const once = scrubText(input)
     expect(once).toBe(expected)
     expect(scrubText(once)).toBe(once)
+  })
+
+  it('finds a swallowed key whose word starts 80 characters before the placeholder ends, and no further', () => {
+    // The search reaches TOKEN_KEY_REACH (80) characters back; a key word one longer keeps its value, the documented residual.
+    expect(scrubText(`/reset/${'a'.repeat(75)}token = zqS7hunter2`)).toBe(
+      '/reset/[token] = [redacted]'
+    )
+    expect(scrubText(`/reset/${'a'.repeat(76)}token = zqS7hunter2`)).toBe(
+      '/reset/[token] = zqS7hunter2'
+    )
   })
 })
 
