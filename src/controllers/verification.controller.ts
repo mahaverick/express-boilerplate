@@ -55,8 +55,9 @@ class VerificationController extends BaseController {
    * only if the address belongs to an existing, unverified account.
    * Identical response in every case.
    *
-   * The lookup runs before the response on every branch; the mail runs after
-   * it, so an SMTP round trip on one branch cannot be timed.
+   * For a well-formed address the lookup runs before the response on every
+   * branch; the mail runs after it, so a mail round trip on one branch cannot
+   * be timed.
    */
   resendVerification = this.handle(async (request, response) => {
     // A malformed address must answer like a well-formed unknown one.

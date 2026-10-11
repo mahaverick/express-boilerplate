@@ -42,8 +42,8 @@ const INVITATION_SENT_MESSAGE = 'If that address can be invited, an invitation h
 
 /**
  * The `:userId` route param on a member-management route, validated as a
- * UUID. A malformed id answers like an unknown member, so it never reaches
- * the database (a NUL would answer 500 there).
+ * UUID. A malformed id answers like an unknown member, so ids cannot be
+ * probed by format and a malformed one never reaches the database.
  * @param request - The incoming request.
  * @returns The `:userId` param.
  * @throws {HttpError} 404 `member_not_found` (message `Member not found`), when `:userId` is not a UUID.
@@ -113,7 +113,7 @@ class TenantController extends BaseController {
 
   /**
    * `PATCH /tenants/:slug`: update a tenant's `name`/`description`/`logo`/
-   * `website`. Owner/admin only — `requireRole('owner', 'admin')`
+   * `website`. Owner/admin only: `requireRole('owner', 'admin')`
    * (tenant.routes.ts) gates this before the handler runs. `slug` cannot be
    * changed here (see `updateTenantSchema`). The service re-reads the caller's
    * access under lock.
@@ -216,8 +216,8 @@ class TenantController extends BaseController {
    * `POST /tenants/:slug/invitations`: invite an address to the tenant.
    * Owner/admin only; `invite` re-checks the actor's current role and
    * `canActorGrantRole` under lock. Answers 202 with one fixed body whether
-   * or not the address has an account; only a current member gets 409
-   * `already_member`.
+   * or not the address has an account; the 409 `already_member` code is
+   * reserved for a current member.
    */
   inviteMember = this.handle(async (request, response) => {
     const principal = tenantPrincipal(request)
@@ -256,8 +256,8 @@ class TenantController extends BaseController {
   })
 
   /**
-   * `GET /tenants/:slug/settings`: a tenant's settings. Anyone `resolveTenant` admits
-   * may call this.
+   * `GET /tenants/:slug/settings`: a tenant's settings. Anyone `resolveTenant`
+   * admits may call this.
    */
   getSettings = this.handle(async (request, response) => {
     const settings = await getSettings(tenantPrincipal(request).tenantId)

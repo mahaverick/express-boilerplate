@@ -61,8 +61,7 @@ interface NotificationStreamPayload {
 }
 
 /**
- * The connected session id `requireAuth` verified this token carries, or a
- * 401 when it verified a token with none.
+ * The session id the access token carries, or a 401 when it carries none.
  *
  * `requireAuth` admits a verified token without `sid` until it expires; this
  * stream does not. The revocation heartbeat closes an open connection by
@@ -82,7 +81,7 @@ function requireSessionId(request: Request): string {
 }
 
 /**
- * Narrow a `notifications` row to `NotificationStreamPayload`.
+ * The fields of a `notifications` row that the stream sends.
  * @param notification - The row to serialize.
  * @returns The JSON-ready payload for this notification's `data:` line.
  */
@@ -127,10 +126,10 @@ function writeNotificationEvent(response: Response, notification: Notification):
  * (it aborted during `requireAuth`'s awaits, before any `'close'` listener
  * exists here) gets nothing, since no listener would ever unregister its
  * stream. Only the response is checked: Node destroys a request once its
- * body is fully read, which a live GET carrying a `Content-Length` has done
- * by now, while a real abort destroys the response. Otherwise apply the two stream caps. Over the per-user cap
- * (`SSE_MAX_STREAMS_PER_USER`) throws 429 `too_many_streams`; at the
- * process-wide cap (`SSE_MAX_STREAMS_TOTAL`) answers 503 `stream_capacity`
+ * body has been read, so a live request can look aborted, while a real abort
+ * destroys the response. Otherwise apply the two stream caps. Over the
+ * per-user cap (`SSE_MAX_STREAMS_PER_USER`) throws 429 `too_many_streams`; at
+ * the process-wide cap (`SSE_MAX_STREAMS_TOTAL`) answers 503 `stream_capacity`
  * with `Retry-After`, written here rather than thrown: `errorHandler` would
  * mask a 503's message and log it as a fault.
  * @param userId - The authenticated caller.
@@ -155,11 +154,11 @@ function didRefuseStream(userId: string, response: Response): boolean {
 }
 
 /**
- * The SSE handler for `GET /api/v1/notifications/stream`.
+ * The handler for `GET /api/v1/notifications/stream`.
  */
 class NotificationStreamController extends BaseController {
   /**
-   * `GET /api/v1/notifications/stream` — open a Server-Sent Events connection
+   * `GET /api/v1/notifications/stream`: open a Server-Sent Events connection
    * for the authenticated user's notifications.
    *
    * The live listener, heartbeat and close handler are registered before the
@@ -175,8 +174,7 @@ class NotificationStreamController extends BaseController {
    * `user.active` is not re-read, and the stream ends at access-token expiry,
    * which bounds that gap to one token lifetime.
    *
-   * Not wrapped in `handle()`: its own `catch` sits beside the `writeHead`
-   * it guards, and every rejection still reaches `next`.
+   * Not wrapped in `handle()`: its own `catch` passes every failure to `next`.
    * @param request - The incoming request, already authenticated by `requireAuth`, and, on reconnect, carrying a `Last-Event-ID` header.
    * @param response - The response, upgraded to an SSE stream once authenticated.
    * @param next - Forwards an authentication failure to the terminal error handler.
@@ -217,6 +215,9 @@ class NotificationStreamController extends BaseController {
       // A live copy of a replayed notification can still arrive after the replay.
       const missedIds = new Set<string>()
 
+      /**
+       * Deliver a live notification, or queue it while the replay runs; skips one the replay already sent.
+       */
       const handleNotification = (notification: Notification): void => {
         if (isReplaying) {
           pendingDuringReplay.push(notification)
@@ -246,10 +247,11 @@ class NotificationStreamController extends BaseController {
 
       /**
        * The teardown for every server-initiated close: shutdown (registry),
-       * token expiry and a stalled client. Safe to call after the stall path
-       * has destroyed the response, and to call twice. Also the teardown when
-       * the response closes, so a slot never depends on a close event the
-       * request may have fired before this handler listened.
+       * token expiry, a denied session and a stalled client. Safe to call
+       * after the stall path has destroyed the response, and to call twice.
+       * Also the teardown when the response closes, so a slot never depends on
+       * a close event the request may have fired before this handler
+       * listened.
        */
       const closeStream = (): void => {
         unregisterStream()

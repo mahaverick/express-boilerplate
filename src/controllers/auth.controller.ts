@@ -81,11 +81,9 @@ function refreshCookieOptions(
 }
 
 /**
- * The value of the last cookie named `name` in the request.
- *
- * Parsed directly off the raw `Cookie` header rather than via cookie-parser:
- * this API reads only its own refresh cookie. Decodes the value the way
- * Express's `response.cookie` encoded it (`encodeURIComponent`).
+ * The value of the last cookie named `name` in the request, read off the raw
+ * `Cookie` header because this API reads only its own refresh cookie and so
+ * needs no cookie-parser.
  *
  * Takes the LAST value of that name. A browser can hold two, one per domain
  * scope, after `COOKIE_DOMAIN` is changed. It sends same-path cookies oldest
@@ -99,7 +97,7 @@ function refreshCookieOptions(
  * revokes the live session.
  * @param request - The incoming request.
  * @param name - The cookie name.
- * @returns The decoded value, or undefined when no cookie of that name was sent.
+ * @returns The value decoded as Express's `response.cookie` encoded it (`encodeURIComponent`), the raw value when it does not decode, or undefined when no cookie of that name was sent.
  */
 function readCookie(request: Request, name: string): string | undefined {
   const header = request.headers.cookie
@@ -124,10 +122,10 @@ function readCookie(request: Request, name: string): string | undefined {
  * The refresh token to redeem: the current cookie's only, by the
  * newest-cookie rule (`readCookie`). Under COOKIE_SECURE the unprefixed
  * `refreshToken` is never read: a sibling subdomain or an on-path
- * attacker on plain http can plant it. `__Host-` stops both; `__Secure-`
- * (used with COOKIE_DOMAIN) stops only the plain-http planter, since
- * COOKIE_DOMAIN already trusts its subdomains.
- * Without COOKIE_SECURE the current name is that unprefixed one.
+ * attacker on plain http can plant it. The `__Host-` prefix stops both;
+ * `__Secure-` (used with COOKIE_DOMAIN) stops only the plain-http planter,
+ * since COOKIE_DOMAIN already trusts its subdomains. Without COOKIE_SECURE
+ * the current name is the unprefixed one.
  * @param request - The incoming request.
  * @returns The raw refresh token, or undefined when the current cookie was not sent.
  */
@@ -142,8 +140,8 @@ function readRefreshTokenCookie(request: Request): string | undefined {
  * replaces it, outlive the next logout, and never trip reuse detection. The
  * new session's token is never the one revoked: it is only in the response.
  * @param request - The request whose cookie names the session.
- * @param options - `emitSignedOut: false` for a sign-in, which is not the user signing out.
- * @param options.emitSignedOut - Whether a live revoke emits `user_signed_out`; default true.
+ * @param options - How the revoke is reported.
+ * @param options.emitSignedOut - Whether a live revoke emits `user_signed_out`; default true. A sign-in passes false, since it is not the user signing out.
  * @returns Resolves once the presented token's session, if any, is revoked.
  */
 async function revokePresentedSession(
@@ -159,8 +157,9 @@ async function revokePresentedSession(
  * Without COOKIE_SECURE but with COOKIE_DOMAIN, when the request carried a
  * `refreshToken` cookie, clear its host-only form too: the browser may hold
  * that scope beside the current one, and either may be the one it sent.
- * Added before any new cookie, so a browser that treats two scopes as one
- * cookie keeps the new one. Under COOKIE_SECURE it clears nothing.
+ * `setRefreshTokenCookie` calls it before adding the new cookie, so a browser
+ * that treats two scopes as one cookie keeps the new one. Under COOKIE_SECURE
+ * it clears nothing.
  * @param request - The incoming request.
  * @param response - The response to add the clearing Set-Cookie line to.
  * @param env - The validated environment.
@@ -177,13 +176,13 @@ function clearHostOnlyPlainRefreshCookie(request: Request, response: Response, e
  * cookie, named and scoped by `refreshCookieSpec`, after
  * `clearHostOnlyPlainRefreshCookie`.
  *
- * `sameSite: 'strict'` is the cookie half of this API's stated CSRF
- * position (SECURITY.md: Bearer access tokens plus `SameSite` cookies, no
- * CSRF middleware) — it assumes the frontend and this API share the same
- * registrable domain (eTLD+1). A deployment that splits them across
- * different top-level domains would need `'lax'` or a real CSRF token
- * instead, since `'strict'` would then never send this cookie back at all.
- * `setOAuthRefreshTokenCookie` below is the one caller that passes `'lax'`.
+ * `sameSite: 'strict'` is the cookie half of this API's CSRF position
+ * (SECURITY.md: Bearer access tokens plus `SameSite` cookies, no CSRF
+ * middleware). It assumes the frontend and this API share a registrable
+ * domain (eTLD+1). A deployment that splits them across different registrable
+ * domains would need `'lax'` plus a CSRF token, since `'strict'` would then
+ * never send this cookie back at all. `setOAuthRefreshTokenCookie` is the
+ * one caller that passes `'lax'`.
  * @param request - The request, checked for a host-only plain cookie to clear.
  * @param response - The response to set the cookie on.
  * @param rawToken - The raw refresh token.
@@ -208,20 +207,16 @@ function setRefreshTokenCookie(
 
 /**
  * Attach a freshly issued refresh token to the response for the Google
- * OAuth callback specifically — identical to `setRefreshTokenCookie` except
- * `sameSite: 'lax'` in place of its `'strict'` default.
+ * OAuth callback: `setRefreshTokenCookie` with `sameSite: 'lax'` in place of
+ * its `'strict'` default.
  *
- * `'strict'` would not survive the very request this cookie is set for: the
- * browser reaches `handleGoogleCallback` via a top-level navigation
- * REDIRECTED FROM `accounts.google.com` — a cross-site origin from this
- * cookie's point of view — and a `'strict'` cookie set here would then be
- * withheld on the very next request too, since that next request (the
- * browser following `handleGoogleCallback`'s own redirect to
- * the frontend's `/auth/callback`) is issued by a document that just loaded
- * arriving from that same cross-site hop. `'lax'` still withholds the
- * cookie on cross-site subresource requests and cross-site unsafe (non-GET)
- * requests — the actual CSRF surface `'strict'` exists to close for every
- * other endpoint — while allowing it on this top-level GET redirect chain.
+ * The browser reaches `handleGoogleCallback` by a top-level navigation
+ * redirected from `accounts.google.com`, a cross-site origin, and a `'strict'`
+ * cookie set here would be withheld on the redirect to the frontend's
+ * `/auth/callback` that follows (SECURITY.md, "Cookies"). `'lax'` still
+ * withholds the cookie on cross-site subresource requests and cross-site
+ * unsafe (non-GET) requests, the CSRF surface `'strict'` closes on every other
+ * endpoint, while allowing it on this top-level GET redirect chain.
  * @param request - The callback request.
  * @param response - The response to set the cookie on.
  * @param rawToken - The raw refresh token.
@@ -254,7 +249,7 @@ function clearRefreshTokenCookie(request: Request, response: Response): void {
  * Clear the refresh cookie a failed refresh read, in every form the clear
  * helpers use for that name. `readRefreshTokenCookie` reads only the current
  * name. Without COOKIE_SECURE that is the unprefixed one, and its host-only
- * form is another scope of the one name that was read, so it is cleared too.
+ * form is another scope of the name that was read, so it is cleared too.
  * @param request - The refresh request.
  * @param response - The response to add the clearing Set-Cookie lines to.
  */
@@ -295,7 +290,7 @@ const FORGOT_PASSWORD_RESPONSE_MESSAGE =
   'If that address has an account, a password reset email has been sent.'
 
 /**
- * Handlers for `/api/v1/auth`, except email verification.
+ * Handlers for `/api/v1/auth`, except email verification (`VerificationController`).
  */
 class AuthController extends BaseController {
   /**
@@ -303,7 +298,8 @@ class AuthController extends BaseController {
    *
    * A free and a taken address answer an identical 202 with `data: null`
    * (a 201/409 split would be an enumeration oracle). The reply goes out
-   * BEFORE the mail, so the branches do not differ by an SMTP round trip.
+   * BEFORE the follow-up work (the sign-up event and the mail), so the two
+   * branches do not differ by that work's cost.
    */
   register = this.handle(async (request, response) => {
     const input = parseBody(registerSchema, request.body)
@@ -316,9 +312,10 @@ class AuthController extends BaseController {
 
   /**
    * `POST /auth/login`: log in with an email and password. See
-   * auth.service.ts for why every failure is one identical, equally-costly 401.
-   * A refresh cookie the browser still presented has its session revoked
-   * once the new one is issued. `no-store`, as every token response (RFC 6749 §5.1).
+   * auth.service.ts for why every credential failure is one identical,
+   * equally costly 401. A refresh cookie the browser still presented has its
+   * session revoked once the new one is issued. `no-store`, as every token
+   * response (RFC 6749 §5.1).
    */
   login = this.handle(async (request, response) => {
     response.set('Cache-Control', 'no-store')
@@ -351,9 +348,9 @@ class AuthController extends BaseController {
    * attempt a refresh with a token it chose. A non-browser client sends the
    * same `Cookie` header.
    *
-   * A 401 after the cookie was read clears that cookie, so the browser stops
-   * presenting a dead token on every page load. No 401 leaves the presented
-   * token able to refresh:
+   * A 401 from `authService.refresh` clears that cookie, so the browser stops
+   * presenting a dead token on every page load. None of those 401s leaves the
+   * presented token able to refresh:
    * - unknown, or issued for another purpose: no refresh can claim it;
    * - replayed outside the grace window, or into a killed session, or past
    *   the session's absolute lifetime: the session is killed;
@@ -392,13 +389,12 @@ class AuthController extends BaseController {
    * `POST /auth/logout`: revoke the session the presented refresh token
    * belongs to, and clear the cookie either way.
    *
-   * Reads the current cookie only, never the body (see `refresh` above for
-   * why). Deliberately does not require a valid access token: a user wanting
-   * to log out has often just watched their access token expire, and
-   * revocation only ever needs the refresh cookie.
-   * A missing, forged, or already-revoked token is treated identically to a
-   * live one — see `revokeRefreshToken`'s JSDoc for why logout must never let
-   * a caller learn which raw value was actually live.
+   * Reads the current cookie only, never the body (see `refresh` for why).
+   * Deliberately does not require a valid access token: a user wanting to log
+   * out has often just watched their access token expire, and revocation only
+   * ever needs the refresh cookie. A missing, forged or already-revoked token
+   * gets the same reply as a live one (see `revokeRefreshToken` for why, and
+   * for the timing it does not hide).
    */
   logout = this.handle(async (request, response) => {
     await revokePresentedSession(request)
@@ -411,8 +407,8 @@ class AuthController extends BaseController {
    *
    * An identical 202 for every address. Unlike register, nothing is shared
    * between branches to hide behind, so the reply goes out before the lookup
-   * even starts, and the rest is fire-and-forget. Synchronous on purpose:
-   * nothing here is awaited.
+   * starts and the rest is fire-and-forget. The handler is synchronous on
+   * purpose: nothing in it is awaited.
    */
   forgotPassword = this.handle((request, response) => {
     const input = parseBody(forgotPasswordSchema, request.body)
@@ -426,8 +422,8 @@ class AuthController extends BaseController {
    * `POST /auth/reset-password`: reset a password with a token from the
    * mailed link.
    *
-   * A weak password gets parseBody's ordinary field-level 400 before the token
-   * is looked at. That is safe here, unlike verify-email: the token is the only
+   * A weak password gets `parseBody`'s field-level 400 before the token is
+   * looked at. That is safe here, unlike verify-email: the token is the only
    * secret in play, so "too short" leaks nothing about it.
    */
   resetPassword = this.handle(async (request, response) => {
@@ -439,11 +435,11 @@ class AuthController extends BaseController {
 
   /**
    * `POST /auth/change-password`: change the authenticated caller's own
-   * password, behind `requireAuth`. The session presenting this request is
-   * spared (`request.sessionId`): only the chain its refresh cookie names,
-   * when the browser sent a live one (`readRefreshTokenCookie`, current name
-   * only), or else the whole session. See auth.service.ts's `changePassword`
-   * for the order and the failure design.
+   * password, behind `requireAuth`. The session making this request is spared
+   * (`request.sessionId`): only the chain its refresh cookie names, when the
+   * browser sent a live one (`readRefreshTokenCookie`, current name only), or
+   * else the whole session. A token without a session id spares nothing. See `changePassword` in auth.service.ts for the
+   * order and the failure design.
    */
   changePassword = this.handle(async (request, response) => {
     const input = parseBody(changePasswordSchema, request.body)
@@ -462,8 +458,8 @@ class AuthController extends BaseController {
    * `requirePlatformRole('viewer')`. Checks the password against the caller's
    * own account, marks the session named by the token's `sid` as just
    * authenticated, and replies with a new access token. The refresh cookie
-   * is untouched: the session is the same. See auth.service.ts's
-   * `reauthenticate` for why a wrong password is a 400.
+   * is untouched: the session is the same. See `reauthenticate` in
+   * auth.service.ts for why a wrong password is a 400.
    */
   reauthenticate = this.handle(async (request, response) => {
     const input = parseBody(reauthenticateSchema, request.body)
@@ -481,8 +477,8 @@ class AuthController extends BaseController {
    * session, behind `requireAuth`, keeping the one this request came from
    * (`request.sessionId`): only the chain its refresh cookie names, when the
    * browser sent a live one (`readRefreshTokenCookie`, current name only),
-   * or else the whole session. Takes `{}` or no body; answers how many
-   * signed-in other sessions ended.
+   * or else the whole session. A token without a session id gets a 401. Takes
+   * `{}` or no body. Answers how many signed-in other sessions it ended.
    */
   revokeOtherSessions = this.handle(async (request, response) => {
     // A body-less POST leaves request.body undefined; it means the same as `{}`.
@@ -498,8 +494,8 @@ class AuthController extends BaseController {
 
   /**
    * `GET /auth/providers`: which methods can sign this account in, and
-   * whether it has a password. Read-only by design: unlinking is a separate
-   * feature (may you remove your last way in?).
+   * whether it has a password. Read-only: unlinking a method would need its own
+   * guard against removing the last way in.
    */
   getAuthProviders = this.handle(async (request, response) => {
     const { providers, hasPassword } = await authService.getAuthProviders(
@@ -520,24 +516,23 @@ class AuthController extends BaseController {
    * `session: false`: the OAuth express-session exists only to carry the CSRF
    * `state`; letting Passport call `req.login()` would serialize the profile
    * into it for nothing. Passport does not await the custom callback, so its
-   * body is an immediately-invoked async function — an async callback passed
+   * body is an immediately-invoked async function: an async callback passed
    * directly would turn a rejection into an unhandled one.
    *
    * A refresh cookie the request carried (a Lax one from an earlier Google
    * sign-in; the cross-site hop withholds a Strict one) has its session
    * revoked once the new one is issued, as `login` does.
    *
-   * Every failure redirects to `/login?error=...` on the frontend that
-   * started the sign-in, never this API's JSON envelope (the browser arrived
-   * by a full-page navigation).
-   * `HttpError.code` is forwarded verbatim; anything else is
+   * Every failure of the async body redirects to `/login?error=...` on the
+   * frontend that started the sign-in, never this API's JSON envelope (the
+   * browser arrived by a full-page navigation), so it is not wrapped in
+   * `handle()`. `HttpError.code` is forwarded verbatim and anything else is
    * `processing_failed`; Google reporting an error or no profile is
-   * `google_auth_failed`. Not wrapped in `handle()` for the same reason.
-   * A maintenance-mode refusal is expected and carries the owner's customer
-   * message, so it is not logged.
+   * `google_auth_failed`. A maintenance-mode refusal is expected, so it is not
+   * logged.
    * @param request - The incoming callback request, carrying Google's `code`/`state` query parameters.
    * @param response - The response.
-   * @param next - Forwards a synchronous failure from `passport.authenticate` itself; every failure from the async body redirects instead.
+   * @param next - Forwards a synchronous failure from `passport.authenticate` itself.
    */
   handleGoogleCallback = (request: Request, response: Response, next: NextFunction): void => {
     const frontend = withoutTrailingSlashes(frontendUrl(oauthAppOf(request)))
@@ -571,7 +566,7 @@ class AuthController extends BaseController {
           }
         })()
       }
-      // Same cast, for the same reason, as the `/google` route's in auth.routes.ts.
+      // Cast for the same reason as the `/google` route in auth.routes.ts: @types/passport types authenticate() as any.
     ) as RequestHandler
 
     authenticate(request, response, next)
@@ -579,6 +574,6 @@ class AuthController extends BaseController {
 }
 
 /**
- * The auth controller the auth routes mount.
+ * The instance whose handlers `createAuthRouter` mounts.
  */
 export const authController = new AuthController()

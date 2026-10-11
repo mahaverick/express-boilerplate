@@ -12,7 +12,7 @@ import { successResponse } from '@/utilities/response.utilities'
  */
 class PlatformSystemController extends BaseController {
   /**
-   * `GET /platform/system/status`: the release, error tracking's health and the flags' status.
+   * `GET /platform/system/status`: the release, error tracking's counters, the flags' status and maintenance mode.
    */
   getStatus = this.handle(async (_request, response) => {
     successResponse(response, await getSystemStatus(), 'System status retrieved.')

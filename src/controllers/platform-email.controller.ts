@@ -62,7 +62,7 @@ class PlatformEmailController extends BaseController {
   })
 
   /**
-   * `GET /platform/emails/:id/preview`: the stored template re-rendered, links masked.
+   * `GET /platform/emails/:id/preview`: the stored template re-rendered, with link tokens masked.
    */
   previewEmail = this.handle(async (request, response) => {
     const id = parseIdParameter(request.params.id, EMAIL_NOT_FOUND)
