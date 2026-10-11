@@ -1,9 +1,9 @@
 /**
  * @file The one call that sends server events to PostHog:
  * `POST <POSTHOG_HOST>/batch/` with `fetch`, classified as acknowledged,
- * retryable or rejected. Not posthog-node: its capture only queues an event,
- * so it cannot tell the drainer whether a batch landed. It imports no
- * database module, so it opens no pool.
+ * retryable or rejected. It does not use a client SDK's capture, which only
+ * queues an event and so cannot tell the drainer whether a batch landed. It
+ * imports no database module, so it opens no pool.
  */
 import { getEnv } from '@/configs/env.config'
 import {
@@ -33,8 +33,8 @@ export interface PosthogBatchEvent {
 /**
  * How PostHog answered a batch: `ack` (2xx, every event accepted), `retry`
  * (no answer, a timeout, 429, 5xx or an endpoint-level 4xx: send the same
- * events again later) or `rejected` (any other 4xx: the batch itself is refused, and sending it
- * again unchanged would be refused again).
+ * events again later) or `rejected` (any other 4xx: the batch itself is
+ * refused, and sending it again unchanged would be refused again).
  */
 export type SendResult =
   { kind: 'ack' } | { kind: 'retry'; status?: number } | { kind: 'rejected'; status: number }

@@ -2,9 +2,10 @@
  * @file The server's calls to PostHog's private API (`/api/projects/…`) with
  * the personal API key: the timeline queries, the group types lookup, person
  * deletion and `pnpm flags:sync`'s flag list and creates. Each call is
- * classified, never thrown, so a PostHog outage reaches the caller as a value. The key travels only in the `Authorization`
- * header and is never logged or put in an error message. Redirects are
- * refused rather than followed: a redirected POST would lose its body.
+ * classified, never thrown, so a PostHog outage reaches the caller as a
+ * value. The key travels only in the `Authorization` header and is never
+ * logged or put in an error message. Redirects are refused rather than
+ * followed: a redirected POST would lose its body.
  */
 import { posthogAppHost } from '@/configs/analytics.config'
 import { getEnv } from '@/configs/env.config'

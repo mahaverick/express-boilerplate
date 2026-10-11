@@ -213,12 +213,13 @@ async function deliver(
  * (`resolveGroupMarkers`, one more autocommit read), then sends them with no
  * database connection held. If that read fails, nothing is sent and every
  * claimed row waits for the lease, as after a retryable answer. Acknowledged
- * rows are deleted; rows PostHog refused alone get one more rejection, and a row at
- * `ANALYTICS_POISON_REJECTIONS` is deleted with an `error` log naming only
- * its event and id. A claimed batch PostHog refuses together with both of its
+ * rows are deleted; rows PostHog refused alone get one more rejection, and a
+ * row at `ANALYTICS_POISON_REJECTIONS` is deleted with an `error` log naming
+ * only its event and id. A claimed batch PostHog refuses together with both of its
  * halves and with the first row of each half sent alone counts against no
  * row; it logs one `error` with the status only. Every other row keeps its
- * lease and is claimed again once the lease and its backoff have passed. `attempts` never deletes a row.
+ * lease and is claimed again once the lease and its backoff have passed.
+ * `attempts` never deletes a row.
  * @param now - The clock the lease and backoff are measured against. Defaults to now.
  * @returns How many rows were sent, retried, rejected and dropped.
  */

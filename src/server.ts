@@ -24,8 +24,8 @@ import type { SupervisedWorkers } from '@/services/worker-supervisor.service'
  * The port is a parameter because `getEnv()` is memoised and already parsed
  * by the time a test runs, so setting `process.env.APP_PORT` would not
  * change it. A bind failure (EADDRINUSE, EACCES) logs one line and sets exit
- * code 1; index.ts owns the exit, so every exit path goes through its shared
- * once-guard.
+ * code 1; index.ts owns the exit so that every exit path goes through its
+ * shared once-guard.
  * @param port - Port to bind. Defaults to the configured one. Pass 0 to let the
  *   OS pick a free port, which is what makes the lifecycle test safe in parallel.
  * @returns The server, listening once its 'listening' event fires.

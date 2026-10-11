@@ -4,7 +4,7 @@
  * event to the outbox rows sent to PostHog. Every property key is snake_case.
  * Every server event except a tenant `$groupidentify` marker carries
  * `source`, `access`, `app: 'api'`, the tenant group when there is one, and
- * the trace and browser session that caused it, when known.
+ * the trace that caused it and, when it is the actor's, the browser session.
  * `scrubPiiProperties` drops banned keys and address-shaped values from the
  * event's own properties as a backstop; `$set`, `$set_once` and `$groups`
  * are built here from fixed fields and are not inspected. A tenant
