@@ -1424,7 +1424,7 @@ error response, and a CORS preflight:
   `POST /auth/refresh`; RFC 6749 §5.1). Without it a browser keeps an
   authenticated body (the staff user directory, a profile, tenants,
   notifications) in its disk cache, and anyone with that browser profile can
-  read it back after sign-out with no credential (ASVS 8.2.1). It must be
+  read it back after sign-out with no credential (ASVS 5.0 14.3.2). It must be
   `no-store`: `no-cache` and `private` still store the body, and express sends
   an ETag. A route with its own policy keeps it: the SSE stream, behind
   `requireAuth`, sets `no-cache` after it, and the public

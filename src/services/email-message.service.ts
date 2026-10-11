@@ -57,8 +57,8 @@ function storedVariables(message: MailMessage): Record<string, string> {
  * @param message - The email.
  * @param userId - The account it is for; `''` when there is none, stored as NULL.
  * @param origin - The caller's context and fixed job id, if any.
- * @param executor - Where to run the queries: pass a transaction so the row commits with the
- * caller's own writes. Defaults to the pool.
+ * @param executor - Where to run the queries: pass a transaction so the row
+ *   commits with the caller's own writes. Defaults to the pool.
  * @returns The message row.
  * @throws {Error} Whatever the id read or the insert throws.
  */

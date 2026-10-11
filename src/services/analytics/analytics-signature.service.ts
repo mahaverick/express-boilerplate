@@ -86,9 +86,8 @@ function signedText(value: unknown): string | null {
  * The signed fields of an event, read from its properties by the one rule
  * both the signer (`toPosthogBatchEvent`) and the verifiers (the timeline and
  * errors mappers) use, so they cannot disagree about an absent or oddly typed
- * field. It reads
- * `source`, `access`, `target_type`, `target_id` and `$groups.tenant`; a
- * `$groups` that is not an object reads as no tenant.
+ * field. It reads `source`, `access`, `target_type`, `target_id` and
+ * `$groups.tenant`; a `$groups` that is not an object reads as no tenant.
  * @param identity - The event's uuid, event name and distinct id.
  * @param identity.uuid - The uuid.
  * @param identity.event - The event name.

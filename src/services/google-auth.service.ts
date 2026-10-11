@@ -204,7 +204,8 @@ async function resolveGoogleUser(profile: GoogleProfile): Promise<ResolvedGoogle
 /**
  * Complete a Google Sign-In: resolve the user, refuse an inactive one, stamp
  * `lastLoggedInAt`, and issue a refresh token for a fresh session.
- * A verified address on PLATFORM_EMAIL_DOMAINS joins the platform tenant as viewer if it has not already.
+ * A verified address on PLATFORM_EMAIL_DOMAINS joins the platform tenant as
+ * viewer if it has not already.
  *
  * The active check runs first and again under the user-row lock before the
  * session is issued, so a deactivation or deletion that committed before the

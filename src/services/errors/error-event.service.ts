@@ -267,8 +267,8 @@ function readableNonError(value: unknown): unknown {
  * A copy of a thrown value the builder can read safely. An `Error` (or an
  * object holding one) becomes a fresh `Error` carrying only its name, its
  * message (`messageOf`), its frame lines and its `cause` copied the same
- * way, in a chain of at most `ERROR_CAUSE_DEPTH` errors. Each part is read through
- * `readSafely`, so a getter that throws costs that part, not the event.
+ * way, in a chain of at most `ERROR_CAUSE_DEPTH` errors. Each part is read
+ * through `readSafely`, so a getter that throws costs that part, not the event.
  * Anything else is copied by `readableNonError`.
  * @param value - Anything thrown.
  * @param depth - How many links precede this one.

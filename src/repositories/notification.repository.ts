@@ -210,10 +210,12 @@ export class NotificationRepository {
    * Delete about `limit` notifications read before `cutoff`.
    * Takes the batch oldest id first with FOR UPDATE SKIP LOCKED: a row a
    * request holds is left for a later run instead of waited on, so a batch
-   * can come back short while matching rows remain. The batch is an
-   * `IN (subquery … LIMIT)`, so `limit` is a target, not a bound.
+   * can come back short while matching rows remain.
+   * `limit` is a target, not a bound: the ids come from an `in (...)`
+   * subquery, which the planner may rescan per outer row and so delete more
+   * than `limit` (see `AnalyticsOutboxRepository.claimBatch`).
    * @param cutoff - Rows read before this go.
-   * @param limit - The target number of rows for one call.
+   * @param limit - The batch size aimed for; more rows may go.
    * @param tx - The batch's transaction.
    * @returns How many rows were deleted.
    */
@@ -233,10 +235,12 @@ export class NotificationRepository {
    * Delete about `limit` unread notifications created before `cutoff`.
    * Takes the batch oldest id first with FOR UPDATE SKIP LOCKED: a row a
    * request holds is left for a later run instead of waited on, so a batch
-   * can come back short while matching rows remain. The batch is an
-   * `IN (subquery … LIMIT)`, so `limit` is a target, not a bound.
+   * can come back short while matching rows remain.
+   * `limit` is a target, not a bound: the ids come from an `in (...)`
+   * subquery, which the planner may rescan per outer row and so delete more
+   * than `limit` (see `AnalyticsOutboxRepository.claimBatch`).
    * @param cutoff - Unread rows created before this go.
-   * @param limit - The target number of rows for one call.
+   * @param limit - The batch size aimed for; more rows may go.
    * @param tx - The batch's transaction.
    * @returns How many rows were deleted.
    */

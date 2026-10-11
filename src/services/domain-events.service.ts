@@ -46,8 +46,8 @@ export function subscribeDomainEvent<TType extends DomainEventType>(
  * that throws or rejects is logged at error and skipped.
  * @param event - The event.
  * @param options - How the actor reached the tenant.
- * @param options.access - `'platform'` for an action taken through platform access; defaults to
- * `'member'`.
+ * @param options.access - `'platform'` for an action taken through platform
+ *   access; defaults to `'member'`.
  * @returns Resolves once every subscriber has settled; never rejects.
  */
 export async function emitDomainEvent(

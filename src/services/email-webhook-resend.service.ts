@@ -48,7 +48,7 @@ const RESEND_SECRET_PREFIX = 'whsec_'
  */
 const PROVIDER_SUPPRESSED_DETAIL = 'PROVIDER_SUPPRESSED'
 
-// The width of email_events.provider_event_id.
+// The width of email_events.provider_event_id; Svix ids are `msg_` plus base62, hence `\w`.
 const SVIX_ID_PATTERN = /^[\w-]{1,128}$/
 const SVIX_TIMESTAMP_PATTERN = /^\d{1,12}$/
 const SIGNATURE_VERSION = 'v1'

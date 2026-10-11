@@ -428,9 +428,9 @@ function report(error: unknown, context: ErrorContext): Report {
  * Report an unexpected error to PostHog Error Tracking. Synchronous: it
  * checks the global cap, then builds, scrubs, throttles and queues the
  * event, and returns without waiting for any I/O; past the global cap the
- * event is not built at all. The id is minted first, so it is returned also when error
- * tracking is off, the event is throttled, or building it failed; it then
- * names a log line, not an event. Never throws: a failure inside is logged
+ * event is not built at all. The id is minted first, so it is returned also
+ * when error tracking is off, the event is throttled, or building it failed;
+ * it then names a log line, not an event. Never throws: a failure inside is logged
  * at `warn` at most once a minute and never reported. A call made while
  * another is running (a getter on the error that reports) returns an id and
  * queues nothing.
@@ -503,7 +503,8 @@ export async function flushErrorReports(deadlineMs: number): Promise<void> {
   const run = { isExpired: false }
   const { generation } = state
   /**
-   * Sends batches until a stop condition above holds.
+   * Sends batches until the queue is empty, a send asks to retry, the deadline
+   * passes or a reset ends the flush.
    */
   const drain = async (): Promise<void> => {
     while (!run.isExpired && generation === state.generation) {

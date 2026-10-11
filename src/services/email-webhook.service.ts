@@ -285,8 +285,8 @@ async function applyEvent(
  * @param rawBody - The exact body bytes, as the provider signed them.
  * @param headers - The request headers.
  * @returns The request's counts.
- * @throws {HttpError} 401 `INVALID_SIGNATURE`; 400 `INVALID_PAYLOAD`. Any database error rolls
- * back every event in the request.
+ * @throws {HttpError} 401 `INVALID_SIGNATURE`; 400 `INVALID_PAYLOAD`. Any
+ *   database error rolls back every event in the request.
  */
 export async function processEmailWebhook(
   adapter: EmailWebhookAdapter,

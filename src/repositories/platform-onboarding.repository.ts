@@ -6,9 +6,9 @@
  * list, the Overview's stuck count and the tenant tab, from the registry
  * keys the service passes in: a tenant step counts from a tenant-level
  * completion, a member step once any active owner has done it, and a
- * completion whose key left the registry counts for nothing. Raw rows carry timestamps as UTC text
- * (drizzle's postgres-js driver hands timestamps back unparsed), which the
- * mappers turn into Dates.
+ * completion whose key left the registry counts for nothing. Raw rows carry
+ * timestamps as UTC text (drizzle's postgres-js driver hands timestamps back
+ * unparsed), which the mappers turn into Dates.
  */
 import { and, asc, desc, eq, inArray, isNull, sql, type SQL } from 'drizzle-orm'
 import type { OnboardingSource, OnboardingState } from '@/constants/onboarding.constants'

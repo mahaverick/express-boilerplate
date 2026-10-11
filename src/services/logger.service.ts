@@ -1,8 +1,9 @@
 /**
  * @file The logger application code writes through: a lazily built pino logger
- * with a `level` label, `timestamp` and `message`, a mixin adding correlation ids
- * from the request context and active span, and a formatter that serialises every
- * top-level Error-valued field, redacting database query errors with `redactedForLog`.
+ * with a `level` label, `timestamp` and `message`, a mixin adding correlation
+ * ids from the request context and active span, and a formatter that
+ * serialises every top-level Error-valued field, redacting database query
+ * errors with `redactedForLog`.
  */
 import { createRequire } from 'node:module'
 import { trace } from '@opentelemetry/api'
@@ -107,9 +108,9 @@ const CAUSE_WALK_DEPTH = 5
 /**
  * Serialise one Error, redacting it with `redactedForLog` if it is a database
  * query error (it carries bound parameters), else recursing into its own
- * `.cause` (also redacted if necessary). Bounded by `CAUSE_WALK_DEPTH` — four `.cause`
- * hops, five nodes including the top-level error — so a cyclic `.cause`
- * chain ends instead of recursing forever inside a log call.
+ * `.cause` (also redacted if necessary). Bounded by `CAUSE_WALK_DEPTH` — four
+ * `.cause` hops, five nodes including the top-level error — so a cyclic
+ * `.cause` chain ends instead of recursing forever inside a log call.
  * @param error - The error to serialise.
  * @param depth - How many levels of `.cause` have already been walked.
  * @returns A plain object safe to write to the log.

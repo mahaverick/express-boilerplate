@@ -35,8 +35,7 @@ export const INVITATION_RECIPIENT_TENANT_SHARE = 3
 export type InvitationRecipientBudget = 'spent' | 'exhausted'
 
 /**
- * The connected client `getRedis` resolves to, named so `incrementInWindow`
- * can take one.
+ * The connected Redis client `getRedis` resolves to.
  */
 type RedisClient = Awaited<ReturnType<typeof getRedis>>
 

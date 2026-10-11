@@ -86,9 +86,9 @@ function sanitizeUpstreamResponse(proxyResponse: IncomingMessage): void {
 /**
  * Log an upstream failure at warn. A plugin rather than an `on.error`
  * handler: http-proxy-middleware drops its own error response (504 for a
- * refused, reset or timed-out connection, 502 for a malformed upstream
- * response, 500 otherwise) when `on.error` is set, and the client would wait
- * forever.
+ * refused, reset or timed-out connection or an unresolvable host, 502 for a
+ * malformed upstream response, 500 otherwise) when `on.error` is set, and the
+ * client would wait forever.
  */
 const logUpstreamFailures = definePlugin<Request, Response>((proxyServer) => {
   proxyServer.on('error', (error) => {
@@ -102,8 +102,8 @@ const logUpstreamFailures = definePlugin<Request, Response>((proxyServer) => {
  * `prepareUpstreamRequest` then overwrites; the `User-Agent` is passed
  * through, so PostHog attributes the browser and OS correctly. An upstream
  * failure is logged and answered by http-proxy-middleware: 504 for a refused,
- * reset or timed-out connection, including an upstream silent for `timeoutMs`
- * before it answers. Once the response has started, it is cut off instead.
+ * reset or timed-out connection or an unresolvable host, including an
+ * upstream silent for `timeoutMs` before it answers. Once the response has started, it is cut off instead.
  * @param target - The upstream base URL, including any path prefix.
  * @param timeoutMs - How long the upstream connection may sit idle.
  * @returns The middleware.

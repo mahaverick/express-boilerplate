@@ -279,8 +279,8 @@ async function evaluateBucketed(
  * snapshot, missing from PostHog, unsupported and inactive each serve the
  * fallback. Bucketing follows the definition's aggregation (distinct id,
  * or the tenant group key for the snapshot's tenant index; no tenant serves
- * `fallback:no_tenant`, any other group index `fallback:unsupported`). A holdout match serves the fallback with
- * `holdoutVariant`. Then conditions are walked in array order: every
+ * `fallback:no_tenant`, any other group index `fallback:unsupported`). A
+ * holdout match serves the fallback with `holdoutVariant`. Then conditions are walked in array order: every
  * property must match and the bucketing hash must be within the rollout; a
  * multivariate match takes the condition's variant override when it names a
  * flag variant, otherwise core's variant. A variant the registry does not
