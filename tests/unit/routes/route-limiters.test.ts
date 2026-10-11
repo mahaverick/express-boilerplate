@@ -120,7 +120,8 @@ function hasRateLimiter(handlers: RequestHandler[]): boolean {
 const ALLOWLIST: { method: string; path: string; reason: string }[] = []
 
 /**
- * Whether the route is named on `ALLOWLIST`.
+ * Whether the route is named on `ALLOWLIST`, and so exempt from needing a
+ * rate limiter.
  */
 function isAllowlisted(route: DiscoveredRoute): boolean {
   // eslint-disable-next-line sonarjs/no-empty-collection -- deliberately empty today; kept as a mechanism for the next legitimate exception rather than removed

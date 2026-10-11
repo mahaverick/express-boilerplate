@@ -346,8 +346,9 @@ describe('errorHandler', () => {
     })
 
     /**
-     * `stackFramesOf` keeps only the lines `isStackFrameLine`
-     * (stack-frames.ts) accepts: indented, `at ` and a location. That tells
+     * `stackFramesOf` keeps only the lines after the message that
+     * `isStackFrameLine` (stack-frames.ts) accepts: indented, `at ` and a
+     * location. That tells
      * a real call frame apart from a message line that merely starts with
      * "at ". A query error's message embeds the bound parameters and can be
      * multi-line, so such a line can appear in it. This pins the filter

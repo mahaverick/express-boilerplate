@@ -29,7 +29,8 @@ describe('anchors', () => {
 describe('linkProblems', () => {
   const files = new Set(['README.md', 'CLAUDE.md'])
   /**
-   * Whether a path is one of the fixture files.
+   * Stands in for the file-existence check `linkProblems` takes: true for
+   * the two fixture files only.
    */
   const exists = (p: string): boolean => files.has(p)
   /**

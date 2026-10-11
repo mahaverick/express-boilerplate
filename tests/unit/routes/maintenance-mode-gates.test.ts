@@ -2,10 +2,12 @@
  * @file Walks the live app's routes (Google OAuth enabled, so its routes are
  * mounted) and checks them against `MAINTENANCE_ROUTE_RULES`: every route is
  * covered by a rule, every rule covers a route, the let-through set and the
- * read-only write allowlist are exactly the ones ARCHITECTURE.md's Maintenance
- * mode section lists, and every read is let through in `read_only`. A mount under one of the let-through prefixes
- * (`/api/v1/platform`, the webhooks, the PostHog proxy) counts as one entry,
- * since the prefix rule covers everything below it. Synthetic apps prove the
+ * read-only write allowlist are exactly the lists spelled out in the tests
+ * below (ARCHITECTURE.md's Maintenance mode section describes the let-through
+ * set), and every read is let through in `read_only`. A mount under one of
+ * the let-through prefixes (`/api/v1/platform`, the webhooks, the PostHog
+ * proxy) counts as one entry, since the prefix rule covers everything below
+ * it. Synthetic apps prove the
  * walk fails on an unclassified route and on a stale rule. The staff-pass
  * routes (`MAINTENANCE_STAFF_ROUTES`) must each sit behind `requireAuth`,
  * which finishes their decision, and must be exactly the authenticated

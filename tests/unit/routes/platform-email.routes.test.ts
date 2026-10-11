@@ -27,7 +27,7 @@ interface RouteLayer {
 }
 
 /**
- * The router's layers, typed for these tests.
+ * The router's layers: `router.stack` read as router@2 layers.
  */
 function layersOf(router: Router): RouteLayer[] {
   return router.stack as unknown as RouteLayer[]

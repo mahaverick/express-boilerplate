@@ -110,9 +110,12 @@ const ruleIdsFor = async (filePath: string, source: string): Promise<string[]> =
  * CI runs, those two cold tests slow down a great deal: parallel vitest
  * workers, v8 coverage instrumentation, and a just-finished `tsc` all
  * compete for the CPU while ESLint type-checks the project from cold. It is
- * this variance that made the file flaky, not the mean, so the timeout is
- * generous rather than tuned close to the typical run; raising the global
- * timeout instead would hide a real slowdown anywhere else in the suite.
+ * this variance that made the file flaky, not the mean. The value is a
+ * ceiling for a hung ESLint program build, not a speed claim: it sits an
+ * order of magnitude above a cold run on an idle machine and well above the
+ * slowest cold run under CI-style CPU contention, so only a hang trips it.
+ * Raising the global timeout instead would hide a real slowdown anywhere
+ * else in the suite.
  */
 const LINT_GATE_TIMEOUT_MS = 120_000
 

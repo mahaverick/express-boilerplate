@@ -64,7 +64,9 @@ function withProbe(argv: string[], tracingModule: string, entry: string): string
 }
 
 /**
- * Asserts the argv names `--env-file-if-exists=.env` before `--import`.
+ * Asserts the argv names `--env-file-if-exists=.env` before `--import`: node
+ * must load `.env` before the tracing module runs, so that module sees the
+ * variables.
  */
 function expectEnvFileBeforeImport(argv: string[]): void {
   const flagAt = argv.indexOf(ENV_FLAG)
@@ -75,7 +77,7 @@ function expectEnvFileBeforeImport(argv: string[]): void {
 /**
  * `dev` and `start` pass --env-file-if-exists=.env before --import; the
  * image CMD does not, since the image has no .env (.dockerignore excludes
- * it) and its environment comes from outside the image.
+ * it) and the deployment supplies its environment (see the Dockerfile).
  */
 describe('launch commands name .env before the tracing --import', () => {
   it('pnpm dev', () => {
