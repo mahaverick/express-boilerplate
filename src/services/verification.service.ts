@@ -48,9 +48,9 @@ export const INVALID_VERIFICATION_TOKEN_MESSAGE = 'Invalid or expired verificati
 /**
  * Build an absolute frontend URL for one page, carrying a raw token. Links
  * point at a frontend (`frontendUrl`), whose page POSTs the token to this
- * API: a GET link that acted by itself would put the token in a query string
- * that access logs along the way record, and a mail scanner following links
- * could spend it.
+ * API: a GET link that acted by itself would put the token in this API's
+ * request URL, which HTTP tracing (`url.query`) and proxy logs record, and a
+ * mail scanner following links could spend it.
  * @param pagePath - The frontend page, relative to `webUrl`.
  * @param rawToken - The raw token, never its hash.
  * @param webUrl - The frontend origin.

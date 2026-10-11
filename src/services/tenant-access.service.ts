@@ -42,9 +42,9 @@ export interface LockedTenantAccess {
  * Lock the tenant's owners, then the memberships of the actor and
  * `otherUserIds`, then (for an actor with no membership) the actor's
  * platform membership FOR SHARE, and return the actor's access as locked.
- * Only the last step reaches a second tenant, and every membership write
- * locks a customer tenant's membership rows before the platform tenant's, so
- * the order has no cycle. A platform role is a membership of the platform
+ * Only the last step reaches a second tenant, and every transaction that locks
+ * membership rows in both a customer tenant and the platform tenant locks the
+ * customer tenant's first, so the order has no cycle. A platform role is a membership of the platform
  * tenant, so the platform tenant itself stays members-only.
  * @param actor - The signed-in user.
  * @param tenantId - The tenant acted on.

@@ -5,7 +5,7 @@
  * actor's current role against the target's (on the platform tenant, the staff
  * rule: an owner may act on another owner); check the last-owner rule (active
  * owners on the platform tenant); write; revoke the pending invitations the
- * member's remaining role cannot stand behind; audit.
+ * member's remaining role, if any, cannot stand behind; audit.
  */
 import type { AuditAccess } from '@/constants/audit.constants'
 import {

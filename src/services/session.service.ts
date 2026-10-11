@@ -36,9 +36,9 @@ const userTokenRepository = new UserTokenRepository()
 const userRepository = new UserRepository()
 
 /**
- * Revoke every live token in one session under the user row lock, then deny
- * the session. FOR NO KEY UPDATE waits for any rotation holding the row FOR
- * SHARE, so this revoke starts after that rotation's next token has
+ * Revoke every unrevoked token in one session under the user row lock, then
+ * deny the session. FOR NO KEY UPDATE waits for any rotation holding the row
+ * FOR SHARE, so this revoke starts after that rotation's next token has
  * committed, and a rotation arriving later finds its token revoked.
  * @param userId - The session's user.
  * @param sessionId - The session (rotation-chain) id.
@@ -349,8 +349,9 @@ type RotationOutcome = RotationIssued | RotationRefused
  * A kill that races this check (logout, reuse, the locked pass of a password
  * write or an account claim) takes the user row FOR NO KEY UPDATE, which
  * waits for this rotation's FOR SHARE, so it revokes the sibling this check
- * lets through. The unlocked first pass of `revokeAllSessions` does not
- * wait; the locked pass its callers run after it catches what it missed.
+ * lets through. `revokeAllSessions`, the unlocked first pass of a reset or a
+ * claim, takes no user row lock and misses the sibling; the locked pass its
+ * callers run after it catches it.
  *
  * Only a kill marker at or after the presented row's consumption refuses
  * grace (`isSessionKilled`): an older one is a revoke that spared this chain,
@@ -743,8 +744,8 @@ export function markSessionReauthenticated(
   tx?: DbTransaction
 ): Promise<Date> {
   /**
-   * The step-up itself, run in the caller's transaction when one is given,
-   * so its audit entry commits with the change, or else in one of its own.
+   * The step-up itself: the locked active check and the `authenticated_at`
+   * write, shared by both transaction paths.
    */
   const mark = async (transaction: DbTransaction): Promise<Date> => {
     const user = await userRepository.lockById(userId, 'no key update', transaction)
