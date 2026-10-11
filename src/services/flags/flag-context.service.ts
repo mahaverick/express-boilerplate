@@ -66,7 +66,7 @@ function wholeDaysBetween(from: Date, to: Date): number {
 
 /**
  * Build an evaluation context from facts already read. Pure apart from
- * the `APP_ENV` default.
+ * the `APP_ENV` and clock defaults.
  * @param input - The user, tenant and their facts.
  * @returns The context: `tenant_role` is `none` without a tenant or a
  *   membership, and the tenant group and its traits are absent without a tenant.

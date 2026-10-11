@@ -140,7 +140,7 @@ function countsOf(
 }
 
 /**
- * The feature-flag status (spec §7.3): this process's switch and snapshot,
+ * The feature-flag status: this process's switch and snapshot,
  * the counts by state, every replica's last fetch outcome, and the
  * undeclared variants of the current minute and the
  * `FLAG_UNKNOWN_VARIANT_WINDOW_MINUTES - 1` before it, read in one `MGET`.

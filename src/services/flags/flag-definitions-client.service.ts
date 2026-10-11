@@ -2,9 +2,9 @@
  * @file The one call to PostHog's `GET /flags/definitions`, with the feature
  * flags secure key. The answer is untrusted input: redirects are refused,
  * the whole call is bounded by `FLAG_DEFINITIONS_TIMEOUT_MS`, and the body is
- * read as a stream and abandoned past `FLAG_DEFINITIONS_MAX_BYTES`. Every
- * outcome is a value, never a throw, and neither key is ever logged or put
- * in a result.
+ * read as a stream and abandoned past `FLAG_DEFINITIONS_MAX_BYTES`. Once
+ * both keys are configured every outcome is a value, never a throw, and
+ * neither key is ever logged or put in a result.
  */
 import { getEnv } from '@/configs/env.config'
 import {
@@ -17,7 +17,7 @@ import type { FlagFetchErrorCode } from '@/types/flags'
 /**
  * How one fetch ended: the parsed body and the ETag header (null when
  * absent), a 304, a failure code (with the status for an HTTP error), or
- * `aborted` when the caller's own signal ended it before PostHog answered.
+ * `aborted` when the caller's own signal ended it.
  */
 export type FlagDefinitionsResult =
   | { kind: 'ok'; body: unknown; etag: string | null }
@@ -111,8 +111,8 @@ async function resultOf(response: Response): Promise<FlagDefinitionsResult> {
 /**
  * Fetch the project's flag definitions: `GET <POSTHOG_HOST>/flags/definitions?token=<project key>`
  * with `Authorization: Bearer <feature flags key>` and, when given,
- * `If-None-Match` set to the stored ETag exactly as PostHog sent it (a weak
- * `W/"…"` tag).
+ * `If-None-Match` set to the stored ETag exactly as it was received, weak
+ * `W/` prefix included.
  * @param etag - The stored ETag, or null for an unconditional fetch.
  * @param options - Call options.
  * @param options.signal - Aborts the call early; `FLAG_DEFINITIONS_TIMEOUT_MS` applies either way.

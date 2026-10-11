@@ -27,11 +27,12 @@ const authProviderRepository = new AuthProviderRepository()
 
 /**
  * The primary email a Google profile carries, lowercased, and whether Google
- * itself verified it. `emails` may be absent (a Workspace admin can restrict
- * it), and verification is read from both `emails[0].verified` and
- * `_json.email_verified`, OR'd, rather than trusting either alone.
+ * reports it verified. `emails` is absent when Google returned no email
+ * claim. The address counts as verified when `emails[0].verified` or
+ * `_json.email_verified` is true; passport-google-oauth20's userinfo parser
+ * fills both from the same `email_verified` claim.
  * @param profile - The raw Google profile.
- * @returns The lowercased email and Google's verification claim for it.
+ * @returns The lowercased email and whether Google reports it verified.
  * @throws {HttpError} 400 `google_email_missing`, when the profile carries no email.
  */
 function verifiedGoogleEmail(profile: GoogleProfile): { email: string; isVerified: boolean } {
@@ -64,10 +65,16 @@ async function linkGoogleProvider(userId: string, googleId: string): Promise<voi
  * squatter's password and any OTHER Google link are removed, the email is
  * marked verified, and every session revoked.
  *
- * Sessions are revoked first on their own, so a failed write leaves no
- * squatter session alive, then again in the claim's transaction, under the
- * user row lock: a refresh rotation in flight either commits before the lock
- * and is revoked there, or waits and finds its token revoked.
+ * Precondition: the caller has checked that Google verified the profile's
+ * email, and that it matches this account's address. Nothing here checks it.
+ *
+ * Sessions are revoked first on their own, so the sessions that existed are
+ * already revoked if the claim fails, then again in the claim's transaction,
+ * under the user row lock: a refresh rotation in flight either commits before
+ * the lock and is revoked there, or waits and finds its token revoked. The
+ * revoked sessions' access tokens are denied after the commit, best effort
+ * (`denySessionsAfterCommit`), so they can stay valid for up to
+ * `ACCESS_TOKEN_TTL` when Redis refuses.
  * @param userId - The unverified account's id.
  * @param googleId - Google's stable profile id of the claiming identity.
  * @returns The account, now verified, federated-only and linked.
@@ -86,7 +93,7 @@ export async function claimUnverifiedAccount(userId: string, googleId: string): 
       tx
     )
 
-    // The claiming identity is Google-verified, which proves the mailbox.
+    // The caller checked that Google verified this address (see the precondition above).
     await markEmailVerified(userId, tx)
 
     // eslint-disable-next-line unicorn/no-null -- a null hash is the federated-only state (user.model.ts)
@@ -110,8 +117,8 @@ interface ResolvedGoogleUser {
  * Resolve the user a Google Sign-In resolves to, linking or creating one
  * when needed.
  *
- * 1. `(google, profile.id)` first: the OIDC `sub` never changes, so a
- *    returning user stays correct whatever happened to their inbox.
+ * 1. `(google, profile.id)` first: the OIDC `sub` is a stable account id, so
+ *    a returning user stays correct whatever happened to their inbox.
  * 2. An email match is accepted only when Google verified the address;
  *    otherwise anyone adding `victim@example.com` to a Google account could
  *    sign in as its owner.
@@ -120,7 +127,7 @@ interface ResolvedGoogleUser {
  * 4. A new account gets its 'email' and 'google' rows in one transaction.
  * @param profile - The raw Google profile.
  * @returns The existing, newly linked, or newly created user, and whether it is new.
- * @throws {HttpError} 400 `google_email_missing`, 401 `google_auth_failed` (linked user deleted), 403 `email_not_verified`, or a database error.
+ * @throws {HttpError} 400 `google_email_missing`, 401 `google_auth_failed` (linked user deleted), 403 `email_not_verified`, 500 when a row it just wrote cannot be read back, or a database error.
  */
 async function resolveGoogleUser(profile: GoogleProfile): Promise<ResolvedGoogleUser> {
   const existingLink = await authProviderRepository.findByProviderAndId('google', profile.id)
@@ -194,19 +201,19 @@ async function resolveGoogleUser(profile: GoogleProfile): Promise<ResolvedGoogle
 /**
  * Complete a Google Sign-In: resolve the user, refuse an inactive one, stamp
  * `lastLoggedInAt`, and issue a refresh token for a fresh session.
- * An address on PLATFORM_EMAIL_DOMAINS joins the platform tenant as viewer if it has not already.
+ * A verified address on PLATFORM_EMAIL_DOMAINS joins the platform tenant as viewer if it has not already.
  *
  * The active check runs first and again under the user-row lock before the
- * session is issued, so a deactivated account never gets a `user_tokens` row
- * or a success redirect, even when the deactivation races the sign-in. Once
- * the session is issued, a sign-in that created the account emits
- * `user_signed_up`, and every one emits `user_signed_in`.
- * @param profile - The raw Google profile from the callback.
- * @returns The new session's refresh token, for the controller to set as a cookie.
+ * session is issued, so a deactivation or deletion that committed before the
+ * lock is taken gets no session. Once the session is issued, a sign-in that
+ * created the account emits `user_signed_up`, and every one emits
+ * `user_signed_in`.
+ *
  * In `full` maintenance a user with no platform role is refused after the
  * active check (`assertSignInAllowed`); the controller redirects with
- * `error=MAINTENANCE_MODE`. A new account is still created first, as the
- * lookup does before any refusal.
+ * `error=MAINTENANCE_MODE`. A new account is created before that refusal.
+ * @param profile - The raw Google profile from the callback.
+ * @returns The new session's refresh token, for the controller to set as a cookie.
  * @throws {HttpError} Any `resolveGoogleUser` error, 401 `google_auth_failed` for an inactive or deleted account, or 503 `MAINTENANCE_MODE`.
  */
 export async function completeGoogleSignIn(profile: GoogleProfile): Promise<IssuedRefreshToken> {
@@ -219,7 +226,7 @@ export async function completeGoogleSignIn(profile: GoogleProfile): Promise<Issu
   await assertSignInAllowed(user.id)
 
   await userRepository.update(user.id, { lastLoggedInAt: new Date() })
-  // Covers users verified before their domain was listed; it never throws.
+  // Covers users verified before their domain was listed; it logs a failure instead of throwing.
   await autoJoinSafely(user)
 
   const issued = await withTransaction(async (tx) => {

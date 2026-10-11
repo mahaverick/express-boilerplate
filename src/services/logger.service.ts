@@ -1,8 +1,8 @@
 /**
- * @file The one place this codebase writes a log line: a lazily built pino logger
+ * @file The logger every module writes through: a lazily built pino logger
  * with a `level` label, `timestamp` and `message`, a mixin adding correlation ids
  * from the request context and active span, and a formatter that serialises every
- * Error-valued field, redacting database query errors with `redactedForLog`.
+ * top-level Error-valued field, redacting database query errors with `redactedForLog`.
  */
 import { createRequire } from 'node:module'
 import { trace } from '@opentelemetry/api'
@@ -47,9 +47,9 @@ function parseStackFrame(frame: string): { path: string; line: string } | undefi
  * Parse the first stack frame external to this file to extract the caller's
  * file path and line number, skipping this module's own frames.
  *
- * Strips `file://` prefixes (tsx/vitest), `dist/` prefixes (production), and
- * `src/` prefixes (development) down to a repo-relative path; with neither
- * `dist/` nor `src/`, it keeps the last two path segments.
+ * Strips a `file://` prefix, then cuts the path to start at its last `dist/`
+ * segment (build output) or, failing that, its last `src/` segment; with
+ * neither, it keeps the last two path segments.
  * @returns A `path:line` string identifying the caller, or `'unknown'` when
  *   the stack could not be parsed.
  */
@@ -105,9 +105,9 @@ function requestContextFields(): Record<string, string> {
 const CAUSE_WALK_DEPTH = 5
 
 /**
- * Serialise one Error, redacting it in place if it carries a database
- * query and bound parameters, else recursing into its own `.cause` (also
- * redacted if necessary). Bounded by `CAUSE_WALK_DEPTH` — four `.cause`
+ * Serialise one Error, redacting it with `redactedForLog` if it is a database
+ * query error (it carries bound parameters), else recursing into its own
+ * `.cause` (also redacted if necessary). Bounded by `CAUSE_WALK_DEPTH` — four `.cause`
  * hops, five nodes including the top-level error — so a cyclic `.cause`
  * chain ends instead of recursing forever inside a log call.
  * @param error - The error to serialise.
@@ -184,6 +184,9 @@ const LEVEL_EMOJI: Record<string, string> = {
   debug: '⚪',
 }
 
+/**
+ * The Slack dedup state of one source-and-message key while its window is open.
+ */
 interface DedupEntry {
   count: number
   firstSeen: number
@@ -452,15 +455,15 @@ function createPrettyStream(destination: DestinationStream): DestinationStream {
 }
 
 /**
- * The levels the env schema allows for LOG_LEVEL and SLACK_LOG_LEVEL, checked
- * again for `createPinoLogger`'s direct callers.
+ * The levels a multistream entry takes: those SLACK_LOG_LEVEL allows, checked
+ * again for `createPinoLogger`'s direct callers. LOG_LEVEL also allows
+ * `silent`, which only the logger's own `level` carries.
  */
 const LEVELS = new Set(['error', 'warn', 'info', 'debug'])
 
 /**
  * Narrow an arbitrary level string to one pino.multistream accepts, falling
- * back to 'info' for anything outside the closed set LOG_LEVEL/
- * SLACK_LOG_LEVEL are validated against.
+ * back to 'info' for anything outside that set (including `silent`).
  * @param level - The requested level.
  * @returns A valid pino.Level.
  */
@@ -500,7 +503,7 @@ export function createPinoLogger(options: LoggerOptions): Logger {
       messageKey: 'message',
       timestamp: () => `,"timestamp":"${new Date().toISOString()}"`,
       mixin: requestContextFields,
-      // Mixin wins, so a caller's meta cannot spoof requestId, tenantId, traceId or spanId.
+      // Mixin wins, so a caller's meta cannot override a requestId, tenantId, traceId or spanId the mixin supplies.
       mixinMergeStrategy: (mergeObject, mixinObject) => Object.assign(mergeObject, mixinObject),
       formatters: {
         level: (label) => ({ level: label }),
@@ -541,10 +544,9 @@ const getLogger: () => Logger = (() => {
  * (`getLogger()`, memoised the same way `getEnv()` is) so importing this
  * module never constructs a destination as a side effect.
  *
- * Each level guards itself with pino's own `isLevelEnabled()` check before
- * doing any work — in particular before paying for `getCallerSource()`'s
- * `new Error().stack` capture, so `logger.debug()` on a hot path costs
- * nothing when `LOG_LEVEL=info`.
+ * Each level checks pino's `isLevelEnabled()` first, so a disabled level skips
+ * `getCallerSource()`'s `new Error().stack` capture: `logger.debug()` on a
+ * hot path stays cheap when `LOG_LEVEL=info`.
  */
 export const logger = {
   error(message: string, meta?: Record<string, unknown>): void {

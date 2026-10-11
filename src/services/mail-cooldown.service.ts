@@ -1,7 +1,8 @@
 /**
- * @file `didClaimMailCooldown`, a per-address mail cooldown in Redis: at most
- * one mail of a kind per address per window, however many requests ask for
- * one, with no reply that differs (a 429 would be an enumeration oracle).
+ * @file `didClaimMailCooldown`, a per-address mail cooldown in Redis: while
+ * Redis answers, at most one mail of a kind per address per window, however
+ * many requests ask for one. Callers reply the same whether or not they won
+ * the claim, since a 429 would be an enumeration oracle.
  */
 import { logger } from '@/services/logger.service'
 import { withRedisDeadline } from '@/services/redis-deadline.service'
@@ -48,7 +49,7 @@ export async function didClaimMailCooldown(
       const redis = await getRedis()
       return redis.set(redisKey(scope, addressDigest(email)), '1', {
         NX: true,
-        // Redis rejects a non-integer PX, and the catch below would then fail open.
+        // Redis rejects a non-integer PX, and the catch below would then answer `whenUnavailable`.
         PX: Math.ceil(cooldownMs),
       })
     }, 'mail cooldown')

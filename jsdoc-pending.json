@@ -1,19 +1,4 @@
 {
-  "X10": [
-    "src/services/flags/flag-context.service.ts",
-    "src/services/flags/flag-counters.service.ts",
-    "src/services/flags/flag-definitions-client.service.ts",
-    "src/services/flags/flag-evaluator.service.ts",
-    "src/services/flags/flag-exposure.service.ts",
-    "src/services/flags/flag-snapshot.service.ts",
-    "src/services/flags/flags.service.ts",
-    "src/services/google-auth.service.ts",
-    "src/services/invitation-recipient-limit.service.ts",
-    "src/services/lifecycle.service.ts",
-    "src/services/logger.service.ts",
-    "src/services/mail-cooldown.service.ts",
-    "src/services/mailer.service.ts"
-  ],
   "X11": [
     "src/services/maintenance-mode/maintenance-mode-notices.service.ts",
     "src/services/maintenance-mode/maintenance-mode-queues.service.ts",

@@ -86,10 +86,10 @@ function isTimestamp(value: unknown): value is string {
 
 /**
  * Whether a stored value has the snapshot's shape, with both timestamps
- * parseable (staleness and the older-copy check compare them). A missing
- * `fingerprint` passes (a snapshot stored before fingerprints existed:
- * replicas keep evaluating it, and the definitions job treats it as a
- * mismatch); one that is not a string does not.
+ * parseable (`checkedAt` feeds the staleness and older-copy checks). A
+ * missing `fingerprint` passes: replicas keep evaluating such a snapshot,
+ * and the definitions job treats it as a mismatch and fetches afresh; one
+ * that is not a string does not pass.
  * @param value - The parsed JSON.
  * @returns True when it has the snapshot's fields.
  */
@@ -203,10 +203,10 @@ export async function touchFlagSnapshot(
  * Whether a snapshot just read is older than the copy in memory: checked
  * earlier. Reloads run concurrently (the message, the backstop, a
  * reconnect), so a read that started first can finish last. Only
- * `checkedAt` is compared: every run that reaches PostHog advances it, while
- * a 304 leaves `fetchedAt` alone, so a copy whose `fetchedAt` is later than
- * the next 200's (worker clock skew, a Redis restored to an older copy)
- * would otherwise refuse every later reload.
+ * `checkedAt` is compared: every successful run advances it, while a 304
+ * leaves `fetchedAt` alone, so a copy whose `fetchedAt` is later than the
+ * next 200's (worker clock skew, a Redis restored to an older copy) would
+ * otherwise refuse every later reload.
  * @param incoming - The snapshot just read.
  * @param current - The copy in memory, or null.
  * @returns True when `incoming` must not replace `current`.
@@ -217,7 +217,7 @@ function isOlder(incoming: ParsedSnapshot, current: ParsedSnapshot | null): bool
 }
 
 /**
- * Close a client; one already closed throws, which is ignored. A client whose
+ * Destroy a client; one already closed throws, which is ignored. A client whose
  * TCP connect has not landed yet is not closed by this: node-redis has no
  * socket to destroy until then. Once the connect lands, the handshake
  * deadline's destroy releases it against a silent peer; against a healthy
@@ -289,6 +289,11 @@ export function createFlagSnapshotStore(options: { backstopMs?: number } = {}): 
     isReloadFailing: false,
   }
 
+  /**
+   * Replace the copy in memory with the stored snapshot, unless that is
+   * missing, unreadable or checked earlier than the copy. Never rejects;
+   * a failure is logged once until a reload succeeds.
+   */
   const reload = async (): Promise<void> => {
     if (state.isClosed) return
     try {
@@ -308,6 +313,10 @@ export function createFlagSnapshotStore(options: { backstopMs?: number } = {}): 
     }
   }
 
+  /**
+   * Open the `reload` subscriber unless one exists or the store is closed.
+   * A failed start is logged and the backstop tries again.
+   */
   const subscribe = async (): Promise<void> => {
     if (state.isClosed || state.subscriber) return
     const client = createRedisClient()
@@ -318,6 +327,10 @@ export function createFlagSnapshotStore(options: { backstopMs?: number } = {}): 
       if (readiness.hasBeenReady) void reload()
       readiness.hasBeenReady = true
     })
+    /**
+     * Connect the subscriber and subscribe it to the reload channel.
+     * @throws {Error} When the store closed meanwhile, or the connection or subscription fails.
+     */
     const handshake = async (): Promise<void> => {
       await client.connect()
       if (state.isClosed || !client.isReady) throw new Error('Closed while connecting')
@@ -347,6 +360,10 @@ export function createFlagSnapshotStore(options: { backstopMs?: number } = {}): 
     }
   }
 
+  /**
+   * Start a subscriber attempt, or join the one in flight, so attempts never overlap.
+   * @returns Resolves when that attempt settles.
+   */
   const ensureSubscriber = (): Promise<void> => {
     state.subscribing ??= (async () => {
       try {
@@ -416,7 +433,7 @@ export async function stopFlagSnapshot(): Promise<void> {
 /**
  * This process's snapshot.
  * @returns The snapshot in memory, or null when none was loaded (flags
- *   disabled, or Redis unreachable since boot).
+ *   disabled, nothing stored yet, or Redis unreachable since boot).
  */
 export function getFlagSnapshot(): ParsedSnapshot | null {
   return defaultStore.get()
