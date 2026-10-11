@@ -1,7 +1,7 @@
 /**
- * @file A hanging PostHog never slows the product: with a one-connection
- * pool (`DB_POOL_MAX` 1 in this file's mocked `getEnv()`), API requests that
- * need the database all answer while a drain is still waiting on PostHog.
+ * @file A hanging PostHog does not block API requests: with a one-connection
+ * pool (`DB_POOL_MAX` 1 in this file's mocked `getEnv()`), requests that
+ * need the database all answer while a drain is waiting on PostHog.
  * That holds only because the drain's claim releases its connection before
  * the HTTP call; a drain holding it would queue every request behind the
  * hang.
@@ -77,7 +77,7 @@ describe('a drain waiting on a hanging PostHog', () => {
         drain.isSettled = true
       }
     })()
-    // The batch has reached PostHog: the drain is now inside the HTTP call.
+    // The batch has reached PostHog, so the drain is inside the HTTP call.
     await waitUntil(() => posthog.batches.length === 1, { message: 'the batch reached PostHog' })
 
     const responses = await Promise.all(

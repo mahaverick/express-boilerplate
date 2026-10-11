@@ -31,8 +31,7 @@ afterEach(async () => {
 })
 
 /**
- * A fresh user, tracked for cleanup.
- * @returns The user's id.
+ * Creates a user, tracked for cleanup.
  */
 async function createUser(): Promise<string> {
   const user = await userRepository.create({
@@ -43,8 +42,7 @@ async function createUser(): Promise<string> {
 }
 
 /**
- * The seeded platform tenant, failing the test when it is missing.
- * @returns The platform tenant.
+ * The seeded platform tenant, failing the test when the migration did not seed it.
  */
 async function platformTenant(): Promise<Tenant> {
   const tenant = await tenantRepository.findPlatformTenant()
@@ -123,7 +121,7 @@ describe('UserMembershipRepository.lockPlatformRole', () => {
 
     await db.transaction(async (tx) => {
       expect(await userMembershipRepository.lockPlatformRole(userId, tx)).toBe('editor')
-      // A writer on the pool's other connection cannot take the row now.
+      // While this transaction is open, a writer on the pool's other connection cannot take the row.
       await expect(
         sql`select id from user_memberships where id = ${membership.id} for update nowait`
       ).rejects.toMatchObject({ code: '55P03' })

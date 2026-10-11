@@ -34,16 +34,15 @@ afterEach(async () => {
 })
 
 /**
- * A lowercase marker unique to one test, safe inside a slug.
- * @returns The marker.
+ * A lowercase marker unique to one test, safe inside a slug, that the test puts in its tenants'
+ * names and slugs and searches by.
  */
 function marker(): string {
   return `m${randomUUID().replaceAll('-', '').slice(0, 12)}`
 }
 
 /**
- * A fresh user, tracked for cleanup.
- * @returns The user's id.
+ * Creates a user, tracked for cleanup, and returns its id.
  */
 async function createUser(): Promise<string> {
   const user = await userRepository.create({ email: `platform-repo-${randomUUID()}@example.test` })
@@ -52,10 +51,8 @@ async function createUser(): Promise<string> {
 }
 
 /**
- * A tenant with this name and slug, owned by a fresh user, tracked for cleanup.
- * @param name - The tenant's name.
- * @param slug - The tenant's slug.
- * @returns The tenant's id.
+ * Creates a tenant with this name and slug, owned by a user created for it, tracked for cleanup,
+ * and returns its id.
  */
 async function createTenant(name: string, slug: string): Promise<string> {
   const tenant = await tenantRepository.create({ name, slug, ownerId: await createUser() })
@@ -64,10 +61,9 @@ async function createTenant(name: string, slug: string): Promise<string> {
 }
 
 /**
- * Every page of a search, following cursors.
- * @param q - The search text.
- * @param limit - The page size.
- * @returns The rows in page order.
+ * Reads every page of a search for `q`, `limit` rows at a time, and returns the rows in page
+ * order. It stops after 20 pages, so a cursor that never ends fails an assertion instead of
+ * hanging the test.
  */
 async function searchEveryPage(q: string, limit: number): Promise<PlatformTenantRow[]> {
   const rows: PlatformTenantRow[] = []
@@ -200,9 +196,8 @@ describe('PlatformTenantRepository.searchAll', () => {
 })
 
 /**
- * Ids in the order Postgres itself sorts them, the tiebreak the search uses.
- * @param ids - The ids.
- * @returns The same ids, database-ordered.
+ * The ids in the order Postgres itself sorts them, which is the tiebreak the search uses, so the
+ * test does not rely on JavaScript's string order matching it.
  */
 async function sortedByDatabase(ids: string[]): Promise<string[]> {
   const rows = await sql<{ id: string }[]>`select unnest(${ids}::varchar[]) as id order by 1`

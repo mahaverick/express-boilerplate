@@ -35,8 +35,7 @@ vi.mock('@/configs/env.config', async (importOriginal) => {
 const state: { posthog?: FakePosthog; tenantIds: string[] } = { tenantIds: [] }
 
 /**
- * The running fake.
- * @returns It.
+ * The fake PostHog started in `beforeAll`, failing the test when it is not running.
  */
 function posthog(): FakePosthog {
   if (!state.posthog) throw new Error('the fake PostHog is not running')
@@ -44,10 +43,8 @@ function posthog(): FakePosthog {
 }
 
 /**
- * Insert one outbox row.
- * @param event - Its event name.
- * @param distinctId - Its distinct id.
- * @param properties - Its stored properties.
+ * Inserts an outbox row straight into the table with the given stored properties, due for the
+ * next drain.
  */
 async function seed(
   event: string,
@@ -60,9 +57,8 @@ async function seed(
 }
 
 /**
- * Whether a sent event's `server_sig` verifies over the fields it was sent with.
- * @param sent - The event as the fake received it.
- * @returns The verifier's answer.
+ * Whether a sent event's `server_sig` verifies over the fields it was sent with, taking the event
+ * as the fake PostHog received it.
  */
 function isVerified(sent: PosthogBatchEvent): boolean {
   return isAnalyticsSignatureValid(

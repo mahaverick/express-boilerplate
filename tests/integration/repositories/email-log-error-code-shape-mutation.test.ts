@@ -1,9 +1,11 @@
 /**
- * @file `withErrorCodeNormalized`'s shape clause (`ERROR_CODE_PATTERN.test(...)`)
- * is exercised through `record()` only here — a 64-character raw token
- * short-circuits on the length check alone, and the DB-level CHECK tests
- * bypass the repository entirely. Two tests, same shape as every other
- * mutation-proof file in this repo (see `token-reuse-mutation.test.ts`).
+ * @file Mutation proof that `withErrorCodeNormalized`'s shape clause
+ * (`ERROR_CODE_PATTERN.test(...)`) is covered through `record()`. The
+ * 64-character raw-token test in `email-log.repository.test.ts` short-circuits
+ * on the length check alone, and the database CHECK test in
+ * `tests/integration/database/migrate.test.ts` bypasses the repository, so
+ * neither notices the clause deleted. Two tests, shaped like the proof in
+ * `token-reuse-mutation.test.ts`.
  */
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -21,22 +23,17 @@ import { withMutatedMethod } from '../../helpers/mutate'
 const emailLogRepository = new EmailLogRepository()
 
 /**
- * A disposable recipient address, unique to one test run.
- * @returns An email guaranteed unique to this call.
+ * A fresh `@example.test` address per call, so rows from different tests never share a recipient.
  */
 function uniqueRecipient(): string {
   return `email-log-shape-mutation-${randomUUID()}@example.test`
 }
 
 /**
- * The regression this file guards against: the length half of
- * `withErrorCodeNormalized`'s guard, with the shape half
- * (`ERROR_CODE_PATTERN.test(...)`) deleted. A width-fitting but
- * wrong-shaped `errorCode` now looks "valid" to this guard and reaches the
- * insert unchanged, where `email_logs_error_code_check` (email-log.model.ts)
- * rejects it.
- * @param entry - The row to insert.
- * @returns The inserted row.
+ * The regression this file guards against: `record()` with only the length half of
+ * `withErrorCodeNormalized`'s guard, the shape half (`ERROR_CODE_PATTERN.test(...)`) deleted. A
+ * width-fitting but wrong-shaped `errorCode` looks valid to this guard and reaches the insert
+ * unchanged, where `email_logs_error_code_check` (email-log.model.ts) rejects it.
  */
 async function recordWithLengthOnlyGuard(entry: NewEmailLog): Promise<EmailLog> {
   const isValid =

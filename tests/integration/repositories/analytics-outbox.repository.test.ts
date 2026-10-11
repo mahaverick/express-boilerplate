@@ -21,18 +21,14 @@ const LEASE_SECONDS = 60
 const SECOND_MS = 1000
 
 /**
- * An instant some milliseconds after `NOW`.
- * @param ms - Milliseconds after `NOW`; negative for before.
- * @returns The instant.
+ * An instant `ms` milliseconds after `NOW`, or before it when negative.
  */
 function at(ms: number): Date {
   return new Date(NOW.getTime() + ms)
 }
 
 /**
- * A minimal row, with overrides.
- * @param overrides - Columns to set.
- * @returns The row.
+ * A valid outbox row that each test overrides only where it matters.
  */
 function row(overrides: Partial<NewAnalyticsOutboxRow> = {}): NewAnalyticsOutboxRow {
   return {
@@ -45,9 +41,8 @@ function row(overrides: Partial<NewAnalyticsOutboxRow> = {}): NewAnalyticsOutbox
 }
 
 /**
- * Insert rows and return their ids in insertion order.
- * @param rows - The rows.
- * @returns Their ids.
+ * Inserts rows straight into the table, so a test controls the lease, attempts and rejections, and
+ * returns their ids in insertion order.
  */
 async function seed(rows: NewAnalyticsOutboxRow[]): Promise<string[]> {
   const ids: string[] = []
@@ -66,8 +61,8 @@ async function seed(rows: NewAnalyticsOutboxRow[]): Promise<string[]> {
 }
 
 /**
- * Every row's id, attempts, rejections and lease, by id.
- * @returns The rows.
+ * Reads each row's id, attempts, rejections and lease, to assert the table state after an
+ * operation.
  */
 async function snapshot() {
   return sql<{ id: string; attempts: number; rejections: number; claimed_until: Date | null }[]>`
@@ -159,7 +154,7 @@ describe('AnalyticsOutboxRepository.claimBatch', () => {
     await seed([row()])
     expect(await repository.claimBatch(10, LEASE_SECONDS, NOW)).toHaveLength(1)
 
-    // attempts is now 1, so the backoff is 2^1 x 5 = 10 seconds after the lease ends.
+    // The claim made attempts 1, so the backoff is 2^1 x 5 = 10 seconds after the lease ends.
     const leaseEnd = LEASE_SECONDS * SECOND_MS
     expect(await repository.claimBatch(10, LEASE_SECONDS, at(leaseEnd - 1))).toEqual([])
     expect(await repository.claimBatch(10, LEASE_SECONDS, at(leaseEnd + 10 * SECOND_MS))).toEqual(
@@ -207,7 +202,7 @@ describe('AnalyticsOutboxRepository.claimBatch', () => {
       row({ occurredAt: at(-SECOND_MS) }),
     ])
 
-    // The pool has two connections: the open transaction holds one, the claim runs on the other.
+    // The pool has two connections (DB_POOL_MAX=2): the open transaction holds one, the claim runs on the other.
     const claimed = await db.transaction(async (tx) => {
       await tx
         .select({ id: analyticsOutboxModel.id })

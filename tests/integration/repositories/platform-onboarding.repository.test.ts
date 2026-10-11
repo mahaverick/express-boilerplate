@@ -41,22 +41,21 @@ const OPTIONS: OnboardingProgressOptions = {
 const NOT_SET = null
 
 /**
- * One tenant's derived state.
- * @param tenantId - The tenant.
- * @returns Its state, or undefined when it is not found.
+ * One tenant's derived state under `OPTIONS`, or undefined when the repository does not find it.
  */
 async function stateOf(tenantId: string): Promise<string | undefined> {
   const progress = await repository.findProgress(tenantId, OPTIONS)
   return progress?.state
 }
 
+/**
+ * The argument of `listByState`, which `list` lets a test override in part.
+ */
 type ListOptions = Parameters<PlatformOnboardingRepository['listByState']>[0]
 
 /**
- * A page of the list in one state, in that state's display order.
- * @param state - The state.
- * @param overrides - Page size, direction or cursor.
- * @returns The page.
+ * A page of one state's list under `OPTIONS`, in that state's display order: stuck longest first,
+ * the others newest first. `overrides` change the page size, direction or cursor.
  */
 function list(
   state: 'stuck' | 'in_progress' | 'awaiting_owner',
@@ -73,10 +72,7 @@ function list(
 }
 
 /**
- * The ids of a page of the list.
- * @param state - The state.
- * @param overrides - Page size, direction or cursor.
- * @returns The ids, in display order.
+ * The ids of a page of `list`, in display order.
  */
 async function idsIn(
   state: 'stuck' | 'in_progress' | 'awaiting_owner',
@@ -87,9 +83,7 @@ async function idsIn(
 }
 
 /**
- * A Date `days` days after T0.
- * @param days - Days after 2001-01-01.
- * @returns The Date.
+ * The instant `days` days after `T0` (2001-01-01).
  */
 function day(days: number): Date {
   return new Date(T0.getTime() + days * DAY_MS)

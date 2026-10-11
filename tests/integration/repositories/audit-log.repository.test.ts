@@ -35,8 +35,7 @@ afterEach(async () => {
 })
 
 /**
- * A user and a tenant they own, both tracked for cleanup.
- * @returns The user's and tenant's ids.
+ * Creates a user and a tenant they own, both tracked for cleanup.
  */
 async function createOwnerAndTenant(): Promise<{ userId: string; tenantId: string }> {
   const user = await userRepository.create({
@@ -55,11 +54,7 @@ async function createOwnerAndTenant(): Promise<{ userId: string; tenantId: strin
 }
 
 /**
- * A valid user-actor entry for `tenantId`, with any columns overridden.
- * @param tenantId - The tenant.
- * @param userId - The actor.
- * @param overrides - Columns to override.
- * @returns The insert values.
+ * A valid entry for `tenantId` with `userId` as the acting user, with any columns overridden.
  */
 function entry(
   tenantId: string,
@@ -80,10 +75,8 @@ function entry(
 }
 
 /**
- * Read a tenant's whole log a page at a time.
- * @param tenantId - The tenant.
- * @param limit - The page size.
- * @returns Every row, in page order, and how many pages it took.
+ * Reads a tenant's log `limit` rows at a time, giving the rows in page order and the page count.
+ * It stops after 20 pages, so a cursor that never ends fails the test instead of hanging it.
  */
 async function readAllPages(
   tenantId: string,

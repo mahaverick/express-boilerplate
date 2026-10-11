@@ -91,8 +91,7 @@ afterAll(async () => {
 })
 
 /**
- * A fresh address under this file's prefix, cleaned up after the test.
- * @returns The address.
+ * A fresh address under this file's prefix, deleted with its user after the test.
  */
 function freshEmail(): string {
   const email = `${PREFIX}${randomUUID()}@example.test`
@@ -101,17 +100,14 @@ function freshEmail(): string {
 }
 
 /**
- * A verified user with a password.
- * @returns The user.
+ * Creates a verified user with a password, tracked for cleanup.
  */
 async function passwordUser(): Promise<User> {
   return createTrackedUser({ hasPassword: true })
 }
 
 /**
- * A Google profile with a verified address.
- * @param email - The address Google reports.
- * @returns The profile.
+ * A Google profile that reports `email` as verified, as `completeGoogleSignIn` receives it.
  */
 function googleProfile(email: string): GoogleProfile {
   const id = randomUUID()

@@ -19,10 +19,7 @@ const MINUTE_MS = 60 * 1000
 const START = new Date('2026-10-04T10:00:00.000Z')
 
 /**
- * A moment some time after START.
- * @param minutes - How many minutes later.
- * @param extraMs - Milliseconds on top of that.
- * @returns The moment.
+ * The instant `minutes` minutes and `extraMs` milliseconds after `START`.
  */
 function at(minutes: number, extraMs = 0): Date {
   return new Date(START.getTime() + minutes * MINUTE_MS + extraMs)

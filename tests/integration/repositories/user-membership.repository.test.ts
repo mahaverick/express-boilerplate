@@ -4,11 +4,10 @@
  * deleted in `afterEach`, tenants first, then users: both
  * `user_memberships.tenant_id` and `.user_id` carry `ON DELETE CASCADE`
  * (`user-membership.model.ts`). Every tenant here is created via
- * `TenantRepository.create` — the only way a tenant (and therefore any
- * membership pointing at it) can exist in this codebase — so these fixtures
- * are exactly what a real caller would produce: a tenant with an owner
- * membership already in place, onto which this file adds further
- * memberships directly via `UserMembershipRepository.create`.
+ * `TenantRepository.create`, so these fixtures are what a real caller
+ * produces: a tenant with an owner membership already in place, onto which
+ * this file adds further memberships directly via
+ * `UserMembershipRepository.create`.
  */
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -23,8 +22,7 @@ const userMembershipRepository = new UserMembershipRepository()
 const userRepository = new UserRepository()
 
 /**
- * A disposable email, unique to one test run.
- * @returns An email guaranteed unique to this call.
+ * A fresh `@example.test` address per call, so users from different tests never share an email.
  */
 function uniqueEmail(): string {
   return `membership-repo-${randomUUID()}@example.test`
@@ -48,9 +46,7 @@ describe('UserMembershipRepository', () => {
   })
 
   /**
-   * A fresh user, tracked for cleanup.
-   * @param overrides - Any `NewUser` fields to override the default email with.
-   * @returns The created user row.
+   * Creates a user, tracked for cleanup. `overrides` set the first and last name.
    */
   async function createUser(overrides: Partial<{ firstName: string; lastName: string }> = {}) {
     const user = await userRepository.create({ email: uniqueEmail(), ...overrides })
@@ -59,11 +55,8 @@ describe('UserMembershipRepository', () => {
   }
 
   /**
-   * A fresh tenant owned by `ownerId`, tracked for cleanup — already
-   * carries one `'owner'` membership for `ownerId`, via
-   * `TenantRepository.create`.
-   * @param ownerId - The user who becomes this tenant's owner.
-   * @returns The created tenant row.
+   * Creates a tenant owned by `ownerId`, tracked for cleanup. `TenantRepository.create` already
+   * adds the `'owner'` membership for `ownerId`.
    */
   async function createTenant(ownerId: string) {
     const tenant = await tenantRepository.create({

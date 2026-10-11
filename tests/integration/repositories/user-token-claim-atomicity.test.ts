@@ -24,25 +24,22 @@ const userRepository = new UserRepository()
 const userTokenRepository = new UserTokenRepository()
 
 /**
- * Matches `database.service.ts`'s own test-mode pool size (`max: 2`)
- * exactly, so both claims below are guaranteed genuinely concurrent at the
- * database, not merely issued concurrently from Node and then serialised
- * waiting for a free connection.
+ * The test pool's size (`DB_POOL_MAX=2` in `.env.test`), so both claims below are genuinely
+ * concurrent at the database, not issued concurrently from Node and then serialised waiting for a
+ * free connection.
  */
 const CONCURRENT_CLAIMS = 2
 
 /**
- * A disposable email, unique to one test run.
- * @returns An email guaranteed unique to this call.
+ * A fresh `@example.test` address per call, so users from different tests never share an email.
  */
 function uniqueEmail(): string {
   return `claim-atomicity-${randomUUID()}@example.test`
 }
 
 /**
- * A disposable, distinct token hash — stands in for a real SHA-256 digest;
- * this file never needs the hash to correspond to a real raw token.
- * @returns A 64-character hex string, unique to this call.
+ * A fresh 64-character hex string standing in for a SHA-256 token digest; this file never needs it to
+ * correspond to a real raw token.
  */
 function uniqueHash(): string {
   return randomBytes(32).toString('hex')
@@ -50,8 +47,6 @@ function uniqueHash(): string {
 
 /**
  * A barrier for `parties` callers: `arrive()` resolves once all of them have called it.
- * @param parties - How many callers must arrive.
- * @returns The barrier.
  */
 function meetingPoint(parties: number): { arrive: () => Promise<void> } {
   let arrivals = 0
@@ -66,16 +61,12 @@ function meetingPoint(parties: number): { arrive: () => Promise<void> } {
 }
 
 /**
- * The exact TOCTOU shape `claimOnce`'s single UPDATE statement exists to
- * rule out: a separate SELECT to check `revokedAt IS NULL`, THEN a separate
- * UPDATE — with every caller meeting at `meeting` between them, so
- * concurrent callers all pass the check before any writes. Cannot use
- * `this.scope`/`this.touched` (both `protected` on BaseRepository): the
- * WHERE and SET clauses are inlined instead, otherwise matching claimOnce's
- * own real predicate exactly (tokenHash + purpose + revokedAt IS NULL + not
- * soft-deleted).
- * @param meeting - The barrier every concurrent caller meets at after its SELECT.
- * @returns A non-atomic stand-in for `claimOnce`.
+ * A non-atomic stand-in for `claimOnce`, with the TOCTOU shape its single UPDATE statement exists
+ * to rule out: a SELECT checking `revokedAt IS NULL`, then a separate UPDATE. Every caller meets at
+ * `meeting` between the two, so concurrent callers all pass the check before any writes.
+ * `this.scope` and `this.touched` are `protected` on BaseRepository, so the WHERE and SET clauses
+ * are inlined; they otherwise match `claimOnce`'s predicate (tokenHash, purpose, `revokedAt IS
+ * NULL`, not soft-deleted).
  */
 function unsafeClaimOnce(
   meeting: ReturnType<typeof meetingPoint>
@@ -107,12 +98,8 @@ function unsafeClaimOnce(
 }
 
 /**
- * Fire `times` concurrent `claimOnce` calls at the same hash/purpose and
- * wait for all of them to settle.
- * @param tokenHash - The SHA-256 hash of the raw token, hex-encoded.
- * @param purpose - The purpose to claim under.
- * @param times - How many concurrent callers to simulate.
- * @returns One result per caller, in no guaranteed order — undefined for every caller that lost the race.
+ * Fires `times` concurrent `claimOnce` calls at the same hash and purpose and waits for all of
+ * them. The result has one entry per caller, undefined for each one that lost the race.
  */
 function claimConcurrently(
   tokenHash: string,
@@ -134,8 +121,7 @@ describe('claimOnce is atomic under real concurrency', () => {
   })
 
   /**
-   * Create a disposable user row for a test and track it for cleanup.
-   * @returns The created user's id.
+   * Creates a user for a test, tracked for cleanup, and returns its id.
    */
   async function createUser(): Promise<string> {
     const user = await userRepository.create({ email: uniqueEmail() })
@@ -144,9 +130,8 @@ describe('claimOnce is atomic under real concurrency', () => {
   }
 
   /**
-   * Always on: races `CONCURRENT_CLAIMS` truly-parallel `claimOnce` calls
-   * (matching the test-mode pool's own `max: 2`, so both genuinely run at
-   * the database at once) against one row. Postgres's own MVCC UPDATE
+   * Always on: races `CONCURRENT_CLAIMS` parallel `claimOnce` calls (one per pool connection, so
+   * they genuinely run at the database at once) against one row. Postgres's own MVCC UPDATE
    * semantics make exactly one winner deterministic.
    */
   it(`exactly one of ${CONCURRENT_CLAIMS} concurrent claims on the same row succeeds`, async () => {
@@ -162,7 +147,7 @@ describe('claimOnce is atomic under real concurrency', () => {
     const results = await claimConcurrently(tokenHash, 'password_reset', CONCURRENT_CLAIMS)
     const claimed = results.filter((row): row is UserToken => row !== undefined)
 
-    // Not "at least one" or "at most one": asserting the count, not just non-emptiness, is what would catch a regression that let every caller win.
+    // Exactly one: "at least one" passes when every caller wins, and "at most one" passes when none does.
     expect(claimed).toHaveLength(1)
 
     const finalRow = await userTokenRepository.findByHash(tokenHash)

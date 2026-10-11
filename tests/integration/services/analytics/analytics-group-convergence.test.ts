@@ -48,8 +48,7 @@ const tenantRepository = new TenantRepository()
 const state: { posthog?: FakePosthog; tenantIds: string[] } = { tenantIds: [] }
 
 /**
- * The running fake.
- * @returns It.
+ * The fake PostHog started in `beforeAll`, failing the test when it is not running.
  */
 function posthog(): FakePosthog {
   if (!state.posthog) throw new Error('the fake PostHog is not running')
@@ -57,9 +56,7 @@ function posthog(): FakePosthog {
 }
 
 /**
- * Insert one tenant row directly.
- * @param name - Its name.
- * @returns Its id.
+ * Inserts a tenant row straight into the table, tracked for cleanup, and returns its id.
  */
 async function insertTenant(name: string): Promise<string> {
   const slug = `converge-${randomUUID()}`
@@ -71,10 +68,8 @@ async function insertTenant(name: string): Promise<string> {
 }
 
 /**
- * Queue one marker for a tenant, as the builder writes it.
- * @param tenantId - The tenant.
- * @param occurredAt - Its event time.
- * @returns The outbox row id.
+ * Queues one `$groupidentify` marker for a tenant as `buildTenantGroupIdentify` writes it, with
+ * `occurredAt` as its event time, and returns the outbox row id.
  */
 async function queueMarker(tenantId: string, occurredAt: Date): Promise<string> {
   const row = buildTenantGroupIdentify({ id: tenantId }, {}, 'audit', occurredAt)
@@ -88,9 +83,7 @@ async function queueMarker(tenantId: string, occurredAt: Date): Promise<string> 
 }
 
 /**
- * The `$groupidentify` events the fake received for one tenant, in send order.
- * @param tenantId - The tenant.
- * @returns Those events.
+ * The `$groupidentify` events the fake PostHog received for one tenant, in send order.
  */
 function sentMarkersFor(tenantId: string): PosthogBatchEvent[] {
   return posthog()
@@ -128,7 +121,7 @@ describe('group marker convergence', () => {
     const older = await queueMarker(tenantId, new Date(now.getTime() - 2 * SECOND_MS))
     await sql`update tenants set name = 'After Rename' where id = ${tenantId}`
     await queueMarker(tenantId, new Date(now.getTime() - SECOND_MS))
-    // The older marker is still leased by an earlier drain whose send is being retried.
+    // The older marker is leased by an earlier drain whose send is being retried.
     const leasedUntil = new Date(now.getTime() + 60 * SECOND_MS)
     await sql`
       update analytics_outbox set claimed_until = ${leasedUntil.toISOString()}::timestamptz

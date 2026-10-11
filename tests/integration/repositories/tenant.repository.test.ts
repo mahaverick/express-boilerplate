@@ -6,11 +6,11 @@
  * DELETE CASCADE` (`tenant.model.ts`, `user-membership.model.ts`), so
  * deleting the tenant takes its settings row and every membership row with
  * it. Also covers `TenantSettingsRepository` (`findByTenantId`/`update`)
- * inline, rather than in a separate file: every settings row in this
- * codebase is created exactly once, atomically, by `TenantRepository.create`,
- * so exercising it via the same tenant fixtures this file already builds is
- * more representative than standing up an isolated settings row a real
- * caller could never produce.
+ * inline, rather than in a separate file: a settings row is created together
+ * with its tenant (`TenantRepository.create` or `createWithoutOwner`, or the
+ * platform tenant's migration), so exercising it via the tenant fixtures this
+ * file already builds is more representative than standing up an isolated
+ * settings row a real caller could never produce.
  */
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -28,19 +28,17 @@ const userMembershipRepository = new UserMembershipRepository()
 const userRepository = new UserRepository()
 
 /**
- * A disposable email, unique to one test run.
- * @returns An email guaranteed unique to this call.
+ * A fresh `@example.test` address per call, so users from different tests never share an email.
  */
 function uniqueEmail(): string {
   return `tenant-repo-${randomUUID()}@example.test`
 }
 
 /**
- * A disposable slug, unique to one test run. Lowercase hex only — already
- * satisfies the `/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/` shape `slugSchema`
- * (`tenant.validators.ts`) enforces, even though this repository layer does
- * not itself validate slug shape.
- * @returns A slug guaranteed unique to this call.
+ * A fresh slug per call, so tenants from different tests never collide on the unique slug. It is
+ * lowercase letters, digits and hyphens, so it also satisfies the
+ * `/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/` shape `slugSchema` (`tenant.validators.ts`) enforces,
+ * although this repository layer does not validate slug shape itself.
  */
 function uniqueSlug(): string {
   return `tenant-${randomUUID()}`
@@ -64,9 +62,7 @@ describe('TenantRepository', () => {
   })
 
   /**
-   * A fresh user for a test to own or join tenants with, tracked for
-   * cleanup.
-   * @returns The created user's id.
+   * Creates a user for a test to own or join tenants, tracked for cleanup.
    */
   async function createUser(): Promise<string> {
     const user = await userRepository.create({ email: uniqueEmail() })
@@ -75,10 +71,8 @@ describe('TenantRepository', () => {
   }
 
   /**
-   * A fresh tenant via `TenantRepository.create`, tracked for cleanup.
-   * @param ownerId - The user who becomes this tenant's owner.
-   * @param overrides - Any `CreateTenantInput` fields to override the defaults with (e.g. a fixed `slug`, to exercise a collision).
-   * @returns The created tenant row.
+   * Creates a tenant through `TenantRepository.create` with `ownerId` as its owner, tracked for
+   * cleanup. `overrides` replace the defaults, for example a fixed `slug` to force a collision.
    */
   async function createTenant(ownerId: string, overrides: Partial<CreateTenantInput> = {}) {
     const tenant = await tenantRepository.create({
@@ -139,7 +133,7 @@ describe('TenantRepository', () => {
         statusCode: 409,
       })
 
-      // The rolled-back attempt must not have left a second tenant, a settings row, or an owner membership behind — proving the transaction, not just the tenant insert, rolled back.
+      // The rejected attempt must leave only the first tenant under this slug and no membership for the second owner.
       const found = await tenantRepository.findBySlug(slug)
       expect(found?.id).toBe(first.id)
       expect(
@@ -219,7 +213,7 @@ describe('TenantRepository', () => {
       await tenantRepository.update(tenant.id, { lifecycleState: 'suspended' })
 
       expect(await tenantRepository.findActiveBySlug(tenant.slug)).toBeUndefined()
-      // The plain (non-active-scoped) lookup still finds it: suspension is not a soft-delete.
+      // The plain (non-active-scoped) lookup finds it: suspension is not a soft-delete.
       expect(await tenantRepository.findBySlug(tenant.slug)).toMatchObject({
         lifecycleState: 'suspended',
       })

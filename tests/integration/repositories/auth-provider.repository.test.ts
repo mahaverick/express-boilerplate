@@ -3,7 +3,7 @@
  * `tests/helpers/worker-database.ts`). Every user this file creates is
  * deleted in `afterEach` — deleting the user is enough: `auth_providers.user_id`
  * carries `ON DELETE CASCADE` (`auth-provider.model.ts`), so a row this
- * file never explicitly deletes is still gone once its owning user is. One
+ * file never explicitly deletes is gone once its owning user is. One
  * test below asserts that property directly.
  */
 import { randomUUID } from 'node:crypto'
@@ -16,18 +16,15 @@ const authProviderRepository = new AuthProviderRepository()
 const userRepository = new UserRepository()
 
 /**
- * A disposable email, unique to one test run.
- * @returns An email guaranteed unique to this call.
+ * A fresh `@example.test` address per call, so the unique (provider, providerId) pair of an email
+ * row never collides across tests.
  */
 function uniqueEmail(): string {
   return `auth-provider-repo-${randomUUID()}@example.test`
 }
 
 /**
- * Alphabetical order, for comparing unordered row lists.
- * @param left - One value.
- * @param right - The other.
- * @returns Negative, zero or positive, as `localeCompare`.
+ * Sort comparator that makes unordered row lists comparable.
  */
 function byName(left: string, right: string): number {
   return left.localeCompare(right)
@@ -43,8 +40,7 @@ describe('AuthProviderRepository', () => {
   })
 
   /**
-   * A fresh user for a test to own provider rows with, tracked for cleanup.
-   * @returns The created user's id.
+   * Creates a user for a test to own provider rows, tracked for cleanup.
    */
   async function createUser(): Promise<string> {
     const user = await userRepository.create({ email: uniqueEmail() })

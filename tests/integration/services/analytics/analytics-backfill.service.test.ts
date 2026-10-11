@@ -25,9 +25,8 @@ vi.mock('@/configs/analytics.config', async (importOriginal) => {
 const state: { tenantIds: string[] } = { tenantIds: [] }
 
 /**
- * Insert one tenant row directly.
- * @param lifecycle - Its lifecycle state; an archived tenant is also soft-deleted.
- * @returns Its id and name.
+ * Inserts a tenant row straight into the table, tracked for cleanup, with a name the test can look
+ * for in the outbox. An archived tenant is also soft-deleted.
  */
 async function insertTenant(
   lifecycle: 'active' | 'suspended' | 'archived'
@@ -45,9 +44,7 @@ async function insertTenant(
 }
 
 /**
- * The queued markers for one tenant.
- * @param tenantId - The tenant.
- * @returns Those outbox rows.
+ * The `$groupidentify` outbox rows queued for one tenant.
  */
 async function markersFor(tenantId: string) {
   const rows = await outboxRowsOf('$groupidentify')

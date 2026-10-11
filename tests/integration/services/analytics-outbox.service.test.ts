@@ -85,8 +85,7 @@ afterEach(async () => {
 })
 
 /**
- * A user and a tenant they own, tracked for cleanup.
- * @returns Their ids.
+ * Creates a user and a tenant they own, tracked for cleanup.
  */
 async function ownerAndTenant(): Promise<{ userId: string; tenantId: string }> {
   const user = await createTrackedUser()
@@ -100,10 +99,7 @@ async function ownerAndTenant(): Promise<{ userId: string; tenantId: string }> {
 }
 
 /**
- * A valid `tenant.updated` entry.
- * @param userId - The actor.
- * @param tenantId - The tenant.
- * @returns The entry.
+ * A valid `tenant.updated` audit entry for `tenantId`, with `userId` as the acting user.
  */
 function tenantUpdated(userId: string, tenantId: string): AuditEntry {
   return {
@@ -117,10 +113,7 @@ function tenantUpdated(userId: string, tenantId: string): AuditEntry {
 }
 
 /**
- * Rename a tenant in `tx`, as the audited business change.
- * @param tenantId - The tenant.
- * @param name - The new name.
- * @param tx - The transaction.
+ * Renames a tenant in `tx`, standing in for the business change the audit entry describes.
  */
 async function rename(
   tenantId: string,
@@ -131,9 +124,7 @@ async function rename(
 }
 
 /**
- * The tenant's committed name.
- * @param tenantId - The tenant.
- * @returns Its name.
+ * The tenant's name as committed, to show whether a change in a transaction survived.
  */
 async function committedName(tenantId: string): Promise<string | undefined> {
   const tenant = await tenantRepository.findById(tenantId)
@@ -141,9 +132,7 @@ async function committedName(tenantId: string): Promise<string | undefined> {
 }
 
 /**
- * The tenant's committed audit rows.
- * @param tenantId - The tenant.
- * @returns The rows' actions.
+ * The actions of the tenant's committed audit rows, in order.
  */
 async function auditActions(tenantId: string): Promise<string[]> {
   const rows = await sql<{ action: string }[]>`

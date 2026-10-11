@@ -17,29 +17,22 @@ const SECOND_MS = 1000
 const MINUTE_MS = 60 * SECOND_MS
 
 /**
- * An instant some milliseconds after `NOW`.
- * @param ms - Milliseconds after `NOW`; negative for before.
- * @returns The instant.
+ * An instant `ms` milliseconds after `NOW`, or before it when negative.
  */
 function at(ms: number): Date {
   return new Date(NOW.getTime() + ms)
 }
 
 /**
- * Compare two strings, for sorting ids.
- * @param left - One id.
- * @param right - The other.
- * @returns Their order.
+ * Sort comparator for ids, so an assertion does not depend on the order a claim returns rows.
  */
 function byText(left: string, right: string): number {
   return left.localeCompare(right)
 }
 
 /**
- * Insert one row directly.
- * @param distinctId - Its id.
- * @param notBefore - When it is due.
- * @param attempts - Its failure count.
+ * Inserts a row straight into the table, bypassing the repository, so a claim test controls the
+ * due time and the failure count.
  */
 async function seed(distinctId: string, notBefore: Date, attempts = 0): Promise<void> {
   await sql`
@@ -48,8 +41,7 @@ async function seed(distinctId: string, notBefore: Date, attempts = 0): Promise<
 }
 
 /**
- * Every row, by id.
- * @returns The rows.
+ * Reads every row ordered by id, to assert the table state after an operation.
  */
 function snapshot() {
   return db
@@ -140,7 +132,7 @@ describe('AnalyticsDeletionRepository.claimDue', () => {
     await seed('locked', at(-2 * SECOND_MS))
     await seed('free', at(-SECOND_MS))
 
-    // The pool has two connections: the open transaction holds one, the claim runs on the other.
+    // The pool has two connections (DB_POOL_MAX=2): the open transaction holds one, the claim runs on the other.
     const claimed = await db.transaction(async (tx) => {
       await tx
         .select({ distinctId: analyticsDeletionModel.distinctId })
