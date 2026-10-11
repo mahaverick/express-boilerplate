@@ -80,27 +80,24 @@ const HTTP: ErrorContext = {
 const UUIDV7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 
 /**
- * Report `count` errors with distinct fingerprints (no stack, distinct messages).
- * @param count - How many.
- * @param label - Keeps one call's messages apart from another's.
- * @returns Their ids, in order.
+ * Reports `count` errors with distinct fingerprints (no stack, distinct
+ * messages), so the per-fingerprint throttle never applies. `label` keeps one
+ * call's messages apart from another's, and the ids come back in report order.
  */
 function reportDistinct(count: number, label = 'e'): string[] {
   return Array.from({ length: count }, (_, index) => reportError(`${label} ${String(index)}`, HTTP))
 }
 
 /**
- * An error thrown from one line, so every one has the same fingerprint.
- * @returns The error.
+ * An error created on one line, so every call has the same fingerprint.
  */
 function sameError(): Error {
   return new Error('same')
 }
 
 /**
- * How many reports a counter mock was told about for one outcome.
- * @param outcome - The outcome.
- * @returns The sum of the counts passed.
+ * How many reports the counters mock was told about for `outcome`, summed over
+ * its calls.
  */
 function counted(outcome: string): number {
   return vi
@@ -110,16 +107,16 @@ function counted(outcome: string): number {
 }
 
 /**
- * The epoch milliseconds between consecutive sends.
- * @returns The gaps.
+ * The fake-clock milliseconds between consecutive sends, which show the
+ * back-off.
  */
 function sendGaps(): number[] {
   return posthog.batches.slice(1).map((batch, index) => batch.at - posthog.batches[index]!.at)
 }
 
 /**
- * Answer every send with a promise the test settles by hand.
- * @returns The resolvers, one per send, in send order.
+ * Answers every send with a promise the test settles by hand. The resolvers
+ * come back one per send, in send order.
  */
 function holdSends(): ((result: SendResult) => void)[] {
   const pending: ((result: SendResult) => void)[] = []
@@ -133,9 +130,9 @@ function holdSends(): ((result: SendResult) => void)[] {
 /**
  * Leave one send hanging, queue 99 events and a fatal one a minute later,
  * start a deadline flush that sends 50 beside the hanging send, then let the
- * hanging send ack, so its end starts a new flight with the last 50
- * (the fatal one among them) while the flush runs.
- * @returns The resolvers, the fatal event's id, and the flush's state.
+ * hanging send ack, so its end starts another flight with the last 50
+ * (the fatal one among them) while the flush runs. Returns the send
+ * resolvers, the fatal event's id and the flush's state.
  */
 async function flushWhileAFlightStarts(): Promise<{
   pending: ((result: SendResult) => void)[]
@@ -237,6 +234,9 @@ describe('reportError gating and ids', () => {
 
   it('a Proxy whose every access throws gives one deterministic outcome per report', async () => {
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    /**
+     * Throws, standing in for every Proxy trap.
+     */
     const trap = (): never => {
       throw new Error('proxy trap')
     }
@@ -293,9 +293,8 @@ describe('reportError gating and ids', () => {
 })
 
 /**
- * Make `logger.warn` write through a real pino JSON pipeline and return
- * the lines written.
- * @returns The written lines, filled as the logger is called.
+ * Makes `logger.warn` write through a real pino JSON pipeline, so a test can
+ * check the serialized line. The returned array fills as the logger is called.
  */
 function capturedWarnLines(): string[] {
   const lines: string[] = []
@@ -359,6 +358,9 @@ describe('internal failure log', () => {
 
   it('scrubs a thrown error name', () => {
     const lines = capturedWarnLines()
+    /**
+     * An error whose `name` carries a secret, which the failure log must scrub.
+     */
     class NamedError extends Error {
       override name = `Bearer ${LEAKED_PARAM}`
     }
@@ -527,7 +529,7 @@ describe('retry, back-off and refusal', () => {
       batch.events.some((event) => event.uuid === lateId)
     ).length
     expect(lateSends).toBe(1)
-    // The late event has had one try, not ERROR_RETRY_LIMIT; it must still be queued.
+    // The late event has had one try, not ERROR_RETRY_LIMIT; it must remain queued.
     expect(counted('retry_exhausted')).toBe(1)
     expect(queuedErrorReportCount()).toBe(1)
   })
@@ -680,7 +682,7 @@ describe('flushErrorReports', () => {
     expect(posthog.batches).toHaveLength(3)
     pending[1]?.({ kind: 'ack' })
     await vi.advanceTimersByTimeAsync(0)
-    // The reset reporter's last event waits for its own flush, not the old one.
+    // The reset reporter's last event waits for its own flush, not the pre-reset reporter's.
     expect(posthog.batches).toHaveLength(3)
     expect(queuedErrorReportCount()).toBe(1)
     await vi.advanceTimersByTimeAsync(2000)
@@ -724,7 +726,7 @@ describe('resetErrorReporter', () => {
     await vi.advanceTimersByTimeAsync(0)
     reportDistinct(50, 'f')
     await vi.advanceTimersByTimeAsync(0)
-    // The post-reset flight is still out, so the next 50 wait for it.
+    // The post-reset flight is out, so the next 50 wait for it.
     expect(posthog.batches).toHaveLength(2)
   })
 })

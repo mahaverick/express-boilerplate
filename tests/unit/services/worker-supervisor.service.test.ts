@@ -43,13 +43,16 @@ vi.mock('@/configs/analytics.config', () => ({
   isFlagsEnabled: vi.fn(() => false),
 }))
 
+/**
+ * The slice of a BullMQ Worker that the supervisor calls: `close`.
+ */
 interface FakeWorker {
   close: ReturnType<typeof vi.fn>
 }
 
 /**
- * A Worker stand-in whose close() resolves once `release` is called.
- * @returns The fake, and a function that lets its close() resolve.
+ * A Worker stand-in whose close() resolves once the returned `release` is
+ * called.
  */
 function fakeWorker(): { worker: FakeWorker; release: () => void } {
   const gate = { open: (): void => undefined }
@@ -63,10 +66,11 @@ function fakeWorker(): { worker: FakeWorker; release: () => void } {
 }
 
 /**
- * Wire the mocks: each generation gets its own connection and a fake Worker
+ * Wires the mocks: each generation gets its own connection and a fake Worker
  * per starter (three, four with analytics or the timeline enabled), and
- * registering any schedule resolves.
- * @returns The fakes in start order, the connections, and the lost-connection listener.
+ * registering any schedule resolves. Returns the fakes in start order, the
+ * connections, `lose` (which reports a connection lost to the listeners) and
+ * the `unsubscribe` spy.
  */
 function wireMocks(): {
   workers: ReturnType<typeof fakeWorker>[]
@@ -83,6 +87,9 @@ function wireMocks(): {
     connections.push(connection)
     return connection
   })
+  /**
+   * Starts a fake Worker and records it, in place of a real starter.
+   */
   const start = (): Worker => {
     const fake = fakeWorker()
     workers.push(fake)
@@ -246,7 +253,7 @@ describe('startWorkers', () => {
     expect(halfStarted?.worker.close).toHaveBeenCalledWith(true)
     expect(setWorkersFailed).toHaveBeenLastCalledWith(true)
 
-    // Its connection is still the one watched: losing it starts a full generation.
+    // Its connection remains the one watched: losing it starts a full generation.
     mocks.lose(mocks.connections[1] as IORedis)
     expect(mocks.workers).toHaveLength(7)
     expect(setWorkersFailed).toHaveBeenLastCalledWith(false)

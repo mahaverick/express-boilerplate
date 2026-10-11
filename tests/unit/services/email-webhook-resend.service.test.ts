@@ -19,6 +19,9 @@ const NOW_MS = Date.UTC(2026, 8, 30, 12, 0, 0)
 const NOW_SECONDS = String(NOW_MS / 1000)
 const adapter = createResendEmailWebhookAdapter({ secret, now: () => NOW_MS })
 
+/**
+ * A Svix `v1,<base64>` signature over `id.timestamp.body` under `signingKey`.
+ */
 function svixSignature(signingKey: Buffer, id: string, timestamp: string, raw: Buffer): string {
   const digest = createHmac('sha256', signingKey)
     .update(Buffer.concat([Buffer.from(`${id}.${timestamp}.`), raw]))
@@ -26,6 +29,11 @@ function svixSignature(signingKey: Buffer, id: string, timestamp: string, raw: B
   return `v1,${digest}`
 }
 
+/**
+ * The three Svix headers for `raw`, signed over the id and the timestamp
+ * (seconds), either of which `overrides` may fix. `overrides.signature`
+ * replaces the real signature.
+ */
 function signedHeaders(
   raw: Buffer,
   overrides: { id?: string; timestamp?: string; signature?: string } = {}
@@ -39,6 +47,10 @@ function signedHeaders(
   }
 }
 
+/**
+ * A Resend webhook body of event `type`, as raw bytes. Its `data` is a full
+ * set of email fields with `data` laid over them.
+ */
 function resendBody(type: string, data: Record<string, unknown> = {}): Buffer {
   return Buffer.from(
     JSON.stringify({
@@ -57,6 +69,10 @@ function resendBody(type: string, data: Record<string, unknown> = {}): Buffer {
   )
 }
 
+/**
+ * Runs `run` and returns the `reason` of the `WebhookSignatureError` it throws,
+ * or undefined when it does not throw. Any other error is rethrown.
+ */
 function rejection(run: () => void): string | undefined {
   try {
     run()
@@ -142,6 +158,10 @@ describe('Resend adapter: verify', () => {
   })
 })
 
+/**
+ * Parses `raw` with headers whose svix-id is fixed, so the event's
+ * `providerEventId` is known.
+ */
 function parsedEvent(raw: Buffer) {
   const headers = signedHeaders(raw, { id: 'msg_2mD6fCWlLJzYz1k2aEGb4QYqWnT' })
   return adapter.parse(raw, headers)

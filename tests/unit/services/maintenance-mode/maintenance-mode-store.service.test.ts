@@ -20,10 +20,7 @@ const CHANGED_AT = new Date('2026-10-06T10:42:00.000Z')
 const NONE = null
 
 /**
- * A stored row.
- * @param mode - Its mode.
- * @param version - Its version.
- * @returns The row.
+ * The stored row for `mode` at `version`, with a message unless the mode is off.
  */
 function row(mode: MaintenanceMode, version: number): MaintenanceModeStateRow {
   return {
@@ -40,9 +37,8 @@ function row(mode: MaintenanceMode, version: number): MaintenanceModeStateRow {
 }
 
 /**
- * A store whose reads answer from `reads`, in order; an Error entry rejects.
- * @param reads - What each read answers.
- * @returns The store, not started.
+ * A store, not started, whose reads answer from `reads` in order; an Error
+ * entry rejects, and a read past the end rejects too.
  */
 function storeReading(reads: (MaintenanceModeStateRow | Error)[]): MaintenanceModeStore {
   const queue = [...reads]

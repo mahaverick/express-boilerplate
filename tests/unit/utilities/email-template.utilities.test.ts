@@ -51,7 +51,7 @@ describe('requireEmailVariables', () => {
   })
 
   /**
-   * A key omitted entirely (not merely set to undefined) must still be
+   * A key omitted entirely (not merely set to undefined) must be
    * caught. An Object.entries-based guard would never see this key at
    * all, since it never appears among the object's own entries — this
    * is the case that distinguishes a real guard from one that only

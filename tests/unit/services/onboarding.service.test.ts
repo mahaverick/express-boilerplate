@@ -19,20 +19,16 @@ const OWNER = 'owner-1'
 const NONE = null
 
 /**
- * A time some days after the clock started.
- * @param days - Days after `STARTED`.
- * @returns The time.
+ * The time `days` days after `STARTED`, the tenant's onboarding start.
  */
 function atDay(days: number): Date {
   return new Date(STARTED.getTime() + days * DAY_MS)
 }
 
 /**
- * A completion row.
- * @param stepKey - The step.
- * @param completedAt - When.
- * @param userId - The member, for a member step.
- * @returns The row.
+ * A completion row for `stepKey` at `completedAt`. Given a `userId` it is that
+ * member's customer completion, for a member step; without one it is the
+ * tenant's automatic completion.
  */
 function completion(stepKey: string, completedAt: Date, userId?: string): OnboardingCompletion {
   return {
@@ -48,9 +44,8 @@ function completion(stepKey: string, completedAt: Date, userId?: string): Onboar
 }
 
 /**
- * Derive for a running tenant with no completions, at day 1, with `overrides`.
- * @param overrides - Input fields to replace.
- * @returns The derived onboarding.
+ * Derives the state of a running tenant with no completions, at day 1, with
+ * `overrides` replacing any input field.
  */
 function derive(overrides: Partial<OnboardingDerivationInput> = {}): DerivedOnboarding {
   return deriveOnboardingState({
@@ -69,9 +64,8 @@ const bothRequired = [
 ]
 
 /**
- * A member-scoped manual step, for registries the tests pass in.
- * @param isRequired - Whether it is required.
- * @returns The step.
+ * A member-scoped manual step, required or not, for the registries the tests
+ * pass in.
  */
 function memberStep(isRequired: boolean): OnboardingStep {
   return {

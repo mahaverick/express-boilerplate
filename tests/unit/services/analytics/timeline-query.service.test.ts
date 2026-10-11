@@ -160,9 +160,9 @@ describe('buildTimelineQuery', () => {
 })
 
 /**
- * A deterministic pseudo-random generator (a 32-bit linear congruential one).
- * @param seed - The seed.
- * @returns A function returning numbers in [0, 1).
+ * A deterministic pseudo-random generator (a 32-bit linear congruential one),
+ * so a failing case reproduces. Each call of the returned function yields a
+ * number in [0, 1).
  */
 function seededRandom(seed: number): () => number {
   let state = seed >>> 0
@@ -200,9 +200,7 @@ const HOSTILE_FRAGMENTS = [
 ]
 
 /**
- * An id assembled from hostile fragments.
- * @param random - The generator.
- * @returns The id, 1–12 fragments long.
+ * An id assembled from 1 to 12 hostile fragments drawn with `random`.
  */
 function hostileId(random: () => number): string {
   const length = 1 + Math.floor(random() * 12)

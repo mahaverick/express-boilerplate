@@ -15,10 +15,16 @@ import {
 } from '@/services/email-webhook.service'
 import type { NormalizedEmailEvent } from '@/types/email-webhook'
 
+/**
+ * The slice of the environment the adapter registry reads, for `appEnv`.
+ */
 function envFor(appEnv: AppEnv) {
   return { APP_ENV: appEnv, FAKE_EMAIL_WEBHOOK_SECRET: 'fake-webhook' }
 }
 
+/**
+ * A delivered event for message `<m1@example.test>`, with `overrides` applied.
+ */
 function event(overrides: Partial<NormalizedEmailEvent>): NormalizedEmailEvent {
   return {
     providerEventId: 'e1',

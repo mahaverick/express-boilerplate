@@ -1,9 +1,8 @@
 /**
- * @file Pure JWT verify behaviour — no database, no user row. "Issues
- * an access token carrying the user id and an expiry" (the property
- * that needs a real `User`) lives in
- * tests/integration/services/session.service.test.ts instead, against
- * a real created user rather than a hand-built fixture.
+ * @file `verifyAccessToken`, the claims `signAccessToken` signs and
+ * `hashToken`, with no database and no user row: a hand-built `{ id }` stands
+ * in for the user. The test that signs for a real created user is in
+ * tests/integration/services/session.service.test.ts.
  */
 import jwt from 'jsonwebtoken'
 import { describe, expect, it } from 'vitest'
@@ -12,12 +11,10 @@ import type { User } from '@/database/models/user.model'
 import { hashToken, signAccessToken, verifyAccessToken } from '@/services/session.service'
 
 /**
- * verifyAccessToken returns a discriminated result rather than
- * throwing (VerifyAccessTokenResult, session.service.ts) — every case
- * below asserts the full literal `{ ok: false, reason }` via toEqual,
- * not just `ok` or just `reason` in isolation, since only asserting
- * the whole object proves both "rejected" and "rejected for the right,
- * specific reason" at once.
+ * verifyAccessToken returns a discriminated result rather than throwing
+ * (VerifyAccessTokenResult, session.service.ts). Every case below asserts the
+ * full `{ ok: false, reason }` via toEqual, because only the whole object
+ * proves both "rejected" and "rejected for the right reason".
  */
 describe('verifyAccessToken', () => {
   it('rejects a token signed with the wrong secret', () => {
@@ -33,16 +30,16 @@ describe('verifyAccessToken', () => {
   it('rejects an expired access token, distinguishing it from other rejections', () => {
     const token = jwt.sign({ sub: 'someone' }, getEnv().JWT_ACCESS_SECRET, {
       algorithm: 'HS256',
-      // Already expired the moment it's signed.
+      // Expired when signed: a negative `expiresIn` puts `exp` in the past.
       expiresIn: -10,
     })
 
-    // 'expired' specifically, not just "rejected" — this is the entire point of the discriminated result: a caller (auth.middleware.ts) needs to tell "refresh me" apart from "log in again", and only this module has anything trustworthy to say about which one applies.
+    // 'expired' specifically, not just "rejected": a caller (auth.middleware.ts) tells "refresh me" apart from "log in again", and jsonwebtoken raises TokenExpiredError only after the signature has verified.
     expect(verifyAccessToken(token)).toEqual({ ok: false, reason: 'expired' })
   })
 
   it('rejects a token signed with a different algorithm than HS256 expects', () => {
-    // 'none' with an empty signature is the classic alg-confusion probe — pinning `algorithms: ['HS256']` on verify is what stops this. This must resolve 'invalid', not 'expired': an alg-confusion forgery has no real signature to have expired against, and the distinction still needs to name the right bucket, not just "not ok".
+    // 'none' with an empty signature is the classic alg-confusion probe; pinning `algorithms: ['HS256']` on verify is what stops it. This must resolve 'invalid', not 'expired': the token is rejected before any claim is read, and its payload has no `exp`.
     const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url')
     const payload = Buffer.from(JSON.stringify({ sub: 'someone' })).toString('base64url')
     const forged = `${header}.${payload}.`
@@ -55,7 +52,7 @@ describe('verifyAccessToken', () => {
   })
 
   it('rejects a validly signed token with no sub claim', () => {
-    // A verified signature is not by itself a verified payload — this is the one branch inside the `ok: true` path that decides the payload itself is unusable (`typeof decoded.sub !== 'string'`) despite the signature checking out. Signed with the real secret, so nothing about signature or algorithm is in play here; only the missing `sub` is.
+    // A verified signature does not make a usable payload: `typeof decoded.sub !== 'string'` rejects a token with no `sub` as 'invalid'. It is signed with the real secret, so only the missing `sub` is in play.
     const token = jwt.sign({}, getEnv().JWT_ACCESS_SECRET, {
       algorithm: 'HS256',
       expiresIn: '15m',
@@ -85,7 +82,7 @@ describe('verifyAccessToken', () => {
   })
 
   it('still verifies a token minted before sid existed, so a deploy does not sign everyone out', () => {
-    // `sid` is optional precisely so a token minted without one (issued by an older running instance during a rolling deploy) keeps verifying until it expires.
+    // `sid` is optional so a token minted without one (by an instance that does not set it, during a rolling deploy) keeps verifying until it expires.
     const legacy = jwt.sign({ sub: 'user-1' }, getEnv().JWT_ACCESS_SECRET, {
       algorithm: 'HS256',
       expiresIn: 900,

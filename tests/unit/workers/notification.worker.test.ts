@@ -1,8 +1,7 @@
 /**
- * @file Pure-logic coverage of processNotificationJob's channel
- * fan-out and retry decision, with both repositories' prototype
- * methods spied on and `addEmailJob` mocked — starting a real
- * Worker/Redis/Postgres belongs to
+ * @file Pure-logic coverage of processNotificationJob's channel fan-out and
+ * retry decision, with both repositories' prototype methods spied on and
+ * `addEmailJob` mocked. Starting a real Worker/Redis/Postgres belongs to
  * tests/integration/workers/notification.worker.test.ts.
  */
 import type { Job } from 'bullmq'
@@ -22,22 +21,19 @@ vi.mock('@/jobs/email.job', () => ({
 }))
 
 /**
- * `emitNotification` (notification-emitter.service.ts) is a plain
- * exported function, not a class method — there is no prototype for a
- * `vi.spyOn` pattern to reach, so this is mocked at the module level
- * instead, same as `addEmailJob` immediately above.
+ * `emitNotification` (notification-emitter.service.ts) is a plain exported
+ * function, not a class method, so there is no prototype for `vi.spyOn` to
+ * reach; it is mocked at the module level instead, as `addEmailJob` is above.
  */
 vi.mock('@/services/notification-emitter.service', () => ({
   emitNotification: vi.fn(),
 }))
 
 /**
- * A minimal stand-in for a BullMQ `Job<NotificationJobData>` — only the
- * properties `processNotificationJob` actually reads (`id`, `timestamp`,
- * `data`). Same shape and reasoning as email.worker.test.ts's own `mockJob`
- * helper.
- * @param overrides - Fields to override on the default job data.
- * @returns A fake job for processNotificationJob to process.
+ * A minimal stand-in for a BullMQ `Job<NotificationJobData>`, with only the
+ * properties `processNotificationJob` reads (`id`, `timestamp`, `data`).
+ * `overrides` replaces fields of the default job data. Same shape and
+ * reasoning as `mockJob` in email.worker.test.ts.
  */
 function mockJob(overrides: Partial<NotificationJobData> = {}): Job<NotificationJobData> {
   return {
@@ -57,15 +53,15 @@ const EXPECTED_DEDUPE_KEY = 'notification-job-test-notification-job-1-1767225600
 const EXPECTED_EMAIL_JOB_ID = 'notification-email-test-notification-job-1-1767225600000'
 
 /**
- * The row `NotificationRepository.create` resolves with once
- * `insertSpy.mockResolvedValue(...)` is set up — only its shape matters to
- * these tests, never its actual values, so every test shares this one
- * fixture rather than repeating the full row literal.
+ * The row `NotificationRepository.createOnce` resolves with once
+ * `insertSpy.mockResolvedValue(...)` is set up. Only its shape matters to
+ * these tests, never its values, so every test shares this one fixture rather
+ * than repeating the full row literal.
  *
- * `metadata`/`readAt` are genuinely `null` here, not `undefined` —
- * `Notification` (notification.model.ts) types both as `T | null` (a real,
- * always-present nullable database column), so `undefined` would not even
- * satisfy the type these tests are stubbing.
+ * `metadata`, `readAt` and `dedupeKey` are `null` here, not `undefined`:
+ * `Notification` (notification.model.ts) types them as `T | null` (nullable
+ * database columns), so `undefined` would not satisfy the type these tests
+ * stub.
  */
 const mockNotificationRow: Notification = {
   id: 'notification-1',
@@ -83,11 +79,9 @@ const mockNotificationRow: Notification = {
 }
 
 /**
- * A real, valid `email_verification` `MailMessage` — every test that needs
- * an `email` payload on the job shares this one, rather than repeating the
+ * A valid `email_verification` `MailMessage` to `to`. Every test that needs an
+ * `email` payload on the job shares it, rather than repeating the
  * discriminated union's full shape.
- * @param to - The recipient address.
- * @returns A `MailMessage` for the `email_verification` template.
  */
 function emailVerificationMessage(to: string): MailMessage {
   return {
@@ -103,15 +97,14 @@ function emailVerificationMessage(to: string): MailMessage {
 
 /**
  * `vi.spyOn(NotificationRepository.prototype, 'createOnce')` etc., not
- * `vi.mock('@/repositories/...')`: notification.worker.ts builds its
- * own module-private `notificationRepository`/`preferenceRepository`
- * instances at import time, so spying on the prototype reaches that
- * already-constructed instance with a plain property assignment, no
- * module re-mocking or `vi.hoisted()` plumbing needed. Importing the
- * real repository classes does not touch Postgres:
- * `database.service.ts`'s `postgres(...)` client connects lazily on
- * first query, and no test here ever lets the real
- * `create`/`isChannelEnabled` implementation run.
+ * `vi.mock('@/repositories/...')`: notification.worker.ts builds its own
+ * module-private `notificationRepository`/`preferenceRepository` instances at
+ * import time, so spying on the prototype reaches those instances with a plain
+ * property assignment, with no module re-mocking or `vi.hoisted()` plumbing.
+ * Importing the real repository classes does not touch Postgres:
+ * `database.service.ts`'s `postgres(...)` client connects lazily on first
+ * query, and no test here lets the real `createOnce`/`isChannelEnabled`
+ * implementation run.
  */
 describe('processNotificationJob', () => {
   let insertSpy: MockInstance<typeof NotificationRepository.prototype.createOnce>
@@ -227,7 +220,7 @@ describe('processNotificationJob', () => {
   })
 
   it('does not enqueue an email when the email channel is disabled', async () => {
-    // in_app enabled (first call), email disabled (second call) — same per-call sequencing `isChannelEnabled` is actually invoked in by processNotificationJob: in-app is always checked first.
+    // in_app enabled (first call), email disabled (second call): processNotificationJob checks the in-app channel first.
     channelEnabledSpy.mockResolvedValueOnce(true).mockResolvedValueOnce(false)
     insertSpy.mockResolvedValue(mockNotificationRow)
 

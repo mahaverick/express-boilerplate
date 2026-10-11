@@ -22,6 +22,10 @@ const NOW = new Date('2026-10-02T12:00:00.000Z')
 const NONE = null
 const DAY_MS = 24 * 60 * 60 * 1000
 
+/**
+ * A manual, required tenant step with key `key`, with `overrides` replacing any
+ * field.
+ */
 function step(key: string, overrides: Partial<OnboardingStep> = {}): OnboardingStep {
   return {
     key,

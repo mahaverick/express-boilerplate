@@ -37,10 +37,8 @@ const HTTP: ErrorContext = {
 }
 
 /**
- * An error whose stack is exactly the given frame lines.
- * @param message - The message.
- * @param frames - Frame lines, innermost first, as V8 writes them.
- * @returns The error.
+ * An error whose stack is its `Error: message` line followed by exactly
+ * `frames`, which are listed innermost first, as V8 writes them.
  */
 function errorWithFrames(message: string, frames: string[]): Error {
   const error = new Error(message)
@@ -171,6 +169,10 @@ describe('exceptionListOf', () => {
   })
 
   it('names a thrown class instance by its class', () => {
+    /**
+     * A thrown class instance holding an email address in a field, which the
+     * report must not carry.
+     */
     class LookupMiss {
       readonly key = 'jane@example.com'
     }
@@ -420,6 +422,10 @@ describe('a failed query’s bound parameters, proven', () => {
   )
 })
 
+/**
+ * Throws when called, so a property getter or `toString` set to it makes a
+ * thrown value unreadable.
+ */
 const trap = (): never => {
   throw new Error('trap')
 }

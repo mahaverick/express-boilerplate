@@ -15,13 +15,12 @@ describe('withTransaction', () => {
   it('reuses an already-open transaction: calls fn directly, without opening a new one', async () => {
     /**
      * withTransaction discriminates its executor with `instanceof
-     * PgTransaction` (see database.service.ts), so a bare `{}` cast
-     * would never take the reuse branch — it would silently fall through
-     * to db.transaction instead, and this test would be asserting
-     * nothing. Object.create(PgTransaction.prototype) is a real instance
-     * of that class (no constructor call, so no real connection), which
-     * the discriminator accepts while still being reference-distinct
-     * from anything db.transaction produces.
+     * PgTransaction` (see database.service.ts), so a bare `{}` cast would never
+     * take the reuse branch: it would fall through to db.transaction, and this
+     * test would assert nothing. Object.create(PgTransaction.prototype) is a real
+     * instance of that class (no constructor call, so no real connection), which
+     * the discriminator accepts and which is reference-distinct from anything
+     * db.transaction produces.
      */
     const fakeTx = Object.create(PgTransaction.prototype) as DbTransaction
 
@@ -50,7 +49,7 @@ describe('withTransaction', () => {
     await withMutatedMethod(
       db,
       'transaction',
-      // `as typeof db.transaction`: drizzle's `transaction` is generic over the callback's return type, the same shape this codebase already casts around elsewhere (see auth.test.ts's own mutation proof).
+      // `as typeof db.transaction`: drizzle's `transaction` is generic over the callback's return type, so a stand-in typed for `unknown` needs the cast.
       ((function_: (tx: DbTransaction) => Promise<unknown>) => {
         calledWith = function_
         return function_(fakeTx)
@@ -74,7 +73,7 @@ describe('withTransaction', () => {
     await withMutatedMethod(
       db,
       'transaction',
-      // `as typeof db.transaction`: see the previous test's own comment.
+      // `as typeof db.transaction`: see the comment in the previous test.
       ((function_: (tx: DbTransaction) => Promise<unknown>) =>
         function_(fakeTx)) as typeof db.transaction,
       async () => {

@@ -31,8 +31,7 @@ vi.mock('@/configs/env.config', async (importOriginal) => {
 const fake: { posthog?: FakePosthog } = {}
 
 /**
- * The running fake.
- * @returns It.
+ * The fake PostHog `beforeAll` started, or a throw before it has.
  */
 function posthog(): FakePosthog {
   if (!fake.posthog) throw new Error('the fake PostHog is not running')
@@ -40,8 +39,8 @@ function posthog(): FakePosthog {
 }
 
 /**
- * How many `groups_types/` requests the fake has had.
- * @returns The count.
+ * How many `groups_types/` requests the fake has had, which shows whether a
+ * lookup was served from the cache.
  */
 function groupTypeCalls(): number {
   return posthog().requests.filter((request) => request.path.endsWith('/groups_types/')).length

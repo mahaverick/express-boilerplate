@@ -20,9 +20,8 @@ import { waitUntil } from '../../../helpers/timing'
 const NONE = null
 
 /**
- * A JSON body of exactly `length` bytes.
- * @param length - The size, at least 10.
- * @returns The body.
+ * A JSON body of exactly `length` bytes, to hit the size cap on either side.
+ * `length` must be at least 10, the size of the empty `{"pad":""}`.
  */
 function bodyOfLength(length: number): string {
   return JSON.stringify({ pad: 'x'.repeat(length - 10) })
@@ -52,8 +51,7 @@ vi.mock('@/configs/env.config', async (importOriginal) => {
 const fake: { posthog?: FakePosthog } = {}
 
 /**
- * The running fake.
- * @returns It.
+ * The fake PostHog `beforeAll` started, or a throw before it has.
  */
 function posthog(): FakePosthog {
   if (!fake.posthog) throw new Error('the fake PostHog is not running')

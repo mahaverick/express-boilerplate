@@ -3,8 +3,17 @@ import { emailMessageDays, getPlatformStats, utcDays } from '@/services/platform
 
 vi.mock('@/repositories/platform-stats.repository', () => ({
   PlatformStatsRepository: class {
+    /**
+     * The headline counts of tenants, users and staff.
+     */
     totals = () => Promise.resolve({ tenants: 2, users: 3, staff: 1 })
+    /**
+     * Sign-ups per day, empty.
+     */
     signupsByDay = () => Promise.resolve({ users: [], tenants: [] })
+    /**
+     * Email messages per day and status, empty.
+     */
     emailMessagesByDay = () => Promise.resolve([])
   },
 }))

@@ -26,7 +26,7 @@ describe('password hashing', () => {
   })
 
   it("never drops below OWASP's floor for bcrypt", () => {
-    // A guard on the constant's value, not just its wiring: the test above only proves hashPassword uses whatever BCRYPT_COST is set to — it still passes if someone quietly weakens the constant itself. This is the one that stops that.
+    // A guard on the constant's value, not just its wiring: the test above only proves hashPassword uses whatever BCRYPT_COST is set to, so it passes even if the constant itself is weakened. This one stops that.
     expect(BCRYPT_COST).toBeGreaterThanOrEqual(12)
   })
 

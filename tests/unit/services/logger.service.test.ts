@@ -1,10 +1,9 @@
 /**
- * @file Exercises pino logger construction via `createPinoLogger`,
- * never the `logger` singleton's own destination — the singleton is
- * memoised off `getEnv()`, so a test that wants a specific format
- * builds its own logger with a capture `destination`. The singleton
- * tests spy on `process.stdout.write`, which is where both the JSON
- * stream and the pino-pretty stream write.
+ * @file Logger construction through `createPinoLogger`, never the `logger`
+ * singleton's own destination: the singleton is memoised off `getEnv()`, so a
+ * test that wants a specific format builds its own logger with a capture
+ * `destination`. The singleton tests spy on `process.stdout.write`, which both
+ * the JSON stream and the pino-pretty stream write to.
  */
 import { Writable } from 'node:stream'
 import { context, trace, TraceFlags } from '@opentelemetry/api'
@@ -28,9 +27,9 @@ vi.hoisted(() => {
 })
 
 /**
- * A real Writable that records each chunk as a trimmed string. A real stream
- * (not a `{ write }` literal) because pino-pretty pipes into its destination.
- * @returns The stream to pass as `destination`, and the captured lines.
+ * A real Writable that records each chunk as a trimmed string, to pass as
+ * `destination`, with the captured lines. A real stream (not a `{ write }`
+ * literal) because pino-pretty pumps into its destination.
  */
 function captureDestination(): { destination: Writable; output: string[] } {
   const output: string[] = []
@@ -46,8 +45,8 @@ function captureDestination(): { destination: Writable; output: string[] } {
 }
 
 /**
- * Spy on process.stdout.write — where the singleton's stream writes.
- * @returns The captured lines, in write order.
+ * Spies on `process.stdout.write`, where the singleton's stream writes, and
+ * returns the captured lines in write order.
  */
 function captureStdout(): string[] {
   const output: string[] = []
@@ -61,9 +60,8 @@ function captureStdout(): string[] {
 }
 
 /**
- * Parse the last captured line as a JSON log record.
- * @param output - Lines captured by `captureStdout`.
- * @returns The parsed record, typed as an open bag of fields.
+ * Parses the last of the captured `output` lines as a JSON log record, typed
+ * as an open bag of fields.
  */
 function parseLastRecord(output: string[]): Record<string, unknown> {
   return JSON.parse(output.at(-1) ?? '{}') as Record<string, unknown>
@@ -128,11 +126,9 @@ describe('createPinoLogger', () => {
       }))
 
     /**
-     * Request-context correlation fields must win over a caller-supplied
-     * field of the same name, not merge in whatever order pino happens
-     * to combine the mixin and the log call's own object. Without
-     * mixinMergeStrategy, pino's default merge lets the logged object's
-     * own `requestId` overwrite the mixin's.
+     * The request context's correlation fields win over a caller-supplied
+     * field of the same name. pino's default merge lets the logged object's own
+     * `requestId` overwrite the mixin's; `mixinMergeStrategy` reverses that.
      */
     it('the real request context requestId wins over a caller-supplied requestId in meta', () =>
       new Promise<void>((resolve) => {
@@ -205,12 +201,11 @@ describe('createPinoLogger', () => {
 
   describe('the err key', () => {
     /**
-     * pino's own default `err` serializer re-processes whatever is
-     * already under `err` into `{ type, message, stack }` — so
-     * serializeErrors's `{ name, message, stack }` (from an Error
-     * instance) would otherwise be run through it a second time,
-     * landing as `{ type: 'Object', message, stack, name }`. The `err`
-     * key must instead pass through serializeErrors's output untouched.
+     * pino's default `err` serializer re-processes whatever is under `err`
+     * into `{ type, message, stack }`, so serializeErrors's `{ name, message,
+     * stack }` (from an Error instance) would be run through it a second
+     * time and land as `{ type: 'Object', message, stack, name }`. The `err`
+     * key must pass through serializeErrors's output untouched.
      */
     it('does not re-serialize err through pino default serializer, and carries no type key', () =>
       new Promise<void>((resolve) => {
@@ -357,8 +352,8 @@ describe('createPinoLogger', () => {
 })
 
 /**
- * A fake Postgres unique-violation error, for wrapping in a DrizzleQueryError.
- * @returns The driver error.
+ * A fake Postgres unique-violation driver error (code 23505), for wrapping in
+ * a DrizzleQueryError.
  */
 function pgUniqueViolation(): postgres.PostgresError {
   return Object.assign(
@@ -501,13 +496,11 @@ describe('loggerOptionsFromEnv', () => {
 
 describe('logger singleton', () => {
   /**
-   * Exercises the real `logger.info/warn/error/debug` bodies —
-   * `getLogger()`, the `isLevelEnabled()` guard, and
-   * `getCallerSource()`'s two-frame skip (its own frame, then the
-   * `Object.info`/`Object.warn`/... wrapper frame inside
-   * logger.service.ts) — through the actual singleton rather than a
-   * mock standing in for it, so this exercises real code, not a
-   * mock-and-assert-it-was-called shape.
+   * Exercises the real `logger.info/warn/error/debug` bodies through the
+   * actual singleton rather than a mock: `getLogger()`, the
+   * `isLevelEnabled()` guard, and `getCallerSource()` skipping the frames of
+   * logger.service.ts (its own, then the `Object.info`/`Object.warn`/...
+   * wrapper frame).
    */
   it('info writes a formatted line naming this test file as the source', () =>
     new Promise<void>((resolve) => {
@@ -552,20 +545,17 @@ describe('logger singleton', () => {
 
 describe('trace-id correlation', () => {
   /**
-   * OTEL is not active in this test run — .env.test
-   * (tests/helpers/setup-global.ts) never sets
-   * OTEL_EXPORTER_OTLP_ENDPOINT, so src/observability/tracing.ts's own
-   * NodeSDK is never started for this suite. But `trace.getActiveSpan()`
-   * (requestContextFields, logger.service.ts) reads OTel's global
-   * context manager, not anything tracing.ts owns — so this describe
-   * block registers its own, real `AsyncLocalStorageContextManager`
-   * (the same context-manager package tracing.ts's NodeSDK would use)
-   * to exercise both branches of the mixin without starting a full SDK:
-   * `context.with(trace.setSpan(...))` makes a span active for the
-   * span-present test below, and simply not entering that context (as
-   * here) leaves none active, so `trace.getActiveSpan()` returns
-   * undefined for a reason specific to this call site, not because no
-   * context manager exists at all.
+   * Neither .env.test nor tests/helpers/setup-global.ts sets
+   * OTEL_EXPORTER_OTLP_ENDPOINT, so src/observability/tracing.ts never
+   * starts its NodeSDK in this suite. `trace.getActiveSpan()` (in
+   * requestContextFields) reads OTel's global context manager, which that
+   * SDK would register, so this block registers a real
+   * `AsyncLocalStorageContextManager` to exercise both branches of the
+   * mixin without starting a full SDK. `context.with(trace.setSpan(...))`
+   * makes a span active for the span-present test; a test that does not
+   * enter that context has no active span, and `trace.getActiveSpan()`
+   * returns undefined because none is set, not because no context manager
+   * exists.
    */
   beforeAll(() => {
     expect(context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable())).toBe(
@@ -597,7 +587,7 @@ describe('trace-id correlation', () => {
       const { destination, output } = captureDestination()
       const log = createPinoLogger({ level: 'info', format: 'json', destination })
 
-      // trace.wrapSpanContext gives a real, minimal Span backed by exactly the ids chosen here, so the assertion below is exact-string equality against a known value — not merely "matches the shape of an id".
+      // trace.wrapSpanContext gives a real Span carrying exactly these ids, so the assertion below can be exact-string equality.
       const spanContext = {
         traceId: '0af7651916cd43dd8448eb211c80319c',
         spanId: 'b7ad6b7169203331',

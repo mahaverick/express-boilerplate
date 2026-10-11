@@ -19,10 +19,8 @@ const SPAN_CONTEXT = {
 const SESSION_ID = '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b'
 
 /**
- * Run `read` with `spanContext` active.
- * @param spanContext - The span context to make active.
- * @param read - What to run inside it.
- * @returns What `read` returned.
+ * Runs `read` with a non-recording span for `spanContext` active, which is what
+ * `currentAnalyticsContext` reads its trace and span ids from.
  */
 function withSpan<T>(spanContext: typeof SPAN_CONTEXT, read: () => T): T {
   return context.with(trace.setSpan(context.active(), trace.wrapSpanContext(spanContext)), read)
@@ -53,6 +51,9 @@ describe('currentAnalyticsContext', () => {
   })
 
   it("copies the request's PostHog session id", () => {
+    /**
+     * Reads the context from inside a request that carries a PostHog session id.
+     */
     const read = (): ReturnType<typeof currentAnalyticsContext> =>
       requestContextStore.run({ requestId: 'req-1', posthogSessionId: SESSION_ID }, () =>
         withSpan(SPAN_CONTEXT, currentAnalyticsContext)

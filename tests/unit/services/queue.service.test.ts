@@ -1,6 +1,6 @@
 /**
- * @file Pure-logic coverage only — anything that touches Redis or BullMQ
- * lives under tests/integration/services/.
+ * @file Pure-logic coverage only: anything that touches Redis or BullMQ lives
+ * under tests/integration/services/.
  */
 import { describe, expect, it } from 'vitest'
 import { JobPriority } from '@/constants/queue.constants'

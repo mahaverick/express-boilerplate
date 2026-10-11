@@ -15,12 +15,8 @@ const TARGET = { kind: 'user', id: 'user-2' } as const
 const SENT_AT = new Date('2026-10-04T10:00:42.886Z')
 
 /**
- * Sign an event as the drainer does.
- * @param n - A number to make its uuid unique.
- * @param event - Its name.
- * @param distinctId - Its distinct id.
- * @param properties - Its stored properties.
- * @returns The `/batch/` event.
+ * Signs a stored outbox event as the drainer does, giving a `/batch/` event.
+ * `n` is a single digit that makes its uuid unique.
  */
 function signed(n: number, event: string, distinctId: string, properties: Record<string, unknown>) {
   return toPosthogBatchEvent({
@@ -33,9 +29,8 @@ function signed(n: number, event: string, distinctId: string, properties: Record
 }
 
 /**
- * The result row PostHog would return for a sent event, in column order.
- * @param sent - The `/batch/` event.
- * @returns The row.
+ * The result row PostHog would return for a sent event, in the order of
+ * `TIMELINE_SELECT_COLUMNS`.
  */
 function resultOf(sent: ReturnType<typeof signed>): unknown[] {
   const groups = sent.properties.$groups as { tenant?: unknown } | undefined

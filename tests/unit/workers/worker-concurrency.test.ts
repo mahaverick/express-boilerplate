@@ -18,11 +18,21 @@ const { constructed } = vi.hoisted(() => ({
 
 vi.mock('bullmq', async (importOriginal) => {
   const actual = await importOriginal<typeof import('bullmq')>()
+  /**
+   * Stands in for BullMQ's Worker and records the queue name and concurrency each
+   * one is constructed with.
+   */
   class RecordingWorker {
+    /**
+     * Records the queue and `options.concurrency`; the processor is ignored.
+     */
     constructor(queue: string, _processor: unknown, options: { concurrency?: number }) {
       constructed.push({ queue, concurrency: options.concurrency })
     }
 
+    /**
+     * Ignores listener registration and returns the worker, so `.on(...)` calls chain.
+     */
     on(): this {
       return this
     }

@@ -1,11 +1,8 @@
 /**
- * @file parseBody's own behaviour needs no database, so this lives
- * under tests/unit/, not tests/integration/. The `.strict()` schema
- * below is throwaway, defined only for this test — no production schema
- * in this codebase uses `.strict()` (see profile.validators.ts's header
- * comment for why a plain allow-list was chosen there instead), but the
- * option must actually work for whoever reaches for it next, which is
- * what this test proves.
+ * @file parseBody's own behaviour needs no database, so this lives under
+ * tests/unit/, not tests/integration/. The `.strict()` schema below is defined
+ * only for this test: its unknown-key rejection is a root-level issue with no
+ * field to attach to, which parseBody must surface.
  */
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
@@ -13,11 +10,9 @@ import { HttpError } from '@/errors/http-error'
 import { parseBody } from '@/validators/parse.validators'
 
 /**
- * Call `parseBody` and capture the `HttpError` it throws, rather than
- * asserting inside a `try`/`catch` at every call site.
- * @param schema - The schema to validate against.
- * @param input - The raw, untrusted request body.
- * @returns The thrown `HttpError`.
+ * Calls `parseBody` and returns the `HttpError` it throws, rather than
+ * asserting inside a `try`/`catch` at every call site. Throws when `parseBody`
+ * does not.
  */
 function captureRejection(schema: z.ZodType, input: unknown): HttpError {
   try {

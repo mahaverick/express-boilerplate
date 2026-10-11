@@ -1,9 +1,9 @@
 /**
  * @file The update schema's staff-only guard on its own: with a staff-only
- * type that is also configurable (none is today, so the constants are
- * mocked), the schema must refuse it for a caller with no platform role and
- * accept it for staff. Without this, the empty configurable list would hide
- * a missing visibility check.
+ * type that is also configurable (no type is both, because every type is
+ * non-disableable, so the constants are mocked), the schema must refuse it for
+ * a caller with no platform role and accept it for staff. Without this, the
+ * empty configurable list would hide a missing visibility check.
  */
 import { describe, expect, it, vi } from 'vitest'
 

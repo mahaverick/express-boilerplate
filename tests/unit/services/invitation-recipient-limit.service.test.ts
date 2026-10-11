@@ -25,13 +25,16 @@ vi.mock('@/services/redis.service', async (importOriginal) => ({
 const TENANT_ID = '00000000-0000-4000-8000-000000000001'
 
 /**
- * Stand in a Redis whose successive INCRs answer `counts`, once.
- * @param counts - What each INCR returns, in order.
- * @returns The keys incremented, filled in as the code runs.
+ * Replaces `getRedis` with a client whose successive INCRs answer `counts`,
+ * then 1 once they run out. The returned array fills with the keys incremented
+ * as the code runs.
  */
 function spentKeys(counts: number[]): string[] {
   const keys: string[] = []
   const pending = [...counts]
+  /**
+   * A MULTI whose INCR answers the next of `counts`.
+   */
   const multi = () => {
     let count = 0
     const transaction = {

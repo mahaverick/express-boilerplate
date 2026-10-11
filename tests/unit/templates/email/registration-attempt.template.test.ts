@@ -59,7 +59,7 @@ describe('renderRegistrationAttemptTemplate', () => {
     })
   })
 
-  // This template carries no token or URL at all, so "no token in the subject" holds by construction; pinned here anyway, so the subject cannot grow a link/URL later without this test being revisited.
+  // This template carries no token or URL at all, so "no token in the subject" holds by construction; pinned here anyway, so a link added to the subject fails this test.
   it('the subject contains no URL', () => {
     const rendered = renderRegistrationAttemptTemplate(validVariables)
     expect(rendered.subject).not.toMatch(/https?:\/\//)

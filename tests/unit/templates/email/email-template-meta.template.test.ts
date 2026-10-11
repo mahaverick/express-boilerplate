@@ -168,10 +168,16 @@ describe('assertTemplateMetaSafe', () => {
  * keep each literal a real, read value.
  */
 describe('EmailTemplateMeta type rules', () => {
+  /**
+   * Variables with a secret: `resetUrl` carries a token.
+   */
   interface TokenVariables {
     firstName: string
     resetUrl: string
   }
+  /**
+   * Variables with no secret.
+   */
   interface PlainVariables {
     firstName: string
   }

@@ -12,9 +12,7 @@ const LINK_BASE = 'https://us.posthog.com/project/4321/error_tracking'
 const USER_ID = '0199a1b2-0000-7000-8000-000000000001'
 
 /**
- * A server-shaped issue for `USER_ID`, unsigned.
- * @param overrides - Any other columns.
- * @returns The seeded issue.
+ * A server-shaped issue for `USER_ID`, unsigned. `overrides` replaces any column.
  */
 function seeded(overrides: Partial<SeededIssue> = {}): SeededIssue {
   return {

@@ -141,6 +141,10 @@ describe('buildPreviewMessage', () => {
 
 const ACTOR = { userId: randomUUID() }
 
+/**
+ * A staff email-log record for a live, active, verified user, with `overrides`
+ * replacing any field.
+ */
 function message(overrides: Partial<PlatformEmailRecord> = {}): PlatformEmailRecord {
   const userId = randomUUID()
   return {
@@ -178,6 +182,10 @@ function message(overrides: Partial<PlatformEmailRecord> = {}): PlatformEmailRec
   }
 }
 
+/**
+ * The resend gate's context for an admin actor with nothing else in it, with
+ * `overrides` replacing any field.
+ */
 function context(overrides: Partial<ResendContext> = {}): ResendContext {
   return {
     actorPlatformRole: 'admin',
