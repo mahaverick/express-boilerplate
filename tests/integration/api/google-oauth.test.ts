@@ -44,7 +44,6 @@ function uniqueEmail(): string {
  * `done()`, which is what `completeGoogleSignIn` (google-auth.service.ts) receives. The fields the
  * account-linking code reads (`id`, `emails[0].value`, `emails[0].verified`,
  * `_json.email_verified`) can be overridden; every other field is a plausible constant.
- * @param overrides - Fields to vary for one test.
  * @param overrides.jsonEmailVerified - Defaults to `emailVerified`, so a test sets it only to make the two disagree.
  * @param overrides.includeEmails - False omits `emails`, the "Google shared no email" case.
  */

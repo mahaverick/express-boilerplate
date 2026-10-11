@@ -127,9 +127,6 @@ function posthog(): FakePosthog {
 
 /**
  * A `$pageview` by `distinctId` at a fixed microsecond timestamp, with a fresh uuid.
- * @param distinctId - Who did it.
- * @param overrides - Any other columns.
- * @returns The seeded event.
  */
 function seeded(distinctId: string, overrides: Partial<SeededEvent> = {}): SeededEvent {
   return {
@@ -143,7 +140,6 @@ function seeded(distinctId: string, overrides: Partial<SeededEvent> = {}): Seede
 
 /**
  * 101 events, one microsecond apart and newest first, so a first page has a next one.
- * @param distinctId - Who did them.
  * @returns The events; the 100th is at 2026-10-04T10:00:42.899901Z.
  */
 function fullPage(distinctId: string): SeededEvent[] {
@@ -162,10 +158,6 @@ function answerWith(events: SeededEvent[]): void {
 
 /**
  * A GET of one timeline.
- * @param token - The staff bearer token.
- * @param path - The path under /api/v1/platform.
- * @param query - The query string.
- * @returns The response.
  */
 function getTimeline(
   token: string,
@@ -196,8 +188,6 @@ function pageOf(response: Response): Page {
 
 /**
  * How many timeline audit entries target an id.
- * @param targetId - The user or tenant id.
- * @returns The count.
  */
 async function timelineAudits(targetId: string): Promise<number> {
   const [row] = await sql<{ count: number }[]>`
@@ -208,7 +198,6 @@ async function timelineAudits(targetId: string): Promise<number> {
 
 /**
  * A customer tenant with no members, tracked for cleanup.
- * @returns Its id.
  */
 async function createTenant(): Promise<string> {
   const tenant = await tenantRepository.createWithoutOwner({

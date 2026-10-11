@@ -69,7 +69,6 @@ function envelopeOf<TData>(response: Response): ApiEnvelope<TData> {
 /**
  * Encode a value the way a cursor travels: base64url JSON, or a raw string.
  * @param value - The decoded cursor, or a string to encode as is.
- * @returns The cursor.
  */
 function b64(value: unknown): string {
   return Buffer.from(typeof value === 'string' ? value : JSON.stringify(value)).toString(
@@ -87,9 +86,6 @@ function uniqueEmail(): string {
 /**
  * Inserts one `verify_email` notification through the repository, bypassing the API: these tests
  * read and mutate notifications that already exist.
- * @param userId - The owning user's id.
- * @param title - The notification's title. Defaults to a fixed string.
- * @returns The inserted notification.
  */
 async function seedNotification(
   userId: string,
@@ -106,8 +102,6 @@ async function seedNotification(
 /**
  * Seed one notification the way the notification worker writes it, with a
  * non-null `dedupeKey`, so a response that leaks the column shows a value.
- * @param userId - The owning user's id.
- * @returns The inserted row.
  */
 async function seedDedupedNotification(userId: string): Promise<Notification> {
   const row = await notificationRepository.createOnce({

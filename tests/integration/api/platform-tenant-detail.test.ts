@@ -19,7 +19,7 @@ import { makeStaff, platformTenant } from '../../helpers/platform-staff'
 import { request } from '../../helpers/request'
 
 /**
- * The `GET /platform/tenants/:id` response.
+ * What a detail response's `data` holds.
  */
 interface DetailBody {
   id: string
@@ -60,7 +60,7 @@ function detailOf(response: Response): DetailBody {
 }
 
 /**
- * GETs a tenant's detail as `token`.
+ * Reads a tenant's detail as the actor under test.
  */
 function get(token: string, id: string): Promise<Response> {
   return request(app).get(`/api/v1/platform/tenants/${id}`).set('Authorization', `Bearer ${token}`)
@@ -79,7 +79,7 @@ describe('GET /api/v1/platform/tenants/:id', () => {
   })
 
   /**
-   * A fresh non-staff user with a token for a sign-in now, tracked for cleanup.
+   * A fresh non-staff user with a bearer token, tracked for cleanup.
    */
   async function createUser(): Promise<{ user: User; token: string }> {
     const user = await userRepository.create({

@@ -22,7 +22,6 @@ const app = createApp()
 
 /**
  * A Redis read that never settles.
- * @returns A promise that stays pending.
  */
 function never(): Promise<never> {
   return new Promise<never>(() => {})
@@ -30,7 +29,6 @@ function never(): Promise<never> {
 
 /**
  * A status as the counters service could answer it.
- * @returns The status.
  */
 function sampleStatus(): counters.ErrorTrackingStatus {
   return {
@@ -45,7 +43,6 @@ function sampleStatus(): counters.ErrorTrackingStatus {
 
 /**
  * A flags status as the flag-counters service could answer it.
- * @returns The status.
  */
 function sampleFlagsStatus(): FlagsStatus {
   return {
@@ -71,7 +68,6 @@ function sampleFlagsStatus(): FlagsStatus {
 
 /**
  * A maintenance section as the maintenance-mode service could answer it.
- * @returns The section.
  */
 function sampleMaintenanceStatus(): MaintenanceModeStatus {
   return {

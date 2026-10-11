@@ -41,7 +41,7 @@ const createdTenantIds: string[] = []
 const REASON = 'Ticket #4411: account compromise'
 
 /**
- * POSTs a lifecycle verb for a user as `token`; the body defaults to the staff `reason`.
+ * Applies a user lifecycle verb as the actor under test; the body defaults to the staff `reason`.
  */
 function action(token: string, userId: string, verb: string, body?: object): Promise<Response> {
   return request(app)
@@ -51,7 +51,7 @@ function action(token: string, userId: string, verb: string, body?: object): Pro
 }
 
 /**
- * Deletes a user as `token`; the body defaults to the staff `reason`.
+ * Soft-deletes a user as the actor under test; the body defaults to the staff `reason`.
  */
 function remove(token: string, userId: string, body?: object): Promise<Response> {
   return request(app)
@@ -62,8 +62,6 @@ function remove(token: string, userId: string, body?: object): Promise<Response>
 
 /**
  * Sign `user` in through the real endpoint: a live session with a refresh cookie.
- * @param user - A user with TEST_PASSWORD.
- * @returns The access token and the refresh cookie pair.
  */
 async function signIn(user: User): Promise<{ accessToken: string; refreshCookie: string }> {
   const response = await request(app)
@@ -80,8 +78,7 @@ async function signIn(user: User): Promise<{ accessToken: string; refreshCookie:
 }
 
 /**
- * The statuses a signed-in session now gets: its access token on the profile, its refresh cookie on
- * refresh.
+ * The statuses an access token (on the profile) and a refresh cookie (on refresh) get.
  */
 async function sessionStatuses(session: {
   accessToken: string
@@ -109,7 +106,6 @@ async function auditActions(targetId: string): Promise<{ action: string; metadat
  * A pending invitation sent by `inviterId` into a fresh tenant where they are
  * an admin. Another user owns it, so the inviter is never its last owner.
  * @param inviterId - The inviting user (made admin of the tenant).
- * @returns The invitation's id.
  */
 async function pendingInvitationFrom(inviterId: string): Promise<string> {
   const owner = await createTrackedUser()
@@ -132,7 +128,6 @@ async function pendingInvitationFrom(inviterId: string): Promise<string> {
 
 /**
  * The audit entries filed against one invitation, with where they were filed.
- * @param invitationId - The invitation.
  * @returns Each entry's action, tenant, access, actor and metadata, oldest first.
  */
 function invitationAudit(invitationId: string): Promise<Record<string, unknown>[]> {
@@ -145,7 +140,6 @@ function invitationAudit(invitationId: string): Promise<Record<string, unknown>[
 
 /**
  * Whether an invitation is revoked.
- * @param invitationId - The invitation.
  * @returns True when `revoked_at` is set.
  */
 async function isRevoked(invitationId: string): Promise<boolean> {

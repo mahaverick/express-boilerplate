@@ -74,7 +74,7 @@ interface PageBody {
 const app = createApp()
 
 /**
- * GETs under `/api/v1/platform` as `token`, with a query.
+ * Staff read requests, with the query a list filters on.
  */
 function get(token: string, path: string, query: Record<string, string> = {}): Promise<Response> {
   return request(app)

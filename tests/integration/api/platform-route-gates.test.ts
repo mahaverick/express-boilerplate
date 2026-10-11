@@ -30,7 +30,7 @@ import {
 import { makeStaff } from '../../helpers/platform-staff'
 import { request } from '../../helpers/request'
 
-// Apex has no experiment flag yet, so a real report could only answer 400, which logStaffWrites skips anyway; an empty key list lets the exemption be seen on a 204.
+// Apex has no experiment flag, so a real report could only answer 400, which logStaffWrites skips anyway; an empty key list lets the exemption be seen on a 204.
 vi.mock('@/validators/flags.validators', () => ({ parseExposureKeys: () => [] }))
 
 /**
@@ -240,7 +240,7 @@ const ROUTES: readonly GateRow[] = [
     target: 'tenant',
   },
   { method: 'get', path: '/me/flags', minRole: 'viewer', requiresStepUp: false },
-  // Exposure is telemetry: a REAUTH_REQUIRED here would silently lose it, so the route takes no step-up.
+  // Exposure is telemetry: a REAUTH_REQUIRED here would silently lose it, and it is neither audited nor logged as a staff write.
   {
     method: 'post',
     path: '/me/flags/exposures',
@@ -311,8 +311,6 @@ interface StackLayer {
  * `layer.match()` about each known mount and checking that the whole mount
  * matched (`layer.path`): a router mounted at `/` matches every path with an
  * empty `layer.path`, so it counts as unknown too.
- * @param stack - A router's layers.
- * @param prefix - The mount path the layers sit under.
  * @returns One `method path` string per route.
  * @throws {Error} When a sub-router is mounted anywhere but a known mount.
  */
@@ -333,8 +331,6 @@ function routesIn(stack: StackLayer[], prefix: string): string[] {
 
 /**
  * The layers of a router built by `Router()`.
- * @param router - The router.
- * @returns Its stack.
  */
 function stackOf(router: Router): StackLayer[] {
   return (router as unknown as { stack: StackLayer[] }).stack
@@ -419,7 +415,7 @@ describe('/api/v1/platform route gates', () => {
   }
 
   /**
-   * Calls a row's route with an empty JSON body, as `token` when given.
+   * Calls a row's route with an empty JSON body, enough to reach the gates without acting.
    */
   function call(row: GateRow, token?: string): Promise<Response> {
     const path = pathOf(row)

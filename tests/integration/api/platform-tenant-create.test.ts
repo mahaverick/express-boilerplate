@@ -26,7 +26,7 @@ import { waitForInvitationEmail } from '../../helpers/queue-jobs'
 import { request } from '../../helpers/request'
 
 /**
- * The `POST /platform/tenants` response.
+ * What a create response's `data` holds.
  */
 interface CreatedBody {
   tenant: {
@@ -52,7 +52,7 @@ afterAll(async () => {
 })
 
 /**
- * Creates a tenant as `token` with the given body.
+ * Staff tenant creation as the actor under test, with the body a test sets.
  */
 function create(token: string, body: Record<string, unknown>): Promise<Response> {
   return request(app)
@@ -62,7 +62,7 @@ function create(token: string, body: Record<string, unknown>): Promise<Response>
 }
 
 /**
- * Sends a tenant's owner invitation again as `token`; the body defaults to a reason.
+ * Re-sends the owner invitation as the actor under test; the body defaults to a reason.
  */
 function reissue(
   token: string,
@@ -89,7 +89,7 @@ describe('staff-created tenants', () => {
   })
 
   /**
-   * A fresh user, verified when `isVerified`, with a token for a sign-in now; tracked for cleanup.
+   * A fresh user, verified when `isVerified`, with a bearer token; tracked for cleanup.
    */
   async function createUser(isVerified = false): Promise<{ user: User; token: string }> {
     const user = await userRepository.create({

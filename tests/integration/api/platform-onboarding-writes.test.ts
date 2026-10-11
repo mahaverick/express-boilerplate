@@ -80,7 +80,7 @@ const REASON = 'Agreed on the onboarding call'
 const LOCK_WAIT_TIMEOUT_MS = 10_000
 
 /**
- * POSTs under `/api/v1/platform` as `token`; the body defaults to the staff `reason`.
+ * Staff write requests; with no body they carry the staff `reason` every write needs.
  */
 function post(token: string, path: string, body?: object): Promise<Response> {
   return request(app)
@@ -90,14 +90,14 @@ function post(token: string, path: string, body?: object): Promise<Response> {
 }
 
 /**
- * Marks onboarding step `stepKey` of a tenant complete as staff.
+ * Staff-completes a tenant's manual onboarding step as the actor under test.
  */
 function complete(token: string, tenantId: string, stepKey: string, body?: object) {
   return post(token, `/tenants/${tenantId}/onboarding/steps/${stepKey}/complete`, body)
 }
 
 /**
- * Sends a tenant's onboarding reminder as staff.
+ * Staff reminder to a tenant's owners to finish onboarding, as the actor under test.
  */
 function remind(token: string, tenantId: string, body?: object) {
   return post(token, `/tenants/${tenantId}/onboarding/remind`, body)
@@ -105,9 +105,6 @@ function remind(token: string, tenantId: string, body?: object) {
 
 /**
  * A reminder request already on the wire: supertest sends only once awaited.
- * @param token - The staff bearer token.
- * @param tenantId - The tenant.
- * @returns The response.
  */
 async function sentNow(token: string, tenantId: string): Promise<Response> {
   return await remind(token, tenantId)
@@ -155,10 +152,6 @@ async function reminderJobsFor(tenantId: string): Promise<EmailJobData[]> {
 
 /**
  * Insert one `onboarding.reminder_sent` entry at a chosen time.
- * @param tenantId - The tenant it is filed in.
- * @param actorId - The staff member.
- * @param occurredAt - When it was sent.
- * @returns Resolves once it is in.
  */
 async function addReminderEntry(tenantId: string, actorId: string, occurredAt: Date) {
   await sql`

@@ -73,7 +73,7 @@ async function memberToken(tenant: Tenant, role: MembershipRole): Promise<string
 }
 
 /**
- * `GET /tenants/:slug/onboarding` as the bearer `token`.
+ * Reads a tenant's onboarding view as the actor under test.
  */
 function readOnboarding(tenant: Tenant, token: string): Promise<Response> {
   return request(app)
@@ -82,7 +82,7 @@ function readOnboarding(tenant: Tenant, token: string): Promise<Response> {
 }
 
 /**
- * POSTs under `/tenants/:slug/onboarding` with no body; `path` is what follows `/onboarding`.
+ * Customer onboarding writes, which take no body; `path` is what follows `/onboarding`.
  */
 function postOnboarding(tenant: Tenant, path: string, token: string): Promise<Response> {
   return request(app)

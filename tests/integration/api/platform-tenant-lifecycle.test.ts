@@ -25,7 +25,7 @@ const userRepository = new UserRepository()
 const ELEVEN_MINUTES_MS = 11 * 60 * 1000
 
 /**
- * Suspends, reactivates or archives a tenant as `token`, with a reason.
+ * Applies a lifecycle transition as the actor under test; the reason defaults to a ticket.
  */
 function act(
   token: string,
@@ -40,7 +40,7 @@ function act(
 }
 
 /**
- * `GET /tenants/:slug` as a member's `token`.
+ * Reads a tenant as its member, to see whether a lifecycle change reached them.
  */
 function memberGet(token: string, slug: string): Promise<Response> {
   return request(app).get(`/api/v1/tenants/${slug}`).set('Authorization', `Bearer ${token}`)

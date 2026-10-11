@@ -24,8 +24,6 @@ const app = createApp()
 
 /**
  * Request the readiness probe, or report that it was still pending after `STALL_ANSWER_BOUND_MS`.
- * @param stalled - Names the stalled dependency, for the failure message.
- * @returns The response.
  */
 async function probeWithinBound(stalled: string): Promise<Awaited<ReturnType<typeof get>>> {
   const response = await answerWithinBound(get())
@@ -35,7 +33,6 @@ async function probeWithinBound(stalled: string): Promise<Awaited<ReturnType<typ
 
 /**
  * Request the readiness probe now: a supertest request is lazy, and awaiting it inside an async function sends it.
- * @returns The response.
  */
 async function get(): Promise<Awaited<ReturnType<ReturnType<typeof request>['get']>>> {
   return request(app).get('/health/ready')
@@ -43,8 +40,6 @@ async function get(): Promise<Awaited<ReturnType<ReturnType<typeof request>['get
 
 /**
  * Wait until the readiness probe answers 200.
- * @param message - Names what has to have recovered.
- * @returns Resolves once it does.
  */
 async function waitForReady(message: string): Promise<void> {
   await waitUntil(
@@ -59,7 +54,6 @@ async function waitForReady(message: string): Promise<void> {
 /**
  * A ping held until the test settles it, the way a ping written to a queue
  * connection that is connected and does not answer waits until the stall ends.
- * @returns The stand-in ping and functions that settle it.
  */
 function heldPing(): {
   ping: () => Promise<'PONG'>

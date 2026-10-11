@@ -19,7 +19,7 @@ import { deleteTrackedUsers } from '../../helpers/platform-users'
 import { request } from '../../helpers/request'
 
 /**
- * The `GET /platform/stats` response.
+ * What the stats `data` holds.
  */
 interface StatsBody {
   range: string
@@ -32,7 +32,7 @@ const app = createApp()
 const userRepository = new UserRepository()
 
 /**
- * GETs `/api/v1/platform/stats` as `token`, with a query.
+ * Reads the Overview totals as the actor under test, with the `range` a test sets.
  */
 function stats(token: string, query: Record<string, string> = {}): Promise<Response> {
   return request(app)

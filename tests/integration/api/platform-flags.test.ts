@@ -46,11 +46,11 @@ const { clearFlagKeys } = await import('../../helpers/flag-redis')
 const { request } = await import('../../helpers/request')
 
 /**
- * The `GET /platform/flags` response.
+ * What the flags list `data` holds.
  */
 type FlagsList = import('@/types/flags').FlagsListResponse
 /**
- * The `GET /platform/flags/evaluate` response.
+ * What the flags evaluate `data` holds.
  */
 type FlagsEvaluation = import('@/types/flags').FlagsEvaluateResponse
 
@@ -63,9 +63,6 @@ const tenantIds: string[] = []
 
 /**
  * GET a platform path as a staff member.
- * @param token - The staff bearer token.
- * @param path - The path under /api/v1/platform, with its query.
- * @returns The response.
  */
 function staffGet(token: string, path: string): Promise<Response> {
   return request(app).get(`/api/v1/platform${path}`).set('Authorization', `Bearer ${token}`)
@@ -73,8 +70,6 @@ function staffGet(token: string, path: string): Promise<Response> {
 
 /**
  * The data of a 200 response.
- * @param response - The response.
- * @returns Its envelope's data.
  */
 function dataOf<T>(response: Response): T {
   return (response.body as { data: T }).data
@@ -82,7 +77,6 @@ function dataOf<T>(response: Response): T {
 
 /**
  * A user who owns a fresh tenant.
- * @returns The user's id and the tenant's id.
  */
 async function memberWithTenant(): Promise<{ userId: string; tenantId: string }> {
   const user = await createTrackedUser()
@@ -97,8 +91,6 @@ async function memberWithTenant(): Promise<{ userId: string; tenantId: string }>
 
 /**
  * The `user.flags_evaluated` entries a staff member wrote.
- * @param actorId - The staff member's id.
- * @returns Each entry's tenant, target and metadata.
  */
 async function evaluateAudits(actorId: string): Promise<Record<string, unknown>[]> {
   return sql<Record<string, unknown>[]>`

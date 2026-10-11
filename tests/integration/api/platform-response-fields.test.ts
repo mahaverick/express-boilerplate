@@ -57,7 +57,7 @@ async function join(userId: string, tenant: Tenant, role: MembershipRole): Promi
 }
 
 /**
- * `GET /tenants/:slug` as the bearer `token`.
+ * Reads a tenant as a member, to check the platform fields on the detail.
  */
 function readTenant(slug: string, token: string) {
   return request(app).get(`/api/v1/tenants/${slug}`).set('Authorization', `Bearer ${token}`)
@@ -148,7 +148,7 @@ describe('platform response fields', () => {
     }
 
     /**
-     * Logs in over HTTP with the shared `PASSWORD`.
+     * Signs in the way a client does, to read the user the login response carries.
      */
     function login(email: string): Promise<Response> {
       return request(app).post('/api/v1/auth/login').send({ email, password: PASSWORD })

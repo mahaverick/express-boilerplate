@@ -93,7 +93,6 @@ function parseSseBlock(raw: string): SseFrame {
  * `break` in a `switch` inside `parseSseBlock`'s loop.
  * @param frame - The frame being built. Mutated in place.
  * @param field - The field name, e.g. `id`, `event`, `data` or `retry`.
- * @param value - The field's value, already trimmed of its leading space.
  */
 function applyField(frame: SseFrame, field: string, value: string): void {
   switch (field) {
@@ -192,7 +191,6 @@ class SseConnection {
 
   /**
    * Waits for a non-streaming response (the 401 rejections) to finish.
-   * @returns The full response body.
    */
   async collectBody(): Promise<string> {
     await this.ended
@@ -210,7 +208,6 @@ class SseConnection {
    * Waits for the next frame this connection has not yet handed out, which proves the stream is
    * delivering and not merely that headers arrived.
    * @param timeoutMs - How long to wait before giving up. Defaults to 5000ms.
-   * @returns The next unread frame.
    * @throws {Error} When no new frame arrives within `timeoutMs`.
    */
   async nextFrame(timeoutMs = 5000): Promise<SseFrame> {
@@ -229,7 +226,6 @@ class SseConnection {
   /**
    * Whether the server ended this response within `timeoutMs`. Resolves `false` on a timeout
    * instead of rejecting, so a test asserting a stream stays open needs no catch.
-   * @param timeoutMs - How long to wait for the response to end.
    */
   async closed(timeoutMs: number): Promise<boolean> {
     // The losing settle keeps its timer until it fires; nothing waits on it.
@@ -256,9 +252,6 @@ function uniqueEmail(): string {
  * Inserts one `verify_email` notification through the repository, as `processNotificationJob`
  * (notification.worker.ts) does before it calls `emitNotification`, without running BullMQ or the
  * worker.
- * @param userId - The owning user's id.
- * @param title - The notification's title. Defaults to a fixed string.
- * @returns The inserted notification.
  */
 async function seedNotification(
   userId: string,
@@ -276,8 +269,6 @@ async function seedNotification(
  * Emit a never-persisted sentinel and wait for its frame. It crosses the same
  * Redis channel, handler and response as every earlier emit, in order, so
  * once it arrives nothing emitted before it is still in flight.
- * @param connection - The stream to wait on.
- * @param userId - The stream's user.
  * @returns The notification frames that arrived before the sentinel.
  */
 async function framesBeforeSentinel(
@@ -368,7 +359,6 @@ describe('GET /api/v1/notifications/stream', () => {
    * tests don't each assemble a URL and header.
    * @param pathOrAuth - The request path (including any query string), or `{ header?, query? }` to build a request against the stream endpoint.
    * @param headers - Extra request headers, e.g. `Last-Event-ID`. Only used when `pathOrAuth` is a path string.
-   * @returns The opened connection.
    */
   function openStream(
     pathOrAuth: string | { header?: string; query?: string },
@@ -404,7 +394,6 @@ describe('GET /api/v1/notifications/stream', () => {
    * Opens an authenticated SSE stream for a new user's new session and keeps that session's
    * refresh token. Unlike `createAuthenticatedUser`, whose `signAccessToken(user, randomUUID())`
    * has no refresh row, a caller here can revoke this exact session, as logout does.
-   * @returns The opened connection, its user id, and its session's raw refresh token.
    */
   async function openStreamForNewSession(): Promise<{
     stream: SseConnection
@@ -680,7 +669,7 @@ describe('GET /api/v1/notifications/stream', () => {
     // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
     const realFindByIdAndUser = NotificationRepository.prototype.findByIdAndUser
     /**
-     * Holds the first replay query at `gate` until the test releases it.
+     * Holds `findByIdAndUser` at `gate` until the test releases it.
      */
     const gatedFindByIdAndUser: typeof realFindByIdAndUser = async function (
       this: NotificationRepository,

@@ -76,7 +76,7 @@ function withoutRequestId(body: unknown): Record<string, unknown> {
 }
 
 /**
- * Searches tenants as `token` with a query.
+ * Runs the staff tenant search as the actor under test, with the filters a test sets.
  */
 function search(token: string, query: Record<string, string> = {}): Promise<Response> {
   return request(app)
@@ -108,7 +108,7 @@ describe('GET /api/v1/platform/tenants', () => {
   })
 
   /**
-   * A fresh non-staff user with a token for a sign-in now, tracked for cleanup.
+   * A fresh non-staff user with a bearer token, tracked for cleanup.
    */
   async function createUser(): Promise<{ user: User; token: string }> {
     const user = await userRepository.create({ email: `platform-api-${randomUUID()}@example.test` })

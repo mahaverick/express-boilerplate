@@ -27,8 +27,6 @@ const PATH = '/api/v1/platform/maintenance-mode'
 
 /**
  * The stored version and the queues, as a client reads them.
- * @param token - A staff token.
- * @returns The view.
  */
 async function view(token: string): Promise<PlatformMaintenanceModeView> {
   const response = await request(app).get(PATH).set('Authorization', `Bearer ${token}`)

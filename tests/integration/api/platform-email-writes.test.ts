@@ -68,7 +68,7 @@ const createdInvitationIds: string[] = []
 const REASON = 'Customer asked on the phone'
 
 /**
- * POSTs under `/api/v1/platform` as `token`; the body defaults to the staff `reason`.
+ * Staff write requests; with no body they carry the staff `reason` every write needs.
  */
 function post(token: string, path: string, body?: object): Promise<Response> {
   return request(app)
@@ -78,7 +78,7 @@ function post(token: string, path: string, body?: object): Promise<Response> {
 }
 
 /**
- * GETs under `/api/v1/platform` as `token`.
+ * Staff reads of the email views, used for the `canResend` hints and checks after a write.
  */
 function get(token: string, path: string): Promise<Response> {
   return request(app).get(`/api/v1/platform${path}`).set('Authorization', `Bearer ${token}`)
@@ -86,9 +86,6 @@ function get(token: string, path: string): Promise<Response> {
 
 /**
  * `canResend` for one message, from the detail and from the list row.
- * @param token - A staff token.
- * @param message - The message.
- * @returns Both answers.
  */
 async function resendHintsOf(
   token: string,
@@ -116,7 +113,7 @@ async function statusOf(pending: Promise<Response>): Promise<number> {
 }
 
 /**
- * POSTs the resend of `message`; the body defaults to the staff `reason`.
+ * Resends a tracked message as the actor under test; the body defaults to the staff `reason`.
  */
 function resend(token: string, message: EmailMessage, body?: object): Promise<Response> {
   return post(token, `/emails/${message.id}/resend`, body)
@@ -126,9 +123,6 @@ function resend(token: string, message: EmailMessage, body?: object): Promise<Re
  * A staff member with a token minted at a sign-in at `authenticatedAt`
  * (now by default), so a test can pick a stale sign-in time;
  * `createTrackedStaff`'s own token is always recent.
- * @param role - The platform role.
- * @param authenticatedAt - When the session signed in.
- * @returns The user and the token.
  */
 async function staffSignedIn(
   role: MembershipRole,
@@ -181,9 +175,6 @@ async function customerTenant(): Promise<Tenant> {
 
 /**
  * A pending invitation in `tenant` and the tracked message that mailed it.
- * @param tenant - The tenant.
- * @param role - The role it offers.
- * @returns The invitation id and the message.
  */
 async function invitationMessage(
   tenant: Tenant,

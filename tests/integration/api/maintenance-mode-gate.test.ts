@@ -53,8 +53,6 @@ const NONE = null
 
 /**
  * Store a mode and load it into this process's store, as a published change would.
- * @param mode - The mode.
- * @param message - The customer message.
  */
 async function enter(
   mode: 'read_only' | 'full',
@@ -66,7 +64,6 @@ async function enter(
 
 /**
  * Revoke a staff member's platform role by deleting their platform-tenant membership.
- * @param userId - The staff member.
  */
 async function revokeStaff(userId: string): Promise<void> {
   const platform = await platformTenant()
@@ -75,7 +72,6 @@ async function revokeStaff(userId: string): Promise<void> {
 
 /**
  * A tenant owned by a fresh customer.
- * @returns The tenant and its owner's token.
  */
 async function customerTenant(): Promise<{ tenant: Tenant; ownerToken: string }> {
   const owner = await createTrackedUser()

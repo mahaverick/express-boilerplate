@@ -113,9 +113,6 @@ function posthog(): FakePosthog {
 
 /**
  * An issue whose most recent event was sent under `distinctId`.
- * @param distinctId - Whose event.
- * @param overrides - Any other columns.
- * @returns The seeded issue.
  */
 function seeded(distinctId: string, overrides: Partial<SeededIssue> = {}): SeededIssue {
   return {
@@ -134,7 +131,6 @@ function seeded(distinctId: string, overrides: Partial<SeededIssue> = {}): Seede
 
 /**
  * Answer every query with these issues.
- * @param issues - The issues.
  */
 function answerWith(issues: SeededIssue[]): void {
   posthog().respondToQuery(() => ({ status: 200, json: issuesAnswer(issues) }))
@@ -142,9 +138,6 @@ function answerWith(issues: SeededIssue[]): void {
 
 /**
  * A GET of one Errors view.
- * @param token - The staff bearer token.
- * @param path - The path under /api/v1/platform.
- * @returns The response.
  */
 function getErrors(token: string, path: string): Promise<Response> {
   return request(app).get(`/api/v1/platform${path}`).set('Authorization', `Bearer ${token}`)
@@ -168,8 +161,6 @@ function pageOf(response: Response): ErrorsPage {
 
 /**
  * How many errors-view audit entries target an id.
- * @param targetId - The user or tenant id.
- * @returns The count.
  */
 async function errorsAudits(targetId: string): Promise<number> {
   const [row] = await sql<{ count: number }[]>`
@@ -180,7 +171,6 @@ async function errorsAudits(targetId: string): Promise<number> {
 
 /**
  * A customer tenant with no members, tracked for cleanup.
- * @returns Its id.
  */
 async function createTenant(): Promise<string> {
   const tenant = await tenantRepository.createWithoutOwner({

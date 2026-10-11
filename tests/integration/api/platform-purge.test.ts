@@ -58,7 +58,7 @@ afterEach(async () => {
 })
 
 /**
- * Purges a user as `token`; the body defaults to the staff `reason`.
+ * Permanently removes a soft-deleted user as the actor under test; the body defaults to the staff `reason`.
  */
 function purgeUser(token: string, userId: string, body?: object): Promise<Response> {
   return request(app)
@@ -68,7 +68,7 @@ function purgeUser(token: string, userId: string, body?: object): Promise<Respon
 }
 
 /**
- * Purges a tenant as `token`; the body defaults to the staff `reason`.
+ * Permanently removes an archived tenant as the actor under test; the body defaults to the staff `reason`.
  */
 function purgeTenant(token: string, tenantId: string, body?: object): Promise<Response> {
   return request(app)
@@ -79,7 +79,6 @@ function purgeTenant(token: string, tenantId: string, body?: object): Promise<Re
 
 /**
  * A soft-deleted user who once acted in a tenant and was mailed.
- * @returns The user's id and email, the tenant they acted in, the id of that audit entry, and of an invitation they sent.
  */
 async function deletedUserWithHistory(): Promise<{
   id: string
@@ -423,12 +422,7 @@ describe('the purge actor re-check under lock', () => {
 
 /**
  * Inserts an email message and tracks it for cleanup.
- * @param recipient - Its recipient.
- * @param options - Its owner, tenant and creation time.
- * @param options.userId - `user_id`.
- * @param options.tenantId - `tenant_id`.
  * @param options.createdAt - `created_at`, ISO.
- * @returns Its id.
  */
 async function trackedMessage(
   recipient: string,
@@ -443,7 +437,6 @@ async function trackedMessage(
  * Inserts an email suppression and tracks it for cleanup.
  * @param address - The address, lowercased.
  * @param liftedBy - Who lifted it; undefined for an active one.
- * @returns Its id.
  */
 async function trackedSuppression(address: string, liftedBy?: string): Promise<string> {
   suppressedAddresses.push(address.toLowerCase())
