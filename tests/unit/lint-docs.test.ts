@@ -28,7 +28,13 @@ describe('anchors', () => {
 
 describe('linkProblems', () => {
   const files = new Set(['README.md', 'CLAUDE.md'])
+  /**
+   * Whether a path is one of the fixture files.
+   */
   const exists = (p: string): boolean => files.has(p)
+  /**
+   * The anchors every fixture file defines: only `cors`.
+   */
   const readAnchors = (): Set<string> => new Set(['cors'])
 
   it('passes existing files, known anchors and external links', () => {

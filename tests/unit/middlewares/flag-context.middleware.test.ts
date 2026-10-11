@@ -28,9 +28,7 @@ const CONTEXT: FlagContext = {
 }
 
 /**
- * A request as the helpers read it.
- * @param fields - The request fields to set.
- * @returns The request.
+ * A request carrying only the given fields, as the helpers read it.
  */
 function requestWith(fields: Record<string, unknown>): Request {
   return fields as unknown as Request

@@ -13,6 +13,11 @@ import { FLAG_GATE_MARK, requireFlag, type FlagGateMark } from '@/middlewares/fl
 import { resolveTenant } from '@/middlewares/tenant.middleware'
 import { createApiRouter } from '@/routes/index.routes'
 
+/**
+ * A router layer as the walk reads it: a route with its handlers, or a
+ * mounted router with its own stack, the mount path that matched and a path
+ * matcher; `slash` marks a bare `use()`.
+ */
 interface StackLayer {
   route?: { path: string; stack: { handle: RequestHandler }[] }
   handle: { stack?: StackLayer[] }
@@ -21,6 +26,10 @@ interface StackLayer {
   match(path: string): boolean
 }
 
+/**
+ * One flag gate the walk found: its full path, its `FLAG_GATE_MARK` and
+ * whether `resolveTenant()` ran before it.
+ */
 interface FoundGate {
   path: string
   mark: FlagGateMark
@@ -47,6 +56,10 @@ const KNOWN_MOUNTS = [
   '/tenants/:id/onboarding',
 ] as const
 
+/**
+ * A route handler that ends the response, standing in for a real handler on
+ * the synthetic routers.
+ */
 const noop: RequestHandler = (_request, response) => {
   response.end()
 }
@@ -59,11 +72,10 @@ const noop: RequestHandler = (_request, response) => {
  * kept for every one it matches, so a wildcard or param mount covers all of
  * them whatever the declaration order. Only this router's own mounts are
  * offered, never a known mount of another router, which a wildcard could
- * match by accident.
- * @param layer - A non-router `use()` layer.
- * @param stack - The router's layers, whose routes and sub-router mounts are the candidates.
- * @returns The covered paths, such as `/:slug/beta`; empty when no route or
- *   sub-router sits under the layer.
+ * match by accident. `layer` is a non-router `use()` layer and `stack` the
+ * router's layers, whose routes and sub-router mounts are the candidates.
+ * The result holds paths such as `/:slug/beta`, and is empty when no route
+ * or sub-router sits under the layer.
  */
 function useMountsOf(layer: StackLayer, stack: StackLayer[]): string[] {
   if (layer.slash) return ['']
@@ -85,17 +97,21 @@ function useMountsOf(layer: StackLayer, stack: StackLayer[]): string[] {
  * into mounted routers. A mount is found by asking `layer.match()` about each
  * known mount and checking the whole mount matched (`layer.path`). A
  * `resolveTenant()` mounted with `use()` on a path counts only for gates on
- * that path or below it, in this router (a nested router starts unresolved).
- * @param stack - A router's layers.
- * @param prefix - The mount path the layers sit under.
- * @param isResolved - Whether `resolveTenant()` already ran on every request that reaches this router.
- * @returns One entry per gate, noting whether `resolveTenant()` ran before it.
+ * that path or below it, in this router; a nested router inherits only a
+ * bare `use()`'s. `prefix` is the mount path the layers sit under and
+ * `isResolved` whether `resolveTenant()` already ran on every request that
+ * reaches this router. Returns one entry per gate, noting whether
+ * `resolveTenant()` ran before it.
  * @throws {Error} When a router or a `use()` gate is mounted at an unknown path.
  */
 function gatesIn(stack: StackLayer[], prefix: string, isResolved = false): FoundGate[] {
   const resolver = resolveTenant() as unknown as RequestHandler
   let hasResolvedHere = isResolved
   const resolvedPaths: string[] = []
+  /**
+   * Whether `resolveTenant()` ran for `path` in this router, through a bare
+   * `use()` or a `use()` on that path or above it.
+   */
   const isResolvedAt = (path: string): boolean =>
     hasResolvedHere ||
     resolvedPaths.some((resolved) => path === resolved || path.startsWith(`${resolved}/`))
@@ -141,8 +157,6 @@ function gatesIn(stack: StackLayer[], prefix: string, isResolved = false): Found
 
 /**
  * The layers of a router built by `Router()`.
- * @param router - The router.
- * @returns Its stack.
  */
 function stackOf(router: Router): StackLayer[] {
   return (router as unknown as { stack: StackLayer[] }).stack
@@ -151,8 +165,6 @@ function stackOf(router: Router): StackLayer[] {
 /**
  * The gates on tenant-scoped flags that are not on a `/tenants/:slug/` route,
  * or that run before `resolveTenant()` on one.
- * @param gates - The gates found.
- * @returns The misplaced ones.
  */
 function misplaced(gates: FoundGate[]): FoundGate[] {
   return gates.filter(

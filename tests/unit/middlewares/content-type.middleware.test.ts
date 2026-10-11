@@ -1,5 +1,5 @@
 /**
- * @file No database, no Redis, no app — a bare `express()` with the
+ * @file No database, no Redis, no app: a bare `express()` with the
  * middleware in front of a stub handler, which is what keeps this a
  * tests/unit/ file. The end-to-end proof that the real auth router
  * rejects a cross-site form POST lives in
@@ -15,9 +15,8 @@ import { errorHandler } from '@/middlewares/error.middleware'
 import { request } from '../../helpers/request'
 
 /**
- * Build a bare app with the gate in front of a stub handler that answers
- * 200 for anything reaching it.
- * @returns The app.
+ * A bare app with the gate in front of a stub handler that answers 200 for
+ * anything reaching it.
  */
 function buildApp(): Express {
   const app = express()

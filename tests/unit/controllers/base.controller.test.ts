@@ -14,20 +14,23 @@ import { logger } from '@/services/logger.service'
  * A concrete controller that exposes `handle` to the test.
  */
 class ProbeController extends BaseController {
+  /**
+   * Makes the protected `handle` callable from a test.
+   */
   wrap(handler: Handler): Handler {
     return this.handle(handler)
   }
 }
 
 /**
- * Throws synchronously.
+ * A handler that fails before it returns a promise.
  */
 function throwSync(): void {
   throw new Error('sync failure')
 }
 
 /**
- * Rejects after one microtask.
+ * A handler that fails asynchronously, before any response is written.
  */
 async function rejectAsync(): Promise<void> {
   await Promise.resolve()
@@ -35,9 +38,7 @@ async function rejectAsync(): Promise<void> {
 }
 
 /**
- * Sends a response, then rejects.
- * @param _request - Unused.
- * @param response - The response to send on.
+ * A handler that fails after it has already sent a response.
  */
 async function sendThenReject(_request: Request, response: Response): Promise<void> {
   response.status(200).json({ ok: true })
@@ -46,9 +47,7 @@ async function sendThenReject(_request: Request, response: Response): Promise<vo
 }
 
 /**
- * Sends a response after one microtask, then resolves.
- * @param _request - Unused.
- * @param response - The response to send on.
+ * A handler that sends a response asynchronously and succeeds.
  */
 async function sendThenResolve(_request: Request, response: Response): Promise<void> {
   await Promise.resolve()
@@ -58,6 +57,9 @@ async function sendThenResolve(_request: Request, response: Response): Promise<v
 const controller = new ProbeController()
 const request = {} as Request
 
+/**
+ * The response double and the spies on its `status` and `json` writes.
+ */
 interface FakeResponse {
   response: Response
   status: ReturnType<typeof vi.fn>
@@ -66,7 +68,6 @@ interface FakeResponse {
 
 /**
  * A response double that records writes; `json` flips `headersSent`, as Express does.
- * @returns The double and its spies.
  */
 function fakeResponse(): FakeResponse {
   const state = { headersSent: false }
@@ -85,8 +86,8 @@ function fakeResponse(): FakeResponse {
 }
 
 /**
- * A `next` spy whose argument reads as `unknown`.
- * @returns The spy and a reader for its last argument.
+ * A `next` spy whose argument reads as `unknown`, with a reader for the
+ * argument of its last call.
  */
 function mockNext(): {
   next: NextFunction

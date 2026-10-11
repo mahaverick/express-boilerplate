@@ -16,6 +16,10 @@ vi.mock('@/services/platform.service', async (importOriginal) => ({
   getPlatformMembership: vi.fn(),
 }))
 
+/**
+ * A router layer as these tests read it: a route's path, methods and handler
+ * stack.
+ */
 interface RouteLayer {
   route?: {
     path: string
@@ -24,6 +28,10 @@ interface RouteLayer {
   }
 }
 
+/**
+ * The handlers of the route with the given method and path, in the order
+ * they run; throws when the router has no such route.
+ */
 function handlersFor(router: Router, method: string, path: string): RequestHandler[] {
   const layers = router.stack as unknown as RouteLayer[]
   const layer = layers.find(
@@ -88,10 +96,8 @@ describe('createPlatformUserRouter lifecycle routes', () => {
 })
 
 /**
- * Run one middleware and return what it passed to `next`.
- * @param handler - The middleware.
- * @param request - The request it sees.
- * @returns The first argument `next` received.
+ * Runs one middleware against the given request and returns the first
+ * argument `next` received.
  */
 async function nextArgumentOf(
   handler: RequestHandler | undefined,

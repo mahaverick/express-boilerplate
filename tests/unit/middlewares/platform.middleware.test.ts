@@ -21,6 +21,11 @@ vi.mock('@/services/platform.service', () => ({ getPlatformMembership: vi.fn() }
 
 const lookup = vi.mocked(getPlatformMembership)
 
+/**
+ * Runs `requirePlatformRole(minimum)` for a user whose platform membership
+ * is `platformRole`, with `locals` as the response's locals, and returns the
+ * arguments of each `next` call.
+ */
 async function run(
   minimum: MembershipRole,
   platformRole: MembershipRole | null,
@@ -78,12 +83,9 @@ describe('requirePlatformRole', () => {
 const TARGET_ID = '0b9c8f36-3c55-4d7e-9a0f-2f3c1d5e6a7b'
 
 /**
- * Run logStaffWrites over a fake request and a response that finishes with `status`.
- * @param method - The request method.
- * @param status - The status the response finishes with.
- * @param isAdmitted - Whether the role gate marked the response.
- * @param originalUrl - The request path and query.
- * @returns The 'Staff write' calls logged.
+ * Runs logStaffWrites over a fake request and a response that finishes with
+ * `status`, and returns the 'Staff write' calls logged. `isAdmitted` is whether
+ * the role gate marked the response; `originalUrl` is the request path and query.
  */
 function logged(
   method: string,

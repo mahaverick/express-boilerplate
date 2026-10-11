@@ -1,12 +1,13 @@
 /**
  * @file Walks the live app's router stack (built the same way
- * createApp() itself builds it — no route list is hardcoded here) and
+ * createApp() itself builds it, so no route list is hardcoded here) and
  * asserts every POST/PUT/PATCH/DELETE route either carries a rate
  * limiter (RATE_LIMITER_MARK on one of its handlers) or is named on
  * ALLOWLIST with a reason. Express 5 has no `app._router`; `app.router`
  * is a lazy getter (application.js) over the standalone `router`
- * package, untyped in Express's own type declarations, hence the local
- * shapes and the one cast.
+ * package. Express's type declarations describe its layers as the older
+ * `ILayer` (a `regexp`, a `handle` with no `.stack`), which does not match
+ * router@2's layers, hence the local shapes and the one cast.
  */
 import type { NextFunction, Request, RequestHandler, Response } from 'express'
 import { describe, expect, it } from 'vitest'
@@ -17,21 +18,34 @@ import { withMutatedModule } from '../../helpers/mutate'
 
 const WRITE_METHODS: ReadonlySet<string> = new Set(['post', 'put', 'patch', 'delete'])
 
+/**
+ * One handler on a route, with the HTTP method it was registered for.
+ */
 interface RouteHandlerLayer {
   method?: string
   handle: RequestHandler
 }
 
+/**
+ * A route as router@2 builds it: its path and the handlers registered on it.
+ */
 interface BuiltRoute {
   path: string
   stack: RouteHandlerLayer[]
 }
 
+/**
+ * A router layer: a route, or a mounted router whose handle carries its own
+ * stack.
+ */
 interface RouterStackLayer {
   route?: BuiltRoute
   handle: RequestHandler & { stack?: RouterStackLayer[] }
 }
 
+/**
+ * One route the walk found for one method, with its handlers in order.
+ */
 interface DiscoveredRoute {
   method: string
   path: string
@@ -43,10 +57,8 @@ interface DiscoveredRoute {
  * recursing into mounted sub-routers. A sub-router is any layer whose
  * `.handle` itself carries a `.stack` array — the shape `Router()` always
  * returns (router@2.2.0's own factory), regardless of which feature router
- * built it.
- * @param stack - A router's own `.stack`, or a sub-router's.
- * @param methods - The lowercase HTTP methods to collect.
- * @param into - Accumulator, mutated in place.
+ * built it. `methods` holds the lowercase HTTP methods to collect, and
+ * `into` is the accumulator, mutated in place.
  */
 function collectRoutes(
   stack: RouterStackLayer[],
@@ -72,14 +84,8 @@ function collectRoutes(
 }
 
 /**
- * The live app's routes matching `methods`, walked from `app.router` —
- * untyped in the installed Express type declarations (Express 5 dropped
- * app._router for a lazy `router` getter; verified against the
- * installed package, no equivalent surfaced in the types), hence this
- * one local cast.
- * @param app - Return value of `createApp()`.
- * @param methods - The lowercase HTTP methods to collect.
- * @returns Every discovered route whose method is in `methods`.
+ * The live app's routes whose lowercase method is in `methods`, walked from
+ * `app.router`; the one local cast reads its layers as `RouterStackLayer`.
  */
 function routesOf(
   app: ReturnType<typeof createApp>,
@@ -92,26 +98,30 @@ function routesOf(
 }
 
 /**
- * The live app's write routes.
- * @param app - Return value of `createApp()`.
- * @returns Every discovered POST/PUT/PATCH/DELETE route.
+ * The live app's POST/PUT/PATCH/DELETE routes.
  */
 function writeRoutesOf(app: ReturnType<typeof createApp>): DiscoveredRoute[] {
   return routesOf(app, WRITE_METHODS)
 }
 
+/**
+ * Whether any of a route's handlers carries `RATE_LIMITER_MARK`.
+ */
 function hasRateLimiter(handlers: RequestHandler[]): boolean {
   return handlers.some((handler) => Object.hasOwn(handler, RATE_LIMITER_MARK))
 }
 
 /**
  * Routes deliberately exempt from carrying any rate limiter, with why.
- * Empty today — every write route either has its own route-specific
- * limiter already, or gets `authenticatedWrite` — kept as a mechanism for
- * the next legitimate exception rather than removed.
+ * Empty: every write route either has its own route-specific limiter or
+ * gets `authenticatedWrite`. Kept as a mechanism for a legitimate exception
+ * rather than removed.
  */
 const ALLOWLIST: { method: string; path: string; reason: string }[] = []
 
+/**
+ * Whether the route is named on `ALLOWLIST`.
+ */
 function isAllowlisted(route: DiscoveredRoute): boolean {
   // eslint-disable-next-line sonarjs/no-empty-collection -- deliberately empty today; kept as a mechanism for the next legitimate exception rather than removed
   return ALLOWLIST.some((entry) => entry.method === route.method && entry.path === route.path)

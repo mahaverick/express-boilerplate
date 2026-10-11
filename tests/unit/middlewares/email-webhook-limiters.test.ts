@@ -21,10 +21,9 @@ vi.mock('@/services/redis.service', async (importOriginal) => ({
 const WINDOW = { windowMs: 60_000 }
 
 /**
- * Build the two limiters in the route's order in front of a stub handler.
- * @param providerLimit - The per-provider budget.
- * @param rejectedLimit - The per-IP budget for refused requests.
- * @returns The app; `X-Forwarded-For` sets the caller's IP.
+ * A bare app with the two limiters in the route's order in front of a stub
+ * handler. `providerLimit` is the per-provider budget and `rejectedLimit` the
+ * per-IP budget for refused requests; `X-Forwarded-For` sets the caller's IP.
  */
 function buildApp(providerLimit: number, rejectedLimit: number): Express {
   const app = express()

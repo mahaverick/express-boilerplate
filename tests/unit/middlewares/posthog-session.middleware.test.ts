@@ -11,9 +11,9 @@ import { requestContextStore, type RequestContext } from '@/services/request-con
 const SESSION_ID = '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b'
 
 /**
- * Run the middleware inside a fresh request context.
- * @param header - The `x-posthog-session-id` header value, if any.
- * @returns The context after the middleware ran, and whether it called next.
+ * Runs the middleware inside a fresh request context with the given
+ * `x-posthog-session-id` header value, if any, and returns the context
+ * afterwards and whether it called next.
  */
 function run(header: string | undefined): {
   context: RequestContext

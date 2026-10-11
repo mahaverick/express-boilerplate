@@ -11,11 +11,9 @@ const APEX_URL = 'https://admin.example.com/console'
 const CORS_ALLOWED_ORIGINS = 'https://shop.example.com, https://docs.example.com/'
 
 /**
- * Load the middleware against a fixed environment.
- * @param env - The variables isAllowedOrigin reads.
- * @param env.APEX_URL - Apex's public origin, if set.
- * @param env.CORS_ALLOWED_ORIGINS - The extra allowed origins, if set.
- * @returns The middleware.
+ * Loads the middleware against a fixed environment: `WEB_URL` plus the
+ * `APEX_URL` and `CORS_ALLOWED_ORIGINS` given, the variables isAllowedOrigin
+ * reads.
  */
 async function load(
   env: { APEX_URL?: string; CORS_ALLOWED_ORIGINS?: string } = {}
@@ -32,9 +30,8 @@ async function load(
 }
 
 /**
- * A request carrying the given headers, read through `request.get`.
- * @param headers - Lowercase header names and values.
- * @returns The request.
+ * A request carrying the given headers, read through `request.get`; the
+ * names are lowercase.
  */
 function requestWith(headers: Record<string, string>): Request {
   return {
@@ -44,10 +41,8 @@ function requestWith(headers: Record<string, string>): Request {
 }
 
 /**
- * Run the middleware once and return what it passed to `next`.
- * @param middleware - The middleware under test.
- * @param headers - The request's headers.
- * @returns The argument `next` received: undefined to continue, else the rejection.
+ * Runs the middleware once and returns the argument `next` received:
+ * undefined to continue, else the rejection.
  */
 function run(
   middleware: Awaited<ReturnType<typeof load>>,

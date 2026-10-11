@@ -13,6 +13,10 @@ import {
   createPlatformTenantOnboardingRouter,
 } from '@/routes/platform-onboarding.routes'
 
+/**
+ * A router layer as these tests read it: a route's path, methods and handler
+ * stack.
+ */
 interface RouteLayer {
   route?: {
     path: string
@@ -21,6 +25,10 @@ interface RouteLayer {
   }
 }
 
+/**
+ * The handlers of the route with the given method and path, in the order
+ * they run; throws when the router has no such route.
+ */
 function handlersFor(router: Router, method: string, path: string): RequestHandler[] {
   const layer = (router.stack as unknown as RouteLayer[]).find(
     (candidate) => candidate.route?.path === path && candidate.route.methods[method] === true

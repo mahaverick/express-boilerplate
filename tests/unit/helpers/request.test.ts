@@ -7,9 +7,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { request } from '../../helpers/request'
 
 /**
- * Answer every request with the address the server accepted it on.
- * @param incoming - The incoming request.
- * @param response - The response.
+ * A request listener that answers every request with the local address the
+ * server accepted it on, so a test can see which interface the helper bound.
  */
 function echoLocalAddress(incoming: IncomingMessage, response: ServerResponse): void {
   response.end(incoming.socket.localAddress)

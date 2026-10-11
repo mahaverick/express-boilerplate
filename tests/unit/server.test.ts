@@ -14,9 +14,7 @@ import type { SupervisedWorkers } from '@/services/worker-supervisor.service'
 const calls = vi.hoisted(() => [] as string[])
 
 /**
- * A mock that records its name, then resolves.
- * @param name - What to record.
- * @returns The mock.
+ * A mock that appends `name` to `calls` when called, then resolves.
  */
 function recorder(name: string): () => Promise<void> {
   return () => {

@@ -1,7 +1,8 @@
 /**
- * @file Pure-logic coverage of resolveTenant's branching,
- * requireRole's role check and the platform-tenant step-up's pass-through, both repositories' prototype methods spied
- * on, no Docker/Postgres touched. Database-backed proof that
+ * @file Pure-logic coverage of resolveTenant's branching, requireRole's role
+ * check, requireMembership, and the platform-tenant step-up checks, with both
+ * repositories' prototype methods spied on and no Docker/Postgres touched.
+ * Database-backed proof that
  * `enterWith` survives Express's own `next()` dispatch through a real
  * router lives in tests/integration/middlewares/tenant.middleware.test.ts.
  */
@@ -29,9 +30,9 @@ import { fakeQueryError, LEAKED_PARAM, loggedText } from '../../helpers/query-er
 import { settle } from '../../helpers/timing'
 
 /**
- * A fixed tenant row — only `id`/`slug` are read by `resolveTenant`, but the
- * full shape is built so `findActiveBySlugSpy.mockResolvedValue(...)` type-checks
- * against `Tenant`.
+ * A fixed tenant row. `resolveTenant` reads only `id`, `slug` and
+ * `isPlatform`, but the full shape is built so
+ * `findActiveBySlugSpy.mockResolvedValue(...)` type-checks against `Tenant`.
  */
 const mockTenant: Tenant = {
   id: 'tenant-1',
@@ -59,10 +60,8 @@ const mockTenant: Tenant = {
 }
 
 /**
- * A fixed membership row for `mockTenant` — only `role` is read by
- * `resolveTenant`.
- * @param role - The role this membership carries.
- * @returns A membership row for `mockTenant`/`mockUser`.
+ * A fixed membership row of the given role for `mockTenant` and `mockUser`;
+ * `resolveTenant` reads only `role`.
  */
 function mockMembership(role: UserMembership['role']): UserMembership {
   return {
@@ -87,9 +86,8 @@ const mockPlatformTenant: Tenant = {
 }
 
 /**
- * The principal `resolveTenant` attaches for a member of `mockTenant`.
- * @param role - The member's role.
- * @returns The expected principal.
+ * The principal `resolveTenant` attaches for a member of `mockTenant` with
+ * the given role.
  */
 function memberPrincipal(role: MembershipRole): RequestPrincipal {
   return {
@@ -112,13 +110,12 @@ const mockUser: AuthenticatedUser = {
 }
 
 /**
- * Build a minimal mock request. `resolveTenant` only ever reads
- * `.params.slug`, `.user`, `.id`, and assigns `.principal` — same
- * minimal-mock approach as auth.middleware.test.ts's own `buildRequest`.
- * @param overrides - Which of `slug`/`user` to populate.
- * @param overrides.slug - The value `request.params.slug` should carry, or undefined to omit it.
- * @param overrides.user - The value `request.user` should carry, or undefined to simulate a route missing `requireAuth`.
- * @returns A mock request, mutable enough for `resolveTenant` to set `.principal` on it.
+ * A minimal mock request. `resolveTenant` only ever reads `.params.slug`,
+ * `.user` and `.id`, and assigns `.principal`; the same minimal-mock approach
+ * as `buildRequest` in tests/integration/middlewares/auth.middleware.test.ts.
+ * `overrides.slug` is the value for `request.params.slug`, left out when
+ * undefined; `overrides.user` is the value for `request.user`, undefined to
+ * simulate a route missing `requireAuth`.
  */
 function buildRequest(overrides: { slug?: string; user?: AuthenticatedUser } = {}): Request {
   return {
@@ -129,10 +126,9 @@ function buildRequest(overrides: { slug?: string; user?: AuthenticatedUser } = {
 }
 
 /**
- * Build a `next` spy whose recorded argument is inspectable as `unknown`
- * rather than `any` — same helper and reasoning as
- * auth.middleware.test.ts's own `mockNext`.
- * @returns The spy (cast to `NextFunction`) and the argument its most recent call recorded.
+ * A `next` spy whose recorded argument reads as `unknown` rather than `any`,
+ * with a reader for the argument of its most recent call. Mirrors `mockNext`
+ * in tests/integration/middlewares/auth.middleware.test.ts.
  */
 function mockNext(): { next: NextFunction; lastCallArgument: () => unknown } {
   const spy = vi.fn<(error?: unknown) => void>()
@@ -142,10 +138,9 @@ function mockNext(): { next: NextFunction; lastCallArgument: () => unknown } {
 const noResponse = {} as Response
 
 /**
- * Build a minimal mock request carrying (or omitting) `request.principal` —
- * all `requireRole` ever reads.
- * @param role - The role `request.principal.role` should carry, or undefined to simulate `resolveTenant` never having run.
- * @returns A mock request.
+ * A minimal mock request carrying (or omitting) `request.principal`, all
+ * `requireRole` ever reads. `role` is the value for `request.principal.role`,
+ * undefined to simulate `resolveTenant` never having run.
  */
 function buildPrincipalRequest(role?: string): Request {
   return {
@@ -196,7 +191,7 @@ describe('resolveTenant', () => {
     let nextCallCount = 0
     let capturedTenant: unknown
     /**
-     * Reads `getStore()` synchronously from inside `next` — the same way
+     * Reads `getStore()` synchronously from inside `next`, the same way
      * Express calls the next middleware/handler synchronously right
      * after `resolveTenant` calls `enterWith`, so this sees the mutation
      * exactly the way real downstream code does. Reading `getStore()`
@@ -204,8 +199,8 @@ describe('resolveTenant', () => {
      * the calling function's own continuation, captures a stale
      * pre-`enterWith` snapshot: that continuation's promise reaction was
      * linked to this async context before the inner `enterWith` call
-     * ever ran — a real, working-as-designed AsyncLocalStorage subtlety,
-     * not a bug in `resolveTenant`.
+     * ever ran. That is AsyncLocalStorage working as designed, not a bug
+     * in `resolveTenant`.
      */
     const next: NextFunction = (): void => {
       nextCallCount++
@@ -228,17 +223,17 @@ describe('resolveTenant', () => {
     findByUserAndTenantSpy.mockResolvedValue(mockMembership('viewer'))
 
     const request = buildRequest({ slug: 'acme', user: mockUser })
+    let capturedStore: unknown
     /**
-     * The whole store, not just `.requestId` — a `{ requestId }`-only
+     * Captures the whole store, not just `.requestId`: a `{ requestId }`-only
      * store and the `enterWith`'d `{ requestId, tenant }` one both carry
      * the same `requestId`, so asserting on that field alone would pass
      * whether or not `enterWith` actually ran. Asserting the whole store
      * proves both that the prior field survived the spread and that
-     * `tenant` landed alongside it, which is what would catch a future
-     * refactor back to hand-listing `requestId` instead of spreading the
-     * current store.
+     * `tenant` landed alongside it, which is what would catch a refactor
+     * back to hand-listing `requestId` instead of spreading the current
+     * store.
      */
-    let capturedStore: unknown
     const next: NextFunction = (): void => {
       capturedStore = requestContextStore.getStore()
     }
@@ -265,7 +260,7 @@ describe('resolveTenant', () => {
     const error = lastCallArgument()
     expect(error).toBeInstanceOf(HttpError)
     expect((error as HttpError).statusCode).toBe(404)
-    // The membership lookup is never reached when the tenant itself was not found — nothing to check membership against.
+    // The membership lookup is never reached when the tenant itself was not found: nothing to check membership against.
     expect(findByUserAndTenantSpy).not.toHaveBeenCalled()
     expect(request.principal).toBeUndefined()
   })
@@ -283,7 +278,7 @@ describe('resolveTenant', () => {
     const error = lastCallArgument()
     expect(error).toBeInstanceOf(HttpError)
     expect((error as HttpError).statusCode).toBe(404)
-    // Same message as the nonexistent-tenant case above — a caller must not be able to distinguish the two by response shape.
+    // Same message as the nonexistent-tenant case above: a caller must not be able to distinguish the two by response shape.
     expect((error as HttpError).message).toBe('Tenant not found')
     expect(request.principal).toBeUndefined()
     expect(findPlatformRoleSpy).toHaveBeenCalledWith('user-1')
@@ -337,7 +332,11 @@ describe('resolveTenant', () => {
 
     let sawTenantInFrameA: unknown = 'not-yet-checked'
     let sawTenantInOtherFrame: unknown = 'not-yet-checked'
-    // Same synchronous-inside-`next` read as the success test above — see that test's own comment for why reading `getStore()` after an outer `await` instead would capture a stale snapshot.
+    /**
+     * The same synchronous-inside-`next` read as the success test above; see
+     * that test's own comment for why reading `getStore()` after an outer
+     * `await` instead would capture a stale snapshot.
+     */
     const captureFrameA: NextFunction = (): void => {
       sawTenantInFrameA = requestContextStore.getStore()?.tenant
     }
@@ -348,7 +347,7 @@ describe('resolveTenant', () => {
         return resolveTenant()(request, noResponse, captureFrameA)
       }),
       requestContextStore.run({ requestId: 'frame-b' }, async () => {
-        // Never calls resolveTenant in this frame at all — its own store must never see frame-a's tenant, proving `enterWith` mutates only the calling async context's store, not a shared/global one.
+        // Never calls resolveTenant in this frame at all: its own store must never see frame-a's tenant, proving `enterWith` mutates only the calling async context's store, not a shared/global one.
         await settle(5, "an async hop, so frame-a's resolveTenant runs enterWith first")
         sawTenantInOtherFrame = requestContextStore.getStore()?.tenant
       }),
@@ -588,11 +587,8 @@ describe('requireRecentAuthOnPlatformTenant', () => {
 })
 
 /**
- * A request from staff reaching a customer tenant through their platform role.
- * @param fields - What else the request carries.
- * @param fields.authTime - The token's `auth_time`, if any.
- * @param fields.body - The request body.
- * @returns The request.
+ * A request from staff reaching a customer tenant through their platform
+ * role, carrying the token's `authTime` and the request `body` when given.
  */
 function staffRequest(fields: { authTime?: number; body?: unknown }): Request {
   const principal: RequestPrincipal = {
@@ -606,8 +602,7 @@ function staffRequest(fields: { authTime?: number; body?: unknown }): Request {
 }
 
 /**
- * Now, in seconds since the epoch: a fresh `auth_time`.
- * @returns The current time in seconds.
+ * The current time in seconds since the epoch: a fresh `auth_time`.
  */
 function nowSeconds(): number {
   return Math.floor(Date.now() / 1000)

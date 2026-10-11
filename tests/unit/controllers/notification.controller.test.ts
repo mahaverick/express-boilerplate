@@ -13,10 +13,9 @@ const unauthenticatedRequest = { user: undefined } as unknown as Request
 const unusedResponse = {} as Response
 
 /**
- * Build a `next` spy whose recorded argument is inspectable as `unknown`
- * rather than `any` — same helper and reasoning as
- * tests/integration/middlewares/auth.middleware.test.ts's own `mockNext`.
- * @returns The spy (cast to `NextFunction` for calling a handler) and the argument its most recent call recorded.
+ * A `next` spy whose recorded argument reads as `unknown` rather than `any`,
+ * with a reader for the argument of its most recent call. Mirrors `mockNext`
+ * in tests/integration/middlewares/auth.middleware.test.ts.
  */
 function mockNext(): { next: NextFunction; lastCallArgument: () => unknown } {
   const spy = vi.fn<(error?: unknown) => void>()
@@ -24,9 +23,8 @@ function mockNext(): { next: NextFunction; lastCallArgument: () => unknown } {
 }
 
 /**
- * Assert that calling `handler` with no `request.user` forwards a 401
+ * Asserts that calling `handler` with no `request.user` forwards a 401
  * `HttpError` to `next()`.
- * @param handler - The controller handler under test.
  */
 async function expectAuthenticationRequired(handler: Handler): Promise<void> {
   const { next, lastCallArgument } = mockNext()
@@ -46,8 +44,8 @@ async function expectAuthenticationRequired(handler: Handler): Promise<void> {
  * `request.user` is always populated by the time any of these run
  * through a real route; reaching the guard at all needs a direct call
  * with no `request.user` set, bypassing routing entirely.
- * `markRead`/`deleteNotification`/`updatePreferences` each already
- * have their error path covered by a real error scenario in
+ * `markRead`, `deleteNotification` and `updatePreferences` each have an
+ * error path covered by a real error scenario in
  * tests/integration/api/notification.test.ts, so they are not
  * repeated here.
  */

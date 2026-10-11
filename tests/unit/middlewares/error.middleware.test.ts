@@ -35,15 +35,15 @@ vi.mock('@/services/errors/error-reporter.service', async (importOriginal) => {
 })
 
 /**
- * Build a minimal mock Express response, enough for errorHandler to call
- * `.status().json()` and `.getHeader()` against.
+ * A minimal mock Express response, enough for errorHandler to call
+ * `.status().json()` and `.getHeader()` against, with a reader for the JSON
+ * body and the `status` spy.
  *
- * The mock functions are returned as their own properties, not read back off
- * `response` in assertions — `response` is typed as `Response`, and
+ * The `status` spy is returned as its own property, not read back off
+ * `response` in assertions: `response` is typed as `Response`, and
  * `@typescript-eslint/unbound-method` flags any reference to one of its
  * methods taken as a value rather than called, which `toHaveBeenCalledWith`
  * would otherwise trigger.
- * @returns The mock response, its captured JSON body, and the `status` spy.
  */
 function mockResponse(): { response: Response; body: () => unknown; status: Mock } {
   let captured: unknown
@@ -60,7 +60,7 @@ function mockResponse(): { response: Response; body: () => unknown; status: Mock
 }
 
 describe('errorHandler', () => {
-  // Every 5xx path logs — spy on logger.error for the whole suite so that logging is silenced in test output by default, and so the one test below that cares can assert on it without every other test needing to.
+  // Most 5xx paths log: spy on logger.error for the whole suite so that logging is silenced in test output by default, and so a test that cares can assert on it without every other test needing to.
   let loggerError: Mock<typeof logger.error>
 
   beforeEach(() => {
@@ -215,7 +215,7 @@ describe('errorHandler', () => {
 
     expect(status).toHaveBeenCalledWith(500)
     expect(body()).toMatchObject({ success: false, message: 'Internal server error' })
-    // The ORIGINAL error object is logged, not the masked message — masking is for the client; the whole point of logging is that the real cause stays recoverable server-side.
+    // The ORIGINAL error object is logged, not the masked message: masking is for the client; the whole point of logging is that the real cause stays recoverable server-side.
     expect(loggerError).toHaveBeenCalledWith('Unhandled server error', {
       error: original,
       errorId: expect.any(String) as unknown,
@@ -223,7 +223,7 @@ describe('errorHandler', () => {
   })
 
   it('logs 5xx errors with the request-id from ALS context', () => {
-    // errorHandler is called directly here, with no Express request ever running requestContext (request-context.middleware.ts) ahead of it, so without wrapping in requestContextStore.run() there is no ALS context for the logger to read a request-id from; this proves errorHandler's call into logger.error works correctly from inside one.
+    // errorHandler is called directly, with no Express request running requestContext (request-context.middleware.ts) ahead of it, so requestContextStore.run() supplies the ALS context; the logger is mocked and reads nothing from it, so this asserts only that the error is logged inside one.
     const { response } = mockResponse()
     requestContextStore.run({ requestId: 'test-req-id' }, () => {
       errorHandler(new Error('boom'), {} as never, response, vi.fn())
@@ -276,13 +276,13 @@ describe('errorHandler', () => {
   })
 
   /**
-   * A failed database write is the one 5xx that arrives carrying the data
-   * it was trying to write. drizzle-orm builds DrizzleQueryError's
-   * message as `Failed query: ${query}\nparams: ${params}` (verified
+   * A failed database query arrives carrying the values it was bound to
+   * (for a write, the data it was trying to write). drizzle-orm builds
+   * DrizzleQueryError's message as `Failed query: ${query}\nparams: ${params}` (verified
    * against node_modules/drizzle-orm/errors.js), so logging the raw error
    * would print a registrant's email address and bcrypt hash into the log
    * on any insert failure that is not the unique violation
-   * BaseRepository already turns into a 409 — an over-length email
+   * BaseRepository turns into a 409 — an over-length email
    * (22001), for instance. The real class is constructed here, not a
    * hand-rolled look-alike: the handler matches this shape structurally
    * (so the error contract takes no runtime dependency on the ORM), and
@@ -294,9 +294,9 @@ describe('errorHandler', () => {
     const passwordHash = '$2b$12$abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQR'
 
     /**
-     * Build the error drizzle's postgres-js driver actually throws for a
-     * failed insert, wrapping a driver error carrying a SQLSTATE code.
-     * @returns The query error, carrying real credentials as bound parameters.
+     * The query error drizzle throws for a failed insert, wrapping a driver
+     * error that carries a SQLSTATE code, with real credentials as bound
+     * parameters.
      */
     function failedInsert(): DrizzleQueryError {
       const cause = Object.assign(new Error('value too long for type character varying(320)'), {
@@ -334,7 +334,7 @@ describe('errorHandler', () => {
     })
 
     it('redacts a query-shaped error that carries neither a driver code nor a stack', () => {
-      // The defensive edges of the same path: a query error whose cause is not an object with a `code` (a dropped connection surfaces one), and one with no usable stack. Neither may fall back to logging the raw error — the message embeds the parameters either way.
+      // The defensive edges of the same path: a query error whose cause is not an object with a string `code`, and one with no usable stack. Neither may fall back to logging the raw error: the message embeds the parameters either way.
       const { response } = mockResponse()
       const bare = { query: 'select 1 from "users" where "email" = $1', params: [email] }
 
@@ -346,12 +346,12 @@ describe('errorHandler', () => {
     })
 
     /**
-     * `stackFramesOf` must filter on V8's own indentation of at least
-     * four spaces on every genuine frame, the one signal that tells a
-     * real call frame apart from a message line that merely happens to
-     * start with "at ". A query error's own message embeds the SQL text
-     * and can be multi-line, and is not fully attacker-controlled here —
-     * this pins the filter directly rather than by absence.
+     * `stackFramesOf` keeps only the lines `isStackFrameLine`
+     * (stack-frames.ts) accepts: indented, `at ` and a location. That tells
+     * a real call frame apart from a message line that merely starts with
+     * "at ". A query error's message embeds the bound parameters and can be
+     * multi-line, so such a line can appear in it. This pins the filter
+     * directly rather than by absence.
      */
     it('drops an unindented line that merely begins "at ", keeping only real indented call frames', () => {
       const { response } = mockResponse()
@@ -436,7 +436,7 @@ describe('errorHandler', () => {
     })
 
     it('does not trust a 5xx status from a foreign error', () => {
-      // Honouring it would skip the masking below and could leak an internal message; 5xx stays the handler's own decision.
+      // Only 400-499 is honoured: a foreign 5xx stays the handler's own 500, masked and logged.
       const { response, body, status } = mockResponse()
       errorHandler(
         Object.assign(new Error('internal detail'), { status: 503, expose: true }),

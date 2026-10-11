@@ -8,6 +8,10 @@ import { requireJsonContentType } from '@/middlewares/content-type.middleware'
 import { RATE_LIMITER_MARK } from '@/middlewares/rate-limit.middleware'
 import { createPlatformRouter } from '@/routes/platform.routes'
 
+/**
+ * A router layer as these tests read it: a route's path, methods and handler
+ * stack, or a mounted sub-router with its own stack, path and matcher.
+ */
 interface RouteLayer {
   route?: {
     path: string
@@ -19,10 +23,18 @@ interface RouteLayer {
   match(path: string): boolean
 }
 
+/**
+ * The handlers of the route with the given method and path directly on the
+ * router, in the order they run; throws when there is none.
+ */
 function handlersFor(router: Router, method: string, path: string): RequestHandler[] {
   return handlersIn(router.stack as unknown as RouteLayer[], method, path)
 }
 
+/**
+ * The handlers of the route with the given method and path among the given
+ * layers, in the order they run; throws when there is none.
+ */
 function handlersIn(layers: RouteLayer[], method: string, path: string): RequestHandler[] {
   const layer = layers.find(
     (candidate) => candidate.route?.path === path && candidate.route.methods[method] === true
