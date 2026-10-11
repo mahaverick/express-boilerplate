@@ -11,7 +11,7 @@ import { redisKey } from '@/services/redis.service'
 import { settle } from './timing'
 
 /**
- * The notification emitter module's exports, as a test loads them.
+ * The shape of the emitter module, so a helper can accept an instance a test imported itself.
  */
 type EmitterModule = typeof import('@/services/notification-emitter.service')
 

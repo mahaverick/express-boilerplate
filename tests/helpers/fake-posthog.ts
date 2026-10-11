@@ -177,17 +177,17 @@ export interface FakePosthog {
    */
   authHeaders: string[]
   /**
-   * The JSON body `GET /flags/definitions` answers with (`EMPTY_FLAG_DEFINITIONS` at start).
+   * The JSON body a request to `/flags/definitions` is answered with (`EMPTY_FLAG_DEFINITIONS` at start).
    */
   flagDefinitions: unknown
   /**
-   * The ETag `GET /flags/definitions` answers with (`W/"fake-0"` at start);
+   * The ETag a request to `/flags/definitions` is answered with (`W/"fake-0"` at start);
    * undefined sends none. `If-None-Match` equal to it, with or without the
    * `W/` prefix, gets a 304 with an empty body.
    */
   flagDefinitionsEtag: string | undefined
   /**
-   * The status a non-304 `GET /flags/definitions` answers with (200 at start).
+   * The status a non-304 request to `/flags/definitions` is answered with (200 at start).
    */
   flagDefinitionsStatus: number
   /**
@@ -196,7 +196,7 @@ export interface FakePosthog {
    */
   flagDefinitionsRawBody: string | undefined
   /**
-   * Awaited before `GET /flags/definitions` is answered; undefined at start.
+   * Awaited before a request to `/flags/definitions` is answered; undefined at start.
    * A test stands in for another replica with it, between the job's read of
    * the stored snapshot and its answer.
    */
@@ -508,9 +508,8 @@ export async function startFakePosthog(): Promise<FakePosthog> {
     )
     const offset = Number(url.searchParams.get('offset') ?? '0')
     /**
-     * The URL of the page that starts at `start`.
-     * @param start - The page's offset.
-     * @returns The full URL.
+     * Builds the `next` and `previous` links, which are full URLs that keep the same `limit`.
+     * @param start - The offset the linked page starts at.
      */
     const pageUrl = (start: number): string => {
       const next = new URL(url.pathname, fake.url)
@@ -627,7 +626,7 @@ export async function startFakePosthog(): Promise<FakePosthog> {
   }
 
   /**
-   * The answer to `GET /flags/definitions`: a 304 with an empty body for the
+   * The answer to a request to `/flags/definitions`, whatever its method: a 304 with an empty body for the
    * current ETag, otherwise the status, the raw body or the JSON
    * definitions, with the ETag header.
    * @param request - The incoming request.
@@ -684,7 +683,7 @@ export async function startFakePosthog(): Promise<FakePosthog> {
       const body = await readBody(request)
       const result = await answerFor(request, body)
       /**
-       * Send the answer and stop tracking it as held, unless the response has already ended.
+       * Writes the response, at once or when a `hang` delay ends; `close()` cancels a held one.
        */
       const answer = (): void => {
         held.delete(response)

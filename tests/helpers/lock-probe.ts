@@ -101,7 +101,7 @@ export async function pollUntil(
 ): Promise<boolean> {
   let hasSettled = false
   /**
-   * Marks `hasSettled` once `settled` resolves or rejects.
+   * Lets the poll learn that `settled` finished, without awaiting it or failing on its rejection.
    */
   const observe = async (): Promise<void> => {
     try {

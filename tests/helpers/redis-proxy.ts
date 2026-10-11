@@ -1,9 +1,9 @@
 /**
  * @file A real Redis outage without touching the shared compose Redis:
  * clients connect through this TCP proxy, and the outage is the proxy
- * resetting every connection. The proxy holds one port for its whole life: a
- * port it gave up could be taken by another worker's test server before it
- * listened again.
+ * closing open connections and resetting new ones. The proxy holds one port
+ * for its whole life: a port it gave up could be taken by another worker's
+ * test server before it listened again.
  */
 import net from 'node:net'
 import { settle } from './timing'
@@ -51,7 +51,7 @@ export class RedisProxy {
       this.sockets.add(toRedis)
       client.pipe(toRedis).pipe(client)
       /**
-       * Close both halves of this proxied connection and forget them.
+       * Releases a proxied pair when either half errors or closes.
        */
       const teardown = (): void => {
         client.destroy()
