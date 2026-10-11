@@ -1,24 +1,4 @@
 {
-  "X02": [
-    "src/constants/analytics.constants.ts",
-    "src/constants/audit.constants.ts",
-    "src/constants/auth-provider.constants.ts",
-    "src/constants/auth.constants.ts",
-    "src/constants/email.constants.ts",
-    "src/constants/error-tracking.constants.ts",
-    "src/constants/errors-view.constants.ts",
-    "src/constants/flags.constants.ts",
-    "src/constants/frontend.constants.ts",
-    "src/constants/global.constants.ts",
-    "src/constants/maintenance-mode.constants.ts",
-    "src/constants/notification.constants.ts",
-    "src/constants/onboarding.constants.ts",
-    "src/constants/platform.constants.ts",
-    "src/constants/queue.constants.ts",
-    "src/constants/rate-limit.constants.ts",
-    "src/constants/tenant.constants.ts",
-    "src/constants/timeline.constants.ts"
-  ],
   "X03": [
     "src/controllers/audit.controller.ts",
     "src/controllers/auth.controller.ts",

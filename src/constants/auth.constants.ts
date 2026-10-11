@@ -6,20 +6,19 @@
 
 /**
  * bcrypt work factor (log2 of the number of hashing rounds) applied to
- * every password this boilerplate hashes.
+ * every password this boilerplate hashes. Each +1 doubles the time per hash.
  *
- * 12 is OWASP's floor recommendation, roughly 200-300ms per hash on typical
- * server hardware. bcrypt stores the cost in each hash, so raising this
- * affects only passwords hashed afterwards.
+ * bcrypt stores the cost in each hash, so raising this affects only
+ * passwords hashed afterwards.
  *
  * Before raising it: `login` (auth.service.ts) answers an unknown email by
- * verifying against a dummy hash made at this cost, while each stored hash
- * verifies at the cost it was written with. A higher cost makes an unknown
- * email measurably slower than a wrong password for an existing account,
- * reopening the login timing oracle (whether an email is registered), and
- * each +1 doubles the gap.
- * Nothing here rehashes on login, so the gap lasts until every active user
- * has a new hash. Build rehash-on-login first, or accept that trade.
+ * verifying against a dummy hash made at the current cost, while each stored
+ * hash verifies at the cost it was written with. A higher cost makes an
+ * unknown email measurably slower than a wrong password for an existing
+ * account, reopening the login timing oracle (whether an email is
+ * registered). Nothing rehashes on login, so the gap lasts until every
+ * active user has a new hash. Build rehash-on-login first, or accept that
+ * trade.
  */
 export const BCRYPT_COST = 12
 
@@ -29,7 +28,7 @@ export const BCRYPT_COST = 12
  * bcrypt silently ignores everything past the 72nd byte, so two passwords
  * sharing their first 72 bytes would verify against each other's hash.
  * `password.utilities.ts` rejects longer input at hash and verify time.
- * Measured in UTF-8 bytes, not characters.
+ * Counted in UTF-8 bytes, not characters.
  */
 export const MAX_PASSWORD_BYTES = 72
 
@@ -37,23 +36,22 @@ export const MAX_PASSWORD_BYTES = 72
  * The shortest password `auth.validators.ts` accepts at registration,
  * password reset and password change.
  *
- * 8 is the OWASP and NIST SP 800-63B floor for a human-chosen password with
- * no composition rules, which this boilerplate does not impose. Registration,
- * password reset and password change enforce it; `loginSchema` does not, so
- * a wrong password never fails validation differently than an unknown email.
+ * 8 is the NIST SP 800-63B minimum for a human-chosen password, with no
+ * composition rules, which this boilerplate does not impose. `loginSchema`
+ * does not enforce it, so a too-short password fails login with the same 401
+ * as a wrong one rather than a distinguishable 400.
  */
 export const MIN_PASSWORD_LENGTH = 8
 
 /**
- * The longest email address this API stores, in characters — and therefore
+ * The longest email address this API stores, in characters, and therefore
  * the longest one `auth.validators.ts` accepts.
  *
- * 320 is the practical maximum for an address (RFC 5321's 64-character
- * local part, an `@`, and a 255-character domain). Both `user.model.ts`'s
- * `email` column and `emailSchema` import it: a schema that accepted more
- * than the column holds would turn a client error into a 500, since
- * Postgres's 22001 (string data right truncation) is not translated by
- * `BaseRepository.create`.
+ * 320 is the practical maximum for an address (a 64-character local part,
+ * an `@`, and a 255-character domain). The email columns and `emailSchema`
+ * share it: a schema that accepted more than a column holds would turn a
+ * client error into a 500, since Postgres's 22001 (string data right
+ * truncation) is not translated by `BaseRepository.create`.
  */
 export const MAX_EMAIL_LENGTH = 320
 
@@ -61,27 +59,28 @@ export const MAX_EMAIL_LENGTH = 320
  * The longest first or last name this API stores, in characters.
  *
  * Shared with `users.first_name`/`users.last_name` for the same reason as
- * `MAX_EMAIL_LENGTH`: `registerSchema` and `updateProfileSchema` cap at the
- * column width.
+ * `MAX_EMAIL_LENGTH`: `registerSchema` and the profile validators cap names
+ * at the column width.
  */
 export const MAX_NAME_LENGTH = 100
 
 /**
- * The refresh cookie's name without COOKIE_SECURE. With it, the API never
- * reads a cookie of this name: a sibling subdomain or a plain-http attacker
- * can plant one.
+ * The refresh cookie's name without COOKIE_SECURE. With it, the API reads
+ * only the prefixed names, because a sibling subdomain or a plain-http
+ * attacker can plant a cookie with this one.
  */
 const PLAIN_REFRESH_TOKEN_COOKIE_NAME = 'refreshToken'
 
 /**
- * The auth routes, so no other endpoint receives the cookie. `__Host-`
- * forbids any path but `/`.
+ * The cookie path for the plain and `__Secure-` forms, so only the auth
+ * routes receive the cookie. The `__Host-` form must use `/`, so it goes to
+ * every path.
  */
 const REFRESH_TOKEN_COOKIE_PATH = '/api/v1/auth'
 
 /**
- * Where the refresh cookie lives: the name, path and domain a set, a read
- * and a clear must all agree on.
+ * The name, path and domain a set, a read and a clear of the refresh cookie
+ * must all agree on.
  */
 export interface RefreshCookieSpec {
   name: string
@@ -113,36 +112,49 @@ export function refreshCookieSpec(env: {
 }
 
 /**
- * The strategy name every `passport.use`/`passport.authenticate` call uses
- * for Google Sign-In, shared by `handleGoogleCallback` (auth.controller.ts)
- * and `configurePassport()` (passport.config.ts) without either importing
- * the other.
+ * The strategy name for Google Sign-In, shared by `passport.authenticate`
+ * (auth.controller.ts, auth.routes.ts) and `passport.use` (passport.config.ts)
+ * so the registration and its callers cannot drift.
  */
 export const GOOGLE_STRATEGY_NAME = 'google'
 
 /**
- * How long after a refresh token's rotation a replay of it gets a sibling token instead of revoking the session.
+ * How long after a refresh token's rotation a replay of it gets a sibling
+ * token instead of revoking the session.
  *
- * Accepted trade-off: concurrent tabs stop logging each other out; a token stolen and replayed within the window also gets a sibling, a second chain that reuse detection never catches. The sibling shares the session, so it lives until SESSION_ABSOLUTE_TTL, until it goes unused for REFRESH_TOKEN_TTL, or until the session ends: a logout from either chain, a password reset, a password change or `POST /auth/sessions/revoke-others` from another session, a Google account claim, a staff sign-out, deactivation or deletion, or a sign-in in a browser that presents either chain's cookie. A password change or revoke-others from that session ends it too when the request presents the caller's live refresh cookie, and spares it when it presents no usable one (none, unknown, revoked, or another session's or user's); the sibling's access tokens share the caller's session id, so they last until ACCESS_TOKEN_TTL.
+ * Accepted trade-off: concurrent tabs stop logging each other out, but a
+ * token stolen and replayed within the window also gets a sibling, a second
+ * chain that reuse detection never catches. The sibling shares the session,
+ * so it lives until SESSION_ABSOLUTE_TTL, until it goes unused for
+ * REFRESH_TOKEN_TTL, or until the session ends: a logout from either chain,
+ * a password reset, a password change or `POST /auth/sessions/revoke-others`
+ * from another session, a Google account claim, a staff sign-out,
+ * deactivation or deletion, or a sign-in in a browser that presents either
+ * chain's cookie.
+ *
+ * A password change or revoke-others from the same session ends the sibling
+ * too when the request presents the caller's live refresh cookie, and spares
+ * it when it presents no usable one (none, unknown, revoked, or another
+ * session's or user's). The sibling's access tokens share the caller's
+ * session id, so they last until ACCESS_TOKEN_TTL.
  */
 export const REFRESH_REUSE_GRACE_MS = 10_000
 
 /**
- * Machine-readable code identifying an expired (not merely invalid) access
- * token, carried in the error envelope's `code` field — lets a client
- * distinguish "try refreshing" from "log in again" without matching on
- * `message`.
+ * Machine-readable code for an access token that is not honoured,
+ * carried in the error envelope's `code` field. It lets a client tell "try
+ * refreshing" from a plain 401 without matching on `message`.
  *
- * Four emitters, all meaning "no longer honoured, refresh":
- *   1. an expired token — `verifyBearerToken` (auth.middleware.ts);
- *   2. a denied session — `requireAuth`'s `isSessionDenied` check;
- *   3. a token with no `sid` claim, on the two routes that need one —
- *      `requireSessionId` (notification-stream.controller.ts) and
- *      `reauthenticate` (auth.service.ts, `POST /auth/reauthenticate`);
- *   4. a step-up with nothing to mark — `reauthenticate` (auth.service.ts)
- *      for a user gone or inactive, and `markSessionReauthenticated`
- *      (session.service.ts), reached from `POST /auth/reauthenticate`, for a
- *      user gone or inactive or a session with no live refresh token.
+ * Emitted for:
+ *   1. an expired token (`verifyBearerToken`, auth.middleware.ts);
+ *   2. a denied session (`requireAuth`'s `isSessionDenied` check);
+ *   3. a token with no `sid` claim, on the routes that need one:
+ *      `requireSessionId` (notification-stream.controller.ts),
+ *      `reauthenticate` (auth.service.ts) and `revokeOtherSessions`
+ *      (session.service.ts);
+ *   4. a user gone or inactive, in `reauthenticate`, `revokeOtherSessions`
+ *      and `markSessionReauthenticated` (session.service.ts), the last also
+ *      for a session with no live refresh token.
  */
 export const ACCESS_TOKEN_EXPIRED_CODE = 'ACCESS_TOKEN_EXPIRED'
 
@@ -157,6 +169,6 @@ export const REAUTH_REQUIRED_CODE = 'REAUTH_REQUIRED'
 
 /**
  * How recently a session must have authenticated to pass a step-up route
- * (`requireRecentAuth`): 10 minutes.
+ * (`requireRecentAuth`): 10 minutes, in milliseconds.
  */
 export const STEP_UP_MAX_AGE_MS = 10 * 60 * 1000

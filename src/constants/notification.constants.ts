@@ -1,6 +1,6 @@
 /**
  * @file The in-app notification types and paging limits. The type list has no
- * database CHECK constraint, so a new type needs no migration; the
+ * database CHECK constraint, so adding a type needs no migration; the
  * TypeScript type is its only enforcement.
  */
 
@@ -8,9 +8,9 @@
  * Every in-app notification type this codebase produces: `'verify_email'`
  * (register, resend-verification), `'password_reset_requested'`
  * (forgot-password), `'password_changed'` (change-password) and
- * `'tenant_invitation'` (to an existing, verified invitee; in-app only,
- * because the mailed link is the only way to accept). The first two fire when
- * the link is sent, so their names are not past tense; `'password_changed'`
+ * `'tenant_invitation'` (to an existing, verified invitee; its metadata
+ * carries no token, because the mailed link is the only way to accept). The
+ * first two fire when the link is sent, so their names are not past tense; `'password_changed'`
  * fires from `changePassword` (auth.service.ts) after the new hash is stored
  * and the other sessions are revoked. `'maintenance_mode_changed'` goes to
  * every other platform owner and admin when maintenance mode is switched on,

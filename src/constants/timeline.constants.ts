@@ -65,7 +65,7 @@ export const TIMELINE_AUDIT_THROTTLE_SECONDS = 600
 
 /**
  * How long one call to PostHog's private API may take. A 90-day timeline
- * query took 2.6–5.6 s on a fresh project.
+ * query can take several seconds on a fresh project.
  */
 export const TIMELINE_POSTHOG_TIMEOUT_MS = 15_000
 

@@ -1,12 +1,12 @@
 /**
  * @file Fixed values of the analytics pipeline: the event names the server
- * sends, the renames and overlaps the builder's collision rule allows, the
- * property keys the PII guard drops, and the drainer's limits.
+ * sends, the audit-action renames, the property keys the PII guard drops, and
+ * the limits of the outbox drainer and the PostHog person-deletion job.
  */
 import type { AuditAction } from '@/constants/audit.constants'
 
 /**
- * A posthog-js session id: a UUID (posthog-js mints UUIDv7). An
+ * The shape of a posthog-js session id: a UUID (posthog-js mints UUIDv7). An
  * `X-POSTHOG-SESSION-ID` header of any other shape is dropped.
  */
 export const POSTHOG_SESSION_ID_PATTERN =
@@ -57,7 +57,7 @@ export const PII_PROPERTY_KEYS = [
 
 /**
  * How many times PostHog may refuse a row sent on its own before the drainer
- * deletes it.
+ * deletes it unsent.
  */
 export const ANALYTICS_POISON_REJECTIONS = 3
 
@@ -67,7 +67,8 @@ export const ANALYTICS_POISON_REJECTIONS = 3
 export const ANALYTICS_LEASE_SECONDS = 60
 
 /**
- * How long one PostHog batch request may take.
+ * How long one request to PostHog's ingestion may take: a batch send or an
+ * error-report flush.
  */
 export const ANALYTICS_SEND_TIMEOUT_MS = 10_000
 
@@ -113,6 +114,6 @@ export const ANALYTICS_DELETION_INTERVAL_MS = 60_000
 
 /**
  * How long after a purge a failed deletion starts logging at `error`
- * instead of `warn`.
+ * instead of `warn`: 24 hours.
  */
 export const ANALYTICS_DELETION_OVERDUE_MS = 24 * 60 * 60 * 1000
