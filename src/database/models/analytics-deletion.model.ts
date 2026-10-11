@@ -1,10 +1,10 @@
 /**
  * @file The `analytics_deletions` table: one row per purged user whose
  * PostHog person, events and recordings are still to be deleted. The purge
- * writes the row in its own transaction, and the `analytics-deletions` job
- * deletes it once PostHog has queued the deletion. Like the outbox it holds
- * an id and no PII, and has no foreign key: the user row is gone by the
- * time the purge commits. Rows are never pruned.
+ * writes the row inside its transaction, and the `analytics-deletions`
+ * job deletes it once PostHog has queued the deletion. Like the outbox it
+ * holds an id and no PII, and has no foreign key: the user row is gone by
+ * the time the purge commits. No retention rule prunes it.
  */
 import { type InferSelectModel } from 'drizzle-orm'
 import { index, pgTable, smallint, timestamp, varchar } from 'drizzle-orm/pg-core'

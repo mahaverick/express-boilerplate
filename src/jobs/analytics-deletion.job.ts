@@ -1,5 +1,5 @@
 /**
- * @file The analytics queue's second schedule: the PostHog deletion of
+ * @file The analytics queue's PostHog deletion schedule: the deletion of
  * purged users, every `ANALYTICS_DELETION_INTERVAL_MS`. Like the drain's,
  * the scheduler lives in Redis under `REDIS_KEY_PREFIX`, so every replica
  * that upserts it shares one schedule, and each tick runs on one Worker.

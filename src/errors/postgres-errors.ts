@@ -43,8 +43,8 @@ const UNTRANSLATABLE_CHARACTER_CODE = '22P05'
 /**
  * Whether an error (or its Drizzle-wrapped cause) is Postgres refusing a
  * character in caller-supplied text: the client's input, not a server
- * fault. Request validation refuses these first; this is the backstop for
- * a field it missed.
+ * fault. Validators refuse a NUL in the fields they cover; this is the
+ * backstop for a field they do not.
  * @param error - The thrown or forwarded error.
  * @returns True when error is (or wraps) a 22021 or 22P05 driver error.
  */
@@ -132,7 +132,7 @@ function stackFramesOf(error: QueryErrorShape): string | undefined {
  * values in them.
  *
  * `serializeOneError` (logger.service.ts) applies this to every
- * Error-valued log field and its `.cause` chain. A query-shaped value that
+ * Error-valued log field and to its `.cause` chain, to a bounded depth. A query-shaped value that
  * is not an `Error`, such as an unhandled rejection's `reason` in index.ts,
  * needs an explicit call at the logging site. Controllers, middlewares,
  * services and workers also call it directly; that is harmless, because a

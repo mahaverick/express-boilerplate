@@ -1,10 +1,11 @@
 /**
- * @file The HTTP error class. Error classes live outside every layer, so
- * any layer can throw one without a banned import.
+ * @file The HTTP error class: an error that carries the status and message
+ * the client receives.
  */
 
 /**
- * An error carrying the HTTP status the client should receive.
+ * An error carrying the HTTP status the client should receive, with a message
+ * chosen to be shown to the client.
  */
 export class HttpError extends Error {
   /**

@@ -22,8 +22,7 @@ import type { EmailContext } from '@/types/email-context'
  * discriminated union on `templateKey`; intersecting it with `{ userId,
  * messageId }` keeps the union intact, so `email.worker.ts` calls
  * `sendMail(job.data, …)` with no cast. `messageId` is the `email_messages`
- * row; a job queued by a replica without tracking has none, and the worker
- * creates the row itself.
+ * row; a job queued without one gets its row from the worker.
  */
 export type EmailJobData = MailMessage & { userId: string; messageId?: string }
 
@@ -45,7 +44,7 @@ export type EmailJobOptions = Partial<JobsOptions> & { context?: EmailContext }
  * `removeOnFail: { age: 7 * 24 * 3600 }`: failed jobs stay 7 days so an
  * operator can inspect `failedReason`. The token stays only while retries
  * are pending: once the job will not be retried, the worker replaces every
- * `…Url` and `…Token` value with `[redacted]` (`recordPermanentFailure`,
+ * link, token and address value with `[redacted]` (`recordPermanentFailure`,
  * job-failure.job.ts).
  */
 export const emailJobDefaults: JobsOptions = {
@@ -139,7 +138,7 @@ export async function enqueueTrackedEmail(
  * fails no job is added. When the add fails the row is marked `failed` with
  * `failure_origin = 'enqueue'` first, unless that write fails too, which is
  * logged; a retry with the same `jobId` puts it back to `queued`.
- * @param message - The MailMessage (discriminated union — type-safe template + variables).
+ * @param message - The email to send.
  * @param userId - The user this email is for; `''` when there is none, stored as NULL.
  * @param options - Override default job options; `context` goes on the message row.
  * @returns The created job, or the existing one for a `jobId` already queued.

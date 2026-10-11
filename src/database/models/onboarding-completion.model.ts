@@ -57,7 +57,7 @@ export const onboardingCompletionModel = pgTable(
       .defaultNow(),
   },
   (table) => [
-    // One completion per step per tenant (user_id null) or per member; the conflict target insertIfNew relies on.
+    // One completion per step per tenant (user_id null) or per member; `insertIfNew` relies on it to skip a repeat.
     uniqueIndex('onboarding_completions_step_unique').on(
       table.tenantId,
       sql`coalesce(${table.userId}, '')`,

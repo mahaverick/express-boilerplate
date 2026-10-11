@@ -49,7 +49,7 @@ export const userMembershipModel = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
-    // The conflict target createIfAbsent relies on: one role per user per tenant.
+    // One role per user per tenant; the conflict target of `insertIfAbsent`.
     uniqueIndex('user_memberships_user_id_tenant_id_unique').on(table.userId, table.tenantId),
     index('user_memberships_tenant_id_idx').on(table.tenantId),
     // sql.raw: a DDL CHECK cannot take bound parameters; the values are code constants.
