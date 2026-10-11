@@ -366,8 +366,9 @@ const AUTH_HEADER_PATTERN = new RegExp(
  * count only in context:
  * - `pin` (and `pin_code`, `pincode`, `pin_number`) only as a whole word or
  *   after `_` or `-` (`user_pin`, never `spin`).
- * - `key` only unquoted and directly before `=` (not `=>`), `%3D`, `&#61;`
- *   or `\u003d`, as a whole word or after `_` or `-` (`MY_KEY`), and not
+ * - `key` or `keys` only unquoted and before `=` (not `=>`), `%3D`, `&#61;`
+ *   or `\u003d`, with only whitespace between (`key = abc`), as a whole word
+ *   or after `_` or `-` (`MY_KEY`), and not
  *   after `primary`, `foreign`, `sort`, `partition`, `cache`, `unique`,
  *   `index`, `s3`, `object`, `routing`, `shard`, `translation` or `i18n` and
  *   a `_` or `-`.

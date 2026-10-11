@@ -20,8 +20,9 @@ const LINK =
 const DOC_REF = /\b([A-Z][A-Z0-9_-]*\.md)\b/g
 
 /**
- * A heading's anchor as GitHub derives it: lowercased, HTML tags and
- * punctuation other than `-` and `_` removed, each whitespace character a `-`.
+ * A heading's anchor as GitHub derives it: lowercased, HTML tags removed,
+ * then everything but letters, digits, whitespace, `-` and `_` removed, and
+ * each whitespace character a `-`.
  * @param heading - Heading text without the leading #s.
  * @returns The anchor, without #.
  */
@@ -89,9 +90,10 @@ export function historyProblems(file, text, { hashComments }) {
 }
 
 /**
- * Relative links and anchors in a markdown file that do not resolve. Code
- * spans and fenced code are skipped, and so is any link with a URL scheme;
- * an anchor is checked only on a link to a markdown file.
+ * Relative links and anchors in a markdown file that do not resolve. Text
+ * between a pair of triple backticks and a single-line backtick span are
+ * skipped (a `~~~` fence is not), and so is any link with a URL scheme; an
+ * anchor is checked only on a link to a markdown file.
  * @param file - Repo-relative path of the markdown file.
  * @param text - Its contents.
  * @param exists - Whether a repo-relative path exists.
