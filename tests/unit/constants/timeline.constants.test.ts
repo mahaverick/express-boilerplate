@@ -128,7 +128,7 @@ function productEvents(): ProductDomainEvent[] {
 function emittedKeys(): Set<string> {
   const keys = new Set<string>()
   /**
-   * Adds the keys of one event's properties to `keys`.
+   * Collects an event's property keys, so `emittedKeys` can compare them with the classified set.
    */
   const add = (properties: Record<string, unknown>): void => {
     for (const key of Object.keys(properties)) keys.add(key)

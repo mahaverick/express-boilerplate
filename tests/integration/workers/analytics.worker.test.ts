@@ -49,7 +49,7 @@ vi.mock('@/configs/env.config', async (importOriginal) => {
 function waitForJobSettled(worker: Worker, jobId: string): Promise<'completed' | 'failed'> {
   return new Promise((resolve) => {
     /**
-     * Detaches both listeners and resolves with 'completed' when `jobId` completes.
+     * Settles the wait with 'completed' for `jobId`.
      */
     const onCompleted = (job: Job): void => {
       if (job.id !== jobId) return
@@ -57,7 +57,7 @@ function waitForJobSettled(worker: Worker, jobId: string): Promise<'completed' |
       resolve('completed')
     }
     /**
-     * Detaches both listeners and resolves with 'failed' when `jobId` fails.
+     * Settles the wait with 'failed' for `jobId`.
      */
     const onFailed = (job: Job | undefined): void => {
       if (job?.id !== jobId) return

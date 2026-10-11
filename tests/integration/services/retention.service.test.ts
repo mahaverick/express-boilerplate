@@ -3,7 +3,8 @@
  * `now` is fixed in 2001 and every row is seeded around that date's
  * cutoffs. A row another file seeds is dated after the cutoff of the rule
  * that covers its table, or carries the real current time, so no predicate
- * here matches it and the `deleted` counts are exact.
+ * here matches it and the `deleted` counts are exact. The files that seed
+ * dates near 2001 delete those rows in `afterEach`.
  */
 import { randomBytes, randomUUID } from 'node:crypto'
 import postgres from 'postgres'

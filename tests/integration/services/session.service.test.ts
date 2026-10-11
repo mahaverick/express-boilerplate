@@ -284,7 +284,7 @@ describe('refresh token issuance, rotation, and revocation', () => {
     // Age the session past the ceiling, read from the same environment as the code so the test tracks `SESSION_ABSOLUTE_TTL`.
     const absoluteTtlMs = parseDurationMs(getEnv().SESSION_ABSOLUTE_TTL)
     if (absoluteTtlMs === undefined) throw new Error('SESSION_ABSOLUTE_TTL is unparseable')
-    // An ISO string, not a Date: the driver throws on a bare Date bound in a raw `sql` query.
+    // An ISO string, not a Date: `drizzle(sql)` replaces the shared client's timestamp serializers with a pass-through, so a bare Date bound in a raw `sql` query throws.
     const startedAt = new Date(Date.now() - absoluteTtlMs - 60_000).toISOString()
     await sql`
       update user_tokens set session_started_at = ${startedAt}::timestamptz
@@ -321,8 +321,8 @@ describe('refresh token issuance, rotation, and revocation', () => {
     `
     /**
      * One distinct value across all three rows in the chain, the one the original login wrote.
-     * Compared as strings: this client returns `timestamptz` as text, so `String()` keeps the
-     * assertion on the value whichever form arrives.
+     * Compared as strings because `drizzle(sql)` also replaces the client's timestamp parsers
+     * with a pass-through, so `timestamptz` comes back as text.
      */
     expect(rows).toHaveLength(1)
     expect(String(rows[0]?.session_started_at)).toBe(String(before?.session_started_at))

@@ -1,7 +1,11 @@
 /**
  * @file A real maintenance Worker picks a retention-purge job off the real
  * Redis and runs it against this worker's Postgres, with the schema's
- * default windows and the real clock.
+ * default windows and the real clock. The worker database is private to one
+ * vitest worker and files run one at a time in it, so the purge can reach
+ * only rows an earlier file left behind; the files that seed rows older than
+ * the default windows delete them in `afterEach`. The real purge is asserted
+ * only as a job that completes.
  */
 import type { Job, Worker } from 'bullmq'
 import { afterAll, describe, expect, it, vi } from 'vitest'
@@ -19,7 +23,7 @@ import { waitForLoggedCall } from '../../helpers/queue-jobs'
 function waitForJobSettled(worker: Worker, jobId: string): Promise<'completed' | 'failed'> {
   return new Promise((resolve) => {
     /**
-     * Detaches both listeners and resolves with 'completed' when `jobId` completes.
+     * Settles the wait with 'completed' for `jobId`.
      */
     const onCompleted = (job: Job): void => {
       if (job.id !== jobId) return
@@ -27,7 +31,7 @@ function waitForJobSettled(worker: Worker, jobId: string): Promise<'completed' |
       resolve('completed')
     }
     /**
-     * Detaches both listeners and resolves with 'failed' when `jobId` fails.
+     * Settles the wait with 'failed' for `jobId`.
      */
     const onFailed = (job: Job | undefined): void => {
       if (job?.id !== jobId) return

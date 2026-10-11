@@ -1,7 +1,7 @@
 /**
  * @file databaseClientOptions as a pure function: database.service.ts opens
- * its pool at module scope under the one environment of the run, so only
- * calling this function with other values shows that DB_POOL_MAX is read.
+ * its pool at module scope with .env.test's single DB_POOL_MAX, so only
+ * calling this function with other values shows that the variable is read.
  * DB_STATEMENT_TIMEOUT_MS is also proven against a live connection in
  * tests/integration/services/database.service.test.ts.
  */
