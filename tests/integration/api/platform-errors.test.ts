@@ -63,9 +63,18 @@ const { createTrackedStaff, createTrackedUser, deleteTrackedUsers } =
 const { withMutatedModule } = await import('../../helpers/mutate')
 const { request } = await import('../../helpers/request')
 
+/**
+ * The fake PostHog server `startFakePosthog` starts.
+ */
 type FakePosthog = Awaited<ReturnType<typeof startFakePosthog>>
+/**
+ * One issue row, as `issuesAnswer` takes it to build PostHog's answer.
+ */
 type SeededIssue = Parameters<typeof issuesAnswer>[0][number]
 
+/**
+ * An issue as the Errors list returns it.
+ */
 interface Issue {
   issueId: string
   type: string
@@ -77,6 +86,9 @@ interface Issue {
   link: string
 }
 
+/**
+ * The Errors list response; `configured` is false for an unconfigured environment.
+ */
 interface ErrorsPage {
   configured: boolean
   items?: Issue[]
@@ -92,8 +104,7 @@ const fake: { posthog?: FakePosthog } = {}
 const tenantIds: string[] = []
 
 /**
- * The running fake.
- * @returns It.
+ * The running fake PostHog, failing the test when it is not started.
  */
 function posthog(): FakePosthog {
   if (!fake.posthog) throw new Error('the fake PostHog is not running')
@@ -140,9 +151,7 @@ function getErrors(token: string, path: string): Promise<Response> {
 }
 
 /**
- * The status of a response.
- * @param pending - The request.
- * @returns Its status.
+ * Awaits a pending request and returns only its status.
  */
 async function statusOf(pending: PromiseLike<Response>): Promise<number> {
   const response = await pending
@@ -150,9 +159,7 @@ async function statusOf(pending: PromiseLike<Response>): Promise<number> {
 }
 
 /**
- * The page in a 200 response.
- * @param response - The response.
- * @returns Its data.
+ * The page in a 200 response; fails the test on any other status.
  */
 function pageOf(response: Response): ErrorsPage {
   expect(response.status).toBe(200)
@@ -401,9 +408,8 @@ describe('the Errors audit with Redis down', () => {
   })
 
   /**
-   * Deliberately red when run with MUTATION_PROOF=1: the app loads against a
-   * view audit that skips the entry when Redis is down (failing toward not
-   * auditing), and the real test's own assertion then fails. Skipped by
+   * Red when run with MUTATION_PROOF=1: the app loads against a view audit that skips the entry
+   * when Redis is down (failing toward silence), so the two-entry assertion fails. Skipped by
    * default, so the file is green:
    *
    *   MUTATION_PROOF=1 pnpm exec vitest run tests/integration/api/platform-errors.test.ts   # red

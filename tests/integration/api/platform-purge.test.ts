@@ -37,7 +37,7 @@ const REASON = 'Erasure request, ticket 9001'
 
 afterEach(async () => {
   await truncateAuditLogs()
-  // Every user purge queues a PostHog deletion; the table is never pruned.
+  // Every user purge inserts an analytics_deletions row; clearing them keeps them from piling up in the shared worker database.
   await sql`delete from analytics_deletions`
   if (messageIds.length > 0) await sql`delete from email_messages where id = any(${messageIds})`
   messageIds.length = 0
@@ -58,11 +58,7 @@ afterEach(async () => {
 })
 
 /**
- * Purge a user.
- * @param token - The caller's bearer token.
- * @param userId - The user.
- * @param body - The request body.
- * @returns The response.
+ * Purges a user as `token`; the body defaults to the staff `reason`.
  */
 function purgeUser(token: string, userId: string, body?: object): Promise<Response> {
   return request(app)
@@ -72,11 +68,7 @@ function purgeUser(token: string, userId: string, body?: object): Promise<Respon
 }
 
 /**
- * Purge a tenant.
- * @param token - The caller's bearer token.
- * @param tenantId - The tenant.
- * @param body - The request body.
- * @returns The response.
+ * Purges a tenant as `token`; the body defaults to the staff `reason`.
  */
 function purgeTenant(token: string, tenantId: string, body?: object): Promise<Response> {
   return request(app)
@@ -430,7 +422,7 @@ describe('the purge actor re-check under lock', () => {
 })
 
 /**
- * An email message tracked for cleanup.
+ * Inserts an email message and tracks it for cleanup.
  * @param recipient - Its recipient.
  * @param options - Its owner, tenant and creation time.
  * @param options.userId - `user_id`.
@@ -448,9 +440,9 @@ async function trackedMessage(
 }
 
 /**
- * A suppression tracked for cleanup.
+ * Inserts an email suppression and tracks it for cleanup.
  * @param address - The address, lowercased.
- * @param liftedBy - Who lifted it, or undefined for an active one.
+ * @param liftedBy - Who lifted it; undefined for an active one.
  * @returns Its id.
  */
 async function trackedSuppression(address: string, liftedBy?: string): Promise<string> {
@@ -466,9 +458,7 @@ async function trackedSuppression(address: string, liftedBy?: string): Promise<s
 }
 
 /**
- * Which of `ids` still exist in email_messages.
- * @param ids - Message ids.
- * @returns The surviving ids, in the order given.
+ * Which of `ids` still exist in email_messages, in the order given.
  */
 async function survivingMessages(ids: string[]): Promise<string[]> {
   const rows = await sql<{ id: string }[]>`select id from email_messages where id = any(${ids})`

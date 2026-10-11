@@ -1,6 +1,6 @@
 /**
- * @file POST /api/v1/platform/tenants and POST /platform/tenants/:id/owner-invitation:
- * staff create a tenant with no members and invite its owner.
+ * @file POST /api/v1/platform/tenants and POST /platform/tenants/:id/owner-invitation: staff create
+ * a tenant with no members and invite its owner.
  */
 import { randomUUID } from 'node:crypto'
 import type { Response } from 'supertest'
@@ -25,6 +25,9 @@ import { makeStaff, platformTenant } from '../../helpers/platform-staff'
 import { waitForInvitationEmail } from '../../helpers/queue-jobs'
 import { request } from '../../helpers/request'
 
+/**
+ * The `POST /platform/tenants` response.
+ */
 interface CreatedBody {
   tenant: {
     id: string
@@ -48,6 +51,9 @@ afterAll(async () => {
   await closeQueue()
 })
 
+/**
+ * Creates a tenant as `token` with the given body.
+ */
 function create(token: string, body: Record<string, unknown>): Promise<Response> {
   return request(app)
     .post('/api/v1/platform/tenants')
@@ -55,6 +61,9 @@ function create(token: string, body: Record<string, unknown>): Promise<Response>
     .send(body)
 }
 
+/**
+ * Sends a tenant's owner invitation again as `token`; the body defaults to a reason.
+ */
 function reissue(
   token: string,
   tenantId: string,
@@ -79,6 +88,9 @@ describe('staff-created tenants', () => {
     userIds.length = 0
   })
 
+  /**
+   * A fresh user, verified when `isVerified`, with a token for a sign-in now; tracked for cleanup.
+   */
   async function createUser(isVerified = false): Promise<{ user: User; token: string }> {
     const user = await userRepository.create({
       email: `create-${randomUUID()}@example.test`,
@@ -89,12 +101,18 @@ describe('staff-created tenants', () => {
     return { user, token: signAccessToken(user, randomUUID(), new Date()) }
   }
 
+  /**
+   * A fresh verified user holding platform `role`.
+   */
   async function staff(role: MembershipRole): Promise<{ user: User; token: string }> {
     const created = await createUser(true)
     await makeStaff(created.user.id, role)
     return created
   }
 
+  /**
+   * A unique tenant slug, tracked so `afterEach` deletes the tenant it names.
+   */
   function newSlug(): string {
     const slug = `made-${randomUUID().slice(0, 8)}`
     slugs.push(slug)
@@ -389,10 +407,13 @@ describe('staff-created tenants', () => {
         'Cannot invite an owner to an archived tenant.'
       )
 
-      // Archived between the first read and the lock: the first read still sees it active.
       // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
       const realFind = TenantRepository.prototype.findByIdIncludingDeleted
       let calls = 0
+      /**
+       * Returns the tenant as active on the first read, as if it were archived after that read and
+       * before the lock.
+       */
       const staleFirstRead: typeof realFind = async function (
         this: TenantRepository,
         ...arguments_

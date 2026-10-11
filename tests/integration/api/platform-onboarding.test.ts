@@ -22,6 +22,9 @@ import { platformTenant } from '../../helpers/platform-staff'
 import { createTrackedStaff, deleteTrackedUsers } from '../../helpers/platform-users'
 import { request } from '../../helpers/request'
 
+/**
+ * The response envelope, narrowed to the fields these tests read.
+ */
 interface ApiEnvelope<TData> {
   success: boolean
   message: string
@@ -32,6 +35,9 @@ interface ApiEnvelope<TData> {
 // eslint-disable-next-line unicorn/no-null -- an unstarted tenant's onboarding_started_at
 const NOT_STARTED = null
 
+/**
+ * The onboarding funnel response.
+ */
 interface FunnelBody {
   range: string
   from: string
@@ -41,6 +47,9 @@ interface FunnelBody {
   steps: { key: string; completed: number; staffCompleted: number }[]
 }
 
+/**
+ * One tenant row of the onboarding tenants list.
+ */
 interface TenantRowBody {
   id: string
   state: string
@@ -53,6 +62,9 @@ interface TenantRowBody {
   requiredTotal: number
 }
 
+/**
+ * One page of the onboarding tenants list, with its cursors.
+ */
 interface PageBody {
   tenants: TenantRowBody[]
   nextCursor: string | null
@@ -61,6 +73,9 @@ interface PageBody {
 
 const app = createApp()
 
+/**
+ * GETs under `/api/v1/platform` as `token`, with a query.
+ */
 function get(token: string, path: string, query: Record<string, string> = {}): Promise<Response> {
   return request(app)
     .get(`/api/v1/platform${path}`)
@@ -68,12 +83,18 @@ function get(token: string, path: string, query: Record<string, string> = {}): P
     .set('Authorization', `Bearer ${token}`)
 }
 
+/**
+ * The `data` of a response, failing the test when there is none.
+ */
 function dataOf<TData>(response: Response): TData {
   const data = (response.body as ApiEnvelope<TData>).data
   if (data === undefined) throw new Error(`no data (status ${response.status})`)
   return data
 }
 
+/**
+ * A fresh platform viewer's token, the lowest role these reads admit.
+ */
 async function viewerToken(): Promise<string> {
   const { token } = await createTrackedStaff('viewer')
   return token
@@ -122,6 +143,9 @@ describe('GET /api/v1/platform/onboarding/funnel', () => {
     const after = dataOf<FunnelBody>(await get(token, '/onboarding/funnel', { range: '7d' }))
 
     expect((after.totals.started ?? 0) - (before.totals.started ?? 0)).toBe(1)
+    /**
+     * The funnel's row for `configure_settings`.
+     */
     const stepOf = (body: FunnelBody) =>
       body.steps.find((step) => step.key === 'configure_settings')
     expect((stepOf(after)?.completed ?? 0) - (stepOf(before)?.completed ?? 0)).toBe(1)

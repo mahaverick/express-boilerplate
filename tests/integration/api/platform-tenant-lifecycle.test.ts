@@ -24,6 +24,9 @@ const tenantRepository = new TenantRepository()
 const userRepository = new UserRepository()
 const ELEVEN_MINUTES_MS = 11 * 60 * 1000
 
+/**
+ * Suspends, reactivates or archives a tenant as `token`, with a reason.
+ */
 function act(
   token: string,
   tenantId: string,
@@ -36,6 +39,9 @@ function act(
     .send({ reason })
 }
 
+/**
+ * `GET /tenants/:slug` as a member's `token`.
+ */
 function memberGet(token: string, slug: string): Promise<Response> {
   return request(app).get(`/api/v1/tenants/${slug}`).set('Authorization', `Bearer ${token}`)
 }
@@ -52,6 +58,9 @@ describe('tenant lifecycle', () => {
     userIds.length = 0
   })
 
+  /**
+   * A fresh verified user with a token for a sign-in at `authenticatedAt`, tracked for cleanup.
+   */
   async function createUser(authenticatedAt = new Date()): Promise<{ user: User; token: string }> {
     const user = await userRepository.create({
       email: `life-${randomUUID()}@example.test`,
@@ -61,6 +70,9 @@ describe('tenant lifecycle', () => {
     return { user, token: signAccessToken(user, randomUUID(), authenticatedAt) }
   }
 
+  /**
+   * A fresh verified user holding platform `role`, signed in at `authenticatedAt`.
+   */
   async function staff(
     role: MembershipRole,
     authenticatedAt = new Date()
@@ -70,6 +82,9 @@ describe('tenant lifecycle', () => {
     return created
   }
 
+  /**
+   * A tenant owned by a fresh user, with that owner's token.
+   */
   async function tenantWithMember(): Promise<{ tenant: Tenant; memberToken: string }> {
     const { user, token } = await createUser()
     const tenant = await tenantRepository.create({

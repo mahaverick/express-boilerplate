@@ -1,13 +1,12 @@
 /**
- * @file The invitation endpoints end to end, against the real per-worker
- * Postgres and Redis. No Worker runs: tests read the invitation and
- * verification emails straight off the queues (tests/helpers/queue-jobs.ts).
+ * @file The invitation endpoints end to end, against the real Postgres (one database per worker)
+ * and the test Redis. No Worker runs: tests read the invitation and verification emails straight
+ * off the queues (tests/helpers/queue-jobs.ts).
  *
- * Rate limits here are wiring, not thresholds. The preview limiter (60 per
- * 15 min) is keyed on IP and every request here comes from 127.0.0.1; this
- * file makes 18 preview requests, so keep them under 60. Accept (20 per 15
- * min) is keyed on the signed-in user, not the IP. Thresholds
- * are proven with small overrides in
+ * Rate limits here are wiring, not thresholds. The preview limiter (60 per 15 min) is keyed on IP
+ * and every request here comes from the same loopback address, so this file's preview requests
+ * must stay under 60. Accept (20 per 15 min) is keyed on the signed-in user, not the IP.
+ * Thresholds are proven with small overrides in
  * tests/unit/middlewares/rate-limit.middleware.test.ts.
  */
 
@@ -97,9 +96,7 @@ interface ApiEnvelope<TData> {
 }
 
 /**
- * Cast a supertest body to a known envelope shape.
- * @param response - The supertest response.
- * @returns The body, typed.
+ * Types a supertest response body as the API envelope.
  */
 function envelopeOf<TData>(response: Response): ApiEnvelope<TData> {
   return response.body as ApiEnvelope<TData>
@@ -107,7 +104,6 @@ function envelopeOf<TData>(response: Response): ApiEnvelope<TData> {
 
 /**
  * A disposable email, unique to one call.
- * @returns An email guaranteed unique to this call.
  */
 function uniqueEmail(): string {
   return `invitation-api-${randomUUID()}@example.test`
@@ -369,6 +365,9 @@ describe('invitations API', () => {
         const queued = await waitForInvitationEmail(email)
         expect(queued.userId).toBe(invitee?.id ?? '')
         const [pending] = await invitationRepository.listPending(tenant.id)
+        /**
+         * Matches the notification job for this test's pending invitation.
+         */
         const isThisNotification = (data: NotificationJobData): boolean =>
           data.type === 'tenant_invitation' && data.metadata?.invitationId === pending?.id
         if (isNotified) {
@@ -727,7 +726,10 @@ describe('invitations API', () => {
       await backdateInvitationSend(invitationId)
       // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
       const realFind = TenantInvitationRepository.prototype.findPendingById
-      // A concurrent resend lands after this read: its send stamp is newer than the one read here.
+      /**
+       * Reads the pending invitation, then stamps a newer send time on it, as a resend landing
+       * after the read would.
+       */
       const findThenRace: TenantInvitationRepository['findPendingById'] = async function (
         this: TenantInvitationRepository,
         ...arguments_

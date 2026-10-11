@@ -33,8 +33,14 @@ import { request } from '../../helpers/request'
 // Apex has no experiment flag yet, so a real report could only answer 400, which logStaffWrites skips anyway; an empty key list lets the exemption be seen on a 204.
 vi.mock('@/validators/flags.validators', () => ({ parseExposureKeys: () => [] }))
 
+/**
+ * An HTTP method a gate row exercises.
+ */
 type Method = 'get' | 'post' | 'put' | 'patch' | 'delete'
 
+/**
+ * One platform route and the gate it must have.
+ */
 interface GateRow {
   method: Method
   /**
@@ -193,7 +199,7 @@ const ROUTES: readonly GateRow[] = [
     requiresStepUp: false,
     target: 'email',
   },
-  // Step-up is per message (any invitation, on any tenant), decided in the service.
+  // Step-up is decided per message in the service: a resend of an invitation needs it on any tenant.
   {
     method: 'post',
     path: '/emails/:id/resend',
@@ -234,7 +240,7 @@ const ROUTES: readonly GateRow[] = [
     target: 'tenant',
   },
   { method: 'get', path: '/me/flags', minRole: 'viewer', requiresStepUp: false },
-  // Exposure is telemetry: a REAUTH_REQUIRED here would silently lose it, and it is not audited.
+  // Exposure is telemetry: a REAUTH_REQUIRED here would silently lose it, so the route takes no step-up.
   {
     method: 'post',
     path: '/me/flags/exposures',
@@ -286,6 +292,9 @@ const SUB_ROUTER_MOUNTS = [
   '/tenants/:id/onboarding',
 ] as const
 
+/**
+ * The part of an Express 5 router layer that the route walker reads.
+ */
 interface StackLayer {
   route?: { path: string; methods: Record<string, boolean> }
   handle: { stack?: StackLayer[] }
@@ -339,6 +348,9 @@ function registeredRoutes(): string[] {
   return routesIn(stackOf(createPlatformRouter()), '')
 }
 
+/**
+ * Orders strings for `toSorted`.
+ */
 const byText = (a: string, b: string): number => a.localeCompare(b)
 
 describe('the platform route walker', () => {
@@ -371,6 +383,9 @@ describe('/api/v1/platform route gates', () => {
   const tenantIds: string[] = []
   const ids = { user: '', tenant: '', email: '', suppression: '' }
 
+  /**
+   * A fresh verified user with a token for a sign-in at `authenticatedAt`, tracked for cleanup.
+   */
   async function createUser(
     authenticatedAt: Date = new Date()
   ): Promise<{ user: User; token: string }> {
@@ -382,6 +397,10 @@ describe('/api/v1/platform route gates', () => {
     return { user, token: signAccessToken(user, randomUUID(), authenticatedAt) }
   }
 
+  /**
+   * A token for a fresh user holding platform `role` (none when undefined), signed in at
+   * `authenticatedAt`.
+   */
   async function tokenFor(
     role: MembershipRole | undefined,
     authenticatedAt?: Date
@@ -391,11 +410,17 @@ describe('/api/v1/platform route gates', () => {
     return token
   }
 
+  /**
+   * A row's request path, with `:id` and `:key` filled in.
+   */
   function pathOf(row: GateRow): string {
     const id = row.target ? ids[row.target] : ''
     return `/api/v1/platform${row.path.replace(':id', () => id).replace(':key', () => STEP_KEY)}`
   }
 
+  /**
+   * Calls a row's route with an empty JSON body, as `token` when given.
+   */
   function call(row: GateRow, token?: string): Promise<Response> {
     const path = pathOf(row)
     // An empty JSON body: enough to pass the content-type gate and fail validation, never to act.

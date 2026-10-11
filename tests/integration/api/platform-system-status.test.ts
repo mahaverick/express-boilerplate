@@ -1,9 +1,8 @@
 /**
- * @file GET /api/v1/platform/system/status through the real app: an admin
- * gets the release, error tracking's status, the flags' status and the
- * maintenance section, a viewer
- * the plain 404, and no read is audited. The counters themselves are the
- * error-counters and flag-counters services'; here they are spied.
+ * @file GET /api/v1/platform/system/status through the real app: an admin gets the release, error
+ * tracking's status, the flags' status and the maintenance section; a viewer gets the plain 404;
+ * no read is audited. The counters themselves are the error-counters and flag-counters services';
+ * here they are spied.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createApp } from '@/app'

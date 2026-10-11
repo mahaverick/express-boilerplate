@@ -40,8 +40,7 @@ afterEach(async () => {
 })
 
 /**
- * A tracked, started tenant and its owner.
- * @returns Both, and the owner's token.
+ * A tracked, started tenant and its owner, with the owner's token.
  */
 async function ownedTenant(): Promise<{ owner: User; ownerToken: string; tenant: Tenant }> {
   const owner = await createTrackedUser()
@@ -55,9 +54,8 @@ async function ownedTenant(): Promise<{ owner: User; ownerToken: string; tenant:
 }
 
 /**
- * Two signed-in callers with no membership in a fresh tenant: a stranger and
- * another tenant's owner.
- * @returns Their tokens.
+ * Two signed-in callers with no membership in a fresh tenant: a stranger and another tenant's
+ * owner.
  */
 async function outsiderTokens(): Promise<string[]> {
   const stranger = await createTrackedUser()
@@ -67,9 +65,6 @@ async function outsiderTokens(): Promise<string[]> {
 
 /**
  * A new member of `tenant` with `role`, and their token.
- * @param tenant - The tenant.
- * @param role - Their role.
- * @returns Their token.
  */
 async function memberToken(tenant: Tenant, role: MembershipRole): Promise<string> {
   const user = await createTrackedUser()
@@ -78,10 +73,7 @@ async function memberToken(tenant: Tenant, role: MembershipRole): Promise<string
 }
 
 /**
- * `GET /tenants/:slug/onboarding`.
- * @param tenant - The tenant.
- * @param token - The caller's bearer token.
- * @returns The response.
+ * `GET /tenants/:slug/onboarding` as the bearer `token`.
  */
 function readOnboarding(tenant: Tenant, token: string): Promise<Response> {
   return request(app)
@@ -90,11 +82,7 @@ function readOnboarding(tenant: Tenant, token: string): Promise<Response> {
 }
 
 /**
- * A POST under `/tenants/:slug/onboarding`, with no body.
- * @param tenant - The tenant.
- * @param path - The path after `/onboarding`.
- * @param token - The caller's bearer token.
- * @returns The response.
+ * POSTs under `/tenants/:slug/onboarding` with no body; `path` is what follows `/onboarding`.
  */
 function postOnboarding(tenant: Tenant, path: string, token: string): Promise<Response> {
   return request(app)
@@ -104,19 +92,14 @@ function postOnboarding(tenant: Tenant, path: string, token: string): Promise<Re
 }
 
 /**
- * The view a response carries.
- * @param response - The response.
- * @returns Its `data`.
+ * The onboarding view a response carries in `data`.
  */
 function viewOf(response: Response): TenantOnboardingView {
   return (response.body as { data: TenantOnboardingView }).data
 }
 
 /**
- * One step of a view.
- * @param view - The view.
- * @param key - The step key.
- * @returns The step.
+ * The step with `key` in a view.
  */
 function stepOf(view: TenantOnboardingView, key: string): TenantOnboardingView['steps'][number] {
   const found = view.steps.find((entry) => entry.key === key)
@@ -125,9 +108,7 @@ function stepOf(view: TenantOnboardingView, key: string): TenantOnboardingView['
 }
 
 /**
- * The response's error code.
- * @param response - The response.
- * @returns Its `code`.
+ * The response's error `code`.
  */
 function codeOf(response: Response): unknown {
   return (response.body as { code?: unknown }).code

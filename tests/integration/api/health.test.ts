@@ -176,6 +176,10 @@ describe('health probes', () => {
   it('GET /health/ready leaves no unhandled rejection when an abandoned queue ping fails later', async () => {
     await waitUntil(isQueueReachable, { message: 'the queue connections are ready' })
     const unhandled: unknown[] = []
+    /**
+     * Collects every unhandled rejection while the abandoned ping fails, so the test can assert
+     * there was none.
+     */
     const onUnhandled = (reason: unknown): void => {
       unhandled.push(reason)
     }

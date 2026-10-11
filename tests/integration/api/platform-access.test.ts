@@ -571,7 +571,7 @@ describe('platform access over the API', () => {
       }
     )
 
-    // An older client sends no reason: it must learn to re-authenticate first, not to add one.
+    // A client that sends no reason must be told to re-authenticate first, not to add one.
     it.each(writes)(
       '$name: refuses staff with a stale sign-in and no reason 401 REAUTH_REQUIRED, step-up before reason',
       async (write) => {

@@ -1,12 +1,10 @@
 /**
- * @file `GET` and `PUT /api/v1/platform/maintenance-mode` through the real
- * app, with no Worker running, so notice jobs stay queued to be counted:
- * the staff view, the change rules (switch-on and escalation need a reason,
- * a message and `confirm` equal to `APP_ENV`; everything else does not),
- * the version conflict, the no-op, the audit entry, who is notified, and
- * two owners saving at once. The role, step-up and OPTIONS gates are
- * `platform-route-gates.test.ts`'s; a change into `full`, which waits for
- * its notices, is `platform-maintenance-mode-notices.test.ts`'s.
+ * @file `GET` and `PUT /api/v1/platform/maintenance-mode` through the real app, with no Worker
+ * running, so notice jobs stay queued to be counted: the staff view, the change rules (a mode that
+ * is on needs a message; switching on or escalating also needs a reason and a `confirm` equal to
+ * `APP_ENV`), the version conflict, the no-op, the audit entry, who is notified, and two owners
+ * saving at once. The role, step-up and OPTIONS gates are `platform-route-gates.test.ts`'s; a
+ * change into `full`, which waits for its notices, is `platform-maintenance-mode-notices.test.ts`'s.
  */
 import type { Response } from 'supertest'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -40,6 +38,9 @@ const ENVIRONMENT = 'local'
 const PATH = '/api/v1/platform/maintenance-mode'
 // eslint-disable-next-line unicorn/no-null -- the API's contract uses null for "none"
 const NONE = null
+/**
+ * Orders strings for `toSorted`.
+ */
 const byText = (a: string, b: string): number => a.localeCompare(b)
 
 /**

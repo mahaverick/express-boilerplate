@@ -1,14 +1,11 @@
 /**
- * @file Auto-join through the paths that call it: password login, Google
- * sign-in, markEmailVerified and a password reset, with
- * PLATFORM_EMAIL_DOMAINS set. getEnv() memoises the first environment it
- * parses, and database.service.ts parses it at module scope, so the
- * variable is stubbed in beforeAll and every runtime module is imported
- * after it (google-oauth.test.ts explains the pattern); the suite's own
- * environment leaves the variable unset. Auto-join writes audit rows, so
- * afterEach empties audit_logs, as every file that writes them does,
- * before deleting this file's users (which cascades to their
- * memberships, providers and tokens).
+ * @file Auto-join through the paths that call it: password login, Google sign-in,
+ * markEmailVerified and a password reset, with PLATFORM_EMAIL_DOMAINS set. getEnv() memoises the
+ * first environment it parses, and database.service.ts parses it at module scope, so the variable
+ * is stubbed in beforeAll and every runtime module is imported after it (google-oauth.test.ts
+ * explains the pattern); the suite's own environment leaves the variable unset. Auto-join writes
+ * audit rows, so afterEach empties audit_logs before deleting this file's users (which cascades
+ * to their memberships, providers and tokens).
  */
 
 import { randomUUID } from 'node:crypto'

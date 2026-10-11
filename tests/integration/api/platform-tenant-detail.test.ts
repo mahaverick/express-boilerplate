@@ -18,6 +18,9 @@ import { truncateAuditLogs } from '../../helpers/audit-log'
 import { makeStaff, platformTenant } from '../../helpers/platform-staff'
 import { request } from '../../helpers/request'
 
+/**
+ * The `GET /platform/tenants/:id` response.
+ */
 interface DetailBody {
   id: string
   name: string
@@ -47,12 +50,18 @@ const tenantRepository = new TenantRepository()
 const userMembershipRepository = new UserMembershipRepository()
 const userRepository = new UserRepository()
 
+/**
+ * The `data` of a detail response, failing the test when there is none.
+ */
 function detailOf(response: Response): DetailBody {
   const data = (response.body as { data?: DetailBody }).data
   if (!data) throw new Error(`no data (status ${response.status})`)
   return data
 }
 
+/**
+ * GETs a tenant's detail as `token`.
+ */
 function get(token: string, id: string): Promise<Response> {
   return request(app).get(`/api/v1/platform/tenants/${id}`).set('Authorization', `Bearer ${token}`)
 }
@@ -69,6 +78,9 @@ describe('GET /api/v1/platform/tenants/:id', () => {
     userIds.length = 0
   })
 
+  /**
+   * A fresh non-staff user with a token for a sign-in now, tracked for cleanup.
+   */
   async function createUser(): Promise<{ user: User; token: string }> {
     const user = await userRepository.create({
       email: `detail-${randomUUID()}@example.test`,
@@ -79,12 +91,18 @@ describe('GET /api/v1/platform/tenants/:id', () => {
     return { user, token: signAccessToken(user, randomUUID(), new Date()) }
   }
 
+  /**
+   * A token for a fresh staff user holding platform `role`.
+   */
   async function staffToken(role: MembershipRole = 'viewer'): Promise<string> {
     const { user, token } = await createUser()
     await makeStaff(user.id, role)
     return token
   }
 
+  /**
+   * A tenant owned by a fresh user, tracked for cleanup.
+   */
   async function createTenant(): Promise<{ tenant: Tenant; owner: User }> {
     const { user: owner } = await createUser()
     const tenant = await tenantRepository.create({

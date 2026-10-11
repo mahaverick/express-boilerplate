@@ -1,12 +1,10 @@
 /**
- * @file The maintenance-mode gate through the real app, with this worker's
- * process store reloaded from the real row: the `Maintenance-Mode` header
- * on every response (let through, refused, 404, error), the 503 body and
- * `Retry-After` for both codes, CORS on a refusal and on a preflight,
- * sign-in in `full` (non-staff refused after the credential check, staff
- * admitted, refresh still answered by its own handler), and the public
- * status endpoint (shape, cache header, rate limit), and the staff pass on
- * the customer routes Apex calls (one platform-role read per request, and a
+ * @file The maintenance-mode gate through the real app, with this worker's process store reloaded
+ * from the real row: the `Maintenance-Mode` header on every response (let through, refused, 404,
+ * error), the 503 body and `Retry-After` for both codes, CORS on a refusal and on a preflight,
+ * sign-in in `full` (non-staff refused after the credential check, staff admitted, refresh still
+ * answered by its own handler), the public status endpoint (shape, cache header, rate limit), and
+ * the staff pass on the customer routes Apex calls (one platform-role read per request, and a
  * revoked role taking effect on the next request).
  */
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'

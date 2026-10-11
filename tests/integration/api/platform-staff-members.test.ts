@@ -1,7 +1,6 @@
 /**
- * @file The platform tenant's member routes, which are how staff roles
- * change: owner-on-owner, the active-owner guard and step-up apply there
- * and nowhere else.
+ * @file The platform tenant's member routes, which are how staff roles change: owner-on-owner
+ * changes, the active-owner guard and step-up apply there, and a customer tenant is left as it was.
  */
 import { randomUUID } from 'node:crypto'
 import type { Response } from 'supertest'

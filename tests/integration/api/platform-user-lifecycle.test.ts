@@ -24,6 +24,9 @@ import {
 import { testRefreshCookie } from '../../helpers/refresh-cookie'
 import { request } from '../../helpers/request'
 
+/**
+ * The response envelope, narrowed to the fields these tests read.
+ */
 interface ApiEnvelope<TData> {
   success: boolean
   message: string
@@ -37,6 +40,9 @@ const userMembershipRepository = new UserMembershipRepository()
 const createdTenantIds: string[] = []
 const REASON = 'Ticket #4411: account compromise'
 
+/**
+ * POSTs a lifecycle verb for a user as `token`; the body defaults to the staff `reason`.
+ */
 function action(token: string, userId: string, verb: string, body?: object): Promise<Response> {
   return request(app)
     .post(`/api/v1/platform/users/${userId}/${verb}`)
@@ -44,6 +50,9 @@ function action(token: string, userId: string, verb: string, body?: object): Pro
     .send(body ?? { reason: REASON })
 }
 
+/**
+ * Deletes a user as `token`; the body defaults to the staff `reason`.
+ */
 function remove(token: string, userId: string, body?: object): Promise<Response> {
   return request(app)
     .delete(`/api/v1/platform/users/${userId}`)
@@ -70,6 +79,10 @@ async function signIn(user: User): Promise<{ accessToken: string; refreshCookie:
   return { accessToken, refreshCookie: line.split(';', 1)[0] as string }
 }
 
+/**
+ * The statuses a signed-in session now gets: its access token on the profile, its refresh cookie on
+ * refresh.
+ */
 async function sessionStatuses(session: {
   accessToken: string
   refreshCookie: string
@@ -83,6 +96,9 @@ async function sessionStatuses(session: {
   return { access: profile.status, refresh: refresh.status }
 }
 
+/**
+ * The audit entries that target `targetId`, oldest first.
+ */
 async function auditActions(targetId: string): Promise<{ action: string; metadata: unknown }[]> {
   return sql<{ action: string; metadata: unknown }[]>`
     select action, metadata from audit_logs where target_id = ${targetId} order by occurred_at, id
@@ -248,6 +264,9 @@ describe('POST /api/v1/platform/users/:id/deactivate', () => {
         hasPassword: true,
         active: verb !== 'reactivate',
       })
+      /**
+       * Sends the verb under test: a delete for `delete`, the matching action otherwise.
+       */
       const send = (token: string, userId: string): Promise<Response> =>
         verb === 'delete' ? remove(token, userId) : action(token, userId, verb)
 

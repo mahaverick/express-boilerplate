@@ -1,14 +1,12 @@
 /**
- * @file GET /api/v1/platform/flags and GET /api/v1/platform/flags/evaluate
- * through the real app and snapshot store. The list joins the registry with
- * the snapshot (each state, the condition summary, PostHog links, the
- * unregistered flags sorted, the traits, the snapshot block) and never calls
- * PostHog. Evaluate answers one user's traits and every flag's value and
- * reason, a holdout's recorded variant included, after its gates: 404 for an
- * unknown user, 400 for a tenant the user isn't in or a tenant with
- * `app=apex`, and is audited once per staff member, user, tenant and app
- * per throttle window. Flags are switched on with a mock; the project id and app host
- * come from a mocked `getEnv()`.
+ * @file GET /api/v1/platform/flags and GET /api/v1/platform/flags/evaluate through the real app
+ * and snapshot store. The list joins the registry with the snapshot (each state, the condition
+ * summary, PostHog links, the unregistered flags sorted, the traits, the snapshot block) and never
+ * calls PostHog. Evaluate answers one user's traits and every flag's value and reason, a holdout's
+ * recorded variant included, after its gates: 404 for an unknown user, 400 for a tenant the user
+ * isn't in or a tenant with `app=apex`. It is audited once per staff member, user, tenant and app
+ * per throttle window. Flags are switched on with a mock; the project id and app host come from a
+ * mocked `getEnv()`.
  */
 import { randomUUID } from 'node:crypto'
 import type { Response } from 'supertest'
@@ -47,7 +45,13 @@ const { createTrackedStaff, createTrackedUser, deleteTrackedUsers } =
 const { clearFlagKeys } = await import('../../helpers/flag-redis')
 const { request } = await import('../../helpers/request')
 
+/**
+ * The `GET /platform/flags` response.
+ */
 type FlagsList = import('@/types/flags').FlagsListResponse
+/**
+ * The `GET /platform/flags/evaluate` response.
+ */
 type FlagsEvaluation = import('@/types/flags').FlagsEvaluateResponse
 
 // eslint-disable-next-line unicorn/no-null -- JSON null, as the list carries it
