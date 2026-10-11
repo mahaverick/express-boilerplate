@@ -141,7 +141,7 @@ export type OnboardingReminderBlock =
 /**
  * One reminder a staff member sent, read from its `onboarding.reminder_sent`
  * audit entry. `sentBy` is null once the staff member was purged.
- * `messageIds` are the SP3 `email_messages` rows, one per queued email.
+ * `messageIds` are the `email_messages` ids, one per queued email.
  */
 export interface OnboardingReminderView {
   id: string

@@ -14,10 +14,10 @@ const parse: (value: string) => number | undefined = ms as unknown as (
 ) => number | undefined
 
 /**
- * Milliseconds per second, for session.service.ts (`expiresIn` in seconds)
- * and session-denylist.service.ts (a Redis `EX` TTL). Here, not in
- * session.service.ts: that module imports session-denylist.service.ts, so
- * the reverse import would close a cycle.
+ * Milliseconds per second, for converting between milliseconds and the
+ * seconds that JWT `expiresIn`, `auth_time` and Redis `EX` use. Here, not in
+ * session.service.ts: that module imports session-denylist.service.ts, which
+ * needs it, so the reverse import would close a cycle.
  */
 export const MS_PER_SECOND = 1000
 
@@ -45,7 +45,7 @@ export function parseDurationMs(value: string): number | undefined {
  *
  * Here, not in session.service.ts, for the same import-cycle reason as
  * `MS_PER_SECOND`.
- * @param value - An `ACCESS_TOKEN_TTL`/`REFRESH_TOKEN_TTL`-shaped value already known to be `ms()`-parseable.
+ * @param value - A TTL or cooldown setting that `env.config.ts` already checked parses.
  * @returns The duration in milliseconds.
  * @throws {Error} Only if that boot-time invariant was somehow violated.
  */

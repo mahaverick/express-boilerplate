@@ -1,7 +1,7 @@
 /**
  * @file Which From address a message goes out from. The sender follows the
- * template's sender class and nothing else, so no caller can send a token
- * email from the general sender.
+ * template's sender class and nothing else, so no caller picks it. A token
+ * email uses `MAIL_FROM_TRANSACTIONAL`, which is `MAIL_FROM` while unset.
  */
 import type { Env } from '@/configs/env.config'
 import type { SenderClass } from '@/constants/email.constants'

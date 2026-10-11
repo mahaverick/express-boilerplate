@@ -12,9 +12,16 @@ import type { FlagContext, FlagEvaluation } from '@/types/flags'
 
 declare global {
   namespace Express {
+    /**
+     * What passport's `request.user` holds: the client-visible user projection.
+     */
     // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- empty on purpose: extending `Express.User` types passport's own `Request.user` declaration
     interface User extends AuthenticatedUser {}
 
+    /**
+     * The fields this app's middleware add to a request. An optional one is
+     * absent until the middleware that sets it has run.
+     */
     interface Request {
       /**
        * Correlation id, set by requestId middleware.

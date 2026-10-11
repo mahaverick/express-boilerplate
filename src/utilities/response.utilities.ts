@@ -52,8 +52,8 @@ export function messageResponse(response: Response, message: string, status = 20
  * @param code - Optional stable, machine-readable token a client can branch on, independent of `message` or `errors`.
  * @param errors - Optional field-level detail, e.g. from a validator.
  * @param extra - Optional extra fields.
- * @param extra.errorId - The id `errorHandler` gives every 5xx fault it
- *   writes, which names its log line and, when reported, its PostHog event.
+ * @param extra.errorId - The id `errorHandler` gives a 5xx fault, which
+ *   names its log line and, when reported, its error-tracking event.
  * @param extra.mode - On a maintenance-mode 503, the mode it was refused under.
  * @param extra.since - On a maintenance-mode 503, when that mode began (or null).
  */
