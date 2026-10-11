@@ -351,9 +351,9 @@ async function queueNoticesOrNone(actor: Actor, change: CommittedChange): Promis
  *
  * One transaction re-checks the owner role under lock, locks the row, checks
  * `expectedVersion` (409), and answers a no-op with the current state,
- * writing nothing. A no-op is a save that keeps the mode and either leaves
- * `off` or repeats the stored message with no new reason (none sent, or the
- * stored one again). Otherwise it checks the change's rules, updates the row
+ * writing nothing. A no-op is a save that keeps the mode and either stays
+ * `off` (whatever reason is sent) or repeats the stored message with no new
+ * reason (none sent, or the stored one again). Otherwise it checks the change's rules, updates the row
  * (`version + 1`) and writes the audit entry. A save that keeps the mode keeps
  * `changed_at` and `changed_by`, and keeps the reason unless the body sends
  * one (`null` clears it).
@@ -370,8 +370,8 @@ async function queueNoticesOrNone(actor: Actor, change: CommittedChange): Promis
  * @param body - The validated body.
  * @returns The view after the change.
  * @throws {HttpError} 409 `MAINTENANCE_MODE_CONFLICT` for a stale version; 400 for a missing
- * message or reason, or a wrong confirm; 404 when the actor is no longer an owner; 401 when the
- * actor's account is now inactive or deleted; 500 when the platform tenant is missing.
+ * message or reason, or a wrong confirm; 404 when the actor lost the owner role; 401 when the
+ * actor's account is inactive or gone; 500 when the platform tenant is missing.
  */
 export async function changeMaintenanceMode(
   actor: Actor,

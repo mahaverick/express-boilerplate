@@ -4,7 +4,8 @@
  * also uses): an over-long value would otherwise reach Postgres as a 22001
  * and answer 500 instead of 400. A password being set is capped at
  * `MAX_PASSWORD_BYTES` bytes (bcrypt's limit) instead; one being checked is
- * not (see `loginSchema`).
+ * not: the compare treats an over-long one as a mismatch (`isPasswordValid`),
+ * so it answers like a wrong password (see `loginSchema`).
  */
 import { z } from 'zod'
 import {

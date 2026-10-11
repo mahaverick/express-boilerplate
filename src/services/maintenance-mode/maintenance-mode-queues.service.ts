@@ -130,8 +130,6 @@ function dueAt(job: Job): number {
 /**
  * Remove one duplicate run. A removal BullMQ refuses is logged, unless the
  * job is gone by then.
- * @param queue - Its queue.
- * @param job - The run.
  * @returns True when the removal did not throw.
  */
 // eslint-disable-next-line unicorn/consistent-boolean-name -- `try…` names an attempt; the boolean says whether this call removed the job
@@ -190,7 +188,7 @@ async function applyTarget(
 ): Promise<void> {
   /**
    * Whether a change has landed in the store since the target was decided.
-   * @returns True when `version` was given and the store now holds another.
+   * @returns True when `version` was given and the store holds another.
    */
   const isSuperseded = (): boolean =>
     version !== undefined && getMaintenanceMode().version !== version

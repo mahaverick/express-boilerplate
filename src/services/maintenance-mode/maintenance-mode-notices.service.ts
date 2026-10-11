@@ -71,7 +71,7 @@ export async function rememberNoticeJobs(ids: NoticeJobIds): Promise<void> {
 
 /**
  * Whether any of a queue's jobs has yet to finish.
- * @param queue - The queue.
+ * @param queue - The queue the jobs are on.
  * @param ids - Job ids on it.
  * @returns True when any is neither completed, failed nor gone.
  */

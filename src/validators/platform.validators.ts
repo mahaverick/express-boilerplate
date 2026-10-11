@@ -200,7 +200,8 @@ const idParameterSchema = z.uuid()
 
 /**
  * A route's `:id` as a uuid, or a 404 with `notFoundMessage`: a malformed id
- * answers like an unknown one, so the answer does not reveal the id's format.
+ * answers like an unknown one, so the two cannot be told apart, and Postgres
+ * never sees a non-uuid.
  * @param raw - `request.params.id` as Express supplies it.
  * @param notFoundMessage - The 404's message, e.g. 'Tenant not found'.
  * @param notFoundCode - The 404's code, when the unknown-id answer carries one, so the malformed id answers with it too.

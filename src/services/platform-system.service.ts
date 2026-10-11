@@ -26,7 +26,8 @@ export interface SystemStatus {
   errorTracking: ErrorTrackingStatus
   flags: FlagsStatus
   /**
-   * Maintenance mode; optional in the contract, always set here.
+   * Maintenance mode; optional in the contract, so a client also accepts an
+   * API without the section; always set here.
    */
   maintenance?: MaintenanceModeStatus
 }

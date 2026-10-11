@@ -363,7 +363,7 @@ async function tenantForMessages(
  * @param email - The address to invite, in any case.
  * @param role - The role offered.
  * @param options - `reason` when staff invite through platform access, recorded in the audit entry.
- * @throws {HttpError} 404 `Tenant not found` when the actor lost access, or when the tenant is gone; 403 when the actor is below admin or may not grant `role`; 409 `already_member` when the address belongs to a member; 429 `RATE_LIMITED` when the tenant or the address has had its share of the day's invitation mail; 409 `invitation_conflict` from a racing duplicate invite; 400 `REASON_REQUIRED` when the locked re-read finds platform access and no reason was given.
+ * @throws {HttpError} 404 `Tenant not found` when the actor lost access, or when the tenant is gone; 403 when the actor is below admin or may not grant `role`; 409 `already_member` when the address belongs to a member; 429 `RATE_LIMITED` when the address has had its day's invitation mail, or this tenant its share of it; 409 `invitation_conflict` from a racing duplicate invite; 400 `REASON_REQUIRED` when the locked re-read finds platform access and no reason was given.
  */
 export async function invite(
   actor: Actor,
@@ -565,7 +565,7 @@ export async function listPending(tenantId: string): Promise<PendingInvitationSu
  * @param tenantId - The tenant it must belong to.
  * @param invitationId - The invitation.
  * @param options - `resentFromId` when a staff resend re-runs this for an earlier message; `reason` when staff resend through platform access.
- * @throws {HttpError} 404 when the tenant is gone, before anything is written; 404 `Tenant not found` when the actor lost access; 403 when the actor is below admin; 404 `invitation_not_found` when it is not pending in this tenant; 403 when the actor may not grant its role; 429 `invitation_resend_cooldown` inside the cooldown; 429 `RATE_LIMITED` when the tenant or the address has had its share of the day's invitation mail; 400 `REASON_REQUIRED` when the locked re-read finds platform access and no reason was given.
+ * @throws {HttpError} 404 when the tenant is gone, before anything is written; 404 `Tenant not found` when the actor lost access; 403 when the actor is below admin; 404 `invitation_not_found` when it is not pending in this tenant; 403 when the actor may not grant its role; 429 `invitation_resend_cooldown` inside the cooldown; 429 `RATE_LIMITED` when the address has had its day's invitation mail, or this tenant its share of it; 400 `REASON_REQUIRED` when the locked re-read finds platform access and no reason was given.
  */
 export async function resend(
   actor: Actor,

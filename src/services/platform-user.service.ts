@@ -252,7 +252,8 @@ interface LockedStaffPair {
  * FOR SHARE (`assertStillPlatformRole`), then the target's user row. An actor
  * deleted or deactivated by a transaction that held these locks first is
  * seen here, after the wait, and refused.
- * No transaction locks the platform tenant before a customer tenant
+ * Every transaction that locks membership rows in both a customer tenant and
+ * the platform tenant locks the customer tenant's first
  * (tenant-access.service.ts), so the order has no cycle.
  * @param actor - The signed-in staff user.
  * @param targetUserId - The user acted on.

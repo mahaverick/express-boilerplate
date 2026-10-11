@@ -591,7 +591,7 @@ async function findCallerRefreshTokenId(
  * denial written before commit would outlive a rollback.
  *
  * With `exceptSessionId` alone the whole session is spared. With a
- * `presentedRefreshToken` that names the caller's live chain
+ * `presentedRefreshToken` that names the caller's unrevoked chain
  * (`findCallerRefreshTokenId`), only that one row is spared, so a sibling a
  * grace-window replay minted in the same session ends too. Run it after the
  * user row lock, as every caller but `revokeAllSessions` does (see there).
@@ -667,7 +667,7 @@ function absoluteLifetimeCutoff(): Date {
  * after commit, which also ends that session's notification stream at its
  * next heartbeat (`denySessionsAfterCommit`). Emits `other_sessions_revoked`.
  *
- * When the request presented the caller's live refresh cookie, a sibling
+ * When the request presented the caller's unrevoked refresh cookie, a sibling
  * chain a grace-window replay minted in the calling session is revoked too
  * (`revokeSessionRows`); its access tokens share the caller's `sid`, so they
  * are not denied and last until ACCESS_TOKEN_TTL. No Origin check is needed:
