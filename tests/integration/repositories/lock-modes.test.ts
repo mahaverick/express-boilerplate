@@ -52,7 +52,7 @@ afterEach(async () => {
 })
 
 /**
- * Creates a user, tracked for cleanup.
+ * Creates a user to own or join a test's tenant, tracked for cleanup.
  */
 async function createUser(): Promise<User> {
   const user = await userRepository.create({ email: `lock-modes-${randomUUID()}@example.test` })

@@ -84,7 +84,8 @@ function outboxRows() {
 }
 
 /**
- * The instant `ms` milliseconds after `start`.
+ * The `now` to pass a later drain, `ms` milliseconds after `start`, so a test can move past a lease
+ * or backoff without waiting.
  */
 function after(start: Date, ms: number): Date {
   return new Date(start.getTime() + ms)

@@ -242,7 +242,8 @@ async function insertRefresh(userId: string, sessionId: string): Promise<string>
  * Builds two live rows of one session whose physical order (b, a) disagrees with
  * their index order (a, b): a is HOT-updated onto a later slot of b's page. An
  * in-place update of a live row, as `markSessionAuthenticated` does, can
- * produce this layout.
+ * produce this layout. A multi-column index leading with user_id or session_id
+ * would also make scans diverge from id order (see the schema guard below).
  * @throws {Error} When no attempt produces the layout.
  */
 async function divergentPair(): Promise<{

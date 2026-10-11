@@ -3,7 +3,8 @@
  * atomic statement, a token minted for one purpose can be claimed as another:
  * here a password-reset token is claimed as an email verification. The same
  * gap would let a verification token, which proves only mailbox access, be
- * spent as a password reset, which stores a new password for the account. The
+ * spent as a password reset, which stores a new password for the account, so
+ * mailbox access alone would be enough to set the account's password. The
  * always-green proof of this lives in
  * `tests/integration/repositories/user-token.repository.test.ts` and
  * `tests/integration/services/session.service.test.ts`; this file exists to
@@ -75,7 +76,7 @@ describe('mutation-test harness, proven on claimOnce’s purpose predicate', () 
   })
 
   /**
-   * Creates a user for a test, tracked for cleanup, and returns its id.
+   * Creates a user to own the token rows a test issues, tracked for cleanup, and returns its id.
    */
   async function createUser(): Promise<string> {
     const user = await userRepository.create({ email: uniqueEmail() })

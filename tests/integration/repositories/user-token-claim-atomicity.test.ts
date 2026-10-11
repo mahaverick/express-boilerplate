@@ -121,7 +121,8 @@ describe('claimOnce is atomic under real concurrency', () => {
   })
 
   /**
-   * Creates a user for a test, tracked for cleanup, and returns its id.
+   * Creates a user to own the token row the concurrent claims race for, tracked for cleanup, and
+   * returns its id.
    */
   async function createUser(): Promise<string> {
     const user = await userRepository.create({ email: uniqueEmail() })

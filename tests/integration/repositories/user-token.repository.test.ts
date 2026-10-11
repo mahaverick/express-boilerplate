@@ -39,7 +39,7 @@ function uniqueHash(): string {
 }
 
 /**
- * Sort comparator for ids, so a result with no guaranteed order can be compared.
+ * Sort comparator for the session ids `revokeAllForUser` returns, which come in no guaranteed order.
  */
 function byId(left: string, right: string): number {
   return left.localeCompare(right)
@@ -86,7 +86,7 @@ describe('UserTokenRepository', () => {
   })
 
   /**
-   * Creates a user for a test, tracked for cleanup, and returns its id.
+   * Creates a user to own the token rows a test issues, tracked for cleanup, and returns its id.
    */
   async function createUser(): Promise<string> {
     const user = await userRepository.create({ email: uniqueEmail() })
@@ -222,7 +222,8 @@ describe('UserTokenRepository', () => {
    * The `purpose` predicate keeps a token minted for one purpose from being
    * spent as another (SECURITY.md): a password-reset token as an email
    * verification, or a verification token, which proves only mailbox access,
-   * as a password reset, which stores a new password for the account.
+   * as a password reset, which stores a new password for the account, so
+   * mailbox access alone would be enough to set the account's password.
    */
   it('claimOnce rejects a claim for a different purpose than the row was issued for', async () => {
     const userId = await createUser()

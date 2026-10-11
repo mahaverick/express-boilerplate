@@ -31,7 +31,7 @@ afterEach(async () => {
 })
 
 /**
- * Creates a user, tracked for cleanup.
+ * Creates a user to hold a platform membership, tracked for cleanup, and returns its id.
  */
 async function createUser(): Promise<string> {
   const user = await userRepository.create({
