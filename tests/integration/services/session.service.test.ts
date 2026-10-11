@@ -479,9 +479,9 @@ describe('issueToken and cross-purpose claiming', () => {
   /**
    * A token issued for one purpose must not be claimable as another.
    * Without this, a password-reset token could be spent as an email
-   * verification, or a verification token could reset a password —
-   * turning "I can receive mail at this address" into "I can take over
-   * this account."
+   * verification, or a verification link, valid for 24h and mailed without a
+   * reset request, could be spent as a reset link, outside the 1h window
+   * `PASSWORD_RESET_TTL` keeps reset links to.
    */
   it('rejects claiming a password-reset token as an email verification, and vice versa', async () => {
     const userId = await createUser()

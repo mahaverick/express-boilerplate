@@ -43,8 +43,7 @@ afterEach(async () => {
 })
 
 /**
- * A user and a tenant they own, both tracked for cleanup.
- * @returns Their ids.
+ * Creates a user and a tenant they own, both deleted in `afterEach`.
  */
 async function createOwnerAndTenant(): Promise<{ userId: string; tenantId: string }> {
   const user = await userRepository.create({ email: `audit-service-${randomUUID()}@example.test` })
@@ -59,10 +58,7 @@ async function createOwnerAndTenant(): Promise<{ userId: string; tenantId: strin
 }
 
 /**
- * A valid `tenant.updated` entry.
- * @param userId - The actor.
- * @param tenantId - The tenant.
- * @returns The entry.
+ * Builds the valid `tenant.updated` entry that the metadata-failure cases corrupt.
  */
 function tenantUpdated(userId: string, tenantId: string): AuditEntry {
   return {
@@ -76,19 +72,14 @@ function tenantUpdated(userId: string, tenantId: string): AuditEntry {
 }
 
 /**
- * The audit rows for one tenant.
- * @param tenantId - The tenant.
- * @returns Its rows, oldest first.
+ * Reads one tenant's audit rows, oldest first.
  */
 async function auditRows(tenantId: string) {
   return sql`select * from audit_logs where tenant_id = ${tenantId} order by occurred_at, id`
 }
 
 /**
- * The dedupe key for one staff user and tenant, tracked for cleanup.
- * @param userId - The staff user.
- * @param tenantId - The tenant.
- * @returns The key.
+ * Builds the dedupe key for one staff user and tenant and deletes it in `afterEach`.
  */
 function trackedDedupeKey(userId: string, tenantId: string): string {
   const key = redisKey('audit', 'platform-access', userId, tenantId)
@@ -97,8 +88,7 @@ function trackedDedupeKey(userId: string, tenantId: string): string {
 }
 
 /**
- * An `AuditLogRepository.insert` stand-in that always fails.
- * @returns Never; always rejects.
+ * An `AuditLogRepository.insert` stand-in that always rejects.
  */
 function refuseInsert(): Promise<never> {
   return Promise.reject(new Error('insert failed'))

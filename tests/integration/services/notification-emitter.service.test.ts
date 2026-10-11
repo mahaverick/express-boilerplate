@@ -22,6 +22,9 @@ import {
 import { isEventuallyTrue } from '../../helpers/redis-proxy'
 import { settle, waitUntil } from '../../helpers/timing'
 
+/**
+ * One module graph's emitter and Redis service, as a replica of the app.
+ */
 interface Replica {
   emitter: typeof replicaA
   redis: typeof redisA
@@ -29,11 +32,17 @@ interface Replica {
 
 const replicas: { b: Replica | undefined } = { b: undefined }
 
+/**
+ * Returns replica B, which `beforeAll` loads.
+ */
 function replicaB(): Replica {
   if (!replicas.b) throw new Error('replica B is loaded in beforeAll')
   return replicas.b
 }
 
+/**
+ * Creates a handler and the array it appends each delivered notification to.
+ */
 function collector(): {
   received: Notification[]
   handler: (notification: Notification) => void
@@ -48,9 +57,8 @@ function collector(): {
 }
 
 /**
- * The port one `net.Socket#connect` call dials.
- * @param connectArguments - The arguments that call received.
- * @returns The port, or undefined for an IPC path.
+ * Reads the port one `net.Socket#connect` call dials from the arguments it
+ * received, or undefined for an IPC path.
  */
 function connectPort(connectArguments: readonly unknown[]): number | undefined {
   // net.createConnection passes connect() its already-normalised [options, callback] pair.
@@ -63,14 +71,23 @@ function connectPort(connectArguments: readonly unknown[]): number | undefined {
   return undefined
 }
 
+/**
+ * A notification handler for tests that only need a listener registered.
+ */
 function noopHandler(): void {
   // Intentionally empty.
 }
 
+/**
+ * A notification handler that always throws, to prove a throwing listener harms no other.
+ */
 function throwingHandler(): void {
   throw new Error('a listener blew up')
 }
 
+/**
+ * Polls for up to 5 s until `received` holds `count` notifications, and reports whether it does.
+ */
 async function hasReceived(received: Notification[], count: number): Promise<boolean> {
   return isEventuallyTrue(() => Promise.resolve(received.length >= count), 5000)
 }
@@ -299,7 +316,7 @@ describe('notification-emitter.service', () => {
   })
 
   it('leaves no subscriber behind when closed in the same tick as its first onNotification', async () => {
-    // A third replica: this one's subscriber is still opening its socket when closed.
+    // A third replica: this one's subscriber is opening its socket when closed.
     vi.resetModules()
     const c = {
       emitter: await import('@/services/notification-emitter.service'),
@@ -311,6 +328,9 @@ describe('notification-emitter.service', () => {
     const userId = `same-tick-close-${randomUUID()}`
     // Only sockets this test opens: every other client here is already connected.
     const connectSpy = vi.spyOn(net.Socket.prototype, 'connect')
+    /**
+     * Lists the sockets this test opened to Redis, by the port `connect` was called with.
+     */
     const redisSockets = (): net.Socket[] =>
       connectSpy.mock.calls.flatMap((callArguments, index) => {
         const socket: unknown = connectSpy.mock.contexts[index]

@@ -29,9 +29,7 @@ afterAll(async () => {
 })
 
 /**
- * How a service call ended: 'ok', or the Postgres code and message it was rejected with.
- * @param work - The call.
- * @returns The outcome.
+ * Reports how a service call ended: 'ok', or the Postgres code and message it was rejected with.
  */
 async function outcomeOf(work: Promise<unknown>): Promise<string> {
   try {

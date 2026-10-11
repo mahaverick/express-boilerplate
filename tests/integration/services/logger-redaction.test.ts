@@ -1,6 +1,6 @@
 /**
  * @file A real `DrizzleQueryError`, from a real unique-violation round trip
- * against this worker's Postgres database — not
+ * against this worker's Postgres database, not
  * `tests/helpers/query-error.ts`'s `fakeQueryError()`, which stands in for
  * one against a mocked rejection. Inserted directly through
  * `db`/`userModel`, bypassing `UserRepository.create`: that method's
@@ -21,9 +21,8 @@ import { withMutatedModule } from '../../helpers/mutate'
 const LEAKED_EMAIL = `leak-${randomUUID()}@example.test`
 
 /**
- * A real Writable that records each JSON line, same pattern
- * tests/unit/services/logger.service.test.ts uses.
- * @returns The capture stream and the lines it collects.
+ * Creates a real Writable that records each JSON log line, the pattern
+ * `tests/unit/services/logger.service.test.ts` uses.
  */
 function captureDestination(): { destination: Writable; output: string[] } {
   const output: string[] = []
@@ -39,9 +38,8 @@ function captureDestination(): { destination: Writable; output: string[] } {
 }
 
 /**
- * Insert the same email twice, directly through db/userModel, to get a real
- * DrizzleQueryError from a live unique-violation round trip.
- * @returns The error thrown by the second insert.
+ * Inserts the same email twice, directly through `db` and `userModel`, to get
+ * a real `DrizzleQueryError` from a live unique-violation round trip.
  */
 async function realUniqueViolation(): Promise<unknown> {
   await db.insert(userModel).values({ email: LEAKED_EMAIL })
@@ -91,7 +89,7 @@ describe('a real unique-violation query error never leaks its parameter', () => 
 })
 
 /**
- * DELIBERATELY red under `MUTATION_PROOF=1`: each twin below reproduces one
+ * Deliberately red under `MUTATION_PROOF=1`: each twin below reproduces one
  * of the real test's own per-record assertions above, against the same
  * real `DrizzleQueryError`, with `redactedForLog` swapped for the identity
  * function (`tests/helpers/mutate.ts`'s `withMutatedModule`). A

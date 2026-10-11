@@ -64,8 +64,7 @@ afterAll(async () => {
 })
 
 /**
- * A slug unique to one call, tracked for cleanup.
- * @returns The slug.
+ * Returns a slug no other tenant shares, whose tenant is deleted in `afterEach`.
  */
 function trackedSlug(): string {
   const slug = `trigger-${randomUUID()}`
@@ -74,8 +73,7 @@ function trackedSlug(): string {
 }
 
 /**
- * A tenant created through the customer service, and its owner.
- * @returns Both.
+ * Creates a tenant through the customer service, and its owner, to run triggers against.
  */
 async function customerTenant(): Promise<{ owner: User; tenant: Tenant }> {
   const owner = await createTrackedUser()
@@ -87,9 +85,7 @@ async function customerTenant(): Promise<{ owner: User; tenant: Tenant }> {
 }
 
 /**
- * The step keys completed in a tenant, sorted.
- * @param tenantId - The tenant.
- * @returns The keys.
+ * Lists the step keys completed in a tenant, sorted.
  */
 async function completedKeys(tenantId: string): Promise<string[]> {
   const rows = await completionRepository.listForTenant(tenantId)
@@ -97,12 +93,8 @@ async function completedKeys(tenantId: string): Promise<string[]> {
 }
 
 /**
- * A pending invitation with a known raw token, written without `invite`.
- * @param tenantId - The tenant.
- * @param invitedBy - The inviter.
- * @param email - The invited address.
- * @param role - The offered role.
- * @returns The raw token and the invitation id.
+ * Creates a pending invitation without `invite`, so no `teammate_invited`
+ * event fires, and returns the raw token its invitee would hold and its id.
  */
 async function seedInvitation(
   tenantId: string,
@@ -128,8 +120,8 @@ async function seedInvitation(
 }
 
 /**
- * A tenant staff created, its staff creator, and an owner invitation token for `ownerEmail`.
- * @returns The tenant id, the staff user and the raw owner token.
+ * Creates a tenant as staff, awaiting its owner, with a raw owner-invitation token for
+ * `ownerEmail`.
  */
 async function staffTenant(): Promise<{
   tenantId: string

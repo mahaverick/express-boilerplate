@@ -51,11 +51,7 @@ afterAll(async () => {
 })
 
 /**
- * A tracked user whose address is tracked for message cleanup.
- * @param options - Whether it has a password and is verified.
- * @param options.hasPassword - Give it a password.
- * @param options.verified - Mark the address verified.
- * @returns The user.
+ * Creates a user, named Ada, whose `email_messages` rows are deleted in `afterEach`.
  */
 async function trackedUser(
   options: { hasPassword?: boolean; verified?: boolean } = {}
@@ -66,8 +62,7 @@ async function trackedUser(
 }
 
 /**
- * A customer tenant owned by a fresh user, tracked for cleanup.
- * @returns The owner and the tenant.
+ * Creates a customer tenant and its owner, both deleted in `afterEach`.
  */
 async function customerTenant(): Promise<{ owner: User; tenant: Tenant }> {
   const owner = await trackedUser()
@@ -81,9 +76,7 @@ async function customerTenant(): Promise<{ owner: User; tenant: Tenant }> {
 }
 
 /**
- * The message row an email job points at.
- * @param job - The email job.
- * @returns The row.
+ * Reads the `email_messages` row an email job points at, and throws when it has none.
  */
 async function rowOf(job: Job<EmailJobData>): Promise<Record<string, unknown>> {
   const [row] = await sql`select * from email_messages where id = ${job.data.messageId ?? ''}`
@@ -92,10 +85,7 @@ async function rowOf(job: Job<EmailJobData>): Promise<Record<string, unknown>> {
 }
 
 /**
- * Wait for the email job to `to` with `templateKey`.
- * @param to - The recipient.
- * @param templateKey - The template.
- * @returns The job.
+ * Waits for the email job queued to `to` for one template.
  */
 async function emailJobTo(
   to: string,
@@ -153,10 +143,7 @@ describe('invitation mail', () => {
 })
 
 /**
- * The notification job a flow enqueued for `userId`.
- * @param userId - The user.
- * @param type - The notification type.
- * @returns The job.
+ * Waits for the notification job a flow enqueued for `userId` with one type.
  */
 async function notificationJobFor(
   userId: string,

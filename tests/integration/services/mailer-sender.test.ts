@@ -17,8 +17,7 @@ afterAll(async () => {
 })
 
 /**
- * A disposable recipient, tracked for cleanup.
- * @returns A unique address.
+ * Returns a unique recipient address, whose `email_logs` rows are deleted in `afterAll`.
  */
 function uniqueRecipient(): string {
   const address = `mailer-sender-${randomUUID()}@example.test`
@@ -27,9 +26,8 @@ function uniqueRecipient(): string {
 }
 
 /**
- * Send one message and read the From address Mailpit received.
- * @param message - The message.
- * @returns The From address.
+ * Sends one message and returns the From address Mailpit received, deleting that message from
+ * Mailpit.
  */
 async function fromAddressOf(message: MailMessage): Promise<string> {
   await expect(sendMail(message)).resolves.toBe('sent')

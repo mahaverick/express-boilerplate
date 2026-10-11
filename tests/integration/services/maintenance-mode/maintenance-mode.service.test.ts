@@ -25,9 +25,7 @@ import {
 } from '../../../helpers/platform-users'
 
 /**
- * A verified Google profile for an address.
- * @param email - The address Google reports.
- * @returns The profile.
+ * Builds a Google profile reporting `email` as verified, with a fresh Google id.
  */
 function googleProfile(email: string): GoogleProfile {
   const id = randomUUID()
@@ -51,9 +49,7 @@ function googleProfile(email: string): GoogleProfile {
 }
 
 /**
- * How many sessions a user holds.
- * @param userId - The user.
- * @returns The count of `user_tokens` rows.
+ * Counts a user's `user_tokens` rows, which a refused sign-in must leave at zero.
  */
 async function sessionsOf(userId: string): Promise<number> {
   const [row] = await sql<{ count: number }[]>`

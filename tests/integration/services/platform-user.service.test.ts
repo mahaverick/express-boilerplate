@@ -116,6 +116,9 @@ describe('platform-user.service link origins', () => {
       }
     )
 
+    /**
+     * Reads the origin of the account-setup link queued for `to`.
+     */
     const originOfSetup = async (to: string): Promise<string> => {
       const job = await waitForJob<EmailJobData>(
         getEmailQueue(),
@@ -123,6 +126,9 @@ describe('platform-user.service link origins', () => {
       )
       return new URL((job.data.variables as { setupUrl: string }).setupUrl).origin
     }
+    /**
+     * Reads the origin of the verification link in the notification queued for `userId`.
+     */
     const originOfVerification = async (userId: string): Promise<string> => {
       const job = await waitForJob<NotificationJobData>(
         getNotificationQueue(),

@@ -1,8 +1,8 @@
 /**
  * @file getEmailHealth over a window in 2001, which no other test writes to,
  * so the counts are exact: disjoint groups by current status, `queued`
- * left out, rates null without provider events (`undeliveredRate` still
- * computed), open and click rates over `general`-sender mail only, and the
+ * left out, rates null without provider events (`undeliveredRate` is
+ * computed anyway), open and click rates over `general`-sender mail only, and the
  * by-template and top-10 by-domain tables.
  */
 import { randomUUID } from 'node:crypto'
@@ -23,6 +23,9 @@ afterEach(async () => {
   await deleteTrackedEmailRows()
 })
 
+/**
+ * Creates a tracked message at `createdAt` and `status`, to a unique recipient at `options.domain`.
+ */
 async function messageAt(
   createdAt: Date,
   status: EmailMessageStatus,

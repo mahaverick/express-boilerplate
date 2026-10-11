@@ -42,13 +42,19 @@ const invitationRepository = new TenantInvitationRepository()
 // eslint-disable-next-line unicorn/no-null -- awaiting the first owner: no start time
 const NOT_STARTED = null
 
-// This client hands timestamps back as UTC text, compared here as text at millisecond precision.
+/**
+ * An `onboarding_completions` row. This client hands timestamps back as UTC
+ * text, compared here as text at millisecond precision.
+ */
 interface CompletionRow {
   step_key: string
   source: string
   completed_at: string
 }
 
+/**
+ * Reads a tenant's completion rows ordered by step key.
+ */
 async function completionsOf(tenantId: string): Promise<CompletionRow[]> {
   return sql<CompletionRow[]>`
     select step_key, source, completed_at from onboarding_completions
@@ -56,16 +62,16 @@ async function completionsOf(tenantId: string): Promise<CompletionRow[]> {
   `
 }
 
+/**
+ * Reads which steps a tenant has completed and by what source, without their dates.
+ */
 async function stepsOf(tenantId: string): Promise<{ step_key: string; source: string }[]> {
   const rows = await completionsOf(tenantId)
   return rows.map(({ step_key, source }) => ({ step_key, source }))
 }
 
 /**
- * When the tenant's earliest audit entry of one action occurred.
- * @param tenantId - The tenant.
- * @param action - The audit action.
- * @returns Its time, as UTC text.
+ * Reads when the tenant's earliest audit entry of one action occurred, as UTC text.
  */
 async function entryTime(tenantId: string, action: string): Promise<string> {
   const [row] = await sql<{ occurred_at: string }[]>`
@@ -78,22 +84,16 @@ async function entryTime(tenantId: string, action: string): Promise<string> {
 }
 
 /**
- * Drop every completion in a tenant, as if each subscriber had failed after its request committed.
- * @param tenantId - The tenant.
- * @returns Resolves once the rows are gone.
+ * Deletes every completion in a tenant, as if each subscriber had failed after its request
+ * committed.
  */
 async function forgetCompletions(tenantId: string): Promise<void> {
   await sql`delete from onboarding_completions where tenant_id = ${tenantId}`
 }
 
 /**
- * A backdated member-access audit entry, written directly: the log is append-only, so a real
- * save cannot be moved into the past.
- * @param tenant - The tenant.
- * @param actor - The member who acted.
- * @param action - The audit action.
- * @param occurredAt - When it happened.
- * @returns Resolves once the row is in.
+ * Writes a backdated member-access audit entry directly: the log is append-only,
+ * so a real save cannot be moved into the past.
  */
 async function addMemberEntry(
   tenant: Tenant,
@@ -109,12 +109,8 @@ async function addMemberEntry(
 }
 
 /**
- * A pending invitation with a known raw token, written without `invite` (so no audit entry).
- * @param tenant - The tenant.
- * @param invitedBy - The inviter.
- * @param email - The invited address.
- * @param role - The offered role.
- * @returns The raw token.
+ * Creates a pending invitation without `invite`, so it has no audit entry, and
+ * returns the raw token its invitee would hold.
  */
 async function seedInvitation(
   tenant: Tenant,

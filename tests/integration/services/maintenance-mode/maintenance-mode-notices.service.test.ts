@@ -1,7 +1,7 @@
 /**
  * @file The last change's notices against the real notification and email
  * queues under this worker's prefix, with no Worker running: whether any is
- * still pending (nothing recorded, a waiting notification or email job,
+ * pending (nothing recorded, a waiting notification or email job,
  * every job finished or gone), and the notice wait's timeout and done paths.
  */
 import { randomUUID } from 'node:crypto'
@@ -36,9 +36,8 @@ afterAll(async () => {
 })
 
 /**
- * Add a job no worker in this file runs, so it stays waiting.
- * @param queue - Which queue.
- * @returns Its id.
+ * Adds a job to one queue, removed in `afterEach`; no worker in this file
+ * runs it, so it stays waiting.
  */
 async function waitingJob(queue: 'notification' | 'email'): Promise<string> {
   const id = `mm-notice-${randomUUID()}`
@@ -55,8 +54,8 @@ async function waitingJob(queue: 'notification' | 'email'): Promise<string> {
 }
 
 /**
- * A waiting notification job and the waiting email job its worker would have enqueued.
- * @returns The notification job.
+ * Adds a waiting notification job and the waiting email job its worker would
+ * have enqueued, and returns the notification job.
  */
 async function notificationWithWaitingEmail(): Promise<Job> {
   const id = await waitingJob('notification')

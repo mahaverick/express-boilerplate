@@ -1,6 +1,6 @@
 /**
  * @file A replica that misses the change message during a real Redis
- * outage still converges from Postgres on its backstop, and pub/sub
+ * outage converges from Postgres on its backstop, and pub/sub
  * delivery resumes once Redis returns. Redis is reached through a TCP proxy
  * this file owns (`tests/helpers/redis-proxy.ts`), never by stopping the
  * shared Redis; its own file because it mocks `getEnv()`'s `REDIS_URL`.
@@ -52,9 +52,7 @@ const proxy = new RedisProxy()
 const stores: MaintenanceModeStore[] = []
 
 /**
- * A started store, stopped after the test.
- * @param reloadIntervalMs - Its backstop interval.
- * @returns The store.
+ * Starts a store, stopped in `afterEach`, whose reload backstop runs every `reloadIntervalMs`.
  */
 async function startedStore(reloadIntervalMs: number): Promise<MaintenanceModeStore> {
   const store = createMaintenanceModeStore({ reloadIntervalMs })

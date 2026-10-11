@@ -28,16 +28,14 @@ const realEnv = getEnv()
 const VALID_PASSWORD = 'correct horse battery staple'
 
 /**
- * A disposable email, unique to one test run.
- * @returns An email guaranteed unique to this call.
+ * Returns an address no other test row shares, for a user the test registers or seeds.
  */
 function uniqueEmail(): string {
   return `auth-service-${randomUUID()}@example.test`
 }
 
 /**
- * Throw from a repository method, to simulate a failed query.
- * @returns Never; always rejects with a query error carrying `LEAKED_PARAM`.
+ * Stands in for a repository method whose query fails with an error carrying `LEAKED_PARAM`.
  */
 function failingQuery(): Promise<never> {
   return Promise.reject(fakeQueryError())
@@ -47,8 +45,8 @@ function failingQuery(): Promise<never> {
  * The controller starts `register`'s follow-up mail,
  * `requestPasswordReset` and the resend-verification mail with a bare
  * `void` after replying, so each must swallow and log its own failure: a
- * rejection there would crash the process on one branch only. `login`'s
- * platform-role read is guarded the same way — a failed read answers null
+ * rejection there would be unhandled and exit the process. `login`'s
+ * platform-role read is guarded the same way: a failed read answers null
  * instead of failing the sign-in. Faults are injected with
  * `withMutatedMethod`; nothing under `src/` is edited. Each test also
  * asserts the failure was logged, so a fault that never reached the work
@@ -143,9 +141,7 @@ describe('post-reply work never rejects', () => {
 })
 
 /**
- * How many password-reset tokens the user has been issued: one per queued reset mail.
- * @param userId - The user.
- * @returns The count.
+ * Counts the password-reset tokens a user was issued: one per queued reset mail.
  */
 async function resetTokenCount(userId: string): Promise<number> {
   const [row] = await sql<{ count: number }[]>`
@@ -156,9 +152,10 @@ async function resetTokenCount(userId: string): Promise<number> {
 }
 
 /**
- * Forgot-password answers every request 202 and has no per-address limiter;
- * one reset mail per address per `PASSWORD_RESET_MAIL_COOLDOWN` bounds the
- * inbox instead, so nobody can spend the owner's budget.
+ * Forgot-password answers every request 202 and has no per-address limiter:
+ * anyone who knows an address could spend its budget and deny the owner their
+ * mail. One reset mail per address per `PASSWORD_RESET_MAIL_COOLDOWN` bounds
+ * the inbox instead.
  */
 describe('requestPasswordReset mail cooldown', () => {
   const userRepository = new UserRepository()
@@ -172,8 +169,7 @@ describe('requestPasswordReset mail cooldown', () => {
   })
 
   /**
-   * An active account, tracked for cleanup.
-   * @returns The user's id and address.
+   * Creates a verified account, deleted in `afterEach`, to request resets for.
    */
   async function seedActiveUser(): Promise<{ id: string; email: string }> {
     const user = await userRepository.create({ email: uniqueEmail(), emailVerifiedAt: new Date() })

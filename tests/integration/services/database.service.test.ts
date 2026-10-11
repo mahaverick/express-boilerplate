@@ -1,9 +1,9 @@
 /**
  * @file Integration test against the real Postgres started by
  * docker-compose. These tests never INSERT/UPDATE/DELETE, and each vitest
- * worker already runs against its own physical database (see
+ * worker runs against its own physical database (see
  * `tests/helpers/worker-database.ts`), so there is no cross-worker
- * data-isolation risk here either way.
+ * data-isolation risk either way.
  */
 import { afterAll, describe, expect, it } from 'vitest'
 import { getEnv } from '@/configs/env.config'

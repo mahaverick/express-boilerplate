@@ -1,7 +1,7 @@
 /**
  * @file A login that compared the old hash must not keep a session past a
  * password change, reset, or refresh rotation. Each flow is raced in both
- * orders — via lock probes, not sleeps — against `login` and against
+ * orders, via lock probes and not sleeps, against `login` and against
  * `rotateRefreshToken`, proving the loser either waits and finds itself
  * revoked, or wins and is revoked after the fact.
  */
@@ -41,11 +41,15 @@ const DENYLIST_FAILURE = 'session denylist write failed after revocation'
 /**
  * A password change hashes with bcrypt before its user lock, which is
  * CPU-bound, so the waiter probe's deadline starts at the lock; this
- * bounds the whole probe. 12 s plus setup and teardown (under 3 s on a
- * starved CPU) stays under the 20 s test timeout.
+ * bounds the whole probe. 12 s plus setup and teardown stays under the 20 s
+ * test timeout.
  */
 const REVOKER_PROBE_BOUND_MS = 12_000
 
+/**
+ * Which password write a race runs: `change` by the signed-in user, or
+ * `reset` with an emailed token.
+ */
 type PasswordFlow = 'change' | 'reset'
 
 const createdIds: string[] = []
@@ -64,8 +68,7 @@ afterAll(async () => {
 })
 
 /**
- * A verified user whose password is OLD_PASSWORD, tracked for cleanup.
- * @returns The user.
+ * Creates a verified user whose password is `OLD_PASSWORD`, deleted in `afterEach`.
  */
 async function seedUser(): Promise<User> {
   const user = await userRepository.create({
@@ -78,11 +81,9 @@ async function seedUser(): Promise<User> {
 }
 
 /**
- * Everything the password side needs, prepared before the race so the race
- * itself makes no extra pool queries.
- * @param flow - Change (from a session that is spared) or reset (with a token).
- * @param user - The user.
- * @returns A thunk that runs the password write.
+ * Prepares everything the password side needs before the race, so the race
+ * itself makes no extra pool queries, and returns a thunk that runs the write.
+ * A `change` runs from a session that is spared; a `reset` uses a token.
  */
 async function preparePasswordWrite(flow: PasswordFlow, user: User): Promise<() => Promise<void>> {
   if (flow === 'change') {
@@ -103,14 +104,11 @@ async function preparePasswordWrite(flow: PasswordFlow, user: User): Promise<() 
 type Mutation = (run: () => Promise<void>) => Promise<void>
 
 /**
- * Apply every mutation, outermost first, around `run`. Pool note: test
+ * Applies every mutation, outermost first, around `run`. Pool note: test
  * mode has max 2 connections and every race run through this helper
  * holds both. A repository call inside a raced transaction that skipped
  * `tx` would wait for a pool connection that never frees, so the race
  * hangs until a lock probe or the test itself times out.
- * @param mutations - The replacements.
- * @param run - The race.
- * @returns Resolves once `run` settles and every method is restored.
  */
 async function withMutations(mutations: Mutation[], run: () => Promise<void>): Promise<void> {
   const [first, ...rest] = mutations
@@ -119,14 +117,13 @@ async function withMutations(mutations: Mutation[], run: () => Promise<void>): P
 }
 
 /**
- * Replace the three revoke methods with ones that, once `isArmed()` is true,
+ * Replaces the three revoke methods with ones that, once `isArmed()` is true,
  * hold after running until `release` resolves. The revoking side arms it
  * when it takes the user row lock, so only a revoke inside that transaction
  * holds; an earlier unlocked revoke runs through.
  * @param revoked - Called once an armed revoke has run.
  * @param release - Awaited before an armed revoke returns.
- * @param isArmed - Whether the revoking side holds the user row lock yet.
- * @returns The three mutations.
+ * @param isArmed - Whether the revoking side holds the user row lock.
  */
 function holdAfterRevoke(
   revoked: () => void,
@@ -140,18 +137,24 @@ function holdAfterRevoke(
   // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
   const realSession = UserTokenRepository.prototype.revokeAllForSession
   /**
-   * Hold here when armed.
+   * Signals that an armed revoke has run, then waits for the release.
    */
   async function holdIfArmed(): Promise<void> {
     if (!isArmed()) return
     revoked()
     await release
   }
+  /**
+   * Holds an armed `revokeAllForUser` call after it has run.
+   */
   const holdingAll: typeof realAll = async function (this: UserTokenRepository, ...parameters) {
     const ids = await realAll.apply(this, parameters)
     await holdIfArmed()
     return ids
   }
+  /**
+   * Holds an armed `revokeAllForUserExceptSession` call after it has run.
+   */
   const holdingExcept: typeof realExcept = async function (
     this: UserTokenRepository,
     ...parameters
@@ -160,6 +163,9 @@ function holdAfterRevoke(
     await holdIfArmed()
     return ids
   }
+  /**
+   * Holds an armed `revokeAllForSession` call after it has run.
+   */
   const holdingSession: typeof realSession = async function (
     this: UserTokenRepository,
     ...parameters
@@ -183,9 +189,7 @@ function holdAfterRevoke(
 }
 
 /**
- * The login's refresh-token rows for `user`.
- * @param user - The user.
- * @returns How many refresh rows exist.
+ * Counts a user's refresh-token rows, which a refused login must leave at zero.
  */
 async function refreshRowCount(user: User): Promise<number> {
   const [row] = await sql<{ count: number }[]>`
@@ -196,10 +200,7 @@ async function refreshRowCount(user: User): Promise<number> {
 }
 
 /**
- * Whether the stored hash now matches `password`.
- * @param user - The user.
- * @param password - The candidate.
- * @returns True when it matches.
+ * Reports whether the user's stored password hash matches `password`.
  */
 async function isStoredPassword(user: User, password: string): Promise<boolean> {
   const [row] = await sql<{ password_hash: string | null }[]>`
@@ -217,8 +218,8 @@ async function isStoredPassword(user: User, password: string): Promise<boolean> 
  * holds `FOR SHARE` while the other finishes without waiting.
  *
  * Seams, all through `withMutatedMethod`:
- * - login pauses after its `lastLoggedInAt` UPDATE, the one call between
- *   the compare and its transaction;
+ * - login pauses after its `lastLoggedInAt` UPDATE, the
+ *   `UserRepository.update` call between the compare and its transaction;
  * - `UserRepository.lockById` reports each side's backend pid, and can
  *   hold login after it has taken `FOR SHARE`;
  * - the revoking side's session revoke can hold after it has run, inside
@@ -239,10 +240,9 @@ describe.each<PasswordFlow>(['change', 'reset'])(
     /**
      * The login commits first: it takes FOR SHARE and holds it, the password
      * write queues on its row lock, then the login issues its token and commits.
-     * @param user - The user both sides act on.
-     * @param options - Mutation-proof switches.
-     * @param options.revokeBeforeLock - Moves the revoke ahead of the row lock (mutation proof only).
-     * @returns Whether the password side waited, and both outcomes.
+     * `options.revokeBeforeLock`, for the mutation proof only, moves the revoke
+     * ahead of the row lock. Returns whether the password side waited, and both
+     * outcomes.
      */
     async function raceLoginFirst(
       user: User,
@@ -262,6 +262,11 @@ describe.each<PasswordFlow>(['change', 'reset'])(
       const releaseLogin = deferred()
       const passwordPid = deferred<number>()
 
+      /**
+       * Reports the password side's backend pid when it locks `FOR NO KEY UPDATE`
+       * (first revoking, if the mutation proof asks), and holds login after its
+       * `FOR SHARE` lock until released.
+       */
       const lockById: typeof realLockById = async function (this: UserRepository, id, mode, tx) {
         if (mode === 'no key update') {
           passwordPid.resolve(await backendPid(tx))
@@ -324,11 +329,9 @@ describe.each<PasswordFlow>(['change', 'reset'])(
     /**
      * The password write commits first: login compares the old hash and
      * pauses, the password transaction locks, stores and revokes and holds,
-     * then login's FOR SHARE queues behind it.
-     * @param user - The user both sides act on.
-     * @param options - Mutation-proof switches.
-     * @param options.unlockedLoginRead - Replaces login's locked re-read with a plain read (mutation proof only).
-     * @returns Whether login waited, and both outcomes.
+     * then login's FOR SHARE queues behind it. `options.unlockedLoginRead`, for
+     * the mutation proof only, replaces login's locked re-read with a plain
+     * read. Returns whether login waited, and both outcomes.
      */
     async function racePasswordFirst(
       user: User,
@@ -351,6 +354,9 @@ describe.each<PasswordFlow>(['change', 'reset'])(
       // A holder object: TypeScript does not see assignments made inside the callback.
       const flags = { passwordLocked: false }
 
+      /**
+       * Pauses login after its `lastLoggedInAt` update until released.
+       */
       const pausingUpdate: typeof realUpdate = async function (
         this: UserRepository,
         ...parameters
@@ -362,6 +368,11 @@ describe.each<PasswordFlow>(['change', 'reset'])(
         }
         return row
       }
+      /**
+       * Marks the password side locked once it holds its lock, and reports
+       * login's backend pid when it takes `FOR SHARE`, replacing that locked
+       * re-read with a plain read if the mutation proof asks.
+       */
       const lockById: typeof realLockById = async function (this: UserRepository, id, mode, tx) {
         if (mode !== 'share') {
           const row = await realLockById.call(this, id, mode, tx)
@@ -414,8 +425,7 @@ describe.each<PasswordFlow>(['change', 'reset'])(
     }
 
     /**
-     * The login committed first, so the password write revoked and denied its session.
-     * @param race - The race's result.
+     * Asserts the login committed first, so the password write revoked and denied its session.
      */
     async function expectLoginSessionRevoked(
       race: Awaited<ReturnType<typeof raceLoginFirst>>
@@ -434,9 +444,7 @@ describe.each<PasswordFlow>(['change', 'reset'])(
     }
 
     /**
-     * The password write committed first, so login saw the new hash and issued nothing.
-     * @param user - The user.
-     * @param race - The race's result.
+     * Asserts the password write committed first, so login saw the updated hash and issued nothing.
      */
     async function expectLoginRefused(
       user: User,
@@ -463,7 +471,7 @@ describe.each<PasswordFlow>(['change', 'reset'])(
     })
 
     /**
-     * DELIBERATELY red under `MUTATION_PROOF=1`: the revoke runs before
+     * Deliberately red under `MUTATION_PROOF=1`: the revoke runs before
      * the row lock, so the login's token, committed after it, survives.
      */
     it.runIf(process.env.MUTATION_PROOF === '1')(
@@ -475,7 +483,7 @@ describe.each<PasswordFlow>(['change', 'reset'])(
     )
 
     /**
-     * DELIBERATELY red under `MUTATION_PROOF=1`: login re-reads the hash
+     * Deliberately red under `MUTATION_PROOF=1`: login re-reads the hash
      * without `FOR SHARE`, sees the uncommitted write's old value and
      * issues a token.
      */
@@ -494,10 +502,9 @@ describe.each<PasswordFlow>(['change', 'reset'])(
  * which conflicts with FOR SHARE and so must run before the first login
  * locks. The first login then takes FOR SHARE and holds it while the
  * second resumes, re-reads under its own lock, and finishes.
- * @param user - The user both logins act on.
- * @param options - Mutation-proof switches.
- * @param options.exclusiveReRead - Swaps login's FOR SHARE for FOR NO KEY UPDATE (mutation proof only).
- * @returns Whether the second login waited, its outcome while the first was held, and both final outcomes.
+ * `options.exclusiveReRead`, for the mutation proof only, swaps login's FOR
+ * SHARE for FOR NO KEY UPDATE. Returns whether the second login waited, its
+ * outcome while the first was held, and both final outcomes.
  */
 async function raceTwoLogins(
   user: User,
@@ -520,6 +527,9 @@ async function raceTwoLogins(
   // A holder object: TypeScript does not see assignments made inside the callback.
   const calls = { update: 0, lockById: 0 }
 
+  /**
+   * Pauses the first login to update, which is the "second" login, until released.
+   */
   const pausingUpdate: typeof realUpdate = async function (this: UserRepository, ...parameters) {
     const row = await realUpdate.apply(this, parameters)
     calls.update += 1
@@ -529,6 +539,11 @@ async function raceTwoLogins(
     }
     return row
   }
+  /**
+   * Holds the first login to lock after its lock until released, and reports
+   * the other login's backend pid; with `exclusiveReRead` both lock `FOR NO
+   * KEY UPDATE`.
+   */
   const lockById: typeof realLockById = async function (this: UserRepository, id, mode, tx) {
     const lockMode = options.exclusiveReRead ? 'no key update' : mode
     calls.lockById += 1
@@ -588,9 +603,7 @@ async function raceTwoLogins(
 }
 
 /**
- * The second login finished while the first held FOR SHARE, and both kept a session.
- * @param user - The user.
- * @param race - The race's result.
+ * Asserts the second login finished while the first held FOR SHARE, and both kept a session.
  */
 async function expectBothLoggedIn(
   user: User,
@@ -614,7 +627,7 @@ describe('two logins at once', () => {
   })
 
   /**
-   * DELIBERATELY red under `MUTATION_PROOF=1`: an exclusive re-read makes
+   * Deliberately red under `MUTATION_PROOF=1`: an exclusive re-read makes
    * the second login wait for the first.
    */
   it.runIf(process.env.MUTATION_PROOF === '1')(
@@ -658,12 +671,10 @@ describe('the denylist write after commit', () => {
 })
 
 /**
- * A session with one live refresh token, or, with `rotated`, one already
- * rotated so that presenting the first token again takes the grace path.
- * @param user - The session's user.
- * @param options - How to seed it.
- * @param options.rotated - Rotates once; the rotation then presents the rotated-away token.
- * @returns The session id, the raw token the rotation presents, and the session's live token.
+ * Creates a session with one live refresh token, or, with `options.rotated`,
+ * one already rotated once so that presenting the first token again takes the
+ * grace path. Returns the session id, the raw token the rotation presents, and
+ * the session's live token.
  */
 async function seedSession(
   user: User,
@@ -677,10 +688,9 @@ async function seedSession(
 }
 
 /**
- * A session rotated once, with its consumed row aged past the grace
- * window, so replaying the first token is reuse.
- * @param user - The session's user.
- * @returns The session id, the replayed (reused) token, and the live token.
+ * Creates a session rotated once, with its consumed row aged past the grace
+ * window, so replaying the first token is reuse. Returns the session id, the
+ * replayed token, and the live token.
  */
 async function seedAgedSession(
   user: User
@@ -694,9 +704,7 @@ async function seedAgedSession(
 }
 
 /**
- * The refresh rows in one session, all and still live.
- * @param sessionId - The session.
- * @returns Both counts.
+ * Counts a session's refresh rows, all of them and those not revoked.
  */
 async function sessionRows(sessionId: string): Promise<{ total: number; live: number }> {
   const [row] = await sql<{ total: number; live: number }[]>`
@@ -721,13 +729,13 @@ type RotationSettled = PromiseSettledResult<Awaited<ReturnType<typeof rotateRefr
  * The rotation locks first: it takes FOR SHARE, claims (or, on the grace
  * path, passes its checks) and pauses before inserting its next token; the
  * revoking side queues behind it; then the rotation commits.
- * @param revoke - The revoking side: a password write, an account claim, a logout, or a reusing rotation.
- * @param presented - The raw token the rotation presents.
- * @param options - Mutation-proof switches.
- * @param options.unlockedRotation - Makes the rotation take no user lock (mutation proof only).
- * @param options.unlockedRevoker - Makes the revoking side take no user lock (mutation proof only).
- * @param options.revokeBeforeLock - Runs a user-wide revoke just before the revoking side's user lock and makes its own user-wide revokes no-ops (mutation proof only).
- * @returns Whether the revoking side queued behind the rotation, and both outcomes.
+ * `revoke` is the revoking side: a password write, an account claim, a
+ * logout, or a reusing rotation. `options` are switches for the mutation
+ * proofs only: `unlockedRotation` makes the rotation take no user lock,
+ * `unlockedRevoker` makes the revoking side take none, and `revokeBeforeLock`
+ * runs a user-wide revoke just before the revoking side's user lock and makes
+ * its own user-wide revokes no-ops. Returns whether the revoking side queued
+ * behind the rotation, and both outcomes.
  */
 async function raceRotationFirst(
   revoke: () => Promise<unknown>,
@@ -752,6 +760,11 @@ async function raceRotationFirst(
   // A holder object: TypeScript does not see assignments made inside the callback.
   const flags = { reachedLock: false, isRevoking: false }
 
+  /**
+   * Signals when the revoking side reaches its lock and reports the rotation's
+   * backend pid when it takes `FOR SHARE`; the mutation-proof switches skip a
+   * lock or run a revoke first.
+   */
   const lockById: typeof realLockById = async function (this: UserRepository, id, mode, tx) {
     // The rotation took its lock before pausing, so any later call is the revoking side's.
     if (flags.isRevoking) revokerReachedLock.resolve()
@@ -765,6 +778,9 @@ async function raceRotationFirst(
     if (options.unlockedRotation) return
     return realLockById.call(this, id, mode, tx)
   }
+  /**
+   * Pauses the rotation before it inserts its next refresh token, until released.
+   */
   const pausingCreate: typeof realCreate = async function (
     this: UserTokenRepository,
     ...parameters
@@ -823,11 +839,9 @@ async function raceRotationFirst(
 /**
  * The revoking side locks first: it locks the user row, revokes, and holds;
  * the rotation then queues on FOR SHARE. Every denylist write is recorded.
- * @param revoke - The revoking side.
- * @param presented - The raw token the rotation presents.
- * @param options - Mutation-proof switches.
- * @param options.unlockedRotation - Makes the rotation take no user lock (mutation proof only).
- * @returns Whether the rotation waited, both outcomes, and the denylist keys written.
+ * `options.unlockedRotation`, for the mutation proof only, makes the rotation
+ * take no user lock. Returns whether the rotation waited, both outcomes, and
+ * the denylist keys written.
  */
 async function raceRevokerFirst(
   revoke: () => Promise<unknown>,
@@ -850,6 +864,11 @@ async function raceRevokerFirst(
   // A holder object: TypeScript does not see assignments made inside the callback.
   const flags = { revokerLocked: false }
 
+  /**
+   * Marks the revoker locked once it holds its lock, and reports the
+   * rotation's backend pid when it takes `FOR SHARE` after that, skipping that
+   * lock if the mutation proof asks.
+   */
   const lockById: typeof realLockById = async function (this: UserRepository, id, mode, tx) {
     if (mode !== 'share') {
       const row = await realLockById.call(this, id, mode, tx)
@@ -865,6 +884,9 @@ async function raceRevokerFirst(
     return realLockById.call(this, id, mode, tx)
   }
   // Only denySession writes with SET during a direct service call.
+  /**
+   * Records the key of each Redis `SET`, then runs the real one.
+   */
   const recordingSet = function (this: typeof client, ...parameters: Parameters<typeof realSet>) {
     denials.push(String(parameters[0]))
     return realSet.apply(this, parameters)
@@ -911,10 +933,8 @@ async function raceRevokerFirst(
 }
 
 /**
- * The rotation committed first, so the revoking side revoked and denied its new token.
- * @param sessionId - The rotated session.
- * @param revoker - How the revoking side should settle.
- * @param race - The race's result.
+ * Asserts the rotation committed first, so the revoking side revoked and
+ * denied its next token. `revoker` is how the revoking side should settle.
  */
 async function expectRotatedSessionRevoked(
   sessionId: string,
@@ -937,12 +957,10 @@ async function expectRotatedSessionRevoked(
 }
 
 /**
- * The revoking side committed first, so the rotation found its token revoked,
- * killed the session itself after its transaction committed, and denied it.
- * @param sessionId - The session.
- * @param totalBefore - How many rows the session had before the race.
- * @param revoker - How the revoking side should settle.
- * @param race - The race's result.
+ * Asserts the revoking side committed first, so the rotation found its token
+ * revoked, killed the session itself after its transaction committed, and
+ * denied it. `totalBefore` is how many rows the session had before the race,
+ * and `revoker` is how the revoking side should settle.
  */
 async function expectRotationRefused(
   sessionId: string,
@@ -965,7 +983,7 @@ async function expectRotationRefused(
 /**
  * A refresh rotation is raced the same way as the login races above. It
  * takes `FOR SHARE` on the user row before it claims the presented token,
- * so the password side's revoke either starts after the rotation's new
+ * so the password side's revoke either starts after the rotation's next
  * token has committed, or the rotation waits and finds its token revoked.
  * The grace path (a replayed token within `REFRESH_REUSE_GRACE_MS` gets a
  * sibling) is raced too. The same two orderings are run for every other
@@ -982,8 +1000,8 @@ describe.each<PasswordFlow>(['change', 'reset'])(
     /**
      * No mutation proof for the `reset` flow: that flow's revoke waits on
      * the claimed row, so the locked revoke starts after the rotation's
-     * new token has committed even with the rotation's user lock
-     * removed. The `change` flow does have one — see the
+     * next token has committed even with the rotation's user lock
+     * removed. The `change` flow does have one; see the
      * `it.runIf(process.env.MUTATION_PROOF === '1' && flow === 'change')`
      * test below.
      */
@@ -1002,9 +1020,9 @@ describe.each<PasswordFlow>(['change', 'reset'])(
      * No mutation proof, either flow: for `change`, the claim waits on
      * the presented row, which the in-transaction revoke holds, and then
      * finds it revoked even with the rotation's user lock removed; for
-     * `reset`, the revoke has already committed before the claim runs,
-     * so the claim refuses regardless, and the kill that follows queues
-     * on the user row lock.
+     * `reset`, the unlocked first-pass `revokeAllSessions` has already
+     * committed before the claim runs, so the claim refuses regardless, and
+     * the kill that follows queues on the user row lock.
      */
     it('refuses a rotation that waited behind a committed password write', async () => {
       const user = await seedUser()
@@ -1031,9 +1049,10 @@ describe.each<PasswordFlow>(['change', 'reset'])(
 
     /**
      * No mutation proof for the `reset` flow, same reasoning as the
-     * non-grace password-first test above: reset's revoke has already
-     * committed before the grace check runs, so it refuses regardless of
-     * the rotation's user lock. The `change` flow does have one — see the
+     * non-grace password-first test above: reset's unlocked first-pass
+     * `revokeAllSessions` has already committed before the grace check runs, so
+     * it refuses regardless of
+     * the rotation's user lock. The `change` flow does have one; see the
      * `it.runIf(process.env.MUTATION_PROOF === '1' && flow === 'change')`
      * test below.
      */
@@ -1050,9 +1069,9 @@ describe.each<PasswordFlow>(['change', 'reset'])(
     })
 
     /**
-     * DELIBERATELY red under `MUTATION_PROOF=1`: with no user lock, the
+     * Deliberately red under `MUTATION_PROOF=1`: with no user lock, the
      * revoke waits on the claimed row, re-checks it, and never sees the
-     * new row inserted after its snapshot.
+     * row inserted after its snapshot.
      */
     it.runIf(process.env.MUTATION_PROOF === '1' && flow === 'change')(
       'reproduces the rotation-first test with a rotation that takes no user lock',
@@ -1069,7 +1088,7 @@ describe.each<PasswordFlow>(['change', 'reset'])(
     )
 
     /**
-     * DELIBERATELY red under `MUTATION_PROOF=1`: the revoke runs before
+     * Deliberately red under `MUTATION_PROOF=1`: the revoke runs before
      * the sibling exists, and nothing makes the password side wait.
      */
     it.runIf(process.env.MUTATION_PROOF === '1')(
@@ -1087,8 +1106,8 @@ describe.each<PasswordFlow>(['change', 'reset'])(
     )
 
     /**
-     * DELIBERATELY red under `MUTATION_PROOF=1`: the kill marker is not
-     * yet committed when the grace check reads it, so a sibling is
+     * Deliberately red under `MUTATION_PROOF=1`: the kill marker is not
+     * committed when the grace check reads it, so a sibling is
      * issued.
      */
     it.runIf(process.env.MUTATION_PROOF === '1' && flow === 'change')(
@@ -1109,9 +1128,8 @@ describe.each<PasswordFlow>(['change', 'reset'])(
 )
 
 /**
- * A never-verified user with a password: an account a verified Google
- * identity for the same address would claim. Tracked for cleanup.
- * @returns The user.
+ * Creates a never-verified user with a password, the account a verified
+ * Google identity for the same address would claim, deleted in `afterEach`.
  */
 async function seedUnverifiedUser(): Promise<User> {
   const user = await userRepository.create({
@@ -1154,7 +1172,7 @@ describe('an account claim against a concurrent refresh rotation', () => {
   })
 
   /**
-   * DELIBERATELY red under `MUTATION_PROOF=1`: the claim's in-transaction
+   * Deliberately red under `MUTATION_PROOF=1`: the claim's in-transaction
    * revoke runs before its user row lock, so it misses the sibling
    * inserted once the rotation resumes. Removing only the lock would stay
    * green: the claim's own UPDATEs of the user row also wait for the
@@ -1205,9 +1223,9 @@ describe('logout against a concurrent refresh rotation', () => {
   })
 
   /**
-   * DELIBERATELY red under `MUTATION_PROOF=1`: without the user row lock,
+   * Deliberately red under `MUTATION_PROOF=1`: without the user row lock,
    * the logout's revoke waits on the claimed row, re-checks it, and never
-   * sees the new row inserted after its snapshot.
+   * sees the row inserted after its snapshot.
    */
   it.runIf(process.env.MUTATION_PROOF === '1')(
     'reproduces the rotation-first logout test with a logout that takes no user lock',
@@ -1241,7 +1259,7 @@ describe('a reuse kill against a concurrent rotation of the same session', () =>
   })
 
   /**
-   * DELIBERATELY red under `MUTATION_PROOF=1`: a kill without the user
+   * Deliberately red under `MUTATION_PROOF=1`: a kill without the user
    * row lock waits on the claimed row and misses the row inserted after
    * its snapshot.
    */

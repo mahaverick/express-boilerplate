@@ -25,8 +25,7 @@ afterEach(async () => {
 })
 
 /**
- * A verified user with a password.
- * @returns The user's id and email.
+ * Creates a verified user with a password, deleted in `afterEach`, to log in as.
  */
 async function createVerifiedUser(): Promise<{ id: string; email: string }> {
   const email = `login-race-${randomUUID()}@example.test`
@@ -37,11 +36,9 @@ async function createVerifiedUser(): Promise<{ id: string; email: string }> {
 }
 
 /**
- * Run a login that pauses at its `lastLoggedInAt` write, apply `change`
- * while it waits, then let it continue.
- * @param email - The address to log in with.
- * @param change - The committed change to make mid-login.
- * @returns The login's settled outcome.
+ * Runs a login that pauses at its `lastLoggedInAt` write, applies `change`
+ * while it waits, lets it continue and returns how it settled. `change` is the
+ * change to commit mid-login.
  */
 async function loginAround(
   email: string,
@@ -51,6 +48,10 @@ async function loginAround(
   const release = deferred()
   // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
   const realUpdate = UserRepository.prototype.update
+  /**
+   * Stands in for `UserRepository.update`: it blocks the `lastLoggedInAt` write until released and
+   * signals when it gets there.
+   */
   const pausingUpdate: typeof realUpdate = async function (this: UserRepository, ...arguments_) {
     const [, fields] = arguments_
     if ((fields as Partial<NewUser>).lastLoggedInAt !== undefined) {
@@ -73,9 +74,7 @@ async function loginAround(
 }
 
 /**
- * The refresh rows a user holds.
- * @param userId - The user.
- * @returns How many there are.
+ * Counts a user's refresh-token rows, which a refused login must leave at zero.
  */
 async function refreshRows(userId: string): Promise<number> {
   const [row] = await sql<{ count: number }[]>`

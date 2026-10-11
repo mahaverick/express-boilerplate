@@ -20,12 +20,10 @@ afterEach(async () => {
 })
 
 /**
- * A Resend event body and its Svix headers, signed now.
- * @param type - The Resend event type.
- * @param messageId - `data.message_id`.
- * @param data - Extra `data` fields.
- * @param svixId - The event id; a fresh one by default.
- * @returns The body and headers.
+ * Builds a Resend event body and the Svix headers that sign it with this
+ * file's secret, timestamped at call time. `messageId` is the stored message's
+ * Message-ID header, sent as `data.message_id`; `svixId` is a fresh event id by
+ * default and a fixed one to redeliver an event.
  */
 function resendRequest(
   type: string,
@@ -55,11 +53,7 @@ function resendRequest(
 }
 
 /**
- * Apply one Resend request.
- * @param request - The body and headers.
- * @param request.body - The exact body bytes.
- * @param request.headers - The Svix headers.
- * @returns The processing result.
+ * Runs one signed Resend request through `processEmailWebhook` with this file's adapter.
  */
 function apply(request: { body: Buffer; headers: Record<string, string> }) {
   return processEmailWebhook(adapter, request.body, request.headers)

@@ -36,6 +36,9 @@ const userMembershipRepository = new UserMembershipRepository()
 const userRepository = new UserRepository()
 const realInsert = auditLogRepository.insert.bind(auditLogRepository)
 
+/**
+ * An `audit_logs` row as the raw client returns it, limited to the columns the tests compare.
+ */
 interface AuditRow {
   actor_kind: string
   actor_user_id: string | null
@@ -66,10 +69,18 @@ afterAll(async () => {
   await closeQueue()
 })
 
+/**
+ * Returns an address no other seeded user shares, so parallel files never collide on the unique
+ * email.
+ */
 function uniqueEmail(): string {
   return `audit-writes-${randomUUID()}@example.test`
 }
 
+/**
+ * Creates a user, removed after the test, to act as or own the rows under test; `verified` marks
+ * the address verified.
+ */
 async function seedUser(options: { verified?: boolean } = {}): Promise<User> {
   const user = await userRepository.create({ email: uniqueEmail() })
   createdUserIds.push(user.id)
@@ -79,6 +90,9 @@ async function seedUser(options: { verified?: boolean } = {}): Promise<User> {
   return user
 }
 
+/**
+ * Creates a tenant with its own owner, both removed after the test, as the target of a mutation.
+ */
 async function seedTenant(): Promise<{ owner: User; tenant: Tenant }> {
   const owner = await seedUser()
   const tenant = await tenantRepository.create({
@@ -90,12 +104,20 @@ async function seedTenant(): Promise<{ owner: User; tenant: Tenant }> {
   return { owner, tenant }
 }
 
+/**
+ * Creates a user who is a member of `tenant` at `role`, to be the actor or the target of a member
+ * mutation.
+ */
 async function seedMember(tenant: Tenant, role: MembershipRole): Promise<User> {
   const user = await seedUser()
   await userMembershipRepository.create({ userId: user.id, tenantId: tenant.id, role })
   return user
 }
 
+/**
+ * Creates a pending editor invitation for `email` and returns it with the raw token its invitee
+ * would hold.
+ */
 async function seedInvitation(
   tenant: Tenant,
   invitedBy: User,
@@ -118,6 +140,9 @@ async function seedInvitation(
   return { rawToken, invitation }
 }
 
+/**
+ * Reads the audit rows one action wrote for a tenant.
+ */
 async function rowsFor(tenantId: string, action: string): Promise<AuditRow[]> {
   return sql<AuditRow[]>`
     select actor_kind, actor_user_id, access, tenant_id, target_type, target_id, metadata
@@ -127,8 +152,7 @@ async function rowsFor(tenantId: string, action: string): Promise<AuditRow[]> {
 /**
  * Backdates a tenant's `updated_at` by an hour, so "left alone" is visible
  * at any clock resolution.
- * @param tenantId - The tenant to backdate.
- * @returns The new `updated_at`, as the raw client returns it: text.
+ * @returns The backdated `updated_at`, as the raw client returns it: text.
  */
 async function backdateTenant(tenantId: string): Promise<string> {
   const [row] = await sql<{ updated_at: string }[]>`
@@ -138,12 +162,20 @@ async function backdateTenant(tenantId: string): Promise<string> {
   return row.updated_at
 }
 
+/**
+ * Reads a tenant's `updated_at` as text, to compare with the backdated value.
+ */
 async function tenantUpdatedAt(tenantId: string): Promise<string | undefined> {
   const [row] = await sql<{ updated_at: string }[]>`
     select updated_at from tenants where id = ${tenantId}`
   return row?.updated_at
 }
 
+/**
+ * Backdates a tenant's settings `updated_at` by an hour, so "left alone" is
+ * visible at any clock resolution.
+ * @returns The backdated `updated_at`, as the raw client returns it: text.
+ */
 async function backdateSettings(tenantId: string): Promise<string> {
   const [row] = await sql<{ updated_at: string }[]>`
     update tenant_settings set updated_at = now() - interval '1 hour'
@@ -152,6 +184,9 @@ async function backdateSettings(tenantId: string): Promise<string> {
   return row.updated_at
 }
 
+/**
+ * Reads a tenant's settings `updated_at` as text, to compare with the backdated value.
+ */
 async function settingsUpdatedAt(tenantId: string): Promise<string | undefined> {
   const [row] = await sql<{ updated_at: string }[]>`
     select updated_at from tenant_settings where tenant_id = ${tenantId}`
@@ -162,8 +197,8 @@ async function settingsUpdatedAt(tenantId: string): Promise<string | undefined> 
  * Runs `run`, then fails its transaction, after letting the real audit
  * insert happen: a row written through `tx` rolls back with the change; one
  * written on the pool would survive.
- * @param run - The mutation under test; must run inside a transaction that
- * this helper fails.
+ * @param run - The mutation under test; its audit insert must run on the
+ * transaction that the thrown error rolls back.
  */
 async function expectRollback(run: () => Promise<unknown>): Promise<void> {
   await withMutatedMethod(
@@ -523,7 +558,7 @@ describe('invitation.resent', () => {
 
 /**
  * A stored address whose domain is no hostname (the invite validator
- * rejects these; a legacy row can still hold one) must not block a resend
+ * rejects these; a legacy row can hold one) must not block a resend
  * or a revoke: the audit entry records a null domain.
  */
 describe('an invitation whose stored domain is no hostname', () => {

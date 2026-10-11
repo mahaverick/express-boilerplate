@@ -15,64 +15,55 @@ import { withMutatedMethod } from '../../helpers/mutate'
 const userRepository = new UserRepository()
 
 /**
- * A disposable email, unique to one test run.
- * @returns An email guaranteed unique to this call.
+ * Returns an address no other test row shares, for the user a test creates.
  */
 function uniqueEmail(): string {
   return `claim-token-mutation-${randomUUID()}@example.test`
 }
 
 /**
- * WHY `Date.now`, NOT a repository method. Unlike reuse detection
- * (`token-reuse-mutation.test.ts`, which mutates
- * `UserTokenRepository.prototype.revokeAllForSession`), `claimToken`'s
- * check —
+ * The mutation pins `Date.now`, not a repository method. Unlike reuse
+ * detection (`token-reuse-mutation.test.ts`, which mutates
+ * `UserTokenRepository.prototype.revokeAllForSession`), `claimToken`'s check
+ * is inline in the function:
  *
  * ```
  * if (claimed.expiresAt.getTime() <= Date.now()) return undefined
  * ```
  *
- * — is inline in the function itself, not delegated to any application
- * class `withMutatedMethod` can reach. There is no repository method whose
- * absence would reproduce "the row is returned unconditionally": claimOnce
- * already ignores expiry on its own, by design, so mutating it changes
- * nothing about THIS check. `Date` is, itself, exactly the "shared,
- * already-mutable object" `withMutatedMethod`'s own doc comment asks for —
- * just a built-in one rather than one this codebase defines. Pinning
- * `Date.now()` to epoch 0 for the lifetime of one `claimToken` call makes
- * the comparison's right-hand side smaller than any real, positive
- * `expiresAt.getTime()` could ever be, so the check can never fire —
- * exactly "return the row unconditionally."
+ * No application class carries it for `withMutatedMethod` to reach, and no
+ * repository method's absence would reproduce "the row is returned
+ * unconditionally": `claimOnce` already ignores expiry by design, so mutating
+ * it changes nothing about this check. `Date` is the shared, already-mutable
+ * object `withMutatedMethod` asks for, a built-in one. Pinning `Date.now()` to
+ * epoch 0 for one `claimToken` call makes the comparison's right-hand side
+ * smaller than any real, positive `expiresAt.getTime()`, so the check never
+ * fires.
  *
- * Blast radius, deliberately kept small: the token is issued, and its
- * already-expired `expiresAt` is fixed at insert time, BEFORE the mutation
- * window opens — `createTokenRow` computes `expiresAt` from the real
- * `Date.now()`, and `claimOnce`'s own revocation timestamps
- * (`revokedAt`/`consumedAt`/`updatedAt`) are all written via Postgres's own
- * `now()` in the SQL text (see `BaseRepository.touched` and `claimOnce`
- * itself), never via this process's `Date.now()`. So the only thing
- * reading the faked clock during the mutation window is the one `<=`
- * comparison in `claimToken` — nothing else in this file's window depends
- * on wall-clock time, and no other test file's assertions do either:
- * vitest's `pool: 'forks'` runs one test file at a time per worker
- * process, and this mutation lives entirely inside one `await`.
+ * The blast radius is small. The token is issued, and its already-expired
+ * `expiresAt` fixed, before the mutation window opens: `createTokenRow`
+ * computes `expiresAt` from the real `Date.now()`, and `claimOnce` writes its
+ * `revokedAt`, `consumedAt` and `updatedAt` through Postgres's `now()` in the
+ * SQL text (see `BaseRepository.touched`), never this process's `Date.now()`.
+ * So the one `<=` comparison in `claimToken` is the only reader of the faked
+ * clock in the window. The mutation lives inside one `await`, and vitest's
+ * `pool: 'forks'` runs one test file at a time per worker process, so no
+ * other file's assertions see it.
  *
- * Two tests, matching `token-reuse-mutation.test.ts`'s own pattern:
+ * Two tests, matching `token-reuse-mutation.test.ts`:
  *
- * 1. Always on, both directions in one run: mutate the clock, show an
+ * 1. Always on, both directions in one run: mutate the clock and show an
  *    expired token is returned instead of refused, then let the harness
- *    restore it and show a FRESH expired token is refused again. This is
- *    what `pnpm test` and CI run, and it is always green — a regression
- *    test for the harness's integration with this check, not a
- *    demonstration of red output.
+ *    restore it and show a fresh expired token is refused again. This is what
+ *    `pnpm test` and CI run. It is always green, a regression test for the
+ *    harness's integration with this check, not a demonstration of red output.
  *
- * 2. `it.runIf(process.env.MUTATION_PROOF === '1')`, DELIBERATELY red
- *    under that flag: it reproduces, assertion for assertion, the real
- *    "refuses an EXPIRED token" test
- *    (`tests/integration/services/session.service.test.ts`) against the
- *    same mutated clock, so the failure shown is the actual regression
- *    test failing — not a hand-written stand-in for it. Skipped by
- *    default, so the file is green under `pnpm test`/CI without anyone
+ * 2. `it.runIf(process.env.MUTATION_PROOF === '1')`, deliberately red under
+ *    that flag: it reproduces, assertion for assertion, the real "refuses an
+ *    EXPIRED token" test (`tests/integration/services/session.service.test.ts`)
+ *    against the same mutated clock, so the failure shown is the actual
+ *    regression test failing, not a hand-written stand-in. It is skipped by
+ *    default, so the file is green under `pnpm test` and CI without anyone
  *    editing anything:
  *
  *    ```
@@ -80,8 +71,8 @@ function uniqueEmail(): string {
  *    pnpm exec vitest run tests/integration/services/claim-token-mutation.test.ts                    # green
  *    ```
  *
- *    No file changes between the two runs — only the environment variable
- *    differs — and `git status --porcelain` stays empty throughout.
+ *    No file changes between the two runs, only the environment variable, so
+ *    `git status --porcelain` stays empty throughout.
  */
 describe("mutation-test harness, proven on claimToken's expiry check", () => {
   const createdUserIds: string[] = []
@@ -93,8 +84,7 @@ describe("mutation-test harness, proven on claimToken's expiry check", () => {
   })
 
   /**
-   * Create a disposable user row for a test and track it for cleanup.
-   * @returns The created user's id.
+   * Creates the user that owns the tokens a test issues, deleted in `afterEach`.
    */
   async function createUser(): Promise<string> {
     const user: User = await userRepository.create({ email: uniqueEmail() })
@@ -105,16 +95,16 @@ describe("mutation-test harness, proven on claimToken's expiry check", () => {
   it('faking Date.now() lets claimToken return an expired row; restoring it refuses that row again', async () => {
     const userId = await createUser()
     /**
-     * Already expired the instant it is issued — `expiresAt` is fixed
-     * here, using the REAL clock, before the mutation window opens below.
+     * Already expired the instant it is issued: `expiresAt` is fixed here,
+     * from the real clock, before the mutation window opens below.
      */
     const issued = await issueToken(userId, 'email_verification', -1000)
 
     /**
-     * MUTATED: `Date.now()` pinned to epoch 0. `claimed.expiresAt.getTime()`
-     * — a real, positive epoch-ms value in the past — can never be `<= 0`,
-     * so `claimToken`'s expiry check can never fire, and the expired row
-     * comes back as if it were live.
+     * Mutated: `Date.now()` is pinned to epoch 0. `claimed.expiresAt.getTime()`,
+     * a real, positive epoch-ms value in the past, can never be `<= 0`, so
+     * `claimToken`'s expiry check never fires and the expired row comes back
+     * as if it were live.
      */
     await withMutatedMethod(
       Date,
@@ -127,19 +117,19 @@ describe("mutation-test harness, proven on claimToken's expiry check", () => {
     )
 
     /**
-     * RESTORED: a fresh expired token proves the check is back, using the
-     * exact same sequence of calls. (Re-presenting `issued.raw` here would
-     * only prove single-use claiming, which the `claimToken` describe
-     * block in `session.service.test.ts` already covers — a fresh token
-     * isolates this assertion to the expiry check alone.)
+     * Restored: a fresh expired token proves the check is back, using the
+     * same sequence of calls. Re-presenting `issued.raw` would only prove
+     * single-use claiming, which the `claimToken` describe block in
+     * `session.service.test.ts` already covers; a fresh token isolates this
+     * assertion to the expiry check.
      */
     const issuedAfterRestore = await issueToken(userId, 'email_verification', -1000)
     expect(await claimToken(issuedAfterRestore.raw, 'email_verification')).toBeUndefined()
   })
 
   /**
-   * DELIBERATELY red when run with `MUTATION_PROOF=1` — see this file's
-   * header comment. Left unset, this test is skipped and the file is
+   * Deliberately red when run with `MUTATION_PROOF=1`, as the describe
+   * block's comment explains. Left unset, this test is skipped and the file is
    * green.
    */
   it.runIf(process.env.MUTATION_PROOF === '1')(

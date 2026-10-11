@@ -20,10 +20,16 @@ const userRepository = new UserRepository()
 const tenantRepository = new TenantRepository()
 const userMembershipRepository = new UserMembershipRepository()
 
+/**
+ * Returns an address no other row shares, for a user the test inserts.
+ */
 function uniqueEmail(): string {
   return `tx-${randomUUID()}@example.test`
 }
 
+/**
+ * Returns a slug no other tenant shares, for a tenant the test creates.
+ */
 function uniqueSlug(): string {
   return `tx-${randomUUID()}`
 }
@@ -90,11 +96,11 @@ describe('withTransaction and repository executors, against real Postgres', () =
 
   it('UserRepository.create writes through a passed tx, and rolls back when the caller throws after it resolves', async () => {
     /**
-     * `{ email }` alone, with no other columns, reuses the exact shape
-     * `tenant.repository.test.ts`'s own `createUser()` helper already
-     * relies on (a bare `userRepository.create({ email: uniqueEmail() })`),
-     * so this is a proven-working `NewUser` shape, not a new assumption
-     * about the `users` table's NOT NULL columns.
+     * `{ email }` alone, with no other columns, is the shape
+     * `tenant.repository.test.ts`'s `createUser()` helper relies on (a bare
+     * `userRepository.create({ email: uniqueEmail() })`), so it is a
+     * proven-working `NewUser` shape, not an assumption about the `users`
+     * table's NOT NULL columns.
      */
     const email = uniqueEmail()
 
@@ -168,12 +174,11 @@ describe('withTransaction and repository executors, against real Postgres', () =
     // The tenant row itself never committed.
     expect(await tenantRepository.findBySlug(slug)).toBeUndefined()
     /**
-     * Nor did its owner membership. `ownerId` never got a tenant id back
-     * (the insert that would have produced one rolled back), so this
-     * checks by user rather than by (user, tenant): a fresh user created
-     * only for this test must end up a member of nothing at all if the
-     * membership insert really rolled back with the rest of the
-     * transaction.
+     * Nor did its owner membership. The insert that would have produced a
+     * tenant id rolled back, so this checks by user rather than by
+     * (user, tenant): a user created only for this test must be a member of
+     * nothing at all if the membership insert rolled back with the rest of
+     * the transaction.
      */
     expect(await userMembershipRepository.listByUser(ownerId)).toEqual([])
   })

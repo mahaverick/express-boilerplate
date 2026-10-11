@@ -65,13 +65,8 @@ const DEFAULT_REMINDER_METADATA: ReminderMetadata = {
 }
 
 /**
- * Insert one `onboarding.reminder_sent` entry at a chosen time (an insert
- * may name `occurred_at`; only UPDATE and DELETE are refused).
- * @param tenantId - The tenant it is filed in.
- * @param actorId - The staff member.
- * @param occurredAt - When it was sent.
- * @param metadata - Its metadata.
- * @returns The entry's id.
+ * Inserts one `onboarding.reminder_sent` entry at a chosen time (an insert may
+ * name `occurred_at`; only UPDATE and DELETE are refused) and returns its id.
  */
 async function addReminderEntry(
   tenantId: string,
@@ -356,11 +351,17 @@ describe('parity with the customer read', () => {
       // Complete outranks dismissed; a retired key is no progress.
       createOnboardingTenant({ startedAt: daysAgo(10, now), dismissedAt: daysAgo(9, now) }),
     ])
+    /**
+     * Returns the tenant of the fixture at `index`.
+     */
     const tenantAt = (index: number): Tenant => {
       const fixture = fixtures[index]
       if (!fixture) throw new Error(`setup: no tenant ${index}`)
       return fixture.tenant
     }
+    /**
+     * Returns the owner's id of the fixture at `index`.
+     */
     const ownerAt = (index: number): string => {
       const fixture = fixtures[index]
       if (!fixture) throw new Error(`setup: no tenant ${index}`)
@@ -416,6 +417,10 @@ describe('parity with the customer read', () => {
       })
       const staff = await getTenantOnboardingDetail(tenant.id, now)
       const customer = await getTenantOnboarding(tenant.id, { userId: NONE }, now)
+      /**
+       * Formats a date as ISO text, or null, so staff, derived and customer values compare
+       * directly.
+       */
       const isoOf = (date: Date | null): string | null => date?.toISOString() ?? NONE
       expect({
         id: tenant.id,

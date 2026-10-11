@@ -34,18 +34,14 @@ afterEach(async () => {
 })
 
 /**
- * Compare two strings, for sorting ids.
- * @param left - One id.
- * @param right - The other.
- * @returns Their order.
+ * Orders two ids as text, so id lists compare regardless of row order.
  */
 function byText(left: string, right: string): number {
   return left.localeCompare(right)
 }
 
 /**
- * A soft-deleted user, ready to purge.
- * @returns Their id.
+ * Creates a soft-deleted user, ready to purge, and returns its id.
  */
 async function deletedUser(): Promise<string> {
   const user = await createTrackedUser()
@@ -54,10 +50,7 @@ async function deletedUser(): Promise<string> {
 }
 
 /**
- * Insert one undelivered outbox row.
- * @param distinctId - Its distinct id.
- * @param event - Its event name.
- * @returns Its id.
+ * Inserts one undelivered outbox row for `distinctId` and returns its id.
  */
 async function outboxRow(distinctId: string, event = 'probe_event'): Promise<string> {
   const [row] = await sql<{ id: string }[]>`
@@ -69,8 +62,7 @@ async function outboxRow(distinctId: string, event = 'probe_event'): Promise<str
 }
 
 /**
- * The ids of every outbox row.
- * @returns The ids, sorted.
+ * Lists the ids of every outbox row, sorted as text.
  */
 async function outboxIds(): Promise<string[]> {
   const rows = await sql<{ id: string }[]>`select id from analytics_outbox`

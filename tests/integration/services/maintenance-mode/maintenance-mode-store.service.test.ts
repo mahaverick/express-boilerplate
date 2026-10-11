@@ -23,9 +23,7 @@ import { waitUntil } from '../../../helpers/timing'
 const stores: MaintenanceModeStore[] = []
 
 /**
- * A started store, stopped after the test.
- * @param reloadIntervalMs - Its backstop interval.
- * @returns The store.
+ * Starts a store, stopped in `afterEach`, whose reload backstop runs every `reloadIntervalMs`.
  */
 async function startedStore(reloadIntervalMs = 60_000): Promise<MaintenanceModeStore> {
   const store = createMaintenanceModeStore({ reloadIntervalMs })
