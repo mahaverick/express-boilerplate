@@ -39,8 +39,7 @@ vi.mock('@/configs/env.config', async (importOriginal) => {
 const fake: { posthog?: FakePosthog } = {}
 
 /**
- * The running fake.
- * @returns It.
+ * The fake PostHog `beforeAll` started, or a throw before it has.
  */
 function posthog(): FakePosthog {
   if (!fake.posthog) throw new Error('the fake PostHog is not running')
@@ -48,10 +47,8 @@ function posthog(): FakePosthog {
 }
 
 /**
- * A flag already in the project.
- * @param key - Its key.
- * @param filters - Its filters.
- * @returns The list entry.
+ * A list entry for a flag already in the project, with the given key and
+ * filters.
  */
 function existing(key: string, filters: Record<string, unknown>): FakePosthogFeatureFlag {
   return {
@@ -69,7 +66,6 @@ function existing(key: string, filters: Record<string, unknown>): FakePosthogFea
 /**
  * Both reference flags, exactly as the registry declares them, with the
  * tenant group at index 2.
- * @returns The two list entries.
  */
 function inSync(): FakePosthogFeatureFlag[] {
   return [
@@ -89,9 +85,8 @@ function inSync(): FakePosthogFeatureFlag[] {
 }
 
 /**
- * Run the script, capturing what it prints.
- * @param argv - Its arguments.
- * @returns The exit code, stdout and stderr.
+ * Runs the script with the given arguments and returns its exit code and
+ * what it printed to stdout and stderr.
  */
 async function run(argv: string[] = []): Promise<{ code: number; stdout: string; stderr: string }> {
   const out: string[] = []
@@ -110,8 +105,7 @@ async function run(argv: string[] = []): Promise<{ code: number; stdout: string;
 }
 
 /**
- * The fake's create requests' paths.
- * @returns One path per POST.
+ * The paths of the fake's create requests, one per POST.
  */
 function createRequests(): string[] {
   return posthog()

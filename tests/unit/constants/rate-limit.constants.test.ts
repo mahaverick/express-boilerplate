@@ -3,7 +3,7 @@
  * limiter's Redis key prefix (the `name` field — a live counter's key
  * depends on it, so changing one resets production counters on deploy)
  * stays exactly the 30 literal strings, in order; (2) every entry's
- * `windowMs`, `limit` and `keyBy` kind match today's literal values, so a
+ * `windowMs`, `limit` and `keyBy` kind match the literal values below, so a
  * budget or key-axis drift is caught even though it changes no Redis key;
  * (3) the five key-derivation functions produce byte-identical output
  * for a fixed input, so a caller mid-window (Redis already holding

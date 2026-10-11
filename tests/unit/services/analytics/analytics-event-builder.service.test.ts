@@ -77,11 +77,8 @@ const SLUG_PROBE = 'slug-probe-co'
 const NONE = null
 
 /**
- * An inserted audit row, as the repository returns it.
- * @param action - The action.
- * @param metadata - Its validated metadata.
- * @param overrides - Other columns to set.
- * @returns The row.
+ * An inserted audit row, as the repository returns it, for `action` with its
+ * already validated `metadata`. `overrides` replaces any other column.
  */
 function auditRow(
   action: AuditAction,
@@ -542,9 +539,8 @@ describe('scrubPiiProperties', () => {
 
 /**
  * A seeded pseudo-random generator (mulberry32), so a failing case
- * reproduces on every run.
- * @param seed - The seed.
- * @returns A function returning a number in [0, 1).
+ * reproduces on every run. Each call of the returned function yields a number
+ * in [0, 1).
  */
 function seededRandom(seed: number): () => number {
   let state = seed
@@ -558,9 +554,8 @@ function seededRandom(seed: number): () => number {
 
 /**
  * A seed derived from an action's name, so each action draws the same
- * samples whether or not the others run.
- * @param action - The audit action.
- * @returns A 32-bit seed.
+ * samples whether or not the others run. The seed is an unsigned 32-bit
+ * FNV-1a hash of the name.
  */
 function seedOf(action: string): number {
   let hash = 2_166_136_261
@@ -618,8 +613,6 @@ const BANNED_FIELD_CANDIDATES: readonly unknown[] = [
 /**
  * The candidates for one metadata field: a slug and a banned field each get
  * probe text of their own.
- * @param key - The metadata key.
- * @returns The candidate values.
  */
 function candidatesFor(key: string): readonly unknown[] {
   if (key === 'slug') return [SLUG_PROBE]
@@ -629,11 +622,8 @@ function candidatesFor(key: string): readonly unknown[] {
 /**
  * Up to `count` metadata objects that `schema` accepts, each field drawn
  * from the candidates its own schema accepts (a banned field from its own
- * candidates).
- * @param schema - An audit action's strict metadata schema.
- * @param random - The seeded generator.
- * @param count - How many to draw.
- * @returns The valid samples.
+ * candidates). `schema` is an audit action's strict metadata schema, and
+ * `random` is the seeded generator that makes the draw repeatable.
  */
 function sampleMetadata(
   schema: z.ZodType,
@@ -888,6 +878,10 @@ describe('onboarding_step_completed from both sources', () => {
       },
       TRACE
     )
+    /**
+     * The sorted property keys that are neither common to every event nor in
+     * `extra`, which is what the event adds of its own.
+     */
     const own = (properties: Record<string, unknown>, extra: string[]): string[] =>
       Object.keys(properties)
         .filter((key) => !common.has(key) && !extra.includes(key))

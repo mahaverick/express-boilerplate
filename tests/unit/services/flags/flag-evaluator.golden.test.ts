@@ -1,11 +1,11 @@
 /**
- * @file The golden fixtures: 129 contexts PostHog's remote `/flags`
- * answered during the planning probe (41 flags), replayed through the
+ * @file The golden fixtures: 129 contexts, across 41 flags, whose answers
+ * were captured from PostHog's remote `/flags` and are replayed through the
  * evaluator. Each case checks the spec value and reason for a registry entry
  * with fallback `false` / `variants[0]`, the PostHog reason code it maps to,
  * the PostHog value on a match or a holdout, and what the parser says about
  * the flag. Unsupported flags are evaluated anyway (forced supported here),
- * because they still pin PostHog's semantics for absent properties, dates
+ * because they pin PostHog's semantics for absent properties, dates
  * and semver.
  */
 import { readFileSync } from 'node:fs'
@@ -50,7 +50,7 @@ const FLAG_REASON_POSTHOG_CODES: Readonly<Record<FlagReason, string | null>> = {
 }
 
 /**
- * One captured case, as `golden-fixtures.json` stores it.
+ * One captured case, as `flag-golden-fixtures.json` stores it.
  */
 interface GoldenFixture {
   flagKey: string
@@ -85,16 +85,16 @@ const file = JSON.parse(readFileSync(FIXTURES_PATH, 'utf8')) as {
 }
 
 /**
- * The probe's name for a construct, where it differs from the parser's.
+ * The fixture file's name for an unsupported construct, where it differs from
+ * the parser's.
  */
 const CONSTRUCT_NAMES: Readonly<Record<string, string>> = {
   property_key_outside_traits: 'property_key',
 }
 
 /**
- * The registry entry a case was evaluated against.
- * @param fixture - The case.
- * @returns The entry.
+ * The registry entry a case was evaluated against: a boolean flag with
+ * fallback `false`, or a multivariate one whose fallback is its first variant.
  */
 function entryOf(fixture: GoldenFixture): FlagEntry {
   const base = {
@@ -115,10 +115,9 @@ function entryOf(fixture: GoldenFixture): FlagEntry {
 }
 
 /**
- * The context of a case, with a relative signup date rebuilt against now.
- * @param fixture - The case.
- * @param now - The moment to rebuild relative dates from.
- * @returns The context.
+ * The context of a case. A case that records its signup date as days ago has
+ * it rebuilt from `now` (epoch milliseconds), since the date operators compare
+ * against the current time.
  */
 function contextOf(fixture: GoldenFixture, now: number): FlagContext {
   const personProperties = { ...fixture.context.personProps }

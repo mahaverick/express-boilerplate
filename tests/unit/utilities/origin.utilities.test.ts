@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+/**
+ * Loads `isAllowedOrigin` against a mocked env with the given `WEB_URL`, optional
+ * `CORS_ALLOWED_ORIGINS` and optional `APEX_URL`.
+ */
 async function load(webUrl: string, allowed?: string, apexUrl?: string) {
   vi.doMock('@/configs/env.config', () => ({
     getEnv: () => ({ WEB_URL: webUrl, CORS_ALLOWED_ORIGINS: allowed, APEX_URL: apexUrl }),

@@ -27,9 +27,8 @@ const BASE: SeededEvent = {
 const NONE = null
 
 /**
- * Map one seeded event.
- * @param event - The event's columns by name, over BASE.
- * @returns The mapped row.
+ * Maps one seeded event for `USER_TARGET`, with `event` overriding the columns
+ * of `BASE`, and throws when the mapper drops the row.
  */
 function mapOne(event: Partial<SeededEvent>): ReturnType<typeof mapTimelineResults>[number] {
   const [row] = mapTimelineResults([resultRow({ ...BASE, ...event })], USER_TARGET)

@@ -4,15 +4,15 @@ import { REQUEST_ID_HEADER } from '@/middlewares/request-id.middleware'
 import { errorResponse, messageResponse, successResponse } from '@/utilities/response.utilities'
 
 /**
- * Build a minimal mock Express response, enough to assert on `.status()`,
- * `.json()` and `.getHeader()` calls.
+ * Builds a minimal mock Express response, enough to assert on `.status()`,
+ * `.json()` and `.getHeader()` calls. Returns the response, its captured JSON
+ * `body`, and the `status` and `getHeader` spies.
  *
- * The `status` spy is returned as its own property, not read back off
- * `response` in assertions — `response` is typed as `Response`, and
+ * The spies are returned as their own properties, not read back off
+ * `response` in assertions: `response` is typed as `Response`, and
  * `@typescript-eslint/unbound-method` flags any reference to one of its
  * methods taken as a value rather than called, which `toHaveBeenCalledWith`
  * would otherwise trigger.
- * @returns The mock response, its captured JSON body, and the `status` spy.
  */
 function mockResponse(): {
   response: Response

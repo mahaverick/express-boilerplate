@@ -1,10 +1,10 @@
 /**
  * @file docker-compose.yml deliberately moves Postgres/Redis off their
  * default host ports (5433/6380), so the suite cannot silently talk to a
- * developer's own native instance instead of the compose stack — silent
- * for Redis specifically, since any Redis answers PING. This reads
- * docker-compose.yml and .env.test off disk and asserts they agree on a
- * non-default port, rather than asserting on `getEnv()` at runtime: CI's
+ * developer's own native instance instead of the compose stack; that would
+ * go unnoticed for Redis in particular, since any Redis answers PING. This
+ * reads docker-compose.yml and .env.test off disk and asserts they agree on
+ * a non-default port, rather than asserting on `getEnv()` at runtime: CI's
  * `services:` publish the container-default ports, so a runtime assertion
  * against the live environment is red on CI by construction.
  */
@@ -13,28 +13,28 @@ import net from 'node:net'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
+/**
+ * The text of a file at the repository root.
+ */
 const read = (file: string): string => fs.readFileSync(path.resolve(process.cwd(), file), 'utf8')
 
 const compose = read('docker-compose.yml')
 const envTest = read('.env.test')
 
 /**
- * The host-side port docker-compose.yml publishes for one service.
+ * The host-side port docker-compose.yml publishes for the compose service `service`.
  *
- * Scoped to the named service's own block rather than grepping the whole
- * file for a port number: a bare search for "5433" would be satisfied by the
- * header comment that explains the choice, so the assertion would pass even
- * if the `ports:` mapping itself had been reverted.
+ * It reads the named service's own block rather than grepping the whole file for a port
+ * number: a bare search for "5433" would be satisfied by the header comment that explains the
+ * choice, so the assertion would pass even if the `ports:` mapping itself had been reverted.
  *
- * Parsed line-by-line rather than with one multiline regex — the obvious
- * `/^\s*ports:.*?['"](\d+):(\d+)['"]/m` puts two lazy quantifiers next to
- * each other, which sonarjs/super-linear-regex flags as backtracking-prone.
- * The same reason rules out matching the `ports:` mapping line itself
- * (`['[<bind-address>:]<host>:<container>', ...]`) with a `(\d+):(\d+)`
- * pattern; it is split on `:` instead, taking the segment before the
- * always-last container port, whether or not a bind address prefixes it.
- * @param service - The compose service name, e.g. "postgres".
- * @returns The published host port, as a string.
+ * It parses line by line rather than with one multiline regex: the obvious
+ * `/^\s*ports:.*?['"](\d+):(\d+)['"]/m` is flagged by sonarjs/super-linear-regex as
+ * backtracking-prone (it puts two lazy quantifiers next to each other). The same rule rules out
+ * matching the `ports:` mapping line itself
+ * (`['[<bind-address>:]<host>:<container>', ...]`) with a `(\d+):(\d+)` pattern, so it splits
+ * on `:` and takes the segment before the always-last container port, whether or not a bind
+ * address prefixes it.
  */
 const composeHostPort = (service: string): string => {
   const lines = compose.split(/\r?\n/)
@@ -56,9 +56,7 @@ const composeHostPort = (service: string): string => {
 }
 
 /**
- * The port .env.test's URL for `key` points at.
- * @param key - The variable name, e.g. "DATABASE_URL".
- * @returns The port component of that URL, as a string.
+ * The port that the URL in .env.test's `key` (such as DATABASE_URL) points at.
  */
 const envTestPort = (key: string): string => {
   const line = envTest.split(/\r?\n/).find((candidate) => candidate.startsWith(`${key}=`))

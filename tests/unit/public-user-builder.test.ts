@@ -10,6 +10,10 @@ import { describe, expect, it } from 'vitest'
 const SRC = path.resolve(process.cwd(), 'src')
 const ALLOWED = new Set(['presenters/user.presenter.ts'])
 
+/**
+ * Every TypeScript file under src/ as a path relative to it with POSIX
+ * separators.
+ */
 function sourceFiles(directory = SRC): string[] {
   return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const full = path.join(directory, entry.name)
@@ -18,6 +22,10 @@ function sourceFiles(directory = SRC): string[] {
   })
 }
 
+/**
+ * The `path:line` of each `toPublicUser(` call in one file, skipping comment
+ * lines. `relativePath` is relative to src/.
+ */
 function callSites(relativePath: string, source: string): string[] {
   return source
     .split('\n')

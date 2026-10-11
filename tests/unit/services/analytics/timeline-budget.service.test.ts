@@ -1,7 +1,7 @@
 /**
  * @file takeTimelineQueryBudget with a Redis that fails (no real Redis): the
- * budget fails open with a `warn`, and a refused query whose entry cannot be
- * removed is still refused.
+ * budget fails open with a `warn`, and a refused query is refused even when
+ * its entry cannot be removed.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { takeTimelineQueryBudget } from '@/services/analytics/timeline-budget.service'

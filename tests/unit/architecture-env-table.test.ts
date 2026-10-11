@@ -15,8 +15,6 @@ const HEADER = /^\| Variable +\| Required +\| Default +\| What it does +\|$/
 /**
  * Split a Markdown table row into trimmed cells, so prettier's column
  * padding does not count as a difference. An escaped `\|` stays in its cell.
- * @param row - One table line.
- * @returns The row's cells.
  */
 function cells(row: string): string[] {
   return row
@@ -28,9 +26,8 @@ function cells(row: string): string[] {
 }
 
 /**
- * The environment table in ARCHITECTURE.md, from its header row to the first
- * line that is not a table row.
- * @returns Each row's cells, the separator row included.
+ * The environment table in ARCHITECTURE.md as each row's cells, the separator row included,
+ * from its header row to the first line that is not a table row.
  */
 function tableRows(): string[][] {
   const lines = architecture.split('\n')
@@ -41,7 +38,9 @@ function tableRows(): string[][] {
   return table.map((line) => cells(line))
 }
 
-// Prettier widens the separator's dashes to the column width.
+/**
+ * Collapse a separator row's dashes to `---`, because prettier widens them to the column width.
+ */
 const normalise = (row: string[]): string[] => row.map((cell) => (/^-+$/.test(cell) ? '---' : cell))
 
 describe('ARCHITECTURE.md environment table', () => {

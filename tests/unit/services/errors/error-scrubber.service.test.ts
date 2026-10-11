@@ -13,6 +13,10 @@ import {
   TRUNCATION_MARKER,
 } from '@/services/errors/error-scrubber.service'
 
+/**
+ * One case of the vector file that the react and apex clients also run, so
+ * the same rule gives the same output in all three.
+ */
 interface ScrubVector {
   rule: string
   input: string
@@ -237,7 +241,7 @@ describe('scrubText on a key a placeholder swallowed, read through earlier repla
   })
 
   it('finds a swallowed key whose word starts 80 characters before the placeholder ends, and no further', () => {
-    // The search reaches TOKEN_KEY_REACH (80) characters back; a key word one longer keeps its value, the documented residual.
+    // The search reaches TOKEN_KEY_REACH (80) characters back; a key word one longer starts out of reach, so its value is kept.
     expect(scrubText(`/reset/${'a'.repeat(75)}token = zqS7hunter2`)).toBe(
       '/reset/[token] = [redacted]'
     )
@@ -322,6 +326,10 @@ describe('scrubText on fragments', () => {
 
   it('scrubs 200 random letters-then-digits fragments', () => {
     let seed = 12_345
+    /**
+     * The next integer in [0, limit) from a seeded linear congruential
+     * generator, so the fragments are the same on every run.
+     */
     const next = (limit: number): number => {
       seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648
       return seed % limit
@@ -339,6 +347,10 @@ describe('scrubText on fragments', () => {
 
   it('gives the same text twice for 300 random lowercase and hex-letter fragments', () => {
     let seed = 54_321
+    /**
+     * The next integer in [0, limit) from a seeded linear congruential
+     * generator, so the fragments are the same on every run.
+     */
     const next = (limit: number): number => {
       seed = (seed * 1_103_515 + 12_345) % 2_147_483_648
       return seed % limit

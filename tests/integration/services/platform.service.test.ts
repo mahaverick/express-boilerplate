@@ -48,9 +48,7 @@ interface AuditRow {
 }
 
 /**
- * Every audit row that names one target.
- * @param targetId - The membership (or other target) id.
- * @returns The rows, oldest first.
+ * Every audit row naming one target (a membership id here), oldest first.
  */
 async function auditRowsFor(targetId: string): Promise<AuditRow[]> {
   return sql<AuditRow[]>`
@@ -61,8 +59,7 @@ async function auditRowsFor(targetId: string): Promise<AuditRow[]> {
 }
 
 /**
- * The seeded platform tenant.
- * @returns Its row.
+ * The platform tenant that migration 0016 seeds; throws when it is missing.
  */
 async function platformTenant(): Promise<Tenant> {
   const platform = await tenantRepository.findPlatformTenant()
@@ -71,17 +68,15 @@ async function platformTenant(): Promise<Tenant> {
 }
 
 /**
- * A fresh address on the staff domain.
- * @returns The address.
+ * A unique address on the staff domain.
  */
 function staffEmail(): string {
   return `platform-service-${randomUUID()}@${STAFF_DOMAIN}`
 }
 
 /**
- * Give a user a platform role directly.
- * @param userId - The user.
- * @param role - The platform role.
+ * Give a user a platform role through the repository, so there is no audit row and
+ * no last-owner check, unlike `bootstrapGrant`.
  */
 async function grantPlatformRole(userId: string, role: MembershipRole): Promise<void> {
   const platform = await platformTenant()
@@ -89,11 +84,8 @@ async function grantPlatformRole(userId: string, role: MembershipRole): Promise<
 }
 
 /**
- * An insertIfAbsent stand-in that raises a real SQL error, so Postgres
- * aborts whatever transaction ran it.
- * @param _data - Ignored.
- * @param executor - Where the failing statement runs.
- * @returns Never resolves with a row.
+ * An insertIfAbsent stand-in that always rejects with a real SQL error, so
+ * Postgres aborts the transaction that ran it.
  */
 const failingInsert: UserMembershipRepository['insertIfAbsent'] = async (_data, executor = db) => {
   await executor.execute(drizzleSql`select 1 / 0`)
@@ -112,11 +104,9 @@ describe('platform.service', () => {
   })
 
   /**
-   * A fresh user, tracked for cleanup.
-   * @param email - The address.
-   * @param options - Setup choices.
-   * @param options.isVerified - Whether to mark the address verified (raw SQL, not markEmailVerified).
-   * @returns The user as stored.
+   * Create a user and track it for `afterEach` cleanup. `isVerified` sets
+   * `email_verified_at` with raw SQL instead of `markEmailVerified`, and the
+   * returned user is re-read so it carries that stamp.
    */
   async function createUser(email: string, options: { isVerified: boolean }): Promise<User> {
     const user = await userRepository.create({ email })
@@ -325,6 +315,9 @@ describe('platform.service', () => {
         slug: `tenant-${randomUUID()}`,
         ownerId: customerOwner.id,
       })
+      /**
+       * A pending invitation from `staff` to a random address, valid for an hour.
+       */
       const invite = (tenantId: string, role: MembershipRole) =>
         invitationRepository.createPending({
           tenantId,

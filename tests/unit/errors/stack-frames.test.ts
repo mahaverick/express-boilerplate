@@ -7,9 +7,8 @@ import { describe, expect, it } from 'vitest'
 import { frameLineIndexesOf, isStackFrameLine } from '@/errors/stack-frames'
 
 /**
- * Throw from inside `Promise.all`, so the stack has `async` and
- * `(index N)` frames, and return the stack.
- * @returns The caught error's stack.
+ * The stack of an error thrown from inside `Promise.all`, so it has `async`
+ * and `(index N)` frames.
  */
 async function asyncStack(): Promise<string> {
   try {

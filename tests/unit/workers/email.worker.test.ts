@@ -1,8 +1,8 @@
 /**
- * @file Pure-logic coverage of processEmailJob — the message lookup, the
- * suppression skip, the tracked send and the retry decision — with
- * sendMail and the email-message service mocked. Starting a real
- * Worker/Redis/Postgres belongs to tests/integration/workers/email.worker.test.ts.
+ * @file Pure-logic coverage of processEmailJob (the message lookup, the
+ * suppression skip, the tracked send and the retry decision) with sendMail and
+ * the email-message service mocked. Starting a real Worker/Redis/Postgres
+ * belongs to tests/integration/workers/email.worker.test.ts.
  */
 import type { Job } from 'bullmq'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -28,9 +28,8 @@ vi.mock('@/services/email-message.service', () => ({
 const MESSAGE_ID = '0190a000-0000-7000-8000-000000000001'
 
 /**
- * The message row the mocked service hands back.
- * @param overrides - Fields to change.
- * @returns A queued message.
+ * The queued message row the mocked service hands back, with `overrides`
+ * replacing any field.
  */
 function messageRow(overrides: Partial<EmailMessage> = {}): EmailMessage {
   return {
@@ -60,8 +59,7 @@ function messageRow(overrides: Partial<EmailMessage> = {}): EmailMessage {
 }
 
 /**
- * The payload of a job queued before tracking: no `messageId`.
- * @returns The job data.
+ * The payload of an untracked job: no `messageId`.
  */
 function untrackedData(): EmailJobData {
   return {
@@ -78,20 +76,16 @@ function untrackedData(): EmailJobData {
 
 /**
  * The payload of a job `addEmailJob` queued: tracked by `MESSAGE_ID`.
- * @returns The job data.
  */
 function trackedData(): EmailJobData {
   return { ...untrackedData(), messageId: MESSAGE_ID }
 }
 
 /**
- * A minimal stand-in for a BullMQ `Job<EmailJobData>` — only what
- * `processEmailJob` reads (`id`, `timestamp`, `data`, `updateData`). Cast
- * via `unknown`: a deliberately partial object standing in for the real
- * `Job` class BullMQ constructs.
- * @param data - The job's payload; a tracked one by default.
- * @param updateData - The job's `updateData`.
- * @returns A fake job for processEmailJob to process.
+ * A minimal stand-in for a BullMQ `Job<EmailJobData>` with only what
+ * `processEmailJob` reads (`id`, `timestamp`, `data`, `updateData`). `data` is
+ * a tracked payload by default. Cast via `unknown`: a deliberately partial
+ * object standing in for the real `Job` class BullMQ constructs.
  */
 function mockJob(
   data: EmailJobData = trackedData(),

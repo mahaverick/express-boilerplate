@@ -32,6 +32,9 @@ describe('final job failures reach error tracking', () => {
     const report = vi.spyOn(reporter, 'reportError')
     const marker = `job-data-marker-${randomUUID()}`
     const reportsAtAttempt = new Map<number, number>()
+    /**
+     * Records how many reports had been made when each attempt of the marked job failed, keyed by attempt count.
+     */
     const onFailed = (job: Job | undefined): void => {
       if (job?.data && (job.data as NotificationJobData).title === marker) {
         reportsAtAttempt.set(job.attemptsMade, report.mock.calls.length)

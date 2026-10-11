@@ -1,6 +1,6 @@
 /**
- * @file isUniqueViolation's own behaviour needs no database — pure logic
- * over constructed error objects.
+ * @file Unit tests for the Postgres error predicates and `redactedForLog`:
+ * pure logic over constructed error objects, so no database.
  */
 import { DrizzleQueryError } from 'drizzle-orm'
 import postgres from 'postgres'
@@ -14,17 +14,13 @@ import {
 import { LEAKED_PARAM } from '../../helpers/query-error'
 
 /**
- * Build a real `postgres.PostgresError`, typed correctly for callers.
+ * A real `postgres.PostgresError`, typed correctly for callers.
  * `postgres`'s own type declarations give `PostgresError` no explicit
- * constructor, so it inherits `Error`'s `(message?: string)` — this
- * builds one through that signature, then attaches the fields
- * `isUniqueViolation` reads, exactly as the runtime class itself does
- * (`Object.assign(this, x)`, `node_modules/postgres/src/errors.js`).
- * @param properties - The message and the fields `isUniqueViolation` reads off a real driver error.
- * @param properties.message - The driver's error message.
- * @param properties.code - The Postgres `SQLSTATE` code.
- * @param properties.constraint_name - The violated constraint's name, when the code is a unique violation.
- * @returns A `postgres.PostgresError` instance.
+ * constructor, so it inherits `Error`'s `(message?: string)`; this
+ * builds one through that signature, then attaches the message and the
+ * fields `isUniqueViolation` reads (`code`, and `constraint_name` for a
+ * unique violation), as the runtime class does with `Object.assign(this, x)`
+ * (`node_modules/postgres/src/errors.js`).
  */
 function pgError(properties: {
   message: string

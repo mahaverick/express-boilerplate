@@ -14,10 +14,7 @@ import {
 import { request } from '../../helpers/request'
 
 /**
- * A route handler that fails.
- * @param _request - Unused.
- * @param _response - Unused.
- * @param next - Receives the error.
+ * A route handler that fails by passing an error to `next`.
  */
 function fail(_request: Request, _response: Response, next: NextFunction): void {
   next(new Error('boom'))
@@ -26,7 +23,6 @@ function fail(_request: Request, _response: Response, next: NextFunction): void 
 /**
  * An app whose routes all fail, answering each failure with the template its
  * error handler saw and the `baseUrl` Express left on the request.
- * @returns The app.
  */
 function probeApp(): express.Express {
   const app = express()

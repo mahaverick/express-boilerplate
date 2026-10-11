@@ -21,11 +21,8 @@ interface RouteLayer {
 }
 
 /**
- * The handler chain mounted for one method and path.
- * @param router - The router to read.
- * @param method - The lowercase HTTP method.
- * @param path - The route path, exactly as mounted.
- * @returns The handlers, in mount order.
+ * The handlers mounted for one lowercase method and a route path exactly as
+ * mounted, in mount order; throws when the router has no such route.
  */
 function handlersFor(router: Router, method: string, path: string): RequestHandler[] {
   // Express's published types omit `route.methods`, which the runtime layer has.
@@ -45,7 +42,7 @@ describe('createTenantRouter', () => {
     const [, inviteLimiter] = handlersFor(router, 'post', '/:slug/invitations')
     const [, resendLimiter] = handlersFor(router, 'post', '/:slug/invitations/:id/resend')
 
-    // A rate limiter, not the shared requireJsonContentType or requireAuth.
+    // A rate limiter, not the shared requireJsonContentType at position 0.
     expect(inviteLimiter).toHaveProperty('resetKey')
     expect(resendLimiter).toBe(inviteLimiter)
   })

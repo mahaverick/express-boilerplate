@@ -1,6 +1,6 @@
 /**
- * @file The real branch of this module — OTEL_EXPORTER_OTLP_ENDPOINT
- * set, a real NodeSDK built and started — is process bootstrap wiring
+ * @file The real branch of this module (OTEL_EXPORTER_OTLP_ENDPOINT
+ * set, a real NodeSDK built and started) is process bootstrap wiring
  * loaded via `--import`, before any test framework is attached, so it is
  * not meaningfully unit-testable (the same reasoning src/index.ts's own
  * coverage exclusion applies). What is testable, and worth pinning, is
@@ -19,7 +19,7 @@ import {
 
 describe('tracing (OTEL_EXPORTER_OTLP_ENDPOINT unset, the test-env default)', () => {
   it('imports without throwing', () => {
-    // The import itself, at the top of this file, is the real assertion — if module-scope evaluation threw, this whole file would fail to load rather than reach this test; re-asserting `shutdownOtel` is a function here gives that a named, visible check instead of an implicit one.
+    // The import itself, at the top of this file, is the real assertion: if module-scope evaluation threw, this whole file would fail to load rather than reach this test; re-asserting `shutdownOtel` is a function here gives that a named, visible check instead of an implicit one.
     expect(typeof shutdownOtel).toBe('function')
   })
 

@@ -56,9 +56,8 @@ const originalRun = workerPrototype.run
 const SPIN_BOUND = 500
 
 /**
- * A 50ms timer firing within this means no fetch loop starves the event
- * loop (`worker-supervisor.service.ts`); at least 10x the lag measured
- * under the full suite.
+ * A 50 ms timer firing within this means no fetch loop starves the event loop
+ * (`worker-supervisor.service.ts`); it is at least 10x the lag measured under the full suite.
  */
 const STARVED_TIMER_MS = 200
 
@@ -69,9 +68,7 @@ const observed: { retries: number; workers: Worker[]; running?: SupervisedWorker
 }
 
 /**
- * Count the Worker's fetch retries; stop a spinning Worker so the test can still fail.
- * @param retryArguments - retryIfFailed's own arguments.
- * @returns What the real retryIfFailed returns.
+ * Count the Worker's fetch retries and, past SPIN_BOUND, close the spinning Worker so the test can still fail; otherwise call through to the real `retryIfFailed`.
  */
 function countedRetryIfFailed(this: Worker, ...retryArguments: unknown[]): Promise<unknown> {
   observed.retries += 1
@@ -80,8 +77,7 @@ function countedRetryIfFailed(this: Worker, ...retryArguments: unknown[]): Promi
 }
 
 /**
- * Record every Worker that starts, so the test can check each one is closed.
- * @returns What the real run returns.
+ * Record every Worker that starts, so the test can check each one is closed, then call through to the real `run`.
  */
 function recordedRun(this: Worker): Promise<void> {
   observed.workers.push(this)
@@ -89,8 +85,7 @@ function recordedRun(this: Worker): Promise<void> {
 }
 
 /**
- * How long a 50ms timer takes to fire: far longer means the event loop is starved.
- * @returns The elapsed milliseconds.
+ * How long a 50 ms timer takes to fire in milliseconds; far longer means the event loop is starved.
  */
 async function timerDelay(): Promise<number> {
   const startedAt = Date.now()
@@ -99,8 +94,7 @@ async function timerDelay(): Promise<number> {
 }
 
 /**
- * Enqueue one email job and wait for a Worker to take it.
- * @returns Whether a Worker picked it up within 5s.
+ * Enqueue one email job and report whether a Worker took it (active, completed or failed) within 5 s.
  */
 async function isJobProcessed(): Promise<boolean> {
   const job = await addJob(

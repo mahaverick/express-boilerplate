@@ -12,6 +12,11 @@ import { scrubText } from '@/services/errors/error-scrubber.service'
 import { corpusCase, huntCase } from '../../../helpers/scrub-gate-generators'
 import { compareCase, visibleWindows } from '../../../helpers/scrub-gate-metric'
 
+/**
+ * The fixed-seed slice of the gate corpus, stored with the known leaks of the
+ * baseline scrubber it is compared against, so the unit suite can run the gate
+ * without git history.
+ */
 interface Slice {
   seed: number
   count: number
@@ -25,18 +30,14 @@ const slice = JSON.parse(fs.readFileSync(slicePath, 'utf8')) as Slice
 
 /**
  * The scrubber fed every `token` misspelt, so the token key rule never fires.
- * @param value - The text.
- * @returns The weakened scrub.
  */
 function weakened(value: string): string {
   return scrubText(value.replaceAll(/token/gi, 'toke_'))
 }
 
 /**
- * The slice's cases in which a scrubber leaves in view a planted value the
- * baseline hid.
- * @param scrub - The scrubber checked.
- * @returns Each such case's index and output, once per value in view.
+ * The slice's cases in which `scrub` leaves in view a planted value the
+ * baseline hid. Each is listed as `index: output`, once per value in view.
  */
 function sliceExposures(scrub: (value: string) => string): string[] {
   const exposed: string[] = []

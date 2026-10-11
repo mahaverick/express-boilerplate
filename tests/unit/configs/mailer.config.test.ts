@@ -1,10 +1,9 @@
 /**
  * @file `mailTransportOptions` is unit-tested directly, with a hand-built
  * env slice, rather than through `getMailTransporter()`: that calls the
- * memoised `getEnv()` (env.config.ts), so once any test in this worker
- * has called it, SMTP_USERNAME/SMTP_PASSWORD can never be varied between
- * cases again — the same reasoning `trustProxySetting` (env.config.ts) is
- * tested as a pure function for.
+ * memoised `getEnv()` (env.config.ts), so once it has run in this file,
+ * SMTP_USERNAME and SMTP_PASSWORD cannot be varied between cases. This is
+ * also why `trustProxySetting` (env.config.ts) is tested as a pure function.
  */
 import { describe, expect, it } from 'vitest'
 import { getEnv, type Env } from '@/configs/env.config'
@@ -88,7 +87,7 @@ describe('getMailTransporter', () => {
     expect(options.requireTLS).toBe(false)
   })
 
-  // getMailTransporter reads the memoised getEnv() once per worker, so the non-local branch needs a fresh module instance against a mutated env.
+  // getMailTransporter reads the memoised getEnv() once per test file, so the non-local branch needs a fresh module instance against a mutated env.
   it('requires TLS outside local, proving requiresSmtpTls is wired in', async () => {
     const productionEnv: Env = { ...getEnv(), APP_ENV: 'prod' }
     await withMutatedModule(

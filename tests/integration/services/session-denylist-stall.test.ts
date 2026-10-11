@@ -1,9 +1,10 @@
 /**
  * @file A logout while Redis is connected but does not answer: the request
  * is not held past the deadline, and the deny still lands once Redis
- * answers, so the session's access tokens stop working then. The stall is
- * the real shared client's `set` held back by a gate (`withMutatedMethod`);
- * nothing under `src/` changes.
+ * answers, so the session's access tokens stop working then. The stalls are
+ * the real shared client's `set` held back by a gate or rejected
+ * (`withMutatedMethod`), and a command that never settles
+ * (`tests/helpers/redis-stall.ts`); nothing under `src/` changes.
  */
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'

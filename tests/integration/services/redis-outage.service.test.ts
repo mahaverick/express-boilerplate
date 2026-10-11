@@ -1,5 +1,5 @@
 /**
- * @file A real Redis outage without touching the shared compose Redis: both
+ * @file A real Redis outage without stopping the shared compose Redis: both
  * clients connect through a TCP proxy this file owns
  * (`tests/helpers/redis-proxy.ts`). Its own file because it mocks
  * `getEnv()`'s `REDIS_URL` (same reason as `redis-unreachable.service.test.ts`).
@@ -29,17 +29,24 @@ import { isEventuallyTrue, RedisProxy } from '../../helpers/redis-proxy'
 import { request } from '../../helpers/request'
 import { settle, waitUntil } from '../../helpers/timing'
 
-// Longer than either client's retry budget (node-redis ~600ms, ioredis ~1.2s).
+/**
+ * Longer than either client's pre-ready retry budget (node-redis 100 + 200 + 300 ms, ioredis
+ * 200 + 400 + 600 ms), so it shows that a client that was ready keeps retrying past that budget.
+ */
 const OUTAGE_MS = 1500
 
 /**
- * A probe that waited on Redis, down or silent, would not settle while it
- * stays that way: this only has to separate "answered promptly" from
- * "never".
+ * The longest a reachability probe may take while Redis is down or silent. A
+ * probe that waited on Redis would not settle while it stays that way, so this
+ * only has to separate "answered promptly" from "never"; `isRedisReachable`
+ * itself waits at most REDIS_REQUEST_DEADLINE_MS, far below it, and
+ * `isQueueReachable` answers at once while a queue connection is not ready.
  */
 const PROBE_BOUND_MS = 5000
 
-// One capped retry delay, then one connect attempt.
+/**
+ * The longest a reconnecting client needs after the proxy returns: one capped retry delay, then one connect attempt.
+ */
 const RECOVERY_TIMEOUT_MS = RECONNECT_DELAY_CAP_MS + REDIS_CONNECT_TIMEOUT_MS
 
 const target = vi.hoisted(() => ({ realUrl: '', proxyUrl: '' }))
@@ -58,6 +65,9 @@ const proxy = new RedisProxy()
 // Set by the last test: once closed, the queue never reports reachable again.
 const queueLifecycle = { isClosed: false }
 
+/**
+ * Take the proxy down for `OUTAGE_MS`, then bring it back without waiting for the clients.
+ */
 async function simulateOutage(): Promise<void> {
   proxy.goDown()
   await settle(OUTAGE_MS, 'outage length')
@@ -65,8 +75,7 @@ async function simulateOutage(): Promise<void> {
 }
 
 /**
- * Whether the shared node-redis client has seen the proxy reset its connection.
- * @returns True once that client is no longer ready.
+ * Whether the shared node-redis client has seen the proxy reset its connection, so it is not ready.
  */
 async function hasRedisClientLeftReady(): Promise<boolean> {
   const client = await getRedis()
@@ -74,8 +83,7 @@ async function hasRedisClientLeftReady(): Promise<boolean> {
 }
 
 /**
- * Whether both queue connections have seen the proxy reset them.
- * @returns True once neither the Worker connection nor the producer connection is ready.
+ * Whether both queue connections, the Worker's and the producer's, have seen the proxy reset them and are not ready.
  */
 function haveQueueConnectionsLeftReady(): boolean {
   // The email queue is built on the producer connection instance itself.
@@ -85,10 +93,8 @@ function haveQueueConnectionsLeftReady(): boolean {
 }
 
 /**
- * Settle a promise, or report that it was still pending after `ms`.
- * @param operation - The operation under test.
- * @param ms - How long to wait before calling it hung.
- * @returns How it settled, or `'hung'`.
+ * Race an operation against a hang budget of `ms`: `'resolved'` or `'rejected'` for how it
+ * settled, `'hung'` when it was still pending at `ms`.
  */
 async function settleWithin(operation: Promise<unknown>, ms: number): Promise<string> {
   const settled = (async () => {
@@ -113,9 +119,9 @@ describe('Redis clients survive an outage', () => {
   })
 
   /**
-   * Every test starts on a live proxy with both clients connected: a test
-   * can end, passed or failed, while a reconnect its outage started is
-   * still pending.
+   * Restore the proxy and wait for both clients, so every test starts on a live proxy with
+   * both clients connected: a test can end, passed or failed, while a reconnect its outage
+   * started is still pending. After the last test has closed the queue, only the proxy is restored.
    */
   afterEach(async () => {
     proxy.comeBack()

@@ -6,6 +6,9 @@ import type { Request } from 'express'
 import { describe, expect, it } from 'vitest'
 import { oauthAppOf } from '@/controllers/helpers.controller'
 
+/**
+ * A request carrying only the given session, which is all `oauthAppOf` reads.
+ */
 function requestWithSession(session: Record<string, unknown>): Request {
   return { session } as unknown as Request
 }

@@ -1,8 +1,7 @@
 /**
- * @file No Express app, no Docker — just the middleware function and the
- * store it populates, called directly the way
- * content-type.middleware.test.ts and error.middleware.test.ts call
- * their middlewares.
+ * @file No Express app, no Docker: just the middleware function and the
+ * store it populates, called directly the way error.middleware.test.ts
+ * calls `errorHandler`.
  */
 import { type Request } from 'express'
 import { describe, expect, it } from 'vitest'

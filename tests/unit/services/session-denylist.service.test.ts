@@ -10,7 +10,10 @@ const redis = {
   exists: vi.fn<(key: string) => Promise<number>>(),
 }
 
-// Written out rather than built with redisKey, so the test pins the key shape itself.
+/**
+ * The Redis key a denial of `session-abc` is stored under. Written out rather than built with
+ * redisKey, so the test pins the key shape itself.
+ */
 const deniedKey = (): string => `${getEnv().REDIS_KEY_PREFIX}:denylist:session:session-abc`
 
 vi.mock('@/services/redis.service', async (importOriginal) => ({
@@ -22,8 +25,8 @@ vi.mock('@/services/logger.service', () => ({
 }))
 
 /**
- * A deny write that Redis has not answered yet, released by the test.
- * @returns The pending reply and the switches that settle it.
+ * A deny write that Redis has not answered, released by the test: the pending
+ * reply, with `answer` and `fail` to settle it.
  */
 function deferredWrite(): {
   reply: Promise<string>
@@ -50,7 +53,7 @@ describe('session denylist', () => {
     const { denySession } = await import('@/services/session-denylist.service')
     expect(await denySession('session-abc')).toBe('denied')
 
-    // Computed from the same source the service reads (getEnv().ACCESS_TOKEN_TTL), not a hard-coded number — this asserts the actual TTL value, not merely `> 0`, which an `EX` of 1 would also satisfy while defeating the point of a matching TTL.
+    // Computed from the same source the service reads (getEnv().ACCESS_TOKEN_TTL), so the assertion pins the actual TTL, not just `> 0`.
     const expectedSeconds = Math.ceil(requireDurationMs(getEnv().ACCESS_TOKEN_TTL) / MS_PER_SECOND)
     expect(redis.set).toHaveBeenCalledWith(deniedKey(), '1', {
       expiration: { type: 'EX', value: expectedSeconds },
@@ -65,7 +68,7 @@ describe('session denylist', () => {
   })
 
   it('ALLOWS when Redis is unreachable, rather than locking everyone out', async () => {
-    // Fail-open is the deliberate trade: failing closed turns a Redis blip into a total outage, while failing open returns to the ordinary token-expiry window; the warning is what makes it visible.
+    // Fail-open is the deliberate trade: failing closed turns a Redis blip into a total outage, while failing open falls back to the ordinary token-expiry window; the warning makes it visible.
     redis.exists.mockRejectedValue(new Error('connection refused'))
     const { isSessionDenied } = await import('@/services/session-denylist.service')
     expect(await isSessionDenied('session-abc')).toBe(false)

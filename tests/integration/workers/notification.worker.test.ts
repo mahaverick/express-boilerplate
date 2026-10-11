@@ -1,12 +1,11 @@
 /**
- * @file Against the real Redis and per-worker Postgres: proves the whole
- * path `addNotificationJob` writes into Redis is actually picked up and
- * processed by a real BullMQ Worker (`notification.worker.ts`) — enqueue,
- * Worker pulls the job, real `NotificationRepository` insert / real
- * `addEmailJob` enqueue onto the "email" queue. Does not also start the
- * email worker: this file's scope is the notification worker's fan-out
- * contract, that a real enqueue eventually leaves a matching job on the
- * real "email" queue, not that Mailpit delivery also works end to end.
+ * @file Against the real Redis and per-worker Postgres: proves that a job
+ * `addNotificationJob` writes into Redis is picked up and processed by a real
+ * BullMQ Worker (`notification.worker.ts`), which inserts through the real
+ * `NotificationRepository` and enqueues the paired email onto the "email"
+ * queue with the real `addEmailJob`. It does not start the email worker: the
+ * scope is the notification worker's fan-out contract, that a real enqueue
+ * leaves a matching job on the real "email" queue, not Mailpit delivery.
  */
 import { randomUUID } from 'node:crypto'
 import { UnrecoverableError, type Job, type Worker } from 'bullmq'
@@ -24,10 +23,9 @@ import { withMutatedMethod } from '../../helpers/mutate'
 import { waitForLoggedCall } from '../../helpers/queue-jobs'
 
 /**
- * The email queue's currently queued/settled jobs, typed as `EmailJobData`:
- * `getEmailQueue()` returns a bare, ungenericised `Queue`, so `.getJobs()`
- * on it is `Job<any>[]` without this assertion.
- * @returns Every job currently on the "email" queue in a non-terminal or completed state.
+ * The email queue's jobs in the waiting, active, completed, delayed and prioritized states,
+ * typed as `EmailJobData`: `getEmailQueue()` returns a bare `Queue`, so `getJobs()` would
+ * otherwise give `Job<any>[]`.
  */
 async function emailQueueJobs(): Promise<Job<EmailJobData>[]> {
   // 'prioritized', not just 'waiting': every email job carries an explicit priority (JobPriority.high), which BullMQ routes into its own list rather than "waiting" until a worker pulls it.
@@ -45,42 +43,42 @@ const preferenceRepository = new NotificationPreferenceRepository()
 const userRepository = new UserRepository()
 
 /**
- * A disposable email, unique to one call — same shape as
- * notification.repository.test.ts's own `uniqueEmail` helper, parameterised
- * with a label so a failing assertion's recipient string also says which
- * test/role produced it.
- * @param label - A short tag identifying which test/role this address is for.
- * @returns An email guaranteed unique to this call.
+ * An address unique to each call. `label` names the test or role it is for, so a failing
+ * assertion's recipient says where it came from.
  */
 function uniqueEmail(label: string): string {
   return `notification-worker-${label}-${randomUUID()}@example.test`
 }
 
 /**
- * Wait for one specific job id to reach a terminal state on `worker`,
- * resolving with which event fired. Scoped to a single job id, same
- * reasoning as email.worker.test.ts's own `waitForJobSettled`: two tests
- * running their own job through the same shared Worker instance must never
- * resolve each other's promise.
- * @param worker - The running notification Worker to listen on.
- * @param jobId - The job id to wait for.
- * @returns Resolves with `'completed'` or `'failed'` once that job settles.
+ * Resolves with `'completed'` or `'failed'` once the job `jobId` settles on `worker`. It is
+ * scoped to one job id, as `waitForJobSettled` in email.worker.test.ts is, so two tests that
+ * run jobs through the same shared Worker never resolve each other's promise.
  */
 function waitForJobSettled(
   worker: Worker<NotificationJobData>,
   jobId: string
 ): Promise<'completed' | 'failed'> {
   return new Promise((resolve) => {
+    /**
+     * Resolves the wait as 'completed' for `jobId`; other jobs on the shared Worker are ignored.
+     */
     const onCompleted = (job: Job<NotificationJobData>): void => {
       if (job.id !== jobId) return
       cleanup()
       resolve('completed')
     }
+    /**
+     * Resolves the wait as 'failed' for `jobId`; other jobs on the shared Worker are ignored.
+     */
     const onFailed = (job: Job<NotificationJobData> | undefined): void => {
       if (job?.id !== jobId) return
       cleanup()
       resolve('failed')
     }
+    /**
+     * Detaches both listeners, so a settled wait leaves nothing registered on the Worker.
+     */
     const cleanup = (): void => {
       worker.off('completed', onCompleted)
       worker.off('failed', onFailed)
@@ -106,11 +104,9 @@ describe('notification.worker', () => {
   })
 
   /**
-   * A fresh user for a test to own notifications with, tracked for cleanup
-   * — `notifications.userId`/`notification_preferences.userId` both carry
-   * `ON DELETE CASCADE` (notification.model.ts), so deleting the user in
-   * `afterAll` is enough to remove everything this file inserts.
-   * @returns The created user's id.
+   * Create a user for a test to own notifications, tracked for the `afterAll` cleanup. Deleting
+   * the user removes everything this file inserts, because `notifications.userId` and
+   * `notification_preferences.userId` both cascade on delete (notification.model.ts).
    */
   async function createUser(): Promise<string> {
     const user = await userRepository.create({ email: uniqueEmail('owner') })

@@ -28,11 +28,12 @@ describe('render', () => {
    * A field a real caller reads (session.service.ts for
    * JWT_ACCESS_SECRET; passport.config.ts's `configurePassport()`/
    * `createOAuthSessionMiddleware()` for APP_URL/SESSION_SECRET
-   * respectively) must render its real description, never a
-   * "PLACEHOLDER" note. One parameterized test, not several
-   * near-identical ones (sonarjs/parameterized-tests) — each case still
-   * pins its own `.describe()` text landing in the generated file, not
-   * merely that some description exists.
+   * respectively; services such as auth.service.ts for APP_NAME) must
+   * render its real description, never a "PLACEHOLDER" note. One
+   * parameterized test, not several near-identical ones
+   * (sonarjs/parameterized-tests); each case pins its own
+   * `.describe()` text landing in the generated file, not merely that some
+   * description exists.
    */
   it.each([
     { field: 'JWT_ACCESS_SECRET', expectedText: 'Signs and verifies access tokens' },
@@ -69,7 +70,7 @@ describe('render', () => {
     expect(output).toContain('\nAPP_PORT=4040\n')
   })
 
-  // io: 'input' JSON schema drops a stringbool's default (its input is a string, its default a boolean) — reading the input schema naively would leave this rendered as `# WORKER_ENABLED=`.
+  // io: 'input' JSON schema drops a stringbool's default (its input is a string, its default a boolean): reading the input schema naively would leave this rendered as `# WORKER_ENABLED=`.
   it('renders a z.stringbool() default as its value, uncommented', () => {
     expect(output).toContain('\nWORKER_ENABLED=true\n')
     expect(output).not.toContain('# WORKER_ENABLED=')

@@ -15,15 +15,25 @@ const secret = randomBytes(16).toString('hex')
 const NOW = new Date('2026-09-30T12:00:00.000Z')
 const adapter = createFakeEmailWebhookAdapter({ secret, now: () => NOW })
 
+/**
+ * A JSON request body as the raw bytes the adapter receives.
+ */
 function body(value: unknown): Buffer {
   return Buffer.from(JSON.stringify(value))
 }
 
+/**
+ * The signature header for `raw`, as a sender holding the secret would set it.
+ */
 function signed(raw: Buffer): Record<string, string> {
   // Computed independently of the module under test, so a wrong algorithm there fails here.
   return { [FAKE_SIGNATURE_HEADER]: createHmac('sha256', secret).update(raw).digest('hex') }
 }
 
+/**
+ * Runs `run` and returns the `reason` of the `WebhookSignatureError` it throws,
+ * or undefined when it does not throw. Any other error is rethrown.
+ */
 function rejection(run: () => void): string | undefined {
   try {
     run()

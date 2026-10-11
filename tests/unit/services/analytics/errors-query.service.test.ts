@@ -13,9 +13,8 @@ const SELECT =
   'select properties.$exception_issue_id as issue_id, count() as occurrences, min(timestamp) as first_seen, max(timestamp) as last_seen, argMax(uuid, (timestamp, uuid)), argMax(distinct_id, (timestamp, uuid)), argMax(properties.$exception_list, (timestamp, uuid)), argMax(properties.app, (timestamp, uuid)), argMax(properties.source, (timestamp, uuid)), argMax(properties.access, (timestamp, uuid)), argMax(properties.target_type, (timestamp, uuid)), argMax(properties.target_id, (timestamp, uuid)), argMax(properties.$groups.tenant, (timestamp, uuid)), argMax(properties.server_sig, (timestamp, uuid))'
 
 /**
- * The expected query for one matching clause.
- * @param match - The clause.
- * @returns The query text.
+ * The query text `buildErrorsQuery` should produce when `match` is the clause
+ * that selects the user's or tenant's events.
  */
 function expected(match: string): string {
   return [

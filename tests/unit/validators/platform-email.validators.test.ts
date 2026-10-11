@@ -11,6 +11,9 @@ import {
   platformSuppressionSearchSchema,
 } from '@/validators/platform-email.validators'
 
+/**
+ * A cursor in the microsecond form the repository issues, for a random row id.
+ */
 const validCursor = (): string =>
   encodeCursor({ sortAt: '2026-09-30T08:15:02.123456Z', id: randomUUID() })
 

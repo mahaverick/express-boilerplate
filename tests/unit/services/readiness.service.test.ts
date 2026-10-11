@@ -1,6 +1,6 @@
 /**
  * @file `createReadinessProbe`: every check answers within
- * `READINESS_CHECK_DEADLINE_MS`, a check still running is joined rather than
+ * `READINESS_CHECK_DEADLINE_MS`, a check that is running is joined rather than
  * started again, nothing rejects or leaves a timer behind, and a check's move
  * into and out of timing out is logged once. Fake timers; the checks are
  * stand-ins, so nothing touches Postgres or Redis.
@@ -18,8 +18,8 @@ const VERDICT_MS = READINESS_CHECK_DEADLINE_MS + 1
 
 /**
  * A check whose answer the test gives when it chooses, the way a stalled
- * dependency answers once the stall ends.
- * @returns The check, how often it ran, and functions that settle the current run.
+ * dependency answers once the stall ends. Returns the check, `runs` (how often
+ * it ran), and `answer` and `fail`, which settle the current run.
  */
 function heldCheck(): {
   check: () => Promise<boolean>
@@ -48,25 +48,22 @@ function heldCheck(): {
 }
 
 /**
- * A check that answers at once.
- * @returns Resolves true.
+ * A readiness check that passes immediately, standing in for a healthy dependency.
  */
 function answersAtOnce(): Promise<boolean> {
   return Promise.resolve(true)
 }
 
 /**
- * A check that throws before it returns a promise.
- * @throws {Error} Always, synchronously.
+ * A check that throws synchronously, before it returns a promise.
  */
 function throwsAtOnce(): Promise<boolean> {
   throw new Error('sync')
 }
 
 /**
- * Start a probe and note its report once it settles, without awaiting it.
- * @param probe - The probe under test.
- * @returns A record filled in once the probe settles.
+ * Starts `probe` without awaiting it and returns a record whose `report` is
+ * filled in when it settles.
  */
 function track<T>(probe: Promise<T>): { report?: T } {
   const record: { report?: T } = {}

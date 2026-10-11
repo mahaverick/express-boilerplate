@@ -1,6 +1,6 @@
 /**
  * @file Pure unit tests for the mutation-test harness itself
- * (tests/helpers/mutate.ts) — no Postgres, no Redis. The harness's
+ * (tests/helpers/mutate.ts), with no Postgres and no Redis. The harness's
  * proof against a real security behaviour (reuse detection,
  * session.service.ts) lives under tests/integration/ instead, since
  * that proof exercises the real per-worker database.
@@ -9,7 +9,13 @@ import { describe, expect, it } from 'vitest'
 import { withMutatedMethod, withMutatedModule } from '../../helpers/mutate'
 
 describe('withMutatedMethod', () => {
+  /**
+   * The object whose method the tests replace through its prototype.
+   */
   class Greeter {
+    /**
+     * The method under mutation; its unmutated result is `hello, <name>`.
+     */
     greet(name: string): string {
       return `hello, ${name}`
     }
@@ -77,10 +83,9 @@ describe('withMutatedMethod', () => {
 })
 
 /**
- * The fixture below is a real, already-committed pair of src modules —
- * env.config.ts imports parseDurationMs from duration.utilities.ts,
- * exactly the shape a real mutation takes — rather than a toy pair
- * invented for this test.
+ * The fixture below is a real pair of src modules: env.config.ts imports
+ * parseDurationMs from duration.utilities.ts, exactly the shape a real
+ * mutation takes, rather than a toy pair invented for this test.
  */
 describe('withMutatedModule', () => {
   it('swaps the dependency for a freshly-loaded subject', async () => {

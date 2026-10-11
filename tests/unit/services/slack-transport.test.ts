@@ -1,8 +1,7 @@
 /**
- * @file Exercises the Slack destination indirectly through
- * `createPinoLogger` (it is internal to logger.service.ts, not
- * exported) by stubbing global `fetch` and asserting on what it was
- * called with.
+ * @file Exercises the Slack destination through `createPinoLogger`, which wires
+ * it in beside the console stream and applies the level filter, by stubbing
+ * global `fetch` and asserting on what it was called with.
  */
 import { Writable } from 'node:stream'
 import { DrizzleQueryError } from 'drizzle-orm'
@@ -37,15 +36,19 @@ interface SlackFetchInit {
   body: string
 }
 
+/**
+ * The stubbed `fetch`: the webhook URL and a `SlackFetchInit`, answering with the
+ * status the Slack webhook would.
+ */
 type FetchProcedure = (
   url: string,
   init: SlackFetchInit
 ) => Promise<{ ok: boolean; status?: number }>
 
 /**
- * A discard destination for the console stream, so tests that only care
- * about the Slack destination don't also print to the real stdout.
- * @returns A Writable that swallows every chunk.
+ * A Writable that swallows every chunk, as the console stream's destination, so
+ * tests that only care about the Slack destination do not also print to the
+ * real stdout.
  */
 function discardDestination(): Writable {
   return new Writable({
@@ -56,22 +59,20 @@ function discardDestination(): Writable {
 }
 
 /**
- * The Slack destination is wired in via `pino.multistream`, alongside
- * the console stream — every `createPinoLogger` call below passes a
- * discard `destination` so console output doesn't pollute the run; the
- * Slack destination is what the assertions actually target. Each test
- * wraps its body in `new Promise<void>((resolve) => { ...;
- * setImmediate(() => { ...; resolve() }) })` rather than a Jest-style
- * `(done) => {...}` callback param, since Vitest 5 has no special
- * handling for a callback-arity test function and a `done` parameter is
- * simply never invoked. `setImmediate` is needed because a raw `{
- * write }` destination (the Slack destination, the discard stream
- * below) is called synchronously by pino.multistream, so the fetch()
- * call itself happens before log.error() returns, but sendToSlack
- * awaits fetch's response before checking `response.ok` or catching a
- * rejection — several assertions here depend on that await having
- * settled, and `setImmediate` runs in the event loop's "check" phase,
- * after those pending promise microtasks have already flushed.
+ * The Slack destination is wired in through `pino.multistream` beside the
+ * console stream. Every `createPinoLogger` call below passes a discard
+ * `destination`, so console output does not pollute the run and the assertions
+ * target the Slack destination. Each test wraps its body in `new
+ * Promise<void>((resolve) => { ...; setImmediate(() => { ...; resolve() }) })`
+ * rather than a `(done) => {...}` callback: Vitest 5 passes the test context as
+ * the first argument, and calling it as `done` throws "done() callback is
+ * deprecated, use promise instead". `setImmediate` is needed because the Slack
+ * destination is a raw `{ write }` object that pino.multistream calls
+ * synchronously, so the `fetch()` call happens before `log.error()` returns,
+ * but `sendToSlack` awaits fetch's response before checking `response.ok` or
+ * catching a rejection. Several assertions depend on that await having
+ * settled, and `setImmediate` runs in the event loop's check phase, after the
+ * pending promise microtasks have flushed.
  */
 describe('Slack transport', () => {
   const mockFetch = vi.fn<FetchProcedure>()
@@ -84,7 +85,7 @@ describe('Slack transport', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals()
-    // Defensive: only the dedup-summary test below enables fake timers, but restore unconditionally so a thrown assertion in that test can never leak fake timers into a later, unrelated test file.
+    // Restored unconditionally, so a thrown assertion in a dedup-summary test (the only tests in this block that enable fake timers) cannot leave fake timers on for a later test.
     vi.useRealTimers()
   })
 
@@ -153,7 +154,7 @@ describe('Slack transport', () => {
 
   it('sends a single summary message once the dedup window closes, only when there were repeats', () =>
     new Promise<void>((resolve) => {
-      // Only setTimeout/clearTimeout are faked, deliberately — the Slack destination's own dedup timer is the thing under test, but setImmediate (used below to flush pino's stream pipeline) must keep running for real, or nothing in this test would ever observe a result.
+      // Only setTimeout/clearTimeout are faked: the Slack destination's dedup timer is under test, but setImmediate (used below to flush pino's stream pipeline) must run for real, or nothing in this test would observe a result.
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
 
       const log = createPinoLogger({
@@ -184,7 +185,7 @@ describe('Slack transport', () => {
 
   it('pluralizes the summary message when more than one occurrence was suppressed', () =>
     new Promise<void>((resolve) => {
-      // Same shape as the singular test above, but three calls (two suppressed, not one) — the summary's own grammar ternary (buildSlackSummaryPayload, logger.service.ts) is `count === 1 ? '' : 's'`, and the singular test above only ever proves the `''` arm.
+      // Same shape as the singular test above, but three calls (two suppressed, not one): the summary's plural ternary (buildSlackSummaryPayload, logger.service.ts) is `suppressedCount === 1 ? '' : 's'`, and the singular test above only proves the `''` arm.
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
 
       const log = createPinoLogger({
@@ -324,7 +325,6 @@ describe('Slack transport', () => {
 
 /**
  * A logger whose error-level records go to the stubbed Slack webhook.
- * @returns The logger.
  */
 function slackLogger(): ReturnType<typeof createPinoLogger> {
   return createPinoLogger({
@@ -337,9 +337,9 @@ function slackLogger(): ReturnType<typeof createPinoLogger> {
 }
 
 /**
- * Let the destination's write and the fetch call run. Assertions go after
- * `await nextTick()`, so a failed one rejects the test at once.
- * @returns A promise that settles on the next macrotask.
+ * Resolves on the next macrotask, which lets the destination's write and the
+ * fetch call run. Assertions go after `await nextTick()`, so a failed one
+ * rejects the test at once.
  */
 function nextTick(): Promise<void> {
   return new Promise((resolve) => {
@@ -354,8 +354,7 @@ describe('Slack transport scrubbing', () => {
   const bearer = 'zqS09bearerTokenValue77'
 
   /**
-   * Every webhook body sent so far, joined.
-   * @returns The bodies.
+   * Every webhook body sent, joined by newlines.
    */
   function sentBodies(): string {
     return mockFetch.mock.calls.map(([, init]) => init.body).join('\n')

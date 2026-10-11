@@ -11,10 +11,8 @@ import {
 } from '@/database/models/email-message.model'
 
 /**
- * The declared width of one varchar column.
- * @param table - The Drizzle table.
- * @param name - The column's SQL name.
- * @returns Its `length`, or undefined.
+ * The declared width of one varchar column of a Drizzle table, found by its
+ * SQL name; undefined when the column has no declared length.
  */
 function widthOf(table: Parameters<typeof getTableConfig>[0], name: string): number | undefined {
   const column = getTableConfig(table).columns.find((candidate) => candidate.name === name)

@@ -35,8 +35,7 @@ vi.mock('@/configs/env.config', async (importOriginal) => {
 const fake: { posthog?: FakePosthog } = {}
 
 /**
- * The running fake.
- * @returns It.
+ * The fake PostHog `beforeAll` started, or a throw before it has.
  */
 function posthog(): FakePosthog {
   if (!fake.posthog) throw new Error('the fake PostHog is not running')
@@ -91,10 +90,8 @@ describe('posthogProjectPath', () => {
 })
 
 /**
- * Create a multivariate flag through the fake, reading the error body.
- * @param key - The flag key.
- * @param percentages - Each variant's rollout.
- * @returns How the call ended.
+ * Creates the multivariate flag `key` with one variant per rollout percentage in
+ * `percentages`; settles as `posthogApi` does, whether it resolves or rejects.
  */
 function createSplitFlag(key: string, percentages: number[]): Promise<unknown> {
   return posthogApi(

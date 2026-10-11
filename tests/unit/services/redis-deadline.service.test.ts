@@ -25,17 +25,16 @@ import {
 const VERDICT_MS = REDIS_REQUEST_DEADLINE_MS + 1
 
 /**
- * An operation that never settles, the way a command written to a stalled Redis behaves.
- * @returns A promise that stays pending.
+ * An operation that never settles, the way a command written to a stalled
+ * Redis behaves.
  */
 function never(): Promise<string> {
   return new Promise<string>(() => {})
 }
 
 /**
- * Start a call and note how it settled, without awaiting it.
- * @param call - The call under test.
- * @returns A record filled in once the call settles.
+ * Starts `call` without awaiting it and returns a record whose `outcome` and
+ * `error` are filled in when it settles.
  */
 function track(call: Promise<string>): { outcome?: 'resolved' | 'rejected'; error?: unknown } {
   const record: { outcome?: 'resolved' | 'rejected'; error?: unknown } = {}
@@ -52,8 +51,8 @@ function track(call: Promise<string>): { outcome?: 'resolved' | 'rejected'; erro
 }
 
 /**
- * Stall one call until its deadline passes, opening the cooldown.
- * @returns Resolves once the call has been rejected.
+ * Stalls one call until its deadline passes, which opens the cooldown, and
+ * checks the call was rejected.
  */
 async function openCooldown(): Promise<void> {
   const stalled = track(withRedisDeadline(never, 'stall'))
@@ -62,9 +61,8 @@ async function openCooldown(): Promise<void> {
 }
 
 /**
- * A reply whose timer is registered after the deadline's, for the same
- * moment: a reply the process reads only after its due timers have run.
- * @returns The reply, `'PONG'`.
+ * A reply, `'PONG'`, whose timer is registered after the deadline's for the
+ * same moment: a reply the process reads only after its due timers have run.
  */
 function replyAfterTheTimer(): Promise<string> {
   return new Promise<string>((resolve) => {
@@ -79,7 +77,6 @@ function replyAfterTheTimer(): Promise<string> {
 
 /**
  * A call that fails 10 ms after the deadline, once it has been abandoned.
- * @returns A promise rejected then.
  */
 function rejectsJustAfterTheDeadline(): Promise<string> {
   return new Promise<string>((_resolve, reject) => {
@@ -91,8 +88,7 @@ function rejectsJustAfterTheDeadline(): Promise<string> {
 }
 
 /**
- * A write that fails well after the deadline, as a dropped connection does.
- * @returns A promise rejected at twice the deadline.
+ * A write that fails at twice the deadline, as a dropped connection does.
  */
 function failsLate(): Promise<string> {
   return new Promise<string>((_resolve, reject) => {
@@ -198,6 +194,9 @@ describe('withRedisDeadline', () => {
   it('opens no new cooldown on a late success from a call already abandoned', async () => {
     vi.spyOn(logger, 'warn').mockImplementation(() => {})
     const info = vi.spyOn(logger, 'info').mockImplementation(() => {})
+    /**
+     * A call that succeeds 10 ms after the deadline, once it has been abandoned.
+     */
     const late = (): Promise<string> =>
       new Promise<string>((resolve) => {
         // eslint-disable-next-line no-restricted-syntax -- a fake timer, advanced by the test

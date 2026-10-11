@@ -19,6 +19,10 @@ vi.mock('@/services/email-message.service', () => ({
   markMessageSendFailed: vi.fn(() => Promise.resolve()),
 }))
 
+/**
+ * The Job fields a test sets on `fakeJob`; `attempts` is the job's `attempts`
+ * option, left out when unset.
+ */
 interface FakeJobFields {
   attemptsMade: number
   attempts?: number
@@ -28,8 +32,6 @@ interface FakeJobFields {
 
 /**
  * A stand-in for a BullMQ Job with only the fields job-failure.job.ts reads.
- * @param fields - Attempts made, the attempts option, data and updateData.
- * @returns The fake, typed as a Job.
  */
 function fakeJob(fields: FakeJobFields): Job {
   return {

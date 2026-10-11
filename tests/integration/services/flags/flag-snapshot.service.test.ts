@@ -5,7 +5,7 @@
  * the copy in memory without logging the stored value, a reload never
  * replaces the copy with an older snapshot, a store with nothing stored
  * serves null, and a stopped store stops reloading. A 304 touch rewrites
- * `checkedAt` only while the stored value is still the exact string its run
+ * `checkedAt` only while the stored value is the exact string its run
  * read: a snapshot another replica stored meanwhile survives it unchanged,
  * and a deleted one is not recreated. `stop()` closes the subscriber, a
  * reconnect reloads, and neither `start()` nor `stop()` waits on a
@@ -30,8 +30,8 @@ import type { ParsedSnapshot } from '@/validators/flag-definition.validators'
 import { waitUntil } from '../../../helpers/timing'
 
 /**
- * Where the next client `createClient` builds is pointed: `redirectNext` marks
- * the snapshot subscriber (the shared client already exists by then), which
+ * Steers the mocked `createClient`. `redirectNext` marks the next client built
+ * as the snapshot subscriber (the shared client already exists by then), which
  * goes to `url` when set and is otherwise named so `CLIENT LIST` finds it.
  */
 const subscriber = vi.hoisted(() => ({
@@ -63,9 +63,8 @@ const NONE = null
 const stores: FlagSnapshotStore[] = []
 
 /**
- * A snapshot with one marker in its ETag.
- * @param marker - Tells snapshots apart.
- * @returns The snapshot.
+ * Builds a snapshot whose ETag carries `marker`, so an assertion can tell which snapshot a store
+ * holds.
  */
 function snapshot(marker: string): ParsedSnapshot {
   return {
@@ -79,9 +78,7 @@ function snapshot(marker: string): ParsedSnapshot {
 }
 
 /**
- * A started store, stopped after the test.
- * @param backstopMs - Its backstop interval.
- * @returns The store.
+ * Starts a store, stopped in `afterEach`, whose reload backstop runs every `backstopMs`.
  */
 async function startedStore(backstopMs = 60_000): Promise<FlagSnapshotStore> {
   const store = createFlagSnapshotStore({ backstopMs })
@@ -91,8 +88,7 @@ async function startedStore(backstopMs = 60_000): Promise<FlagSnapshotStore> {
 }
 
 /**
- * How many clients are subscribed to the reload channel.
- * @returns The `PUBSUB NUMSUB` count.
+ * Counts the clients subscribed to the reload channel, by `PUBSUB NUMSUB`.
  */
 async function subscriberCount(): Promise<number> {
   const redis = await getRedis()
@@ -297,9 +293,9 @@ describe('the subscriber: stop() and reconnect', () => {
 })
 
 /**
- * A TCP server that accepts and never answers, but reads so a peer's close is
- * seen; the next subscriber is pointed at it.
- * @returns The sockets it has accepted, and a function that closes it all.
+ * Starts a TCP server that accepts and never answers, but reads so a peer's
+ * close is seen, and points the next subscriber at it.
+ * @returns The sockets it has accepted, and a function that closes the sockets and the server.
  */
 async function silentServer(): Promise<{ accepted: net.Socket[]; close: () => void }> {
   const accepted: net.Socket[] = []
@@ -331,11 +327,11 @@ describe('start() and stop() while the subscriber never finishes its handshake',
       })
       const stopping = Date.now()
       await store.stop()
-      // Half of STOP_SUBSCRIBER_WAIT_MS (1 s), so a stop() that fell back to that wait fails; measured ~100 ms.
+      // Half of STOP_SUBSCRIBER_WAIT_MS (1 s), so a stop() that fell back to that wait fails.
       expect(Date.now() - stopping).toBeLessThan(500)
       await waitUntil(() => silent.accepted[0]?.destroyed, {
         message: 'the connected subscriber is closed by stop()',
-        // Well inside the 5 s handshake deadline, which would otherwise close it; measured in ms.
+        // Well inside REDIS_CONNECT_TIMEOUT_MS (5 s), the handshake deadline that would otherwise close it; measured in ms.
         timeout: 1000,
       })
     } finally {

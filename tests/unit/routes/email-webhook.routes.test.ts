@@ -10,6 +10,10 @@ import { requireEnabledEmailWebhookProvider } from '@/middlewares/email-webhook.
 import { RATE_LIMITER_MARK } from '@/middlewares/rate-limit.middleware'
 import { createEmailWebhookRouter } from '@/routes/email-webhook.routes'
 
+/**
+ * A router layer as router@2 builds it. Express's published types describe an
+ * older layer shape, so the tests declare the part they read.
+ */
 interface RouteLayer {
   route?: {
     path: string
@@ -18,6 +22,10 @@ interface RouteLayer {
   }
 }
 
+/**
+ * The handlers of the route with the given method and path, in the order
+ * they run; throws when the router has no such route.
+ */
 function handlersFor(router: Router, method: string, path: string): RequestHandler[] {
   const layers = router.stack as unknown as RouteLayer[]
   const layer = layers.find(

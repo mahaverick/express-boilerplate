@@ -36,9 +36,7 @@ const BOLD: FlagEvaluation = { value: 'bold', reason: 'condition_match', conditi
 const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60
 
 /**
- * A request-bound context in a tenant.
- * @param fields - Fields to change.
- * @returns The context.
+ * Builds a request-bound flag context in a fresh tenant, with `fields` overriding the defaults.
  */
 function contextWith(fields: Partial<FlagContext> = {}): FlagContext {
   const tenantId = randomUUID()

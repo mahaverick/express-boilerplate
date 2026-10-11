@@ -9,6 +9,10 @@ import { describe, expect, it } from 'vitest'
 
 const SRC = path.resolve(process.cwd(), 'src')
 
+/**
+ * One shape of write to `users.email_verified_at`, and the only src/ files
+ * allowed to contain it.
+ */
 interface WriterRule {
   name: string
   pattern: RegExp
@@ -40,9 +44,8 @@ const RULES: readonly WriterRule[] = [
 ]
 
 /**
- * Lines of a source file that are code, not comment prose.
- * @param source - The file's text.
- * @returns Each non-comment line with its 1-based line number.
+ * Lines of a source file that are code, not comment prose, each with its
+ * 1-based line number.
  */
 function codeLines(source: string): { line: number; text: string }[] {
   return source
@@ -52,10 +55,8 @@ function codeLines(source: string): { line: number; text: string }[] {
 }
 
 /**
- * Every place in one file that breaks a rule.
- * @param relativePath - The file's path relative to src/.
- * @param source - The file's text.
- * @returns One `path:line rule` string per violation.
+ * Every place in one file that breaks a rule, as a `path:line rule` string.
+ * `relativePath` is relative to src/.
  */
 function violationsIn(relativePath: string, source: string): string[] {
   return RULES.flatMap((rule) =>
@@ -68,8 +69,8 @@ function violationsIn(relativePath: string, source: string): string[] {
 }
 
 /**
- * Every TypeScript source file under src/, relative to it.
- * @returns POSIX-style relative paths.
+ * Every TypeScript source file under src/, as a path relative to it with
+ * POSIX separators.
  */
 function sourceFiles(): string[] {
   return fs

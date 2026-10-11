@@ -7,9 +7,8 @@ import { createHmac, hkdfSync } from 'node:crypto'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 /**
- * Load the function against a fixed SESSION_SECRET.
- * @param secret - The SESSION_SECRET getEnv answers.
- * @returns The function.
+ * Loads `hashRateLimitIdentity` against a mocked `getEnv` that answers
+ * `secret` as SESSION_SECRET.
  */
 async function load(
   secret: string

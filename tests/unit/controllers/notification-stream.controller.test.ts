@@ -11,19 +11,18 @@ import { countAllStreams, resetLifecycleForTests } from '@/services/lifecycle.se
 import { isSessionDenied } from '@/services/session-denylist.service'
 
 vi.mock('@/services/session-denylist.service', () => ({ isSessionDenied: vi.fn() }))
-// The real emitter opens a Redis subscriber whose connect timer would race the timer-count checks.
+// The real emitter opens a Redis subscriber, and a failed start schedules a retry timer that the timer-count checks would count.
 vi.mock('@/services/notification-emitter.service', () => ({
   onNotification: vi.fn(),
   offNotification: vi.fn(),
 }))
 
 /**
- * Build a fake request and response pair for an authenticated stream call.
- * @param options - Whether the client is already gone, and when the token expires.
- * @param options.isGone - True when the request and response are already destroyed.
- * @param options.isRequestDestroyed - True when only the request is destroyed, as Node does once a body is fully read.
- * @param options.expiresAt - The access token's expiry.
- * @returns The fakes, with the response's `writeHead` spy.
+ * A fake request and response pair for an authenticated stream call.
+ * `isGone` destroys both; `isRequestDestroyed` destroys only the request, as
+ * Node does once a body is fully read; `expiresAt` is the access token's
+ * expiry. Also returns the `writeHead` and `end` spies and a trigger for the
+ * response's registered handlers of one event.
  */
 function buildCall(options: { isGone: boolean; isRequestDestroyed?: boolean; expiresAt?: Date }): {
   request: Request
@@ -55,6 +54,9 @@ function buildCall(options: { isGone: boolean; isRequestDestroyed?: boolean; exp
     write: vi.fn(),
     end,
   } as unknown as Response
+  /**
+   * Runs every handler the stream registered on the response for `event`.
+   */
   const emitResponse = (event: string): void => {
     const handlers = responseHandlers.get(event) ?? []
     for (const handler of handlers) handler()

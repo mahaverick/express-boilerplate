@@ -59,10 +59,8 @@ const CONTEXT: FlagContext = {
 const TENANTLESS: FlagContext = { ...CONTEXT, groups: {}, groupProps: {}, tenantId: NONE }
 
 /**
- * A snapshot entry for `probe_flag`.
- * @param filters - The definition's filters.
- * @param fields - Snapshot-entry fields to change.
- * @returns The parsed definition.
+ * A parsed snapshot entry for `probe_flag` with the definition's `filters`.
+ * `fields` replaces any entry field.
  */
 function parsed(
   filters: Record<string, unknown>,
@@ -73,9 +71,8 @@ function parsed(
 }
 
 /**
- * A snapshot holding one definition, with the tenant at group index 0.
- * @param definition - The definition, or none.
- * @returns The snapshot.
+ * A snapshot holding `definition`, or no flag when it is omitted, with the
+ * tenant at group index 0.
  */
 function snapshotWith(definition?: ParsedDefinition): ParsedSnapshot {
   return {
@@ -89,10 +86,8 @@ function snapshotWith(definition?: ParsedDefinition): ParsedSnapshot {
 }
 
 /**
- * A snapshot holding one `probe_flag` definition.
- * @param filters - The definition's filters.
- * @param fields - Snapshot-entry fields to change.
- * @returns The snapshot.
+ * A snapshot holding the `probe_flag` entry that `parsed` builds from
+ * `filters` and `fields`.
  */
 function snapshotOf(
   filters: Record<string, unknown>,
@@ -301,6 +296,10 @@ describe('evaluateFlag rules', () => {
   it('evaluates a $group_key condition the same with and without the group_key_names PostHog injects', async () => {
     const OTHER_TENANT_ID = '0199b000-0000-7000-8000-00000000b2b2'
     const entry: FlagEntry = { ...BOOLEAN_ENTRY, scope: 'tenant' }
+    /**
+     * Evaluates a tenant-scoped `$group_key` condition on `value`, with the
+     * `group_key_names` map when `names` is given.
+     */
     const targeting = (
       value: string[],
       names?: Record<string, string>

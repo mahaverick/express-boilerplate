@@ -1,7 +1,7 @@
 /**
  * @file Exercises `resolveActorAccess` against the real per-worker
- * Postgres, and the lock order it adds: owners, then memberships, then
- * the platform membership `FOR SHARE`.
+ * Postgres, and the lock order it takes: owners, then memberships, then,
+ * for an actor with no membership, the platform membership `FOR SHARE`.
  */
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -25,10 +25,8 @@ const userMembershipRepository = new UserMembershipRepository()
 const userRepository = new UserRepository()
 
 /**
- * How a settled call ended: 'fulfilled', an HttpError's status, or a
- * Postgres failure's SQLSTATE (40P01 for a deadlock).
- * @param result - The settled call.
- * @returns A comparable summary.
+ * How a settled call ended, for comparing race outcomes.
+ * @returns 'fulfilled', an HttpError's status code, or a Postgres failure's SQLSTATE (40P01 for a deadlock).
  */
 function outcomeOf(result: PromiseSettledResult<unknown>): string | number {
   if (result.status === 'fulfilled') return 'fulfilled'
@@ -39,10 +37,7 @@ function outcomeOf(result: PromiseSettledResult<unknown>): string | number {
 }
 
 /**
- * Add `user` to `tenant` with `role`.
- * @param tenant - The tenant (the platform tenant makes them staff).
- * @param user - The user.
- * @param role - The role.
+ * Add `user` to `tenant` with `role` through the repository; adding to the platform tenant makes them staff.
  */
 async function addMember(tenant: Tenant, user: User, role: MembershipRole): Promise<void> {
   await userMembershipRepository.create({ userId: user.id, tenantId: tenant.id, role })
@@ -51,7 +46,7 @@ async function addMember(tenant: Tenant, user: User, role: MembershipRole): Prom
 /**
  * The lock test below runs a staff write in a customer tenant while that
  * staff member's demotion in the platform tenant is still uncommitted.
- * Only the staff write locks rows in two tenants.
+ * Only the staff write locks membership rows in two tenants.
  *
  * The last test is DELIBERATELY red under `MUTATION_PROOF=1`. It swaps
  * the `FOR SHARE` read for a plain read in the same transaction and
@@ -83,8 +78,7 @@ describe('tenant-access.service', () => {
   })
 
   /**
-   * A fresh user, tracked for cleanup.
-   * @returns The user.
+   * Create a user for a test and track it for the `afterEach` cleanup.
    */
   async function createUser(): Promise<User> {
     const user = await userRepository.create({
@@ -95,9 +89,7 @@ describe('tenant-access.service', () => {
   }
 
   /**
-   * A tenant owned by `owner`, tracked for cleanup.
-   * @param owner - The owner.
-   * @returns The tenant.
+   * Create a tenant owned by `owner` and track it for the `afterEach` cleanup.
    */
   async function createTenant(owner: User): Promise<Tenant> {
     const tenant = await tenantRepository.create({
@@ -174,9 +166,9 @@ describe('tenant-access.service', () => {
      * Staff admin S removes manager M from tenant T while platform owner P's
      * demotion of S to viewer holds S's platform row, uncommitted. P's
      * transaction waits inside `updateRole` until the probe has answered
-     * whether S's platform read queued behind it, then commits.
-     * @param platformRead - The read S's transaction makes in place of `lockPlatformRole`.
-     * @returns The race's outcomes (S, then P), events, whether S waited, and the rows involved.
+     * whether S's platform read queued behind it, then commits. `platformRead` is the read S's
+     * transaction makes in place of `lockPlatformRole`. Resolves with the outcomes (S, then P),
+     * the events, whether S waited, and the rows involved.
      */
     async function raceStaffRemovalAgainstDemotion(
       platformRead: UserMembershipRepository['lockPlatformRole']
@@ -198,6 +190,10 @@ describe('tenant-access.service', () => {
 
       // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
       const realUpdateRole = UserMembershipRepository.prototype.updateRole
+      /**
+       * `updateRole` that, after the real update, signals that the demotion holds S's platform
+       * row and waits for the release before returning, so the commit comes after the probe.
+       */
       const holdingUpdateRole: typeof realUpdateRole = async function (
         this: UserMembershipRepository,
         ...parameters: Parameters<typeof realUpdateRole>
@@ -208,6 +204,10 @@ describe('tenant-access.service', () => {
         events.push('demotion committing')
         return updated
       }
+      /**
+       * `lockPlatformRole` stand-in that publishes S's backend pid for the probe, makes
+       * `platformRead`, and records the role it read.
+       */
       const recordingRead: typeof platformRead = async function (
         this: UserMembershipRepository,
         userId,
@@ -256,8 +256,8 @@ describe('tenant-access.service', () => {
     }
 
     /**
-     * Assert the staff write waited for the demotion and was refused on it.
-     * @param race - The race's result.
+     * Asserts that the staff removal waited for the demotion and was then refused with 403 on
+     * the demoted role, leaving the manager in place.
      */
     async function expectRefusedOnTheDemotedRole(
       race: Awaited<ReturnType<typeof raceStaffRemovalAgainstDemotion>>
@@ -274,9 +274,9 @@ describe('tenant-access.service', () => {
     }
 
     /**
-     * No lock cycle is possible by construction: the only lock that reaches
-     * a second tenant is this `FOR SHARE` on one platform row, and no
-     * platform-tenant transaction locks rows in a customer tenant.
+     * No lock cycle: the only membership lock that reaches a second tenant is this `FOR SHARE`
+     * on one platform row, and every transaction that locks membership rows in both a customer
+     * tenant and the platform tenant locks the customer tenant's first.
      */
     it('serialises a staff write behind a concurrent demotion (the FOR SHARE lock)', async () => {
       const race = await raceStaffRemovalAgainstDemotion(

@@ -222,9 +222,9 @@ describe('UserTokenRepository', () => {
   /**
    * The `purpose` predicate keeps a token minted for one purpose from being
    * spent as another (SECURITY.md): a password-reset token as an email
-   * verification, or a verification link, valid for 24h and mailed without a
-   * reset request, as a reset link, outside the 1h window `PASSWORD_RESET_TTL`
-   * keeps reset links to.
+   * verification, or a verification link, valid for `EMAIL_VERIFICATION_TTL`
+   * (24h by default) and mailed without a reset request, as a reset link,
+   * outside the window `PASSWORD_RESET_TTL` (1h by default) keeps reset links to.
    */
   it('claimOnce rejects a claim for a different purpose than the row was issued for', async () => {
     const userId = await createUser()

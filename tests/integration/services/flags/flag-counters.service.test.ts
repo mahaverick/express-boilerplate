@@ -32,12 +32,7 @@ const NONE = null
 const NOW = new Date('2026-10-05T12:00:00.000Z')
 
 /**
- * A snapshot entry.
- * @param key - The flag key.
- * @param fields - Fields to change.
- * @param fields.active - Whether it is active; true by default.
- * @param fields.unsupported - Its unsupported construct; none by default.
- * @returns The entry.
+ * Builds a snapshot entry for `key`, active and fully supported unless `fields` says otherwise.
  */
 function entry(
   key: string,
@@ -54,10 +49,9 @@ function entry(
 }
 
 /**
- * A snapshot holding the given entries, checked at `checkedAt`.
- * @param flags - The entries.
- * @param checkedAt - When PostHog last confirmed it.
- * @returns The snapshot.
+ * Builds a snapshot holding `flags`, with the `checkedAt` that staleness is
+ * judged on: `checkedAt` is when PostHog last confirmed the snapshot, as an
+ * ISO string.
  */
 function snapshotOf(flags: ParsedSnapshot['flags'][string][], checkedAt: string): ParsedSnapshot {
   return {

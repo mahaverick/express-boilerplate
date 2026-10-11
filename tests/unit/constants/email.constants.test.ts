@@ -1,6 +1,6 @@
 /**
- * @file Pins email tracking's value sets to the spec and to the CHECK
- * constraints built from them, and the status ranks every writer obeys.
+ * @file Pins email tracking's value sets, from which the CHECK constraints
+ * are built, and the status ranks every writer obeys.
  */
 import { describe, expect, it } from 'vitest'
 import {

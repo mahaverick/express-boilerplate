@@ -63,7 +63,7 @@ describe('lifecycle.service', () => {
     const first = vi.fn()
     const second = vi.fn()
     const unregisterFirst = registerStream('user-a', first)
-    // closeAllStreams snapshots and clears the registry before calling any closer, so this mid-loop unregister is a no-op against the current run — proven by `first` firing exactly once despite it.
+    // closeAllStreams snapshots and clears the registry before calling any closer, so this mid-loop unregister changes nothing in the current run.
     registerStream('user-b', () => {
       second()
       unregisterFirst()

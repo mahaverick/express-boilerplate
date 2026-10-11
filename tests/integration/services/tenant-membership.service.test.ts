@@ -30,8 +30,7 @@ const userMembershipRepository = new UserMembershipRepository()
 const userRepository = new UserRepository()
 
 /**
- * The `invitation.revoked` audit rows, each with its target and actor.
- * @returns One row per entry, by target id.
+ * The `invitation.revoked` audit rows with their target, actor and tenant, ordered by target id.
  */
 async function revokedAuditRows(): Promise<
   { targetId: string; actorUserId: string; tenantId: string }[]
@@ -42,8 +41,7 @@ async function revokedAuditRows(): Promise<
 }
 
 /**
- * The access mode of each `invitation.revoked` audit row, by target id.
- * @returns One mode per entry.
+ * The access mode of each `invitation.revoked` audit row, ordered by target id.
  */
 async function revokedAuditAccess(): Promise<string[]> {
   const rows = await sql<{ access: string }[]>`
@@ -52,9 +50,7 @@ async function revokedAuditAccess(): Promise<string[]> {
 }
 
 /**
- * Whether an invitation is still pending (neither accepted nor revoked).
- * @param id - The invitation.
- * @returns True while it is pending.
+ * Whether an invitation is still pending, meaning neither accepted nor revoked.
  */
 async function isPending(id: string): Promise<boolean> {
   const [row] = await sql<{ pending: boolean }[]>`
@@ -63,10 +59,8 @@ async function isPending(id: string): Promise<boolean> {
 }
 
 /**
- * How a settled service call ended: 'fulfilled', an HttpError's status, or
- * a Postgres failure's SQLSTATE (40P01 for a deadlock).
- * @param result - The settled call.
- * @returns A comparable summary of the outcome.
+ * How a settled call ended, for comparing race outcomes.
+ * @returns 'fulfilled', an HttpError's status code, or a Postgres failure's SQLSTATE (40P01 for a deadlock).
  */
 function outcomeOf(result: PromiseSettledResult<unknown>): string | number {
   if (result.status === 'fulfilled') return 'fulfilled'
@@ -77,11 +71,7 @@ function outcomeOf(result: PromiseSettledResult<unknown>): string | number {
 }
 
 /**
- * A pending invitation sent by `inviter`, written straight to the table.
- * @param tenant - The tenant.
- * @param inviter - The sender.
- * @param role - The offered role.
- * @returns The invitation id.
+ * Seed a pending invitation from `inviter` straight into the table; resolves with its id.
  */
 async function pendingFrom(tenant: Tenant, inviter: User, role: MembershipRole): Promise<string> {
   const invitation = await invitationRepository.createPending({
@@ -96,10 +86,8 @@ async function pendingFrom(tenant: Tenant, inviter: User, role: MembershipRole):
 }
 
 /**
- * Start two service calls whose transactions both reach `lockOwners` before
- * either takes it, and report how each ended.
- * @param start - Starts the two calls.
- * @returns How many calls reached `lockOwners`, and each call's outcome, in call order.
+ * Start two service calls whose transactions both reach `lockOwners` before either takes it. `start`
+ * starts the two calls. Resolves with how many calls reached `lockOwners` and each call's outcome, in call order.
  */
 async function meetingAtLockOwners(
   start: () => Promise<unknown>[]
@@ -112,6 +100,10 @@ async function meetingAtLockOwners(
   const barrier = new Promise<void>((resolve) => {
     releaseBarrier = resolve
   })
+  /**
+   * `lockOwners` stand-in that holds each caller until both have arrived, then takes the real
+   * owner lock. A fallback wait keeps a call that never arrives from hanging the test.
+   */
   const meetingLockOwners: typeof realLockOwners = async function (
     this: UserMembershipRepository,
     ...parameters: Parameters<typeof realLockOwners>
@@ -154,8 +146,7 @@ describe('tenant-membership.service', () => {
   })
 
   /**
-   * A fresh user, tracked for cleanup.
-   * @returns The created user.
+   * Create a user and track it for the `afterEach` cleanup.
    */
   async function createUser(): Promise<User> {
     const user = await userRepository.create({
@@ -166,9 +157,7 @@ describe('tenant-membership.service', () => {
   }
 
   /**
-   * A tenant owned by `owner`, tracked for cleanup.
-   * @param owner - The owner.
-   * @returns The tenant.
+   * Create a tenant owned by `owner` and track it for the `afterEach` cleanup.
    */
   async function createTenant(owner: User): Promise<Tenant> {
     const tenant = await tenantRepository.create({
@@ -183,7 +172,7 @@ describe('tenant-membership.service', () => {
   /**
    * Owner A promotes manager B to owner while B's call demotes A. Both
    * transactions are open and meet at `lockOwners` before either takes it.
-   * If A commits first, B is now an owner acting on another owner: 403. If
+   * If A commits first, B has become an owner acting on another owner: 403. If
    * B goes first, B is a manager below the owner bar: 403, then A wins.
    * Either way: A fulfilled, B 403, and no 40P01.
    */

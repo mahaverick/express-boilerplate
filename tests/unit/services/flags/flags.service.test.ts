@@ -73,10 +73,8 @@ const TENANTLESS_CONTEXT: FlagContext = {
 
 /**
  * A definitions body holding both reference flags, fully rolled out, with
- * the experiment forced to one variant.
- * @param variant - The variant every user gets.
- * @param variants - The variants PostHog declares.
- * @returns The snapshot.
+ * the experiment forced to `variant` for every user. `variants` is the list
+ * PostHog declares for it.
  */
 function snapshotWith(variant: string, variants: string[] = ['control', 'bold']) {
   const base = {

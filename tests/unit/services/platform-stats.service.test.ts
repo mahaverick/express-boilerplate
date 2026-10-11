@@ -3,8 +3,19 @@ import { emailMessageDays, getPlatformStats, utcDays } from '@/services/platform
 
 vi.mock('@/repositories/platform-stats.repository', () => ({
   PlatformStatsRepository: class {
+    /**
+     * Fixed totals, so the test can check the service adds the stuck-tenant
+     * count to them.
+     */
     totals = () => Promise.resolve({ tenants: 2, users: 3, staff: 1 })
+    /**
+     * Returns no sign-ups, so the day lists the service builds are all zero.
+     */
     signupsByDay = () => Promise.resolve({ users: [], tenants: [] })
+    /**
+     * Returns no messages, so the service's zero-filled day list is checked
+     * without data.
+     */
     emailMessagesByDay = () => Promise.resolve([])
   },
 }))

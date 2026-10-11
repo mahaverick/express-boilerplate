@@ -31,6 +31,10 @@ const fake = vi.hoisted(() => {
     commands: [] as unknown[][],
     values: new Map<string, string>(),
   }
+  /**
+   * Logs one Redis command and its arguments into `state.commands`, so a test can
+   * assert the keys and expiries a write used.
+   */
   const record = (name: string, parameters: unknown[]): void => {
     state.commands.push([name, ...parameters])
   }

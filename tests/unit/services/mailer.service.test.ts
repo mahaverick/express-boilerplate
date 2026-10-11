@@ -1,14 +1,10 @@
 /**
- * @file Unit tests for mailer.service.ts's two pure, exported helpers —
- * extractErrorCode and redactedMailErrorForLog. `sendMail` itself has no
- * pure-function surface (it always touches the real transporter and the
- * real delivery log), so it is exercised end to end in
- * tests/integration/services/mailer.service.test.ts instead; these two
- * helpers are unit-tested directly, with hand-built error values, so
- * every branch — including ones a real SMTP round trip would rarely or
- * never reach (a rejection with no `.stack` at all, one whose stack has
- * no frame lines) — is exercised without needing a real network failure
- * to shape one.
+ * @file extractErrorCode and redactedMailErrorForLog, the two pure helpers of
+ * mailer.service.ts, called with hand-built error values so that every branch
+ * runs, including ones a real SMTP failure rarely reaches (a rejection with no
+ * `.stack`, one whose stack has no frame lines); and the compile-time shape of
+ * `MailMessage`. `sendMail` touches the real transporter and the delivery log,
+ * so it is covered in tests/integration/services/mailer.service.test.ts.
  */
 import { describe, expect, it } from 'vitest'
 import { UNKNOWN_ERROR_CODE } from '@/database/models/email-log.model'
@@ -38,7 +34,7 @@ describe('extractErrorCode', () => {
     expect(extractErrorCode(undefined)).toBe(UNKNOWN_ERROR_CODE)
   })
 
-  // Never reads .message or .response, even when they are the only place a real code-shaped value appears — this is the actual property that keeps a leaked token or body fragment out of email_logs.error_code.
+  // Never reads .message or .response, even when they are the only place a code-shaped value appears: this keeps a leaked token or body fragment out of email_logs.error_code.
   it('never reads .message or .response, even when they contain something code-shaped', () => {
     const error = { message: 'ECONNECTION', response: 'EAUTH' }
     expect(extractErrorCode(error)).toBe(UNKNOWN_ERROR_CODE)
@@ -102,12 +98,11 @@ describe('redactedMailErrorForLog', () => {
   })
 
   /**
-   * The frame filter must key on V8's own indentation (at least four
-   * spaces on every genuine frame), the one signal that tells a real
-   * call frame apart from an unindented line that merely happens to
-   * start with "at ". `.stack` is server-derived here (nodemailer
-   * builds it from the rejection, which for an SMTP failure can echo
-   * server-controlled, multi-line content), so this matters — pinned
+   * The frame filter requires a V8 frame's shape, which starts with
+   * indentation, to tell a real call frame from an unindented line that
+   * merely starts with "at ". `.stack` begins with the error's message, which on
+   * some nodemailer failure paths is built from server text (smtp-connection
+   * puts a multi-line RSET reply into it), so this matters; it is pinned
    * directly, not by absence.
    */
   it('drops an unindented line that merely begins "at ", keeping only real indented call frames', () => {
@@ -125,15 +120,14 @@ describe('redactedMailErrorForLog', () => {
 })
 
 /**
- * `MailMessage` is a discriminated union on `templateKey`
- * (mailer.service.ts's own header comment), so a caller cannot construct
- * one whose `templateKey` and `variables` disagree, and cannot supply
- * `subject`/`text`/`html` at all. All three properties below are
- * compile-time-only — no assertion can check them; `tsc` either reports
- * "Unused '@ts-expect-error' directive" or it doesn't (`pnpm lint` runs
- * tsconfig.typecheck.json's tsc over this file). Mirrors
- * tests/unit/database/models/user-token.model.test.ts's own
- * `@ts-expect-error` pattern for `NewUserToken['purpose']`.
+ * `MailMessage` is a discriminated union on `templateKey` (see its JSDoc in
+ * mailer.service.ts), so a caller cannot construct one whose `templateKey` and
+ * `variables` disagree, and cannot supply `subject`/`text`/`html` at all. All
+ * three properties below are compile-time only: no assertion can check them,
+ * and `tsc` either reports "Unused '@ts-expect-error' directive" or it does
+ * not (`pnpm lint` runs tsconfig.typecheck.json's tsc over this file). The
+ * same `@ts-expect-error` pattern is used for `NewUserToken['purpose']` in
+ * tests/unit/database/models/user-token.model.test.ts.
  */
 describe('MailMessage', () => {
   const validPasswordResetVariables = {
@@ -149,11 +143,11 @@ describe('MailMessage', () => {
       templateKey: 'password-reset',
       variables: validPasswordResetVariables,
     }
-    // A real assertion, not a throwaway — see tests/unit/database/models/user-token.model.test.ts's own comment on why the compile-time check needs one genuine read of the value.
+    // A real assertion, not a throwaway: see the comment in tests/unit/database/models/user-token.model.test.ts on why a compile-time check needs one genuine read of the value.
     expect(invalid.templateKey).toBe('password-reset')
   })
 
-  // `variables` shaped for a different template (this is exactly RegistrationAttemptVariables — firstName/appName, no resetUrl) paired with `templateKey: 'password_reset'` must not compile — proving a caller cannot construct that mismatch.
+  // `variables` shaped for a different template (RegistrationAttemptVariables: firstName and appName, no resetUrl) paired with `templateKey: 'password_reset'` must not compile, so a caller cannot construct that mismatch.
   it('variables shaped for a different template than the declared templateKey is a compile error', () => {
     // @ts-expect-error — PasswordResetVariables requires `resetUrl`; the `variables` object below is RegistrationAttemptVariables-shaped instead. TS reports the mismatched-union-member error on the object literal's own declaration line, so the directive sits directly above it.
     const invalid: MailMessage = {
@@ -164,7 +158,7 @@ describe('MailMessage', () => {
     expect(invalid.templateKey).toBe('password_reset')
   })
 
-  // "No token may appear in a subject line" is unenforceable-by-construction (mailer.service.ts's own header comment): there is no field left for a caller to put a token into. This pins that: a caller-supplied `subject` alongside an otherwise-valid message must not compile.
+  // MailMessage has no subject, text or html field, so a caller has no message field to put a token into; a caller-supplied `subject` alongside an otherwise valid message must not compile.
   it('a caller-supplied subject is a compile error — there is no field to reopen the old token-in-subject risk', () => {
     const invalid: MailMessage = {
       to: 'user@example.test',

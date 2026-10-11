@@ -1,13 +1,12 @@
 /**
  * @file Confirms `isRedisReachable()` (and therefore `GET /health/ready`)
- * gives up instead of hanging when Redis is unreachable: this test fails by
- * TIMING OUT, not by a mismatched assertion, if `redis.service.ts`'s bounded
- * `reconnectStrategy` is ever removed. Isolated from `redis.service.test.ts`
- * on purpose: this file mocks `getEnv()` to point `REDIS_URL` at a dead port
- * for every test in it, so it cannot share a module registry (and therefore
- * a mocked `getEnv`) with tests that need the real, reachable compose-stack
- * Redis. Vitest gives each test file its own module registry by default,
- * which is what makes this safe.
+ * answers false, and `getRedis()` rejects, instead of hanging when Redis is
+ * unreachable. Without `redis.service.ts`'s bounded `reconnectStrategy`, each
+ * `getRedis()` waits out `REDIS_CONNECT_TIMEOUT_MS`, so the second test fails
+ * by timing out rather than by a mismatched assertion. Its own file because
+ * it mocks `getEnv()` to point `REDIS_URL` at a dead port for every test in
+ * it; each test file runs in its own process, so that mock reaches no test
+ * that needs the real compose-stack Redis.
  */
 import { createClient } from 'redis'
 import { afterAll, describe, expect, it, vi } from 'vitest'
@@ -22,10 +21,8 @@ vi.mock('redis', async (importOriginal) => {
 })
 
 /**
- * `vi.mock` calls are hoisted above these imports by Vitest's transform, so
- * both `@/services/redis.service` and `@/app` (which imports it
- * transitively) see the mocked `getEnv` from the moment they're first
- * evaluated.
+ * `vi.mock` is hoisted above the imports, so `@/services/redis.service` and
+ * `@/app`, which imports it, see the mocked `getEnv` from their first evaluation.
  */
 vi.mock('@/configs/env.config', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/configs/env.config')>()
@@ -44,7 +41,7 @@ describe('redis unreachable', () => {
   it('isRedisReachable() resolves false within a few seconds instead of hanging', async () => {
     const startedAt = Date.now()
     await expect(isRedisReachable()).resolves.toBe(false)
-    // The claim: it gives up rather than retrying forever. 10x the whole test's measured p99 (795ms).
+    // The claim: it gives up rather than waiting on Redis. The bound is far above REDIS_REQUEST_DEADLINE_MS, the longest isRedisReachable waits.
     expect(Date.now() - startedAt).toBeLessThan(8000)
   }, 10_000)
 

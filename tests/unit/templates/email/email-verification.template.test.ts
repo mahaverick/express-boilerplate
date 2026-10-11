@@ -69,7 +69,7 @@ describe('renderEmailVerificationTemplate', () => {
         verificationUrl: payload,
       })
 
-      // The raw href attribute must never let the payload's own quote close the attribute early and inject a new one.
+      // The raw href attribute must never let the payload's own quote close the attribute early and inject another.
       expect(rendered.html).not.toContain(`href="${payload}"`)
       expect(rendered.html).not.toContain('" onmouseover="alert(1)')
       expect(rendered.html).toContain('&quot; onmouseover=&quot;alert(1)')

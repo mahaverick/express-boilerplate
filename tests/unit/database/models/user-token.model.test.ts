@@ -11,22 +11,22 @@ import type { NewUserToken } from '@/database/models/user-token.model'
  * what makes an insert missing `purpose` a compile error instead of a
  * silent `'refresh'`, the highest-privilege purpose, the one that can
  * mint a session. Only one call site (`createTokenRow`,
- * session.service.ts) calling `create()` is a convention, not something
- * enforced elsewhere; this suite is the gate that survives its erosion.
- * If a future edit re-adds `.default(...)` to `purpose`, it becomes
+ * session.service.ts) calls `create()`, but that is a convention nothing
+ * else enforces; this suite is the gate that survives its erosion.
+ * If an edit re-adds `.default(...)` to `purpose`, it becomes
  * optional in `NewUserToken` again, the `@ts-expect-error` below stops
  * being consumed, and TypeScript reports "Unused '@ts-expect-error'
- * directive" — which `pnpm lint`'s `tsc -p tsconfig.typecheck.json
- * --noEmit` step turns into a real, red gate. The gate itself is
- * checked by the compiler, not by anything this test executes at
- * runtime — `tsc` either reports the unused directive or it doesn't.
+ * directive", which the `tsc -p tsconfig.typecheck.json --noEmit` step of
+ * `pnpm lint` turns into a red gate. The compiler checks that gate, not
+ * anything this test executes at runtime: `tsc` either reports the unused
+ * directive or it doesn't.
  */
 describe('user_tokens: `purpose` has no default', () => {
   /**
    * The one runtime `expect` in this block exists for two narrower
    * reasons: it gives `sonarjs/assertions-in-tests` something real to
    * check, and it proves the object literal is a genuine, read value
-   * rather than one a future cleanup could quietly delete or
+   * rather than one a cleanup could quietly delete or
    * `void`-away, which would also delete the compile-time check it
    * exists to trigger.
    */

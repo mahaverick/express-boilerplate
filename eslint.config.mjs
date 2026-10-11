@@ -13,7 +13,6 @@ import sonarjs from 'eslint-plugin-sonarjs'
 import unicorn from 'eslint-plugin-unicorn'
 import globals from 'globals'
 import tseslint from 'typescript-eslint'
-import jsdocPending from './jsdoc-pending.json' with { type: 'json' }
 import { commentStyleRule } from './scripts/comment-style.mjs'
 
 /**
@@ -51,13 +50,6 @@ const JSDOC_CONTEXTS = [
   'TSTypeAliasDeclaration',
   'ExportNamedDeclaration[declaration.type="VariableDeclaration"]',
 ]
-/**
- * Files whose comments are not yet converted, keyed by plan task; each
- * comment PR deletes its key.
- */
-const PENDING = Object.values(jsdocPending).flat()
-const PENDING_TESTS = PENDING.filter((file) => file.startsWith('tests/'))
-const PENDING_OTHER = PENDING.filter((file) => !file.startsWith('tests/'))
 
 export default tseslint.config(
   {
@@ -492,40 +484,5 @@ export default tseslint.config(
     files: ['scripts/**/*.d.mts'],
     rules: { 'jsdoc/require-jsdoc': 'off' },
   },
-  ...(PENDING_OTHER.length > 0
-    ? [
-        {
-          // Unconverted files keep the JSDoc rule they had before the rollout.
-          files: PENDING_OTHER,
-          rules: {
-            'jsdoc/require-jsdoc': [
-              'error',
-              {
-                publicOnly: true,
-                require: {
-                  FunctionDeclaration: true,
-                  ClassDeclaration: true,
-                  MethodDefinition: true,
-                },
-                contexts: [
-                  'TSInterfaceDeclaration',
-                  'TSTypeAliasDeclaration',
-                  'ExportNamedDeclaration > VariableDeclaration',
-                ],
-              },
-            ],
-            'jsdoc/require-description': 'off',
-          },
-        },
-      ]
-    : []),
-  ...(PENDING_TESTS.length > 0
-    ? [
-        {
-          files: PENDING_TESTS,
-          rules: { 'jsdoc/require-jsdoc': 'off', 'jsdoc/require-description': 'off' },
-        },
-      ]
-    : []),
   prettier
 )

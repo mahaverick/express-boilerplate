@@ -5,9 +5,7 @@ import { listNotificationsSchema } from '@/validators/notification.validators'
 const ID = '01a1156d-00b7-75d4-887f-2dd37e110303'
 
 /**
- * Encode arbitrary JSON the way a cursor travels.
- * @param value - The decoded cursor.
- * @returns The base64url cursor.
+ * Encodes `value`, a decoded cursor, as the base64url JSON a cursor travels as.
  */
 function b64(value: unknown): string {
   return Buffer.from(JSON.stringify(value)).toString('base64url')

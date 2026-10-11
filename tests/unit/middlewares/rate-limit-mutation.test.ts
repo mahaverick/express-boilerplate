@@ -21,11 +21,9 @@ vi.mock('@/services/redis.service', async (importOriginal) => ({
 }))
 
 /**
- * Build a bare app behind a login rate limiter built by the given
- * `createRateLimiter` — real or, while a mutation is active,
- * freshly-loaded-and-mutated.
- * @param createRateLimiter - The `createRateLimiter` to build the limiter from.
- * @returns The app.
+ * A bare app behind a login rate limiter built by the given
+ * `createRateLimiter`: the real one or, while a mutation is active, the
+ * freshly loaded and mutated one.
  */
 function buildApp(createRateLimiter: typeof CreateRateLimiter): Express {
   const app = express()
@@ -42,20 +40,16 @@ function buildApp(createRateLimiter: typeof CreateRateLimiter): Express {
 }
 
 /**
- * POST a login attempt.
- * @param app - The app under test.
- * @param email - The email to submit.
- * @returns The supertest response.
+ * A login attempt submitting `email` to the app.
  */
 function attempt(app: Express, email: string): Test {
   return request(app).post('/login').send({ email, password: 'wrong-password' })
 }
 
 /**
- * Exhaust `victim@example.com`'s budget (limit 2), then probe whether a
- * different email sharing the same IP is also blocked.
- * @param createRateLimiter - The `createRateLimiter` to build the limiter from.
- * @returns The status code of the request from the different email.
+ * Exhausts `victim@example.com`'s budget (limit 2), then probes whether a
+ * different email sharing the same IP is also blocked. Returns the status of
+ * the request from the different email.
  */
 async function bystanderStatusAfterExhaustingVictim(
   createRateLimiter: typeof CreateRateLimiter
@@ -73,13 +67,12 @@ async function bystanderStatusAfterExhaustingVictim(
 /**
  * loginRateLimitKey is private to rate-limit.constants.ts, reached only
  * through `RATE_LIMITS.login.keyBy`, so there is no exported binding to
- * replace directly — the mutated dependency is `rateLimit` itself,
+ * replace directly. The mutated dependency is `rateLimit` itself,
  * imported from the third-party express-rate-limit package, wrapped to
  * force `keyGenerator` to an IP-only function and so reproduce the
  * exact bug the composite `${ip}:${email}` key exists to prevent.
- * Every other limiter built through `createRateLimiter` is unaffected,
- * since none of the other `RATE_LIMITS` entries pass their own
- * key-generating function.
+ * The override applies to every limiter the reloaded module builds; these
+ * tests build only the login limiter.
  */
 describe('withMutatedModule, proven on the login rate limiter’s real key generator', () => {
   it('forcing keyGenerator to IP-only reopens the lockout the composite key exists to prevent; restoring closes it again', async () => {
@@ -152,7 +145,7 @@ describe('withMutatedModule, proven on the login rate limiter’s real key gener
           const victimBlocked = await attempt(app, 'victim@example.com')
           expect(victimBlocked.status).toBe(429)
 
-          // A different email, same supertest agent — so the same client IP — must be entirely unaffected by victim@example.com's counter. With the guard mutated, it is not.
+          // A different email from the same client IP must be entirely unaffected by victim@example.com's counter. With the guard mutated, it is not.
           const bystander = await attempt(app, 'someone-else@example.com')
           expect(bystander.status).toBe(401)
         }

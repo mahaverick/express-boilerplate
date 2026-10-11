@@ -29,12 +29,9 @@ const PRINCIPAL: RequestPrincipal = {
 }
 
 /**
- * Run the beta gate once.
- * @param isOn - What the evaluation answers.
- * @param options - The value the gate admits and whether the request has a principal.
- * @param options.shouldBeOn - The value the gate admits.
- * @param options.hasPrincipal - Whether `resolveTenant` ran.
- * @returns The arguments `next` was called with.
+ * Runs the beta gate once and returns the arguments of each `next` call.
+ * `isOn` is what the evaluation answers, `shouldBeOn` the value the gate
+ * admits, and `hasPrincipal` whether `resolveTenant` ran.
  */
 async function run(
   isOn: boolean,

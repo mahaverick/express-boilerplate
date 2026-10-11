@@ -1,7 +1,7 @@
 /**
  * @file completeOnboardingStep and getTenantOnboarding against the real
  * per-worker Postgres: one completion per step, the refusals, untracked and
- * waiting tenants, a dismissed tenant still recording, and the customer's
+ * waiting tenants, a dismissed tenant that keeps recording, and the customer's
  * view of tenant steps, their own member steps, and staff-only states.
  */
 import { randomUUID } from 'node:crypto'
@@ -29,8 +29,7 @@ afterEach(async () => {
 })
 
 /**
- * A customer-created tenant (tracked and started) and its owner.
- * @returns Both.
+ * Creates a customer-created tenant, tracked and started, and its owner.
  */
 async function startedTenant(): Promise<{ owner: User; tenant: Tenant }> {
   const owner = await createTrackedUser()
@@ -150,6 +149,9 @@ describe('getTenantOnboarding', () => {
 
     const asStaff = await getTenantOnboarding(tenant.id, { userId: NONE })
 
+    /**
+     * Reads one step out of the owner, teammate or staff view, to compare how each sees it.
+     */
     const stepOf = (view: typeof asOwner, key: string) =>
       view.steps.find((entry) => entry.key === key)
     expect(asOwner.steps.map((entry) => entry.key)).toEqual([

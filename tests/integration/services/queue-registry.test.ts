@@ -9,6 +9,9 @@ import path from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { closeQueue, getAllQueues } from '@/services/queue.service'
 
+/**
+ * Orders queue names alphabetically, so the two lists compare whatever order they were built in.
+ */
 const byText = (a: string, b: string): number => a.localeCompare(b)
 
 afterAll(async () => {

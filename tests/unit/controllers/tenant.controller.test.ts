@@ -3,8 +3,8 @@
  * cannot reach through the HTTP layer, every one a defensive check
  * unreachable through a correctly-wired route. Every case below calls
  * a `tenantController` handler directly rather than routing through
- * `createApp()` — no database import is reached by doing this, since
- * every branch here throws or returns before any service call.
+ * `createApp()`; no query runs, since every branch here throws or returns
+ * before any service call.
  */
 import type { NextFunction, Request, Response } from 'express'
 import { describe, expect, it, vi } from 'vitest'
@@ -15,10 +15,8 @@ import type { RequestPrincipal } from '@/types/actor'
 const unusedResponse = {} as Response
 
 /**
- * Build a `next` spy whose recorded argument is inspectable as `unknown`
- * rather than `any` — same helper and reasoning as
- * tests/integration/middlewares/auth.middleware.test.ts's own `mockNext`.
- * @returns The spy (cast to `NextFunction` for calling a handler) and the argument its most recent call recorded.
+ * A `next` spy whose recorded argument reads as `unknown` rather than `any`.
+ * Mirrors `mockNext` in tests/integration/middlewares/auth.middleware.test.ts.
  */
 function mockNext(): { next: NextFunction; lastCallArgument: () => unknown } {
   const spy = vi.fn<(error?: unknown) => void>()

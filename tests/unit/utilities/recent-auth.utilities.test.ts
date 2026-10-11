@@ -1,6 +1,6 @@
 /**
- * @file `isRecentAuth`: seconds in (`auth_time`), milliseconds `now`, the
- * same arithmetic `requireRecentAuth` applied before it moved here.
+ * @file `isRecentAuth`: `auth_time` in seconds against `now` in milliseconds,
+ * the arithmetic the `requireRecentAuth` middleware applies.
  */
 import { describe, expect, it } from 'vitest'
 import { STEP_UP_MAX_AGE_MS } from '@/constants/auth.constants'

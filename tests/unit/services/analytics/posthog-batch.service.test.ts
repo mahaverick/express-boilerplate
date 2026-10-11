@@ -2,8 +2,8 @@
  * @file sendBatch against the fake PostHog on 127.0.0.1 (no database, no
  * Redis): the request it makes, and how each answer is classified; and
  * toPosthogBatchEvent's wire form (the signature, and `$geoip_disable`
- * forced on without changing the signature). The host
- * and key come from a mocked `getEnv()`, bound once the fake is listening.
+ * forced on without changing the signature). The host and key come from a
+ * mocked `getEnv()`, bound once the fake is listening.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { signAnalyticsEvent } from '@/services/analytics/analytics-signature.service'
@@ -43,8 +43,7 @@ const EVENT: PosthogBatchEvent = {
 const fake: { posthog?: FakePosthog } = {}
 
 /**
- * The running fake.
- * @returns It.
+ * The fake PostHog `beforeAll` started, or a throw before it has.
  */
 function posthog(): FakePosthog {
   if (!fake.posthog) throw new Error('the fake PostHog is not running')

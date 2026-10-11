@@ -35,9 +35,7 @@ afterEach(async () => {
 })
 
 /**
- * A session one rotation in, so its head can be rotated once more and then replayed.
- * @param user - The session's user.
- * @returns The live head.
+ * A session one rotation in, so its live head can be rotated once more and then replayed.
  */
 async function rotatedSession(user: User): Promise<IssuedRefreshToken> {
   const first = await issueRefreshToken(user.id, randomUUID())
@@ -47,10 +45,8 @@ async function rotatedSession(user: User): Promise<IssuedRefreshToken> {
 /**
  * Run `kill` with a rotation of `raw` slipped in when the kill asks for the
  * user row FOR NO KEY UPDATE: after its transaction began, before its lock.
- * @param userId - The user whose row the kill locks.
- * @param raw - The refresh token the slipped-in rotation consumes.
- * @param kill - The kill under test.
- * @returns The token the slipped-in rotation minted.
+ * Resolves with the token that rotation minted, and throws when the kill never
+ * takes that lock.
  */
 async function killWithRotationBeforeLock(
   userId: string,
@@ -62,11 +58,8 @@ async function killWithRotationBeforeLock(
   const original = prototype.lockById
   let minted: IssuedRefreshToken | undefined
   /**
-   * `lockById` that first rotates `raw` on another connection, once, for the kill's lock.
-   * @param id - The user id to lock.
-   * @param mode - The row-lock strength.
-   * @param tx - The kill's transaction, already begun.
-   * @returns The locked row, as the original returns it.
+   * `lockById` that first rotates `raw` outside the kill's transaction, once, for the kill's
+   * FOR NO KEY UPDATE lock on `userId`, then locks as the original does.
    */
   async function lockAfterRotation(
     this: UserRepository,

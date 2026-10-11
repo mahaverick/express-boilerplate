@@ -1,8 +1,10 @@
 /**
  * @file Exercises the retention purge against the real per-worker Postgres.
  * `now` is fixed in 2001 and every row is seeded around that date's
- * cutoffs. Every other file's rows carry the real current time and can't
- * match any predicate, so the `deleted` counts here are exact.
+ * cutoffs. A row another file seeds is dated after the cutoff of the rule
+ * that covers its table, or carries the real current time, so no predicate
+ * here matches it and the `deleted` counts are exact. The files that seed
+ * dates near 2001 delete those rows in `afterEach`.
  */
 import { randomBytes, randomUUID } from 'node:crypto'
 import postgres from 'postgres'
@@ -59,10 +61,7 @@ afterEach(async () => {
 })
 
 /**
- * `days` before NOW, shifted by `offsetMs`, as ISO text: raw SQL binds it with ::timestamptz.
- * @param days - Days before NOW; negative is after it.
- * @param offsetMs - Added after.
- * @returns The ISO timestamp.
+ * `days` before NOW, shifted by `offsetMs` (positive is later), as ISO text: raw SQL binds it with ::timestamptz.
  */
 function daysBefore(days: number, offsetMs = 0): string {
   return new Date(NOW.getTime() - days * DAY_MS + offsetMs).toISOString()
@@ -70,8 +69,6 @@ function daysBefore(days: number, offsetMs = 0): string {
 
 /**
  * One minute past a rule's cutoff, on the side that is deleted.
- * @param days - The rule's days.
- * @returns The ISO timestamp.
  */
 function justOlder(days: number): string {
   return daysBefore(days, -MINUTE_MS)
@@ -79,8 +76,6 @@ function justOlder(days: number): string {
 
 /**
  * One minute short of a rule's cutoff, on the side that is kept.
- * @param days - The rule's days.
- * @returns The ISO timestamp.
  */
 function justNewer(days: number): string {
   return daysBefore(days, MINUTE_MS)
@@ -89,29 +84,21 @@ function justNewer(days: number): string {
 const LATER = daysBefore(-30)
 
 /**
- * A nullable timestamptz value for raw SQL.
- * @param value - ISO text, or undefined for NULL.
- * @returns The SQL fragment.
+ * A nullable timestamptz value for raw SQL: ISO text, or NULL when `value` is undefined.
  */
 function timestampOrNull(value: string | undefined) {
   return value === undefined ? sql`null` : sql`${value}::timestamptz`
 }
 
 /**
- * How many rows one rule's result says it deleted.
- * @param results - A run's results.
- * @param table - The rule's name.
- * @returns Its count, or undefined when the rule did not run.
+ * How many rows the rule for `table` reports it deleted, or undefined when that rule did not run.
  */
 function deletedBy(results: RetentionResult[], table: string): number | undefined {
   return results.find((result) => result.table === table)?.deleted
 }
 
 /**
- * Which of `ids` still exist in `table`.
- * @param table - The table.
- * @param ids - Ids seeded by the test.
- * @returns The surviving ids, sorted.
+ * Which of `ids` still exist in `table`, sorted.
  */
 async function surviving(table: string, ids: string[]): Promise<string[]> {
   const rows = await sql<{ id: string }[]>`select id from ${sql(table)} where id = any(${ids})`
@@ -119,17 +106,14 @@ async function surviving(table: string, ids: string[]): Promise<string[]> {
 }
 
 /**
- * Sort ids for comparison with `surviving`.
- * @param ids - Ids.
- * @returns A sorted copy.
+ * Sort ids the way `surviving` returns them, so the two compare equal.
  */
 function sorted(ids: string[]): string[] {
   return ids.toSorted((a, b) => a.localeCompare(b))
 }
 
 /**
- * A user, tracked for cleanup; deleting it cascades its tokens and notifications.
- * @returns Its id.
+ * Seed a user to own tokens and notifications, tracked for cleanup; deleting it cascades both.
  */
 async function insertUser(): Promise<string> {
   const [row] = await sql<{ id: string }[]>`
@@ -141,8 +125,7 @@ async function insertUser(): Promise<string> {
 }
 
 /**
- * A tenant, tracked for cleanup; deleting it cascades its invitations.
- * @returns Its id.
+ * Seed a tenant to hold invitations or audit rows, tracked for cleanup; deleting it cascades its invitations.
  */
 async function insertTenant(): Promise<string> {
   const [row] = await sql<{ id: string }[]>`
@@ -153,6 +136,9 @@ async function insertTenant(): Promise<string> {
   return row.id
 }
 
+/**
+ * The timestamps of a seeded refresh-token row, and the successor it points to once rotated.
+ */
 interface TokenSeed {
   expiresAt: string
   revokedAt?: string
@@ -161,10 +147,7 @@ interface TokenSeed {
 }
 
 /**
- * One refresh-token row.
- * @param userId - Its owner.
- * @param seed - Its timestamps and successor.
- * @returns Its id.
+ * Seed a refresh-token row whose timestamps decide whether the tokens rule deletes it.
  */
 async function insertToken(userId: string, seed: TokenSeed): Promise<string> {
   const [row] = await sql<{ id: string }[]>`
@@ -181,6 +164,9 @@ async function insertToken(userId: string, seed: TokenSeed): Promise<string> {
   return row.id
 }
 
+/**
+ * The timestamps of a seeded invitation row.
+ */
 interface InvitationSeed {
   expiresAt: string
   acceptedAt?: string
@@ -188,10 +174,7 @@ interface InvitationSeed {
 }
 
 /**
- * One invitation row, with a unique address so pending rows never collide.
- * @param tenantId - Its tenant.
- * @param seed - Its timestamps.
- * @returns Its id.
+ * Insert an invitation row, with a unique address so pending rows never collide.
  */
 async function insertInvitation(tenantId: string, seed: InvitationSeed): Promise<string> {
   const [row] = await sql<{ id: string }[]>`
@@ -208,9 +191,7 @@ async function insertInvitation(tenantId: string, seed: InvitationSeed): Promise
 }
 
 /**
- * One email_logs row.
- * @param createdAt - Its created_at, ISO.
- * @returns Its id.
+ * Seed an email_logs row with no message, so only `createdAt` decides whether the email_logs rule deletes it.
  */
 async function insertEmailLog(createdAt: string): Promise<string> {
   const [row] = await sql<{ id: string }[]>`
@@ -223,10 +204,7 @@ async function insertEmailLog(createdAt: string): Promise<string> {
 }
 
 /**
- * One provider event for a message.
- * @param messageId - Its message.
- * @param occurredAt - Its occurred_at, ISO.
- * @returns Its id.
+ * Seed a provider event on a message; the events rule dates it by that message, not by `occurredAt`.
  */
 async function insertEmailEvent(messageId: string, occurredAt: string): Promise<string> {
   const [row] = await sql<{ id: string }[]>`
@@ -239,11 +217,7 @@ async function insertEmailEvent(messageId: string, occurredAt: string): Promise<
 }
 
 /**
- * One attempt row for a message.
- * @param messageId - Its message.
- * @param recipient - The message's recipient.
- * @param createdAt - Its own created_at, ISO.
- * @returns Its id.
+ * Seed an email_logs attempt row on a message; the email_logs rule dates it by that message, not by its own `createdAt`.
  */
 async function insertAttempt(
   messageId: string,
@@ -260,11 +234,7 @@ async function insertAttempt(
 }
 
 /**
- * One notification row.
- * @param userId - Its owner.
- * @param createdAt - Its created_at, ISO.
- * @param readAt - Its read_at, ISO, or undefined for unread.
- * @returns Its id.
+ * Seed a notification: a read one is dated by `readAt`, an unread one by `createdAt`.
  */
 async function insertNotification(
   userId: string,
@@ -281,10 +251,7 @@ async function insertNotification(
 }
 
 /**
- * One system-actor audit row.
- * @param tenantId - Its tenant.
- * @param occurredAt - Its occurred_at, ISO.
- * @returns Its id.
+ * Seed a system-actor audit row that the audit_logs rule keeps or deletes by `occurredAt`.
  */
 async function insertAuditRow(tenantId: string, occurredAt: string): Promise<string> {
   const [row] = await sql<{ id: string }[]>`
@@ -297,9 +264,7 @@ async function insertAuditRow(tenantId: string, occurredAt: string): Promise<str
 }
 
 /**
- * One undelivered analytics outbox row.
- * @param occurredAt - Its occurred_at, ISO.
- * @returns Its id.
+ * Seed an undelivered analytics_outbox row that the outbox rule keeps or drops by `occurredAt`.
  */
 async function insertOutboxRow(occurredAt: string): Promise<string> {
   const [row] = await sql<{ id: string }[]>`
@@ -312,9 +277,7 @@ async function insertOutboxRow(occurredAt: string): Promise<string> {
 }
 
 /**
- * Two rows from the same seed.
- * @param insert - Inserts one row.
- * @returns Both ids, in insert order.
+ * Two rows from the same seed, in insert order.
  */
 async function seedPair(insert: () => Promise<string>): Promise<[string, string]> {
   return [await insert(), await insert()]
@@ -370,7 +333,7 @@ describe('runRetentionPurge', () => {
     const old = justOlder(DAYS.tokens)
     // Revoked unused (a logout ended the session): past retention.
     const successor = await insertToken(userId, { expiresAt: LATER, revokedAt: old })
-    // Rotated away and not yet expired: kept, still pointing at the successor.
+    // Rotated away but unexpired, so kept; it points at the successor, which is deleted.
     const predecessor = await insertToken(userId, {
       expiresAt: LATER,
       revokedAt: old,

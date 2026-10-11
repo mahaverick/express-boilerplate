@@ -56,22 +56,15 @@ afterAll(async () => {
 })
 
 /**
- * A disposable email, unique to one call.
- * @returns An email guaranteed unique to this call.
+ * An address unique to each call, so users and invitations from different tests never collide.
  */
 function uniqueEmail(): string {
   return `invitation-service-${randomUUID()}@example.test`
 }
 
 /**
- * Write an invitation with a known raw token, bypassing `invite`.
- * @param tenant - The tenant.
- * @param invitedBy - The inviter.
- * @param options - Address, role and expiry.
- * @param options.email - The invited address.
- * @param options.role - The offered role. Defaults to editor.
- * @param options.expiresAt - The expiry. Defaults to an hour from now.
- * @returns The raw token and the stored row.
+ * Seed a pending invitation whose raw token the test knows, bypassing `invite`. `role` defaults to
+ * editor and `expiresAt` to an hour from now. Resolves with the raw token and the stored row.
  */
 async function seedInvitation(
   tenant: Tenant,
@@ -96,12 +89,9 @@ async function seedInvitation(
 }
 
 /**
- * Run `run` while `findValidByTokenHash` answers with `stale`, as if accept
- * had read the row just before another transaction changed it. Records what
- * each `claimForAccept` returned, so a test can prove the claim was lost.
- * @param stale - The redeemable view captured earlier.
- * @param run - The accept to run.
- * @returns What each claim returned while `run` ran.
+ * Run `run` while `findValidByTokenHash` answers with `stale`, as if accept had read the row just
+ * before another transaction changed it. Resolves with what each `claimForAccept` returned, so a
+ * test can prove the claim was lost.
  */
 async function withStaleRead(
   stale: Awaited<ReturnType<TenantInvitationRepository['findValidByTokenHash']>>,
@@ -144,12 +134,8 @@ describe('tenant-invitation.service', () => {
   })
 
   /**
-   * A fresh user, tracked for cleanup.
-   * @param options - Whether the address is verified and the account active, and an explicit address.
-   * @param options.verified - Set `emailVerifiedAt` to now. Defaults to true.
-   * @param options.active - The account's `active` flag. Defaults to true.
-   * @param options.email - The address. Defaults to a unique one.
-   * @returns The created user.
+   * Create a user and track it for the `afterEach` cleanup. By default the address is unique and
+   * verified and the account is active; `verified: false`, `active: false` and `email` override those.
    */
   async function createUser(
     options: { verified?: boolean; active?: boolean; email?: string } = {}
@@ -166,8 +152,7 @@ describe('tenant-invitation.service', () => {
   }
 
   /**
-   * An owner and a tenant named Acme Inc they own, tracked for cleanup.
-   * @returns The owner and the tenant.
+   * Create an owner and a tenant named Acme Inc that they own, both tracked for the `afterEach` cleanup.
    */
   async function setup(): Promise<{ owner: User; tenant: Tenant }> {
     const owner = await createUser()

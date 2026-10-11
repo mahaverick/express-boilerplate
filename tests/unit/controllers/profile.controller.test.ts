@@ -15,10 +15,8 @@ const unauthenticatedRequest = { user: undefined } as unknown as Request
 const unusedResponse = {} as Response
 
 /**
- * Build a `next` spy whose recorded argument is inspectable as `unknown`
- * rather than `any` — same helper and reasoning as
- * tests/integration/middlewares/auth.middleware.test.ts's own `mockNext`.
- * @returns The spy (cast to `NextFunction` for calling a handler) and the argument its most recent call recorded.
+ * A `next` spy whose recorded argument reads as `unknown` rather than `any`.
+ * Mirrors `mockNext` in tests/integration/middlewares/auth.middleware.test.ts.
  */
 function mockNext(): { next: NextFunction; lastCallArgument: () => unknown } {
   const spy = vi.fn<(error?: unknown) => void>()
@@ -26,15 +24,12 @@ function mockNext(): { next: NextFunction; lastCallArgument: () => unknown } {
 }
 
 /**
- * tests/integration/api/profile.test.ts already covers both handlers'
- * "not found" 404 branches (a real, later race — the user deleted
- * between requireAuth's own lookup and the controller's second one)
- * end to end through the real HTTP route; this file is the one way
- * left to reach the `!request.user` guard at all, since it requires
- * calling the handler directly with no `request.user` set, bypassing
- * routing entirely. No database import is reached by doing this:
- * `authenticatedUserId` throws before either handler ever calls the
- * profile service.
+ * tests/integration/api/profile.test.ts covers both handlers' 404 branches
+ * end to end through the real HTTP route: a user deleted between
+ * requireAuth's lookup and the handler's second one. Reaching the
+ * `!request.user` guard needs a direct call with no `request.user` set,
+ * bypassing routing entirely. No query runs: `authenticatedUserId` throws
+ * before either handler calls the profile service.
  */
 describe('authenticatedUserId (via getProfile/updateProfile)', () => {
   it('getProfile forwards a 401 HttpError to next() when request.user is unset', async () => {

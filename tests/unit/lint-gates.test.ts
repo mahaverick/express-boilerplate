@@ -22,14 +22,14 @@ const eslint = new ESLint({ cwd: process.cwd(), ignore: false })
 /**
  * Lints synthetic text at a `filePath` that need not exist on disk.
  * `parserOptions.project` resolves included files through a real tsconfig
- * watch program (see eslint.config.mjs), unlike the old `projectService:
- * true`, so a path that isn't really on disk fatals before any rule runs
+ * watch program (see eslint.config.mjs), unlike `projectService`, so
+ * a path that isn't really on disk fatals before any rule runs
  * under the type-checked rule set; `disableTypeChecked` avoids that, since
  * none of the rules exercised via `lintText` need type information.
  * `disallowAutomaticSingleRunInference` avoids a second failure mode: under
  * `CI=true`, typescript-estree treats a second parse of the same path as a
  * fix pass and builds an isolated program for it, and the probes below
- * reuse one path — which can crash a third-party type-aware rule such as
+ * reuse one path, which can crash a third-party type-aware rule such as
  * `sonarjs/deprecation` running on that virtual file.
  */
 const eslintText = new ESLint({
@@ -76,15 +76,13 @@ const eslintAliasedCycle = new ESLint({
 })
 
 /**
- * Lints `source` at a synthetic `filePath` via {@link eslintText}.
- * @param filePath - A path used to select config, real or not.
- * @param source - The text to lint.
- * @returns The lint messages.
- * @throws {Error} When ESLint fatals on `source` — a fatal reports with `ruleId:
- * null`, which a caller mapping to `ruleId ?? ''` would silently read as
- * "no rule fired", turning a `not.toContain` assertion into a vacuous
- * pass. That is exactly the inert-gate failure mode this file exists to
- * catch, so it fails loudly instead.
+ * Lints `source` at a synthetic `filePath` via {@link eslintText}; the path
+ * selects the config and need not exist. Returns the lint messages.
+ * @throws {Error} When ESLint fatals on `source`. A fatal reports with
+ *   `ruleId: null`, which a caller mapping to `ruleId ?? ''` would silently
+ *   read as "no rule fired", turning a `not.toContain` assertion into a
+ *   vacuous pass. That is exactly the inert-gate failure mode this file
+ *   exists to catch, so it fails loudly instead.
  */
 const messagesFor = async (filePath: string, source: string): Promise<Linter.LintMessage[]> => {
   const [result] = await eslintText.lintText(source, { filePath })
@@ -95,10 +93,8 @@ const messagesFor = async (filePath: string, source: string): Promise<Linter.Lin
 }
 
 /**
- * The rule ids {@link messagesFor} reported for `source`.
- * @param filePath - A path used to select config, real or not.
- * @param source - The text to lint.
- * @returns Each message's rule id, `''` for a fatal.
+ * The rule id of each message {@link messagesFor} reported for `source` at
+ * `filePath`, `''` for a fatal.
  */
 const ruleIdsFor = async (filePath: string, source: string): Promise<string[]> => {
   const messages = await messagesFor(filePath, source)
@@ -106,18 +102,18 @@ const ruleIdsFor = async (filePath: string, source: string): Promise<string[]> =
 }
 
 /**
- * This suite's own timeout, in place of the global 20s (vitest.config.ts).
- * On an idle machine the two cold tests (first `lintText`, first
- * `lintFiles`, building the real TS program the no-cycle fixtures need)
- * run in ~1.1-1.5s each and every later test in each group costs 7-40ms,
- * since both ESLint instances above are module-scoped and reused. Run
- * immediately after `pnpm lint && pnpm build` — the sequence CI runs —
- * those same two cold tests were observed at 20.2s and once at 61s: eight
- * vitest workers, v8 coverage instrumentation, and a just-finished `tsc`
- * all compete for the CPU while ESLint type-checks the project from cold.
- * It is this variance that made the file flaky, not the mean, so the
+ * This suite's own timeout, in place of the global test timeout
+ * (vitest.config.ts). On an idle machine the two cold tests (first
+ * `lintText`, first `lintFiles`, building the real TS program the no-cycle
+ * fixtures need) run in ~1.1-1.5 s each, and every later test in each group
+ * costs 7-40 ms, since both ESLint instances above are module-scoped and
+ * reused. Run right after `pnpm lint && pnpm build`, the sequence CI runs,
+ * those same two cold tests were observed at 20.2 s and once at 61 s:
+ * parallel vitest workers, v8 coverage instrumentation, and a just-finished
+ * `tsc` all compete for the CPU while ESLint type-checks the project from
+ * cold. It is this variance that made the file flaky, not the mean, so the
  * timeout is generous (2x the worst contended run observed here) rather
- * than tuned close to it; raising the global timeout instead would hide a
+ * than tuned close to it. Raising the global timeout instead would hide a
  * real slowdown anywhere else in the suite.
  */
 const LINT_GATE_TIMEOUT_MS = 120_000

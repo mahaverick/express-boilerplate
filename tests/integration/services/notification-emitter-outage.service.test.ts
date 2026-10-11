@@ -3,7 +3,7 @@
  * stopping the shared Redis. Its own file because it mocks `getEnv()`'s
  * `REDIS_URL`, as `redis-outage.service.test.ts` does.
  *
- * The `MUTATION_PROOF` test is DELIBERATELY red: it drops the emitter's
+ * The `MUTATION_PROOF` test is deliberately red: it drops the emitter's
  * `'error'` listener, the only thing that destroys a subscriber closed
  * while its reconnect is refused.
  *
@@ -47,7 +47,7 @@ const OUTAGE_MS = 1500
 const RETRY_SETTLE_MS = 2000
 // One capped retry delay, then one connect attempt.
 const RECOVERY_TIMEOUT_MS = RECONNECT_DELAY_CAP_MS + REDIS_CONNECT_TIMEOUT_MS
-// The close claim: prompt, never stuck behind the retry backoff. 10x the whole test's measured p99 (399ms).
+// The close claim: prompt, never stuck behind the retry backoff. 10x the whole test's measured p99 (399 ms).
 const PROMPT_CLOSE_BUDGET_MS = 4000
 const FAILED_TO_START = 'Notification subscriber failed to start'
 const PUBLISH_FAILED =
@@ -67,25 +67,36 @@ vi.mock('@/configs/env.config', async (importOriginal) => {
 const proxy = new RedisProxy()
 const emitter = { onNotification, offNotification }
 
+/**
+ * The signature of a `logger` method, for the spies that replace one.
+ */
 type LogMethod = (message: string, meta?: Record<string, unknown>) => void
 
+/**
+ * The module type of a freshly loaded emitter.
+ */
 type EmitterModule = typeof import('@/services/notification-emitter.service')
 
+/**
+ * A notification handler for tests that only need a listener registered.
+ */
 function noopHandler(): void {
   // Intentionally empty.
 }
 
 /**
- * Run against a fresh emitter module, whose subscriber has never been opened.
+ * Runs `run` against a fresh emitter module, whose subscriber has never been opened.
  * @param run - Gets the fresh module and every Redis client it created.
  * @param decorate - Applied to each client before the fresh module sees it.
- * @returns Resolves once `run` settles.
  */
 async function withFreshEmitter(
   run: (fresh: EmitterModule, clients: RedisClientType[]) => Promise<void>,
   decorate: (client: RedisClientType) => RedisClientType = (client) => client
 ): Promise<void> {
   const clients: RedisClientType[] = []
+  /**
+   * Creates a Redis client the way the emitter would, recording it in `clients`.
+   */
   const createCapturedClient = (): RedisClientType => {
     const client = decorate(createRedisClient())
     clients.push(client)
@@ -106,8 +117,8 @@ async function withFreshEmitter(
 }
 
 /**
- * Whether the shared Redis client has seen the proxy reset its connection.
- * @returns True once that client is no longer ready.
+ * Reports whether the shared Redis client has seen the proxy reset its
+ * connection, so is not ready.
  */
 async function hasRedisClientLeftReady(): Promise<boolean> {
   const client = await getRedis()
@@ -115,9 +126,8 @@ async function hasRedisClientLeftReady(): Promise<boolean> {
 }
 
 /**
- * Wait until a fresh emitter's first subscriber has given up.
- * @param clients - The clients the fresh emitter created.
- * @returns Whether it gave up within the budget.
+ * Polls for up to 5 s until a fresh emitter's first subscriber has closed, and reports whether it
+ * did.
  */
 async function hasFirstAttemptFailed(clients: RedisClientType[]): Promise<boolean> {
   return isEventuallyTrue(
@@ -127,12 +137,11 @@ async function hasFirstAttemptFailed(clients: RedisClientType[]): Promise<boolea
 }
 
 /**
- * Drop any `'error'` listener registered through `client.on` from here on;
- * its existing logger listener stays. Only intercepts `.on` — a listener
- * added via `.addListener` or `.prependListener` would not be caught
- * (`.once` routes through `.on` and is caught).
- * @param client - A client `createRedisClient` just built.
- * @returns The same client.
+ * Makes `client` drop any `'error'` listener registered through `client.on`
+ * afterwards, so the emitter's own listener never attaches; the logger
+ * listener `createRedisClient` already added stays. Only `.on` is
+ * intercepted: a listener added via `.addListener` or `.prependListener`
+ * would not be caught (`.once` routes through `.on` and is caught).
  */
 function withoutLaterErrorListeners(client: RedisClientType): RedisClientType {
   const on = client.on.bind(client)
@@ -142,10 +151,9 @@ function withoutLaterErrorListeners(client: RedisClientType): RedisClientType {
 }
 
 /**
- * Close a live fresh subscriber as its reconnect starts, while nothing listens
- * on its port, and check it leaves nothing behind.
+ * Closes a live fresh subscriber as its reconnect starts, while nothing listens
+ * on its port, and checks it leaves nothing behind.
  * @param decorate - Applied to each client the fresh emitter creates.
- * @returns Resolves once every check has passed.
  */
 async function expectRefusedReconnectCloseLeavesNothing(
   decorate: (client: RedisClientType) => RedisClientType
@@ -205,7 +213,7 @@ describe('notification pub/sub survives a Redis outage', () => {
 
   /**
    * A test can end, passed or failed, on a dead proxy, with its streams
-   * still open, or behind a reconnect its outage started.
+   * open, or behind a reconnect its outage started.
    */
   afterEach(async () => {
     proxy.comeBack()
@@ -247,6 +255,9 @@ describe('notification pub/sub survives a Redis outage', () => {
     await waitForNotificationSubscriber(emitter, getRedis)
     const userId = `fallback-${randomUUID()}`
     const received: Notification[] = []
+    /**
+     * The listener whose deliveries the test counts.
+     */
     const handler = (notification: Notification): void => {
       received.push(notification)
     }
@@ -255,8 +266,15 @@ describe('notification pub/sub survives a Redis outage', () => {
     const third = fakeNotification({ userId })
     const fourth = fakeNotification({ userId })
     const logWarn = vi.fn<LogMethod>()
+    /**
+     * Counts the publish-failure warnings `logWarn` received.
+     */
     const publishWarnings = (): number =>
       logWarn.mock.calls.filter(([message]) => message === PUBLISH_FAILED).length
+    /**
+     * Polls for up to 5 s until the handler has received `count` notifications, and reports whether
+     * it did.
+     */
     const hasReceived = async (count: number): Promise<boolean> =>
       isEventuallyTrue(() => Promise.resolve(received.length >= count), 5000)
 
@@ -325,9 +343,15 @@ describe('notification pub/sub survives a Redis outage', () => {
       const [subscriber] = clients
       if (!subscriber) throw new Error('the fresh emitter created no subscriber')
       const attempts = { reconnects: 0, hasSecondFailed: false }
+      /**
+       * Counts reconnect attempts, so the test can tell the first retry from the later ones.
+       */
       const onReconnecting = (): void => {
         attempts.reconnects += 1
       }
+      /**
+       * Marks a connect failure after the first reconnect, which is the second attempt failing.
+       */
       const onError = (): void => {
         if (attempts.reconnects >= 1) attempts.hasSecondFailed = true
       }
@@ -336,7 +360,7 @@ describe('notification pub/sub survives a Redis outage', () => {
       try {
         /**
          * The first retry has no delay; once the second attempt fails, the
-         * client waits in the next retry's backoff (100ms) before its third
+         * client waits in the next retry's backoff (100 ms) before its third
          * attempt.
          */
         await waitUntil(() => attempts.hasSecondFailed, {
@@ -347,10 +371,16 @@ describe('notification pub/sub survives a Redis outage', () => {
         subscriber.off('error', onError)
       }
       try {
+        /**
+         * The close under test, labelled so the race below can name its winner.
+         */
         const close = async (): Promise<'closed'> => {
           await fresh.closeNotificationSubscriber()
           return 'closed'
         }
+        /**
+         * Resolves `'timed out'` after the budget, so a close stuck in the backoff loses the race.
+         */
         const giveUp = async (): Promise<'timed out'> => {
           await settle(
             PROMPT_CLOSE_BUDGET_MS,
@@ -408,7 +438,7 @@ describe('notification pub/sub survives a Redis outage', () => {
     await expectRefusedReconnectCloseLeavesNothing((client) => client)
   }, 15_000)
 
-  // DELIBERATELY red under MUTATION_PROOF=1.
+  // Deliberately red under MUTATION_PROOF=1.
   it.runIf(process.env.MUTATION_PROOF === '1')(
     'reproduces the unreachable-reconnect close against a subscriber whose error listener is gone',
     async () => {

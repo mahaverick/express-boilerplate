@@ -14,6 +14,10 @@ import {
   createPlatformEmailSuppressionRouter,
 } from '@/routes/platform-email.routes'
 
+/**
+ * A router layer as router@2 builds it. Express's published types describe an
+ * older layer shape, so the tests declare the part they read.
+ */
 interface RouteLayer {
   route?: {
     path: string
@@ -22,10 +26,17 @@ interface RouteLayer {
   }
 }
 
+/**
+ * The router's layers: `router.stack` read as router@2 layers.
+ */
 function layersOf(router: Router): RouteLayer[] {
   return router.stack as unknown as RouteLayer[]
 }
 
+/**
+ * The handlers of the route with the given method and path, in the order
+ * they run; throws when the router has no such route.
+ */
 function handlersFor(router: Router, method: string, path: string): RequestHandler[] {
   const layer = layersOf(router).find(
     (candidate) => candidate.route?.path === path && candidate.route.methods[method] === true

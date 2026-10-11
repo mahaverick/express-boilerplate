@@ -11,10 +11,9 @@ import { requireRecentAuth } from '@/middlewares/auth.middleware'
 const noResponse = {} as Response
 
 /**
- * A request as `requireAuth` leaves it.
- * @param authTime - The `auth_time` claim in seconds, or undefined for a token without one.
- * @param isSignedIn - Whether `request.user` is set.
- * @returns The request.
+ * A request as `requireAuth` leaves it. `authTime` is the `auth_time` claim
+ * in seconds, undefined for a token without one; `isSignedIn` is whether
+ * `request.user` is set.
  */
 function buildRequest(authTime: number | undefined, isSignedIn = true): Request {
   return {
@@ -24,10 +23,9 @@ function buildRequest(authTime: number | undefined, isSignedIn = true): Request 
 }
 
 /**
- * Run the middleware once and return what it passed to `next`.
- * @param request - The request.
- * @param maxAgeMs - Passed to requireRecentAuth when given.
- * @returns The argument `next` received: undefined when the request was admitted.
+ * Runs the middleware once, with `maxAgeMs` passed to requireRecentAuth when
+ * given, and returns the argument `next` received: undefined when the
+ * request was admitted.
  */
 function run(request: Request, maxAgeMs?: number): unknown {
   const next = vi.fn<(error?: unknown) => void>()
@@ -37,6 +35,9 @@ function run(request: Request, maxAgeMs?: number): unknown {
   return next.mock.calls[0]?.[0]
 }
 
+/**
+ * The Unix time in seconds, `seconds` before the call.
+ */
 const secondsAgo = (seconds: number): number => Math.floor(Date.now() / 1000) - seconds
 
 describe('requireRecentAuth', () => {

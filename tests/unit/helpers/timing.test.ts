@@ -95,7 +95,7 @@ describe('settle', () => {
 
     await settle(20, 'the delay is what this test checks')
 
-    // A floor only: a timer never fires early, but it may fire late under load.
+    // A floor only. It sits 5ms below the 20ms delay because a timer can fire up to about 1ms early against performance.now(); a ceiling would flake, since it may fire late under load.
     expect(performance.now() - startedAt).toBeGreaterThanOrEqual(15)
   })
 

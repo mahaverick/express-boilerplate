@@ -3,7 +3,7 @@
  * its owner invitation mail cannot be queued; the caller hears emailSent: false.
  * Both tenant writes re-check the actor under lock in their transaction. An
  * owner re-issue racing the old invitee's accept never leaves both an owner
- * and a new pending owner invitation. Seams via withMutatedMethod, no sleeps.
+ * and a reissued pending owner invitation. Seams via withMutatedMethod, no sleeps.
  */
 import { randomUUID } from 'node:crypto'
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
@@ -158,6 +158,10 @@ describe('owner re-issue vs the old invitee accepting', () => {
     const release = deferred()
     // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
     const realInsert = UserMembershipRepository.prototype.insertIfAbsent
+    /**
+     * Pauses the accept after its owner membership insert, reporting its backend pid, until
+     * released.
+     */
     const pausingInsert: typeof realInsert = async function (
       this: UserMembershipRepository,
       ...arguments_

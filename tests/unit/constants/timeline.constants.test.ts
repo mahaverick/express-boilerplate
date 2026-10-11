@@ -2,8 +2,8 @@
  * @file TIMELINE_PROP_KEYS against what the server actually sends PostHog:
  * every property key the analytics builder emits on an event a timeline can
  * list is either allowlisted, read into a row field of its own, or excluded
- * here on purpose with a reason. A new builder key fails this test until it
- * is classified. Also pins the range hours and the excluded events.
+ * here on purpose with a reason. A builder key that is not classified fails
+ * this test. Also pins the range hours and the excluded events.
  */
 import { describe, expect, it } from 'vitest'
 import type { z } from 'zod'
@@ -70,9 +70,8 @@ const DELIBERATELY_EXCLUDED: Readonly<Record<string, string>> = {
 }
 
 /**
- * An audit row with every metadata key its action's schema declares.
- * @param action - The action.
- * @returns The row; values are placeholders, since the builder only renames keys.
+ * An audit row for `action` with every metadata key its schema declares. The values are
+ * placeholders: only the keys matter here.
  */
 function auditRowFor(action: AuditAction): AuditLog {
   const shape = (AUDIT_ACTIONS[action].metadata as unknown as { shape: Record<string, z.ZodType> })
@@ -95,8 +94,7 @@ function auditRowFor(action: AuditAction): AuditLog {
 }
 
 /**
- * One product event of each type.
- * @returns The events.
+ * One product event of each type in PRODUCT_EVENTS.
  */
 function productEvents(): ProductDomainEvent[] {
   return PRODUCT_EVENTS.map((type): ProductDomainEvent => {
@@ -126,10 +124,12 @@ function productEvents(): ProductDomainEvent[] {
 /**
  * Every property key the builder emits on a listable event: each audit
  * action (and a system one), product event and email event type.
- * @returns The keys.
  */
 function emittedKeys(): Set<string> {
   const keys = new Set<string>()
+  /**
+   * Collects an event's property keys, so `emittedKeys` can compare them with the classified set.
+   */
   const add = (properties: Record<string, unknown>): void => {
     for (const key of Object.keys(properties)) keys.add(key)
   }

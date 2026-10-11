@@ -8,7 +8,7 @@ import {
 
 describe('buildVerificationUrl', () => {
   it('points at the frontend WEB_URL, not the API', () => {
-    // The base is passed explicitly in every test here: this is a unit test — it must not depend on a validated env being loadable, and getEnv() throws when one is not.
+    // The base is passed explicitly in every test here: a unit test must not depend on a validated env being loadable, and getEnv() throws when one is not.
     const url = new URL(buildVerificationUrl('abc123', 'https://app.example.com'))
 
     expect(url.origin).toBe('https://app.example.com')
@@ -17,7 +17,7 @@ describe('buildVerificationUrl', () => {
   })
 
   it('percent-encodes the token rather than concatenating it raw', () => {
-    // Tokens are hex (session.service.ts generateRawToken), so nothing needs escaping today — this pins the behaviour anyway: a future encoding whose alphabet includes '+' or '/' would otherwise silently decode to something else in a query string, breaking a verification link for a fraction of users with no error anywhere.
+    // Tokens are hex (session.service.ts generateRawToken), so nothing needs escaping; this pins the behaviour anyway: an alphabet that included '+' or '/' would otherwise silently decode to something else in a query string, breaking a verification link for a fraction of users with no error anywhere.
     const url = new URL(buildVerificationUrl('a+b/c==', 'https://app.example.com'))
 
     expect(url.searchParams.get('token')).toBe('a+b/c==')

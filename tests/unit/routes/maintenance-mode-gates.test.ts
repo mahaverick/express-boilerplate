@@ -2,10 +2,12 @@
  * @file Walks the live app's routes (Google OAuth enabled, so its routes are
  * mounted) and checks them against `MAINTENANCE_ROUTE_RULES`: every route is
  * covered by a rule, every rule covers a route, the let-through set and the
- * read-only write allowlist are exactly spec §4.3's, and every read is let
- * through in `read_only`. A mount under one of the let-through prefixes
- * (`/api/v1/platform`, the webhooks, the PostHog proxy) counts as one entry,
- * since the prefix rule covers everything below it. Synthetic apps prove the
+ * read-only write allowlist are exactly the lists spelled out in the tests
+ * below (ARCHITECTURE.md's Maintenance mode section describes the let-through
+ * set), and every read is let through in `read_only`. A mount under one of
+ * the let-through prefixes (`/api/v1/platform`, the webhooks, the PostHog
+ * proxy) counts as one entry, since the prefix rule covers everything below
+ * it. Synthetic apps prove the
  * walk fails on an unclassified route and on a stale rule. The staff-pass
  * routes (`MAINTENANCE_STAFF_ROUTES`) must each sit behind `requireAuth`,
  * which finishes their decision, and must be exactly the authenticated
@@ -22,6 +24,11 @@ import {
   type MaintenanceRouteRule,
 } from '@/constants/maintenance-mode.constants'
 
+/**
+ * A router layer as the walk reads it: a route with its methods and
+ * handlers, or a mounted router with its own stack, the mount path that
+ * matched and a path matcher.
+ */
 interface StackLayer {
   route?: { path: string; methods: Record<string, boolean>; stack: { handle: unknown }[] }
   handle: { stack?: StackLayer[] }
@@ -71,6 +78,10 @@ const PREFIX_PATHS = new Set(
   MAINTENANCE_ROUTE_RULES.filter((rule) => rule.match === 'prefix').map((rule) => rule.path)
 )
 
+/**
+ * A route handler that ends the response, standing in for a real handler on
+ * the synthetic apps.
+ */
 const noop: RequestHandler = (_request, response) => {
   response.end()
 }
@@ -87,11 +98,9 @@ type AuthCover = (fullPath: string) => boolean
  * route is behind auth when a `requireAuth` layer registered before it
  * covers its path (a `use(requireAuth)` covers only the paths under its own
  * mount), or when `requireAuth` sits in its own handler list before its
- * last handler.
- * @param stack - A router's layers.
- * @param prefix - The mount path the layers sit under.
- * @param inherited - The `requireAuth` layers of the routers above that run on every request reaching this one.
- * @returns The entries.
+ * last handler. `prefix` is the mount path the layers sit under and
+ * `inherited` the `requireAuth` layers of the routers above that run on
+ * every request reaching this one.
  * @throws {Error} When a router is mounted at a path not in `KNOWN_MOUNTS`.
  */
 function entriesIn(
@@ -100,6 +109,9 @@ function entriesIn(
   inherited: readonly AuthCover[] = []
 ): WalkedEntry[] {
   const covers = [...inherited]
+  /**
+   * Whether a `requireAuth` layer registered so far covers the full path.
+   */
   const isCovered = (fullPath: string): boolean => covers.some((cover) => cover(fullPath))
   return stack.flatMap((layer) => {
     if (layer.route) {
@@ -131,9 +143,8 @@ function entriesIn(
 }
 
 /**
- * Walk an app.
- * @param app - The app.
- * @returns Its entries.
+ * An app's route entries, read through a cast because Express's types do not
+ * describe `app.router`'s stack.
  */
 function entriesOf(app: Express): WalkedEntry[] {
   return entriesIn((app as unknown as { router: { stack: StackLayer[] } }).router.stack, '')
@@ -143,10 +154,8 @@ function entriesOf(app: Express): WalkedEntry[] {
  * The rule an entry falls under: the prefix rule for a `*` mount, else the
  * rule whose path is exactly the entry's route template (a rule never
  * covers a different template that merely matches its pattern, so a literal
- * route beside a parameterised one needs a row of its own).
- * @param entry - The entry.
- * @param rules - The rule list to look in.
- * @returns The rule, or undefined.
+ * route beside a parameterised one needs a row of its own). Looks in `rules`,
+ * which defaults to the real list; undefined when none applies.
  */
 function ruleFor(
   entry: WalkedEntry,
@@ -166,10 +175,8 @@ function ruleFor(
 /**
  * The walked routes the gate would classify by another rule than their own:
  * it takes the first rule whose pattern matches, so an earlier parameterised
- * rule shadows a later literal one.
- * @param entries - The walked entries.
- * @param rules - The rule list the gate would use.
- * @returns `METHOD path` for each.
+ * rule shadows a later literal one. `rules` is the rule list the gate would
+ * use; each result is `METHOD path`.
  */
 function shadowed(entries: WalkedEntry[], rules: readonly MaintenanceRouteRule[]): string[] {
   return entries
@@ -181,9 +188,7 @@ function shadowed(entries: WalkedEntry[], rules: readonly MaintenanceRouteRule[]
 }
 
 /**
- * The entries no rule covers.
- * @param entries - The walked entries.
- * @returns `METHOD path` for each.
+ * The entries no rule covers, as `METHOD path`.
  */
 function unclassified(entries: WalkedEntry[]): string[] {
   return entries
@@ -192,9 +197,8 @@ function unclassified(entries: WalkedEntry[]): string[] {
 }
 
 /**
- * The rules that cover no entry: a route they named is gone.
- * @param entries - The walked entries.
- * @returns `METHOD path` for each.
+ * The rules that cover no entry, as `METHOD path`: a route they named is
+ * gone.
  */
 function staleRules(entries: WalkedEntry[]): string[] {
   const used = new Set(entries.map((entry) => ruleFor(entry)))
@@ -203,20 +207,22 @@ function staleRules(entries: WalkedEntry[]): string[] {
   )
 }
 
+/**
+ * A comparator that orders strings by locale for a stable list comparison.
+ */
 const byText = (a: string, b: string): number => a.localeCompare(b)
 
 /**
- * A `METHOD path` with every parameter renamed, so apex's names and express's compare equal.
- * @param call - `METHOD path`.
- * @returns The shape.
+ * A `METHOD path` with every parameter renamed, so apex's names and
+ * express's compare equal.
  */
 function shapeOf(call: string): string {
   return call.replaceAll(/:\w+/g, ':param')
 }
 
 /**
- * The apex calls that run before sign-in, so no staff check can apply:
- * they keep spec §4.3's auth table.
+ * The apex calls that run before sign-in, so no staff check can apply and
+ * none needs the staff pass.
  */
 const PRE_SIGN_IN_CALLS = new Set([
   'POST /api/v1/auth/register',

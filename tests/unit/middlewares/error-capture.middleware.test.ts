@@ -38,9 +38,8 @@ vi.mock('@/services/errors/error-reporter.service', async (importOriginal) => {
 vi.mock('@posthog/core/vendor/uuidv7', () => ({ uuidv7: vi.fn(() => 'fresh-error-id') }))
 
 /**
- * A mock response whose `getHeader` answers the request id.
- * @param isHeadersSent - Whether the headers are already sent.
- * @returns The response and its captured body.
+ * A mock response whose `getHeader` answers the request id, with a reader
+ * for the body passed to `json`. `isHeadersSent` sets `headersSent`.
  */
 function mockResponse(isHeadersSent = false): { response: Response; body: () => unknown } {
   let captured: unknown
@@ -57,9 +56,8 @@ function mockResponse(isHeadersSent = false): { response: Response; body: () => 
 }
 
 /**
- * A request with a method and a live or destroyed socket.
- * @param isSocketDestroyed - Whether the client's socket is already gone.
- * @returns The request and its socket's `destroy` spy.
+ * A request with a method and a live or destroyed socket, with the socket's
+ * `destroy` spy. `isSocketDestroyed` means the client's socket is already gone.
  */
 function mockRequest(isSocketDestroyed = false): { request: Request; destroy: Mock } {
   const destroy = vi.fn()

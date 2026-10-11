@@ -2,9 +2,10 @@
  * @file Proves that without the `purpose` predicate in `claimOnce`'s single
  * atomic statement, a token minted for one purpose can be claimed as another:
  * here a password-reset token is claimed as an email verification. The same
- * gap would let a verification link, valid for 24h and mailed without a
- * reset request, be spent as a reset link, outside the 1h window
- * `PASSWORD_RESET_TTL` keeps reset links to. The
+ * gap would let a verification link, valid for `EMAIL_VERIFICATION_TTL`
+ * (24h by default) and mailed without a reset request, be spent as a reset
+ * link, outside the window `PASSWORD_RESET_TTL` (1h by default) keeps reset
+ * links to. The
  * always-green proof of this lives in
  * `tests/integration/repositories/user-token.repository.test.ts` and
  * `tests/integration/services/session.service.test.ts`; this file exists to

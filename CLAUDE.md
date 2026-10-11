@@ -624,8 +624,9 @@ exemption.
 - **No barrel files.** Import the module directly (`@/services/foo.service`),
   never through a re-exporting `index.ts`. See
   [ARCHITECTURE.md](ARCHITECTURE.md#no-barrel-files).
-- **Comments.** Every exported function, class, interface and type alias has
-  a JSDoc description (`jsdoc/require-jsdoc`; tests are exempt). Describe
+- **Comments.** Every named function, method, class, interface, type alias
+  and exported const has a JSDoc description (`jsdoc/require-jsdoc`), tests
+  included; `.d.mts` files are exempt. Describe
   behaviour in prose; don't repeat the TypeScript types in `@param`/`@returns`.
   Every other comment is a file JSDoc (`/** @file … */`) or a one-line `//`
   why, with no history; `local/comment-style` checks the form.

@@ -45,9 +45,8 @@ const EXPERIMENT: FlagEntry = {
 }
 
 /**
- * Run the registry check on one changed copy of an entry.
- * @param entry - The entry, with the field under test changed.
- * @returns A function that runs the check, for `toThrow`.
+ * Wrap the registry check on one changed copy of an entry (the field under test altered) in a
+ * function, so a test can pass it to `toThrow`.
  */
 function checking(entry: Record<string, unknown>): () => unknown {
   return () => assertFlagRegistry([entry as unknown as FlagEntry])

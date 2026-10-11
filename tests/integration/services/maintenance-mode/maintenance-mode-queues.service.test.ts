@@ -38,10 +38,8 @@ const NOW = new Date('2026-10-06T10:00:30.000Z')
 const NONE = null
 
 /**
- * A known snapshot, at the version this process's store holds, that changed `ageMs` before `NOW`.
- * @param mode - Its mode.
- * @param ageMs - How long before `NOW` it changed.
- * @returns The snapshot.
+ * Builds a known snapshot of `mode`, at the version this process's store holds,
+ * that changed `ageMs` before `NOW`.
  */
 function snapshot(mode: 'off' | 'read_only' | 'full', ageMs: number): MaintenanceModeSnapshot {
   const changedAt = new Date(NOW.getTime() - ageMs).toISOString()
@@ -56,8 +54,7 @@ function snapshot(mode: 'off' | 'read_only' | 'full', ageMs: number): Maintenanc
 }
 
 /**
- * Each registry queue's pause flag.
- * @returns `name: paused` pairs.
+ * Reads each registry queue's pause flag, keyed by queue name.
  */
 async function pauseFlags(): Promise<Record<string, boolean>> {
   const entries = await Promise.all(
@@ -134,7 +131,7 @@ const DEDUPE_WARNING =
   'Duplicate scheduler runs could not be removed before the queue resumed; duplicate runs may follow'
 
 /**
- * Pause every queue, then reconcile to `read_only`, which resumes them.
+ * Pauses every queue, then reconciles to `read_only`, which resumes them.
  */
 async function pauseThenResume(): Promise<void> {
   await setAllQueuesPaused(true)
@@ -147,6 +144,9 @@ describe('the failure streaks', () => {
     vi.spyOn(getEmailQueue(), 'getJobSchedulers').mockRejectedValue(
       new Error('Connection is closed.')
     )
+    /**
+     * Counts the duplicate-cleanup warnings logged, to show a failing streak logs once.
+     */
     const dedupeWarnings = (): number =>
       warn.mock.calls.filter(([message]) => message === DEDUPE_WARNING).length
 
@@ -163,6 +163,9 @@ describe('the failure streaks', () => {
   it('logs a failing pause check once per streak, and again once the streaks are reset', async () => {
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
     vi.spyOn(getEmailQueue(), 'isPaused').mockRejectedValue(new Error('Connection is closed.'))
+    /**
+     * Counts the pause-check warnings logged, to show a failing streak logs once.
+     */
     const pauseWarnings = (): number =>
       warn.mock.calls.filter(([message]) => message === PAUSE_WARNING).length
 
@@ -201,6 +204,10 @@ describe('a reconcile for a superseded snapshot', () => {
   it('rechecks the version just before each pause, so a change landing mid-reconcile wins', async () => {
     const stale = snapshot('full', 60_000)
     let moved: Promise<void> | undefined
+    /**
+     * Moves the store to `off` once, however many queues ask, and resolves when the reload has
+     * landed.
+     */
     const moveStore = (): Promise<void> => {
       moved ??= (async () => {
         await storeMaintenanceMode('off')
@@ -298,8 +305,7 @@ describe('dedupeSchedulerJobs', () => {
   const queues: Queue[] = []
 
   /**
-   * A queue of its own under this worker's prefix, removed after the test.
-   * @returns The queue.
+   * Creates a queue of its own under this worker's prefix, obliterated and closed in `afterEach`.
    */
   function scratchQueue(): Queue {
     const queue = new Queue(`mm-dedupe-${randomUUID()}`, {
@@ -328,7 +334,10 @@ describe('dedupeSchedulerJobs', () => {
     const template = { name: 'tick', opts: { removeOnComplete: true } }
     await queue.pause()
     await queue.upsertJobScheduler('tick', { every: 200 }, template)
-    // With no Worker, a scheduler's first run lands in `wait` at once; a re-upsert then adds its next run as a second pending job (probe P1b).
+    // With no Worker, a scheduler's first run lands in `wait` at once; a re-upsert then adds its next run as a second pending job.
+    /**
+     * Counts the scheduler's runs waiting or delayed.
+     */
     const pending = async (): Promise<number> => {
       const counts = await queue.getJobCounts('wait', 'delayed')
       return (counts.wait ?? 0) + (counts.delayed ?? 0)

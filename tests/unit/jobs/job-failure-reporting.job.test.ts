@@ -14,10 +14,9 @@ vi.mock('@/services/errors/error-reporter.service', () => ({
 }))
 
 /**
- * A stand-in Job with the fields the helper reads, and data it must never send.
- * @param attemptsMade - Attempts made, the failed one included.
- * @param attempts - The job's `attempts` option, if set.
- * @returns The fake.
+ * A stand-in Job with the fields the helper reads, and data it must never
+ * send. `attemptsMade` counts the failed attempt; `attempts` is the job's
+ * `attempts` option, left out when unset.
  */
 function fakeJob(attemptsMade: number, attempts?: number): Job {
   return {

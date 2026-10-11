@@ -1,7 +1,7 @@
 /**
  * @file `withStatusTimeout`: a prompt read passes through, a read that
  * never settles is answered with the fallback after `STATUS_READ_TIMEOUT_MS`
- * and one warning, a failed read still rejects, and the timer is always
+ * and one warning, a failed read rejects, and the timer is always
  * cleared. Fake timers; nothing touches Redis.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'

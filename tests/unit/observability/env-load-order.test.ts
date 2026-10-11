@@ -16,11 +16,18 @@ const { scripts } = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json
   scripts: Record<string, string | undefined>
 }
 
+/**
+ * The whitespace-separated words of a package.json script; throws when the
+ * script is missing.
+ */
 function words(script: string | undefined): string[] {
   if (!script) throw new Error('package.json script is missing')
   return script.trim().split(/\s+/)
 }
 
+/**
+ * The image's CMD as an argv array, parsed from the Dockerfile's `CMD [...]` line.
+ */
 function dockerCommand(): string[] {
   const dockerfile = fs.readFileSync(path.join(repoRoot, 'Dockerfile'), 'utf8')
   const line = dockerfile.split('\n').find((candidate) => candidate.startsWith('CMD '))
@@ -29,12 +36,10 @@ function dockerCommand(): string[] {
 }
 
 /**
- * Only PATH is passed, so neither this shell's OTEL_SERVICE_NAME nor
- * Vitest's own variables reach the child. The timeout fails a hung child
- * instead of blocking the worker.
- * @param directory - The working directory for the spawned process.
- * @param commandArguments - The `node` arguments to run.
- * @returns The child's stdout.
+ * Runs `node` with the given arguments in `directory` and returns the
+ * child's stdout. Only PATH is passed, so neither this shell's
+ * OTEL_SERVICE_NAME nor Vitest's own variables reach the child. The timeout
+ * fails a hung child instead of blocking the worker.
  */
 function run(directory: string, commandArguments: string[]): string {
   return execFileSync(process.execPath, commandArguments, {
@@ -46,7 +51,10 @@ function run(directory: string, commandArguments: string[]): string {
   })
 }
 
-// Swaps the tracing module for the probe and the app entry for an empty file.
+/**
+ * The argv with the tracing module swapped for the probe and the app entry
+ * for an empty file.
+ */
 function withProbe(argv: string[], tracingModule: string, entry: string): string[] {
   return argv.map((argument) => {
     if (argument === tracingModule) return './probe.mjs'
@@ -55,6 +63,11 @@ function withProbe(argv: string[], tracingModule: string, entry: string): string
   })
 }
 
+/**
+ * Asserts the argv names `--env-file-if-exists=.env` before `--import`: node
+ * must load `.env` before the tracing module runs, so that module sees the
+ * variables.
+ */
 function expectEnvFileBeforeImport(argv: string[]): void {
   const flagAt = argv.indexOf(ENV_FLAG)
   expect(flagAt).toBeGreaterThan(-1)
@@ -63,8 +76,8 @@ function expectEnvFileBeforeImport(argv: string[]): void {
 
 /**
  * `dev` and `start` pass --env-file-if-exists=.env before --import; the
- * image CMD does not, since the image has no .env and the orchestrator
- * supplies the environment.
+ * image CMD does not, since the image has no .env (.dockerignore excludes
+ * it) and the deployment supplies its environment (see the Dockerfile).
  */
 describe('launch commands name .env before the tracing --import', () => {
   it('pnpm dev', () => {
@@ -85,11 +98,14 @@ describe('launch commands name .env before the tracing --import', () => {
   })
 })
 
-// Runs a spawned process against those exact flags, with a probe in place of the tracing module and an empty entry in place of the app — no build and no network.
+// Runs a spawned process against those exact flags, with a probe in place of the tracing module and an empty entry in place of the app, so there is no build and no network.
 describe('those flags, run for real, load .env before the --import module', () => {
   const directories: string[] = []
 
-  // A fresh directory per test: the probe, an empty entry and, optionally, a .env.
+  /**
+   * A fresh directory per test holding the probe, an empty entry and,
+   * optionally, a .env with the given contents.
+   */
   function fixture(dotEnv?: string): string {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'env-load-order-'))
     directories.push(directory)

@@ -1,7 +1,7 @@
 /**
  * @file The definitions parser: the top-level shape, which flags are kept,
- * stripped or refused, and `detectUnsupported` with one case per construct
- * of spec §4.5 (each verified against PostHog in the planning probe).
+ * stripped or refused, and `detectUnsupported` with one case per unsupported
+ * construct.
  */
 import { describe, expect, it } from 'vitest'
 import {
@@ -45,10 +45,8 @@ const MULTIVARIATE_ENTRY: FlagEntry = {
 }
 
 /**
- * A raw person-aggregated definition, as PostHog sends it.
- * @param overrides - Flag-level fields to change.
- * @param filters - `filters` fields to change.
- * @returns The raw JSON.
+ * A raw person-aggregated definition, as PostHog sends it. `overrides` replaces
+ * flag-level fields and `filters` replaces fields of `filters`.
  */
 function rawDefinition(
   overrides: Record<string, unknown> = {},
@@ -77,10 +75,8 @@ function rawDefinition(
 }
 
 /**
- * A validated definition with one condition holding `properties`.
- * @param properties - The condition's properties.
- * @param filters - `filters` fields to change.
- * @returns The parsed definition.
+ * A validated definition with one condition holding `properties`. `filters`
+ * replaces fields of `filters`.
  */
 function withProperties(
   properties: Record<string, unknown>[],
@@ -98,10 +94,7 @@ function withProperties(
 }
 
 /**
- * A validated definition.
- * @param overrides - Flag-level fields to change.
- * @param filters - `filters` fields to change.
- * @returns The parsed definition.
+ * A validated `rawDefinition`, with the same `overrides` and `filters`.
  */
 function definition(
   overrides: Record<string, unknown> = {},
@@ -111,9 +104,8 @@ function definition(
 }
 
 /**
- * A validated tenant-aggregated definition at group index 0.
- * @param conditionFields - Fields of its one condition.
- * @returns The parsed definition.
+ * A validated tenant-aggregated definition at group index 0, whose one
+ * condition takes `conditionFields`.
  */
 function tenantDefinition(conditionFields: Record<string, unknown> = {}): FlagDefinitionJson {
   return definition(
@@ -677,9 +669,8 @@ describe('detectUnsupported', () => {
 })
 
 /**
- * The registry's multivariate experiment with one condition.
- * @param condition - Fields of its one condition.
- * @returns The parsed definition.
+ * The registry's multivariate experiment as a validated definition whose one
+ * condition takes the fields of `condition`.
  */
 function definitionWith(condition: Record<string, unknown>): FlagDefinitionJson {
   return flagDefinitionSchema.parse({
@@ -700,9 +691,8 @@ function definitionWith(condition: Record<string, unknown>): FlagDefinitionJson 
 }
 
 /**
- * A tenant-aggregated flag with one `$group_key`-style property.
- * @param property - Fields of its one property.
- * @returns The parsed definition.
+ * A validated tenant-aggregated flag with one `$group_key`-style property
+ * taking the fields of `property`.
  */
 function tenantFlagWith(property: Record<string, unknown>): FlagDefinitionJson {
   return flagDefinitionSchema.parse({

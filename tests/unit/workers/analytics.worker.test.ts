@@ -22,9 +22,7 @@ vi.mock('@/jobs/flag-definitions.job', () => ({
 }))
 
 /**
- * A stand-in for an analytics Job; the processor reads only its name.
- * @param name - The job name.
- * @returns The fake, typed as a Job.
+ * A stand-in for an analytics Job named `name`; the processor reads only its name.
  */
 function jobNamed(name: string): Job {
   return { name } as unknown as Job

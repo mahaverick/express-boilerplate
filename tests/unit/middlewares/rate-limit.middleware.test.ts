@@ -5,7 +5,7 @@
  * file. A bare `express()` app stands in for `createApp()`: importing
  * `@/app` here would pull in `database.service.ts` at module scope for
  * no reason this file needs. The stub route below never checks
- * credentials — it exists only so a request has somewhere to land after
+ * credentials; it exists only so a request has somewhere to land after
  * the limiter lets it through, so these tests prove the limiter's
  * behaviour, not the login controller's (that's
  * tests/integration/api/auth.test.ts's job).
@@ -27,11 +27,10 @@ vi.mock('@/services/redis.service', async (importOriginal) => ({
 }))
 
 /**
- * Build a bare app: a login rate limiter (small `limit`, so a test does not
- * need to make hundreds of requests) in front of a stub handler that always
- * answers 401 without looking at the credentials at all.
- * @param limit - Max attempts per window before the limiter answers 429.
- * @returns The app.
+ * A bare app: a login rate limiter in front of a stub handler that always
+ * answers 401 without looking at the credentials at all. `limit` is the
+ * attempts allowed per window before the limiter answers 429, kept small so
+ * a test does not need to make hundreds of requests.
  */
 function buildApp(limit: number): Express {
   const app = express()
@@ -48,12 +47,10 @@ function buildApp(limit: number): Express {
 }
 
 /**
- * Build a bare app behind an arbitrary limiter, answering 201 when the
- * request gets through. Used for the limiters that are NOT keyed on the
- * request body, where the stub's own status only has to be distinguishable
- * from a 429.
- * @param limiter - The limiter middleware to put in front of the stub handler.
- * @returns The app.
+ * A bare app behind an arbitrary limiter, answering 201 when the request
+ * gets through. Used for the limiters that are NOT keyed on the request
+ * body, where the stub's own status only has to be distinguishable from a
+ * 429.
  */
 function buildAppBehind(limiter: RequestHandler): Express {
   const app = express()
@@ -66,18 +63,15 @@ function buildAppBehind(limiter: RequestHandler): Express {
 }
 
 /**
- * Build a bare app behind an arbitrary limiter, the same as `buildAppBehind`
+ * A bare app behind an arbitrary limiter, the same as `buildAppBehind`
  * except a stub middleware runs FIRST and populates `request.user` from a
- * test-only `x-test-user-id` header — standing in for `requireAuth`
- * (tenant.routes.ts mounts the real one router-wide ahead of both limiters
- * this app exercises). A header, not a fixed id baked into the app, so one
- * app instance (and therefore one shared limiter/store) can simulate
- * several different authenticated callers across separate requests — the
- * same "vary the identity per request, not per app" shape
- * `loginRateLimitKey`'s own discriminator test achieves by varying the
- * submitted email.
- * @param limiter - The limiter middleware to put in front of the stub handler.
- * @returns The app.
+ * test-only `x-test-user-id` header, standing in for `requireAuth`, which
+ * the real routes mount ahead of the user-keyed limiters. A header, not a
+ * fixed id baked into the app, so one app instance (and therefore one
+ * shared limiter/store) can simulate several different authenticated
+ * callers across separate requests: the same "vary the identity per
+ * request, not per app" shape `loginRateLimitKey`'s own discriminator test
+ * achieves by varying the submitted email.
  */
 function buildAppBehindAsUser(limiter: RequestHandler): Express {
   const app = express()
@@ -104,11 +98,8 @@ function buildAppBehindAsUser(limiter: RequestHandler): Express {
 }
 
 /**
- * POST a login attempt.
- * @param app - The app under test.
- * @param email - The email to submit.
- * @param password - The password to submit. Defaults to a fixed wrong one — never checked by the stub handler.
- * @returns The supertest response.
+ * A login attempt submitting `email`. The password defaults to a fixed wrong
+ * one, which the stub handler never checks.
  */
 function attempt(app: Express, email: string, password = 'wrong-password'): Test {
   return request(app).post('/login').send({ email, password })
@@ -140,7 +131,7 @@ describe('RATE_LIMITS.login', () => {
     const victimBlocked = await attempt(app, 'victim@example.com')
     expect(victimBlocked.status).toBe(429)
 
-    // A different email, same supertest agent — so the same client IP — must be entirely unaffected by victim@example.com's counter.
+    // A different email from the same client IP must be entirely unaffected by victim@example.com's counter.
     const bystander = await attempt(app, 'someone-else@example.com')
     expect(bystander.status).toBe(401)
   })
@@ -209,12 +200,11 @@ describe('RATE_LIMITS.loginIp', () => {
 
 /**
  * The account limiter behind a proxy-aware bare app, so each request can
- * claim its own client IP via X-Forwarded-For. 'loopback' trusts exactly
- * supertest's 127.0.0.1 hop; `true` would trip express-rate-limit's
- * permissive-trust-proxy validation. The stub answers like the real login:
- * 400 for a body with no password, 200 for `OWNER_PASSWORD`, else 401.
- * @param limit - Max attempts per window.
- * @returns The app.
+ * claim its own client IP via X-Forwarded-For. 'loopback' trusts only the
+ * loopback hop the test client connects from; `true` would make
+ * express-rate-limit's permissive-trust-proxy validation log an error. The
+ * stub answers like the real login: 400 for a body with no password, 200
+ * for `OWNER_PASSWORD`, else 401. `limit` is the attempts allowed per window.
  */
 function buildAccountLimitedApp(limit: number): Express {
   const app = express()
@@ -297,7 +287,7 @@ describe('RATE_LIMITS.loginAccount', () => {
 
 describe('POST /login wiring', () => {
   it('mounts the ip+email, per-IP and per-account limiters, in that order, before login', () => {
-    // Asserted against the committed route file, the same way `store prefix derivation` below asserts against the committed middleware source: a built router does not expose which `RATE_LIMITS` entry produced each piece of its middleware.
+    // Asserted against the route source, the way `store prefix derivation` below asserts against the middleware source: the pattern pins the order of the three limiters and the login handler.
     const routes = fs.readFileSync(path.resolve(process.cwd(), 'src/routes/auth.routes.ts'), 'utf8')
     expect(routes).toMatch(
       /router\.post\(\s*'\/login',\s*createRateLimiter\(RATE_LIMITS\.login\),\s*createRateLimiter\(RATE_LIMITS\.loginIp\),\s*createRateLimiter\(RATE_LIMITS\.loginAccount\),\s*authController\.login\s*\)/
@@ -426,8 +416,7 @@ describe('RATE_LIMITS.createTenant', () => {
   /**
    * The property that makes this limiter genuinely different from every
    * IP-keyed one above, proven directly: two different authenticated
-   * callers behind the same client IP (one supertest agent, so one
-   * shared underlying connection/IP) must not share a counter. Red if
+   * callers behind the same client IP must not share a counter. Red if
    * `RATE_LIMITS.createTenant` were built with express-rate-limit's
    * default IP-based `keyGenerator` instead of
    * `authenticatedUserRateLimitKey` — every request in this test would
@@ -594,7 +583,7 @@ describe('createRateLimiter marks its output', () => {
 
 describe('store prefix derivation', () => {
   /**
-   * The 21-name list and order live in
+   * The list of names and their order live in
    * tests/unit/constants/rate-limit.constants.test.ts, asserted directly
    * against the real RATE_LIMITS object. What that test alone cannot
    * prove is that createRateLimiter actually threads spec.name into
@@ -603,9 +592,9 @@ describe('store prefix derivation', () => {
    * limiter's Redis counter into one bucket. Asserted against the
    * committed source, the same way tests/unit/connection-target.test.ts
    * guards the compose ports and password.utilities.test.ts guards
-   * SECURITY.md's stated bcrypt cost: a built limiter exposes only
-   * `resetKey`/`getKey` (verified — no `store` property), so this is not
-   * observable at runtime.
+   * SECURITY.md's stated bcrypt cost: express-rate-limit's middleware exposes
+   * `resetKey`/`getKey` but not its `store`, so this is not observable at
+   * runtime.
    */
   it("derives every limiter's store prefix from spec.name, not a hardcoded string", () => {
     const source = fs.readFileSync(

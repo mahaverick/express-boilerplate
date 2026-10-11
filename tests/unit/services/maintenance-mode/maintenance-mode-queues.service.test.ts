@@ -37,10 +37,7 @@ const NONE = null
 const NOW = new Date('2026-10-06T10:00:30.000Z')
 
 /**
- * A known snapshot that changed `ageMs` before `NOW`.
- * @param mode - Its mode.
- * @param ageMs - How long before `NOW` it changed.
- * @returns The snapshot.
+ * A known snapshot of `mode` that changed `ageMs` before `NOW`.
  */
 function snapshot(mode: MaintenanceModeSnapshot['mode'], ageMs: number): MaintenanceModeSnapshot {
   const changedAt = new Date(NOW.getTime() - ageMs).toISOString()
@@ -87,6 +84,10 @@ describe('queuePauseTarget without a change time', () => {
   })
 })
 
+/**
+ * The slice of a BullMQ job that `dedupeSchedulerJobs` reads, with a spy for
+ * `remove`.
+ */
 interface StubRun {
   id: string
   repeatJobKey: string
@@ -96,11 +97,8 @@ interface StubRun {
 }
 
 /**
- * A pending run of the scheduler `tick`.
- * @param id - Its id.
- * @param dueAtMs - When it is due.
- * @param remove - What removing it does.
- * @returns The job.
+ * A pending run of the scheduler `tick`, due at `dueAtMs`. `remove` is what
+ * removing it does.
  */
 function run(
   id: string,
@@ -117,10 +115,8 @@ function run(
 }
 
 /**
- * A queue holding one scheduler and some pending runs.
- * @param runs - The pending runs.
- * @param state - What `getJobState` answers.
- * @returns The queue.
+ * A stub queue holding the scheduler `tick` and the pending `runs`, whose
+ * `getJobState` answers `state`.
  */
 function queueOf(runs: StubRun[], state = 'waiting'): Queue {
   return {

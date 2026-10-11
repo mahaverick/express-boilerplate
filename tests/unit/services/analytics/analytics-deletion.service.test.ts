@@ -3,8 +3,9 @@
  * with the repository, the PostHog API client and the config mocked: an
  * unknown id is acknowledged, a non-empty `deletion_errors`, an answer
  * without one, a timeout and a network error each keep the rows, and a
- * failure logs at `error` only once a row is more than a day old. The real
- * database and the fake PostHog are in
+ * failure logs at `warn` until a row is more than a day old, then at `error`,
+ * and a 401, 403 or 404 logs at `error` at once. The real database and the fake
+ * PostHog are in
  * tests/integration/services/analytics/analytics-deletion.service.test.ts.
  */
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
@@ -29,10 +30,8 @@ const NOW = new Date('2030-01-02T00:00:00.000Z')
 const DAY_MS = 24 * 60 * 60 * 1000
 
 /**
- * A claimed row.
- * @param distinctId - Its id.
- * @param createdAt - When the purge queued it.
- * @returns The row.
+ * A row `claimDue` returned, for the purged user `distinctId`. `createdAt` is
+ * when the purge queued it, which the overdue check measures from.
  */
 function claimed(distinctId: string, createdAt: Date = NOW): AnalyticsDeletionRow {
   // eslint-disable-next-line unicorn/no-null -- the column's "never failed" state
@@ -40,9 +39,7 @@ function claimed(distinctId: string, createdAt: Date = NOW): AnalyticsDeletionRo
 }
 
 /**
- * A 202 with the given `deletion_errors`.
- * @param deletionErrors - The list PostHog returns.
- * @returns The result.
+ * A 202 answer from PostHog whose `deletion_errors` is `deletionErrors`.
  */
 function accepted(deletionErrors: unknown[]): PosthogApiResult {
   return {
@@ -72,9 +69,8 @@ const repository: {
 } = {}
 
 /**
- * One of the repository spies.
- * @param name - The method.
- * @returns Its spy.
+ * The spy on repository method `name`, or a throw when `beforeEach` has not
+ * installed it.
  */
 function spy<K extends keyof typeof repository>(name: K): NonNullable<(typeof repository)[K]> {
   const found = repository[name]
