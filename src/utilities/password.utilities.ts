@@ -57,8 +57,9 @@ export async function isPasswordValid(plain: string, hash: string): Promise<bool
 
 /**
  * A bcrypt hash of a fixed, non-secret plaintext, so `login` (auth.service.ts)
- * pays a real compare for an unknown email. Hashed lazily through
- * `hashPassword` and memoised, so it always costs the current `BCRYPT_COST`.
+ * pays a real compare for an unknown email or an account with no password.
+ * Hashed lazily through `hashPassword` and memoised, so it always costs the
+ * current `BCRYPT_COST`.
  * A stored hash keeps the cost it was written with, so raising the cost
  * makes an unknown email slower than a wrong password until rows are
  * rehashed; see `BCRYPT_COST` (auth.constants.ts).

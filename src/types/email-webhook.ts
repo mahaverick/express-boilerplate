@@ -18,8 +18,8 @@ export interface NormalizedEmailEvent {
    */
   providerEventId: string
   /**
-   * The RFC 5322 Message-ID the message was sent with, trimmed, angle
-   * brackets kept: `<id@domain>`.
+   * The RFC 5322 Message-ID the message was sent with, trimmed and in
+   * angle brackets (`normalizedMessageIdHeader`): `<id@domain>`.
    */
   messageIdHeader: string
   type: EmailEventType

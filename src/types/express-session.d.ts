@@ -5,7 +5,8 @@ import type { FrontendApp } from '@/constants/frontend.constants'
 
 declare module 'express-session' {
   /**
-   * What is stored for one Google sign-in, from `/auth/google` to its callback.
+   * This app's own fields on one Google sign-in's session, from `/auth/google`
+   * to its callback (passport keeps the OAuth `state` beside them).
    */
   interface SessionData {
     /**

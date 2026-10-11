@@ -47,7 +47,8 @@ export interface FlagContext {
    */
   tenantId: string | null
   /**
-   * The refresh session id of the request, or null outside a request (a worker).
+   * The refresh session id of the request, or null when there is none (a worker,
+   * a token without `sid`, or a staff evaluation for another user).
    */
   sessionId: string | null
 }

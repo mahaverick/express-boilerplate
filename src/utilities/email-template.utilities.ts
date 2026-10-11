@@ -138,8 +138,9 @@ type SecretKey<T> = {
 /**
  * What email tracking needs to know about one template, typed against its
  * variables so the compiler enforces two rules: a template with a secret
- * variable must use the `transactional` sender (click tracking off), and no
- * secret variable can be listed for storage.
+ * variable must use the `transactional` sender (the one whose domain the
+ * operator keeps click tracking off), and no secret variable can be listed
+ * for storage.
  */
 export type EmailTemplateMeta<V> = {
   /**

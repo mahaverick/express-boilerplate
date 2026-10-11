@@ -83,8 +83,10 @@ function camelWords(chunk: string): string[] {
  * the UPPER_SNAKE `detail` `email_events` stores (`MESSAGE_REJECTED`), or
  * nothing. A value that does not fit `EMAIL_DETAIL_PATTERN` and
  * `EMAIL_DETAIL_MAX_LENGTH` once converted is dropped rather than cut, and
- * so is a detail made only of 16 or more hex digits, which a bare token
- * would be. A token split by separators is not caught.
+ * so is a detail made only of 16 or more hex digits, which a bare hex token
+ * would be. A token split into words, by separators or by letter case
+ * (base64url), is not caught; a full-length token of this app exceeds
+ * `EMAIL_DETAIL_MAX_LENGTH` and is dropped anyway.
  * @param value - The provider's code.
  * @returns The UPPER_SNAKE code, or undefined.
  */

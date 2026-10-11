@@ -17,7 +17,7 @@ export interface EmailContext {
 }
 
 /**
- * The option each mail flow a staff resend can re-run takes: the message the
- * resend is for, stored on the new message.
+ * The option a resendable mail flow takes: the message a staff resend re-runs
+ * it for, stored on the new message.
  */
 export type EmailResendOptions = Pick<EmailContext, 'resentFromId'>
