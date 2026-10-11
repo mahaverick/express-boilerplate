@@ -51,7 +51,8 @@ afterAll(async () => {
 })
 
 /**
- * Creates a user, named Ada, whose `email_messages` rows are deleted in `afterEach`.
+ * Creates a user whose `email_messages` rows are deleted in `afterEach`, so a test's mail
+ * does not outlive it.
  */
 async function trackedUser(
   options: { hasPassword?: boolean; verified?: boolean } = {}

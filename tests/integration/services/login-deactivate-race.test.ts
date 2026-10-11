@@ -37,8 +37,8 @@ async function createVerifiedUser(): Promise<{ id: string; email: string }> {
 
 /**
  * Runs a login that pauses at its `lastLoggedInAt` write, applies `change`
- * while it waits, lets it continue and returns how it settled. `change` is the
- * change to commit mid-login.
+ * while it waits, lets it continue and returns how it settled. `change` is a
+ * committed account change such as a deactivation.
  */
 async function loginAround(
   email: string,

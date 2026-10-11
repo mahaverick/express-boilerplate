@@ -150,7 +150,7 @@ describe('getTenantOnboarding', () => {
     const asStaff = await getTenantOnboarding(tenant.id, { userId: NONE })
 
     /**
-     * Finds one step in a view.
+     * Reads one step out of the owner, teammate or staff view, to compare how each sees it.
      */
     const stepOf = (view: typeof asOwner, key: string) =>
       view.steps.find((entry) => entry.key === key)

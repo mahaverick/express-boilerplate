@@ -352,7 +352,7 @@ describe('parity with the customer read', () => {
       createOnboardingTenant({ startedAt: daysAgo(10, now), dismissedAt: daysAgo(9, now) }),
     ])
     /**
-     * Returns the tenant of the fixture at `index`.
+     * Narrows `fixtures[index]` to defined, so the parity setup reads a tenant by index.
      */
     const tenantAt = (index: number): Tenant => {
       const fixture = fixtures[index]
@@ -360,7 +360,7 @@ describe('parity with the customer read', () => {
       return fixture.tenant
     }
     /**
-     * Returns the owner's id of the fixture at `index`.
+     * Narrows `fixtures[index]` to defined, so the parity setup reads an owner by index.
      */
     const ownerAt = (index: number): string => {
       const fixture = fixtures[index]

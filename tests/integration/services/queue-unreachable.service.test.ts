@@ -4,18 +4,17 @@
  * `vi.resetModules()` plus a dynamic `import()`, not `vi.mock(getEnv)`
  * (contrast `redis-unreachable.service.test.ts`): `queue.service.ts`'s own
  * module-scope state is created once, on first import, so this file needs a
- * genuinely fresh module instance, not a mocked `getEnv` layered over
- * whatever instance another test file's module registry already holds, to
- * guarantee `REDIS_URL` is wrong from this module's very first
- * `getQueueConnection()` call.
+ * genuinely fresh module instance, not a mocked `getEnv` layered over an
+ * instance that may already exist, to guarantee `REDIS_URL` is wrong from
+ * this module's very first `getQueueConnection()` call.
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
 describe('queue unreachable', () => {
   /**
-   * Captured before `beforeAll` overwrites it, so `afterAll` can put the
-   * real per-worker `REDIS_URL` back for the rest of this file. Each test
-   * file runs in its own process, so no other file sees the overwrite.
+   * Captured before `beforeAll` overwrites it, so `afterAll` leaves
+   * `process.env` as it found it. Each test file runs in its own process, so
+   * no other file sees the overwrite.
    */
   const originalRedisUrl = process.env.REDIS_URL
   let queueService: typeof import('@/services/queue.service')
@@ -35,7 +34,7 @@ describe('queue unreachable', () => {
   it('isQueueReachable() resolves false within a few seconds instead of hanging', async () => {
     const startedAt = Date.now()
     await expect(queueService.isQueueReachable()).resolves.toBe(false)
-    // The claim: it gives up rather than retrying forever. At least 10x what giving up takes.
+    // Giving up costs the three pre-ready retry delays (0.2, 0.4, 0.6 s); a hang would take about 4 x REDIS_CONNECT_TIMEOUT_MS (20 s).
     expect(Date.now() - startedAt).toBeLessThan(14_000)
   }, 20_000)
 

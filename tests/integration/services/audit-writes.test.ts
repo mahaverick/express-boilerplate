@@ -70,8 +70,8 @@ afterAll(async () => {
 })
 
 /**
- * Returns an address no other seeded user shares, so parallel files never collide on the unique
- * email.
+ * Returns an address no other row in this worker's database shares, so a seeded user never
+ * collides on the unique email.
  */
 function uniqueEmail(): string {
   return `audit-writes-${randomUUID()}@example.test`
@@ -141,7 +141,7 @@ async function seedInvitation(
 }
 
 /**
- * Reads the audit rows one action wrote for a tenant.
+ * Reads the audit rows one action wrote for a tenant, as raw columns for exact comparison.
  */
 async function rowsFor(tenantId: string, action: string): Promise<AuditRow[]> {
   return sql<AuditRow[]>`
@@ -558,7 +558,7 @@ describe('invitation.resent', () => {
 
 /**
  * A stored address whose domain is no hostname (the invite validator
- * rejects these; a legacy row can hold one) must not block a resend
+ * rejects these; a row stored before the validator existed can hold one) must not block a resend
  * or a revoke: the audit entry records a null domain.
  */
 describe('an invitation whose stored domain is no hostname', () => {

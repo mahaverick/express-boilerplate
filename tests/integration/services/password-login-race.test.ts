@@ -145,7 +145,7 @@ function holdAfterRevoke(
     await release
   }
   /**
-   * Holds an armed `revokeAllForUser` call after it has run.
+   * `revokeAllForUser` followed by `holdIfArmed`.
    */
   const holdingAll: typeof realAll = async function (this: UserTokenRepository, ...parameters) {
     const ids = await realAll.apply(this, parameters)
@@ -153,7 +153,7 @@ function holdAfterRevoke(
     return ids
   }
   /**
-   * Holds an armed `revokeAllForUserExceptSession` call after it has run.
+   * `revokeAllForUserExceptSession` followed by `holdIfArmed`.
    */
   const holdingExcept: typeof realExcept = async function (
     this: UserTokenRepository,
@@ -164,7 +164,7 @@ function holdAfterRevoke(
     return ids
   }
   /**
-   * Holds an armed `revokeAllForSession` call after it has run.
+   * `revokeAllForSession` followed by `holdIfArmed`.
    */
   const holdingSession: typeof realSession = async function (
     this: UserTokenRepository,
@@ -528,7 +528,8 @@ async function raceTwoLogins(
   const calls = { update: 0, lockById: 0 }
 
   /**
-   * Pauses the first login to update, which is the "second" login, until released.
+   * Pauses the login named `second`, the first to reach its `lastLoggedInAt` update, until
+   * released.
    */
   const pausingUpdate: typeof realUpdate = async function (this: UserRepository, ...parameters) {
     const row = await realUpdate.apply(this, parameters)
@@ -540,8 +541,8 @@ async function raceTwoLogins(
     return row
   }
   /**
-   * Holds the first login to lock after its lock until released, and reports
-   * the other login's backend pid; with `exclusiveReRead` both lock `FOR NO
+   * Holds the login named `first` after it takes its lock until released, and
+   * reports the other login's backend pid; with `exclusiveReRead` both lock `FOR NO
    * KEY UPDATE`.
    */
   const lockById: typeof realLockById = async function (this: UserRepository, id, mode, tx) {

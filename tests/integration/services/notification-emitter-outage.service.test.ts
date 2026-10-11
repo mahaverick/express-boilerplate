@@ -47,7 +47,7 @@ const OUTAGE_MS = 1500
 const RETRY_SETTLE_MS = 2000
 // One capped retry delay, then one connect attempt.
 const RECOVERY_TIMEOUT_MS = RECONNECT_DELAY_CAP_MS + REDIS_CONNECT_TIMEOUT_MS
-// The close claim: prompt, never stuck behind the retry backoff. At least 10x what a prompt close takes.
+// The close claim: prompt, never stuck behind the retry backoff. Under REDIS_CONNECT_TIMEOUT_MS (5 s), the longest a close could wait on a connect.
 const PROMPT_CLOSE_BUDGET_MS = 4000
 const FAILED_TO_START = 'Notification subscriber failed to start'
 const PUBLISH_FAILED =
@@ -256,7 +256,7 @@ describe('notification pub/sub survives a Redis outage', () => {
     const userId = `fallback-${randomUUID()}`
     const received: Notification[] = []
     /**
-     * Records each notification delivered to the listener.
+     * The listener whose deliveries the test counts.
      */
     const handler = (notification: Notification): void => {
       received.push(notification)
@@ -344,7 +344,7 @@ describe('notification pub/sub survives a Redis outage', () => {
       if (!subscriber) throw new Error('the fresh emitter created no subscriber')
       const attempts = { reconnects: 0, hasSecondFailed: false }
       /**
-       * Counts the subscriber's reconnect attempts.
+       * Counts reconnect attempts, so the test can tell the first retry from the later ones.
        */
       const onReconnecting = (): void => {
         attempts.reconnects += 1
@@ -372,7 +372,7 @@ describe('notification pub/sub survives a Redis outage', () => {
       }
       try {
         /**
-         * Closes the subscriber and resolves `'closed'`.
+         * The close under test, labelled so the race below can name its winner.
          */
         const close = async (): Promise<'closed'> => {
           await fresh.closeNotificationSubscriber()
