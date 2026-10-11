@@ -162,9 +162,9 @@ export function authenticatedUserRateLimitKey(request: Request): string {
 
 /**
  * The key `emailWebhook`'s limiter counts requests by: the `:provider` path
- * segment alone, never the IP. A provider posts from a few egress addresses,
- * so an IP key would put a whole bounce storm in a few buckets and throttle
- * it into retries. The route checks that the provider is enabled before this
+ * segment alone, never the IP. The `emailWebhook` budget is sized for one
+ * provider's whole bounce storm, so keying by provider gives each provider
+ * that budget instead of sharing one across all of them. The route checks that the provider is enabled before this
  * limiter runs, so the key space is the enabled adapters.
  * @param request - The incoming request.
  * @returns The provider name, or an empty string when the route has none.
@@ -569,7 +569,8 @@ export const RATE_LIMITS: Readonly<Record<RateLimitName, RateLimiterSpec>> = {
   /**
    * 10 a minute per staff member for `PUT /platform/maintenance-mode`, behind
    * the owner gate and step-up: a person switches maintenance a few times an
-   * hour at most, and each change notifies every other owner and admin.
+   * hour at most, and switching on, escalating or switching off notifies every
+   * other owner and admin (a message edit or a de-escalation notifies no one).
    */
   maintenanceModeChange: {
     name: 'maintenance-mode-change',

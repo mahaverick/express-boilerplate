@@ -36,8 +36,9 @@ export const MAX_PASSWORD_BYTES = 72
  * The shortest password `auth.validators.ts` accepts at registration,
  * password reset and password change.
  *
- * 8 is the NIST SP 800-63B minimum for a human-chosen password, with no
- * composition rules, which this boilerplate does not impose. `loginSchema`
+ * 8 is the NIST SP 800-63B revision 3 minimum for a human-chosen password,
+ * with no composition rules, which this boilerplate does not impose. It is
+ * this app's chosen floor, not a claim of compliance with the current revision. `loginSchema`
  * does not enforce it, so a too-short password fails login with the same 401
  * as a wrong one rather than a distinguishable 400.
  */

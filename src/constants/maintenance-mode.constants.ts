@@ -1,6 +1,6 @@
 /**
  * @file The fixed values of maintenance mode: its modes, header, timings,
- * text bounds and error codes. Everything here is named `maintenance-mode`;
+ * text bounds and error codes. This feature's names use `maintenance-mode`;
  * the `maintenance` queue (the retention purge) is unrelated.
  */
 
