@@ -173,7 +173,7 @@ export function createMaintenanceModeStore(
   /**
    * Read the row, apply it under the version rule and notify the listeners.
    * A failed read keeps the last known snapshot and records its label; it
-   * never rejects, and a read finishing after `stop()` changes and says nothing.
+   * never rejects, and a read finishing after `stop()` changes nothing and logs nothing.
    */
   const reload = async (): Promise<void> => {
     if (state.isClosed) return
@@ -241,7 +241,7 @@ export function createMaintenanceModeStore(
 
   /**
    * Run `subscribe` unless one is already running; concurrent callers share it.
-   * @returns Resolves when that `subscribe` has finished.
+   * @returns Resolves once that run has finished; never rejects.
    */
   const ensureSubscriber = (): Promise<void> => {
     state.subscribing ??= (async () => {

@@ -81,9 +81,10 @@ export function queuePauseTarget(snapshot: MaintenanceModeSnapshot, now: Date): 
  * does, adds another pending run. Per scheduler, the pending job with id
  * `repeat:<key>:<next>` is kept, or else the one due latest; every other is
  * removed. A scheduler's only pending job is never removed: its chain lives
- * there. A removal BullMQ refuses is logged and not counted.
+ * there. A removal BullMQ refuses is logged, unless the job is gone by then,
+ * and not counted.
  * @param queue - A paused queue.
- * @returns How many jobs were removed.
+ * @returns How many removals succeeded, a job another replica removed first included.
  */
 export async function dedupeSchedulerJobs(queue: Queue): Promise<number> {
   const schedulers = await queue.getJobSchedulers(0, -1)
@@ -139,7 +140,7 @@ async function tryRemove(queue: Queue, job: Job): Promise<boolean> {
     await job.remove()
     return true
   } catch (error) {
-    // BullMQ throws for a job a worker holds or its scheduler's current run, not for one already gone.
+    // BullMQ throws for a job a worker holds (or one of its children) or its scheduler's current run, never for one gone.
     if (job.id !== undefined && (await queue.getJobState(job.id)) !== 'unknown') {
       logger.warn('A duplicate scheduler job could not be removed', {
         queue: queue.name,
@@ -267,7 +268,7 @@ export async function reconcileQueuePause(
  * the staff maintenance-mode view and the view a mode change answers with
  * all show this list, for display only.
  * @returns One entry per queue, in registry order (empty during shutdown, when the queues cannot
- * be reached); a field Redis could not answer in time is null.
+ * be reached); a field Redis did not answer, or failed to answer, in time is null.
  */
 export async function getQueuePauseStates(): Promise<QueuePauseState[]> {
   let queues: Queue[]
