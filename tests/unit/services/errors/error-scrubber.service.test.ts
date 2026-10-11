@@ -14,8 +14,8 @@ import {
 } from '@/services/errors/error-scrubber.service'
 
 /**
- * One row of the shared vector file: the `rule` it exercises, the `input`
- * text and the output `scrubText` must give.
+ * One case of the vector file that the react and apex clients also run, so
+ * the same rule gives the same output in all three.
  */
 interface ScrubVector {
   rule: string

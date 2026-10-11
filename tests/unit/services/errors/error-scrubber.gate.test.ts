@@ -13,10 +13,9 @@ import { corpusCase, huntCase } from '../../../helpers/scrub-gate-generators'
 import { compareCase, visibleWindows } from '../../../helpers/scrub-gate-metric'
 
 /**
- * The fixed-seed slice of the gate corpus: `count` cases from `seed`, the
- * commit (`baseline`) whose scrubber was compared, by case index the planted
- * values the baseline left in view (`allowed`), and the cases whose baseline
- * output changes on a second pass (`unstable`).
+ * The fixed-seed slice of the gate corpus, stored with the known leaks of the
+ * baseline scrubber it is compared against, so the unit suite can run the gate
+ * without git history.
  */
 interface Slice {
   seed: number

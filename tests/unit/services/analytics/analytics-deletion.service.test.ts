@@ -4,7 +4,7 @@
  * unknown id is acknowledged, a non-empty `deletion_errors`, an answer
  * without one, a timeout and a network error each keep the rows, and a
  * failure logs at `warn` until a row is more than a day old, then at `error`,
- * and a 401 or 404 logs at `error` at once. The real database and the fake
+ * and a 401, 403 or 404 logs at `error` at once. The real database and the fake
  * PostHog are in
  * tests/integration/services/analytics/analytics-deletion.service.test.ts.
  */

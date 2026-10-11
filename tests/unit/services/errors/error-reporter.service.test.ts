@@ -235,7 +235,7 @@ describe('reportError gating and ids', () => {
   it('a Proxy whose every access throws gives one deterministic outcome per report', async () => {
     const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
     /**
-     * Throws, standing in for every Proxy trap.
+     * Set as every trap of a Proxy, so any access to the thrown value throws.
      */
     const trap = (): never => {
       throw new Error('proxy trap')

@@ -24,14 +24,16 @@ vi.mock('bullmq', async (importOriginal) => {
    */
   class RecordingWorker {
     /**
-     * Records the queue and `options.concurrency`; the processor is ignored.
+     * Keeps only the queue name and `options.concurrency`, the two things the
+     * tests assert; the processor never runs.
      */
     constructor(queue: string, _processor: unknown, options: { concurrency?: number }) {
       constructed.push({ queue, concurrency: options.concurrency })
     }
 
     /**
-     * Ignores listener registration and returns the worker, so `.on(...)` calls chain.
+     * The starters attach event listeners; this accepts and drops them so no real
+     * Worker behaviour is needed.
      */
     on(): this {
       return this

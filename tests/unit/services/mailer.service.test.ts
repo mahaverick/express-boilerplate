@@ -100,9 +100,10 @@ describe('redactedMailErrorForLog', () => {
   /**
    * The frame filter requires a V8 frame's shape, which starts with
    * indentation, to tell a real call frame from an unindented line that
-   * merely starts with "at ". `.stack` begins with the error's message, which
-   * can include an SMTP server's multi-line response, so this matters; it is
-   * pinned directly, not by absence.
+   * merely starts with "at ". `.stack` begins with the error's message, which on
+   * some nodemailer failure paths is built from server text (smtp-connection
+   * puts a multi-line RSET reply into it), so this matters; it is pinned
+   * directly, not by absence.
    */
   it('drops an unindented line that merely begins "at ", keeping only real indented call frames', () => {
     const craftedStack = [
