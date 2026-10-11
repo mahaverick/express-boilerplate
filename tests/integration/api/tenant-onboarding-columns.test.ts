@@ -28,8 +28,7 @@ afterEach(async () => {
 })
 
 /**
- * Assert an object carries none of the onboarding columns.
- * @param shown - The tenant as a response carried it.
+ * Asserts that a tenant, as a response carried it, has none of the onboarding columns.
  */
 function expectNoOnboardingColumns(shown: unknown): void {
   expect(shown).toBeTypeOf('object')
@@ -59,6 +58,9 @@ describe('tenant responses', () => {
     expect([created.status, listed.status, read.status, updated.status]).toEqual([
       201, 200, 200, 200,
     ])
+    /**
+     * The response body typed as the envelope's `data` wrapper.
+     */
     const body = (response: typeof created): { data: unknown } => response.body as { data: unknown }
     expectNoOnboardingColumns(body(created).data)
     const rows = body(listed).data as Array<{ tenant: unknown }>

@@ -24,8 +24,7 @@ afterEach(async () => {
 })
 
 /**
- * Insert a user with raw SQL, tracked for cleanup.
- * @returns The user's id.
+ * Inserts a user with raw SQL, tracked for cleanup, and returns its id.
  */
 async function insertUser(): Promise<string> {
   const id = randomUUID()
@@ -36,8 +35,8 @@ async function insertUser(): Promise<string> {
 }
 
 /**
- * Insert a tenant with raw SQL, naming no onboarding column, tracked for cleanup.
- * @returns The tenant's id.
+ * Inserts a tenant with raw SQL, naming no onboarding column so its defaults
+ * apply, tracked for cleanup, and returns its id.
  */
 async function insertTenant(): Promise<string> {
   const id = randomUUID()
@@ -48,15 +47,9 @@ async function insertTenant(): Promise<string> {
 }
 
 /**
- * Insert one completion with raw SQL.
- * @param row - The columns to set.
- * @param row.tenantId - The tenant.
- * @param row.userId - The member, for a member step.
- * @param row.stepKey - The step key. Defaults to `configure_settings`.
- * @param row.source - The source. Defaults to `auto`.
- * @param row.completedBy - Who recorded it.
- * @param row.reason - The staff reason.
- * @returns The completion's id.
+ * Inserts one onboarding completion with raw SQL and returns its id. Unset
+ * columns are SQL NULL, except `stepKey` (`configure_settings`) and `source`
+ * (`auto`); `userId` is set only for a member step.
  */
 async function insertCompletion(row: {
   tenantId: string

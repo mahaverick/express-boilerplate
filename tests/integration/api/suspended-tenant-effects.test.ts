@@ -1,7 +1,7 @@
 /**
- * @file What a suspension freezes beyond the tenant routes: its invitations
- * cannot be previewed or accepted until it is reactivated. And what a member
- * sees of it afterwards: the audit entries, without the staff member's reason.
+ * @file What a suspension freezes beyond the tenant routes (its invitations
+ * cannot be previewed or accepted until it is reactivated), and what a member
+ * sees of it in the audit log, which omits the staff member's reason.
  */
 import { randomUUID } from 'node:crypto'
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
@@ -38,7 +38,7 @@ afterAll(async () => {
 
 /**
  * A tenant owned by a fresh user, with an invitation to a second fresh user.
- * @returns The tenant, the owner's token, the invitee and the raw invitation token.
+ * `rawToken` is the token from the invitation mail.
  */
 async function tenantWithInvitation(): Promise<{
   tenantId: string
@@ -72,11 +72,8 @@ async function tenantWithInvitation(): Promise<{
 }
 
 /**
- * Move a tenant through a staff lifecycle action.
+ * Moves a tenant through a staff lifecycle action and fails the test unless it answers 200.
  * @param token - A staff admin's recently authenticated token.
- * @param tenantId - The tenant.
- * @param verb - The action.
- * @returns Resolves once it answered 200.
  */
 async function lifecycle(
   token: string,
@@ -127,6 +124,9 @@ describe('a suspended tenant', () => {
       .get(`/api/v1/tenants/${slug}/audit-log`)
       .set('Authorization', `Bearer ${staffToken}`)
 
+    /**
+     * The audit-log response body, narrowed to what the assertions read.
+     */
     type Entries = { data: { entries: { action: string; metadata: Record<string, unknown> }[] } }
     const memberSuspend = (asMember.body as Entries).data.entries.find(
       (entry) => entry.action === 'tenant.suspended'

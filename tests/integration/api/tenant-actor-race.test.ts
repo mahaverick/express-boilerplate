@@ -1,12 +1,11 @@
 /**
  * @file The actor's own role is re-read under lock inside the service's
  * transaction, not taken from request.principal. Each test changes the
- * actor's membership straight after resolveTenant has read it, so
- * requireRole still sees the old owner role; the write must be refused
- * and must change nothing. The hook wraps
- * `UserMembershipRepository.findByUserAndTenant` and fires once, on
- * resolveTenant's pool read of the actor; reads inside a transaction (the
- * executor argument is set) pass through untouched.
+ * actor's membership right after resolveTenant has read it, so requireRole
+ * still sees the old owner role; the write must be refused and change
+ * nothing. The hook wraps `UserMembershipRepository.findByUserAndTenant` and
+ * fires once, on resolveTenant's pool read of the actor; reads inside a
+ * transaction (the executor argument is set) pass through.
  */
 
 import { randomBytes, randomUUID } from 'node:crypto'
@@ -43,8 +42,7 @@ afterAll(async () => {
 })
 
 /**
- * A disposable email, unique to one call.
- * @returns An email guaranteed unique to this call.
+ * A throwaway email unique to this call.
  */
 function uniqueEmail(): string {
   return `actor-race-${randomUUID()}@example.test`
@@ -56,13 +54,9 @@ function uniqueEmail(): string {
 type ActorChange = 'demote-to-viewer' | 'remove'
 
 /**
- * Run `run` while resolveTenant's read of the actor's membership in
- * `tenant` returns the row as read, then applies `change` to it. The
- * request therefore carries the stale role.
- * @param actor - The acting user.
- * @param tenant - The tenant the request names.
- * @param change - What to do to the actor's membership.
- * @param run - The request(s) to make while the hook is installed.
+ * Runs `run` with a hook that applies `change` to the actor's membership in
+ * `tenant` right after resolveTenant has read it, so the request carries the
+ * stale role. Fails the test if the hook never fired.
  */
 async function withActorChangedAfterResolve(
   actor: User,
@@ -73,6 +67,10 @@ async function withActorChangedAfterResolve(
   // eslint-disable-next-line @typescript-eslint/unbound-method -- deliberately capturing the original to call it inside the mutated version
   const realFind = UserMembershipRepository.prototype.findByUserAndTenant
   let hasChanged = false
+  /**
+   * Returns the real read's row, and on resolveTenant's own pool read of the
+   * actor applies `change` once.
+   */
   const changingFind: typeof realFind = async function (
     this: UserMembershipRepository,
     userId: string,
@@ -102,10 +100,7 @@ async function withActorChangedAfterResolve(
 }
 
 /**
- * A pending invitation in `tenant`, written directly.
- * @param tenant - The tenant.
- * @param invitedBy - The inviter.
- * @returns The stored row.
+ * A pending invitation in `tenant`, written straight to the repository.
  */
 async function seedInvitation(tenant: Tenant, invitedBy: User): Promise<TenantInvitation> {
   return db.transaction((tx) =>
@@ -124,9 +119,7 @@ async function seedInvitation(tenant: Tenant, invitedBy: User): Promise<TenantIn
 }
 
 /**
- * The stored token hash and revocation time of one invitation.
- * @param invitationId - The invitation.
- * @returns Its row's `tokenHash` and `revokedAt`.
+ * The stored token hash and revocation time of one invitation, read with raw SQL.
  */
 async function invitationState(
   invitationId: string
@@ -155,7 +148,6 @@ describe('the actor role is re-read under lock (actor changed after resolveTenan
 
   /**
    * A fresh user with a valid bearer token, tracked for cleanup.
-   * @returns The user and a bearer token for it.
    */
   async function createAuthenticatedUser(): Promise<{ user: User; token: string }> {
     const user = await userRepository.create({ email: uniqueEmail() })
@@ -165,7 +157,6 @@ describe('the actor role is re-read under lock (actor changed after resolveTenan
 
   /**
    * A tenant owned by a fresh actor, tracked for cleanup.
-   * @returns The owner-actor, their token and the tenant.
    */
   async function ownedTenant(): Promise<{ actor: User; token: string; tenant: Tenant }> {
     const { user: actor, token } = await createAuthenticatedUser()
@@ -180,9 +171,6 @@ describe('the actor role is re-read under lock (actor changed after resolveTenan
 
   /**
    * A fresh user added to `tenant` with `role`, bypassing the API.
-   * @param tenant - The tenant.
-   * @param role - The role to grant.
-   * @returns The new member.
    */
   async function addMember(tenant: Tenant, role: MembershipRole): Promise<User> {
     const { user } = await createAuthenticatedUser()

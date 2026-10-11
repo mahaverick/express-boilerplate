@@ -1,9 +1,9 @@
 /**
  * @file What migration 0016 built, asserted against the live per-worker
  * database: the seeded platform tenant and its constraints, and
- * audit_logs' CHECKs, append-only trigger (UPDATE and DELETE; TRUNCATE is
- * open) and RESTRICT foreign keys. Raw SQL throughout, so no application
- * check stands in for the database's.
+ * audit_logs' CHECKs, append-only trigger (a plain UPDATE or DELETE raises;
+ * TRUNCATE is open) and RESTRICT foreign keys. Raw SQL throughout, so no
+ * application check stands in for the database's.
  */
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -25,8 +25,7 @@ afterEach(async () => {
 })
 
 /**
- * A raw user row, tracked for cleanup.
- * @returns The user's id.
+ * Inserts a raw user row, tracked for cleanup, and returns its id.
  */
 async function insertUser(): Promise<string> {
   const [row] = await sql<{ id: string }[]>`
@@ -38,8 +37,7 @@ async function insertUser(): Promise<string> {
 }
 
 /**
- * A raw customer tenant row, tracked for cleanup.
- * @returns The tenant's id.
+ * Inserts a raw customer tenant row, tracked for cleanup, and returns its id.
  */
 async function insertTenant(): Promise<string> {
   const [row] = await sql<{ id: string }[]>`
@@ -51,8 +49,7 @@ async function insertTenant(): Promise<string> {
 }
 
 /**
- * The platform tenant's id.
- * @returns The id of the one `is_platform` row.
+ * The id of the one `is_platform` tenant, which the migration seeds.
  */
 async function platformTenantId(): Promise<string> {
   const [row] = await sql<{ id: string }[]>`select id from tenants where is_platform`
@@ -61,10 +58,7 @@ async function platformTenantId(): Promise<string> {
 }
 
 /**
- * Insert one valid user-actor audit row.
- * @param tenantId - The tenant it belongs to.
- * @param userId - The actor.
- * @returns The row's id.
+ * Inserts one valid user-actor audit row in `tenantId` and returns its id.
  */
 async function insertAuditRow(tenantId: string, userId: string): Promise<string> {
   const [row] = await sql<{ id: string }[]>`

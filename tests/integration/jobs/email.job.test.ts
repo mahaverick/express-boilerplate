@@ -29,8 +29,7 @@ afterAll(async () => {
 })
 
 /**
- * A disposable recipient, tracked for cleanup.
- * @returns A unique address.
+ * A throwaway recipient address, tracked so afterEach deletes its message rows.
  */
 function uniqueRecipient(): string {
   const address = `email-job-${randomUUID()}@example.test`
@@ -39,11 +38,8 @@ function uniqueRecipient(): string {
 }
 
 /**
- * A real invitation message: the template with the most variables, one of
- * which (`inviterName`) must never be stored.
- * @param to - The recipient.
- * @param token - The token in its accept link.
- * @returns The message.
+ * A real invitation message: its accept link carries `token`, and
+ * `inviterName` is another person's name that must never be stored.
  */
 function invitationMessage(to: string, token: string): MailMessage {
   return {
@@ -62,16 +58,13 @@ function invitationMessage(to: string, token: string): MailMessage {
 
 /**
  * A stand-in for a queue add or an insert that fails.
- * @returns A rejection.
  */
 function failingCall(): Promise<never> {
   return Promise.reject(new Error('unavailable'))
 }
 
 /**
- * The job's message row, read back.
- * @param messageId - The job's `messageId`.
- * @returns The row.
+ * The job's `email_messages` row, read back; fails the test when there is none.
  */
 async function rowFor(messageId: string | undefined): Promise<Record<string, unknown>> {
   const [row] = await sql`select * from email_messages where id = ${messageId ?? ''}`

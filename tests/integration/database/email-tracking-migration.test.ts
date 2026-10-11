@@ -1,9 +1,8 @@
 /**
- * @file Migration 0020's backfill, observed the only way it can be: the
- * suite's own databases are migrated empty in globalSetup, so this file
- * creates a throwaway database, migrates it to 0019, writes legacy
- * `email_logs` rows, then applies 0020 and reads what the backfill made.
- * Raw SQL throughout. The database is dropped afterwards.
+ * @file Migration 0020's backfill. The suite's own databases are migrated
+ * empty in globalSetup, so this file creates a throwaway database, migrates
+ * it to 0019, writes legacy `email_logs` rows, applies 0020 and reads what the
+ * backfill made. Raw SQL throughout; the database is dropped after the tests.
  */
 import fs from 'node:fs'
 import os from 'node:os'
@@ -19,7 +18,6 @@ const LAST_LEGACY_MIGRATION = 19
 
 /**
  * The base URL every test database is derived from.
- * @returns The stashed base URL.
  * @throws {Error} When global setup has not run.
  */
 function requireBaseUrl(): string {
@@ -37,19 +35,23 @@ const scratchUrl = (() => {
   return url.href
 })()
 
+/**
+ * One entry of drizzle's migration journal; `idx` is the migration's number.
+ */
 interface JournalEntry {
   idx: number
 }
 
+/**
+ * Drizzle's migration journal (`meta/_journal.json`), narrowed to its entries.
+ */
 interface Journal {
   entries: JournalEntry[]
 }
 
 /**
- * A copy of the migrations folder whose journal stops at `lastIndex`, so
- * the migrator applies nothing after it.
- * @param lastIndex - The last migration to keep.
- * @returns The copy's path.
+ * A temporary copy of the migrations folder whose journal stops at
+ * `lastIndex`, so the migrator applies nothing after it. Returns the copy's path.
  */
 function migrationsUpTo(lastIndex: number): string {
   const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'migrations-'))
@@ -62,9 +64,7 @@ function migrationsUpTo(lastIndex: number): string {
 }
 
 /**
- * Apply a folder's migrations to the scratch database.
- * @param folder - The migrations folder.
- * @returns Resolves once they are applied.
+ * Applies a folder's migrations to the scratch database.
  */
 async function migrateScratch(folder: string): Promise<void> {
   const client = postgres(scratchUrl, { max: 1, onnotice: () => {} })
@@ -84,7 +84,7 @@ const SENT_AT = '2026-01-02T03:04:05.678Z'
 const FAILED_AT = '2026-01-03T00:00:00.000Z'
 
 beforeAll(async () => {
-  // A scratch name is fixed per worker, so a run that died mid-file left it behind.
+  // The scratch name is fixed per worker, so a run that died mid-file may have left the database behind.
   await admin.unsafe(`drop database if exists "${scratchName}" with (force)`)
   await admin.unsafe(`create database "${scratchName}"`)
   await migrateScratch(legacyFolder)

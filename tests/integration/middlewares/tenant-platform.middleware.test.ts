@@ -2,9 +2,9 @@
  * @file `resolveTenant`'s platform branch through a real Express dispatch,
  * on the probe harness `tenant.middleware.test.ts` uses: the principal each
  * caller gets, the `requireRole` floors each platform role clears, and the
- * platform tenant staying members-only. Staff visits write audit rows,
- * which RESTRICT deleting their user and tenant, so `afterEach` clears
- * `audit_logs` first.
+ * platform tenant staying members-only. Staff visits write audit rows, whose
+ * foreign keys RESTRICT deleting their user and tenant, so `afterEach`
+ * clears `audit_logs` first.
  */
 import { randomUUID } from 'node:crypto'
 import express, { type Express, type NextFunction, type Request, type Response } from 'express'
@@ -49,8 +49,8 @@ const FLOORS_CLEARED: Record<MembershipRole, readonly MembershipRole[]> = {
 }
 
 /**
- * A platform-role lookup that makes anyone staff admin.
- * @returns 'admin', whoever asks.
+ * A platform-role lookup that makes anyone a staff admin, to show the
+ * platform tenant stays members-only.
  */
 const answersAdminForAnyone: UserMembershipRepository['findPlatformRole'] = () =>
   Promise.resolve('admin')
@@ -61,8 +61,6 @@ const userRepository = new UserRepository()
 
 /**
  * Sets `request.user` from a real user id, standing in for `requireAuth`.
- * @param userId - The user id to attach.
- * @returns An Express middleware.
  */
 function stubAuthenticatedUser(userId: string) {
   return (thisRequest: Request, _response: Response, next: NextFunction): void => {
@@ -79,9 +77,7 @@ function stubAuthenticatedUser(userId: string) {
 }
 
 /**
- * Reports what the chain ahead of it attached.
- * @param thisRequest - The incoming request.
- * @param response - The response to write the probe body to.
+ * Reports what the chain ahead of it attached: the principal and the ALS tenant.
  */
 function probe(thisRequest: Request, response: Response): void {
   response.json({
@@ -91,11 +87,9 @@ function probe(thisRequest: Request, response: Response): void {
 }
 
 /**
- * A standalone app: requestId, requestContext, the stub user, resolveTenant,
- * optionally requireRole, then the probe, on `/tenants/:slug/probe`.
- * @param userId - The user `resolveTenant` sees.
- * @param roles - When given, `requireRole(...roles)` runs after `resolveTenant`.
- * @returns The app, not listening.
+ * A standalone app: requestId, requestContext, the stub user for `userId`,
+ * resolveTenant, `requireRole(...roles)` when `roles` is given, then the
+ * probe, on `/tenants/:slug/probe`. It is not listening.
  */
 function buildApp(userId: string, roles?: MembershipRole[]): Express {
   const app = express()
@@ -126,8 +120,7 @@ describe('resolveTenant platform access (integration)', () => {
   })
 
   /**
-   * A fresh user, tracked for cleanup.
-   * @returns The user's id.
+   * A fresh user, tracked for cleanup; returns its id.
    */
   async function createUser(): Promise<string> {
     const user = await userRepository.create({
@@ -139,8 +132,6 @@ describe('resolveTenant platform access (integration)', () => {
 
   /**
    * A fresh tenant owned by `ownerId`, tracked for cleanup.
-   * @param ownerId - Its owner.
-   * @returns The tenant.
    */
   async function createTenant(ownerId: string): Promise<Tenant> {
     const tenant = await tenantRepository.create({

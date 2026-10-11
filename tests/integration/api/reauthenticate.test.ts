@@ -2,7 +2,8 @@
  * @file POST /api/v1/auth/reauthenticate: step-up for staff. Sessions come
  * from real logins, since the endpoint marks the session named by the
  * token's `sid` and a fabricated sid has no rows behind it. A wrong password
- * must never be a 401: every client signs out on a non-expiry 401.
+ * must never be a 401: clients sign out on a 401 that is neither an expiry nor
+ * a reauth-required one.
  */
 import { randomUUID } from 'node:crypto'
 import jwt from 'jsonwebtoken'
@@ -25,6 +26,10 @@ const app = createApp()
 const userRepository = new UserRepository()
 const PASSWORD = 'correct horse battery staple'
 
+/**
+ * A signed-in user: the access token, the session id in it, and the agent
+ * holding the refresh cookie.
+ */
 interface StaffSession {
   userId: string
   email: string
@@ -34,9 +39,7 @@ interface StaffSession {
 }
 
 /**
- * The verified claims of a token.
- * @param token - An access token this server issued.
- * @returns Its `sid` and `auth_time`.
+ * The `sid` and `auth_time` claims of a token this server issued; throws when it does not verify.
  */
 function claims(token: string): { sid: string | undefined; authTime: number | undefined } {
   const verified = verifyAccessToken(token)
@@ -45,17 +48,14 @@ function claims(token: string): { sid: string | undefined; authTime: number | un
 }
 
 /**
- * The access token in a reply's envelope.
- * @param response - A login, refresh or reauthenticate reply.
- * @returns The token.
+ * The access token in a login, refresh or reauthenticate reply.
  */
 function accessTokenOf(response: Response): string {
   return (response.body as { data: { accessToken: string } }).data.accessToken
 }
 
 /**
- * Age a session's authentication by an hour, as if signed in long ago.
- * @param sid - The session.
+ * Moves a session's `authenticated_at` back an hour, so it reads as signed in long ago.
  */
 async function ageSession(sid: string): Promise<void> {
   await sql`
@@ -64,6 +64,9 @@ async function ageSession(sid: string): Promise<void> {
   `
 }
 
+/**
+ * POSTs to the endpoint with a bearer token; `body` is untyped so tests can send malformed ones.
+ */
 function reauthenticate(token: string, body: unknown): Promise<Response> {
   return request(app)
     .post('/api/v1/auth/reauthenticate')
@@ -71,6 +74,9 @@ function reauthenticate(token: string, body: unknown): Promise<Response> {
     .send(body as object)
 }
 
+/**
+ * The `auth.reauthenticated` audit rows about one user, oldest first.
+ */
 async function auditRows(userId: string): Promise<{ outcome: string; tenantId: string }[]> {
   const rows = await sql<{ metadata: { outcome: string }; tenant_id: string }[]>`
     select metadata, tenant_id from audit_logs
@@ -93,7 +99,6 @@ describe('POST /api/v1/auth/reauthenticate', () => {
   /**
    * A verified user with a password, optionally staff, signed in through the real login.
    * @param role - The platform role, or null for a non-staff user.
-   * @returns The session: its access token, sid and the cookie-carrying agent.
    */
   async function signIn(role: MembershipRole | null = 'viewer'): Promise<StaffSession> {
     const email = `reauth-${randomUUID()}@example.test`
@@ -206,7 +211,7 @@ describe('POST /api/v1/auth/reauthenticate', () => {
     expect((response.body as { code?: string }).code).toBe(ACCESS_TOKEN_EXPIRED_CODE)
   })
 
-  // Over HTTP requireAuth refuses an inactive account first; this is the service's own check, for one deactivated after that.
+  // Over HTTP requireAuth refuses an inactive account first; this calls the service's own check directly.
   it.each([
     ['deactivated', 'update users set active = false where id = $1'],
     ['soft-deleted', 'update users set deleted_at = now() where id = $1'],

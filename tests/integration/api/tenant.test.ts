@@ -1,16 +1,11 @@
 /**
- * @file Integration test against the real per-worker Postgres database
- * (see tests/helpers/worker-database.ts) — the same convention
- * tests/integration/api/profile.test.ts and
- * tests/integration/middlewares/tenant.middleware.test.ts already
- * follow. Authenticated requests sign a token directly with
- * `signAccessToken` rather than going through `POST /api/v1/auth/login`,
- * and most fixtures (tenants, memberships) are built directly via the
- * repositories rather than through this file's own `POST /tenants`
- * endpoint: these tests are about what happens once a caller is
- * already a member with a given role, not about tenant creation itself
- * (its own `describe` block below). Members join only by invitation;
- * tests/integration/api/invitation.test.ts covers those endpoints.
+ * @file `/api/v1/tenants` against the real per-worker Postgres database
+ * (tests/helpers/worker-database.ts). Requests sign a token with
+ * `signAccessToken` instead of logging in, and most fixtures (tenants,
+ * memberships) are built through the repositories instead of `POST /tenants`:
+ * these tests cover what a caller with a given role can do once a member, and
+ * tenant creation has its own `describe` block below. Members join only by
+ * invitation; tests/integration/api/invitation.test.ts covers those endpoints.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -48,9 +43,8 @@ interface MemberRow {
 }
 
 /**
- * The envelope every controller response is wrapped in
- * (response.utilities.ts), narrowed to the fields these tests read. Same
- * pattern as `tests/integration/api/profile.test.ts`'s own `ApiEnvelope`.
+ * The envelope `response.utilities.ts` wraps every controller response in,
+ * narrowed to the fields these tests read.
  */
 interface ApiEnvelope<TData> {
   success: boolean
@@ -61,20 +55,16 @@ interface ApiEnvelope<TData> {
 }
 
 /**
- * Cast a supertest response's body to a known envelope shape. supertest
- * types `.body` as `any`; every access after this point is a normal,
- * type-checked property access rather than an unsafe one.
- * @param response - The supertest response.
- * @returns The response body, typed.
+ * Casts a response body, which supertest types as `any`, to the envelope, so
+ * every later property access is type-checked.
  */
 function envelopeOf<TData>(response: Response): ApiEnvelope<TData> {
   return response.body as ApiEnvelope<TData>
 }
 
 /**
- * Assert the member routes' unknown-member answer: 404 with the message and
+ * Asserts the member routes' unknown-member answer: 404 with the message and
  * the `member_not_found` code a client branches on.
- * @param response - The supertest response.
  */
 function expectMemberNotFound(response: Response): void {
   expect(response.status).toBe(404)
@@ -85,10 +75,9 @@ function expectMemberNotFound(response: Response): void {
 }
 
 /**
- * Assert the unknown-tenant answer a caller without access gets: 404
+ * Asserts the unknown-tenant answer a caller without access gets: 404
  * `Tenant not found` with no code, so a client never reads it as a vanished
  * member.
- * @param response - The supertest response.
  */
 function expectTenantNotFound(response: Response): void {
   expect(response.status).toBe(404)
@@ -97,26 +86,21 @@ function expectTenantNotFound(response: Response): void {
 }
 
 /**
- * A disposable email, unique to one test run.
- * @returns An email guaranteed unique to this call.
+ * A throwaway email unique to this call.
  */
 function uniqueEmail(): string {
   return `tenant-api-${randomUUID()}@example.test`
 }
 
 /**
- * A disposable slug, unique to one test run.
- * @returns A slug guaranteed unique to this call.
+ * A throwaway tenant slug unique to this call.
  */
 function uniqueSlug(): string {
   return `tenant-${randomUUID()}`
 }
 
 /**
- * Add an existing user to a tenant with a given role, bypassing the API.
- * @param userId - The user to add.
- * @param tenantId - The tenant to add them to.
- * @param role - The role to grant.
+ * Adds an existing user to a tenant with the given role, bypassing the API.
  */
 async function addMembership(
   userId: string,
@@ -127,10 +111,8 @@ async function addMembership(
 }
 
 /**
- * Leave `slug` as the bearer of `token`.
- * @param slug - The tenant.
- * @param token - The caller's token, or none.
- * @returns The response.
+ * `DELETE /tenants/:slug/membership` as the bearer of `token`, or with no
+ * Authorization header when `token` is omitted.
  */
 async function leave(slug: string, token?: string): Promise<Response> {
   const pending = request(app).delete(`/api/v1/tenants/${slug}/membership`)
@@ -139,10 +121,7 @@ async function leave(slug: string, token?: string): Promise<Response> {
 }
 
 /**
- * A pending invitation sent by `inviterId`, written straight to the table.
- * @param tenantId - The tenant.
- * @param inviterId - The sender.
- * @returns The invitation id.
+ * A pending invitation sent by `inviterId`, written straight to the table; returns its id.
  */
 async function pendingFrom(tenantId: string, inviterId: string): Promise<string> {
   const invitation = await new TenantInvitationRepository().createPending({
@@ -157,9 +136,7 @@ async function pendingFrom(tenantId: string, inviterId: string): Promise<string>
 }
 
 /**
- * An object nested `levels` deep: `{ a: { a: … {} } }`.
- * @param levels - How many objects deep.
- * @returns The root.
+ * An object nested `levels` deep: `{ a: { a: … {} } }`, for the metadata depth cap.
  */
 function nested(levels: number): Record<string, unknown> {
   const root: Record<string, unknown> = {}
@@ -178,7 +155,7 @@ describe('/api/v1/tenants', () => {
 
   afterEach(async () => {
     await truncateAuditLogs()
-    // Tenants first: tenant_settings.tenant_id and user_memberships.tenant_id both carry ON DELETE CASCADE, so deleting the tenant takes its settings and membership rows with it.
+    // Tenants first: tenant_settings.tenant_id and user_memberships.tenant_id cascade, so deleting the tenant takes its settings and membership rows with it.
     if (createdTenantIds.length > 0) {
       await sql`delete from tenants where id = any(${createdTenantIds})`
       createdTenantIds.length = 0
@@ -192,9 +169,7 @@ describe('/api/v1/tenants', () => {
   })
 
   /**
-   * A fresh, disposable user with a valid bearer token, tracked for
-   * cleanup.
-   * @returns The created row and a valid bearer token for it.
+   * A fresh user with a valid bearer token, tracked for cleanup.
    */
   async function createAuthenticatedUser(): Promise<{ user: User; token: string }> {
     const user = await userRepository.create({ email: uniqueEmail() })
@@ -204,9 +179,6 @@ describe('/api/v1/tenants', () => {
 
   /**
    * A fresh tenant via `TenantRepository.create`, tracked for cleanup.
-   * @param ownerId - The user who becomes this tenant's owner.
-   * @param overrides - Any `CreateTenantInput` fields to override.
-   * @returns The created tenant row.
    */
   async function createTenant(
     ownerId: string,
@@ -223,9 +195,7 @@ describe('/api/v1/tenants', () => {
   }
 
   /**
-   * PATCH the settings of a fresh tenant as its owner.
-   * @param body - The request body.
-   * @returns The response status.
+   * PATCHes the settings of a fresh tenant as its owner and returns the response status.
    */
   async function patchSettings(body: unknown): Promise<number> {
     const { user, token } = await createAuthenticatedUser()
@@ -310,12 +280,10 @@ describe('/api/v1/tenants', () => {
     })
 
     /**
-     * Wiring, not thresholds: exhausting `RATE_LIMITS.createTenant`'s
-     * real 20-per-hour budget would spend a budget every other
-     * integration file running in parallel shares. The 429 behaviour
-     * itself, including the user-keyed discriminator, is proven with
-     * small overrides in
-     * tests/unit/middlewares/rate-limit.middleware.test.ts.
+     * Wiring, not thresholds: the 429 behaviour, including the user-keyed
+     * discriminator, is proven with small overrides in
+     * tests/unit/middlewares/rate-limit.middleware.test.ts, so this does not
+     * exhaust the real 20-per-hour `RATE_LIMITS.createTenant` budget.
      */
     it('runs a limiter — proven by the RateLimit-* headers on an ordinary response', async () => {
       const { token } = await createAuthenticatedUser()
@@ -408,7 +376,7 @@ describe('/api/v1/tenants', () => {
       expect(response.status).toBe(404)
     })
 
-    // A real race: resolveTenant resolves the tenant via findActiveBySlug, a different method from getTenant's own findById call, so mutating findById alone cannot make resolveTenant itself fail first — no call counter needed.
+    // resolveTenant loads the tenant with findActiveBySlug and the handler with findById, so mutating findById alone cannot fail resolveTenant first.
     it('404s when the tenant is deleted between resolveTenant loading it and the handler loading it again', async () => {
       const { user, token } = await createAuthenticatedUser()
       const tenant = await createTenant(user.id)
@@ -510,7 +478,7 @@ describe('/api/v1/tenants', () => {
       expect(response.status).toBe(404)
     })
 
-    // Mass-assignment: slug is not one of updateTenantSchema's fields, so it is silently stripped. Read back with raw SQL, an oracle independent of the repository under test.
+    // slug is not one of updateTenantSchema's fields, so it is stripped; the row is read back with raw SQL, independent of the repository under test.
     it('ignores slug even when supplied, and the stored row proves it', async () => {
       const { user, token } = await createAuthenticatedUser()
       const tenant = await createTenant(user.id)
@@ -528,7 +496,7 @@ describe('/api/v1/tenants', () => {
       expect(row).toEqual({ slug: tenant.slug })
     })
 
-    // Same TOCTOU shape as the GET test above, for updateTenant's own second lookup — tenantRepository.update, taken here because the request body carries a real change.
+    // The write path of the race above: updateTenant calls tenantRepository.update only when the body changes a field, and the new name does.
     it('404s when the tenant is deleted between resolveTenant loading it and the update itself', async () => {
       const { user, token } = await createAuthenticatedUser()
       const tenant = await createTenant(user.id)
@@ -595,7 +563,7 @@ describe('/api/v1/tenants', () => {
         lastName: deactivatedUser.lastName,
       })
 
-      // Staff reading through platform access get the customer shape too: the tenant decides, not the caller.
+      // Staff reading through platform access get the customer shape too: the tenant decides the shape, not the caller.
       const { user: staffUser, token: staffToken } = await createAuthenticatedUser()
       await makeStaff(staffUser.id, 'viewer')
       const staffResponse = await request(app)
@@ -806,7 +774,7 @@ describe('/api/v1/tenants', () => {
       expectTenantNotFound(response)
     })
 
-    // The second "Member not found" — a real race, not the "target user was never a member" 404 two tests above: permission/last-owner checks already pass, and the row vanishes only in the gap before updateRole's own write.
+    // Not the never-a-member 404: the permission and last-owner checks pass, and the row vanishes only before updateRole's own write.
     it('404s when the membership is deleted between the permission check and the role update itself', async () => {
       const { user: ownerUser, token: ownerToken } = await createAuthenticatedUser()
       const { user: targetUser } = await createAuthenticatedUser()
@@ -958,7 +926,7 @@ describe('/api/v1/tenants', () => {
       expect(response.status).toBe(403)
     })
 
-    // The matrix carves out no self-exception for admin -> admin, unlike the owner row's explicit "self-only".
+    // The matrix has no self-exception for an admin acting on an admin, unlike the owner row's "self-only".
     it('blocks an admin from removing THEMSELVES (matrix: admin actor, admin target = no)', async () => {
       const { user: ownerUser } = await createAuthenticatedUser()
       const { user: adminUser, token: adminToken } = await createAuthenticatedUser()
@@ -1011,7 +979,7 @@ describe('/api/v1/tenants', () => {
       expectTenantNotFound(response)
     })
 
-    // The second "Member not found" — same race as updateMemberRole's own version above: the permission and last-owner checks already pass, and the row vanishes only in the gap before the delete itself.
+    // The same race as the role update above: the permission and last-owner checks pass, and the row vanishes only before the delete itself.
     it('404s when the membership is deleted between the permission check and the delete itself', async () => {
       const { user: ownerUser, token: ownerToken } = await createAuthenticatedUser()
       const { user: targetUser } = await createAuthenticatedUser()
@@ -1035,18 +1003,16 @@ describe('/api/v1/tenants', () => {
 
   describe('last-owner guard: atomic and blind to soft-deleted owners', () => {
     /**
-     * Two owners demote themselves at once. countOwners is wrapped so
-     * the first caller waits (up to 1s) for the second to have counted
-     * too. Pins: with the owner lock, the second transaction is
-     * blocked at lockOwners, so the first times out of the wait,
-     * commits, and the second then counts 1 and gets 409. Without the
-     * lock both usually count 2 and both succeed, leaving no owner.
+     * Two owners demote themselves at once. `countOwners` is wrapped so the
+     * first caller waits, for at most 1 s, until the second has counted too.
+     * With the owner lock the second transaction blocks at `lockOwners`, so
+     * the first times out of the wait and commits, and the second then counts
+     * 1 and gets 409. Without the lock both usually count 2 and both succeed,
+     * leaving no owner.
      *
-     * Pool note: test mode has max 2 connections. The two transactions
-     * hold both, which works only because B waits inside its own
-     * connection and A needs no third — a repository call inside the
-     * service that forgot the executor would hang here until the test
-     * timeout.
+     * The test pool has 2 connections (`DB_POOL_MAX` in .env.test) and the two
+     * transactions hold both, so a repository call in the service that
+     * forgot the executor would need a third and hang until the test timeout.
      */
     it('lets exactly one of two concurrent self-demotions through, leaving one owner', async () => {
       const { user: ownerA, token: tokenA } = await createAuthenticatedUser()
@@ -1062,12 +1028,16 @@ describe('/api/v1/tenants', () => {
       const barrier = new Promise<void>((resolve) => {
         releaseBarrier = resolve
       })
+      /**
+       * Counts with the caller's executor, then holds the caller until the
+       * other owner has counted or 1 s passes.
+       */
       const waitingCountOwners: typeof realCountOwners = async function (
         this: UserMembershipRepository,
         tenantId: string,
         executor?: DbExecutor
       ) {
-        // Forward the executor, or this would count outside the transaction, defeating the lock.
+        // Forward the executor, or the count would run outside the transaction and bypass the lock.
         const count = await realCountOwners.call(this, tenantId, executor)
         arrivals += 1
         if (arrivals >= 2) releaseBarrier()
@@ -1137,7 +1107,7 @@ describe('/api/v1/tenants', () => {
       ).toBeDefined()
     })
 
-    // An admin's DELETE is held just before it takes the owner lock, after any earlier read of the target, while an owner promotes that target to owner. The permission check must see the promotion and refuse.
+    // An admin's DELETE is held just before it takes the owner lock while an owner promotes the target; the permission check under the lock must see the promotion and refuse.
     it("re-checks the admin's permission under the lock, so a target promoted to owner mid-request is not removed", async () => {
       const { user: owner, token: ownerToken } = await createAuthenticatedUser()
       const { user: admin, token: adminToken } = await createAuthenticatedUser()
@@ -1159,6 +1129,9 @@ describe('/api/v1/tenants', () => {
         releaseHeld = resolve
       })
       let calls = 0
+      /**
+       * Holds the first caller before it takes the owner lock until the test releases it.
+       */
       const heldLockOwners: typeof realLockOwners = async function (
         this: UserMembershipRepository,
         ...parameters: Parameters<typeof realLockOwners>
@@ -1177,7 +1150,7 @@ describe('/api/v1/tenants', () => {
         'lockOwners',
         heldLockOwners,
         async () => {
-          // Promise.resolve starts the request now (supertest is lazy until then'd).
+          // Promise.resolve starts the request: supertest sends nothing until it is awaited.
           const deleting = Promise.resolve(
             request(app)
               .delete(`/api/v1/tenants/${tenant.slug}/members/${target.id}`)
@@ -1389,7 +1362,7 @@ describe('/api/v1/tenants', () => {
       expect(response.status).toBe(404)
     })
 
-    // Defensive, not reachable through any real gap in practice — TenantRepository.create writes the settings row atomically alongside the tenant itself — but proven the same way as this file's other TOCTOU tests: mutate the repository call directly.
+    // Defensive: TenantRepository.create writes the settings row in the same transaction as the tenant, so no real gap exists; the repository call is mutated directly.
     it('404s when the settings row is unexpectedly missing', async () => {
       const { user, token } = await createAuthenticatedUser()
       const tenant = await createTenant(user.id)
@@ -1477,7 +1450,7 @@ describe('/api/v1/tenants', () => {
       expect(response.status).toBe(404)
     })
 
-    // Same shape as GET settings' own defensive test above, for updateSettings's own second lookup — tenantSettingsRepository.update, taken here because the request body carries a real change.
+    // The write path of the defensive case above: updateSettings calls tenantSettingsRepository.update only when the body changes a field, and the new locale does.
     it('404s when the settings row is unexpectedly missing at update time', async () => {
       const { user, token } = await createAuthenticatedUser()
       const tenant = await createTenant(user.id)
@@ -1612,7 +1585,7 @@ describe('/api/v1/tenants', () => {
     it('refuses metadata nested 100,000 deep with a 400, not a 500', async () => {
       const { user, token } = await createAuthenticatedUser()
       const tenant = await createTenant(user.id)
-      // Raw JSON: serializing a value this deep would overflow the stack in the client too.
+      // Raw JSON: JSON.stringify overflows the stack on a value this deep.
       const levels = 100_000
       const body = `{"metadata":${'{"a":'.repeat(levels - 1)}{}${'}'.repeat(levels - 1)}}`
       const response = await request(app)

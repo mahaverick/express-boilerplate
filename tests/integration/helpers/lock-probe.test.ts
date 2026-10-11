@@ -40,6 +40,10 @@ describe('pollUntil', () => {
   it('counts its deadline from when the clock starts', async () => {
     const started = deferred()
     const startedAt = { ms: 0 }
+    /**
+     * Starts the clock after the unstarted poll has outlasted its own 100 ms
+     * timeout, noting when it started.
+     */
     const startClock = async (): Promise<void> => {
       await settle(300, 'let the unstarted poll run past its own timeout')
       startedAt.ms = Date.now()
@@ -64,6 +68,9 @@ describe('pollUntil', () => {
 
   it('never polls past its whole bound once the clock starts', async () => {
     const started = deferred()
+    /**
+     * Starts the clock 200 ms in, leaving little of the 400 ms whole bound.
+     */
     const startClock = async (): Promise<void> => {
       await settle(200, 'start the clock close to the whole bound')
       started.resolve()

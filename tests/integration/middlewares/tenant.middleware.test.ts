@@ -1,13 +1,11 @@
 /**
- * @file Against the real per-worker Postgres database
- * (`tests/helpers/worker-database.ts`), through a real Express dispatch,
- * not a direct function call: a direct call (`tests/unit/middlewares/tenant.middleware.test.ts`)
- * cannot prove `requestContextStore.enterWith(...)` survives Express 5's own
- * `next()` hop from `resolveTenant` into a downstream handler. This file
- * builds its own small standalone `express()` app per test with a bare
- * probe route, rather than mounting the real `/tenants/*` router, to
- * isolate `resolveTenant`/`requireRole` from the rest of that router's
- * composition.
+ * @file `resolveTenant` and `requireRole` against the real per-worker Postgres
+ * database (`tests/helpers/worker-database.ts`), through a real Express
+ * dispatch: a direct call (`tests/unit/middlewares/tenant.middleware.test.ts`)
+ * cannot show that `requestContextStore.enterWith(...)` survives Express 5's
+ * `next()` hop into a downstream handler. Each test builds a small standalone
+ * `express()` app with a bare probe route instead of mounting the real
+ * `/tenants/*` router, so only these two middlewares are under test.
  */
 import { randomUUID } from 'node:crypto'
 import express, { type Express, type NextFunction, type Request, type Response } from 'express'
@@ -27,15 +25,11 @@ import { truncateAuditLogs } from '../../helpers/audit-log'
 import { request } from '../../helpers/request'
 
 /**
- * The body the probe handler (`buildApp` below) responds with — what
- * `resolveTenant` attached to `request.principal` and to the `RequestContext`
- * ALS store's own `.tenant`, both, so a test can assert either without
- * `@typescript-eslint/no-unsafe-member-access` on supertest's `any`-typed
- * `response.body`. Same "cast the JSON body to a known interface" pattern
- * tests/integration/api/auth.test.ts's own `ApiEnvelope<TData>` uses, just
- * for a plain (non-enveloped) JSON body — this probe route is test-only
- * scaffolding, not a real endpoint, so it does not go through
- * `successResponse`.
+ * The body the probe handler responds with: what `resolveTenant` attached to
+ * `request.principal` and to the ALS store's `.tenant`. Typing it lets a test
+ * assert either without `no-unsafe-member-access` on supertest's `any` body.
+ * The probe route is test scaffolding, so its body is plain JSON, not an
+ * enveloped `successResponse`.
  */
 interface ProbeBody {
   principal: RequestPrincipal | undefined
@@ -44,11 +38,9 @@ interface ProbeBody {
 
 /**
  * The error envelope `errorHandler` (error.middleware.ts) sends for a
- * rejected `HttpError` — `{ success, message, statusCode, requestId }`
- * (`code`/`errors` are omitted here since `resolveTenant` never sets
- * either). Declared so the Ruling G test below can compare specific fields
- * without `@typescript-eslint/no-unsafe-member-access` on supertest's
- * `any`-typed `response.body` — same reasoning as `ProbeBody` above.
+ * rejected `HttpError`: `{ success, message, statusCode, requestId }`, with
+ * `code` and `errors` omitted because `resolveTenant` sets neither. Typed so
+ * the 404 comparison below can read fields, as `ProbeBody` does.
  */
 interface ErrorEnvelope {
   success: boolean
@@ -62,16 +54,14 @@ const userMembershipRepository = new UserMembershipRepository()
 const userRepository = new UserRepository()
 
 /**
- * A disposable email, unique to one test run.
- * @returns An email guaranteed unique to this call.
+ * A throwaway email unique to this call.
  */
 function uniqueEmail(): string {
   return `tenant-middleware-${randomUUID()}@example.test`
 }
 
 /**
- * A disposable slug, unique to one test run.
- * @returns A slug guaranteed unique to this call.
+ * A throwaway tenant slug unique to this call.
  */
 function uniqueSlug(): string {
   return `tenant-${randomUUID()}`
@@ -79,12 +69,9 @@ function uniqueSlug(): string {
 
 /**
  * Sets `request.user` from a real user id, standing in for `requireAuth`,
- * which is not exercised here: this stub is enough to prove
- * `resolveTenant`'s own contract, since it only reads `request.user.id`.
- * Real `requireAuth` composition is proven end-to-end by
- * `tests/integration/api/tenant.test.ts`.
- * @param userId - The user id to attach.
- * @returns An Express middleware.
+ * which is not exercised here: `resolveTenant` reads only `request.user.id`.
+ * `tests/integration/api/tenant.test.ts` covers the real `requireAuth`
+ * composition end to end.
  */
 function stubAuthenticatedUser(userId: string) {
   return (thisRequest: Request, _response: Response, next: NextFunction): void => {
@@ -101,14 +88,11 @@ function stubAuthenticatedUser(userId: string) {
 }
 
 /**
- * The probe handler mounted at the end of every chain `buildApp` builds —
- * reports what the middleware chain ahead of it attached, so a test can
- * assert both `request.principal` and the ALS store's `.tenant` without a
- * second round trip. Only ever reached once `resolveTenant` (and, where
- * composed, `requireRole`) has already called `next()`, so `request.principal`
- * is always set here — never the `undefined` half of its type.
- * @param thisRequest - The incoming request, already carrying `.principal`.
- * @param response - The response to write the probe body to.
+ * The probe handler at the end of every chain `buildApp` builds. It reports
+ * what the chain ahead of it attached, so one request shows both
+ * `request.principal` and the ALS store's `.tenant`. It runs only after
+ * `resolveTenant` (and `requireRole`, where composed) called `next()`, so
+ * `request.principal` is always set here.
  */
 function probe(thisRequest: Request, response: Response): void {
   response.json({
@@ -118,13 +102,10 @@ function probe(thisRequest: Request, response: Response): void {
 }
 
 /**
- * Build a standalone app wiring `requestId` -> `requestContext` ->
- * `stubAuthenticatedUser` (when `userId` is given) -> `resolveTenant` ->
- * (optionally) `requireRole` -> `probe`, on `/tenants/:slug/probe`, the
- * same shape every real `/tenants/:slug/*` route uses.
- * @param userId - The user id `resolveTenant` should see as `request.user.id`, or undefined to simulate a route missing `requireAuth`.
- * @param roles - When given, `requireRole(...roles)` is composed after `resolveTenant`.
- * @returns A configured Express app, not listening.
+ * A standalone app wiring `requestId`, `requestContext`, `stubAuthenticatedUser`
+ * (only when `userId` is given, so `undefined` simulates a route missing
+ * `requireAuth`), `resolveTenant`, `requireRole(...roles)` (only when `roles`
+ * is given) and `probe`, on `/tenants/:slug/probe`. It is not listening.
  */
 function buildApp(userId: string | undefined, roles?: MembershipRole[]): Express {
   const app = express()
@@ -158,8 +139,7 @@ describe('resolveTenant + requireRole (integration)', () => {
   })
 
   /**
-   * A fresh, disposable user, tracked for cleanup.
-   * @returns The created user's id.
+   * A fresh user, tracked for cleanup; returns its id.
    */
   async function createUser(): Promise<string> {
     const user = await userRepository.create({ email: uniqueEmail() })
@@ -169,9 +149,6 @@ describe('resolveTenant + requireRole (integration)', () => {
 
   /**
    * A fresh tenant with `ownerId` as its owner, tracked for cleanup.
-   * @param ownerId - The user who becomes this tenant's owner.
-   * @param overrides - Any `CreateTenantInput` fields to override.
-   * @returns The created tenant row.
    */
   async function createTenant(ownerId: string, overrides: Partial<CreateTenantInput> = {}) {
     const tenant = await tenantRepository.create({
@@ -220,7 +197,7 @@ describe('resolveTenant + requireRole (integration)', () => {
 
     expect(nonexistentResponse.status).toBe(404)
     expect(nonMemberResponse.status).toBe(404)
-    // requestId is excluded below: it differs between ANY two requests, so it's sanity-checked here to prove these are two distinct requests, not a caching bug.
+    // requestId differs between any two requests, so it is excluded from the body comparison below; asserting it differs shows these were two distinct requests.
     expect(nonexistentBody.requestId).not.toBe(nonMemberBody.requestId)
     expect({
       success: nonMemberBody.success,
