@@ -230,8 +230,9 @@ const EnvSchema = z.object({
     ),
 
   /**
-   * Not a per-address rate limit on forgot-password, which anyone who knows
-   * an address could spend to deny its owner their reset mail.
+   * A silent per-address cooldown (forgot-password still answers 202), not a
+   * refusing per-address limiter, which anyone who knows an address could
+   * spend to deny its owner their reset mail.
    */
   PASSWORD_RESET_MAIL_COOLDOWN: z
     .string()
@@ -307,7 +308,7 @@ const EnvSchema = z.object({
    * every IP-keyed limiter shares one bucket, but no header can bypass them.
    * `true` is refused because X-Forwarded-For is client-written, so trusting
    * every hop gives each request a fresh rate-limit bucket; a hop count or an
-   * address list trusts only the proxies in front of this app.
+   * address list trusts only the hops it names.
    */
   TRUST_PROXY: z
     .string()
@@ -548,8 +549,8 @@ const EnvSchema = z.object({
       'Most analytics events one drain claims and sends in one PostHog batch. At least 1, at most 1000. Defaults to 500.'
     ),
   /**
-   * Optional: without both it and POSTHOG_PROJECT_ID the staff timelines
-   * answer "not configured" and queued person deletions wait
+   * Optional: unless both it and POSTHOG_PROJECT_ID are set, the staff
+   * timelines answer "not configured" and queued person deletions wait
    * (analytics.config.ts `isTimelineEnabled`).
    */
   POSTHOG_PERSONAL_API_KEY: z

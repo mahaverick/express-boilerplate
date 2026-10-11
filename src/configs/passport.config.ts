@@ -209,8 +209,8 @@ export function createOAuthSessionMiddleware(): RequestHandler {
   let middlewarePromise: Promise<RequestHandler> | undefined
 
   /**
-   * Wait for the shared Redis client and build the real session middleware on it.
-   * @returns The `express-session` middleware.
+   * Wait for the shared Redis client and build the real session middleware on
+   * it. Rejects when Redis misses the `withRedisDeadline` deadline.
    */
   async function buildMiddleware(): Promise<RequestHandler> {
     const client = await withRedisDeadline(() => getRedis(), 'OAuth session store')
